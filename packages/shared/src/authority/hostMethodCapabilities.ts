@@ -43,6 +43,7 @@ const GROUPS = {
   "browser-passwords.read": ["autofill.listNeverSaveOrigins", "autofill.listSavedPasswords"],
   "browser-passwords.manage": ["autofill.confirmSave", "autofill.removeNeverSaveOrigin"],
   "browser-passwords.delete": ["autofill.deleteSavedPassword"],
+  "browser-form-fill.manage": ["autofill.confirmFormFill"],
   "connections.approve": ["auth.grantConnection"],
   "agent.credentials.manage": ["auth.mintAgentCredential", "auth.revokeAgentCredential"],
   "workspace.storage.delete": ["blobstore.delete"],

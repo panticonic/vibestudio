@@ -141,5 +141,9 @@ export function createSnapshot(
     contextId,
     options: persistableOptions,
     stateArgs,
+    // Lift the resolved placement hint to the snapshot's canonical top-level
+    // field; it also stays in `options` so the per-entry persistence blob
+    // (and thus restarts / other clients) round-trips it.
+    ...(persistableOptions.placement ? { placement: persistableOptions.placement } : {}),
   };
 }

@@ -13,6 +13,12 @@ export interface PanelResourcePolicyDeps {
   idleSweepIntervalMs: number;
   now(): number;
   getFocusedPanelId(): string | null;
+  /**
+   * Panel ids currently bound to a native slot (resident in the shell's
+   * column viewport). With multi-column layouts a non-focused pane is still
+   * on screen; residency protects it from idle sweep and cap eviction (§5.3).
+   */
+  getResidentPanelIds(): string[];
   isPinned(panelId: string): boolean;
   isKeepLoaded(panelId: string): boolean;
   panelExists(panelId: string): boolean;
@@ -60,7 +66,11 @@ export class PanelResourcePolicy {
     const cap = this.deps.maximumLoadedPanels;
     if (cap === null || cap <= 0) return;
     const focused = this.deps.getFocusedPanelId();
-    const protectedIds = [keepPanelId, ...(focused ? [focused] : [])];
+    const protectedIds = [
+      keepPanelId,
+      ...(focused ? [focused] : []),
+      ...this.deps.getResidentPanelIds(),
+    ];
     const victims = selectCapEvictionVictims(this.loadedSnapshots(), {
       cap,
       protectedIds,
@@ -76,7 +86,7 @@ export class PanelResourcePolicy {
     const victims = selectIdlePanelVictims(this.loadedSnapshots(), {
       now: this.deps.now(),
       idleMs,
-      protectedIds: focused ? [focused] : [],
+      protectedIds: [...(focused ? [focused] : []), ...this.deps.getResidentPanelIds()],
       ...this.protectionPredicates(),
     });
     for (const panelId of victims) void this.unloadTracked(panelId, "idle-timeout");

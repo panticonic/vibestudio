@@ -40,6 +40,8 @@ import {
   type HubPairingInvite,
 } from "@vibestudio/service-schemas/hubControl";
 import { workspacePresenceMethods } from "@vibestudio/service-schemas/workspacePresence";
+import { browserEnvironmentMethods } from "@vibestudio/service-schemas/browserEnvironment";
+import { createBrowserDataClient } from "@vibestudio/browser-data/client";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   createDurableObjectServiceClient,
@@ -55,6 +57,7 @@ import {
 } from "@vibestudio/shared/userNotifications";
 import type { ConnectPairing } from "@vibestudio/shared/connect";
 import type { PanelLocation } from "@vibestudio/shared/panelLocation";
+import type { PanelPlacementHint } from "@vibestudio/shared/types";
 // Type for the shell transport bridge injected by the preload script
 type ShellTransportBridge = {
   send: (envelope: RpcEnvelope) => Promise<void>;
@@ -109,6 +112,14 @@ const eventsClient = new EventsClient(rpc, undefined, "desktopEvents");
 const extensionsClient = createTypedServiceClient(
   "extensions",
   extensionsMethods,
+  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+);
+const browserDataClient = createBrowserDataClient({
+  call: (service, method, args) => rpc.call("main", `${service}.${method}`, args),
+});
+const browserEnvironmentClient = createTypedServiceClient(
+  "browserEnvironment",
+  browserEnvironmentMethods,
   (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
 const menuClient = createTypedServiceClient("menu", menuMethods, (service, method, args) =>
@@ -205,6 +216,12 @@ export const panel = {
   /** Authenticated server read that performs per-account first-attach seeding. */
   ensureOwnerTree: () => panelTreeClient.getTreeSnapshot(),
   getFocusedPanelId: () => panelClient.getFocusedPanelId(),
+  setFocusedPanelId: (panelId: string) => panelClient.setFocusedPanelId(panelId),
+  focus: (panelId: string) => panelTreeClient.focus(panelId),
+  /** Per-device persisted PanelLayout (validated/pruned again shell-side on restore). */
+  getPanelLayout: () => panelClient.getPanelLayout(),
+  savePanelLayout: (layout: Parameters<typeof panelClient.savePanelLayout>[0]) =>
+    panelClient.savePanelLayout(layout),
   ensureLoaded: (panelId: string) => panelClient.ensureLoaded(panelId),
   updateTheme: (theme: ThemeAppearance) => panelClient.updateTheme(theme),
   updateThemeConfig: (config: ThemeConfig) => panelClient.updateThemeConfig(config),
@@ -221,6 +238,20 @@ export const panel = {
   reload: (panelId: string) => panelTreeClient.reload(panelId),
   reloadView: (panelId: string) => panelClient.reloadView(panelId),
   forceReloadView: (panelId: string) => panelClient.forceReloadView(panelId),
+  findInPage: (
+    panelId: string,
+    text: string,
+    options: { forward: boolean; findNext: boolean }
+  ) => panelClient.findInPage(panelId, text, options),
+  stopFindInPage: (panelId: string) => panelClient.stopFindInPage(panelId),
+  getBrowserSiteState: (panelId: string) => panelClient.getBrowserSiteState(panelId),
+  toggleBrowserBookmark: (panelId: string) => panelClient.toggleBrowserBookmark(panelId),
+  setBrowserZoom: (panelId: string, zoomFactor: number) =>
+    panelClient.setBrowserZoom(panelId, zoomFactor),
+  clearBrowserSiteData: (panelId: string) => panelClient.clearBrowserSiteData(panelId),
+  printBrowserPage: (panelId: string) => panelClient.printBrowserPage(panelId),
+  saveBrowserPagePdf: (panelId: string) => panelClient.saveBrowserPagePdf(panelId),
+  stopBrowserMedia: (panelId: string) => panelClient.stopBrowserMedia(panelId),
   rebuildPanel: (panelId: string) => panelTreeClient.rebuildPanel(panelId),
   rebuildAndReload: (panelId: string) => panelTreeClient.rebuildAndReload(panelId),
   navigateHistory: (panelId: string, delta: -1 | 1) =>
@@ -260,6 +291,7 @@ export const panel = {
       ref?: string;
       contextId?: string;
       stateArgs?: Record<string, unknown>;
+      placement?: PanelPlacementHint;
       focus?: boolean;
     }
   ) =>
@@ -270,6 +302,7 @@ export const panel = {
       parentId: options?.isRoot === false ? undefined : null,
       focus: options?.focus ?? true,
       stateArgs: options?.stateArgs,
+      placement: options?.placement,
     }),
   createChild: (
     parentId: string,
@@ -280,6 +313,7 @@ export const panel = {
       ref?: string;
       contextId?: string;
       stateArgs?: Record<string, unknown>;
+      placement?: PanelPlacementHint;
     }
   ) =>
     panelTreeClient.create(source, {
@@ -289,6 +323,7 @@ export const panel = {
       ref: options?.ref,
       contextId: options?.contextId,
       stateArgs: options?.stateArgs,
+      placement: options?.placement,
     }),
   createBrowser: (
     url: string,
@@ -558,6 +593,8 @@ export const hubControl = hubControlClient;
 export const autofill = {
   confirmSave: (panelId: string, action: "save" | "never" | "dismiss") =>
     autofillClient.confirmSave(panelId, action),
+  confirmFormFill: (panelId: string, action: "save" | "dismiss") =>
+    autofillClient.confirmFormFill(panelId, action),
 };
 // =============================================================================
 // Blobstore Service (content-addressed read surface — diff-review lazy fetch)
@@ -783,6 +820,8 @@ export const extensions = {
   invoke: (name: string, method: string, args: unknown[] = []) =>
     extensionsClient.invoke(name, method, args),
 };
+export const browserData = browserDataClient;
+export const browserEnvironment = browserEnvironmentClient;
 // =============================================================================
 // Workspace Unit Service
 // =============================================================================

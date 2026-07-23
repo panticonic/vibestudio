@@ -12,8 +12,21 @@ import {
   ReloadIcon,
   StopIcon,
   GlobeIcon,
+  StarIcon,
+  LockClosedIcon,
+  ExclamationTriangleIcon,
+  SpeakerLoudIcon,
 } from "@radix-ui/react-icons";
-import { Badge, Box, Flex, IconButton, Text, TextField, Tooltip } from "@radix-ui/themes";
+import {
+  Badge,
+  Box,
+  DropdownMenu,
+  Flex,
+  IconButton,
+  Text,
+  TextField,
+  Tooltip,
+} from "@radix-ui/themes";
 import { VibestudioLogo } from "@workspace/ui";
 import {
   useCallback,
@@ -50,7 +63,10 @@ import {
   type PanelChromeState,
   type PanelSourceSuggestion,
 } from "@vibestudio/shared/panelChrome";
-import { getAddressNavigationModeFromModifiers } from "@vibestudio/shared/panelCommands";
+import {
+  getAddressNavigationModeFromModifiers,
+  isPanelClosePointerButton,
+} from "@vibestudio/shared/panelCommands";
 import {
   menu,
   notification,
@@ -60,6 +76,7 @@ import {
   type ShellOverlayRow,
 } from "../shell/client";
 import { useNativeShellOverlay } from "../shell/useNativeShellOverlay";
+import { BrowserFavicon } from "./BrowserFavicon";
 
 const isMac = /Mac|iPhone|iPad|iPod/i.test(
   (globalThis.navigator as { userAgentData?: { platform?: string } } | undefined)?.userAgentData
@@ -310,7 +327,7 @@ export function TitleBar({
             </IconButton>
           </Tooltip>
 
-          <Tooltip content="New panel (⌘T / Ctrl+Shift+T)">
+          <Tooltip content="New panel (⌘/Ctrl+T)">
             <IconButton
               variant="ghost"
               size="1"
@@ -471,10 +488,51 @@ function BrowserAddressBar({
     null
   );
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [siteState, setSiteState] = useState<{
+    origin: string;
+    url: string;
+    secure: boolean;
+    zoomFactor: number;
+    bookmarkId: number | null;
+    cookieCount: number;
+  } | null>(null);
 
   useEffect(() => {
     setValue(chromeState?.editableAddress ?? "");
   }, [chromeState?.editableAddress]);
+
+  useEffect(() => {
+    if (!chromeState?.panelId || chromeState.kind !== "browser") {
+      setSiteState(null);
+      return;
+    }
+    let cancelled = false;
+    void panel
+      .getBrowserSiteState(chromeState.panelId)
+      .then((next) => {
+        if (!cancelled) setSiteState(next);
+      })
+      .catch(() => {
+        if (!cancelled) setSiteState(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    chromeState?.browserUrl,
+    chromeState?.editableAddress,
+    chromeState?.panelId,
+    chromeState?.resolvedUrl,
+  ]);
+
+  const reportSiteActionError = useCallback((title: string, error: unknown) => {
+    void notification.show({
+      type: "error",
+      title,
+      message: error instanceof Error ? error.message : String(error),
+      ttl: 8_000,
+    });
+  }, []);
 
   useEffect(() => {
     if (!focused) return;
@@ -643,6 +701,7 @@ function BrowserAddressBar({
           {chromeState?.isLoading ? <StopIcon /> : <ReloadIcon />}
         </IconButton>
       </Tooltip>
+      {chromeState?.favicon ? <BrowserFavicon handle={chromeState.favicon} /> : <GlobeIcon />}
       <TextField.Root
         ref={inputRef}
         size="1"
@@ -676,6 +735,133 @@ function BrowserAddressBar({
         aria-label="Address"
         style={{ flex: 1, minWidth: 0 }}
       />
+      {chromeState?.panelId && siteState ? (
+        <>
+          {chromeState.mediaPlaying ? (
+            <Tooltip content="Stop media">
+              <IconButton
+                size="1"
+                variant="soft"
+                color="red"
+                aria-label="Stop media"
+                onClick={() => void panel.stopBrowserMedia(chromeState.panelId)}
+              >
+                <SpeakerLoudIcon />
+              </IconButton>
+            </Tooltip>
+          ) : null}
+          <Tooltip content={siteState.bookmarkId ? "Remove bookmark" : "Bookmark this page"}>
+            <IconButton
+              size="1"
+              variant={siteState.bookmarkId ? "soft" : "ghost"}
+              color={siteState.bookmarkId ? "amber" : undefined}
+              aria-label={siteState.bookmarkId ? "Remove bookmark" : "Bookmark this page"}
+              onClick={() => {
+                void panel
+                  .toggleBrowserBookmark(chromeState.panelId)
+                  .then((result) =>
+                    setSiteState((current) =>
+                      current ? { ...current, bookmarkId: result.bookmarkId } : current
+                    )
+                  )
+                  .catch((error) => reportSiteActionError("Bookmark action failed", error));
+              }}
+            >
+              <StarIcon fill={siteState.bookmarkId ? "currentColor" : "none"} />
+            </IconButton>
+          </Tooltip>
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger>
+              <IconButton size="1" variant="ghost" aria-label="Site controls" title="Site controls">
+                {siteState.secure ? <LockClosedIcon /> : <ExclamationTriangleIcon />}
+              </IconButton>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Content align="end">
+              <DropdownMenu.Label>{siteState.origin}</DropdownMenu.Label>
+              <DropdownMenu.Item disabled>
+                {siteState.secure ? "Secure connection" : "Not secure"}
+              </DropdownMenu.Item>
+              <DropdownMenu.Separator />
+              <DropdownMenu.Label>
+                Zoom {Math.round(siteState.zoomFactor * 100)}%
+              </DropdownMenu.Label>
+              <DropdownMenu.Item
+                onSelect={() => {
+                  void panel
+                    .setBrowserZoom(chromeState.panelId, siteState.zoomFactor - 0.1)
+                    .then((zoomFactor) =>
+                      setSiteState((current) => (current ? { ...current, zoomFactor } : current))
+                    )
+                    .catch((error) => reportSiteActionError("Couldn't change zoom", error));
+                }}
+              >
+                Zoom out
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                onSelect={() => {
+                  void panel
+                    .setBrowserZoom(chromeState.panelId, 1)
+                    .then((zoomFactor) =>
+                      setSiteState((current) => (current ? { ...current, zoomFactor } : current))
+                    )
+                    .catch((error) => reportSiteActionError("Couldn't reset zoom", error));
+                }}
+              >
+                Reset zoom
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                onSelect={() => {
+                  void panel
+                    .setBrowserZoom(chromeState.panelId, siteState.zoomFactor + 0.1)
+                    .then((zoomFactor) =>
+                      setSiteState((current) => (current ? { ...current, zoomFactor } : current))
+                    )
+                    .catch((error) => reportSiteActionError("Couldn't change zoom", error));
+                }}
+              >
+                Zoom in
+              </DropdownMenu.Item>
+              <DropdownMenu.Separator />
+              <DropdownMenu.Item onSelect={() => void panel.printBrowserPage(chromeState.panelId)}>
+                Print…
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                onSelect={() => void panel.saveBrowserPagePdf(chromeState.panelId)}
+              >
+                Save as PDF…
+              </DropdownMenu.Item>
+              <DropdownMenu.Separator />
+              <DropdownMenu.Item
+                color="red"
+                onSelect={() => {
+                  if (
+                    !window.confirm(
+                      `Clear ${siteState.cookieCount} cookie${
+                        siteState.cookieCount === 1 ? "" : "s"
+                      } for ${siteState.origin}?`
+                    )
+                  ) {
+                    return;
+                  }
+                  void panel
+                    .clearBrowserSiteData(chromeState.panelId)
+                    .then(() =>
+                      setSiteState((current) =>
+                        current ? { ...current, cookieCount: 0 } : current
+                      )
+                    )
+                    .catch((error) => reportSiteActionError("Couldn't clear site data", error));
+                }}
+              >
+                Clear site data ({siteState.cookieCount})
+              </DropdownMenu.Item>
+              <DropdownMenu.Item onSelect={() => void panel.createAboutPanel("permissions")}>
+                Website permissions…
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Root>
+        </>
+      ) : null}
     </Flex>
   );
 }
@@ -1016,6 +1202,17 @@ function HoverableBreadcrumbItem({
     archivePanel();
   };
 
+  const handleAuxClick = (e: MouseEvent<HTMLSpanElement>) => {
+    if (!isPanelClosePointerButton(e.button)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    archivePanel();
+  };
+
+  const handleMouseDown = (e: MouseEvent<HTMLSpanElement>) => {
+    if (isPanelClosePointerButton(e.button)) e.preventDefault();
+  };
+
   const handleKeyDown = (e: KeyboardEvent<HTMLSpanElement>) => {
     if (e.key !== "Enter" && e.key !== " ") return;
     e.preventDefault();
@@ -1047,6 +1244,8 @@ function HoverableBreadcrumbItem({
           color: isCurrentActive ? "var(--accent-12)" : undefined,
         }}
         onClick={handleActivate}
+        onMouseDown={handleMouseDown}
+        onAuxClick={handleAuxClick}
         onContextMenu={onContextMenu}
         onKeyDown={handleKeyDown}
         onMouseEnter={() => setIsHovered(true)}

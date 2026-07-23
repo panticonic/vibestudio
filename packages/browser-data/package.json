@@ -20,6 +20,10 @@
     "./storage": {
       "types": "./dist/storage/index.d.ts",
       "default": "./dist/storage/index.js"
+    },
+    "./source-reader-internals": {
+      "types": "./dist/sourceReaderInternals.d.ts",
+      "default": "./dist/sourceReaderInternals.js"
     }
   },
   "scripts": {

@@ -1,12 +1,13 @@
 // Shared types used across main, renderer, server, and preload
 
-import type { CreateChildOptions } from "@vibestudio/types";
+import type { CreateChildOptions, PanelPlacementHint } from "@vibestudio/types";
 import type { CapabilityScope } from "@vibestudio/rpc";
 import type { EvalAuthorityCeiling, UnitAuthorityManifest } from "./authorityManifest.js";
 import type { StateArgsSchema, StateArgsValue } from "./stateArgs.js";
 
 // Re-export types for consumers of this module
 export type { StateArgsSchema, StateArgsValue };
+export type { PanelPlacementHint };
 
 // =============================================================================
 // Package Manifest
@@ -71,6 +72,8 @@ export interface PackageManifest {
   hiddenInLauncher?: boolean;
   /** Auto-archive a panel when it has no children at startup. */
   autoArchiveWhenEmpty?: boolean;
+  /** Default layout placement hint for this panel (call-site `placement` wins). */
+  placement?: PanelPlacementHint;
   // ----- Build-pipeline fields -----
   /** Whether to include inline source maps in the build. */
   sourcemap?: boolean;
@@ -319,6 +322,12 @@ export interface PanelSnapshot {
   autoArchiveWhenEmpty?: boolean;
   /** If true, this panel is privileged and approvals targeting it use severe tone. */
   privileged?: boolean;
+  /**
+   * Effective layout placement hint, resolved server-side at creation time
+   * (call-site `placement` ?? manifest `placement`). The shell reads this one
+   * value and never re-implements precedence.
+   */
+  placement?: PanelPlacementHint;
 }
 
 /**
@@ -329,9 +338,15 @@ export interface PanelSnapshot {
 export interface PanelNavigationState {
   url?: string;
   pageTitle?: string;
+  /** Opaque canonical favicon reference; shell renderers resolve bytes through browser-data. */
+  favicon?: {
+    pageUrl: string;
+    updatedAt: number;
+  };
   isLoading?: boolean;
   canGoBack?: boolean;
   canGoForward?: boolean;
+  mediaPlaying?: boolean;
 }
 
 export interface PanelSnapshotHistory {
@@ -482,6 +497,7 @@ export interface PanelSummary {
   childCount: number;
   buildState?: string;
   position: number;
+  favicon?: PanelNavigationState["favicon"];
 }
 
 /**

@@ -16,7 +16,7 @@ import type { PanelRuntimeLeaseChangedEvent } from "./panel/panelLease.js";
 import type { CallerKind } from "./principalKinds.js";
 import type { ProtectedPublicationEvent } from "./protectedPublicationEvents.js";
 import type { WorkspacePresenceEntry } from "./workspacePresence.js";
-import type { PanelRecoverySnapshot, PanelTreeSnapshot } from "./types.js";
+import type { PanelPlacementHint, PanelRecoverySnapshot, PanelTreeSnapshot } from "./types.js";
 
 /**
  * Known event names that can be subscribed to.
@@ -43,9 +43,11 @@ export type EventName =
   | "toggle-address-bar"
   | "focus-address-bar"
   | "panel-chrome-command"
+  | "toggle-find-in-page"
   | "toggle-panel-devtools"
   | "panel-initialization-error"
   | "panel-responsiveness-changed"
+  | "native-slot-focused"
   | "navigate-about"
   | "navigate-to-panel"
   | "external-open:open"
@@ -53,6 +55,7 @@ export type EventName =
   | "browser-import-progress"
   | "browser-data-changed"
   | "autofill:save-prompt"
+  | "autofill:form-fill-save-prompt"
   | "notification:show"
   | "notification:dismiss"
   | "notification:action"
@@ -75,7 +78,10 @@ export interface NotificationAction {
     | { type: "app.rollback"; appId: string; buildKey?: string }
     | { type: "workspace.restartUnit"; name: string }
     | { type: "desktop.downloadUpdate" }
-    | { type: "desktop.installUpdate" };
+    | { type: "desktop.installUpdate" }
+    | { type: "browser.downloadOpen"; downloadId: string }
+    | { type: "browser.downloadReveal"; downloadId: string }
+    | { type: "panel.focus"; panelId: string };
   invoke?: {
     kind: "extension";
     extension: string;
@@ -131,6 +137,8 @@ export interface NotificationPayload {
   history?: NotificationHistoryItem[];
   /** Panel that triggered this notification */
   sourcePanelId?: string;
+  /** Host-validated raster data for website notification identity. */
+  iconDataUrl?: string;
 }
 
 export interface HostTargetChangedPayload {
@@ -168,11 +176,29 @@ export interface EventPayloads {
   "toggle-address-bar": undefined;
   "focus-address-bar": undefined;
   "panel-chrome-command": { command: PanelCommandId };
+  "toggle-find-in-page": void;
   "toggle-panel-devtools": undefined;
   "panel-initialization-error": { path: string; error: string };
   "panel-responsiveness-changed": { panelId: string; responsive: boolean };
+  /**
+   * Main→shell focus feedback (multi-column plan §5.2): a slot-bound native
+   * panel view's WebContents gained focus by any route (keyboard traversal,
+   * programmatic focus, click), so shell layout focus can follow.
+   */
+  "native-slot-focused": { nativeSlotId: string; panelId: string };
   "navigate-about": { page: string };
-  "navigate-to-panel": { panelId: string };
+  /**
+   * Canonical layout intent (multi-column plan §3.1/§4): the shell layout
+   * engine consumes parentId/hint/intentId to place the panel deliberately.
+   * All fields beyond panelId are best-effort — emitters populate what they
+   * have (e.g. child creation carries parent + resolved placement hint).
+   */
+  "navigate-to-panel": {
+    panelId: string;
+    parentId?: string;
+    hint?: PanelPlacementHint;
+    intentId?: string;
+  };
   "external-open:open": {
     url: string;
     callerId: string;
@@ -214,6 +240,11 @@ export interface EventPayloads {
   // `extensions:@workspace-extensions/browser-data::import-complete`.
   "browser-data-changed": { dataType: string };
   "autofill:save-prompt": { panelId: string; origin: string; username: string; isUpdate: boolean };
+  "autofill:form-fill-save-prompt": {
+    panelId: string;
+    origin: string;
+    fields: Array<{ type: string; label: string }>;
+  };
   "notification:show": NotificationPayload;
   "notification:dismiss": { id: string };
   "notification:action": { id: string; actionId: string };
@@ -322,9 +353,11 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "toggle-address-bar",
   "focus-address-bar",
   "panel-chrome-command",
+  "toggle-find-in-page",
   "toggle-panel-devtools",
   "panel-initialization-error",
   "panel-responsiveness-changed",
+  "native-slot-focused",
   "navigate-about",
   "navigate-to-panel",
   "external-open:open",
@@ -332,6 +365,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "browser-import-progress",
   "browser-data-changed",
   "autofill:save-prompt",
+  "autofill:form-fill-save-prompt",
   "notification:show",
   "notification:dismiss",
   "notification:action",

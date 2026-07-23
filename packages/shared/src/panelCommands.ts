@@ -25,6 +25,17 @@ export interface AddressNavigationModifiers {
   altKey?: boolean;
 }
 
+/** Browser-familiar application accelerators for panel lifecycle. */
+export const PANEL_KEYBOARD_ACCELERATORS = {
+  newPanel: "CmdOrCtrl+T",
+  closePanel: "CmdOrCtrl+W",
+} as const;
+
+/** Mouse button 1 is the browser-standard auxiliary action for closing a tab-like item. */
+export function isPanelClosePointerButton(button: number): boolean {
+  return button === 1;
+}
+
 export type PanelCommandId =
   | "back"
   | "forward"
@@ -60,7 +71,10 @@ export interface PanelCommandDefinition {
 
 export const DEFAULT_SEARCH_TEMPLATE = "https://www.google.com/search?q=%s";
 
-export function applySearchTemplate(query: string, template: string = DEFAULT_SEARCH_TEMPLATE): string {
+export function applySearchTemplate(
+  query: string,
+  template: string = DEFAULT_SEARCH_TEMPLATE
+): string {
   const encoded = encodeURIComponent(query);
   if (template.includes("%s")) return template.replace(/%s/g, encoded);
   const separator = template.includes("?") ? "&" : "?";
@@ -74,7 +88,10 @@ export function canonicalizeBrowserHistoryUrl(url: string): string | null {
     parsed.protocol = parsed.protocol.toLowerCase();
     parsed.hostname = parsed.hostname.toLowerCase();
     parsed.hash = "";
-    if ((parsed.protocol === "http:" && parsed.port === "80") || (parsed.protocol === "https:" && parsed.port === "443")) {
+    if (
+      (parsed.protocol === "http:" && parsed.port === "80") ||
+      (parsed.protocol === "https:" && parsed.port === "443")
+    ) {
       parsed.port = "";
     }
     return parsed.toString();
@@ -83,23 +100,31 @@ export function canonicalizeBrowserHistoryUrl(url: string): string | null {
   }
 }
 
-export function getBrowserNavigationIntentForCommand(command: PanelCommandId): BrowserNavigationIntent | null {
-  if (command === "back" || command === "forward") return { transition: "back_forward", typed: false };
+export function getBrowserNavigationIntentForCommand(
+  command: PanelCommandId
+): BrowserNavigationIntent | null {
+  if (command === "back" || command === "forward")
+    return { transition: "back_forward", typed: false };
   if (command === "reload-panel" || command === "reload-view" || command === "force-reload-view") {
     return { transition: "reload", typed: false };
   }
   return null;
 }
 
-export function getBrowserNavigationIntentForAddressAction(action: AddressAction): BrowserNavigationIntent | null {
-  if (action.type === "navigate-url" && action.recordAsTyped) return { transition: "typed", typed: true };
-  if (action.type === "search") return { transition: "generated", typed: Boolean(action.recordAsTyped) };
-  if (action.type === "keyword-search") return { transition: "keyword_generated", typed: Boolean(action.recordAsTyped) };
+export function getBrowserNavigationIntentForAddressAction(
+  action: AddressAction
+): BrowserNavigationIntent | null {
+  if (action.type === "navigate-url" && action.recordAsTyped)
+    return { transition: "typed", typed: true };
+  if (action.type === "search")
+    return { transition: "generated", typed: Boolean(action.recordAsTyped) };
+  if (action.type === "keyword-search")
+    return { transition: "keyword_generated", typed: Boolean(action.recordAsTyped) };
   return null;
 }
 
 export function getAddressNavigationModeFromModifiers(
-  modifiers: AddressNavigationModifiers,
+  modifiers: AddressNavigationModifiers
 ): AddressNavigationMode {
   if (modifiers.altKey) return "external";
   if (modifiers.metaKey || modifiers.ctrlKey) return "root";
@@ -108,7 +133,7 @@ export function getAddressNavigationModeFromModifiers(
 }
 
 export function getPanelCommandDefinitions(
-  context: PanelCommandContext = {},
+  context: PanelCommandContext = {}
 ): PanelCommandDefinition[] {
   const chrome = context.chrome ?? null;
   const isBrowser = chrome?.kind === "browser";
@@ -217,6 +242,7 @@ export function getPanelCommandDefinitions(
     {
       id: "archive",
       label: "Archive",
+      shortcut: "Cmd/Ctrl+W",
       visible: true,
       enabled: Boolean(chrome),
     },
@@ -225,7 +251,7 @@ export function getPanelCommandDefinitions(
 
 export function getAvailablePanelCommands(
   context: PanelCommandContext = {},
-  ids?: readonly PanelCommandId[],
+  ids?: readonly PanelCommandId[]
 ): PanelCommandDefinition[] {
   const allowed = ids ? new Set<PanelCommandId>(ids) : null;
   return getPanelCommandDefinitions(context).filter((command) => {

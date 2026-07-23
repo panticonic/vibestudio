@@ -1,6 +1,8 @@
 import {
   APPROVAL_CATEGORY_DECIDE,
   APPROVAL_CATEGORY_INPUT_REQUIRED,
+  APPROVAL_CATEGORY_BROWSER_PERMISSION,
+  NOTIFICATION_ACTION_IDS_BROWSER_PERMISSION,
   NOTIFICATION_ACTION_IDS_INPUT_REQUIRED,
   NOTIFICATION_ACTION_IDS_STANDARD,
   type PushApprovalDataPayload,
@@ -43,6 +45,7 @@ interface TrackedApproval {
 }
 
 function categoryFor(approval: PendingApproval): string {
+  if (approval.kind === "browser-permission") return APPROVAL_CATEGORY_BROWSER_PERMISSION;
   return approval.kind === "credential" ||
     approval.kind === "capability" ||
     approval.kind === "unit-batch"
@@ -51,6 +54,9 @@ function categoryFor(approval: PendingApproval): string {
 }
 
 function actionsFor(approval: PendingApproval): readonly string[] {
+  if (approval.kind === "browser-permission") {
+    return NOTIFICATION_ACTION_IDS_BROWSER_PERMISSION;
+  }
   if (approval.kind === "unit-batch") {
     // Source/config change approvals offer a dev-session grant; startup/management do not.
     return approval.trigger === "meta-change" || approval.trigger === "source-change"
@@ -68,6 +74,8 @@ const ACTION_TITLES: Record<string, string> = {
   deny: HOST_APPROVAL_COPY.pushActions.deny,
   open: HOST_APPROVAL_COPY.pushActions.open,
   version: HOST_APPROVAL_COPY.pushActions.version,
+  always: "Always allow",
+  block: "Always block",
 };
 
 function actionPayloadFor(approval: PendingApproval): Array<{ id: string; title: string }> {

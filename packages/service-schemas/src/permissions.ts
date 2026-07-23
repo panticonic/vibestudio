@@ -4,7 +4,7 @@ import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 export const savedPermissionGrantSchema = z
   .object({
     id: z.string().min(1),
-    kind: z.enum(["capability", "userland", "credential-use"]),
+    kind: z.enum(["capability", "userland", "credential-use", "browser-site"]),
     callerLabel: z.string().min(1),
     scopeLabel: z.string().min(1),
     capability: z.string().optional(),
@@ -29,7 +29,7 @@ export const permissionsMethods = defineServiceMethods({
     args: z.tuple([
       z
         .object({
-          kind: z.enum(["capability", "userland", "credential-use"]),
+          kind: z.enum(["capability", "userland", "credential-use", "browser-site"]),
           id: z.string().min(1),
         })
         .strict(),

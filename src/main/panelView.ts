@@ -10,7 +10,6 @@ import { createDevLogger } from "@vibestudio/dev-log";
 import type { ViewManager } from "./viewManager.js";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { PanelViewLike, ServerInfoLike } from "@vibestudio/shared/panelInterfaces";
-import { BROWSER_SESSION_PARTITION } from "@vibestudio/shared/panelInterfaces";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import {
   getCurrentSnapshot,
@@ -68,7 +67,7 @@ interface PanelOrchestratorLike {
   createBrowserUrlPanel(
     callerId: string,
     url: string,
-    options?: { name?: string; focus?: boolean },
+    options?: { name?: string; focus?: boolean; placement?: "child" | "sibling" },
     scopedCaller?: PanelLinkCaller
   ): Promise<{ id: string; title: string }>;
   navigatePanel(
@@ -91,9 +90,17 @@ interface PanelOrchestratorLike {
 
 type PanelLinkCaller = { callerId: string; callerKind: "app" };
 
-interface AutofillManagerLike {
+interface FormFillManagerLike {
   attachToWebContents(webContentsId: number, webContents: Electron.WebContents): void;
   detachFromWebContents(webContentsId: number, webContents?: Electron.WebContents): void;
+}
+
+interface BrowserFaviconObserverLike {
+  attach(
+    panelId: string,
+    contents: Electron.WebContents,
+    onStored: (favicon: { pageUrl: string; updatedAt: number }) => void
+  ): () => void;
 }
 
 export class PanelView implements PanelViewLike {
@@ -108,12 +115,15 @@ export class PanelView implements PanelViewLike {
   private sendPanelEvent?: (panelId: string, event: string, payload: unknown) => void;
   private onPanelLinkError?: (panelId: string, url: string, message: string) => void;
   private onPanelResponsivenessChanged?: (panelId: string, responsive: boolean) => void;
-  private autofillManager?: AutofillManagerLike;
+  private formFillManager?: FormFillManagerLike;
+  private browserFaviconObserver?: BrowserFaviconObserverLike;
+  private browserFaviconCleanup = new Map<string, () => void>();
   private autofillPreloadPath?: string;
   private panelPreloadPath?: string;
   private appPreloadPath?: string;
   private browserPreloadPath?: string;
   private browserHistoryRecorder?: BrowserHistoryRecorder;
+  private readonly getBrowserSessionPartition: () => string;
 
   private browserStateCleanup = new Map<
     string,
@@ -144,12 +154,14 @@ export class PanelView implements PanelViewLike {
     sendPanelEvent?: (panelId: string, event: string, payload: unknown) => void;
     onPanelLinkError?: (panelId: string, url: string, message: string) => void;
     onPanelResponsivenessChanged?: (panelId: string, responsive: boolean) => void;
-    autofillManager?: AutofillManagerLike;
+    formFillManager?: FormFillManagerLike;
+    browserFaviconObserver?: BrowserFaviconObserverLike;
     autofillPreloadPath?: string;
     panelPreloadPath?: string;
     appPreloadPath?: string;
     browserPreloadPath?: string;
     browserHistoryRecorder?: BrowserHistoryRecorder;
+    getBrowserSessionPartition?: () => string;
   }) {
     this.viewManager = deps.viewManager;
     this.panelRegistry = deps.panelRegistry;
@@ -164,12 +176,18 @@ export class PanelView implements PanelViewLike {
     this.sendPanelEvent = deps.sendPanelEvent;
     this.onPanelLinkError = deps.onPanelLinkError;
     this.onPanelResponsivenessChanged = deps.onPanelResponsivenessChanged;
-    this.autofillManager = deps.autofillManager;
+    this.formFillManager = deps.formFillManager;
+    this.browserFaviconObserver = deps.browserFaviconObserver;
     this.autofillPreloadPath = deps.autofillPreloadPath;
     this.panelPreloadPath = deps.panelPreloadPath;
     this.appPreloadPath = deps.appPreloadPath;
     this.browserPreloadPath = deps.browserPreloadPath;
     this.browserHistoryRecorder = deps.browserHistoryRecorder;
+    this.getBrowserSessionPartition =
+      deps.getBrowserSessionPartition ??
+      (() => {
+        throw new Error("Browser environment is not initialized");
+      });
   }
 
   private buildManagedHosts(serverInfo: ServerInfoLike): string[] {
@@ -344,10 +362,12 @@ export class PanelView implements PanelViewLike {
 
   destroyView(panelId: string): void {
     const contents = this.viewManager.getWebContents(panelId);
-    if (this.autofillManager && contents && !contents.isDestroyed()) {
-      this.autofillManager.detachFromWebContents(contents.id, contents);
+    if (this.formFillManager && contents && !contents.isDestroyed()) {
+      this.formFillManager.detachFromWebContents(contents.id, contents);
     }
     this.cleanupBrowserStateTracking(panelId, contents ?? undefined);
+    this.browserFaviconCleanup.get(panelId)?.();
+    this.browserFaviconCleanup.delete(panelId);
     this.cleanupLinkInterception(panelId, contents ?? undefined);
     this.cdpHost.cleanupPanelAccess(panelId);
     this.cdpHost.unregisterTarget(panelId);
@@ -393,7 +413,7 @@ export class PanelView implements PanelViewLike {
       type: "panel",
       preload: this.browserPreloadPath ?? this.autofillPreloadPath ?? null,
       parentId: parentId ?? undefined,
-      partition: BROWSER_SESSION_PARTITION,
+      partition: this.getBrowserSessionPartition(),
       injectHostThemeVariables: false,
     });
 
@@ -409,11 +429,21 @@ export class PanelView implements PanelViewLike {
     this.contentLoadHandlers.set(panelId, { domReady: domReadyHandler });
 
     // Attach autofill for browser panels
-    if (this.autofillManager) {
-      this.autofillManager.attachToWebContents(view.webContents.id, view.webContents);
+    if (this.formFillManager) {
+      this.formFillManager.attachToWebContents(view.webContents.id, view.webContents);
+    }
+    if (this.browserFaviconObserver) {
+      this.browserFaviconCleanup.set(
+        panelId,
+        this.browserFaviconObserver.attach(panelId, view.webContents, (favicon) => {
+          this.updatePanelState(panelId, { favicon });
+        })
+      );
     }
 
-    // No setupLinkInterception — browser panels navigate freely
+    // Browser panels navigate freely in their current frame, but auxiliary
+    // clicks and target-blank/window.open requests still become panel children.
+    this.setupWindowOpenInterception(panelId, view.webContents, false);
     await this.viewManager.navigateView(panelId, url);
   }
 
@@ -561,11 +591,17 @@ export class PanelView implements PanelViewLike {
             }, TRANSIENT_MAIN_FRAME_LOAD_RETRY_DELAY_MS);
             return;
           }
+          const panel = this.panelRegistry.getPanel(panelId);
+          const browserFailure =
+            panel && isBrowserPanelSource(getPanelSource(panel))
+              ? describeBrowserLoadFailure(code, desc)
+              : null;
           this.showPanelErrorPage(
             panelId,
-            "Panel failed to load",
+            browserFailure?.title ?? "Panel failed to load",
             `${desc} (${code}) while loading ${url}`,
-            url
+            url,
+            browserFailure?.message
           );
         }
       },
@@ -606,6 +642,12 @@ export class PanelView implements PanelViewLike {
           this.browserHistoryRecorder?.updateTitle(url, title);
         }
       },
+      mediaStartedPlaying: () => {
+        queueStateUpdate({ mediaPlaying: true });
+      },
+      mediaPaused: () => {
+        queueStateUpdate({ mediaPlaying: false });
+      },
     };
 
     contents.on("did-navigate", handlers.didNavigate);
@@ -618,6 +660,8 @@ export class PanelView implements PanelViewLike {
     contents.on("did-stop-loading", handlers.didStopLoading);
     contents.on("did-finish-load", handlers.didFinishLoad);
     contents.on("page-title-updated", handlers.pageTitleUpdated);
+    contents.on("media-started-playing", handlers.mediaStartedPlaying);
+    contents.on("media-paused", handlers.mediaPaused);
 
     const cleanup = () => {
       if (cleaned) return;
@@ -635,6 +679,8 @@ export class PanelView implements PanelViewLike {
         contents.off("did-stop-loading", handlers.didStopLoading);
         contents.off("did-finish-load", handlers.didFinishLoad);
         contents.off("page-title-updated", handlers.pageTitleUpdated);
+        contents.off("media-started-playing", handlers.mediaStartedPlaying);
+        contents.off("media-paused", handlers.mediaPaused);
       }
       this.browserStateCleanup.delete(panelId);
     };
@@ -673,10 +719,14 @@ export class PanelView implements PanelViewLike {
 
   // ==== Link interception ===================================================
 
-  private setupLinkInterception(panelId: string, contents: Electron.WebContents): void {
+  private setupWindowOpenInterception(
+    panelId: string,
+    contents: Electron.WebContents,
+    translateManagedLinks = true
+  ): void {
     contents.setWindowOpenHandler((details) => {
       const url = details.url;
-      const parsed = this.parseManagedPanelUrl(url);
+      const parsed = translateManagedLinks ? this.parseManagedPanelUrl(url) : null;
       if (parsed) {
         void this.handleManagedLink(panelId, parsed, url, "child").catch((err: unknown) =>
           this.handlePanelLinkError(panelId, err, url)
@@ -684,7 +734,7 @@ export class PanelView implements PanelViewLike {
         return { action: "deny" as const };
       }
       if (/^https?:\/\//i.test(url)) {
-        void this.openBrowserLink(panelId, url).catch((err: unknown) =>
+        void this.openBrowserLink(panelId, url, details.disposition).catch((err: unknown) =>
           this.handlePanelLinkError(panelId, err, url)
         );
         return { action: "deny" as const };
@@ -696,6 +746,10 @@ export class PanelView implements PanelViewLike {
       );
       return { action: "deny" as const };
     });
+  }
+
+  private setupLinkInterception(panelId: string, contents: Electron.WebContents): void {
+    this.setupWindowOpenInterception(panelId, contents);
 
     const willNavigateHandler = (event: Electron.Event, url: string) => {
       const canonical = tryParsePanelLocationLink(url);
@@ -871,12 +925,19 @@ export class PanelView implements PanelViewLike {
     );
   }
 
-  private async openBrowserLink(sourceViewId: string, url: string): Promise<void> {
+  private async openBrowserLink(
+    sourceViewId: string,
+    url: string,
+    disposition: Electron.HandlerDetails["disposition"] = "default"
+  ): Promise<void> {
     const caller = this.scopedCallerForHostedView(sourceViewId);
+    const background = disposition === "background-tab";
+    const placement =
+      disposition === "new-window" || disposition === "foreground-tab" ? "sibling" : "child";
     const result = await this.panelOrchestrator.createBrowserUrlPanel(
       sourceViewId,
       url,
-      { focus: true },
+      { focus: !background, placement },
       caller
     );
     this.sendPanelEvent?.(sourceViewId, "runtime:child-created", { childId: result.id, url });
@@ -919,7 +980,8 @@ export class PanelView implements PanelViewLike {
     panelId: string,
     title: string,
     detail: string,
-    retryUrl?: string
+    retryUrl?: string,
+    userMessage = "The panel stopped unexpectedly. Reload it to try again."
   ): void {
     const contents = this.viewManager.getWebContents(panelId);
     if (!contents || contents.isDestroyed()) return;
@@ -939,8 +1001,11 @@ export class PanelView implements PanelViewLike {
   .box { max-width: 560px; padding: 2rem; }
   h1 { font-size: 1.1rem; color: #b42318; }
   p, summary { font-size: 0.9rem; line-height: 1.5; color: #5f6368; word-break: break-word; }
-  a { display: inline-block; color: white; background: #a15c00; padding: .55rem .8rem;
-      border-radius: 6px; text-decoration: none; font-weight: 600; }
+  a, button { display: inline-block; color: white; background: #a15c00; padding: .55rem .8rem;
+      border: 0; border-radius: 6px; text-decoration: none; font: inherit; font-weight: 600;
+      cursor: pointer; margin-right: .4rem; }
+  code { display: block; padding: .65rem; background: rgba(127,127,127,.12);
+      border-radius: 6px; word-break: break-all; user-select: all; }
   details { margin: 1rem 0; }
   @media (prefers-color-scheme: dark) {
     body { background: #272a2d; color: #ddd; }
@@ -949,9 +1014,22 @@ export class PanelView implements PanelViewLike {
   }
 </style></head><body><div class="box">
   <h1>${escapeHtml(title)}</h1>
-  <p>The panel stopped unexpectedly. Reload it to try again.</p>
+  <p>${escapeHtml(userMessage)}</p>
+  ${targetUrl ? `<code id="failed-url">${escapeHtml(targetUrl)}</code>` : ""}
   <details><summary>Technical details</summary><p>${escapeHtml(detail)}</p></details>
-  ${targetUrl ? `<p><a href="${escapeHtml(targetUrl)}">Reload panel</a></p>` : panel ? "<p>Open the panel menu and choose Rebuild.</p>" : "<p>Restart Vibestudio from the launcher to recover the app shell.</p>"}
+  ${
+    targetUrl
+      ? `<p><a href="${escapeHtml(targetUrl)}">Retry</a><button id="copy-url" type="button">Copy URL</button></p>
+  <script>document.getElementById('copy-url').addEventListener('click', async function() {
+    var value = document.getElementById('failed-url').textContent || '';
+    try { await navigator.clipboard.writeText(value); this.textContent = 'Copied'; }
+    catch (_) { var range = document.createRange(); range.selectNodeContents(document.getElementById('failed-url'));
+      var selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range); }
+  });</script>`
+      : panel
+        ? "<p>Open the panel menu and choose Rebuild.</p>"
+        : "<p>Restart Vibestudio from the launcher to recover the app shell.</p>"
+  }
 </div></body></html>`;
     void this.viewManager
       .navigateView(panelId, `data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
@@ -1005,4 +1083,46 @@ export class PanelView implements PanelViewLike {
       this.panelRegistry.notifyPanelTreeUpdate();
     }
   }
+}
+
+function describeBrowserLoadFailure(
+  code: number,
+  description: string
+): { title: string; message: string } {
+  if (code === -106 || /internet_disconnected|offline/i.test(description)) {
+    return {
+      title: "You’re offline",
+      message: "Reconnect to the internet, then retry this page.",
+    };
+  }
+  if (code === -105 || /name_not_resolved|dns/i.test(description)) {
+    return {
+      title: "Site not found",
+      message: "The site’s address could not be resolved. Check the URL or try again later.",
+    };
+  }
+  if ((code <= -200 && code >= -299) || /certificate|cert_/i.test(description)) {
+    return {
+      title: "Secure connection failed",
+      message:
+        "Vibestudio could not establish a trusted HTTPS connection. Check the address and the site’s certificate.",
+    };
+  }
+  if (code === -102 || /connection_refused/i.test(description)) {
+    return {
+      title: "Site refused the connection",
+      message: "The server is reachable but is not accepting connections.",
+    };
+  }
+  if (code === -7 || /timed_out/i.test(description)) {
+    return {
+      title: "Site took too long to respond",
+      message: "The connection timed out. Retry when the network or site is available.",
+    };
+  }
+  return {
+    title: "Page couldn’t load",
+    message:
+      "The browser could not load this page. Retry or use the panel menu to open it externally.",
+  };
 }

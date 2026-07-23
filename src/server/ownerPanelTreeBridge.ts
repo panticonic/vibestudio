@@ -792,6 +792,7 @@ export async function createServerPanelTreeBridge(
           focus?: boolean;
           ref?: string;
           stateArgs?: Record<string, unknown>;
+          placement?: import("@vibestudio/shared/types").PanelPlacementHint;
         };
         // Resolve the owning panel TREE SLOT once, durably. Explicit null = root; an explicit id or
         // the implicit caller = walk the entity lineage to the nearest OPEN panel and return its slot

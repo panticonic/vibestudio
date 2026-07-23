@@ -14,6 +14,7 @@ function createHarness(
     pinned: new Set<string>(),
     keepLoaded: new Set<string>(),
     panels: new Set<string>(),
+    resident: new Set<string>(),
   };
   const unload = vi.fn(async () => undefined);
   const reportUnloadError = vi.fn();
@@ -24,6 +25,7 @@ function createHarness(
     idleSweepIntervalMs: 50,
     now: () => Date.now(),
     getFocusedPanelId: () => state.focusedPanelId,
+    getResidentPanelIds: () => [...state.resident],
     isPinned: (panelId) => state.pinned.has(panelId),
     isKeepLoaded: (panelId) => state.keepLoaded.has(panelId),
     panelExists: (panelId) => state.panels.has(panelId),
@@ -113,6 +115,51 @@ describe("PanelResourcePolicy", () => {
 
     expect(harness.unload).toHaveBeenCalledOnce();
     expect(harness.unload).toHaveBeenCalledWith("old", "resource-cap");
+  });
+
+  it("protects slot-bound non-focused panels from the idle sweep until unbound", async () => {
+    const harness = createHarness({ idleUnloadMs: 100 });
+    for (const panelId of ["focused", "resident"]) {
+      harness.state.panels.add(panelId);
+      harness.authority.track(panelId);
+    }
+    harness.state.focusedPanelId = "focused";
+    harness.state.resident.add("resident");
+    harness.authority.start();
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(harness.unload).not.toHaveBeenCalled();
+
+    // Unbinding the slot (e.g. the pane closed or its column parked) removes
+    // the protection; the next sweep may collect it.
+    harness.state.resident.delete("resident");
+    await vi.advanceTimersByTimeAsync(50);
+    expect(harness.unload).toHaveBeenCalledOnce();
+    expect(harness.unload).toHaveBeenCalledWith("resident", "idle-timeout");
+  });
+
+  it("protects slot-bound non-focused panels from cap eviction until unbound", async () => {
+    const harness = createHarness({ maximumLoadedPanels: 2 });
+    for (const panelId of ["resident", "old", "new"]) harness.state.panels.add(panelId);
+    harness.state.resident.add("resident");
+    harness.authority.track("resident");
+    vi.setSystemTime(1);
+    harness.authority.track("old");
+    vi.setSystemTime(2);
+    harness.authority.track("new");
+
+    await harness.authority.enforceCap("new");
+    expect(harness.unload).toHaveBeenCalledOnce();
+    expect(harness.unload).toHaveBeenCalledWith("old", "resource-cap");
+
+    harness.unload.mockClear();
+    harness.state.resident.delete("resident");
+    harness.state.panels.add("extra");
+    vi.setSystemTime(3);
+    harness.authority.track("extra");
+    await harness.authority.enforceCap("extra");
+    expect(harness.unload).toHaveBeenCalledOnce();
+    expect(harness.unload).toHaveBeenCalledWith("resident", "resource-cap");
   });
 
   it("does not track resources for hosts that do not load assigned leases", async () => {

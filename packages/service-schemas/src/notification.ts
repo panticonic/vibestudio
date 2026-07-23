@@ -40,6 +40,9 @@ export const NotificationActionSchema = z.object({
       }),
       z.object({ type: z.literal("desktop.downloadUpdate") }),
       z.object({ type: z.literal("desktop.installUpdate") }),
+      z.object({ type: z.literal("browser.downloadOpen"), downloadId: z.string() }),
+      z.object({ type: z.literal("browser.downloadReveal"), downloadId: z.string() }),
+      z.object({ type: z.literal("panel.focus"), panelId: z.string() }),
     ])
     .optional()
     .describe("Optional built-in command the shell runs when the action is taken."),

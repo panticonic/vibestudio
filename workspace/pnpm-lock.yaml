@@ -54,6 +54,28 @@ importers:
         specifier: ^3.2.4
         version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
+  ../packages/browser-import:
+    dependencies:
+      '@vibestudio/browser-data':
+        specifier: workspace:*
+        version: link:../browser-data
+      bplist-parser:
+        specifier: ^0.3.2
+        version: 0.3.2
+      sql.js:
+        specifier: ^1.14.0
+        version: 1.14.1
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.13.2
+      '@types/sql.js':
+        specifier: ^1.4.11
+        version: 1.4.11
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
+
   ../packages/content-addressing: {}
 
   ../packages/credential-client:
@@ -426,6 +448,27 @@ importers:
         specifier: workspace:*
         version: link:../../packages/runtime
 
+  about/bookmarks:
+    dependencies:
+      '@radix-ui/react-icons':
+        specifier: ^1.3.2
+        version: 1.3.2(react@19.0.0)
+      '@radix-ui/themes':
+        specifier: ^3.2.1
+        version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/browser-data':
+        specifier: workspace:*
+        version: link:../../../packages/browser-data
+      '@workspace/about-shared':
+        specifier: workspace:*
+        version: link:../../packages/about-shared
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
+
   about/browser-import-inspector:
     dependencies:
       '@radix-ui/react-icons':
@@ -463,6 +506,27 @@ importers:
         specifier: workspace:*
         version: link:../../packages/runtime
 
+  about/downloads:
+    dependencies:
+      '@radix-ui/themes':
+        specifier: ^3.2.1
+        version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/browser-data':
+        specifier: workspace:*
+        version: link:../../../packages/browser-data
+      '@workspace/react':
+        specifier: workspace:*
+        version: link:../../packages/react
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      '@workspace/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
+
   about/help:
     dependencies:
       '@workspace/about-shared':
@@ -474,6 +538,27 @@ importers:
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+
+  about/history:
+    dependencies:
+      '@radix-ui/react-icons':
+        specifier: ^1.3.2
+        version: 1.3.2(react@19.0.0)
+      '@radix-ui/themes':
+        specifier: ^3.2.1
+        version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/browser-data':
+        specifier: workspace:*
+        version: link:../../../packages/browser-data
+      '@workspace/about-shared':
+        specifier: workspace:*
+        version: link:../../packages/about-shared
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
 
   about/keyboard-shortcuts:
     dependencies:
@@ -660,6 +745,9 @@ importers:
       '@tanstack/react-virtual':
         specifier: ^3.13.0
         version: 3.14.5(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/browser-data':
+        specifier: workspace:*
+        version: link:../../../packages/browser-data
       '@vibestudio/identity':
         specifier: workspace:*
         version: link:../../../packages/identity
@@ -733,9 +821,9 @@ importers:
       '@vibestudio/browser-data':
         specifier: workspace:*
         version: link:../../../packages/browser-data
-      '@workspace/browser-data':
+      '@vibestudio/browser-import':
         specifier: workspace:*
-        version: link:../../packages/browser-data
+        version: link:../../../packages/browser-import
 
   extensions/claude-code:
     dependencies:
@@ -1029,28 +1117,6 @@ importers:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
-
-  packages/browser-data:
-    dependencies:
-      '@vibestudio/browser-data':
-        specifier: workspace:*
-        version: link:../../../packages/browser-data
-      bplist-parser:
-        specifier: ^0.3.2
-        version: 0.3.2
-      sql.js:
-        specifier: ^1.14.0
-        version: 1.14.1
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.1
-        version: 24.13.2
-      '@types/sql.js':
-        specifier: ^1.4.11
-        version: 1.4.11
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   packages/cdp-client: {}
 

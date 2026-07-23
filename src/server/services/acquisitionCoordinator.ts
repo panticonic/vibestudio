@@ -10,6 +10,8 @@ import {
 } from "./capabilityGrantStore.js";
 import { createHash } from "node:crypto";
 
+type AuthorityAcquisitionDecision = Exclude<GrantedDecision, "always" | "block">;
+
 export interface AcquisitionRequestInput {
   snapshot: InvocationSnapshot;
   snapshotDigest: string;
@@ -22,7 +24,7 @@ export interface AcquisitionRequestInput {
 
 export interface AcquisitionOutcome {
   state: "decided" | "closed";
-  decision?: GrantedDecision;
+  decision?: AuthorityAcquisitionDecision;
   info?: AcquisitionInfo;
 }
 
@@ -276,7 +278,7 @@ export class AcquisitionCoordinator {
       this.finish(entry, { state: "closed" });
       return;
     }
-    if (!allowedDecisions.includes(decision)) {
+    if (!isAuthorityAcquisitionDecision(decision) || !allowedDecisions.includes(decision)) {
       throw new Error(`Authority presentation returned disallowed decision '${decision}'`);
     }
     this.persistDecision(input, decision);
@@ -325,7 +327,10 @@ export class AcquisitionCoordinator {
     }
   }
 
-  private persistDecision(input: AcquisitionRequestInput, decision: GrantedDecision): void {
+  private persistDecision(
+    input: AcquisitionRequestInput,
+    decision: AuthorityAcquisitionDecision
+  ): void {
     if (decision === "deny") {
       if (input.tier === "critical") return;
       this.deps.grantStore.issue({
@@ -464,7 +469,9 @@ function approvalCallerKind(
   }
 }
 
-function decisionsForOrigin(input: AcquisitionRequestInput): readonly GrantedDecision[] {
+function decisionsForOrigin(
+  input: AcquisitionRequestInput
+): readonly AuthorityAcquisitionDecision[] {
   if (input.tier === "critical") return ["once", "deny"];
   if (input.snapshot.callerPrincipal.startsWith("session:")) {
     return ["once", "session", "deny"];
@@ -478,9 +485,9 @@ function decisionsForOrigin(input: AcquisitionRequestInput): readonly GrantedDec
 }
 
 function intersectAllowedDecisions(
-  origin: readonly GrantedDecision[],
+  origin: readonly AuthorityAcquisitionDecision[],
   operation: readonly import("@vibestudio/shared/approvals").ApprovalDecision[] | undefined
-): readonly GrantedDecision[] {
+): AuthorityAcquisitionDecision[] {
   const allowed = operation
     ? origin.filter((decision) => operation.includes(decision))
     : [...origin];
@@ -491,4 +498,12 @@ function intersectAllowedDecisions(
     );
   }
   return allowed;
+}
+
+function isAuthorityAcquisitionDecision(
+  decision: GrantedDecision | "dismiss"
+): decision is AuthorityAcquisitionDecision {
+  return (
+    decision === "once" || decision === "session" || decision === "version" || decision === "deny"
+  );
 }

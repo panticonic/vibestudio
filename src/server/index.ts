@@ -1805,6 +1805,16 @@ async function main() {
       capabilityGrantStore,
     })
   );
+  const { BrowserPermissionGrantStore, createBrowserPermissionsService } =
+    await import("./services/browserPermissionsService.js");
+  const browserPermissionGrantStore = new BrowserPermissionGrantStore(statePath);
+  container.registerRpc(
+    createBrowserPermissionsService({
+      approvalQueue,
+      workspaceId,
+      grantStore: browserPermissionGrantStore,
+    })
+  );
   const { createCorsApprovalService } = await import("./services/corsApprovalService.js");
   container.registerRpc(createCorsApprovalService());
   const { createUserlandApprovalService } = await import("./services/userlandApprovalService.js");
@@ -1908,6 +1918,8 @@ async function main() {
       createPermissionsService({
         capabilityGrants: capabilityGrantStore,
         credentialUseGrants: credentialUseGrantStore,
+        browserPermissions: browserPermissionGrantStore,
+        workspaceId,
       })
     );
   }
@@ -3154,6 +3166,7 @@ async function main() {
         workerServiceDef = createWorkerService({
           buildSystem: buildSystemInst,
           workspaceDecls,
+          workspaceId,
           getCallerContextId: (callerId) => entityCache.resolveContext(callerId),
           loadContextDeclarations: async (contextId) => {
             const stateHash = await workspaceVcs.resolveContextState(contextId);

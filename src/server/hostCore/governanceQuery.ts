@@ -10,6 +10,7 @@ const APPROVAL_KINDS = [
   "unit-batch",
   "device-code",
   "external-agent",
+  "browser-permission",
 ] as const;
 
 const MEMBERSHIP_OPS = [

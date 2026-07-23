@@ -37,7 +37,7 @@ export type {
   SameSiteValue,
   SourceScheme,
   ImportPhase,
-} from "@vibestudio/browser-data";
+} from "@vibestudio/browser-data/source-reader-internals";
 
 export {
   BrowserNameSchema,
@@ -58,4 +58,4 @@ export {
   HISTORY_VISIT_SOURCES,
   IMPORT_DATA_TYPES,
   resolveProfilePath,
-} from "@vibestudio/browser-data";
+} from "@vibestudio/browser-data/source-reader-internals";

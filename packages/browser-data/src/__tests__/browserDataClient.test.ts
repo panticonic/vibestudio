@@ -48,12 +48,12 @@ describe("createBrowserDataClient", () => {
     const call = makeRpc();
     const client = createBrowserDataClient({ call });
 
-    await client.detectBrowsers();
+    await client.listImportHosts();
     await client.searchHistory("git", 10);
 
     expect(call).toHaveBeenNthCalledWith(1, "extensions", "invokeProvider", [
       "browserData",
-      "detectBrowsers",
+      "listImportHosts",
       [],
     ]);
     expect(call).toHaveBeenNthCalledWith(2, "extensions", "invokeProvider", [

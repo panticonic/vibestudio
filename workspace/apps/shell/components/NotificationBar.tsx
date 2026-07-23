@@ -22,7 +22,14 @@ import {
 } from "@radix-ui/react-icons";
 import { useShellEvent } from "../shell/useShellEvent";
 import { useDirectShellEvent } from "../shell/useDirectShellEvent";
-import { app, extensions, notification, panel, workspaceUnits } from "../shell/client";
+import {
+  app,
+  browserEnvironment,
+  extensions,
+  notification,
+  panel,
+  workspaceUnits,
+} from "../shell/client";
 import type { NotificationPayload } from "@vibestudio/shared/events";
 import { assertPresent } from "../utils/assertPresent";
 
@@ -222,6 +229,12 @@ export function NotificationBar() {
               ttl: 0,
             });
           });
+      } else if (action.command?.type === "browser.downloadOpen") {
+        void browserEnvironment.openDownload(action.command.downloadId);
+      } else if (action.command?.type === "browser.downloadReveal") {
+        void browserEnvironment.revealDownload(action.command.downloadId);
+      } else if (action.command?.type === "panel.focus") {
+        void panel.focus(action.command.panelId);
       }
       dismissNotification(notificationId);
     },
@@ -338,7 +351,17 @@ function ToastNotification({
     >
       <Flex align="center" justify="between" px="3" py="2" gap="3" style={{ width: "100%" }}>
         <Flex align="center" gap="2" style={{ flex: 1, minWidth: 0 }}>
-          <TypeIcon type={notification.type} />
+          {notification.iconDataUrl ? (
+            <img
+              src={notification.iconDataUrl}
+              width={20}
+              height={20}
+              alt=""
+              style={{ borderRadius: 4, flexShrink: 0 }}
+            />
+          ) : (
+            <TypeIcon type={notification.type} />
+          )}
           <Text size="2" weight="bold" truncate>
             {notification.title}
           </Text>

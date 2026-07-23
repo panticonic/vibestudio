@@ -74,6 +74,14 @@ function panelBoundaryAuthority(method: string) {
 }
 
 const PanelIdSchema = z.string();
+export const PanelPlacementHintSchema = z.object({
+  disposition: z
+    .enum(["side", "replace", "split-below"])
+    .optional()
+    .describe("How the panel wants to be placed relative to its parent; default side."),
+  preferredWidth: z.number().positive().optional().describe("Preferred column width in px."),
+  minWidth: z.number().positive().optional().describe("Minimum column width in px."),
+});
 const StateArgsSchema = z.record(z.unknown());
 // The list/handle APIs intentionally expose lightweight slot metadata, not the
 // recursive persisted Panel record used by getTreeSnapshot. Keeping these wire
@@ -143,6 +151,9 @@ export const PanelTreeCreateOptionsSchema = z
     ref: z.string().optional().describe("Optional git-style ref / version pin for the source."),
     stateArgs: StateArgsSchema.optional().describe(
       "Initial validated state-args passed to the panel runtime."
+    ),
+    placement: PanelPlacementHintSchema.optional().describe(
+      "Layout placement hint for the new panel; overrides the manifest's placement default."
     ),
   })
   .optional();

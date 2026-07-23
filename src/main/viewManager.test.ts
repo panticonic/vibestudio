@@ -480,6 +480,42 @@ describe("ViewManager", () => {
       expect(vm.isPanelSlotted("panel-1")).toBe(false);
     });
 
+    it("emits native-slot-focused and updates focus state when a bound view's WebContents gains focus", () => {
+      const panelView = vm.createView({ id: "panel-1", type: "panel" });
+      vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+      vm.bindPanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "panel-stack:pane-a",
+        panelId: "panel-1",
+        bounds: { x: 10, y: 20, width: 300, height: 200 },
+      });
+
+      const focused: Array<{ nativeSlotId: string; panelId: string }> = [];
+      const unsubscribe = vm.onNativeSlotFocused((payload) => focused.push(payload));
+
+      const onCalls = (panelView.webContents.on as Mock).mock.calls as Array<[string, () => void]>;
+      const focusHandler = onCalls.find(([event]) => event === "focus")?.[1];
+      expect(focusHandler).toBeDefined();
+      focusHandler?.();
+
+      expect(focused).toEqual([{ nativeSlotId: "panel-stack:pane-a", panelId: "panel-1" }]);
+      expect(vm.getSlotBoundPanelIds()).toEqual(["panel-1"]);
+
+      // Clearing the slot detaches the listener; a late native focus event
+      // must not resurrect focus state for an unbound slot.
+      vm.clearPanelSlot("@workspace-apps/shell", "panel-stack:pane-a");
+      expect(panelView.webContents.off).toHaveBeenCalledWith("focus", focusHandler);
+      focusHandler?.();
+      expect(focused).toHaveLength(1);
+      expect(vm.getSlotBoundPanelIds()).toEqual([]);
+      unsubscribe();
+    });
+
     it("reports missing slots so the hosted shell can rebind", () => {
       vm.createView({
         id: "@workspace-apps/shell",

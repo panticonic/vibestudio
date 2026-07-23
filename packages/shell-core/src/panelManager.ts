@@ -5,6 +5,7 @@ import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type {
   Panel,
   PanelNavigationState,
+  PanelPlacementHint,
   PanelSnapshot,
   PanelTreeSnapshot,
   ThemeAppearance,
@@ -85,6 +86,8 @@ export interface CreatePanelOptions {
   isRoot?: boolean;
   addAsRoot?: boolean;
   autoArchiveWhenEmpty?: boolean;
+  /** Per-call layout placement hint; wins over the manifest's `placement`. */
+  placement?: PanelPlacementHint;
   /**
    * Owning-user id (WP3) — the creating caller's `subject.userId`, threaded from
    * `panelTreeService`. Stamped onto the slot + the in-memory panel so the new
@@ -302,10 +305,14 @@ export class PanelManager {
     const stateArgsPayload = validatedStateArgs ?? {};
     const positionId = this.rankForAppend(opts?.parentId ?? null);
 
+    // Effective placement hint: call-site override wins, else the manifest's
+    // declared default. Resolved once here so every consumer (persistence,
+    // shell layout) reads a single canonical value from the snapshot.
+    const placement = opts?.placement ?? manifest.placement;
     const snapshot = createSnapshot(
       relativePath,
       contextId,
-      { env: opts?.env, ref: opts?.ref },
+      { env: opts?.env, ref: opts?.ref, ...(placement ? { placement } : {}) },
       validatedStateArgs
     );
     if (opts?.autoArchiveWhenEmpty || manifest.autoArchiveWhenEmpty) {
@@ -1255,6 +1262,9 @@ export class PanelManager {
       contextId: row.context_id,
       options,
       stateArgs: stateArgs as PanelSnapshot["stateArgs"],
+      // The resolved placement hint round-trips inside the persisted options
+      // blob; re-lift it to the snapshot's canonical top-level field.
+      ...(options.placement ? { placement: options.placement } : {}),
     };
   }
 
@@ -1484,7 +1494,13 @@ export class PanelManager {
     absolutePath: string,
     relativePath: string,
     allowMissing: boolean
-  ): { title: string; stateArgs?: unknown; autoArchiveWhenEmpty?: boolean; privileged?: boolean } {
+  ): {
+    title: string;
+    stateArgs?: unknown;
+    autoArchiveWhenEmpty?: boolean;
+    privileged?: boolean;
+    placement?: PanelPlacementHint;
+  } {
     try {
       const manifest = loadPanelManifest(absolutePath);
       return {

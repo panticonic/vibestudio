@@ -1,10 +1,4 @@
-import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AccessibilityInfo,
   ActivityIndicator,
@@ -28,6 +22,7 @@ import type {
   ApprovalDetailFormat,
   ApprovalDecision,
   PendingApproval,
+  PendingBrowserPermissionApproval,
   PendingCapabilityApproval,
   PendingClientConfigApproval,
   PendingCredentialApproval,
@@ -216,9 +211,7 @@ type PendingAction =
 
 type ButtonVariant = "primary" | "surface" | "danger" | "dangerPrimary" | "outline";
 
-const SECONDARY_GRANT_DECISIONS: Array<
-  Exclude<ApprovalDecision, "once" | "version" | "deny" | "dismiss">
-> = ["session"];
+const SECONDARY_GRANT_DECISIONS = ["session"] as const;
 
 export function ApprovalSheet({
   approvals,
@@ -572,6 +565,14 @@ export function ApprovalSheet({
                       runAction(decision, () => onResolve(current.approvalId, decision))
                     }
                   />
+                ) : current.kind === "browser-permission" ? (
+                  <BrowserPermissionActions
+                    busy={isBusy}
+                    pendingAction={pendingAction}
+                    onChoose={(decision) =>
+                      runAction(decision, () => onResolve(current.approvalId, decision))
+                    }
+                  />
                 ) : (
                   <StandardActions
                     approval={current}
@@ -581,9 +582,7 @@ export function ApprovalSheet({
                       runAction(decision, () => onResolve(current.approvalId, decision))
                     }
                     onBlock={() =>
-                      runAction("block-capability", () =>
-                        onBlockCapability(current.approvalId)
-                      )
+                      runAction("block-capability", () => onBlockCapability(current.approvalId))
                     }
                   />
                 )}
@@ -776,10 +775,7 @@ function WarningBand({ message }: { message: string }) {
   return (
     <View
       accessibilityRole="alert"
-      style={[
-        styles.warningBand,
-        { backgroundColor: colors.dangerSoft },
-      ]}
+      style={[styles.warningBand, { backgroundColor: colors.dangerSoft }]}
     >
       <AlertTriangle size={14} color={colors.danger} />
       <View style={styles.markdownFlex}>
@@ -897,12 +893,7 @@ function ApprovalMarkdownInlineNodes({
 function InlineError({ message }: { message: string }) {
   const colors = useAtomValue(themeColorsAtom);
   return (
-    <View
-      style={[
-        styles.warningBand,
-        { backgroundColor: colors.dangerSoft },
-      ]}
-    >
+    <View style={[styles.warningBand, { backgroundColor: colors.dangerSoft }]}>
       <AlertTriangle size={14} color={colors.danger} />
       <Text style={[styles.warningText, { color: colors.danger }]}>{message}</Text>
     </View>
@@ -936,9 +927,7 @@ function SecretConfigFields({
             {field.required ? (
               <Badge label={HOST_APPROVAL_COPY.chrome.required} tone="warning" />
             ) : null}
-            {field.type === "secret" ? (
-              <Badge label={HOST_APPROVAL_COPY.chrome.secret} />
-            ) : null}
+            {field.type === "secret" ? <Badge label={HOST_APPROVAL_COPY.chrome.secret} /> : null}
           </View>
           <TextInput
             accessibilityLabel={field.label}
@@ -1081,6 +1070,8 @@ function ApprovalDetails({
             <DeviceCodeDetails approval={approval} />
           ) : approval.kind === "unit-batch" ? (
             <UnitBatchDetails approval={approval} />
+          ) : approval.kind === "browser-permission" ? (
+            <BrowserPermissionDetails approval={approval} />
           ) : (
             <CapabilityDetails approval={approval} />
           )}
@@ -1233,6 +1224,16 @@ function CapabilityDetails({ approval }: { approval: PendingCapabilityApproval }
           format={detail.format}
         />
       ))}
+    </>
+  );
+}
+
+function BrowserPermissionDetails({ approval }: { approval: PendingBrowserPermissionApproval }) {
+  return (
+    <>
+      <DetailRow icon={Globe} label="Site" value={approval.origin} code />
+      <DetailRow icon={Lock} label="Permissions" value={approval.capabilities.join(", ")} code />
+      <DetailRow icon={Settings2} label="Device" value={approval.deviceLabel} code />
     </>
   );
 }
@@ -1812,6 +1813,73 @@ function StandardActions({
             testID="approval-action-block"
           />
         ) : null}
+      </View>
+    </View>
+  );
+}
+
+function BrowserPermissionActions({
+  busy,
+  pendingAction,
+  onChoose,
+}: {
+  busy: boolean;
+  pendingAction: PendingAction | null;
+  onChoose: (decision: ApprovalDecision) => void;
+}) {
+  const copy = HOST_APPROVAL_COPY.actions.browserPermission;
+  const actions: Array<{
+    decision: "once" | "session" | "always" | "block";
+    label: string;
+    description: string;
+    variant: ButtonVariant;
+  }> = [
+    {
+      decision: "once",
+      ...copy.once,
+      variant: "primary",
+    },
+    {
+      decision: "session",
+      ...copy.session,
+      variant: "surface",
+    },
+    {
+      decision: "always",
+      ...copy.always,
+      variant: "outline",
+    },
+    {
+      decision: "block",
+      ...copy.block,
+      variant: "danger",
+    },
+  ];
+  return (
+    <View style={styles.actionGroups}>
+      <View style={styles.actionRow}>
+        {actions.map((action) => (
+          <DecisionButton
+            key={action.decision}
+            label={action.label}
+            description={action.description}
+            variant={action.variant}
+            disabled={busy}
+            loading={pendingAction === action.decision}
+            icon={action.decision === "block" ? XCircle : undefined}
+            onPress={() => onChoose(action.decision)}
+            testID={`approval-action-${action.decision}`}
+          />
+        ))}
+        <DecisionButton
+          label={copy.dismiss.label}
+          description={copy.dismiss.description}
+          variant="surface"
+          disabled={busy}
+          loading={pendingAction === "dismiss"}
+          onPress={() => onChoose("dismiss")}
+          testID="approval-action-dismiss"
+        />
       </View>
     </View>
   );

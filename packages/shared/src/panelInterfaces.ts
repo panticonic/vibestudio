@@ -23,14 +23,15 @@ export interface HostedCodeIdentity {
   requested?: readonly CapabilityScope[];
   evalCeilings?: readonly EvalAuthorityCeiling[];
 }
-import type { PanelLifecycleResult } from "./types.js";
+import type { PanelLifecycleResult, PanelPlacementHint } from "./types.js";
 
-/**
- * Shared Electron session partition for all browser panels.
- * All browser panels share one cookie jar / session, like tabs in a normal browser.
- * Panel-to-panel origin isolation is handled by Chromium's same-origin policy.
- */
-export const BROWSER_SESSION_PARTITION = "persist:browser";
+/** Derive the materialized Electron partition for one opaque environment. */
+export function browserEnvironmentPartition(environmentKey: string): string {
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(environmentKey)) {
+    throw new Error("Invalid browser environment key");
+  }
+  return `persist:browser-environment:${environmentKey}`;
+}
 
 /**
  * Minimal panel lifecycle interface — the subset that common bridge handlers need.
@@ -145,4 +146,6 @@ export type PanelCreateOptions = {
   contextId?: string;
   /** If true, immediately focus the new panel after creation */
   focus?: boolean;
+  /** Per-call layout placement hint; wins over the manifest's `placement`. */
+  placement?: PanelPlacementHint;
 };

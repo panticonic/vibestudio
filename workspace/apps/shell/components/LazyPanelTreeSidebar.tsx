@@ -45,6 +45,7 @@ import {
   type WorkspacePresenceEntry,
 } from "../shell/hooks/index.js";
 import type { PanelContextMenuAction } from "@vibestudio/shared/types";
+import { isPanelClosePointerButton } from "@vibestudio/shared/panelCommands";
 import { menu, notification, panel } from "../shell/client.js";
 import {
   activeWorkspaceNameAtom,
@@ -52,6 +53,7 @@ import {
   workspaceChooserDialogOpenAtom,
 } from "../state/appModeAtoms.js";
 import { assertPresent } from "../utils/assertPresent";
+import { BrowserFavicon } from "./BrowserFavicon";
 
 // ============================================================================
 // Style Constants
@@ -118,9 +120,15 @@ function getDropIndicatorStyle(depth: number, top: number | string): CSSProperti
   };
 }
 
-function getRowBackground(isSelected: boolean, isHovered: boolean): string | undefined {
+function getRowBackground(
+  isSelected: boolean,
+  isHovered: boolean,
+  isVisible: boolean
+): string | undefined {
   if (isSelected) return isHovered ? COLORS.selectedHover : COLORS.selected;
   if (isHovered) return COLORS.hover;
+  // Visible in some pane but not focused: subtle emphasis (multi-column D8/§6).
+  if (isVisible) return COLORS.hover;
   return undefined;
 }
 
@@ -315,12 +323,14 @@ interface SortableTreeItemProps {
   item: FlattenedPanel;
   guides: string;
   isSelected: boolean;
+  /** Shown in some pane of the layout (the focused one renders as selected). */
+  isVisible: boolean;
   showIndicator: boolean;
   projectedDepth: number | null;
   isDraggingAny: boolean;
   showIndicatorBelow: boolean;
   isTouch: boolean;
-  onSelect: (panelId: string) => void;
+  onSelect: (panelId: string, options?: { openBeside?: boolean }) => void;
   onToggleCollapse: (panelId: string) => void;
   onPanelAction?: (panelId: string, action: PanelContextMenuAction) => void;
   onArchive?: (panelId: string) => void;
@@ -334,6 +344,7 @@ const SortableTreeItem = memo(
     item,
     guides,
     isSelected,
+    isVisible,
     showIndicator,
     projectedDepth,
     isDraggingAny,
@@ -397,9 +408,13 @@ const SortableTreeItem = memo(
       [panel.id, onToggleCollapse]
     );
 
-    const handleSelect = useCallback(() => {
-      onSelect(panel.id);
-    }, [onSelect, panel.id]);
+    // Cmd/Ctrl-click forces open-beside (D8); plain click replaces in place.
+    const handleSelect = useCallback(
+      (e?: React.MouseEvent) => {
+        onSelect(panel.id, { openBeside: Boolean(e && (e.metaKey || e.ctrlKey)) });
+      },
+      [onSelect, panel.id]
+    );
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent) => {
@@ -467,6 +482,20 @@ const SortableTreeItem = memo(
       [panel.childCount, panel.id, panel.title, onArchive]
     );
 
+    const handleAuxClick = useCallback(
+      (e: React.MouseEvent) => {
+        if (!isPanelClosePointerButton(e.button)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        handleArchive(e);
+      },
+      [handleArchive]
+    );
+
+    const handleMouseDown = useCallback((e: React.MouseEvent) => {
+      if (isPanelClosePointerButton(e.button)) e.preventDefault();
+    }, []);
+
     const handleAddChild = useCallback(
       (e: React.MouseEvent) => {
         e.stopPropagation();
@@ -478,7 +507,7 @@ const SortableTreeItem = memo(
     const rowStyle: CSSProperties = {
       height: ROW_HEIGHT,
       cursor: "pointer",
-      backgroundColor: getRowBackground(isSelected, isHovered),
+      backgroundColor: getRowBackground(isSelected, isHovered, isVisible),
       borderRadius: "var(--radius-2)",
       paddingLeft: ROW_PADDING_LEFT + depth * INDENTATION_WIDTH,
       transition: "background-color var(--motion-fast) var(--ease-standard)",
@@ -508,6 +537,8 @@ const SortableTreeItem = memo(
           style={rowStyle}
           data-active={isSelected ? "true" : "false"}
           onClick={handleSelect}
+          onMouseDown={handleMouseDown}
+          onAuxClick={handleAuxClick}
           onContextMenu={handleContextMenu}
           onMouseEnter={() => {
             if (!isDraggingAny) {
@@ -553,6 +584,8 @@ const SortableTreeItem = memo(
               </IconButton>
             )}
           </Flex>
+
+          {panel.favicon ? <BrowserFavicon handle={panel.favicon} size={14} /> : null}
 
           {/* Title — the focal element; brightened + weighted when selected */}
           <Text
@@ -651,7 +684,10 @@ const SortableTreeItem = memo(
       prev.item.panel.title === next.item.panel.title &&
       prev.item.panel.childCount === next.item.panel.childCount &&
       prev.item.panel.buildState === next.item.panel.buildState &&
+      prev.item.panel.favicon?.pageUrl === next.item.panel.favicon?.pageUrl &&
+      prev.item.panel.favicon?.updatedAt === next.item.panel.favicon?.updatedAt &&
       prev.isSelected === next.isSelected &&
+      prev.isVisible === next.isVisible &&
       prev.showIndicator === next.showIndicator &&
       prev.projectedDepth === next.projectedDepth &&
       prev.isDraggingAny === next.isDraggingAny &&
@@ -924,14 +960,17 @@ function buildSidebarRows(
 
 interface LazyPanelTreeSidebarProps {
   selectedId: string | null;
+  /** All panels currently visible in the layout; `selectedId` is the focused one. */
+  visibleIds?: ReadonlySet<string>;
   ancestorIds: string[];
-  onSelect: (panelId: string) => void;
+  onSelect: (panelId: string, options?: { openBeside?: boolean }) => void;
   onPanelAction?: (panelId: string, action: PanelContextMenuAction) => void;
   onArchive?: (panelId: string) => void;
 }
 
 export function LazyPanelTreeSidebar({
   selectedId,
+  visibleIds,
   ancestorIds,
   onSelect,
   onPanelAction,
@@ -1000,9 +1039,11 @@ export function LazyPanelTreeSidebar({
       }
       try {
         const result = await panel.createChild(parentId, "about/new", { focus: true });
+        // parentId lets the layout engine place the child with full
+        // open-child intent (beside/below) instead of a bare show-panel.
         window.dispatchEvent(
           new CustomEvent("shell-panel-created", {
-            detail: { panelId: result.id },
+            detail: { panelId: result.id, parentId },
           })
         );
       } catch (error) {
@@ -1193,6 +1234,7 @@ export function LazyPanelTreeSidebar({
                   item={item}
                   guides={guidesById.get(item.id) ?? ""}
                   isSelected={item.id === selectedId}
+                  isVisible={item.id !== selectedId && (visibleIds?.has(item.id) ?? false)}
                   showIndicator={item.id === indicatorItemId}
                   projectedDepth={item.id === indicatorItemId ? projectedDepth : null}
                   isDraggingAny={activeId !== null}

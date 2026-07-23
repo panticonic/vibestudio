@@ -513,7 +513,7 @@ function requireProviderSource(value: unknown, field: string): string {
   return source.trim();
 }
 
-function providerExtensionRepoPath(
+export function workspaceProviderExtensionRepoPath(
   config: WorkspaceConfig,
   provider: WorkspaceExtensionProviderName
 ): string | null {
@@ -560,7 +560,7 @@ function validateProviders(config: WorkspaceConfig): void {
         `meta/vibestudio.yml: \`providers.${provider}\` must be a mapping with an \`extension\``
       );
     }
-    providerExtensionRepoPath(config, provider as WorkspaceExtensionProviderName);
+    workspaceProviderExtensionRepoPath(config, provider as WorkspaceExtensionProviderName);
   }
 }
 

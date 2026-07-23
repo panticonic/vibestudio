@@ -34,7 +34,8 @@ export function invocationFromServiceContext(
   extensionName: string,
   method: string,
   requestId: string,
-  resolveContextId?: (callerId: string) => string | null
+  resolveContextId?: (callerId: string) => string | null,
+  workspaceId?: string
 ): ExtensionInvocation {
   const directContextId = resolveContextId?.(ctx.caller.runtime.id) ?? null;
   const callerKind = ctx.caller.runtime.kind;
@@ -47,6 +48,8 @@ export function invocationFromServiceContext(
       callerKind,
       ...(ctx.connectionId ? { connectionId: ctx.connectionId } : {}),
       ...(directContextId ? { contextId: directContextId } : {}),
+      ...(ctx.caller.subject?.userId ? { userId: ctx.caller.subject.userId } : {}),
+      ...(workspaceId ? { workspaceId } : {}),
     },
   };
   if (

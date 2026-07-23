@@ -58,6 +58,9 @@ export const ABOUT_PAGES = {
   ABOUT: "about",
   CREDENTIALS: "credentials",
   PERMISSIONS: "permissions",
+  DOWNLOADS: "downloads",
+  BOOKMARKS: "bookmarks",
+  HISTORY: "history",
 } as const;
 
 export type AboutPageId = (typeof ABOUT_PAGES)[keyof typeof ABOUT_PAGES];

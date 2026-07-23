@@ -179,6 +179,12 @@ export const METHOD_TIERS = {
     session: "family",
     rationale: "Stores or suppresses a credential only after an explicit browser save prompt.",
   },
+  "autofill.confirmFormFill": {
+    tier: "gated",
+    session: "family",
+    rationale:
+      "Stores personal form-fill values only after an explicit post-submission browser prompt.",
+  },
   "autofill.deleteSavedPassword": {
     tier: "critical",
     session: "family",
@@ -369,6 +375,102 @@ export const METHOD_TIERS = {
     session: "family",
     rationale:
       "G5: external package acquisition is gated; installed code and explicitly approved eval sessions share the reviewed code family",
+  },
+  "browserEnvironment.getImportHost": {
+    tier: "open",
+    session: "family",
+    rationale: "Host/code read of the browser-import host descriptor; per-method authority principals gate callers.",
+  },
+  "browserEnvironment.listImportSources": {
+    tier: "open",
+    session: "family",
+    rationale: "Enumerates importable external browser profiles; read-only discovery gated by authority principals.",
+  },
+  "browserEnvironment.previewImportSource": {
+    tier: "open",
+    session: "family",
+    rationale: "Read-only preview of an external browser profile import; gated by authority principals.",
+  },
+  "browserEnvironment.startImportRead": {
+    tier: "open",
+    session: "family",
+    rationale: "Starts a streamed read of an external browser profile for import; gated by authority principals.",
+  },
+  "browserEnvironment.nextImportFrame": {
+    tier: "open",
+    session: "family",
+    rationale: "Continues a streamed browser-profile import read; gated by authority principals.",
+  },
+  "browserEnvironment.cancelImportRead": {
+    tier: "open",
+    session: "family",
+    rationale: "Cancels a streamed browser-profile import read; gated by authority principals.",
+  },
+  "browserEnvironment.listImportOpenTabs": {
+    tier: "open",
+    session: "family",
+    rationale: "Reads open tabs from an external browser profile for import; gated by authority principals.",
+  },
+  "browserEnvironment.flushCookieProjection": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Host-principal-only browser environment maintenance; the authority principal gate keeps prompts/code out.",
+  },
+  "browserEnvironment.getCookieProjectionDiagnostics": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Host-principal-only diagnostics read for the browser environment cookie projection.",
+  },
+  "browserEnvironment.listDownloads": {
+    tier: "open",
+    session: "family",
+    rationale: "Host-principal-only read of the browser environment download ledger.",
+  },
+  "browserEnvironment.pauseDownload": {
+    tier: "open",
+    session: "family",
+    rationale: "Host-principal-only download control driven by explicit shell UI.",
+  },
+  "browserEnvironment.resumeDownload": {
+    tier: "open",
+    session: "family",
+    rationale: "Host-principal-only download control driven by explicit shell UI.",
+  },
+  "browserEnvironment.cancelDownload": {
+    tier: "open",
+    session: "family",
+    rationale: "Host-principal-only download control driven by explicit shell UI.",
+  },
+  "browserEnvironment.openDownload": {
+    tier: "open",
+    session: "family",
+    rationale: "Host-principal-only open of a completed download, driven by explicit shell UI.",
+  },
+  "browserEnvironment.revealDownload": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Host-principal-only reveal of a completed download in the file manager, driven by explicit shell UI.",
+  },
+  "browserPermissions.snapshot": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Host-principal-only read of browser permission grants; the authority principal gate keeps prompts/code out.",
+  },
+  "browserPermissions.request": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Host-principal-only permission prompt flow; user consent happens in the shell approval UI itself.",
+  },
+  "browserPermissions.revoke": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Host-principal-only revocation of browser permission grants, driven by explicit shell UI.",
   },
   "build.getBuildReport": {
     tier: "open",
@@ -1202,6 +1304,52 @@ export const METHOD_TIERS = {
     rationale:
       "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
   },
+  "panel.clearBrowserSiteData": {
+    tier: "open",
+    session: "family",
+    rationale: "P-panels: shell-driven browser site-data clear for the focused panel; core mutually inspectable workspace UX.",
+  },
+  "panel.findInPage": {
+    tier: "open",
+    session: "family",
+    rationale: "P-panels: in-page find UI on the focused panel; core mutually inspectable workspace UX.",
+  },
+  "panel.getBrowserSiteState": {
+    tier: "open",
+    session: "family",
+    rationale: "P-panels: read of the focused browser panel's per-site UI state; core mutually inspectable workspace UX.",
+  },
+  "panel.printBrowserPage": {
+    tier: "open",
+    session: "family",
+    rationale: "P-panels: shell print action on the focused browser panel; core mutually inspectable workspace UX.",
+  },
+  "panel.saveBrowserPagePdf": {
+    tier: "open",
+    session: "family",
+    rationale: "P-panels: shell save-as-PDF action on the focused browser panel; core mutually inspectable workspace UX.",
+  },
+  "panel.setBrowserZoom": {
+    tier: "open",
+    session: "family",
+    rationale: "P-panels: per-site zoom control on the focused browser panel; core mutually inspectable workspace UX.",
+  },
+  "panel.stopBrowserMedia": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "P-panels: stops media in the focused browser panel; core mutually inspectable workspace UX.",
+  },
+  "panel.stopFindInPage": {
+    tier: "open",
+    session: "family",
+    rationale: "P-panels: dismisses the in-page find session; core mutually inspectable workspace UX.",
+  },
+  "panel.toggleBrowserBookmark": {
+    tier: "open",
+    session: "family",
+    rationale: "P-panels: bookmark toggle on the focused browser panel; core mutually inspectable workspace UX.",
+  },
   "panel.forceReloadView": {
     tier: "open",
     session: "family",
@@ -1232,6 +1380,12 @@ export const METHOD_TIERS = {
     rationale:
       "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
   },
+  "panel.getPanelLayout": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+  },
   "panel.getThemeConfig": {
     tier: "open",
     session: "family",
@@ -1257,6 +1411,18 @@ export const METHOD_TIERS = {
       "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
   },
   "panel.reloadView": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+  },
+  "panel.savePanelLayout": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+  },
+  "panel.setFocusedPanelId": {
     tier: "open",
     session: "family",
     rationale:

@@ -1,3 +1,10 @@
+import type {
+  BrowserCookieRecord,
+  FormFillType,
+  ImportCategoryProgress,
+  ImportJobPhase,
+} from "../environment.js";
+
 export interface StoredBookmark {
   id: number;
   title: string;
@@ -5,10 +12,8 @@ export interface StoredBookmark {
   folder_path: string;
   date_added: number;
   date_modified: number | null;
-  favicon_id: number | null;
   position: number;
-  source_browser: string | null;
-  source_profile_path: string;
+  source_id: string | null;
   import_key: string | null;
   tags: string | null;
   keyword: string | null;
@@ -22,7 +27,6 @@ export interface StoredHistory {
   typed_count: number;
   first_visit: number | null;
   last_visit: number;
-  favicon_id: number | null;
 }
 
 export interface StoredVisit {
@@ -30,10 +34,8 @@ export interface StoredVisit {
   history_id: number;
   visit_time: number;
   transition: string;
-  from_visit_id: number | null;
   source: string;
-  source_browser: string;
-  source_profile_path: string;
+  import_source_id: string;
   panel_id: string;
   title: string | null;
   typed: number;
@@ -52,31 +54,20 @@ export interface StoredPassword {
   times_used: number;
 }
 
-export interface StoredCookie {
-  id: number;
-  name: string;
+/** Decrypted only at the trusted service boundary. */
+export interface StoredCookie extends BrowserCookieRecord {
   value: string;
-  domain: string;
-  host_only: number;
-  path: string;
-  expiration_date: number | null;
-  secure: number;
-  http_only: number;
-  same_site: string;
-  source_scheme: string | null;
-  source_port: number;
-  source_browser: string | null;
-  created_at: number;
-  last_accessed: number | null;
 }
 
-export interface StoredAutofill {
+export interface StoredFormFill {
   id: number;
-  field_name: string;
+  type: FormFillType;
   value: string;
-  date_created: number | null;
-  date_last_used: number | null;
-  times_used: number;
+  displayLabel: string | null;
+  aliases: string[];
+  createdAt: number;
+  updatedAt: number;
+  useCount: number;
 }
 
 export interface StoredSearchEngine {
@@ -87,78 +78,50 @@ export interface StoredSearchEngine {
   suggest_url: string | null;
   favicon_url: string | null;
   is_default: number;
-  source_browser: string;
-  source_profile_path: string;
+  source_id: string | null;
   import_key: string | null;
 }
 
-export interface StoredFavicon {
-  id: number;
-  url: string;
-  data: Buffer | null;
-  mime_type: string | null;
-  last_updated: number | null;
-}
-
-export interface StoredPermission {
-  id: number;
+export interface StoredPageFavicon {
+  page_url: string;
   origin: string;
-  permission: string;
-  setting: string;
-  date_set: number | null;
+  source_url: string | null;
+  png16: Uint8Array | null;
+  png32: Uint8Array | null;
+  mime_type: "image/png";
+  updated_at: number;
 }
 
-/** Per-data-type counts for a single import run. `added`/`changed`/`unchanged`
- * become meaningful once the dry-run classifier lands; until then `scanned`,
- * `skipped`, and `errors` are populated and the diff buckets stay 0. */
-export interface ImportRunSummaryInput {
-  dataType: string;
-  scanned: number;
-  added: number;
-  changed: number;
-  unchanged: number;
-  skipped: number;
-  errors: number;
-}
-
-/** A single `startImport` invocation, recorded for the run timeline. */
-export interface ImportRunInput {
+export interface StoredImportJob {
+  job_id: string;
+  host_id: string;
+  host_label: string;
+  source_id: string;
   browser: string;
-  profilePath: string;
-  mode: "import" | "preview";
-  status: "success" | "partial" | "error";
-  startedAt: number;
-  finishedAt: number;
-  dataTypes: string[];
-  warnings?: string[];
-  summaries: ImportRunSummaryInput[];
-}
-
-export interface StoredImportRun {
-  id: number;
-  browser: string;
-  profile_path: string;
-  mode: string;
-  status: string;
+  phase: ImportJobPhase;
   started_at: number;
-  finished_at: number;
+  updated_at: number;
+  finished_at: number | null;
   data_types: string;
-  warnings: string | null;
+  progress: string;
+  warnings: string;
+  error: string | null;
+  resumable: number;
 }
 
-export interface StoredImportRunSummary {
-  id: number;
-  run_id: number;
-  data_type: string;
-  scanned: number;
-  added: number;
-  changed: number;
-  unchanged: number;
-  skipped: number;
-  errors: number;
-}
-
-/** A run joined with its per-type summaries — what `getImportHistory` returns. */
-export interface StoredImportRunWithSummaries extends StoredImportRun {
-  summaries: StoredImportRunSummary[];
+export interface ImportJobWrite {
+  jobId: string;
+  hostId: string;
+  hostLabel: string;
+  sourceId: string;
+  browser: string;
+  phase: ImportJobPhase;
+  startedAt: number;
+  updatedAt: number;
+  finishedAt?: number;
+  dataTypes: string[];
+  progress: ImportCategoryProgress[];
+  warnings: string[];
+  error?: string;
+  resumable: boolean;
 }

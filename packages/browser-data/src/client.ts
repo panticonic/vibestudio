@@ -1,37 +1,32 @@
 export { createBrowserDataClient } from "./client/browserDataClient.js";
 export type {
-  AutocompleteDebugResult,
-  AutocompleteDebugSuggestion,
-  AutofillFieldSummary,
   BrowserDataClient,
-  CookieDomainSummary,
-  DomainReadiness,
-  HistoryDomainSummary,
-  ImportRun,
-  PasswordOriginSummary,
-  PreviewDiffSample,
-  PreviewTypeResult,
-  ProfileImportState,
+  ImportPreview,
 } from "./client/browserDataClient.js";
 export type {
-  BrowserName,
-  BrowserOpenTabsRequest,
-  DetectedBrowser,
-  DetectedProfile,
-  ImportedOpenTab,
-  ImportDataType,
-  ImportRequest,
-  ImportResult,
+  ApplyCookieMutationsRequest,
+  BrowserImportSelection,
+  BrowserDownloadRecord,
+  BrowserImportSource,
+  FormFillSuggestionQuery,
+  FormFillValueInput,
+  ImportedBrowserOpenTab,
+  ImportHostSummary,
+  ImportJobSnapshot,
+  PageFavicon,
+} from "./environment.js";
+export type {
+  ImportedPassword,
   OpenTabsAsPanelsResult,
   RecordHistoryVisitRequest,
   UpdateHistoryTitleRequest,
 } from "./types.js";
 export type {
-  StoredAutofill,
   StoredBookmark,
   StoredCookie,
+  StoredFormFill,
   StoredHistory,
+  StoredPageFavicon,
   StoredPassword,
-  StoredPermission,
   StoredSearchEngine,
 } from "./storage/types.js";

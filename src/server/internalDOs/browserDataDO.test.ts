@@ -33,7 +33,7 @@ describe("BrowserDataDO direct authority", () => {
 });
 
 describe("BrowserDataDO schema migrations", () => {
-  it("migrates the exact v1 database through v4 without losing browser data", () => {
+  it("cuts pre-release profile data over to the canonical v7 environment schema", () => {
     const db = new DatabaseSync(":memory:");
     db.exec(V1_BROWSER_DATA_SCHEMA);
     db.prepare(`INSERT INTO state (key, value) VALUES ('schema_version', '1')`).run();
@@ -64,73 +64,14 @@ describe("BrowserDataDO schema migrations", () => {
     new BrowserDataDO(ctx, {});
 
     expect(db.prepare(`SELECT value FROM state WHERE key = 'schema_version'`).get()).toEqual({
-      value: "4",
+      value: "7",
     });
-    expect(
-      db
-        .prepare(
-          `SELECT id, history_id, visit_time, transition, source, source_browser,
-                  source_profile_path, panel_id, title, typed
-             FROM history_visits ORDER BY id`
-        )
-        .all()
-    ).toEqual([
-      {
-        id: 10,
-        history_id: 1,
-        visit_time: 200,
-        transition: "typed",
-        source: "vibestudio",
-        source_browser: "",
-        source_profile_path: "",
-        panel_id: "legacy:10",
-        title: "Example",
-        typed: 0,
-      },
-      {
-        id: 11,
-        history_id: 1,
-        visit_time: 200,
-        transition: "typed",
-        source: "vibestudio",
-        source_browser: "",
-        source_profile_path: "",
-        panel_id: "legacy:11",
-        title: "Example",
-        typed: 0,
-      },
-    ]);
-    expect(db.prepare(`SELECT id, title, source_browser FROM bookmarks`).get()).toEqual({
-      id: 20,
-      title: "Saved",
-      source_browser: "chrome",
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM history`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM bookmarks`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM passwords`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM site_preferences`).get()).toEqual({
+      count: 0,
     });
-    expect(
-      db
-        .prepare(
-          `SELECT hex(username_hash) AS hash, hex(password_encrypted) AS password FROM passwords`
-        )
-        .get()
-    ).toEqual({ hash: "01", password: "03" });
-    expect(db.prepare(`SELECT * FROM import_runs`).get()).toMatchObject({
-      id: 40,
-      browser: "chrome",
-      profile_path: "/profile",
-      started_at: 300,
-      finished_at: 300,
-      data_types: '["history"]',
-      warnings: "one warning",
-    });
-    expect(db.prepare(`SELECT * FROM import_run_summaries`).get()).toMatchObject({
-      run_id: 40,
-      data_type: "history",
-      scanned: 3,
-      added: 2,
-      skipped: 1,
-    });
-    expect(
-      db.prepare(`SELECT rowid FROM history_fts WHERE history_fts MATCH 'Example'`).all()
-    ).toEqual([{ rowid: 1 }]);
     expect(
       db.prepare(`SELECT version, name FROM _vibestudio_schema_migrations ORDER BY version`).all()
     ).toEqual([
@@ -138,34 +79,70 @@ describe("BrowserDataDO schema migrations", () => {
       { version: 2, name: "preserve-history-visit-provenance" },
       { version: 3, name: "preserve-import-source-identity" },
       { version: 4, name: "preserve-import-runs-and-secret-metadata" },
+      { version: 5, name: "canonical-browser-environment-cutover" },
+      { version: 6, name: "browser-site-preferences" },
+      { version: 7, name: "canonical-download-metadata" },
     ]);
     db.close();
   });
 
-  it("rejects v1 source-shape drift before mutating the database", () => {
+  it("drops unrecognized pre-release v1 shape instead of translating it", () => {
     const db = new DatabaseSync(":memory:");
     db.exec(V1_BROWSER_DATA_SCHEMA);
     db.prepare(`INSERT INTO state (key, value) VALUES ('schema_version', '1')`).run();
     db.exec(`ALTER TABLE history_visits ADD COLUMN unexpected TEXT`);
 
-    expect(() => new BrowserDataDO(sqliteContext(db), {})).toThrow(
-      /history_visits does not match its exact recognized shape/
-    );
+    new BrowserDataDO(sqliteContext(db), {});
     expect(db.prepare(`SELECT value FROM state WHERE key = 'schema_version'`).get()).toEqual({
-      value: "1",
+      value: "7",
     });
     expect(
       db
         .prepare(`PRAGMA table_info(history_visits)`)
         .all()
         .map((column) => column["name"])
-    ).toContain("unexpected");
-    expect(
-      db
-        .prepare(`PRAGMA table_info(history_visits)`)
-        .all()
-        .map((column) => column["name"])
-    ).not.toContain("source");
+    ).not.toContain("unexpected");
+    db.close();
+  });
+});
+
+describe("BrowserDataDO download metadata", () => {
+  it("persists download metadata by host inside the canonical environment", () => {
+    const db = new DatabaseSync(":memory:");
+    const store = new BrowserDataDO(sqliteContext(db), {});
+    const record = {
+      id: "download-1",
+      environmentKey: "environment-1",
+      hostId: "desktop:host-1",
+      panelId: "panel-1",
+      origin: "https://example.test",
+      url: "https://example.test/archive.zip",
+      filename: "archive.zip",
+      savePath: "/tmp/archive.zip",
+      receivedBytes: 25,
+      totalBytes: 100,
+      state: "progressing" as const,
+      startedAt: 100,
+      updatedAt: 110,
+    };
+
+    store.upsertDownloadRecord(record);
+    store.upsertDownloadRecord({
+      ...record,
+      receivedBytes: 100,
+      state: "completed",
+      updatedAt: 120,
+    });
+
+    expect(store.listDownloadRecords("desktop:host-1")).toEqual([
+      {
+        ...record,
+        receivedBytes: 100,
+        state: "completed",
+        updatedAt: 120,
+      },
+    ]);
+    expect(store.listDownloadRecords("desktop:other-host")).toEqual([]);
     db.close();
   });
 });

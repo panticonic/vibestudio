@@ -137,6 +137,10 @@ async function createWorkerdHarness(
     workspaceId: "workspace:internal-workerd-test",
     services: [PUBSUB_WORKSPACE_SERVICE],
     callerId: "internal-workerd-test",
+    callerSubject: {
+      userId: "internal-workerd-test-user",
+      handle: "internal-workerd-test-user",
+    },
   });
 
   const loaderServer = createServer(async (req, res) => {
@@ -229,6 +233,9 @@ async function createWorkerdHarness(
       workerdUrl: `http://127.0.0.1:${port}`,
       workerdGatewayToken: manager.getWorkerdGatewayToken(),
       workerdDispatchSecret: manager.getDispatchSecret(),
+      callerId: "internal-workerd-test",
+      callerKind: "server",
+      userId: "internal-workerd-test-user",
       authorization: attestHostDoCall(ref, method),
     });
   };
@@ -1006,7 +1013,7 @@ describe("internal storage DOs under workerd", () => {
         ],
       },
     ];
-    const importMeta = { browser: "chrome", profilePath: "/tmp/chrome-profile" };
+    const importMeta = { sourceId: "chrome:test-source" };
     await harness.callDurableObject(ref, "addHistoryBatch", historyBatch, importMeta);
     await harness.callDurableObject(ref, "addHistoryBatch", historyBatch, importMeta);
     const aggregateOnlyHistoryBatch = [
@@ -1255,7 +1262,7 @@ describe("internal storage DOs under workerd", () => {
       className: "BrowserDataDO",
       objectKey: "global-import-idempotency",
     };
-    const meta = { browser: "chrome", profilePath: "/tmp/chrome-profile" };
+    const meta = { sourceId: "chrome:test-source" };
 
     await harness.callDurableObject(
       ref,
@@ -1336,46 +1343,30 @@ describe("internal storage DOs under workerd", () => {
 
     await harness.callDurableObject(
       ref,
-      "addAutofillBatch",
-      [{ fieldName: "email", value: "me@example.com", timesUsed: 3, dateLastUsed: 100 }],
+      "addFormFillBatch",
+      [{ type: "email", value: "me@example.com", useCount: 3, updatedAt: 100 }],
       meta
     );
     await harness.callDurableObject(
       ref,
-      "addAutofillBatch",
-      [{ fieldName: "email", value: "me@example.com", timesUsed: 3, dateLastUsed: 100 }],
+      "addFormFillBatch",
+      [{ type: "email", value: "me@example.com", useCount: 3, updatedAt: 100 }],
       meta
     );
     await harness.callDurableObject(
       ref,
-      "addAutofillBatch",
-      [{ fieldName: "email", value: "me@example.com", timesUsed: 5, dateLastUsed: 200 }],
+      "addFormFillBatch",
+      [{ type: "email", value: "me@example.com", useCount: 5, updatedAt: 200 }],
       meta
     );
     await expect(
-      harness.callDurableObject(ref, "getAutofillSuggestions", "email")
+      harness.callDurableObject(ref, "getFormFillSuggestions", { type: "email" })
     ).resolves.toMatchObject([
       {
-        field_name: "email",
+        type: "email",
         value: "me@example.com",
-        times_used: 5,
-        date_last_used: 200,
-      },
-    ]);
-
-    await harness.callDurableObject(ref, "addPermissionsBatch", [
-      { origin: "https://example.com", permission: "notifications", setting: "allow" },
-    ]);
-    await harness.callDurableObject(ref, "addPermissionsBatch", [
-      { origin: "https://example.com", permission: "notifications", setting: "allow" },
-    ]);
-    await expect(
-      harness.callDurableObject(ref, "getPermissions", "https://example.com")
-    ).resolves.toMatchObject([
-      {
-        origin: "https://example.com",
-        permission: "notifications",
-        setting: "allow",
+        useCount: 5,
+        updatedAt: 200,
       },
     ]);
   }, 30_000);
@@ -1388,50 +1379,10 @@ describe("internal storage DOs under workerd", () => {
     ]);
 
     const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
-    await harness.callDurableObject(ref, "addCookiesBatch", [
-      {
-        name: "sid",
-        value: "one",
-        domain: ".example.com",
-        hostOnly: false,
-        path: "/",
-        secure: true,
-        httpOnly: true,
-        sameSite: "lax",
-        sourceScheme: "secure",
-        sourcePort: 443,
-      },
-      {
-        name: "sid",
-        value: "two",
-        domain: ".other.test",
-        hostOnly: false,
-        path: "/",
-        secure: true,
-        httpOnly: true,
-        sameSite: "lax",
-        sourceScheme: "secure",
-        sourcePort: 443,
-      },
-    ]);
-
-    await expect(harness.callDurableObject(ref, "clearCookies", "example.com")).resolves.toBe(1);
-    await expect(harness.callDurableObject(ref, "clearCookies")).resolves.toBe(1);
-  }, 30_000);
-
-  it("records BrowserDataDO import runs with summaries and cookie provenance", async () => {
-    const harness = await createWorkerdHarness();
-    manager = harness.manager;
-    await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
-    ]);
-
-    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
-
-    await harness.callDurableObject(
-      ref,
-      "addCookiesBatch",
-      [
+    await harness.callDurableObject(ref, "addCookiesBatch", {
+      jobId: "cookie-clear-job",
+      batchIndex: 0,
+      cookies: [
         {
           name: "sid",
           value: "one",
@@ -1444,141 +1395,25 @@ describe("internal storage DOs under workerd", () => {
           sourceScheme: "secure",
           sourcePort: 443,
         },
+        {
+          name: "sid",
+          value: "two",
+          domain: ".other.test",
+          hostOnly: false,
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          sameSite: "lax",
+          sourceScheme: "secure",
+          sourcePort: 443,
+        },
       ],
-      { browser: "chrome", profilePath: "/p" }
-    );
-
-    // Provenance is populated from the batch meta.
-    await expect(
-      harness.callDurableObject(ref, "getCookies", "example.com")
-    ).resolves.toMatchObject([{ name: "sid", source_browser: "chrome" }]);
-
-    const runId = await harness.callDurableObject(ref, "recordImportRun", {
-      browser: "chrome",
-      profilePath: "/p",
-      status: "success",
-      dataTypes: ["cookies"],
-      summaries: [{ dataType: "cookies", scanned: 1, skipped: 0, errors: 0 }],
-    });
-    expect(typeof runId).toBe("number");
-
-    await expect(harness.callDurableObject(ref, "getImportHistory")).resolves.toMatchObject([
-      {
-        browser: "chrome",
-        status: "success",
-        summaries: [{ data_type: "cookies", scanned: 1 }],
-      },
-    ]);
-  }, 30_000);
-
-  it("classifies dry-run cookie diffs and exposes secret-free views", async () => {
-    const harness = await createWorkerdHarness();
-    manager = harness.manager;
-    await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
-    ]);
-
-    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
-    const baseCookie = {
-      name: "sid",
-      domain: ".example.com",
-      hostOnly: false,
-      path: "/",
-      secure: true,
-      httpOnly: true,
-      sameSite: "lax",
-      sourceScheme: "secure",
-      sourcePort: 443,
-    };
-    await harness.callDurableObject(ref, "addCookiesBatch", [{ ...baseCookie, value: "one" }], {
-      browser: "chrome",
-      profilePath: "/p",
     });
 
-    // Same key + same value = unchanged; same key + new value = changed; new key = added.
-    const diff = (await harness.callDurableObject(ref, "classifyAgainstStore", "cookies", [
-      { ...baseCookie, value: "one" },
-      { ...baseCookie, value: "two" },
-      { ...baseCookie, name: "other", value: "x" },
-    ])) as { added: number; changed: number; unchanged: number; scanned: number };
-    expect(diff).toMatchObject({ scanned: 3, added: 1, changed: 1, unchanged: 1 });
-
-    await expect(harness.callDurableObject(ref, "getCookieDomains")).resolves.toMatchObject([
-      { domain: ".example.com", count: 1 },
-    ]);
     await expect(
-      harness.callDurableObject(ref, "getDomainReadiness", "example.com")
-    ).resolves.toMatchObject({ domain: "example.com", cookies: 1, password: false });
-  }, 30_000);
-
-  it("matches BrowserDataDO domain readiness by hostname boundary", async () => {
-    const harness = await createWorkerdHarness();
-    manager = harness.manager;
-    await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
-    ]);
-
-    const ref = {
-      source: INTERNAL_DO_SOURCE,
-      className: "BrowserDataDO",
-      objectKey: "global-domain-readiness",
-    };
-
-    await harness.callDurableObject(ref, "addCookiesBatch", [
-      {
-        name: "sid",
-        value: "one",
-        domain: ".notgithub.com",
-        hostOnly: false,
-        path: "/",
-        secure: true,
-        httpOnly: true,
-        sameSite: "lax",
-        sourceScheme: "secure",
-        sourcePort: 443,
-      },
-      {
-        name: "sid",
-        value: "two",
-        domain: ".sub.github.com",
-        hostOnly: false,
-        path: "/",
-        secure: true,
-        httpOnly: true,
-        sameSite: "lax",
-        sourceScheme: "secure",
-        sourcePort: 443,
-      },
-    ]);
-    await harness.callDurableObject(ref, "addPermissionsBatch", [
-      { origin: "https://notgithub.com", permission: "notifications", setting: "allow" },
-      { origin: "https://api.github.com", permission: "camera", setting: "block" },
-    ]);
-    await harness.callDurableObject(ref, "addHistoryBatch", [
-      {
-        url: "https://notgithub.com/path",
-        title: "Not GitHub",
-        visitCount: 1,
-        lastVisitTime: 100,
-      },
-      {
-        url: "https://docs.github.com/path",
-        title: "GitHub Docs",
-        visitCount: 1,
-        lastVisitTime: 200,
-      },
-    ]);
-
-    await expect(
-      harness.callDurableObject(ref, "getDomainReadiness", "github.com")
-    ).resolves.toMatchObject({
-      domain: "github.com",
-      cookies: 1,
-      password: false,
-      permissions: [{ permission: "camera", setting: "block" }],
-      recentHistoryCount: 1,
-      lastVisit: 200,
-    });
+      harness.callDurableObject(ref, "clearCookiesForOrigin", "https://example.com")
+    ).resolves.toBe(1);
+    await expect(harness.callDurableObject(ref, "clearAllCookies")).resolves.toBe(1);
   }, 30_000);
 
   it("round-trips BrowserDataDO encrypted passwords in real workerd storage", async () => {
@@ -1602,7 +1437,7 @@ describe("internal storage DOs under workerd", () => {
       harness.callDurableObject(ref, "getPasswordForSite", "https://example.com/login")
     ).resolves.toMatchObject([
       {
-        origin_url: "https://example.com/login",
+        origin_url: "https://example.com",
         username: "ada",
         password: "correct horse battery staple",
         action_url: "https://example.com/session",
@@ -1637,7 +1472,7 @@ describe("internal storage DOs under workerd", () => {
     ).resolves.toMatchObject([
       {
         id,
-        origin_url: "https://example.com/login",
+        origin_url: "https://example.com",
         username: "ada",
         password: "first secret",
       },
@@ -1673,15 +1508,22 @@ describe("internal storage DOs under workerd", () => {
       realm: "",
       timesUsed: 1,
     };
-    await expect(harness.callDurableObject(ref, "addPasswordsBatch", [password])).resolves.toBe(1);
     await expect(
-      harness.callDurableObject(ref, "addPasswordsBatch", [
-        { ...password, password: "second secret", timesUsed: 7 },
-      ])
+      harness.callDurableObject(ref, "addPasswordsBatch", [password], {
+        sourceId: "chrome:test-source",
+      })
+    ).resolves.toBe(1);
+    await expect(
+      harness.callDurableObject(
+        ref,
+        "addPasswordsBatch",
+        [{ ...password, password: "second secret", timesUsed: 7 }],
+        { sourceId: "chrome:test-source" }
+      )
     ).resolves.toBe(1);
     await expect(harness.callDurableObject(ref, "getPasswords")).resolves.toMatchObject([
       {
-        origin_url: "https://example.com/login",
+        origin_url: "https://example.com",
         username: "ada",
         password: "second secret",
         times_used: 7,

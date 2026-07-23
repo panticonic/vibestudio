@@ -54,7 +54,7 @@ describe("P1 receiver parity worksheet", () => {
     const calls = worksheet.rows.filter(
       (row) => row.className === "BrowserDataDO" && row.kind === "call"
     );
-    expect(calls).toHaveLength(50);
+    expect(calls).toHaveLength(57);
     expect(
       calls.every((row) => row.currentDeclaration.includes("code-source:<manifest-broker>"))
     ).toBe(true);

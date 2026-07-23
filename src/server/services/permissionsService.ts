@@ -12,12 +12,16 @@ import {
   credentialUseGrantId,
   type CredentialUseGrantStoreLike,
 } from "./credentialUseGrantStore.js";
+import { browserEnvironmentIdentityFromContext } from "../browserEnvironmentIdentity.js";
+import type { BrowserPermissionGrantStore } from "./browserPermissionsService.js";
 
 const SERVICE = "permissions";
 
 export function createPermissionsService(deps: {
   capabilityGrants: CapabilityGrantStore;
   credentialUseGrants: CredentialUseGrantStoreLike;
+  browserPermissions: BrowserPermissionGrantStore;
+  workspaceId: string;
 }): ServiceDefinition {
   return {
     name: SERVICE,
@@ -25,7 +29,9 @@ export function createPermissionsService(deps: {
     authority: { principals: ["user", "host", "code"] },
     methods: permissionsMethods,
     handler: defineServiceHandler(SERVICE, permissionsMethods, {
-      list: () => {
+      list: async (ctx) => {
+        await deps.browserPermissions.ensureLoaded();
+        const identity = browserEnvironmentIdentityFromContext(deps.workspaceId, ctx);
         const capability: SavedPermissionGrant[] = deps.capabilityGrants
           .listActiveAuthorityGrants()
           .filter((grant) => !grant.capability.startsWith("userland.choice/"))
@@ -63,11 +69,39 @@ export function createPermissionsService(deps: {
               : {}),
             grantedAt: grant.grantedAt,
           }));
-        return [...capability, ...userland, ...credentialUse].sort(
+        const browserSites: SavedPermissionGrant[] = deps.browserPermissions
+          .list(identity.environmentKey, identity.ownerUserId)
+          .map((grant) => ({
+            id: deps.browserPermissions.idFor(identity.environmentKey, identity.ownerUserId, grant),
+            kind: "browser-site",
+            callerLabel: grant.origin,
+            scopeLabel:
+              grant.decision === "block"
+                ? "Blocked for this browser environment"
+                : grant.scope === "session"
+                  ? "Allowed for this session"
+                  : "Always allowed",
+            capability: `Website ${grant.capability}`,
+            resource: grant.origin,
+            grantedAt: grant.updatedAt,
+          }));
+        return [...capability, ...userland, ...credentialUse, ...browserSites].sort(
           (a, b) => (b.grantedAt ?? 0) - (a.grantedAt ?? 0)
         );
       },
-      revoke: async (_ctx, [{ kind, id }]) => {
+      revoke: async (ctx, [{ kind, id }]) => {
+        if (kind === "browser-site") {
+          await deps.browserPermissions.ensureLoaded();
+          const identity = browserEnvironmentIdentityFromContext(deps.workspaceId, ctx);
+          const removed = await deps.browserPermissions.revokeById(
+            identity.environmentKey,
+            identity.ownerUserId,
+            id
+          );
+          if (!removed)
+            throw new ServiceError(SERVICE, "revoke", "Permission grant not found", "ENOENT");
+          return;
+        }
         const removed =
           kind === "capability"
             ? deps.capabilityGrants.revoke(id)

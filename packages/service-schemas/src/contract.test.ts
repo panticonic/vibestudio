@@ -10,6 +10,8 @@ import { authMethods } from "./auth.js";
 import { authorityMethods } from "./authority.js";
 import { autofillMethods } from "./autofill.js";
 import { blobstoreMethods } from "./blobstore.js";
+import { browserEnvironmentMethods } from "./browserEnvironment.js";
+import { browserPermissionsMethods } from "./browserPermissions.js";
 import { buildMethods } from "./build.js";
 import { channelMethods } from "./channel.js";
 import { contentTrustMethods } from "./contentTrust.js";
@@ -64,6 +66,16 @@ const serviceTables: ServiceTable[] = [
   { service: "authority", file: "authority.ts", methods: authorityMethods },
   { service: "autofill", file: "autofill.ts", methods: autofillMethods },
   { service: "blobstore", file: "blobstore.ts", methods: blobstoreMethods },
+  {
+    service: "browserEnvironment",
+    file: "browserEnvironment.ts",
+    methods: browserEnvironmentMethods,
+  },
+  {
+    service: "browserPermissions",
+    file: "browserPermissions.ts",
+    methods: browserPermissionsMethods,
+  },
   { service: "build", file: "build.ts", methods: buildMethods },
   { service: "channel", file: "channel.ts", methods: channelMethods },
   { service: "contentTrust", file: "contentTrust.ts", methods: contentTrustMethods },

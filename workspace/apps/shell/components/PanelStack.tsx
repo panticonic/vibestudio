@@ -1,16 +1,12 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useSetAtom } from "jotai";
 import { Cross2Icon } from "@radix-ui/react-icons";
-import { Box, Button, Card, Flex, IconButton, Spinner, Text } from "@radix-ui/themes";
+import { Box, Button, Card, Flex, IconButton, Spinner, Text, TextField } from "@radix-ui/themes";
 import { VibestudioLogo } from "@workspace/ui";
 import { useIsMobile } from "@workspace/react/responsive";
 
 import type { LazyTitleNavigationData, LazyStatusNavigationData } from "./navigationTypes";
 import type { PanelContextMenuAction } from "@vibestudio/shared/types";
-import type {
-  PanelRuntimeLease,
-  PanelRuntimeLeaseChangedEvent,
-} from "@vibestudio/shared/panel/panelLease";
 import {
   DEFAULT_SEARCH_TEMPLATE,
   applySearchTemplate,
@@ -53,8 +49,11 @@ import { LazyPanelTreeSidebar } from "./LazyPanelTreeSidebar";
 import { useShellEvent } from "../shell/useShellEvent";
 import { SavePasswordBar } from "./SavePasswordBar";
 import { assertPresent } from "../utils/assertPresent";
-import { leasedElsewhereInfo, shouldShowPanelView } from "./PanelStackVisibility";
-import { PanelSurface } from "./PanelSurface";
+import { ColumnRow } from "./ColumnRow";
+import { usePanelLayout } from "../layout/usePanelLayout";
+import { findPane, paneForPanel } from "../layout/placementEngine";
+import { LAYOUT_DROP_EVENT, type LayoutDropDetail } from "../layout/dropTargets";
+import type { PanelPlacementHint } from "../layout/types";
 
 interface PanelStackProps {
   onTitleChange?: (title: string) => void;
@@ -146,25 +145,62 @@ export function PanelStack({
   const bumpPinMutationSeq = useSetAtom(pinMutationSeqAtom);
   const openWorkspaceChooser = useSetAtom(workspaceChooserDialogOpenAtom);
 
-  // ID-based visible panel state
-  const [visiblePanelId, setVisiblePanelId] = useState<string | null>(null);
-
-  // Switching to a *different* panel returns the title bar to breadcrumb view.
-  // Guard on an actual id change: the context's setAddressBarVisible identity is
-  // unstable, so an unguarded effect would re-run every render and clobber the
-  // address view the moment a breadcrumb click opened it.
-  const lastAddressResetPanelIdRef = useRef(visiblePanelId);
+  // The layout content viewport (the area right of the sidebar) drives the
+  // engine's fit tests; measured with a ResizeObserver. A callback ref (state,
+  // not a ref object) matters: the measured box mounts only after the loading
+  // early-return, so a mount-time effect would observe nothing forever.
+  const [contentEl, setContentEl] = useState<HTMLDivElement | null>(null);
+  const [contentSize, setContentSize] = useState({ width: 1024, height: 768 });
   useEffect(() => {
-    if (lastAddressResetPanelIdRef.current === visiblePanelId) return;
-    lastAddressResetPanelIdRef.current = visiblePanelId;
+    const el = contentEl;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        setContentSize((current) =>
+          current.width === Math.round(rect.width) && current.height === Math.round(rect.height)
+            ? current
+            : { width: Math.round(rect.width), height: Math.round(rect.height) }
+        );
+      }
+    });
+    observer.observe(el);
+    const rect = el.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      setContentSize({ width: Math.round(rect.width), height: Math.round(rect.height) });
+    }
+    return () => observer.disconnect();
+  }, [contentEl]);
+
+  const {
+    layout,
+    layoutEpoch,
+    bumpLayoutEpoch,
+    residentColumnIds,
+    parkedLeft,
+    parkedRight,
+    focusedPanelId,
+    visiblePanelIds,
+    dispatch,
+    dispatchIntent,
+    restored,
+  } = usePanelLayout(contentSize.width, contentSize.height);
+
+  // Switching to a *different* focused panel returns the title bar to breadcrumb
+  // view. Guard on an actual id change: the context's setAddressBarVisible
+  // identity is unstable, so an unguarded effect would re-run every render and
+  // clobber the address view the moment a breadcrumb click opened it.
+  const lastAddressResetPanelIdRef = useRef(focusedPanelId);
+  useEffect(() => {
+    if (lastAddressResetPanelIdRef.current === focusedPanelId) return;
+    lastAddressResetPanelIdRef.current = focusedPanelId;
     setAddressBarVisible(false);
-  }, [visiblePanelId, setAddressBarVisible]);
+  }, [focusedPanelId, setAddressBarVisible]);
   const [hostThemeCss, setHostThemeCss] = useState<string | null>(null);
-  const [visibleRuntimeLease, setVisibleRuntimeLease] = useState<PanelRuntimeLease | null>(null);
-  const [takeoverBusy, setTakeoverBusy] = useState(false);
-  const [takeoverError, setTakeoverError] = useState<string | null>(null);
-  const [buildSlow, setBuildSlow] = useState(false);
   const [unresponsivePanels, setUnresponsivePanels] = useState<Set<string>>(() => new Set());
+  const [findOpen, setFindOpen] = useState(false);
+  const [findText, setFindText] = useState("");
+  const [findResult, setFindResult] = useState({ activeMatchOrdinal: 0, matches: 0 });
   const [sidebarWidth, setSidebarWidth] = useState<number>(260);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [isResizeHover, setIsResizeHover] = useState(false);
@@ -175,13 +211,46 @@ export function PanelStack({
   const resizePointerIdRef = useRef<number | null>(null);
   const isMobile = useIsMobile();
 
-  // Lazy data hooks
+  // Lazy data hooks — chrome, breadcrumbs, and commands follow the focused pane.
   const { panels: rootPanels, loading: rootLoading } = useRootPanels();
-  const { panel: visiblePanel, loading: panelLoading } = useFullPanel(visiblePanelId);
+  const { panel: visiblePanel } = useFullPanel(focusedPanelId);
   const { panelMap } = usePanelTree();
-  const { ancestors } = useAncestors(visiblePanelId);
-  const { siblings } = useSiblings(visiblePanelId);
-  const { groups: descendantGroups } = useDescendantSiblingGroups(visiblePanelId);
+  const { ancestors } = useAncestors(focusedPanelId);
+  const { siblings } = useSiblings(focusedPanelId);
+  const { groups: descendantGroups } = useDescendantSiblingGroups(focusedPanelId);
+
+  useShellEvent(
+    "toggle-find-in-page",
+    useCallback(() => setFindOpen((open) => !open), [])
+  );
+  useEffect(() => {
+    if (!findOpen || !focusedPanelId || !findText) {
+      setFindResult({ activeMatchOrdinal: 0, matches: 0 });
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void panelService
+        .findInPage(focusedPanelId, findText, { forward: true, findNext: false })
+        .then(setFindResult)
+        .catch((error) => reportPanelCommandError("Find", error));
+    }, 100);
+    return () => window.clearTimeout(timer);
+  }, [findOpen, findText, focusedPanelId]);
+  const closeFind = useCallback(() => {
+    if (focusedPanelId) void panelService.stopFindInPage(focusedPanelId);
+    setFindOpen(false);
+    setFindText("");
+  }, [focusedPanelId]);
+  const nextFind = useCallback(
+    (forward: boolean) => {
+      if (!focusedPanelId || !findText) return;
+      void panelService
+        .findInPage(focusedPanelId, findText, { forward, findNext: true })
+        .then(setFindResult)
+        .catch((error) => reportPanelCommandError("Find", error));
+    },
+    [findText, focusedPanelId]
+  );
 
   useShellEvent(
     "panel-responsiveness-changed",
@@ -194,15 +263,6 @@ export function PanelStack({
       });
     }, [])
   );
-
-  useEffect(() => {
-    setTakeoverError(null);
-    setTakeoverBusy(false);
-    setBuildSlow(false);
-    if (!visiblePanel || visiblePanel.artifacts?.htmlPath || visiblePanel.artifacts?.error) return;
-    const timer = window.setTimeout(() => setBuildSlow(true), 60_000);
-    return () => window.clearTimeout(timer);
-  }, [visiblePanel?.id, visiblePanel?.artifacts?.htmlPath, visiblePanel?.artifacts?.error]);
 
   // Ancestor IDs for tree auto-expansion
   const ancestorIds = useMemo(() => ancestors.map((a) => a.id), [ancestors]);
@@ -217,47 +277,8 @@ export function PanelStack({
     });
   }, [hostTheme]);
 
-  // Initial panel selection - set visible panel when root panels load
-  useEffect(() => {
-    if (rootLoading || visiblePanelId || rootPanels.length === 0) {
-      return;
-    }
-    const fallbackPanelId = assertPresent(rootPanels[0]).id;
-    setVisiblePanelId((currentId) => currentId ?? fallbackPanelId);
-    void panelService
-      .getFocusedPanelId()
-      .then((focusedPanelId) => {
-        const restoredPanelId =
-          focusedPanelId && panelTreeContainsId(rootPanels, focusedPanelId) ? focusedPanelId : null;
-        if (!restoredPanelId) return;
-        setVisiblePanelId((currentId) =>
-          currentId === fallbackPanelId ? restoredPanelId : currentId
-        );
-      })
-      .catch(() => {});
-  }, [rootLoading, rootPanels, visiblePanelId]);
-
-  // Handle panel deletion - fall back to first root if current panel is gone
-  // Use a small delay to avoid race condition with tree updates when creating new panels.
-  // The tree update is debounced (16ms), so we need to wait before assuming the panel was deleted.
-  useEffect(() => {
-    // If we have a visible panel ID but no panel data and loading is done, panel may be deleted
-    if (!visiblePanelId || visiblePanel || panelLoading || rootPanels.length === 0) {
-      return;
-    }
-    // Delay fallback to allow pending tree updates to arrive
-    const timer = setTimeout(() => {
-      setVisiblePanelId((currentId) => {
-        // Only fall back if we still have the same ID and still can't find the panel
-        // This prevents incorrectly falling back during panel creation
-        if (currentId === visiblePanelId) {
-          return assertPresent(rootPanels[0]).id;
-        }
-        return currentId;
-      });
-    }, 50); // 50ms > 16ms debounce, gives tree time to update
-    return () => clearTimeout(timer);
-  }, [visiblePanelId, visiblePanel, panelLoading, rootPanels]);
+  // Startup restore, deleted-panel fallback, and tree reconcile all live in
+  // usePanelLayout (§7, §4.5); the engine is the single writer of layout state.
 
   // Build lazy title navigation data
   const lazyTitleNavigationData = useMemo<LazyTitleNavigationData | null>(() => {
@@ -275,15 +296,15 @@ export function PanelStack({
 
   // Build lazy status navigation data
   const lazyStatusNavigationData = useMemo<LazyStatusNavigationData | null>(() => {
-    if (!visiblePanelId) {
+    if (!focusedPanelId) {
       return null;
     }
 
     return {
       descendantGroups,
-      visiblePanelId,
+      visiblePanelId: focusedPanelId,
     };
-  }, [descendantGroups, visiblePanelId]);
+  }, [descendantGroups, focusedPanelId]);
 
   // Update navigation context with lazy data
   useEffect(() => {
@@ -294,13 +315,38 @@ export function PanelStack({
     setLazyStatusNavigation(lazyStatusNavigationData);
   }, [setLazyStatusNavigation, lazyStatusNavigationData]);
 
-  // Navigate to a specific panel by ID
-  const navigateToPanelId = useCallback((panelId: string) => {
-    if (!panelId) {
-      return;
-    }
-    setVisiblePanelId(panelId);
-  }, []);
+  // Navigate to a specific panel by ID (rule 1: replace in the nearest-relative
+  // pane, or focus its pane when already visible).
+  const navigateToPanelId = useCallback(
+    (panelId: string) => {
+      if (!panelId) {
+        return;
+      }
+      dispatch({ type: "show-panel", panelId, origin: "navigate-event" });
+    },
+    [dispatch]
+  );
+
+  // A child just created with focus: dispatch full open-child intent so the
+  // engine can place it beside/below its parent (§4.2). The intentId keeps a
+  // later bare navigate-to-panel for the same creation from double-applying.
+  const openChildInLayout = useCallback(
+    (parentId: string, childId: string, hint?: PanelPlacementHint) => {
+      // The server resolves call-site ?? manifest hints onto the snapshot (W4);
+      // use it when the local call site didn't carry one.
+      const resolvedHint =
+        hint ??
+        (panelMap.get(childId)?.snapshot as { placement?: PanelPlacementHint } | undefined)
+          ?.placement;
+      dispatchIntent(`create:${childId}`, {
+        type: "open-child",
+        panelId: childId,
+        parentId,
+        hint: resolvedHint,
+      });
+    },
+    [dispatchIntent, panelMap]
+  );
 
   // Register navigate function with context
   useEffect(() => {
@@ -313,47 +359,94 @@ export function PanelStack({
     onRegisterNavigateToId(navigateToPanelId);
   }, [onRegisterNavigateToId, navigateToPanelId]);
 
-  // Listen for navigate-to-panel events from main process (e.g., when new panels are created with focus: true)
+  // Listen for navigate-to-panel events from main process (e.g., when new
+  // panels are created with focus: true). The payload optionally carries the
+  // canonical layout intent (§3.1): parentId/hint/intentId for creations.
   useShellEvent(
     "navigate-to-panel",
     useCallback(
-      ({ panelId }) => {
-        navigateToPanelId(panelId);
+      (payload: {
+        panelId: string;
+        parentId?: string;
+        hint?: PanelPlacementHint;
+        intentId?: string;
+      }) => {
+        const intentId = payload.intentId ?? (payload.parentId ? `create:${payload.panelId}` : undefined);
+        if (payload.parentId) {
+          dispatchIntent(intentId, {
+            type: "open-child",
+            panelId: payload.panelId,
+            parentId: payload.parentId,
+            hint: payload.hint,
+          });
+          return;
+        }
+        dispatchIntent(intentId, {
+          type: "show-panel",
+          panelId: payload.panelId,
+          origin: "navigate-event",
+        });
       },
-      [navigateToPanelId]
+      [dispatchIntent]
     )
   );
 
+  // Renderer-local creation surfaces (title bar, sidebar add-child, user
+  // notifications) announce via this custom event; the detail may carry the
+  // parent for full open-child intent.
+  useEffect(() => {
+    const handleShellPanelCreated = (event: Event) => {
+      const detail = (event as CustomEvent<{ panelId?: string; parentId?: string }>).detail;
+      if (!detail?.panelId) return;
+      if (detail.parentId) {
+        openChildInLayout(detail.parentId, detail.panelId);
+      } else {
+        navigateToPanelId(detail.panelId);
+      }
+    };
+    window.addEventListener("shell-panel-created", handleShellPanelCreated);
+    return () => window.removeEventListener("shell-panel-created", handleShellPanelCreated);
+  }, [openChildInLayout, navigateToPanelId]);
+
+  // Tree→layout drops (W5, D8): pane-header drop shows the panel in exactly
+  // that pane; gutter drop opens it in a new column at that position.
+  const layoutRefForDrop = useRef(layout);
+  layoutRefForDrop.current = layout;
+  useEffect(() => {
+    const handleLayoutDrop = (event: Event) => {
+      const detail = (event as CustomEvent<LayoutDropDetail>).detail;
+      if (!detail?.panelId) return;
+      const target = detail.target;
+      if (target.kind === "pane") {
+        dispatch({ type: "place-in-pane", panelId: detail.panelId, paneId: target.paneId });
+        return;
+      }
+      const column = layoutRefForDrop.current.columns.find(
+        (candidate) => candidate.id === target.columnId
+      );
+      const anchorPane = column?.panes[0];
+      if (anchorPane) {
+        dispatch({ type: "open-beside", panelId: detail.panelId, anchorPaneId: anchorPane.id });
+      }
+    };
+    window.addEventListener(LAYOUT_DROP_EVENT, handleLayoutDrop);
+    return () => window.removeEventListener(LAYOUT_DROP_EVENT, handleLayoutDrop);
+  }, [dispatch]);
+
+  // Native focus feedback (§5.2): when a native view gains focus by a route the
+  // shell didn't initiate, follow it with layout focus.
   useShellEvent(
-    "panel:runtimeLeaseChanged",
+    "native-slot-focused",
     useCallback(
-      (event: PanelRuntimeLeaseChangedEvent) => {
-        if (event.slotId === visiblePanelId) {
-          setVisibleRuntimeLease(event.next);
+      (payload: { nativeSlotId: string; panelId: string }) => {
+        const location = paneForPanel(layout, payload.panelId);
+        if (location && layout.focusedPaneId !== location.pane.id) {
+          dispatch({ type: "focus-pane", paneId: location.pane.id });
         }
       },
-      [visiblePanelId]
+      [layout, dispatch]
     )
   );
-
-  useEffect(() => {
-    if (!visiblePanelId) {
-      setVisibleRuntimeLease(null);
-      return;
-    }
-    let cancelled = false;
-    void panelService
-      .getRuntimeLease(visiblePanelId)
-      .then((lease) => {
-        if (!cancelled) setVisibleRuntimeLease(lease);
-      })
-      .catch(() => {
-        if (!cancelled) setVisibleRuntimeLease(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [visiblePanelId]);
 
   const navigatePanelHistory = useCallback(
     (panelId: string, delta: -1 | 1): Promise<unknown> => {
@@ -423,7 +516,7 @@ export function PanelStack({
           break;
         case "add-child": {
           const result = await panelService.createChild(panelId, "about/new", { focus: true });
-          navigateToPanelId(result.id);
+          openChildInLayout(panelId, result.id);
           break;
         }
         case "open-external": {
@@ -470,7 +563,7 @@ export function PanelStack({
           break;
       }
     },
-    [navigatePanelHistory, navigateToPanelId, setPinnedPanelIds, bumpPinMutationSeq]
+    [navigatePanelHistory, navigateToPanelId, openChildInLayout, setPinnedPanelIds, bumpPinMutationSeq]
   );
 
   // Register panel action handler with parent
@@ -544,25 +637,6 @@ export function PanelStack({
       } as EventListenerOptions);
     };
   }, [isResizingSidebar]);
-
-  // Notify panels about focus changes
-  useEffect(() => {
-    const panelId = visiblePanel?.id;
-    if (!panelId) {
-      return;
-    }
-
-    void panelService
-      .ensureLoaded(panelId)
-      .then((result) => {
-        if (result.status === "leased_elsewhere" || result.status === "view_creation_failed") {
-          console.warn("Panel load did not create a view", result);
-        }
-      })
-      .catch((error) => {
-        console.error("Failed to ensure panel is loaded", error);
-      });
-  }, [visiblePanel?.id]);
 
   const mobileSidebarWidth = Math.max(0, Math.min(360, viewportWidth - 48));
   const effectiveSidebarWidth = isMobile ? mobileSidebarWidth : sidebarWidth;
@@ -753,7 +827,10 @@ export function PanelStack({
                         isRoot: true,
                         focus: location.focus ?? true,
                       });
-              if (result && location.focus !== false) navigateToPanelId(result.id);
+              if (result && location.focus !== false) {
+                if (mode === "child") openChildInLayout(panelId, result.id);
+                else navigateToPanelId(result.id);
+              }
             })().catch((error: unknown) => {
               void notification.show({
                 type: "error",
@@ -777,7 +854,7 @@ export function PanelStack({
             } else if (mode === "child") {
               void panelService
                 .createBrowserChild(panelId, parsed.url, { focus: true })
-                .then((result) => navigateToPanelId(result.id));
+                .then((result) => openChildInLayout(panelId, result.id));
             } else if (mode === "root") {
               void panelService
                 .createBrowser(parsed.url, { focus: true })
@@ -803,7 +880,9 @@ export function PanelStack({
                   ? panelService.createChild(panelId, parsed.source, { focus: true, ref })
                   : panelService.createPanel(parsed.source, { isRoot: true, ref });
             void creator.then((result) => {
-              if (result) navigateToPanelId(result.id);
+              if (!result) return;
+              if (mode === "child") openChildInLayout(panelId, result.id);
+              else navigateToPanelId(result.id);
             });
             return;
           }
@@ -822,7 +901,7 @@ export function PanelStack({
             } else if (mode === "child") {
               void panelService
                 .createBrowserChild(panelId, url, { focus: true })
-                .then((result) => navigateToPanelId(result.id));
+                .then((result) => openChildInLayout(panelId, result.id));
             } else if (mode === "root") {
               void panelService
                 .createBrowser(url, { focus: true })
@@ -886,7 +965,10 @@ export function PanelStack({
                       isRoot: true,
                       focus: location.focus ?? true,
                     });
-            if (result && location.focus !== false) navigateToPanelId(result.id);
+            if (result && location.focus !== false) {
+              if (targetMode === "child") openChildInLayout(targetPanelId, result.id);
+              else navigateToPanelId(result.id);
+            }
           })().catch((error: unknown) => {
             void notification.show({
               type: "error",
@@ -904,7 +986,7 @@ export function PanelStack({
           } else if (mode === "child") {
             void panelService
               .createBrowserChild(targetPanelId, action.url, { focus: true })
-              .then((result) => navigateToPanelId(result.id));
+              .then((result) => openChildInLayout(targetPanelId, result.id));
           } else if (mode === "root") {
             void panelService
               .createBrowser(action.url, { focus: true })
@@ -930,7 +1012,7 @@ export function PanelStack({
           } else if (mode === "child") {
             void panelService
               .createBrowserChild(targetPanelId, url, { focus: true })
-              .then((result) => navigateToPanelId(result.id));
+              .then((result) => openChildInLayout(targetPanelId, result.id));
           } else if (mode === "root") {
             void panelService
               .createBrowser(url, { focus: true })
@@ -959,7 +1041,9 @@ export function PanelStack({
                   })
                 : panelService.createPanel(action.source, { isRoot: true, ref: actionRef });
           void creator.then((result) => {
-            if (result) navigateToPanelId(result.id);
+            if (!result) return;
+            if (mode === "child") openChildInLayout(targetPanelId, result.id);
+            else navigateToPanelId(result.id);
           });
         }
       }
@@ -967,6 +1051,7 @@ export function PanelStack({
     [
       navigatePanelHistory,
       navigateToPanelId,
+      openChildInLayout,
       setPinnedPanelIds,
       bumpPinMutationSeq,
       visiblePanel,
@@ -1028,16 +1113,120 @@ export function PanelStack({
       setMode("stack");
     }
   }, [isMobile, setMode]);
+  // Plain tree click = replace in the resolved pane (rule 1); Cmd/Ctrl-click =
+  // force open-beside anchored at the focused pane (D8).
   const navigateFromTree = useCallback(
-    (panelId: string) => {
-      navigateToPanelId(panelId);
+    (panelId: string, options?: { openBeside?: boolean }) => {
+      if (options?.openBeside && layout.focusedPaneId) {
+        dispatch({ type: "open-beside", panelId, anchorPaneId: layout.focusedPaneId });
+      } else {
+        dispatch({ type: "show-panel", panelId, origin: "tree-click" });
+      }
       closeMobileTree();
     },
-    [closeMobileTree, navigateToPanelId]
+    [closeMobileTree, dispatch, layout.focusedPaneId]
+  );
+
+  const focusPane = useCallback(
+    (paneId: string) => dispatch({ type: "focus-pane", paneId }),
+    [dispatch]
+  );
+  const focusColumn = useCallback(
+    (columnId: string) => {
+      const column = layout.columns.find((candidate) => candidate.id === columnId);
+      const pane = column?.panes[0];
+      if (pane) dispatch({ type: "focus-pane", paneId: pane.id });
+    },
+    [layout, dispatch]
+  );
+  const closePane = useCallback(
+    (paneId: string) => dispatch({ type: "close-pane", paneId }),
+    [dispatch]
+  );
+  const splitBelowPane = useCallback(
+    (paneId: string) => {
+      const panelId = findPane(layout, paneId)?.pane.panelId;
+      if (!panelId) return;
+      void panelService
+        .createChild(panelId, "about/new", {
+          focus: true,
+          placement: { disposition: "split-below" },
+        })
+        .then((result) =>
+          dispatchIntent(`create:${result.id}`, {
+            type: "split-below",
+            panelId: result.id,
+            anchorPaneId: paneId,
+          })
+        )
+        .catch((error) => reportPanelCommandError("Split pane", error));
+    },
+    [layout, dispatchIntent]
+  );
+  const openBesidePane = useCallback(
+    (paneId: string) => {
+      dispatch({ type: "move-pane-to-new-column", paneId });
+    },
+    [dispatch]
+  );
+  const showAddressBar = useCallback(() => {
+    setAddressBarVisible(true);
+    window.requestAnimationFrame(() => window.dispatchEvent(new CustomEvent("shell-focus-address")));
+  }, [setAddressBarVisible]);
+  const dismissUnresponsive = useCallback((panelId: string) => {
+    setUnresponsivePanels((current) => {
+      const next = new Set(current);
+      next.delete(panelId);
+      return next;
+    });
+  }, []);
+
+  // Keyboard pane-focus movement: Cmd/Ctrl+Alt+arrows; +Shift+←/→ brings the
+  // nearest parked column into the viewport (§5.2/§6).
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || !event.altKey) return;
+      const focused = layout.focusedPaneId ? findPane(layout, layout.focusedPaneId) : null;
+      if (!focused) return;
+      if (event.shiftKey) {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        const parked = event.key === "ArrowLeft" ? parkedLeft : parkedRight;
+        const target = event.key === "ArrowLeft" ? parked[parked.length - 1] : parked[0];
+        if (target) focusColumn(target);
+        return;
+      }
+      let target: string | null = null;
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        const delta = event.key === "ArrowLeft" ? -1 : 1;
+        const neighbor = layout.columns[focused.columnIndex + delta];
+        target = neighbor?.panes[Math.min(focused.paneIndex, (neighbor?.panes.length ?? 1) - 1)]?.id ?? null;
+      } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        const delta = event.key === "ArrowUp" ? -1 : 1;
+        target = focused.column.panes[focused.paneIndex + delta]?.id ?? null;
+      } else {
+        return;
+      }
+      event.preventDefault();
+      if (target) focusPane(target);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [layout, parkedLeft, parkedRight, focusPane, focusColumn]);
+
+  const visibleIdSet = useMemo(() => new Set(visiblePanelIds), [visiblePanelIds]);
+
+  const resizeColumns = useCallback(
+    (columnFrs: number[]) => dispatch({ type: "resize-columns", columnFrs }),
+    [dispatch]
+  );
+  const resizePanes = useCallback(
+    (columnId: string, paneFrs: number[]) => dispatch({ type: "resize-panes", columnId, paneFrs }),
+    [dispatch]
   );
 
   // Show loading state while initializing
-  if (rootLoading && rootPanels.length === 0) {
+  if ((rootLoading && rootPanels.length === 0) || !restored) {
     return (
       <Flex
         direction="column"
@@ -1053,219 +1242,7 @@ export function PanelStack({
     );
   }
 
-  if (!visiblePanel && !panelLoading) {
-    return (
-      <Flex
-        direction="column"
-        align="center"
-        justify="center"
-        gap="3"
-        style={{ flex: 1, height: "100%", textAlign: "center" }}
-      >
-        <VibestudioLogo size={72} variant="symbol" />
-        <Text weight="medium">No panels available.</Text>
-        <Text size="2" color="gray">
-          Create a panel or choose another workspace to continue.
-        </Text>
-        <Flex gap="2" wrap="wrap" justify="center">
-          <Button
-            onClick={() => {
-              void panelService
-                .createAboutPanel("new")
-                .then((result) => navigateToPanelId(result.id))
-                .catch((error) => reportPanelCommandError("Create panel", error));
-            }}
-          >
-            New panel
-          </Button>
-          <Button variant="soft" onClick={() => openWorkspaceChooser(true)}>
-            Switch workspace
-          </Button>
-        </Flex>
-      </Flex>
-    );
-  }
-
-  // Helper to render panel content based on its state
-  const renderPanelContent = () => {
-    if (!visiblePanel) {
-      return (
-        <Flex direction="column" align="center" justify="center" gap="3" height="100%">
-          <VibestudioLogo size={56} variant="symbol" />
-          <Spinner size="3" />
-          <Text>Loading panel...</Text>
-        </Flex>
-      );
-    }
-
-    const artifacts = visiblePanel.artifacts;
-    if (unresponsivePanels.has(visiblePanel.id)) {
-      return (
-        <Flex direction="column" align="center" justify="center" height="100%" gap="3" p="4">
-          <Text size="4" weight="bold">
-            This panel is not responding
-          </Text>
-          <Text size="2" color="gray" align="center">
-            Its renderer may be busy or stuck. You can wait, or force a clean reload.
-          </Text>
-          <Flex gap="2">
-            <Button
-              variant="soft"
-              onClick={() =>
-                setUnresponsivePanels((current) => {
-                  const next = new Set(current);
-                  next.delete(visiblePanel.id);
-                  return next;
-                })
-              }
-            >
-              Wait
-            </Button>
-            <Button
-              color="red"
-              onClick={() => {
-                setUnresponsivePanels((current) => {
-                  const next = new Set(current);
-                  next.delete(visiblePanel.id);
-                  return next;
-                });
-                void panelService.forceReloadView(visiblePanel.id);
-              }}
-            >
-              Force reload
-            </Button>
-          </Flex>
-        </Flex>
-      );
-    }
-    // "Leased elsewhere" means the runtime slot is held by a NON-desktop client
-    // (the headless host or a mobile device) that renders it remotely — the only
-    // case where "Take Over" is meaningful. A desktop-held lease whose build
-    // artifacts simply aren't populated yet is NOT elsewhere: it falls through to
-    // the dedicated "Preparing panel…" loading branch below. (The former
-    // `|| !artifacts?.htmlPath` conflated "still building" with "running
-    // elsewhere", so a freshly-created panel flashed the Take Over screen — with
-    // the desktop's own lease — until its first build artifacts arrived.)
-    const leasedElsewhere = leasedElsewhereInfo(
-      visiblePanel.id,
-      visibleRuntimeLease,
-      visiblePanel.state?.runtime
-    );
-
-    if (leasedElsewhere) {
-      return (
-        <Flex direction="column" align="center" justify="center" height="100%" gap="3" p="4">
-          <Text size="4" weight="bold">
-            Running on {leasedElsewhere.holderLabel}
-          </Text>
-          <Button
-            disabled={takeoverBusy}
-            onClick={() => {
-              setTakeoverBusy(true);
-              setTakeoverError(null);
-              void panelService
-                .takeOver(leasedElsewhere.slotId)
-                .catch((error) => {
-                  console.error("Failed to take over panel", error);
-                  setTakeoverError(error instanceof Error ? error.message : String(error));
-                })
-                .finally(() => setTakeoverBusy(false));
-            }}
-          >
-            {takeoverBusy ? "Taking over…" : "Take Over"}
-          </Button>
-          {takeoverError ? (
-            <Text color="red" size="2" role="alert">
-              Couldn&apos;t take over: {takeoverError}
-            </Text>
-          ) : null}
-        </Flex>
-      );
-    }
-
-    // Error state
-    if (artifacts?.error) {
-      return (
-        <Flex direction="column" align="center" justify="center" height="100%" p="4">
-          <Text color="red" size="4" weight="bold" mb="2">
-            Panel Error
-          </Text>
-          <Text color="red" size="2" style={{ fontFamily: "monospace" }}>
-            {artifacts.error}
-          </Text>
-          <Flex gap="2" mt="3">
-            <Button variant="soft" onClick={() => void panelService.reload(visiblePanel.id)}>
-              Reload
-            </Button>
-            <Button onClick={() => void panelService.rebuildAndReload(visiblePanel.id)}>
-              Rebuild
-            </Button>
-          </Flex>
-        </Flex>
-      );
-    }
-
-    if (!artifacts?.htmlPath) {
-      // Panel loading state (while build is in progress)
-      return (
-        <Flex direction="column" align="center" justify="center" height="100%">
-          <Spinner size="3" />
-          <Text mt="3">{"Preparing panel..."}</Text>
-          {artifacts?.buildProgress ? (
-            <Text size="2" color="gray" mt="1">
-              {artifacts.buildProgress}
-            </Text>
-          ) : null}
-          {buildSlow ? (
-            <Flex direction="column" align="center" gap="2" mt="3">
-              <Text size="2" color="amber">
-                This build is taking longer than expected.
-              </Text>
-              <Flex gap="2">
-                <Button
-                  size="1"
-                  variant="soft"
-                  onClick={() => void panelService.createAboutPanel("server-logs")}
-                >
-                  View server logs
-                </Button>
-                <Button size="1" onClick={() => void panelService.rebuildPanel(visiblePanel.id)}>
-                  Rebuild
-                </Button>
-              </Flex>
-            </Flex>
-          ) : null}
-        </Flex>
-      );
-    }
-
-    // Panel is ready - WebContentsView is managed by main process. If Electron
-    // routes a native click to this shell placeholder instead of the child view,
-    // forward it into the visible WebContentsView so embedded apps remain
-    // focusable.
-    return (
-      <PanelSurface
-        key={visiblePanel.id}
-        nativeSlotId="panel-stack:primary"
-        panelId={visiblePanel.id}
-        bindingKey={[
-          visiblePanel.id,
-          visiblePanel.path ?? "",
-          visiblePanel.contextId,
-          artifacts.htmlPath ?? "",
-          artifacts.buildRevision ?? "",
-          artifacts.buildState ?? "",
-        ].join("|")}
-        focused
-        onPointerDown={(event) => {
-          void view.forwardMouseClick(visiblePanel.id, {
-            x: Math.round(event.clientX),
-            y: Math.round(event.clientY),
-          });
-        }}
-      />
-    );
-  };
+  const layoutEmpty = layout.columns.length === 0;
 
   return (
     <Flex
@@ -1315,7 +1292,8 @@ export function PanelStack({
                 </Flex>
               )}
               <LazyPanelTreeSidebar
-                selectedId={visiblePanelId}
+                selectedId={focusedPanelId}
+                visibleIds={visibleIdSet}
                 ancestorIds={ancestorIds}
                 onSelect={navigateFromTree}
                 onPanelAction={handlePanelAction}
@@ -1355,9 +1333,44 @@ export function PanelStack({
           </Box>
         )}
 
-        {/* Current Panel Content */}
+        {/* Layout viewport: a row of resizable columns of panes */}
         <Flex direction="column" gap="0" style={{ flex: "1 1 0", minHeight: 0, minWidth: 0 }}>
-          <SavePasswordBar visiblePanelId={visiblePanelId} />
+          <SavePasswordBar visiblePanelId={focusedPanelId} />
+          {findOpen && (
+            <Flex
+              align="center"
+              justify="end"
+              gap="1"
+              p="1"
+              style={{ borderBottom: "1px solid var(--gray-a5)" }}
+            >
+              <TextField.Root
+                autoFocus
+                size="1"
+                value={findText}
+                placeholder="Find in page"
+                onChange={(event) => setFindText(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") closeFind();
+                  if (event.key === "Enter") nextFind(!event.shiftKey);
+                }}
+              />
+              <Text size="1" color="gray">
+                {findResult.matches
+                  ? `${findResult.activeMatchOrdinal}/${findResult.matches}`
+                  : "0/0"}
+              </Text>
+              <Button size="1" variant="ghost" onClick={() => nextFind(false)}>
+                Previous
+              </Button>
+              <Button size="1" variant="ghost" onClick={() => nextFind(true)}>
+                Next
+              </Button>
+              <IconButton size="1" variant="ghost" aria-label="Close find" onClick={closeFind}>
+                <Cross2Icon />
+              </IconButton>
+            </Flex>
+          )}
           <Card
             className="app-shell-panel-card"
             size="3"
@@ -1372,6 +1385,7 @@ export function PanelStack({
             }}
           >
             <Box
+              ref={setContentEl}
               style={{
                 flex: "1 1 0",
                 width: "100%",
@@ -1382,7 +1396,57 @@ export function PanelStack({
                 flexDirection: "column",
               }}
             >
-              {renderPanelContent()}
+              {layoutEmpty ? (
+                <Flex
+                  direction="column"
+                  align="center"
+                  justify="center"
+                  gap="3"
+                  style={{ flex: 1, height: "100%", textAlign: "center" }}
+                >
+                  <VibestudioLogo size={72} variant="symbol" />
+                  <Text weight="medium">No panels available.</Text>
+                  <Text size="2" color="gray">
+                    Create a panel or choose another workspace to continue.
+                  </Text>
+                  <Flex gap="2" wrap="wrap" justify="center">
+                    <Button
+                      onClick={() => {
+                        void panelService
+                          .createAboutPanel("new")
+                          .then((result) => navigateToPanelId(result.id))
+                          .catch((error) => reportPanelCommandError("Create panel", error));
+                      }}
+                    >
+                      New panel
+                    </Button>
+                    <Button variant="soft" onClick={() => openWorkspaceChooser(true)}>
+                      Switch workspace
+                    </Button>
+                  </Flex>
+                </Flex>
+              ) : (
+                <ColumnRow
+                  layout={layout}
+                  residentColumnIds={residentColumnIds}
+                  parkedLeft={parkedLeft}
+                  parkedRight={parkedRight}
+                  layoutEpoch={layoutEpoch}
+                  viewportHeight={contentSize.height}
+                  unresponsivePanels={unresponsivePanels}
+                  onDismissUnresponsive={dismissUnresponsive}
+                  onFocusPane={focusPane}
+                  onFocusColumn={focusColumn}
+                  onClosePane={closePane}
+                  onSplitBelow={splitBelowPane}
+                  onOpenBeside={openBesidePane}
+                  onShowAddressBar={showAddressBar}
+                  onPanelAction={handlePanelAction}
+                  onResizeColumns={resizeColumns}
+                  onResizePanes={resizePanes}
+                  onTransitionSettled={bumpLayoutEpoch}
+                />
+              )}
             </Box>
           </Card>
         </Flex>

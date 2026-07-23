@@ -7,25 +7,51 @@ import {
 import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import type { RpcAuthorityPolicy } from "@vibestudio/rpc";
 import { allOf, anyOf, capability, relationship } from "@vibestudio/shared/authorization";
-import { BROWSER_DATA_SCHEMA } from "@vibestudio/browser-data";
-import type {
-  ImportedAutofillEntry,
-  ImportedBookmark,
-  ImportedCookie,
-  ImportedFavicon,
-  ImportedHistoryEntry,
-  ImportedHistoryVisit,
-  ImportBatchMeta,
-  ImportHistoryBatchMeta,
-  ImportedPassword,
-  ImportedPermission,
-  ImportedSearchEngine,
-  RecordHistoryVisitRequest,
-  UpdateHistoryTitleRequest,
+import {
+  ApplyCookieMutationsRequestSchema,
+  BROWSER_DATA_SCHEMA,
+  FORM_FILL_TYPES,
+  type ApplyCookieMutationsRequest,
+  type BrowserCookieInput,
+  type BrowserCookieKey,
+  type BrowserCookieRecord,
+  type BrowserDownloadRecord,
+  type FormFillSuggestionQuery,
+  type FormFillValueInput,
+  type ImportedBookmark,
+  type ImportedHistoryEntry,
+  type ImportedHistoryVisit,
+  type ImportedPassword,
+  type ImportedSearchEngine,
+  type ImportJobWrite,
+  type PageFavicon,
+  type RecordHistoryVisitRequest,
+  type StoredCookie,
+  type UpdateHistoryTitleRequest,
 } from "@vibestudio/browser-data";
-import { assertPresent } from "../../lintHelpers";
 
-const BATCH_SIZE = 1000;
+const BATCH_SIZE = 500;
+const MAX_FAVICON_BYTES = 128 * 1024;
+
+interface ImportSourceMeta {
+  sourceId: string;
+}
+
+interface HistoryVisitWrite {
+  visitTime: number;
+  transition: string;
+  source: "vibestudio" | "import";
+  importSourceId: string;
+  panelId: string;
+  title?: string;
+  typed: boolean;
+}
+
+interface PreparedCookiePut {
+  input: BrowserCookieInput;
+  encryptedValue: string;
+  contentHash: string;
+}
 
 function browserDataAuthority(sensitivity: RpcAuthorityPolicy["sensitivity"]): RpcAuthorityPolicy {
   return {
@@ -53,24 +79,6 @@ function browserDataAuthority(sensitivity: RpcAuthorityPolicy["sensitivity"]): R
   };
 }
 
-type HistoryVisitSource = "vibestudio" | "import";
-
-interface HistoryVisitWrite {
-  visitTime: number;
-  transition?: string;
-  typed?: boolean;
-  source: HistoryVisitSource;
-  sourceBrowser?: string;
-  sourceProfilePath?: string;
-  panelId?: string;
-  title?: string;
-}
-
-/**
- * Direct access to browser data is restricted to the trusted host and the one
- * manifest-selected broker extension. The method-level `@rpc` declarations
- * describe authority metadata; they do not replace this receiver-side guard.
- */
 export function isBrowserDataDirectCaller(
   caller: AuthenticatedCaller | null,
   brokerCallerId: string | null
@@ -80,29 +88,8 @@ export function isBrowserDataDirectCaller(
   return brokerCallerId !== null && kind === "extension" && caller?.callerId === brokerCallerId;
 }
 
-type BrowserDataMigrationSql = Parameters<DurableObjectSchemaMigration["migrate"]>[0];
-
-function assertExactMigrationColumns(
-  sql: BrowserDataMigrationSql,
-  table: string,
-  expected: readonly string[]
-): void {
-  const actual = sql
-    .exec(`PRAGMA table_info(${table})`)
-    .toArray()
-    .map((column) => String(column["name"]));
-  if (
-    actual.length !== expected.length ||
-    actual.some((column, index) => column !== expected[index])
-  ) {
-    throw new Error(
-      `BrowserDataDO migration source table ${table} does not match its exact recognized shape`
-    );
-  }
-}
-
 export class BrowserDataDO extends DurableObjectBase {
-  static override schemaVersion = 4;
+  static override schemaVersion = 7;
 
   protected override schemaProductionBaseline() {
     return { version: 1, name: "browser-data-v1" } as const;
@@ -113,18 +100,11 @@ export class BrowserDataDO extends DurableObjectBase {
     this.ensureReady();
   }
 
-  /**
-   * The manifest-declared broker extension's callerId, injected by the server
-   * as the `BROWSER_DATA_BROKER_ID` env binding (derived from
-   * `providers.browserData.extension` in meta/vibestudio.yml). Null when the
-   * workspace declares no broker — extension access is then disabled.
-   */
   private brokerCallerId(): string | null {
     const value = this.env["BROWSER_DATA_BROKER_ID"];
     return typeof value === "string" && value.length > 0 ? value : null;
   }
 
-  /** Exact code-source identity paired with the legacy transport caller id. */
   brokerRepoPath(): string | null {
     const value = this.env["BROWSER_DATA_BROKER_SOURCE"];
     return typeof value === "string" && value.length > 0 ? value : null;
@@ -136,259 +116,119 @@ export class BrowserDataDO extends DurableObjectBase {
   ): void {
     if (kind === "event") return;
     const broker = this.brokerCallerId();
-    if (isBrowserDataDirectCaller(caller, broker)) return;
-    const detail =
-      caller?.callerKind === "extension" && broker === null
-        ? " (no browser-data broker extension is declared in meta/vibestudio.yml providers.browserData)"
-        : "";
-    throw new Error(
-      `browser-data: BrowserDataDO is shell/server-only (holds user credentials); refusing caller kind ${caller?.callerKind ?? "unknown"}${detail}`
-    );
+    if (!isBrowserDataDirectCaller(caller, broker)) {
+      throw new Error(
+        `browser-data: BrowserDataDO is shell/server-only (holds user credentials); refusing caller kind ${caller?.callerKind ?? "unknown"}`
+      );
+    }
+    const userId = caller?.userId?.trim();
+    if (!userId || userId === "system") {
+      throw new Error("browser-data: a verified user is required");
+    }
+    const owner = this.getStateValue("browser_environment_owner");
+    if (owner && owner !== userId) {
+      throw new Error("browser-data: browser environment owner mismatch");
+    }
+    if (!owner) this.setStateValue("browser_environment_owner", userId);
   }
 
   protected createTables(): void {
-    for (const stmt of this.schemaStatements(BROWSER_DATA_SCHEMA)) {
-      const sql = stmt.trim();
-      if (sql) this.sql.exec(sql);
-    }
+    this.executeSchema(BROWSER_DATA_SCHEMA);
   }
 
   protected override schemaMigrations(): readonly DurableObjectSchemaMigration[] {
+    // Versions 2–4 are retained only so existing ledgers remain recognizable.
+    // The repository is pre-release; v5 deliberately drops all browser state
+    // and requires a fresh import instead of translating profile-scoped data.
     return [
       {
         version: 2,
         name: "preserve-history-visit-provenance",
-        validateSource: (sql) => {
-          assertExactMigrationColumns(sql, "history", [
-            "id",
-            "url",
-            "title",
-            "visit_count",
-            "typed_count",
-            "first_visit",
-            "last_visit",
-            "favicon_id",
-          ]);
-          assertExactMigrationColumns(sql, "history_visits", [
-            "id",
-            "history_id",
-            "visit_time",
-            "transition",
-            "from_visit_id",
-          ]);
-        },
-        migrate: (sql) => {
-          // FTS5 owns shadow tables; migrate only the declared virtual table.
-          sql.exec(`DROP TRIGGER IF EXISTS history_ai`);
-          sql.exec(`DROP TRIGGER IF EXISTS history_ad`);
-          sql.exec(`DROP TRIGGER IF EXISTS history_au`);
-          sql.exec(`DROP TABLE IF EXISTS history_fts`);
-          sql.exec(`ALTER TABLE history_visits RENAME TO history_visits_v1`);
-          sql.exec(`
-            CREATE TABLE history_visits (
-              id INTEGER PRIMARY KEY,
-              history_id INTEGER NOT NULL REFERENCES history(id) ON DELETE CASCADE,
-              visit_time INTEGER NOT NULL,
-              transition TEXT DEFAULT 'link',
-              from_visit_id INTEGER REFERENCES history_visits(id),
-              source TEXT NOT NULL DEFAULT 'vibestudio',
-              source_browser TEXT NOT NULL DEFAULT '',
-              source_profile_path TEXT NOT NULL DEFAULT '',
-              panel_id TEXT NOT NULL DEFAULT '',
-              title TEXT,
-              typed INTEGER NOT NULL DEFAULT 0,
-              UNIQUE(history_id, visit_time, source, source_browser, source_profile_path, panel_id, transition)
-            )
-          `);
-          sql.exec(`
-            INSERT INTO history_visits (
-              id, history_id, visit_time, transition, from_visit_id, source,
-              source_browser, source_profile_path, panel_id, title, typed
-            )
-            SELECT v.id, v.history_id, v.visit_time, v.transition, v.from_visit_id,
-                   'vibestudio', '', '', 'legacy:' || v.id, h.title, 0
-              FROM history_visits_v1 v
-              JOIN history h ON h.id = v.history_id
-          `);
-          sql.exec(`DROP TABLE history_visits_v1`);
-          sql.exec(`CREATE INDEX idx_history_visits_history_id ON history_visits(history_id)`);
-          sql.exec(
-            `CREATE INDEX idx_history_visits_source ON history_visits(source, source_browser, source_profile_path)`
-          );
-          sql.exec(
-            `CREATE VIRTUAL TABLE history_fts USING fts5(url, title, content=history, content_rowid=id)`
-          );
-          sql.exec(`
-            CREATE TRIGGER history_ai AFTER INSERT ON history BEGIN
-              INSERT INTO history_fts(rowid, url, title) VALUES (new.id, new.url, new.title);
-            END
-          `);
-          sql.exec(`
-            CREATE TRIGGER history_ad AFTER DELETE ON history BEGIN
-              INSERT INTO history_fts(history_fts, rowid, url, title)
-              VALUES('delete', old.id, old.url, old.title);
-            END
-          `);
-          sql.exec(`
-            CREATE TRIGGER history_au AFTER UPDATE ON history BEGIN
-              INSERT INTO history_fts(history_fts, rowid, url, title)
-              VALUES('delete', old.id, old.url, old.title);
-              INSERT INTO history_fts(rowid, url, title) VALUES (new.id, new.url, new.title);
-            END
-          `);
-          sql.exec(`INSERT INTO history_fts(history_fts) VALUES('rebuild')`);
-        },
+        validateSource: () => {},
+        migrate: () => {},
       },
       {
         version: 3,
         name: "preserve-import-source-identity",
-        validateSource: (sql) => {
-          assertExactMigrationColumns(sql, "bookmarks", [
-            "id",
-            "title",
-            "url",
-            "folder_path",
-            "date_added",
-            "date_modified",
-            "favicon_id",
-            "position",
-            "source_browser",
-            "tags",
-            "keyword",
-          ]);
-          assertExactMigrationColumns(sql, "autofill", [
-            "id",
-            "field_name",
-            "value",
-            "date_created",
-            "date_last_used",
-            "times_used",
-          ]);
-          assertExactMigrationColumns(sql, "search_engines", [
-            "id",
-            "name",
-            "keyword",
-            "search_url",
-            "suggest_url",
-            "favicon_url",
-            "is_default",
-          ]);
-        },
-        migrate: (sql) => {
-          sql.exec(`ALTER TABLE bookmarks ADD COLUMN source_profile_path TEXT NOT NULL DEFAULT ''`);
-          sql.exec(`ALTER TABLE bookmarks ADD COLUMN import_key TEXT`);
-          sql.exec(
-            `CREATE UNIQUE INDEX idx_bookmarks_import_key ON bookmarks(import_key) WHERE import_key IS NOT NULL`
-          );
-          sql.exec(`ALTER TABLE autofill ADD COLUMN source_browser TEXT`);
-          sql.exec(`ALTER TABLE autofill ADD COLUMN source_profile_path TEXT NOT NULL DEFAULT ''`);
-          sql.exec(`ALTER TABLE search_engines ADD COLUMN source_browser TEXT NOT NULL DEFAULT ''`);
-          sql.exec(
-            `ALTER TABLE search_engines ADD COLUMN source_profile_path TEXT NOT NULL DEFAULT ''`
-          );
-          sql.exec(`ALTER TABLE search_engines ADD COLUMN import_key TEXT`);
-          sql.exec(
-            `CREATE UNIQUE INDEX idx_search_engines_import_key ON search_engines(import_key) WHERE import_key IS NOT NULL`
-          );
-        },
+        validateSource: () => {},
+        migrate: () => {},
       },
       {
         version: 4,
         name: "preserve-import-runs-and-secret-metadata",
-        validateSource: (sql) => {
-          assertExactMigrationColumns(sql, "favicons", [
-            "id",
-            "url",
-            "data",
-            "mime_type",
-            "last_updated",
-          ]);
-          assertExactMigrationColumns(sql, "passwords", [
-            "id",
-            "origin_url",
-            "username_hash",
-            "username_encrypted",
-            "password_encrypted",
-            "action_url",
-            "realm",
-            "date_created",
-            "date_last_used",
-            "date_password_changed",
-            "times_used",
-          ]);
-          assertExactMigrationColumns(sql, "permissions", [
-            "id",
-            "origin",
-            "permission",
-            "setting",
-            "date_set",
-          ]);
-          assertExactMigrationColumns(sql, "import_log", [
-            "id",
-            "browser",
-            "profile_path",
-            "data_type",
-            "items_imported",
-            "items_skipped",
-            "imported_at",
-            "warnings",
-          ]);
-        },
+        validateSource: () => {},
+        migrate: () => {},
+      },
+      {
+        version: 5,
+        name: "canonical-browser-environment-cutover",
+        validateSource: () => {},
         migrate: (sql) => {
-          sql.exec(`ALTER TABLE favicons ADD COLUMN source_browser TEXT`);
-          sql.exec(`ALTER TABLE favicons ADD COLUMN source_profile_path TEXT NOT NULL DEFAULT ''`);
-          sql.exec(`ALTER TABLE passwords ADD COLUMN source_browser TEXT`);
-          sql.exec(`ALTER TABLE passwords ADD COLUMN source_profile_path TEXT NOT NULL DEFAULT ''`);
-          sql.exec(`ALTER TABLE permissions ADD COLUMN source_browser TEXT`);
-          sql.exec(
-            `ALTER TABLE permissions ADD COLUMN source_profile_path TEXT NOT NULL DEFAULT ''`
-          );
-          sql.exec(`
-            CREATE TABLE import_runs (
-              id INTEGER PRIMARY KEY,
-              browser TEXT NOT NULL,
-              profile_path TEXT NOT NULL,
-              mode TEXT NOT NULL DEFAULT 'import',
-              status TEXT NOT NULL DEFAULT 'success',
-              started_at INTEGER NOT NULL,
-              finished_at INTEGER NOT NULL,
-              data_types TEXT NOT NULL DEFAULT '[]',
-              warnings TEXT
-            )
-          `);
-          sql.exec(`CREATE INDEX idx_import_runs_finished ON import_runs(finished_at)`);
-          sql.exec(`
-            CREATE TABLE import_run_summaries (
-              id INTEGER PRIMARY KEY,
-              run_id INTEGER NOT NULL REFERENCES import_runs(id) ON DELETE CASCADE,
-              data_type TEXT NOT NULL,
-              scanned INTEGER NOT NULL DEFAULT 0,
-              added INTEGER NOT NULL DEFAULT 0,
-              changed INTEGER NOT NULL DEFAULT 0,
-              unchanged INTEGER NOT NULL DEFAULT 0,
-              skipped INTEGER NOT NULL DEFAULT 0,
-              errors INTEGER NOT NULL DEFAULT 0
-            )
-          `);
-          sql.exec(`CREATE INDEX idx_import_run_summaries_run ON import_run_summaries(run_id)`);
-          sql.exec(`
-            INSERT INTO import_runs (
-              id, browser, profile_path, mode, status, started_at, finished_at,
-              data_types, warnings
-            )
-            SELECT id, browser, profile_path, 'import', 'success', imported_at, imported_at,
-                   json_array(data_type), warnings
-              FROM import_log
-          `);
-          sql.exec(`
-            INSERT INTO import_run_summaries (
-              run_id, data_type, scanned, added, changed, unchanged, skipped, errors
-            )
-            SELECT id, data_type, items_imported + items_skipped, items_imported,
-                   0, 0, items_skipped, 0
-              FROM import_log
-          `);
-          sql.exec(`DROP TABLE import_log`);
+          for (const trigger of ["history_ai", "history_ad", "history_au"]) {
+            sql.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
+          }
+          for (const table of [
+            "history_fts",
+            "import_run_summaries",
+            "import_runs",
+            "import_log",
+            "permissions",
+            "autofill",
+            "cookies",
+            "password_never_save",
+            "passwords",
+            "history_visits",
+            "history",
+            "bookmarks",
+            "favicons",
+            "search_engines",
+            "cookie_state",
+            "cookie_mutations",
+            "form_fill_values",
+            "page_favicons",
+            "import_jobs",
+            "import_batches",
+          ]) {
+            sql.exec(`DROP TABLE IF EXISTS ${table}`);
+          }
+          this.executeSchema(BROWSER_DATA_SCHEMA, sql);
+        },
+      },
+      {
+        version: 6,
+        name: "browser-site-preferences",
+        validateSource: () => {},
+        migrate: (sql) => {
+          sql.exec(`CREATE TABLE IF NOT EXISTS site_preferences (
+            origin TEXT PRIMARY KEY,
+            zoom_factor REAL NOT NULL DEFAULT 1.0
+              CHECK (zoom_factor >= 0.25 AND zoom_factor <= 5.0),
+            updated_at INTEGER NOT NULL
+          )`);
+        },
+      },
+      {
+        version: 7,
+        name: "canonical-download-metadata",
+        validateSource: () => {},
+        migrate: (sql) => {
+          sql.exec(`CREATE TABLE IF NOT EXISTS downloads (
+            id TEXT PRIMARY KEY,
+            environment_key TEXT NOT NULL,
+            host_id TEXT NOT NULL,
+            panel_id TEXT,
+            origin TEXT,
+            url TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            save_path TEXT NOT NULL,
+            received_bytes INTEGER NOT NULL,
+            total_bytes INTEGER NOT NULL,
+            state TEXT NOT NULL,
+            started_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+          )`);
+          sql.exec(`CREATE INDEX IF NOT EXISTS idx_downloads_host_updated
+            ON downloads(host_id, updated_at DESC)`);
         },
       },
     ];
@@ -396,59 +236,131 @@ export class BrowserDataDO extends DurableObjectBase {
 
   protected override requiredTables(): readonly string[] {
     return [
-      "favicons",
+      "page_favicons",
+      "site_preferences",
       "bookmarks",
       "history",
       "history_visits",
-      "history_fts",
       "passwords",
       "password_never_save",
+      "cookie_state",
       "cookies",
-      "autofill",
+      "cookie_mutations",
+      "form_fill_values",
       "search_engines",
-      "permissions",
-      "import_runs",
-      "import_run_summaries",
+      "import_jobs",
+      "import_batches",
+      "downloads",
     ];
   }
 
-  protected override validateSchema(): void {
-    super.validateSchema();
-    const requiredColumns: Readonly<Record<string, readonly string[]>> = {
-      history_visits: ["source", "source_profile_path", "panel_id", "title", "typed"],
-      bookmarks: ["source_profile_path", "import_key"],
-      autofill: ["source_browser", "source_profile_path"],
-      search_engines: ["source_browser", "source_profile_path", "import_key"],
-      favicons: ["source_browser", "source_profile_path"],
-      passwords: ["source_browser", "source_profile_path"],
-      permissions: ["source_browser", "source_profile_path"],
-    };
-    for (const [table, expected] of Object.entries(requiredColumns)) {
-      const actual = new Set(
-        this.sql
-          .exec(`PRAGMA table_info(${table})`)
-          .toArray()
-          .map((column) => String(column["name"]))
-      );
-      const missing = expected.filter((column) => !actual.has(column));
-      if (missing.length > 0) {
-        throw new Error(
-          `${this.constructor.name} schema validation failed: ${table} missing column(s): ${missing.join(", ")}`
-        );
-      }
+  @rpc(browserDataAuthority("write"))
+  upsertDownloadRecord(record: BrowserDownloadRecord): void {
+    if (!record.id || !record.environmentKey || !record.hostId) {
+      throw new Error("Download metadata identity is incomplete");
     }
+    const url = new URL(record.url);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error("Download metadata URL must use HTTP(S)");
+    }
+    if (
+      !["progressing", "paused", "completed", "cancelled", "interrupted"].includes(record.state)
+    ) {
+      throw new Error("Download metadata state is invalid");
+    }
+    this.sql.exec(
+      `INSERT INTO downloads
+        (id, environment_key, host_id, panel_id, origin, url, filename, save_path,
+         received_bytes, total_bytes, state, started_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         received_bytes = excluded.received_bytes,
+         total_bytes = excluded.total_bytes,
+         state = excluded.state,
+         updated_at = excluded.updated_at`,
+      record.id,
+      record.environmentKey,
+      record.hostId,
+      record.panelId ?? null,
+      record.origin ?? null,
+      url.href,
+      record.filename,
+      record.savePath,
+      Math.max(0, record.receivedBytes),
+      Math.max(0, record.totalBytes),
+      record.state,
+      record.startedAt,
+      record.updatedAt
+    );
   }
+
+  @rpc(browserDataAuthority("read"))
+  listDownloadRecords(hostId: string): BrowserDownloadRecord[] {
+    return this.sql
+      .exec(`SELECT * FROM downloads WHERE host_id = ? ORDER BY updated_at DESC LIMIT 500`, hostId)
+      .toArray()
+      .map((row) => ({
+        id: String(row["id"]),
+        environmentKey: String(row["environment_key"]),
+        hostId: String(row["host_id"]),
+        ...(row["panel_id"] == null ? {} : { panelId: String(row["panel_id"]) }),
+        ...(row["origin"] == null ? {} : { origin: String(row["origin"]) }),
+        url: String(row["url"]),
+        filename: String(row["filename"]),
+        savePath: String(row["save_path"]),
+        receivedBytes: Number(row["received_bytes"]),
+        totalBytes: Number(row["total_bytes"]),
+        state: String(row["state"]) as BrowserDownloadRecord["state"],
+        startedAt: Number(row["started_at"]),
+        updatedAt: Number(row["updated_at"]),
+      }));
+  }
+
+  // -- Site preferences ----------------------------------------------------
+
+  @rpc(browserDataAuthority("read"))
+  getSitePreferences(origin: string): { origin: string; zoomFactor: number; updatedAt?: number } {
+    const normalized = this.requireHttpOrigin(origin);
+    const row = this.sql
+      .exec(`SELECT zoom_factor, updated_at FROM site_preferences WHERE origin = ?`, normalized)
+      .toArray()[0];
+    return {
+      origin: normalized,
+      zoomFactor: row ? Number(row["zoom_factor"]) : 1,
+      ...(row ? { updatedAt: Number(row["updated_at"]) } : {}),
+    };
+  }
+
+  @rpc(browserDataAuthority("write"))
+  setSiteZoom(origin: string, zoomFactor: number): void {
+    const normalized = this.requireHttpOrigin(origin);
+    if (!Number.isFinite(zoomFactor) || zoomFactor < 0.25 || zoomFactor > 5) {
+      throw new Error("Browser zoom factor must be between 0.25 and 5");
+    }
+    this.sql.exec(
+      `INSERT INTO site_preferences(origin, zoom_factor, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(origin) DO UPDATE SET
+         zoom_factor = excluded.zoom_factor,
+         updated_at = excluded.updated_at`,
+      normalized,
+      zoomFactor,
+      Date.now()
+    );
+  }
+
+  // -- Bookmarks -----------------------------------------------------------
 
   @rpc(browserDataAuthority("read"))
   getBookmarks(folderPath = "/") {
     return this.sql
-      .exec(`SELECT * FROM bookmarks WHERE folder_path = ? ORDER BY position`, folderPath)
+      .exec(`SELECT * FROM bookmarks WHERE folder_path = ? ORDER BY position, title`, folderPath)
       .toArray();
   }
 
   @rpc(browserDataAuthority("read"))
   getAllBookmarks() {
-    return this.sql.exec(`SELECT * FROM bookmarks ORDER BY folder_path, position`).toArray();
+    return this.sql.exec(`SELECT * FROM bookmarks ORDER BY folder_path, position, title`).toArray();
   }
 
   @rpc(browserDataAuthority("write"))
@@ -457,24 +369,25 @@ export class BrowserDataDO extends DurableObjectBase {
     url?: string;
     folderPath?: string;
     dateAdded?: number;
-    tags?: string[] | string;
+    tags?: string;
     keyword?: string;
     position?: number;
   }): number {
     const result = this.sql
       .exec(
-        `INSERT INTO bookmarks (title, url, folder_path, date_added, tags, keyword, position)
-       VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+        `INSERT INTO bookmarks
+          (title, url, folder_path, date_added, position, tags, keyword)
+         VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
         bookmark.title,
         bookmark.url ?? null,
         bookmark.folderPath ?? "/",
         bookmark.dateAdded ?? Date.now(),
-        Array.isArray(bookmark.tags) ? JSON.stringify(bookmark.tags) : (bookmark.tags ?? null),
-        bookmark.keyword ?? null,
-        bookmark.position ?? 0
+        bookmark.position ?? 0,
+        bookmark.tags ?? null,
+        bookmark.keyword ?? null
       )
-      .one() as { id: number };
-    return result.id;
+      .one();
+    return Number(result["id"]);
   }
 
   @rpc(browserDataAuthority("write"))
@@ -489,7 +402,6 @@ export class BrowserDataDO extends DurableObjectBase {
         tags: "tags",
         keyword: "keyword",
         position: "position",
-        faviconId: "favicon_id",
       },
       partial,
       { date_modified: Date.now() }
@@ -514,14 +426,19 @@ export class BrowserDataDO extends DurableObjectBase {
 
   @rpc(browserDataAuthority("read"))
   searchBookmarks(query: string) {
+    const pattern = `%${this.escapeLikePattern(query)}%`;
     return this.sql
       .exec(
-        `SELECT * FROM bookmarks WHERE title LIKE ? OR url LIKE ? ORDER BY date_added DESC`,
-        `%${query}%`,
-        `%${query}%`
+        `SELECT * FROM bookmarks
+         WHERE title LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\'
+         ORDER BY date_modified DESC, date_added DESC LIMIT 100`,
+        pattern,
+        pattern
       )
       .toArray();
   }
+
+  // -- History -------------------------------------------------------------
 
   @rpc(browserDataAuthority("read"))
   getHistory(query: {
@@ -531,100 +448,39 @@ export class BrowserDataDO extends DurableObjectBase {
     limit?: number;
     offset?: number;
   }) {
-    const conditions: string[] = [];
+    const clauses: string[] = [];
     const params: unknown[] = [];
     if (query.search) {
-      conditions.push(`id IN (SELECT rowid FROM history_fts WHERE history_fts MATCH ?)`);
-      params.push(this.escapeFts5Query(query.search));
+      const pattern = `%${this.escapeLikePattern(query.search)}%`;
+      clauses.push(`(url LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\')`);
+      params.push(pattern, pattern);
     }
     if (query.startTime !== undefined) {
-      conditions.push(`last_visit >= ?`);
+      clauses.push("last_visit >= ?");
       params.push(query.startTime);
     }
     if (query.endTime !== undefined) {
-      conditions.push(`last_visit <= ?`);
+      clauses.push("last_visit <= ?");
       params.push(query.endTime);
     }
-    params.push(query.limit ?? 100, query.offset ?? 0);
-    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    params.push(Math.min(Math.max(query.limit ?? 100, 1), 1_000), Math.max(query.offset ?? 0, 0));
     return this.sql
-      .exec(`SELECT * FROM history ${where} ORDER BY last_visit DESC LIMIT ? OFFSET ?`, ...params)
+      .exec(
+        `SELECT * FROM history ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
+         ORDER BY last_visit DESC LIMIT ? OFFSET ?`,
+        ...params
+      )
       .toArray();
   }
 
   @rpc(browserDataAuthority("read"))
   searchHistory(query: string, limit = 50) {
-    return this.sql
-      .exec(
-        `SELECT h.* FROM history h
-       JOIN history_fts fts ON h.id = fts.rowid
-       WHERE history_fts MATCH ?
-       ORDER BY h.last_visit DESC
-       LIMIT ?`,
-        this.escapeFts5Query(query),
-        limit
-      )
-      .toArray();
+    return this.getHistory({ search: query, limit });
   }
 
   @rpc(browserDataAuthority("read"))
   searchHistoryForAutocomplete(query: { query: string; limit?: number }) {
-    const trimmed = query.query.trim();
-    const limit = query.limit ?? 50;
-    if (!trimmed) return this.getHistory({ limit });
-
-    const byId = new Map<number, Record<string, unknown>>();
-    const addRows = (rows: Record<string, unknown>[]) => {
-      for (const row of rows) {
-        const id = Number(row["id"]);
-        if (Number.isFinite(id) && !byId.has(id)) byId.set(id, row);
-      }
-    };
-
-    try {
-      addRows(
-        this.sql
-          .exec(
-            `SELECT h.* FROM history h
-         JOIN history_fts fts ON h.id = fts.rowid
-         WHERE history_fts MATCH ?
-         ORDER BY h.typed_count DESC, h.visit_count DESC, h.last_visit DESC
-         LIMIT ?`,
-            this.escapeFts5Query(
-              trimmed
-                .split(/\s+/)
-                .map((token) => `${token}*`)
-                .join(" ")
-            ),
-            limit
-          )
-          .toArray() as Record<string, unknown>[]
-      );
-    } catch {
-      // FTS tokenization can reject unusual user input; LIKE fallback below still applies.
-    }
-
-    const pattern = `%${this.escapeLikePattern(trimmed)}%`;
-    addRows(
-      this.sql
-        .exec(
-          `SELECT * FROM history
-       WHERE url LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\'
-       ORDER BY typed_count DESC, visit_count DESC, last_visit DESC
-       LIMIT ?`,
-          pattern,
-          pattern,
-          limit
-        )
-        .toArray() as Record<string, unknown>[]
-    );
-
-    return [...byId.values()]
-      .sort(
-        (a, b) =>
-          this.historyAutocompleteScore(b, trimmed) - this.historyAutocompleteScore(a, trimmed)
-      )
-      .slice(0, limit);
+    return this.getHistory({ search: query.query, limit: query.limit ?? 20 });
   }
 
   @rpc(browserDataAuthority("write"))
@@ -634,10 +490,11 @@ export class BrowserDataDO extends DurableObjectBase {
     this.insertHistoryVisit(historyId, {
       visitTime,
       transition: request.transition ?? "link",
-      typed: Boolean(request.typed),
       source: request.source ?? "vibestudio",
-      panelId: request.panelId,
+      importSourceId: "",
+      panelId: request.panelId ?? "",
       title: request.title,
+      typed: request.typed === true,
     });
     this.recomputeHistorySummary(historyId);
     return historyId;
@@ -647,15 +504,19 @@ export class BrowserDataDO extends DurableObjectBase {
   updateHistoryTitle(request: UpdateHistoryTitleRequest): void {
     const title = request.title.trim();
     if (!title) return;
-    const observedAt = request.observedAt ?? Date.now();
+    this.sql.exec(`UPDATE history SET title = ? WHERE url = ?`, title, request.url);
     this.sql.exec(
-      `INSERT INTO history (url, title, visit_count, typed_count, first_visit, last_visit)
-       VALUES (?, ?, 0, 0, NULL, ?)
-       ON CONFLICT(url) DO UPDATE SET
-         title = excluded.title`,
-      request.url,
+      `UPDATE history_visits SET title = ? WHERE id = (
+         SELECT history_visits.id
+         FROM history_visits
+         JOIN history ON history.id = history_visits.history_id
+         WHERE history.url = ? AND history_visits.visit_time <= ?
+         ORDER BY history_visits.visit_time DESC, history_visits.id DESC
+         LIMIT 1
+       )`,
       title,
-      observedAt
+      request.url,
+      request.observedAt ?? Date.now()
     );
   }
 
@@ -666,41 +527,32 @@ export class BrowserDataDO extends DurableObjectBase {
 
   @rpc(browserDataAuthority("destructive"))
   deleteHistoryRange(start: number, end: number): number {
-    let affectedCount = 0;
+    const affected = this.sql
+      .exec(
+        `SELECT DISTINCT history_id AS id FROM history_visits
+         WHERE visit_time >= ? AND visit_time <= ?`,
+        start,
+        end
+      )
+      .toArray()
+      .map((row) => Number(row["id"]));
     this.ctx.storage.transactionSync(() => {
-      const affectedIds = this.sql
-        .exec(
-          `SELECT DISTINCT history_id AS id
-           FROM history_visits
-           WHERE visit_time >= ? AND visit_time <= ?`,
-          start,
-          end
-        )
-        .toArray()
-        .map((row) => Number(row["id"]))
-        .filter((id) => Number.isFinite(id));
-
-      if (affectedIds.length === 0) return;
-      affectedCount = affectedIds.length;
-
       this.sql.exec(
         `DELETE FROM history_visits WHERE visit_time >= ? AND visit_time <= ?`,
         start,
         end
       );
-
-      for (const historyId of affectedIds) {
-        const remaining = this.sql
-          .exec(`SELECT COUNT(*) AS count FROM history_visits WHERE history_id = ?`, historyId)
-          .one();
-        if (Number(remaining["count"] ?? 0) > 0) {
-          this.recomputeHistorySummary(historyId);
-        } else {
-          this.sql.exec(`DELETE FROM history WHERE id = ?`, historyId);
-        }
+      for (const id of affected) {
+        const count = Number(
+          this.sql
+            .exec(`SELECT COUNT(*) AS count FROM history_visits WHERE history_id = ?`, id)
+            .one()["count"]
+        );
+        if (count === 0) this.sql.exec(`DELETE FROM history WHERE id = ?`, id);
+        else this.recomputeHistorySummary(id);
       }
     });
-    return affectedCount;
+    return affected.length;
   }
 
   @rpc(browserDataAuthority("destructive"))
@@ -709,22 +561,27 @@ export class BrowserDataDO extends DurableObjectBase {
     this.sql.exec(`DELETE FROM history`);
   }
 
+  // -- Passwords -----------------------------------------------------------
+
   @rpc(browserDataAuthority("read"))
   async getPasswords() {
-    const rows = this.sql.exec(`SELECT * FROM passwords`).toArray();
-    return Promise.all(rows.map((row) => this.passwordRow(row)));
+    return Promise.all(
+      this.sql
+        .exec(`SELECT * FROM passwords ORDER BY date_last_used DESC`)
+        .toArray()
+        .map((row) => this.passwordRow(row))
+    );
   }
 
   @rpc(browserDataAuthority("read"))
   async getPasswordForSite(url: string) {
-    const prefix = `${this.escapeLikePattern(url.replace(/\/+$/, ""))}/%`;
+    const origin = this.httpOrigin(url);
+    if (!origin) return [];
     const rows = this.sql
       .exec(
-        `SELECT * FROM passwords
-       WHERE origin_url = ? OR origin_url LIKE ? ESCAPE '\\'
-       ORDER BY COALESCE(date_last_used, date_created, 0) DESC, times_used DESC`,
-        url,
-        prefix
+        `SELECT * FROM passwords WHERE origin_url = ?
+         ORDER BY COALESCE(date_last_used, date_created, 0) DESC, times_used DESC`,
+        origin
       )
       .toArray();
     return Promise.all(rows.map((row) => this.passwordRow(row)));
@@ -732,21 +589,24 @@ export class BrowserDataDO extends DurableObjectBase {
 
   @rpc(browserDataAuthority("write"))
   async addPassword(password: ImportedPassword): Promise<number> {
+    const origin = this.httpOrigin(password.url);
+    if (!origin) throw new Error("Password URL must use http or https");
     const encrypted = await this.encryptPasswordFields(password.username, password.password);
     const now = Date.now();
     const result = this.sql
       .exec(
-        `INSERT INTO passwords (origin_url, username_hash, username_encrypted, password_encrypted,
-        action_url, realm, date_created, date_last_used, date_password_changed, times_used)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(origin_url, username_hash, action_url, realm) DO UPDATE SET
-         username_encrypted = excluded.username_encrypted,
-         password_encrypted = excluded.password_encrypted,
-         date_last_used = excluded.date_last_used,
-         date_password_changed = excluded.date_password_changed,
-         times_used = excluded.times_used
-       RETURNING id`,
-        password.url,
+        `INSERT INTO passwords
+          (origin_url, username_hash, username_encrypted, password_encrypted, action_url, realm,
+           date_created, date_last_used, date_password_changed, times_used)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(origin_url, username_hash, action_url, realm) DO UPDATE SET
+           username_encrypted = excluded.username_encrypted,
+           password_encrypted = excluded.password_encrypted,
+           date_last_used = excluded.date_last_used,
+           date_password_changed = excluded.date_password_changed,
+           times_used = excluded.times_used
+         RETURNING id`,
+        origin,
         encrypted.usernameHash,
         encrypted.usernameEncrypted,
         encrypted.passwordEncrypted,
@@ -754,11 +614,11 @@ export class BrowserDataDO extends DurableObjectBase {
         password.realm ?? "",
         password.dateCreated ?? now,
         password.dateLastUsed ?? null,
-        password.datePasswordChanged ?? null,
+        password.datePasswordChanged ?? now,
         password.timesUsed ?? 0
       )
-      .one() as { id: number };
-    return result.id;
+      .one();
+    return Number(result["id"]);
   }
 
   @rpc(browserDataAuthority("write"))
@@ -768,7 +628,7 @@ export class BrowserDataDO extends DurableObjectBase {
     if (partial.username !== undefined) {
       sets.push("username_hash = ?", "username_encrypted = ?");
       params.push(
-        await this.hashUsername(partial.username),
+        await this.hashSecret(partial.username),
         await this.encryptText(partial.username)
       );
     }
@@ -794,525 +654,39 @@ export class BrowserDataDO extends DurableObjectBase {
     this.sql.exec(`DELETE FROM passwords WHERE id = ?`, id);
   }
 
-  @rpc(browserDataAuthority("read"))
-  getAutofillSuggestions(fieldName: string, prefix?: string) {
-    const pattern = `${prefix ?? ""}%`;
-    return this.sql
-      .exec(
-        `SELECT * FROM autofill WHERE field_name = ? AND value LIKE ? ORDER BY times_used DESC, date_last_used DESC LIMIT 20`,
-        fieldName,
-        pattern
-      )
-      .toArray();
-  }
-
-  @rpc(browserDataAuthority("read"))
-  getSearchEngines() {
-    return this.sql.exec(`SELECT * FROM search_engines ORDER BY is_default DESC, name`).toArray();
-  }
-
-  @rpc(browserDataAuthority("write"))
-  setDefaultEngine(id: number): void {
-    this.sql.exec(`UPDATE search_engines SET is_default = 0`);
-    this.sql.exec(`UPDATE search_engines SET is_default = 1 WHERE id = ?`, id);
-  }
-
-  @rpc(browserDataAuthority("read"))
-  getPermissions(origin?: string) {
-    return origin
-      ? this.sql.exec(`SELECT * FROM permissions WHERE origin = ?`, origin).toArray()
-      : this.sql.exec(`SELECT * FROM permissions`).toArray();
-  }
-
-  @rpc(browserDataAuthority("write"))
-  setPermission(origin: string, permission: string, setting: string): void {
-    this.sql.exec(
-      `INSERT INTO permissions (origin, permission, setting, date_set)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(origin, permission) DO UPDATE SET
-         setting = excluded.setting,
-         date_set = excluded.date_set
-       WHERE permissions.setting IS NOT excluded.setting`,
-      origin,
-      permission,
-      setting,
-      Date.now()
-    );
-  }
-
-  @rpc(browserDataAuthority("read"))
-  getCookies(domain?: string) {
-    return domain
-      ? this.sql
-          .exec(
-            `SELECT * FROM cookies WHERE domain = ? OR domain = ? ORDER BY created_at DESC`,
-            domain,
-            `.${domain}`
-          )
-          .toArray()
-      : this.sql.exec(`SELECT * FROM cookies ORDER BY created_at DESC`).toArray();
-  }
-
-  @rpc(browserDataAuthority("destructive"))
-  deleteCookie(id: number): void {
-    this.sql.exec(`DELETE FROM cookies WHERE id = ?`, id);
-  }
-
-  @rpc(browserDataAuthority("destructive"))
-  clearCookies(domain?: string): number {
-    if (domain) {
-      this.sql.exec(`DELETE FROM cookies WHERE domain = ? OR domain = ?`, domain, `.${domain}`);
-      return this.changes();
-    }
-    this.sql.exec(`DELETE FROM cookies`);
-    return this.changes();
-  }
-
-  @rpc(browserDataAuthority("write"))
-  async addBookmarksBatch(
-    bookmarks: ImportedBookmark[],
-    meta: ImportBatchMeta = {}
-  ): Promise<number> {
-    return this.runBatch(bookmarks.length, (i) => {
-      const bm = assertPresent(bookmarks[i]);
-      const folderPath = "/" + bm.folder.join("/");
-      const importKey = this.importKey(
-        "bookmark",
-        meta,
-        bm.sourceId ? ["id", bm.sourceId] : ["url-folder", bm.url, folderPath]
-      );
-      this.sql.exec(
-        `INSERT INTO bookmarks (
-           title, url, folder_path, date_added, date_modified, source_browser,
-           source_profile_path, import_key, tags, keyword, position
-         )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(import_key) DO UPDATE SET
-           title = excluded.title,
-           url = excluded.url,
-           folder_path = excluded.folder_path,
-           date_added = CASE
-             WHEN excluded.date_added > 0 AND (bookmarks.date_added <= 0 OR excluded.date_added < bookmarks.date_added)
-               THEN excluded.date_added
-             ELSE bookmarks.date_added
-           END,
-           date_modified = excluded.date_modified,
-           source_browser = excluded.source_browser,
-           source_profile_path = excluded.source_profile_path,
-           tags = excluded.tags,
-           keyword = excluded.keyword,
-           position = excluded.position`,
-        bm.title,
-        bm.url,
-        folderPath,
-        bm.dateAdded,
-        bm.dateModified ?? null,
-        meta.browser ?? null,
-        meta.profilePath ?? "",
-        importKey,
-        bm.tags ? JSON.stringify(bm.tags) : null,
-        bm.keyword ?? null,
-        i
-      );
-    });
-  }
-
-  @rpc(browserDataAuthority("write"))
-  async addHistoryBatch(
-    entries: ImportedHistoryEntry[],
-    meta: ImportHistoryBatchMeta = {}
-  ): Promise<number> {
-    return this.runBatch(entries.length, (i) => {
-      const entry = assertPresent(entries[i]);
-      const historyId = this.ensureHistoryRow(entry.url, entry.title, entry.lastVisitTime);
-      const visits = this.importedVisitsForEntry(entry);
-      for (const visit of visits) {
-        this.insertHistoryVisit(historyId, {
-          visitTime: visit.visitTime,
-          transition: visit.transition ?? entry.transition ?? "link",
-          typed: Boolean(visit.typed),
-          source: "import",
-          sourceBrowser: meta.browser,
-          sourceProfilePath: meta.profilePath,
-          title: entry.title,
-        });
-      }
-      this.recomputeHistorySummary(historyId);
-    });
-  }
-
-  @rpc(browserDataAuthority("write"))
-  async addCookiesBatch(cookies: ImportedCookie[], meta: ImportBatchMeta = {}): Promise<number> {
-    const now = Date.now();
-    const sourceBrowser = meta.browser ?? null;
-    return this.runBatch(cookies.length, (i) => {
-      const cookie = assertPresent(cookies[i]);
-      this.sql.exec(
-        `INSERT INTO cookies (name, value, domain, host_only, path, expiration_date, secure, http_only,
-          same_site, source_scheme, source_port, source_browser, created_at, last_accessed)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(name, domain, path) DO UPDATE SET
-          value = excluded.value,
-          expiration_date = excluded.expiration_date,
-          secure = excluded.secure,
-          http_only = excluded.http_only,
-          same_site = excluded.same_site,
-          source_scheme = excluded.source_scheme,
-          source_port = excluded.source_port,
-          source_browser = excluded.source_browser,
-          last_accessed = excluded.last_accessed
-         WHERE cookies.value IS NOT excluded.value
-            OR cookies.expiration_date IS NOT excluded.expiration_date
-            OR cookies.secure IS NOT excluded.secure
-            OR cookies.http_only IS NOT excluded.http_only
-            OR cookies.same_site IS NOT excluded.same_site
-            OR cookies.source_scheme IS NOT excluded.source_scheme
-            OR cookies.source_port IS NOT excluded.source_port`,
-        cookie.name,
-        cookie.value,
-        cookie.domain,
-        cookie.hostOnly ? 1 : 0,
-        cookie.path,
-        cookie.expirationDate ?? null,
-        cookie.secure ? 1 : 0,
-        cookie.httpOnly ? 1 : 0,
-        cookie.sameSite,
-        cookie.sourceScheme,
-        cookie.sourcePort,
-        sourceBrowser,
-        now,
-        now
-      );
-    });
-  }
-
-  @rpc(browserDataAuthority("write"))
-  async addPasswordsBatch(
-    passwords: ImportedPassword[],
-    meta: ImportBatchMeta = {}
-  ): Promise<number> {
-    if (passwords.length === 0) return 0;
-    const sourceBrowser = meta.browser ?? null;
-    const sourceProfilePath = meta.profilePath ?? "";
-    // Encryption is async (crypto.subtle); transactionSync is synchronous.
-    // Encrypt all passwords up-front, then run the inserts inside the txn.
-    type PreparedSecretRow = {
-      kind: "secret";
-      url: string;
-      usernameHash: string;
-      usernameEncrypted: string;
-      passwordEncrypted: string;
-      actionUrl: string;
-      realm: string;
-      dateCreated: number | null;
-      dateLastUsed: number | null;
-      datePasswordChanged: number | null;
-      timesUsed: number;
-    };
-    type PreparedMetadataRow = {
-      kind: "metadata";
-      url: string;
-      usernameHash: string;
-      actionUrl: string;
-      realm: string;
-      dateCreated: number | null;
-      dateLastUsed: number | null;
-      datePasswordChanged: number | null;
-      timesUsed: number;
-    };
-    type PreparedRow = PreparedSecretRow | PreparedMetadataRow;
-    const prepared: PreparedRow[] = [];
-    for (const password of passwords) {
-      const url = password.url;
-      const usernameHash = await this.hashUsername(password.username);
-      const actionUrl = password.actionUrl ?? "";
-      const realm = password.realm ?? "";
-      const dateCreated = password.dateCreated ?? null;
-      const dateLastUsed = password.dateLastUsed ?? null;
-      const datePasswordChanged = password.datePasswordChanged ?? null;
-      const timesUsed = password.timesUsed ?? 0;
-      const existing = this.sql
-        .exec(
-          `SELECT password_encrypted FROM passwords
-           WHERE origin_url = ? AND username_hash = ? AND action_url = ? AND realm = ?`,
-          url,
-          usernameHash,
-          actionUrl,
-          realm
-        )
-        .toArray()[0] as Record<string, unknown> | undefined;
-
-      let sameSecret = false;
-      if (existing) {
-        try {
-          sameSecret =
-            (await this.decryptText(String(existing["password_encrypted"] ?? ""))) ===
-            password.password;
-        } catch {
-          sameSecret = false;
-        }
-      }
-
-      if (sameSecret) {
-        prepared.push({
-          kind: "metadata",
-          url,
-          usernameHash,
-          actionUrl,
-          realm,
-          dateCreated,
-          dateLastUsed,
-          datePasswordChanged,
-          timesUsed,
-        });
-        continue;
-      }
-
-      prepared.push({
-        kind: "secret",
-        url: password.url,
-        usernameHash,
-        usernameEncrypted: await this.encryptText(password.username),
-        passwordEncrypted: await this.encryptText(password.password),
-        actionUrl,
-        realm,
-        dateCreated,
-        dateLastUsed,
-        datePasswordChanged,
-        timesUsed,
-      });
-    }
-    return this.runBatch(prepared.length, (i) => {
-      const r = assertPresent(prepared[i]);
-      if (r.kind === "metadata") {
-        this.sql.exec(
-          `UPDATE passwords SET
-             date_created = CASE
-               WHEN passwords.date_created IS NULL THEN ?
-               WHEN ? IS NULL THEN passwords.date_created
-               ELSE MIN(passwords.date_created, ?)
-             END,
-             date_last_used = ?,
-             date_password_changed = ?,
-             times_used = ?
-           WHERE origin_url = ? AND username_hash = ? AND action_url = ? AND realm = ?
-             AND (
-               date_created IS NOT ?
-               OR date_last_used IS NOT ?
-               OR date_password_changed IS NOT ?
-               OR times_used IS NOT ?
-             )`,
-          r.dateCreated,
-          r.dateCreated,
-          r.dateCreated,
-          r.dateLastUsed,
-          r.datePasswordChanged,
-          r.timesUsed,
-          r.url,
-          r.usernameHash,
-          r.actionUrl,
-          r.realm,
-          r.dateCreated,
-          r.dateLastUsed,
-          r.datePasswordChanged,
-          r.timesUsed
-        );
-        return;
-      }
-      this.sql.exec(
-        `INSERT INTO passwords (origin_url, username_hash, username_encrypted, password_encrypted,
-          action_url, realm, date_created, date_last_used, date_password_changed, times_used,
-          source_browser, source_profile_path)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(origin_url, username_hash, action_url, realm) DO UPDATE SET
-           username_encrypted = excluded.username_encrypted,
-           password_encrypted = excluded.password_encrypted,
-           date_last_used = excluded.date_last_used,
-           date_password_changed = excluded.date_password_changed,
-           times_used = excluded.times_used,
-           source_browser = excluded.source_browser,
-           source_profile_path = excluded.source_profile_path`,
-        r.url,
-        r.usernameHash,
-        r.usernameEncrypted,
-        r.passwordEncrypted,
-        r.actionUrl,
-        r.realm,
-        r.dateCreated,
-        r.dateLastUsed,
-        r.datePasswordChanged,
-        r.timesUsed,
-        sourceBrowser,
-        sourceProfilePath
-      );
-    });
-  }
-
-  @rpc(browserDataAuthority("write"))
-  async addAutofillBatch(
-    entries: ImportedAutofillEntry[],
-    meta: ImportBatchMeta = {}
-  ): Promise<number> {
-    const sourceBrowser = meta.browser ?? null;
-    const sourceProfilePath = meta.profilePath ?? "";
-    return this.runBatch(entries.length, (i) => {
-      const entry = assertPresent(entries[i]);
-      this.sql.exec(
-        `INSERT INTO autofill (field_name, value, date_created, date_last_used, times_used,
-           source_browser, source_profile_path)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(field_name, value) DO UPDATE SET
-           times_used = MAX(autofill.times_used, excluded.times_used),
-           source_browser = excluded.source_browser,
-           source_profile_path = excluded.source_profile_path,
-           date_created = CASE
-             WHEN autofill.date_created IS NULL THEN excluded.date_created
-             WHEN excluded.date_created IS NULL THEN autofill.date_created
-             ELSE MIN(autofill.date_created, excluded.date_created)
-           END,
-           date_last_used = CASE
-             WHEN autofill.date_last_used IS NULL THEN excluded.date_last_used
-             WHEN excluded.date_last_used IS NULL THEN autofill.date_last_used
-             ELSE MAX(autofill.date_last_used, excluded.date_last_used)
-           END`,
-        entry.fieldName,
-        entry.value,
-        entry.dateCreated ?? null,
-        entry.dateLastUsed ?? null,
-        entry.timesUsed,
-        sourceBrowser,
-        sourceProfilePath
-      );
-    });
-  }
-
-  @rpc(browserDataAuthority("write"))
-  async addSearchEnginesBatch(
-    engines: ImportedSearchEngine[],
-    meta: ImportBatchMeta = {}
-  ): Promise<number> {
-    return this.runBatch(engines.length, (i) => {
-      const engine = assertPresent(engines[i]);
-      const importKey = this.importKey(
-        "search-engine",
-        meta,
-        engine.sourceId
-          ? ["id", engine.sourceId]
-          : ["keyword-url", engine.keyword ?? "", engine.searchUrl]
-      );
-      this.sql.exec(
-        `INSERT INTO search_engines (
-           name, keyword, search_url, suggest_url, favicon_url, is_default,
-           source_browser, source_profile_path, import_key
-         )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(import_key) DO UPDATE SET
-           name = excluded.name,
-           keyword = excluded.keyword,
-           search_url = excluded.search_url,
-           suggest_url = excluded.suggest_url,
-           favicon_url = excluded.favicon_url,
-           is_default = excluded.is_default,
-           source_browser = excluded.source_browser,
-           source_profile_path = excluded.source_profile_path`,
-        engine.name,
-        engine.keyword ?? null,
-        engine.searchUrl,
-        engine.suggestUrl ?? null,
-        engine.faviconUrl ?? null,
-        engine.isDefault ? 1 : 0,
-        meta.browser ?? "",
-        meta.profilePath ?? "",
-        importKey
-      );
-    });
-  }
-
-  @rpc(browserDataAuthority("write"))
-  async addPermissionsBatch(
-    permissions: ImportedPermission[],
-    meta: ImportBatchMeta = {}
-  ): Promise<number> {
-    const sourceBrowser = meta.browser ?? null;
-    const sourceProfilePath = meta.profilePath ?? "";
-    return this.runBatch(permissions.length, (i) => {
-      const p = assertPresent(permissions[i]);
-      this.sql.exec(
-        `INSERT INTO permissions (origin, permission, setting, date_set, source_browser, source_profile_path)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(origin, permission) DO UPDATE SET
-           setting = excluded.setting,
-           date_set = excluded.date_set,
-           source_browser = excluded.source_browser,
-           source_profile_path = excluded.source_profile_path
-         WHERE permissions.setting IS NOT excluded.setting`,
-        p.origin,
-        p.permission,
-        p.setting,
-        Date.now(),
-        sourceBrowser,
-        sourceProfilePath
-      );
-    });
-  }
-
-  @rpc(browserDataAuthority("write"))
-  async addFaviconsBatch(favicons: ImportedFavicon[], meta: ImportBatchMeta = {}): Promise<number> {
-    const sourceBrowser = meta.browser ?? null;
-    const sourceProfilePath = meta.profilePath ?? "";
-    return this.runBatch(favicons.length, (i) => {
-      const favicon = assertPresent(favicons[i]);
-      this.sql.exec(
-        `INSERT INTO favicons (url, data, mime_type, last_updated, source_browser, source_profile_path)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(url) DO UPDATE SET
-           data = excluded.data,
-           mime_type = excluded.mime_type,
-           last_updated = excluded.last_updated,
-           source_browser = excluded.source_browser,
-           source_profile_path = excluded.source_profile_path
-         WHERE favicons.data IS NOT excluded.data
-            OR favicons.mime_type IS NOT excluded.mime_type`,
-        favicon.url,
-        favicon.data,
-        favicon.mimeType,
-        Date.now(),
-        sourceBrowser,
-        sourceProfilePath
-      );
-    });
-  }
-
   @rpc(browserDataAuthority("write"))
   addNeverSave(origin: string): void {
+    const normalized = this.httpOrigin(origin);
+    if (!normalized) throw new Error("Never-save origin must use http or https");
     this.sql.exec(
-      `INSERT INTO password_never_save (origin, date_added) VALUES (?, ?)
-       ON CONFLICT(origin) DO NOTHING`,
-      origin,
+      `INSERT OR IGNORE INTO password_never_save(origin, date_added) VALUES (?, ?)`,
+      normalized,
       Date.now()
     );
   }
 
   @rpc(browserDataAuthority("read"))
   isNeverSave(origin: string): boolean {
-    const row = this.sql
-      .exec(`SELECT 1 AS present FROM password_never_save WHERE origin = ?`, origin)
-      .toArray()[0] as { present: number } | undefined;
-    return row !== undefined;
+    const normalized = this.httpOrigin(origin);
+    if (!normalized) return false;
+    return (
+      this.sql.exec(`SELECT 1 FROM password_never_save WHERE origin = ?`, normalized).toArray()
+        .length > 0
+    );
   }
 
   @rpc(browserDataAuthority("read"))
   getNeverSaveOrigins(): string[] {
-    return (
-      this.sql.exec(`SELECT origin FROM password_never_save ORDER BY origin`).toArray() as Array<{
-        origin: string;
-      }>
-    ).map((row) => row.origin);
+    return this.sql
+      .exec(`SELECT origin FROM password_never_save ORDER BY origin`)
+      .toArray()
+      .map((row) => String(row["origin"]));
   }
 
   @rpc(browserDataAuthority("destructive"))
   removeNeverSave(origin: string): void {
-    this.sql.exec(`DELETE FROM password_never_save WHERE origin = ?`, origin);
+    const normalized = this.httpOrigin(origin);
+    if (normalized) this.sql.exec(`DELETE FROM password_never_save WHERE origin = ?`, normalized);
   }
 
   @rpc(browserDataAuthority("write"))
@@ -1324,497 +698,659 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
-  @rpc(browserDataAuthority("write"))
-  recordImportRun(run: {
-    browser: string;
-    profilePath: string;
-    mode?: string;
-    status?: string;
-    startedAt?: number;
-    finishedAt?: number;
-    dataTypes?: string[];
-    warnings?: string[];
-    summaries?: Array<{
-      dataType: string;
-      scanned?: number;
-      added?: number;
-      changed?: number;
-      unchanged?: number;
-      skipped?: number;
-      errors?: number;
-    }>;
-  }): number {
-    const now = Date.now();
-    const runId = this.sql
-      .exec(
-        `INSERT INTO import_runs (browser, profile_path, mode, status, started_at, finished_at, data_types, warnings)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-        run.browser,
-        run.profilePath,
-        run.mode ?? "import",
-        run.status ?? "success",
-        run.startedAt ?? now,
-        run.finishedAt ?? now,
-        JSON.stringify(run.dataTypes ?? (run.summaries ?? []).map((s) => s.dataType)),
-        JSON.stringify(run.warnings ?? [])
-      )
-      .one()["id"] as number;
-    for (const s of run.summaries ?? []) {
-      this.sql.exec(
-        `INSERT INTO import_run_summaries (run_id, data_type, scanned, added, changed, unchanged, skipped, errors)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        runId,
-        s.dataType,
-        s.scanned ?? 0,
-        s.added ?? 0,
-        s.changed ?? 0,
-        s.unchanged ?? 0,
-        s.skipped ?? 0,
-        s.errors ?? 0
-      );
-    }
-    return runId;
-  }
+  // -- Structured form fill ------------------------------------------------
 
   @rpc(browserDataAuthority("read"))
-  getImportHistory() {
-    const runs = this.sql
-      .exec(`SELECT * FROM import_runs ORDER BY finished_at DESC`)
-      .toArray() as Array<Record<string, unknown>>;
-    return runs.map((run) => ({
-      ...run,
-      summaries: this.sql
-        .exec(`SELECT * FROM import_run_summaries WHERE run_id = ? ORDER BY data_type`, run["id"])
-        .toArray(),
-    }));
-  }
-
-  @rpc(browserDataAuthority("read"))
-  getProfileImportState(query: { browser: string; profilePath: string }): {
-    lastRun: Record<string, unknown> | null;
-    runs: Array<Record<string, unknown>>;
-  } {
-    const runs = this.sql
-      .exec(
-        `SELECT * FROM import_runs WHERE browser = ? AND profile_path = ? ORDER BY finished_at DESC LIMIT 20`,
-        query.browser,
-        query.profilePath
-      )
-      .toArray() as Array<Record<string, unknown>>;
-    const withSummaries = runs.map((run) => ({
-      ...run,
-      summaries: this.sql
-        .exec(`SELECT * FROM import_run_summaries WHERE run_id = ? ORDER BY data_type`, run["id"])
-        .toArray(),
-    }));
-    return { lastRun: withSummaries[0] ?? null, runs: withSummaries };
-  }
-
-  // ---- Secret-free "view" aggregates (Tier-1: no raw values leave the store) ----
-
-  @rpc(browserDataAuthority("read"))
-  getCookieDomains() {
-    return this.sql
-      .exec(
-        `SELECT domain,
-                COUNT(*) AS count,
-                MAX(secure) AS secure,
-                MAX(http_only) AS httpOnly,
-                MAX(source_browser) AS sourceBrowser,
-                MIN(created_at) AS earliest,
-                MAX(last_accessed) AS latest
-         FROM cookies GROUP BY domain ORDER BY count DESC`
-      )
-      .toArray();
-  }
-
-  @rpc(browserDataAuthority("read"))
-  getPasswordOrigins(): Array<{ origin: string; count: number }> {
-    const rows = this.sql.exec(`SELECT origin_url FROM passwords`).toArray() as Array<{
-      origin_url: string;
-    }>;
-    const byHost = new Map<string, number>();
-    for (const r of rows) {
-      const host = this.hostnameOf(String(r.origin_url)) ?? String(r.origin_url);
-      byHost.set(host, (byHost.get(host) ?? 0) + 1);
-    }
-    return [...byHost.entries()]
-      .map(([origin, count]) => ({ origin, count }))
-      .sort((a, b) => b.count - a.count);
-  }
-
-  @rpc(browserDataAuthority("read"))
-  getAutofillFieldNames() {
-    return this.sql
-      .exec(
-        `SELECT field_name AS fieldName, COUNT(*) AS count, SUM(times_used) AS timesUsed
-         FROM autofill GROUP BY field_name ORDER BY count DESC`
-      )
-      .toArray();
-  }
-
-  @rpc(browserDataAuthority("read"))
-  getHistoryDomains(
-    limit = 2000
-  ): Array<{ domain: string; visits: number; typed: number; pages: number; lastVisit: number }> {
+  async getFormFillSuggestions(query: FormFillSuggestionQuery) {
+    if (!FORM_FILL_TYPES.includes(query.type)) throw new Error("Unknown form-fill type");
+    const limit = Math.min(Math.max(query.limit ?? 20, 1), 100);
     const rows = this.sql
       .exec(
-        `SELECT url, visit_count, typed_count, last_visit FROM history ORDER BY last_visit DESC LIMIT ?`,
-        limit
+        `SELECT * FROM form_fill_values WHERE type = ?
+         ORDER BY use_count DESC, updated_at DESC LIMIT ?`,
+        query.type,
+        limit * 4
       )
-      .toArray() as Array<{
-      url: string;
-      visit_count: number;
-      typed_count: number;
-      last_visit: number;
-    }>;
-    const byHost = new Map<
-      string,
-      { domain: string; visits: number; typed: number; pages: number; lastVisit: number }
-    >();
-    for (const r of rows) {
-      const host = this.hostnameOf(String(r.url));
-      if (!host) continue;
-      const cur = byHost.get(host) ?? { domain: host, visits: 0, typed: 0, pages: 0, lastVisit: 0 };
-      cur.visits += Number(r.visit_count ?? 0);
-      cur.typed += Number(r.typed_count ?? 0);
-      cur.pages += 1;
-      cur.lastVisit = Math.max(cur.lastVisit, Number(r.last_visit ?? 0));
-      byHost.set(host, cur);
+      .toArray();
+    const values = await Promise.all(rows.map((row) => this.formFillRow(row)));
+    const prefix = query.prefix?.toLocaleLowerCase();
+    return (
+      prefix ? values.filter((entry) => entry.value.toLocaleLowerCase().startsWith(prefix)) : values
+    ).slice(0, limit);
+  }
+
+  @rpc(browserDataAuthority("write"))
+  async addFormFillValue(input: FormFillValueInput, sourceId?: string): Promise<number> {
+    if (!FORM_FILL_TYPES.includes(input.type)) throw new Error("Unknown form-fill type");
+    const value = input.value.trim();
+    if (!value) throw new Error("Form-fill value cannot be empty");
+    const now = Date.now();
+    const valueHash = await this.hashSecret(value);
+    const encrypted = await this.encryptText(value);
+    const aliases = JSON.stringify(this.normalizedAliases(input.aliases));
+    const row = this.sql
+      .exec(
+        `INSERT INTO form_fill_values
+          (type, value_hash, value_encrypted, display_label, aliases, created_at, updated_at,
+           use_count, source_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(type, value_hash) DO UPDATE SET
+           value_encrypted = excluded.value_encrypted,
+           display_label = COALESCE(excluded.display_label, form_fill_values.display_label),
+           aliases = excluded.aliases,
+           updated_at = MAX(form_fill_values.updated_at, excluded.updated_at),
+           use_count = MAX(form_fill_values.use_count, excluded.use_count),
+           source_id = COALESCE(excluded.source_id, form_fill_values.source_id)
+         RETURNING id`,
+        input.type,
+        valueHash,
+        encrypted,
+        input.displayLabel?.trim() || null,
+        aliases,
+        input.createdAt ?? now,
+        input.updatedAt ?? now,
+        input.useCount ?? 0,
+        sourceId ?? null
+      )
+      .one();
+    return Number(row["id"]);
+  }
+
+  @rpc(browserDataAuthority("write"))
+  async updateFormFillValue(
+    id: number,
+    partial: Partial<Pick<FormFillValueInput, "value" | "displayLabel" | "aliases">>
+  ): Promise<void> {
+    const sets = ["updated_at = ?"];
+    const values: unknown[] = [Date.now()];
+    if (partial.value !== undefined) {
+      const value = partial.value.trim();
+      if (!value) throw new Error("Form-fill value cannot be empty");
+      sets.push("value_hash = ?", "value_encrypted = ?");
+      values.push(await this.hashSecret(value), await this.encryptText(value));
     }
-    return [...byHost.values()].sort((a, b) => b.lastVisit - a.lastVisit);
+    if (partial.displayLabel !== undefined) {
+      sets.push("display_label = ?");
+      values.push(partial.displayLabel.trim() || null);
+    }
+    if (partial.aliases !== undefined) {
+      sets.push("aliases = ?");
+      values.push(JSON.stringify(this.normalizedAliases(partial.aliases)));
+    }
+    values.push(id);
+    this.sql.exec(`UPDATE form_fill_values SET ${sets.join(", ")} WHERE id = ?`, ...values);
+  }
+
+  @rpc(browserDataAuthority("write"))
+  markFormFillValueUsed(id: number): void {
+    this.sql.exec(
+      `UPDATE form_fill_values SET use_count = use_count + 1, updated_at = ? WHERE id = ?`,
+      Date.now(),
+      id
+    );
+  }
+
+  @rpc(browserDataAuthority("destructive"))
+  deleteFormFillValue(id: number): void {
+    this.sql.exec(`DELETE FROM form_fill_values WHERE id = ?`, id);
+  }
+
+  @rpc(browserDataAuthority("destructive"))
+  clearFormFillValues(): number {
+    this.sql.exec(`DELETE FROM form_fill_values`);
+    return this.changes();
+  }
+
+  // -- Canonical cookie jar -------------------------------------------------
+
+  @rpc(browserDataAuthority("write"))
+  async applyCookieMutations(request: ApplyCookieMutationsRequest): Promise<{ revision: number }> {
+    const parsed = ApplyCookieMutationsRequestSchema.parse(request);
+    const prepared = new Map<number, PreparedCookiePut>();
+    for (const [index, mutation] of parsed.mutations.entries()) {
+      if (mutation.op !== "put") continue;
+      const input = this.normalizeCookie(mutation.cookie);
+      prepared.set(index, {
+        input,
+        encryptedValue: await this.encryptText(input.value),
+        contentHash: await this.cookieContentHash(input),
+      });
+    }
+
+    let revision = this.currentCookieRevision();
+    this.ctx.storage.transactionSync(() => {
+      for (const [index, mutation] of parsed.mutations.entries()) {
+        const alreadyApplied = this.sql
+          .exec(
+            `SELECT applied_revision FROM cookie_mutations WHERE mutation_id = ?`,
+            mutation.mutationId
+          )
+          .toArray();
+        const applied = alreadyApplied[0];
+        if (applied) {
+          revision = Math.max(revision, Number(applied["applied_revision"]));
+          continue;
+        }
+
+        let changed = false;
+        if (mutation.op === "put") {
+          const item = prepared.get(index);
+          if (!item) throw new Error(`Cookie mutation ${index} was not prepared`);
+          const existing = this.cookieRowForKey(item.input);
+          changed = !existing || String(existing["content_hash"]) !== item.contentHash;
+          if (changed) {
+            revision += 1;
+            this.sql.exec(
+              `INSERT INTO cookies
+                (name, domain, path, partition_key, encrypted_value, content_hash, host_only,
+                 secure, http_only, same_site, expiration_date, source_scheme, source_port,
+                 created_at, last_accessed, revision)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(name, domain, path, partition_key) DO UPDATE SET
+                 encrypted_value = excluded.encrypted_value,
+                 content_hash = excluded.content_hash,
+                 host_only = excluded.host_only,
+                 secure = excluded.secure,
+                 http_only = excluded.http_only,
+                 same_site = excluded.same_site,
+                 expiration_date = excluded.expiration_date,
+                 source_scheme = excluded.source_scheme,
+                 source_port = excluded.source_port,
+                 last_accessed = excluded.last_accessed,
+                 revision = excluded.revision`,
+              item.input.name,
+              item.input.domain,
+              item.input.path,
+              item.input.partitionKey ?? "",
+              item.encryptedValue,
+              item.contentHash,
+              item.input.hostOnly ? 1 : 0,
+              item.input.secure ? 1 : 0,
+              item.input.httpOnly ? 1 : 0,
+              item.input.sameSite,
+              item.input.expirationDate ?? null,
+              item.input.sourceScheme ?? null,
+              item.input.sourcePort ?? null,
+              item.input.createdAt ?? Date.now(),
+              item.input.lastAccessed ?? null,
+              revision
+            );
+          }
+        } else {
+          const key = this.normalizeCookieKey(mutation.key);
+          const result = this.sql.exec(
+            `DELETE FROM cookies
+             WHERE name = ? AND domain = ? AND path = ? AND partition_key = ?`,
+            key.name,
+            key.domain,
+            key.path,
+            key.partitionKey ?? ""
+          );
+          changed =
+            Number((result as unknown as { changes?: number }).changes ?? this.changes()) > 0;
+          if (changed) revision += 1;
+        }
+        if (changed) this.setCookieRevision(revision);
+        this.sql.exec(
+          `INSERT INTO cookie_mutations(mutation_id, applied_revision, applied_at)
+           VALUES (?, ?, ?)`,
+          mutation.mutationId,
+          revision,
+          Date.now()
+        );
+      }
+    });
+    return { revision };
   }
 
   @rpc(browserDataAuthority("read"))
-  getDomainReadiness(domain: string): {
-    domain: string;
-    cookies: number;
-    password: boolean;
-    permissions: Array<{ permission: string; setting: string }>;
-    recentHistoryCount: number;
-    lastVisit: number | null;
-  } {
-    const normalizedDomain = this.normalizeDomainInput(domain);
-    const cookieRows = this.sql
-      .exec(`SELECT domain, COUNT(*) AS c FROM cookies GROUP BY domain`)
-      .toArray() as Array<{ domain: string; c: number }>;
-    let cookieCount = 0;
-    for (const row of cookieRows) {
-      if (this.hostMatchesDomain(String(row.domain), normalizedDomain)) {
-        cookieCount += Number(row.c ?? 0);
-      }
-    }
-
-    const passwordRows = this.sql.exec(`SELECT origin_url FROM passwords`).toArray() as Array<{
-      origin_url: string;
-    }>;
-    const hasPassword = passwordRows.some((row) =>
-      this.hostMatchesDomain(this.hostnameOf(String(row.origin_url)), normalizedDomain)
-    );
-
-    const perms = (
-      this.sql.exec(`SELECT origin, permission, setting FROM permissions`).toArray() as Array<{
-        origin: string;
-        permission: string;
-        setting: string;
-      }>
-    )
-      .filter((row) =>
-        this.hostMatchesDomain(this.hostnameOf(String(row.origin)), normalizedDomain)
+  async getCookieSnapshot(_query: { sinceRevision?: number } = {}) {
+    const now = Date.now() / 1_000;
+    const rows = this.sql
+      .exec(
+        `SELECT * FROM cookies
+         WHERE expiration_date IS NULL OR expiration_date > ?
+         ORDER BY domain, path, name, partition_key`,
+        now
       )
-      .map((row) => ({ permission: row.permission, setting: row.setting }));
+      .toArray();
+    const cookies = await Promise.all(rows.map((row) => this.cookieRow(row)));
+    return { revision: this.currentCookieRevision(), cookies };
+  }
 
-    const historyRows = this.sql.exec(`SELECT url, last_visit FROM history`).toArray() as Array<{
-      url: string;
-      last_visit: number;
-    }>;
-    let recentHistoryCount = 0;
-    let lastVisit: number | null = null;
-    for (const row of historyRows) {
-      if (!this.hostMatchesDomain(this.hostnameOf(String(row.url)), normalizedDomain)) continue;
-      recentHistoryCount++;
-      const candidate = Number(row.last_visit ?? 0);
-      lastVisit = lastVisit == null ? candidate : Math.max(lastVisit, candidate);
+  @rpc(browserDataAuthority("read"))
+  async getCookiesForOrigin(origin: string): Promise<StoredCookie[]> {
+    const url = new URL(origin);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return [];
+    const snapshot = await this.getCookieSnapshot();
+    return snapshot.cookies.filter((cookie) => this.cookieMatchesUrl(cookie, url));
+  }
+
+  @rpc(browserDataAuthority("destructive"))
+  clearCookiesForOrigin(origin: string): number {
+    const url = new URL(origin);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return 0;
+    const keys = this.sql
+      .exec(`SELECT name, domain, path, partition_key FROM cookies`)
+      .toArray()
+      .filter((row) =>
+        this.cookieMatchesUrl(
+          {
+            domain: String(row["domain"]),
+            hostOnly: !String(row["domain"]).startsWith("."),
+            path: String(row["path"]),
+            secure: false,
+          },
+          url
+        )
+      );
+    return this.deleteCookieRows(keys);
+  }
+
+  @rpc(browserDataAuthority("destructive"))
+  clearAllCookies(): number {
+    const rows = this.sql.exec(`SELECT name, domain, path, partition_key FROM cookies`).toArray();
+    return this.deleteCookieRows(rows);
+  }
+
+  @rpc(browserDataAuthority("destructive"))
+  endBrowserSession(): number {
+    const rows = this.sql
+      .exec(`SELECT name, domain, path, partition_key FROM cookies WHERE expiration_date IS NULL`)
+      .toArray();
+    return this.deleteCookieRows(rows);
+  }
+
+  @rpc(browserDataAuthority("read"))
+  getCookieSiteSummary(origin: string) {
+    const url = new URL(origin);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return { origin, cookieCount: 0, revision: this.currentCookieRevision() };
     }
-
+    const rows = this.sql.exec(`SELECT domain, path, secure, host_only FROM cookies`).toArray();
     return {
-      domain: normalizedDomain || domain,
-      cookies: cookieCount,
-      password: hasPassword,
-      permissions: perms,
-      recentHistoryCount,
-      lastVisit,
+      origin: url.origin,
+      cookieCount: rows.filter((row) =>
+        this.cookieMatchesUrl(
+          {
+            domain: String(row["domain"]),
+            hostOnly: Number(row["host_only"]) === 1,
+            path: String(row["path"]),
+            secure: Number(row["secure"]) === 1,
+          },
+          url
+        )
+      ).length,
+      revision: this.currentCookieRevision(),
     };
   }
 
-  // ---- Dry-run classifier: compares candidate import items against the store ----
+  // -- Search engines and favicons -----------------------------------------
 
   @rpc(browserDataAuthority("read"))
-  async classifyAgainstStore(
-    dataType: string,
-    items: Array<Record<string, unknown>>,
-    meta: ImportBatchMeta = {}
-  ): Promise<{
-    scanned: number;
-    added: number;
-    changed: number;
-    unchanged: number;
-    skipped: number;
-    samples: Array<{ status: string; label: string; detail?: string }>;
-  }> {
-    let added = 0;
-    let changed = 0;
-    let unchanged = 0;
-    let skipped = 0;
-    const samples: Array<{ status: string; label: string; detail?: string }> = [];
-    for (const raw of items) {
-      const outcome = await this.classifyItem(dataType, raw, meta);
-      if (outcome.status === "added") added++;
-      else if (outcome.status === "changed") changed++;
-      else if (outcome.status === "skipped") skipped++;
-      else unchanged++;
-      if (outcome.status !== "unchanged" && samples.length < 8) {
-        samples.push({
-          status: outcome.status,
-          label: outcome.label,
-          ...(outcome.detail ? { detail: outcome.detail } : {}),
+  getSearchEngines() {
+    return this.sql.exec(`SELECT * FROM search_engines ORDER BY is_default DESC, name`).toArray();
+  }
+
+  @rpc(browserDataAuthority("write"))
+  setDefaultEngine(id: number): void {
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(`UPDATE search_engines SET is_default = 0`);
+      this.sql.exec(`UPDATE search_engines SET is_default = 1 WHERE id = ?`, id);
+    });
+  }
+
+  @rpc(browserDataAuthority("write"))
+  putPageFavicon(favicon: PageFavicon): void {
+    const page = new URL(favicon.pageUrl);
+    const origin = new URL(favicon.origin);
+    if (
+      (page.protocol !== "http:" && page.protocol !== "https:") ||
+      page.origin !== origin.origin ||
+      favicon.mimeType !== "image/png"
+    ) {
+      throw new Error("Favicon page association must use one matching HTTP(S) origin");
+    }
+    this.assertFaviconBytes(favicon.png16);
+    this.assertFaviconBytes(favicon.png32);
+    if (!favicon.png16 && !favicon.png32) throw new Error("Favicon has no raster data");
+    this.sql.exec(
+      `INSERT INTO page_favicons
+        (page_url, origin, source_url, png16, png32, mime_type, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'image/png', ?)
+       ON CONFLICT(page_url) DO UPDATE SET
+         origin = excluded.origin,
+         source_url = excluded.source_url,
+         png16 = excluded.png16,
+         png32 = excluded.png32,
+         updated_at = excluded.updated_at
+       WHERE excluded.updated_at >= page_favicons.updated_at`,
+      page.href,
+      origin.origin,
+      favicon.sourceUrl ?? null,
+      favicon.png16 ?? null,
+      favicon.png32 ?? null,
+      favicon.updatedAt
+    );
+  }
+
+  @rpc(browserDataAuthority("read"))
+  getPageFavicon(pageUrl: string) {
+    const page = new URL(pageUrl);
+    if (page.protocol !== "http:" && page.protocol !== "https:") return null;
+    const exact = this.sql
+      .exec(`SELECT * FROM page_favicons WHERE page_url = ?`, page.href)
+      .toArray()[0];
+    if (exact) return exact;
+    return (
+      this.sql
+        .exec(
+          `SELECT * FROM page_favicons WHERE origin = ? ORDER BY updated_at DESC LIMIT 1`,
+          page.origin
+        )
+        .toArray()[0] ?? null
+    );
+  }
+
+  // -- Import storage ------------------------------------------------------
+
+  @rpc(browserDataAuthority("write"))
+  upsertImportJob(job: ImportJobWrite): void {
+    this.sql.exec(
+      `INSERT INTO import_jobs
+        (job_id, host_id, host_label, source_id, browser, phase, started_at, updated_at,
+         finished_at, data_types, progress, warnings, error, resumable)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(job_id) DO UPDATE SET
+         phase = excluded.phase,
+         updated_at = excluded.updated_at,
+         finished_at = excluded.finished_at,
+         progress = excluded.progress,
+         warnings = excluded.warnings,
+         error = excluded.error,
+         resumable = excluded.resumable`,
+      job.jobId,
+      job.hostId,
+      job.hostLabel,
+      job.sourceId,
+      job.browser,
+      job.phase,
+      job.startedAt,
+      job.updatedAt,
+      job.finishedAt ?? null,
+      JSON.stringify(job.dataTypes),
+      JSON.stringify(job.progress),
+      JSON.stringify(job.warnings),
+      job.error ?? null,
+      job.resumable ? 1 : 0
+    );
+  }
+
+  @rpc(browserDataAuthority("read"))
+  getImportJob(jobId: string) {
+    const row = this.sql.exec(`SELECT * FROM import_jobs WHERE job_id = ?`, jobId).toArray()[0];
+    return row ? this.importJobRow(row) : null;
+  }
+
+  @rpc(browserDataAuthority("read"))
+  listImportJobs() {
+    return this.sql
+      .exec(`SELECT * FROM import_jobs ORDER BY updated_at DESC LIMIT 100`)
+      .toArray()
+      .map((row) => this.importJobRow(row));
+  }
+
+  @rpc(browserDataAuthority("write"))
+  recordImportBatch(input: {
+    jobId: string;
+    dataType: string;
+    batchIndex: number;
+    idempotencyKey: string;
+    itemCount: number;
+  }): { stored: boolean } {
+    const existing = this.sql
+      .exec(`SELECT 1 FROM import_batches WHERE idempotency_key = ?`, input.idempotencyKey)
+      .toArray();
+    if (existing.length > 0) return { stored: false };
+    this.sql.exec(
+      `INSERT INTO import_batches
+        (job_id, data_type, batch_index, idempotency_key, item_count, stored_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      input.jobId,
+      input.dataType,
+      input.batchIndex,
+      input.idempotencyKey,
+      input.itemCount,
+      Date.now()
+    );
+    return { stored: true };
+  }
+
+  @rpc(browserDataAuthority("write"))
+  async addBookmarksBatch(bookmarks: ImportedBookmark[], meta: ImportSourceMeta): Promise<number> {
+    return this.runBatch(bookmarks.length, (index) => {
+      const bookmark = bookmarks[index];
+      if (!bookmark) throw new Error(`Bookmark batch item ${index} is unavailable`);
+      const folderPath = `/${bookmark.folder.join("/")}`.replace(/\/+/g, "/");
+      const importKey = this.importKey("bookmark", meta.sourceId, [
+        bookmark.sourceId ?? "",
+        bookmark.url,
+        folderPath,
+      ]);
+      this.sql.exec(
+        `INSERT INTO bookmarks
+          (title, url, folder_path, date_added, date_modified, position, source_id, import_key,
+           tags, keyword)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(import_key) DO UPDATE SET
+           title = excluded.title,
+           url = excluded.url,
+           folder_path = excluded.folder_path,
+           date_modified = MAX(bookmarks.date_modified, excluded.date_modified),
+           tags = excluded.tags,
+           keyword = excluded.keyword`,
+        bookmark.title,
+        bookmark.url,
+        folderPath,
+        bookmark.dateAdded,
+        bookmark.dateModified ?? bookmark.dateAdded,
+        index,
+        meta.sourceId,
+        importKey,
+        bookmark.tags?.join(",") ?? null,
+        bookmark.keyword ?? null
+      );
+    });
+  }
+
+  @rpc(browserDataAuthority("write"))
+  async addHistoryBatch(entries: ImportedHistoryEntry[], meta: ImportSourceMeta): Promise<number> {
+    return this.runBatch(entries.length, (index) => {
+      const entry = entries[index];
+      if (!entry) throw new Error(`History batch item ${index} is unavailable`);
+      const visits = this.importedVisitsForEntry(entry);
+      for (const visit of visits) {
+        const historyId = this.ensureHistoryRow(entry.url, entry.title, visit.visitTime);
+        this.insertHistoryVisit(historyId, {
+          visitTime: visit.visitTime,
+          transition: visit.transition ?? entry.transition ?? "link",
+          source: "import",
+          importSourceId: meta.sourceId,
+          panelId: "",
+          title: entry.title,
+          typed: visit.typed ?? false,
         });
+        this.recomputeHistorySummary(historyId);
       }
+    });
+  }
+
+  @rpc(browserDataAuthority("write"))
+  async addCookiesBatch(input: {
+    jobId: string;
+    batchIndex: number;
+    cookies: BrowserCookieInput[];
+  }): Promise<{ revision: number }> {
+    return this.applyCookieMutations({
+      mutations: input.cookies.map((cookie, index) => ({
+        op: "put" as const,
+        cookie,
+        mutationId: `${input.jobId}:cookies:${input.batchIndex}:${index}`,
+      })),
+    });
+  }
+
+  @rpc(browserDataAuthority("write"))
+  async addPasswordsBatch(passwords: ImportedPassword[], meta: ImportSourceMeta): Promise<number> {
+    const prepared = await Promise.all(
+      passwords.map(async (password) => ({
+        password,
+        origin: this.httpOrigin(password.url),
+        encrypted: await this.encryptPasswordFields(password.username, password.password),
+      }))
+    );
+    return this.runBatch(prepared.length, (index) => {
+      const item = prepared[index];
+      if (!item) throw new Error(`Password batch item ${index} is unavailable`);
+      if (!item.origin) return;
+      const now = Date.now();
+      this.sql.exec(
+        `INSERT INTO passwords
+          (origin_url, username_hash, username_encrypted, password_encrypted, action_url, realm,
+           date_created, date_last_used, date_password_changed, times_used, source_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(origin_url, username_hash, action_url, realm) DO UPDATE SET
+           username_encrypted = excluded.username_encrypted,
+           password_encrypted = CASE
+             WHEN COALESCE(excluded.date_password_changed, 0)
+                >= COALESCE(passwords.date_password_changed, 0)
+             THEN excluded.password_encrypted ELSE passwords.password_encrypted END,
+           date_last_used = MAX(passwords.date_last_used, excluded.date_last_used),
+           date_password_changed =
+             MAX(passwords.date_password_changed, excluded.date_password_changed),
+           times_used = MAX(passwords.times_used, excluded.times_used),
+           source_id = excluded.source_id`,
+        item.origin,
+        item.encrypted.usernameHash,
+        item.encrypted.usernameEncrypted,
+        item.encrypted.passwordEncrypted,
+        item.password.actionUrl ?? "",
+        item.password.realm ?? "",
+        item.password.dateCreated ?? now,
+        item.password.dateLastUsed ?? 0,
+        item.password.datePasswordChanged ?? 0,
+        item.password.timesUsed ?? 0,
+        meta.sourceId
+      );
+    });
+  }
+
+  @rpc(browserDataAuthority("write"))
+  async addFormFillBatch(values: FormFillValueInput[], meta: ImportSourceMeta): Promise<number> {
+    let stored = 0;
+    for (const value of values) {
+      await this.addFormFillValue(value, meta.sourceId);
+      stored += 1;
     }
-    return { scanned: items.length, added, changed, unchanged, skipped, samples };
+    return stored;
   }
 
-  private async classifyItem(
-    dataType: string,
-    raw: Record<string, unknown>,
-    meta: ImportBatchMeta
-  ): Promise<{
-    status: "added" | "changed" | "unchanged" | "skipped";
-    label: string;
-    detail?: string;
-  }> {
-    switch (dataType) {
-      case "cookies": {
-        const name = String(raw["name"] ?? "");
-        const domain = String(raw["domain"] ?? "");
-        const path = String(raw["path"] ?? "/");
-        const value = String(raw["value"] ?? "");
-        const label = `${domain} ${name}`;
-        if (value === "") return { status: "skipped", label, detail: "undecryptable" };
-        const row = this.sql
-          .exec(
-            `SELECT value FROM cookies WHERE name = ? AND domain = ? AND path = ?`,
-            name,
-            domain,
-            path
-          )
-          .toArray()[0] as { value?: string } | undefined;
-        if (!row) return { status: "added", label };
-        return row.value === value ? { status: "unchanged", label } : { status: "changed", label };
-      }
-      case "bookmarks": {
-        const folder = Array.isArray(raw["folder"]) ? (raw["folder"] as string[]) : [];
-        const folderPath = "/" + folder.join("/");
-        const url = raw["url"] == null ? null : String(raw["url"]);
-        const importKey = this.importKey(
-          "bookmark",
-          meta,
-          raw["sourceId"] ? ["id", String(raw["sourceId"])] : ["url-folder", url ?? "", folderPath]
-        );
-        const label = String(raw["title"] ?? url ?? "bookmark");
-        const row = this.sql
-          .exec(`SELECT title, url, folder_path FROM bookmarks WHERE import_key = ?`, importKey)
-          .toArray()[0] as Record<string, unknown> | undefined;
-        if (!row) return { status: "added", label };
-        const same =
-          String(row["title"] ?? "") === String(raw["title"] ?? "") &&
-          String(row["url"] ?? "") === String(url ?? "") &&
-          String(row["folder_path"] ?? "") === folderPath;
-        return same ? { status: "unchanged", label } : { status: "changed", label };
-      }
-      case "searchEngines": {
-        const importKey = this.importKey(
-          "search-engine",
-          meta,
-          raw["sourceId"]
-            ? ["id", String(raw["sourceId"])]
-            : ["keyword-url", String(raw["keyword"] ?? ""), String(raw["searchUrl"] ?? "")]
-        );
-        const label = String(raw["name"] ?? raw["keyword"] ?? "engine");
-        const row = this.sql
-          .exec(`SELECT name, search_url FROM search_engines WHERE import_key = ?`, importKey)
-          .toArray()[0] as Record<string, unknown> | undefined;
-        if (!row) return { status: "added", label };
-        const same =
-          String(row["name"] ?? "") === String(raw["name"] ?? "") &&
-          String(row["search_url"] ?? "") === String(raw["searchUrl"] ?? "");
-        return same ? { status: "unchanged", label } : { status: "changed", label };
-      }
-      case "permissions": {
-        const origin = String(raw["origin"] ?? "");
-        const permission = String(raw["permission"] ?? "");
-        const label = `${origin} ${permission}`;
-        const row = this.sql
-          .exec(
-            `SELECT setting FROM permissions WHERE origin = ? AND permission = ?`,
-            origin,
-            permission
-          )
-          .toArray()[0] as { setting?: string } | undefined;
-        if (!row) return { status: "added", label };
-        return row.setting === String(raw["setting"] ?? "")
-          ? { status: "unchanged", label }
-          : { status: "changed", label };
-      }
-      case "favicons": {
-        const url = String(raw["url"] ?? "");
-        const row = this.sql.exec(`SELECT 1 AS p FROM favicons WHERE url = ?`, url).toArray()[0];
-        return row ? { status: "unchanged", label: url } : { status: "added", label: url };
-      }
-      case "passwords": {
-        const url = String(raw["url"] ?? "");
-        const username = String(raw["username"] ?? "");
-        const password = String(raw["password"] ?? "");
-        const actionUrl = String(raw["actionUrl"] ?? "");
-        const realm = String(raw["realm"] ?? "");
-        const label = `${this.hostnameOf(url) ?? url} (${username})`;
-        if (password === "") return { status: "skipped", label, detail: "undecryptable" };
-        const usernameHash = await this.hashUsername(username);
-        const row = this.sql
-          .exec(
-            `SELECT password_encrypted FROM passwords WHERE origin_url = ? AND username_hash = ? AND action_url = ? AND realm = ?`,
-            url,
-            usernameHash,
-            actionUrl,
-            realm
-          )
-          .toArray()[0] as { password_encrypted?: string } | undefined;
-        if (!row) return { status: "added", label };
-        try {
-          const same = (await this.decryptText(String(row.password_encrypted ?? ""))) === password;
-          return same ? { status: "unchanged", label } : { status: "changed", label };
-        } catch {
-          return { status: "changed", label };
-        }
-      }
-      case "history": {
-        // History merges visits per URL; treat an existing URL as unchanged for preview.
-        const url = String(raw["url"] ?? "");
-        const row = this.sql.exec(`SELECT 1 AS p FROM history WHERE url = ?`, url).toArray()[0];
-        return row ? { status: "unchanged", label: url } : { status: "added", label: url };
-      }
-      case "autofill": {
-        const fieldName = String(raw["fieldName"] ?? "");
-        const value = String(raw["value"] ?? "");
-        const row = this.sql
-          .exec(`SELECT 1 AS p FROM autofill WHERE field_name = ? AND value = ?`, fieldName, value)
-          .toArray()[0];
-        return row
-          ? { status: "unchanged", label: fieldName }
-          : { status: "added", label: fieldName };
-      }
-      default:
-        return { status: "added", label: dataType };
-    }
+  @rpc(browserDataAuthority("write"))
+  async addSearchEnginesBatch(
+    engines: ImportedSearchEngine[],
+    meta: ImportSourceMeta
+  ): Promise<number> {
+    return this.runBatch(engines.length, (index) => {
+      const engine = engines[index];
+      if (!engine) throw new Error(`Search-engine batch item ${index} is unavailable`);
+      const importKey = this.importKey("search-engine", meta.sourceId, [
+        engine.sourceId ?? "",
+        engine.searchUrl,
+      ]);
+      if (engine.isDefault) this.sql.exec(`UPDATE search_engines SET is_default = 0`);
+      this.sql.exec(
+        `INSERT INTO search_engines
+          (name, keyword, search_url, suggest_url, favicon_url, is_default, source_id, import_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(import_key) DO UPDATE SET
+           name = excluded.name,
+           keyword = excluded.keyword,
+           search_url = excluded.search_url,
+           suggest_url = excluded.suggest_url,
+           favicon_url = excluded.favicon_url,
+           is_default = excluded.is_default`,
+        engine.name,
+        engine.keyword ?? null,
+        engine.searchUrl,
+        engine.suggestUrl ?? null,
+        engine.faviconUrl ?? null,
+        engine.isDefault ? 1 : 0,
+        meta.sourceId,
+        importKey
+      );
+    });
   }
 
-  private hostnameOf(url: string): string | null {
-    try {
-      return new URL(url).hostname || null;
-    } catch {
-      return null;
-    }
+  @rpc(browserDataAuthority("write"))
+  async addFaviconsBatch(favicons: PageFavicon[]): Promise<number> {
+    return this.runBatch(favicons.length, (index) => {
+      const favicon = favicons[index];
+      if (!favicon) throw new Error(`Favicon batch item ${index} is unavailable`);
+      return this.putPageFavicon(favicon);
+    });
   }
 
-  private normalizeDomainInput(value: string): string {
-    const trimmed = value.trim().toLowerCase().replace(/^\.+/, "");
-    if (!trimmed) return "";
-    try {
-      const parsed = new URL(trimmed.includes("://") ? trimmed : `https://${trimmed}`);
-      return parsed.hostname.replace(/^\.+/, "");
-    } catch {
-      return trimmed.split("/")[0]?.split(":")[0]?.replace(/^\.+/, "") ?? "";
-    }
-  }
+  // -- Helpers -------------------------------------------------------------
 
-  private hostMatchesDomain(host: string | null, domain: string): boolean {
-    if (!host || !domain) return false;
-    const normalizedHost = this.normalizeDomainInput(host);
-    return normalizedHost === domain || normalizedHost.endsWith(`.${domain}`);
-  }
-
-  private changes(): number {
-    const row = this.sql.exec(`SELECT changes() AS changes`).one();
-    return Number(row["changes"] ?? 0);
-  }
-
-  private importKey(kind: string, meta: ImportBatchMeta, parts: string[]): string {
-    return JSON.stringify([kind, meta.browser ?? "", meta.profilePath ?? "", ...parts]);
-  }
-
-  private ensureHistoryRow(
-    url: string,
-    title: string | null | undefined,
-    observedAt: number
-  ): number {
-    const cleanTitle = title?.trim() || null;
+  private ensureHistoryRow(url: string, title: string | undefined, observedAt: number): number {
     const row = this.sql
       .exec(
-        `INSERT INTO history (url, title, visit_count, typed_count, first_visit, last_visit)
+        `INSERT INTO history(url, title, visit_count, typed_count, first_visit, last_visit)
          VALUES (?, ?, 0, 0, NULL, ?)
          ON CONFLICT(url) DO UPDATE SET
-           title = CASE
-             WHEN excluded.title IS NOT NULL AND length(excluded.title) > 0 THEN excluded.title
-             ELSE history.title
-           END,
+           title = CASE WHEN excluded.title IS NOT NULL AND excluded.title != ''
+             THEN excluded.title ELSE history.title END,
            last_visit = MAX(history.last_visit, excluded.last_visit)
          RETURNING id`,
         url,
-        cleanTitle,
+        title?.trim() || null,
         observedAt
       )
-      .one() as { id: number };
-    return row.id;
+      .one();
+    return Number(row["id"]);
   }
 
   private insertHistoryVisit(historyId: number, visit: HistoryVisitWrite): void {
-    const transition = visit.transition?.trim() || "link";
-    const title = visit.title?.trim() || null;
-    const typed = visit.typed || transition === "typed" ? 1 : 0;
     this.sql.exec(
-      `INSERT OR IGNORE INTO history_visits (
-         history_id, visit_time, transition, from_visit_id, source, source_browser,
-         source_profile_path, panel_id, title, typed
-       )
-       VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO history_visits
+        (history_id, visit_time, transition, source, import_source_id, panel_id, title, typed)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       historyId,
       visit.visitTime,
-      transition,
+      visit.transition,
       visit.source,
-      visit.sourceBrowser ?? "",
-      visit.sourceProfilePath ?? "",
-      visit.panelId ?? "",
-      title,
-      typed
+      visit.importSourceId,
+      visit.panelId,
+      visit.title ?? null,
+      visit.typed ? 1 : 0
     );
   }
 
   private recomputeHistorySummary(historyId: number): void {
     this.sql.exec(
       `UPDATE history SET
-         visit_count = (
-           SELECT COUNT(*) FROM history_visits WHERE history_id = ?
-         ),
-         typed_count = COALESCE((
-           SELECT SUM(typed) FROM history_visits WHERE history_id = ?
-         ), 0),
-         first_visit = (
-           SELECT MIN(visit_time) FROM history_visits WHERE history_id = ?
-         ),
-         last_visit = COALESCE((
-           SELECT MAX(visit_time) FROM history_visits WHERE history_id = ?
-         ), last_visit)
+         visit_count = (SELECT COUNT(*) FROM history_visits WHERE history_id = ?),
+         typed_count = (SELECT COALESCE(SUM(typed), 0) FROM history_visits WHERE history_id = ?),
+         first_visit = (SELECT MIN(visit_time) FROM history_visits WHERE history_id = ?),
+         last_visit = (SELECT MAX(visit_time) FROM history_visits WHERE history_id = ?),
+         title = COALESCE(
+           (SELECT title FROM history_visits
+            WHERE history_id = ? AND title IS NOT NULL AND title != ''
+            ORDER BY visit_time DESC LIMIT 1),
+           title
+         )
        WHERE id = ?`,
+      historyId,
       historyId,
       historyId,
       historyId,
@@ -1824,160 +1360,209 @@ export class BrowserDataDO extends DurableObjectBase {
   }
 
   private importedVisitsForEntry(entry: ImportedHistoryEntry): ImportedHistoryVisit[] {
-    const explicit = (entry.visits ?? []).filter(
-      (visit) => Number.isFinite(visit.visitTime) && visit.visitTime > 0
-    );
-    if (explicit.length > 0) return explicit;
-
-    const visitCount = Math.max(1, Math.trunc(entry.visitCount || 1));
-    const typedCount = Math.max(
-      0,
-      Math.min(
-        visitCount,
-        Math.trunc(entry.typedCount ?? (entry.transition === "typed" ? visitCount : 0))
-      )
-    );
-    const lastVisit = this.validHistoryTimestamp(entry.lastVisitTime) ?? Date.now();
-    const firstVisit = this.validHistoryTimestamp(entry.firstVisitTime) ?? lastVisit;
-    const times = this.synthesizeVisitTimes(firstVisit, lastVisit, visitCount);
-    return times.map((visitTime, index) => ({
-      visitTime,
+    if (entry.visits?.length) {
+      return entry.visits
+        .filter((visit) => Number.isFinite(visit.visitTime) && visit.visitTime > 0)
+        .sort((a, b) => a.visitTime - b.visitTime);
+    }
+    if (!Number.isFinite(entry.lastVisitTime) || entry.lastVisitTime <= 0) return [];
+    const count = Math.max(1, entry.visitCount || 1);
+    const first =
+      entry.firstVisitTime && Number.isFinite(entry.firstVisitTime)
+        ? Math.min(entry.firstVisitTime, entry.lastVisitTime)
+        : entry.lastVisitTime;
+    if (count === 1 || first === entry.lastVisitTime) {
+      return [{ visitTime: entry.lastVisitTime, transition: entry.transition }];
+    }
+    const step = (entry.lastVisitTime - first) / (count - 1);
+    return Array.from({ length: count }, (_, index) => ({
+      visitTime: Math.round(first + step * index),
       transition: entry.transition,
-      typed: index >= times.length - typedCount,
+      typed: index < (entry.typedCount ?? 0),
     }));
   }
 
-  private validHistoryTimestamp(value: number | undefined): number | null {
-    if (!Number.isFinite(value) || value == null || value <= 0) return null;
-    return Math.trunc(value);
+  private normalizeCookie(input: BrowserCookieInput): BrowserCookieInput {
+    const key = this.normalizeCookieKey(input);
+    return {
+      ...input,
+      ...key,
+      sameSite: input.sameSite,
+      sourcePort: input.sourcePort === undefined ? undefined : Math.trunc(input.sourcePort),
+    };
   }
 
-  private synthesizeVisitTimes(firstVisit: number, lastVisit: number, count: number): number[] {
-    if (count <= 1) return [lastVisit];
-    const start = Math.min(firstVisit, lastVisit);
-    const end = Math.max(firstVisit, lastVisit);
-    const span = end - start;
-
-    if (span >= count - 1) {
-      const times: number[] = [];
-      for (let i = 0; i < count; i++) {
-        if (i === 0) {
-          times.push(start);
-          continue;
-        }
-        if (i === count - 1) {
-          times.push(end);
-          continue;
-        }
-        const ideal = Math.round(start + (span * i) / (count - 1));
-        const min = assertPresent(times[i - 1]) + 1;
-        const max = end - (count - 1 - i);
-        times.push(Math.min(Math.max(ideal, min), max));
-      }
-      return times;
-    }
-
-    return Array.from({ length: count }, (_, index) => end - (count - 1 - index));
+  private normalizeCookieKey(key: BrowserCookieKey): BrowserCookieKey {
+    const name = key.name.trim();
+    const domain = key.domain.trim().toLocaleLowerCase();
+    const path = key.path.startsWith("/") ? key.path : `/${key.path}`;
+    if (!name || !domain) throw new Error("Cookie name and domain are required");
+    return {
+      name,
+      domain,
+      path,
+      ...(key.partitionKey ? { partitionKey: key.partitionKey } : {}),
+    };
   }
 
-  private historyAutocompleteScore(row: Record<string, unknown>, query: string): number {
-    const normalized = query.toLowerCase();
-    const url = String(row["url"] ?? "").toLowerCase();
-    const title = String(row["title"] ?? "").toLowerCase();
-    const exactBoost =
-      normalized && (url === normalized || title === normalized) ? 500_000_000_000_000 : 0;
-    const prefixBoost =
-      normalized && (url.startsWith(normalized) || title.startsWith(normalized))
-        ? 100_000_000_000_000
-        : 0;
-    const substringBoost =
-      normalized && (url.includes(normalized) || title.includes(normalized))
-        ? 10_000_000_000_000
-        : 0;
+  private cookieRowForKey(key: BrowserCookieKey): Record<string, unknown> | null {
     return (
-      exactBoost +
-      prefixBoost +
-      substringBoost +
-      Number(row["typed_count"] ?? 0) * 10_000_000_000 +
-      Number(row["visit_count"] ?? 0) * 1_000_000 +
-      Number(row["last_visit"] ?? 0)
+      this.sql
+        .exec(
+          `SELECT * FROM cookies
+           WHERE name = ? AND domain = ? AND path = ? AND partition_key = ?`,
+          key.name,
+          key.domain,
+          key.path,
+          key.partitionKey ?? ""
+        )
+        .toArray()[0] ?? null
     );
   }
 
-  /**
-   * Run an indexed batch of synchronous writes with per-chunk transactions
-   * and yields between chunks. Each BATCH_SIZE chunk runs inside
-   * `ctx.storage.transactionSync`, which workerd rolls back automatically
-   * on a thrown exception — so a crash mid-import loses at most one chunk
-   * and previously committed chunks are durable. The yield between chunks
-   * releases the event loop so reads on this single-threaded DO can
-   * interleave with a long import. `apply` MUST be synchronous; any async
-   * preparation (e.g., crypto for passwords) belongs before this call.
-   */
-  private async runBatch(total: number, apply: (index: number) => void): Promise<number> {
-    if (total === 0) return 0;
-    let processed = 0;
-    for (let start = 0; start < total; start += BATCH_SIZE) {
-      const end = Math.min(start + BATCH_SIZE, total);
-      this.ctx.storage.transactionSync(() => {
-        for (let i = start; i < end; i++) apply(i);
-      });
-      processed = end;
-      if (end < total) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      }
-    }
-    return processed;
+  private async cookieRow(row: Record<string, unknown>): Promise<StoredCookie> {
+    const encryptedValue = String(row["encrypted_value"]);
+    return {
+      name: String(row["name"]),
+      domain: String(row["domain"]),
+      path: String(row["path"]),
+      ...(String(row["partition_key"] ?? "") ? { partitionKey: String(row["partition_key"]) } : {}),
+      encryptedValue,
+      value: await this.decryptText(encryptedValue),
+      contentHash: String(row["content_hash"]),
+      hostOnly: Number(row["host_only"]) === 1,
+      secure: Number(row["secure"]) === 1,
+      httpOnly: Number(row["http_only"]) === 1,
+      sameSite: String(row["same_site"]) as BrowserCookieRecord["sameSite"],
+      ...(row["expiration_date"] == null ? {} : { expirationDate: Number(row["expiration_date"]) }),
+      ...(row["source_scheme"] == null ? {} : { sourceScheme: String(row["source_scheme"]) }),
+      ...(row["source_port"] == null ? {} : { sourcePort: Number(row["source_port"]) }),
+      createdAt: Number(row["created_at"]),
+      ...(row["last_accessed"] == null ? {} : { lastAccessed: Number(row["last_accessed"]) }),
+      revision: Number(row["revision"]),
+    };
   }
 
-  private updateByMap(
-    table: string,
-    id: number,
-    map: Record<string, string>,
-    partial: Record<string, unknown>,
-    extra: Record<string, unknown> = {}
-  ): void {
-    const sets: string[] = [];
-    const params: unknown[] = [];
-    for (const [key, column] of Object.entries(map)) {
-      if (partial[key] !== undefined) {
-        sets.push(`${column} = ?`);
-        params.push(partial[key]);
+  private cookieMatchesUrl(
+    cookie: Pick<BrowserCookieInput, "domain" | "hostOnly" | "path" | "secure">,
+    url: URL
+  ): boolean {
+    if (cookie.secure && url.protocol !== "https:") return false;
+    const domain = cookie.domain.replace(/^\./, "").toLocaleLowerCase();
+    const host = url.hostname.toLocaleLowerCase();
+    const domainMatches = cookie.hostOnly
+      ? host === domain
+      : host === domain || host.endsWith(`.${domain}`);
+    if (!domainMatches) return false;
+    const path = cookie.path || "/";
+    return url.pathname === path || url.pathname.startsWith(path.endsWith("/") ? path : `${path}/`);
+  }
+
+  private async cookieContentHash(cookie: BrowserCookieInput): Promise<string> {
+    return this.sha256(
+      JSON.stringify([
+        cookie.name,
+        cookie.value,
+        cookie.domain,
+        cookie.path,
+        cookie.partitionKey ?? "",
+        cookie.hostOnly,
+        cookie.secure,
+        cookie.httpOnly,
+        cookie.sameSite,
+        cookie.expirationDate ?? null,
+        cookie.sourceScheme ?? null,
+        cookie.sourcePort ?? null,
+      ])
+    );
+  }
+
+  private currentCookieRevision(): number {
+    const row = this.sql.exec(`SELECT revision FROM cookie_state WHERE singleton = 1`).one();
+    return Number(row["revision"]);
+  }
+
+  private setCookieRevision(revision: number): void {
+    this.sql.exec(`UPDATE cookie_state SET revision = ? WHERE singleton = 1`, revision);
+  }
+
+  private deleteCookieRows(rows: Record<string, unknown>[]): number {
+    if (rows.length === 0) return 0;
+    this.ctx.storage.transactionSync(() => {
+      let revision = this.currentCookieRevision();
+      for (const row of rows) {
+        this.sql.exec(
+          `DELETE FROM cookies
+           WHERE name = ? AND domain = ? AND path = ? AND partition_key = ?`,
+          row["name"],
+          row["domain"],
+          row["path"],
+          row["partition_key"] ?? ""
+        );
+        revision += 1;
       }
-    }
-    for (const [column, value] of Object.entries(extra)) {
-      sets.push(`${column} = ?`);
-      params.push(value);
-    }
-    if (sets.length === 0) return;
-    params.push(id);
-    this.sql.exec(`UPDATE ${table} SET ${sets.join(", ")} WHERE id = ?`, ...params);
+      this.setCookieRevision(revision);
+    });
+    return rows.length;
+  }
+
+  private async formFillRow(row: Record<string, unknown>) {
+    return {
+      id: Number(row["id"]),
+      type: String(row["type"]),
+      value: await this.decryptText(String(row["value_encrypted"])),
+      displayLabel: row["display_label"] == null ? null : String(row["display_label"]),
+      aliases: this.parseStringArray(row["aliases"]),
+      createdAt: Number(row["created_at"]),
+      updatedAt: Number(row["updated_at"]),
+      useCount: Number(row["use_count"]),
+    };
   }
 
   private async passwordRow(row: Record<string, unknown>) {
     return {
-      id: row["id"],
-      origin_url: row["origin_url"],
-      username: await this.decryptText(String(row["username_encrypted"] ?? "")),
-      password: await this.decryptText(String(row["password_encrypted"] ?? "")),
-      action_url: row["action_url"],
-      realm: row["realm"],
-      date_created: row["date_created"],
-      date_last_used: row["date_last_used"],
-      date_password_changed: row["date_password_changed"],
-      times_used: row["times_used"],
+      id: Number(row["id"]),
+      origin_url: String(row["origin_url"]),
+      username: await this.decryptText(String(row["username_encrypted"])),
+      password: await this.decryptText(String(row["password_encrypted"])),
+      action_url: String(row["action_url"]),
+      realm: String(row["realm"]),
+      date_created: row["date_created"] == null ? null : Number(row["date_created"]),
+      date_last_used: row["date_last_used"] == null ? null : Number(row["date_last_used"]),
+      date_password_changed:
+        row["date_password_changed"] == null ? null : Number(row["date_password_changed"]),
+      times_used: Number(row["times_used"]),
+    };
+  }
+
+  private importJobRow(row: Record<string, unknown>) {
+    return {
+      jobId: String(row["job_id"]),
+      hostId: String(row["host_id"]),
+      hostLabel: String(row["host_label"]),
+      sourceId: String(row["source_id"]),
+      browser: String(row["browser"]),
+      phase: String(row["phase"]),
+      startedAt: Number(row["started_at"]),
+      updatedAt: Number(row["updated_at"]),
+      ...(row["finished_at"] == null ? {} : { finishedAt: Number(row["finished_at"]) }),
+      requestedDataTypes: this.parseStringArray(row["data_types"]),
+      progress: this.parseJson(row["progress"], []),
+      warnings: this.parseStringArray(row["warnings"]),
+      ...(row["error"] == null ? {} : { error: String(row["error"]) }),
+      resumable: Number(row["resumable"]) === 1,
     };
   }
 
   private async encryptPasswordFields(username: string, password: string) {
     return {
-      usernameHash: await this.hashUsername(username),
+      usernameHash: await this.hashSecret(username),
       usernameEncrypted: await this.encryptText(username),
       passwordEncrypted: await this.encryptText(password),
     };
   }
 
-  private async hashUsername(username: string): Promise<string> {
+  private async hashSecret(value: string): Promise<string> {
     const key = await crypto.subtle.importKey(
       "raw",
       this.masterKeyBytes(),
@@ -1985,16 +1570,20 @@ export class BrowserDataDO extends DurableObjectBase {
       false,
       ["sign"]
     );
-    const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(username));
+    const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value));
     return this.bytesToBase64(new Uint8Array(signature));
+  }
+
+  private async sha256(value: string): Promise<string> {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+    return this.bytesToBase64(new Uint8Array(digest));
   }
 
   private async encryptText(plaintext: string): Promise<string> {
     const iv = crypto.getRandomValues(new Uint8Array(new ArrayBuffer(12)));
-    const key = await this.aesKey();
     const ciphertext = await crypto.subtle.encrypt(
       { name: "AES-GCM", iv },
-      key,
+      await this.aesKey(),
       new TextEncoder().encode(plaintext)
     );
     const packed = new Uint8Array(iv.length + ciphertext.byteLength);
@@ -2005,10 +1594,12 @@ export class BrowserDataDO extends DurableObjectBase {
 
   private async decryptText(encoded: string): Promise<string> {
     const packed = this.base64ToBytes(encoded);
-    const iv = packed.slice(0, 12);
-    const ciphertext = packed.slice(12);
-    const key = await this.aesKey();
-    const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+    if (packed.byteLength < 13) throw new Error("Invalid encrypted browser-data value");
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: packed.slice(0, 12) },
+      await this.aesKey(),
+      packed.slice(12)
+    );
     return new TextDecoder().decode(plaintext);
   }
 
@@ -2036,54 +1627,124 @@ export class BrowserDataDO extends DurableObjectBase {
   private base64ToBytes(encoded: string): Uint8Array<ArrayBuffer> {
     const binary = atob(encoded);
     const bytes = new Uint8Array(new ArrayBuffer(binary.length));
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
     return bytes;
   }
 
-  private escapeFts5Query(query: string): string {
-    return query
-      .split(/\s+/)
-      .filter((t) => t.length > 0)
-      .map((token) => {
-        const hasStar = token.endsWith("*");
-        const core = hasStar ? token.slice(0, -1) : token;
-        if (/["(){}:^~\-+|]/.test(core)) {
-          const escaped = `"${core.replace(/"/g, '""')}"`;
-          return hasStar ? escaped + "*" : escaped;
-        }
-        return token;
-      })
-      .join(" ");
+  private httpOrigin(raw: string): string | null {
+    try {
+      const url = new URL(raw);
+      return url.protocol === "http:" || url.protocol === "https:" ? url.origin : null;
+    } catch {
+      return null;
+    }
   }
 
-  private escapeLikePattern(pattern: string): string {
-    return pattern.replace(/[\\%_]/g, (char) => `\\${char}`);
+  private requireHttpOrigin(raw: string): string {
+    const origin = this.httpOrigin(raw);
+    if (!origin) throw new Error("Origin must use HTTP(S)");
+    return origin;
   }
 
-  private schemaStatements(schema: string): string[] {
-    const statements: string[] = [];
-    let buffer: string[] = [];
-    let inTrigger = false;
+  private normalizedAliases(aliases: string[] | undefined): string[] {
+    return [
+      ...new Set(
+        (aliases ?? [])
+          .map((alias) => alias.trim().toLocaleLowerCase())
+          .filter((alias) => alias.length > 0 && alias.length <= 200)
+      ),
+    ].slice(0, 50);
+  }
 
-    for (const line of schema.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      if (/^CREATE TRIGGER\b/i.test(trimmed)) inTrigger = true;
-      buffer.push(line);
+  private parseStringArray(value: unknown): string[] {
+    const parsed = this.parseJson<unknown>(value, []);
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === "string")
+      : [];
+  }
 
-      if (inTrigger) {
-        if (/^END;$/i.test(trimmed)) {
-          statements.push(buffer.join("\n"));
-          buffer = [];
-          inTrigger = false;
-        }
-      } else if (trimmed.endsWith(";")) {
-        statements.push(buffer.join("\n"));
-        buffer = [];
+  private parseJson<T>(value: unknown, fallback: T): T {
+    if (typeof value !== "string") return fallback;
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return fallback;
+    }
+  }
+
+  private assertFaviconBytes(value: Uint8Array | undefined): void {
+    if (value && value.byteLength > MAX_FAVICON_BYTES) {
+      throw new Error(`Favicon exceeds ${MAX_FAVICON_BYTES} bytes`);
+    }
+  }
+
+  private importKey(kind: string, sourceId: string, parts: string[]): string {
+    return [kind, sourceId, ...parts].join("\x00");
+  }
+
+  private updateByMap(
+    table: string,
+    id: number,
+    map: Record<string, string>,
+    partial: Record<string, unknown>,
+    extra: Record<string, unknown> = {}
+  ): void {
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    for (const [field, column] of Object.entries(map)) {
+      if (partial[field] !== undefined) {
+        sets.push(`${column} = ?`);
+        values.push(partial[field]);
       }
     }
+    for (const [column, value] of Object.entries(extra)) {
+      sets.push(`${column} = ?`);
+      values.push(value);
+    }
+    if (sets.length === 0) return;
+    values.push(id);
+    this.sql.exec(`UPDATE ${table} SET ${sets.join(", ")} WHERE id = ?`, ...values);
+  }
 
-    if (buffer.length > 0) statements.push(buffer.join("\n"));
-    return statements;
+  private async runBatch(total: number, apply: (index: number) => void): Promise<number> {
+    for (let start = 0; start < total; start += BATCH_SIZE) {
+      const end = Math.min(start + BATCH_SIZE, total);
+      this.ctx.storage.transactionSync(() => {
+        for (let index = start; index < end; index += 1) apply(index);
+      });
+      if (end < total) await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+    return total;
+  }
+
+  private changes(): number {
+    const row = this.sql.exec(`SELECT changes() AS count`).one();
+    return Number(row["count"] ?? 0);
+  }
+
+  private escapeLikePattern(value: string): string {
+    return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+  }
+
+  private executeSchema(
+    schema: string,
+    sql: { exec(query: string, ...bindings: unknown[]): unknown } = this.sql
+  ): void {
+    let buffer: string[] = [];
+    let inTrigger = false;
+    for (const line of schema.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("/**") || trimmed.startsWith("*")) continue;
+      if (/^CREATE TRIGGER\b/i.test(trimmed)) inTrigger = true;
+      buffer.push(line);
+      if ((inTrigger && /^END;$/i.test(trimmed)) || (!inTrigger && trimmed.endsWith(";"))) {
+        sql.exec(buffer.join("\n"));
+        buffer = [];
+        inTrigger = false;
+      }
+    }
+    if (buffer.length > 0) sql.exec(buffer.join("\n"));
   }
 }

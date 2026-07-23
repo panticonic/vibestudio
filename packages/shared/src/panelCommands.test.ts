@@ -6,49 +6,81 @@ import {
   getAvailablePanelCommands,
   getBrowserNavigationIntentForAddressAction,
   getBrowserNavigationIntentForCommand,
+  isPanelClosePointerButton,
+  PANEL_KEYBOARD_ACCELERATORS,
 } from "./panelCommands.js";
 
 describe("panelCommands", () => {
+  it("uses browser-familiar panel lifecycle commands and middle-click close semantics", () => {
+    expect(PANEL_KEYBOARD_ACCELERATORS).toEqual({
+      newPanel: "CmdOrCtrl+T",
+      closePanel: "CmdOrCtrl+W",
+    });
+    expect(isPanelClosePointerButton(0)).toBe(false);
+    expect(isPanelClosePointerButton(1)).toBe(true);
+    expect(isPanelClosePointerButton(2)).toBe(false);
+  });
+
   it("maps address submit modifiers to navigation modes", () => {
     expect(getAddressNavigationModeFromModifiers({})).toBe("current");
     expect(getAddressNavigationModeFromModifiers({ shiftKey: true })).toBe("child");
     expect(getAddressNavigationModeFromModifiers({ metaKey: true })).toBe("root");
     expect(getAddressNavigationModeFromModifiers({ ctrlKey: true })).toBe("root");
-    expect(getAddressNavigationModeFromModifiers({ altKey: true, shiftKey: true })).toBe("external");
+    expect(getAddressNavigationModeFromModifiers({ altKey: true, shiftKey: true })).toBe(
+      "external"
+    );
   });
 
   it("applies configurable search templates", () => {
-    expect(applySearchTemplate("hello world")).toBe("https://www.google.com/search?q=hello%20world");
-    expect(applySearchTemplate("hello world", "https://search.example/?term=%s"))
-      .toBe("https://search.example/?term=hello%20world");
-    expect(applySearchTemplate("hello world", "https://search.example/"))
-      .toBe("https://search.example/?q=hello%20world");
+    expect(applySearchTemplate("hello world")).toBe(
+      "https://www.google.com/search?q=hello%20world"
+    );
+    expect(applySearchTemplate("hello world", "https://search.example/?term=%s")).toBe(
+      "https://search.example/?term=hello%20world"
+    );
+    expect(applySearchTemplate("hello world", "https://search.example/")).toBe(
+      "https://search.example/?q=hello%20world"
+    );
   });
 
   it("centralizes browser history canonicalization and intent semantics", () => {
-    expect(canonicalizeBrowserHistoryUrl("HTTPS://Example.COM:443/docs#section")).toBe("https://example.com/docs");
+    expect(canonicalizeBrowserHistoryUrl("HTTPS://Example.COM:443/docs#section")).toBe(
+      "https://example.com/docs"
+    );
     expect(canonicalizeBrowserHistoryUrl("vibestudio://panel")).toBeNull();
 
-    expect(getBrowserNavigationIntentForCommand("back")).toEqual({ transition: "back_forward", typed: false });
-    expect(getBrowserNavigationIntentForCommand("force-reload-view")).toEqual({ transition: "reload", typed: false });
+    expect(getBrowserNavigationIntentForCommand("back")).toEqual({
+      transition: "back_forward",
+      typed: false,
+    });
+    expect(getBrowserNavigationIntentForCommand("force-reload-view")).toEqual({
+      transition: "reload",
+      typed: false,
+    });
     expect(getBrowserNavigationIntentForCommand("archive")).toBeNull();
 
-    expect(getBrowserNavigationIntentForAddressAction({
-      type: "navigate-url",
-      url: "https://example.com",
-      recordAsTyped: true,
-    })).toEqual({ transition: "typed", typed: true });
-    expect(getBrowserNavigationIntentForAddressAction({
-      type: "navigate-url",
-      url: "https://example.com",
-    })).toBeNull();
-    expect(getBrowserNavigationIntentForAddressAction({
-      type: "keyword-search",
-      engineId: 1,
-      query: "docs",
-      template: "https://example.com/search?q=%s",
-      recordAsTyped: true,
-    })).toEqual({ transition: "keyword_generated", typed: true });
+    expect(
+      getBrowserNavigationIntentForAddressAction({
+        type: "navigate-url",
+        url: "https://example.com",
+        recordAsTyped: true,
+      })
+    ).toEqual({ transition: "typed", typed: true });
+    expect(
+      getBrowserNavigationIntentForAddressAction({
+        type: "navigate-url",
+        url: "https://example.com",
+      })
+    ).toBeNull();
+    expect(
+      getBrowserNavigationIntentForAddressAction({
+        type: "keyword-search",
+        engineId: 1,
+        query: "docs",
+        template: "https://example.com/search?q=%s",
+        recordAsTyped: true,
+      })
+    ).toEqual({ transition: "keyword_generated", typed: true });
   });
 
   it("filters unavailable commands from context menus", () => {
@@ -64,11 +96,13 @@ describe("panelCommands", () => {
         isLoading: false,
         canGoBack: false,
         canGoForward: true,
+        mediaPlaying: false,
       },
     });
 
     expect(commands.map((command) => command.id)).toContain("forward");
     expect(commands.map((command) => command.id)).not.toContain("back");
     expect(commands.map((command) => command.id)).not.toContain("open-external");
+    expect(commands.find((command) => command.id === "archive")?.shortcut).toBe("Cmd/Ctrl+W");
   });
 });

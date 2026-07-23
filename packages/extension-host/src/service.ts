@@ -1068,7 +1068,8 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
       extensionName,
       method,
       randomUUID(),
-      this.deps.getContextIdForCaller
+      this.deps.getContextIdForCaller,
+      this.deps.workspaceId
     );
     this.activeInvocations.set(this.invocationKey(extensionName, invocation.requestId), {
       invocation,

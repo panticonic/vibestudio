@@ -24,4 +24,5 @@ export type {
   CreateChildOptions,
   ChildCreationResult,
   ChildSpec,
+  PanelPlacementHint,
 } from "./runtime-types.js";

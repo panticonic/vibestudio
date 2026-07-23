@@ -258,6 +258,37 @@
       }
     }
   },
+  "browserPermissions": {
+    "service": {
+      "principals": ["host"]
+    },
+    "methods": {
+      "request": {
+        "authority": {
+          "principals": ["host"]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "revoke": {
+        "authority": {
+          "principals": ["host"]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "snapshot": {
+        "authority": {
+          "principals": ["host"]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
   "build": {
     "service": {
       "principals": ["code", "user", "host"]

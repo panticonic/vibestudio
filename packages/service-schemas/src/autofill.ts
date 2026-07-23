@@ -22,6 +22,14 @@ export const autofillMethods = defineServiceMethods({
     access: CONFIRM_SAVE_ACCESS,
     examples: [{ args: ["panel-abc123", "save"] }],
   },
+  confirmFormFill: {
+    description:
+      "Resolve a pending structured form-fill learning prompt. Values remain in trusted main-process memory until this call.",
+    args: z.tuple([z.string(), z.enum(["save", "dismiss"])]),
+    returns: z.void(),
+    access: CONFIRM_SAVE_ACCESS,
+    examples: [{ args: ["panel-abc123", "save"] }],
+  },
   listSavedPasswords: {
     description:
       "List secret-free saved browser-password summaries for the trusted Credentials page.",

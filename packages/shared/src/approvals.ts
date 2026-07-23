@@ -498,6 +498,24 @@ export interface PendingCapabilityApproval extends PendingApprovalBase {
   allowedDecisions?: ApprovalDecision[];
 }
 
+export type BrowserSitePermissionCapability =
+  | "camera"
+  | "microphone"
+  | "geolocation"
+  | "notifications";
+
+export interface PendingBrowserPermissionApproval extends PendingApprovalBase {
+  kind: "browser-permission";
+  ownerUserId: string;
+  workspaceId: string;
+  environmentKey: string;
+  panelId: string;
+  origin: string;
+  topLevelUrl: string;
+  capabilities: BrowserSitePermissionCapability[];
+  deviceLabel: string;
+}
+
 export interface UnitApprovalDiffStat {
   filesChanged: number;
   insertions: number;
@@ -802,4 +820,5 @@ export type PendingApproval =
   | PendingSecretInputApproval
   | PendingUserlandApproval
   | PendingExternalAgentApproval
-  | PendingDeviceCodeApproval;
+  | PendingDeviceCodeApproval
+  | PendingBrowserPermissionApproval;

@@ -23,6 +23,10 @@ export interface ExtensionInvocation {
     callerKind: CallerKind | "http";
     connectionId?: string;
     contextId?: string;
+    /** Host-verified account subject; never accepted from extension input. */
+    userId?: string;
+    /** Host-owned workspace identity for per-user workspace resources. */
+    workspaceId?: string;
   };
   chainCaller?: {
     callerId: string;

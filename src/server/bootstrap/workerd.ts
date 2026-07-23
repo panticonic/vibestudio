@@ -6,6 +6,7 @@ import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { WorkspaceDeclarations } from "@vibestudio/workspace/singletonRegistry";
 import { PRODUCT_WORKSPACE_SERVICES } from "@vibestudio/shared/productWorkspaceServices.mjs";
 import type { DirectAuthorityAttestation } from "@vibestudio/rpc";
+import type { UserSubject } from "@vibestudio/identity/types";
 import { randomBytes } from "node:crypto";
 import { assertPresent } from "../../lintHelpers";
 import type { BuildSystemV2 } from "../buildV2/index.js";
@@ -81,12 +82,17 @@ export function createHostDoAuthorityAttester(input: {
   workspaceId: string;
   services: WorkspaceDeclarations["services"];
   callerId?: string;
+  callerSubject?: UserSubject;
 }): (ref: DORef, method: string) => DirectAuthorityAttestation {
   return (ref, method) => {
-    const caller = createHostCaller(input.callerId ?? "main", "server", {
-      userId: "system",
-      handle: "system",
-    });
+    const caller = createHostCaller(
+      input.callerId ?? "main",
+      "server",
+      input.callerSubject ?? {
+        userId: "system",
+        handle: "system",
+      }
+    );
     const facts = {
       caller,
       source: ref.source,

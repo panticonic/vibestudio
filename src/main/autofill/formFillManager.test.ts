@@ -1,5 +1,5 @@
 /**
- * AutofillManager Unit Tests
+ * FormFillManager Unit Tests
  *
  * Tests signal tier logic, save/update/never flows, and credential lifecycle.
  * Uses mocked Electron APIs and injected dependencies.
@@ -8,7 +8,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 
-// Mock Electron before importing AutofillManager
+// Mock Electron before importing FormFillManager
 vi.mock("electron", () => ({
   ipcMain: {
     on: vi.fn(),
@@ -48,7 +48,7 @@ vi.mock("@vibestudio/dev-log", () => ({
   }),
 }));
 
-import { AutofillManager } from "./autofillManager.js";
+import { FormFillManager } from "./formFillManager.js";
 import type { StoredPassword } from "@vibestudio/browser-data";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ViewManager } from "../viewManager.js";
@@ -68,6 +68,12 @@ type TestPanelState = {
   hasPendingSnapshot: boolean;
   dismissedAt?: number;
   signalCounts: { strong: number; medium: number; weak: number };
+  pendingFormFill?: {
+    timestamp: number;
+    pageUrl: string;
+    actionUrl: string | null;
+    values: Array<{ type: "email" | "tel"; value: string; label: string }>;
+  };
   pendingSnapshot?: {
     username: string;
     password: string;
@@ -87,11 +93,11 @@ type TestManager = {
   triggerSave(wcId: number, onlyIfChanged: boolean): Promise<void>;
 };
 
-function testManager(manager: AutofillManager): TestManager {
+function testManager(manager: FormFillManager): TestManager {
   return manager as unknown as TestManager;
 }
 
-function getPanelState(manager: AutofillManager, wcId: number): TestPanelState {
+function getPanelState(manager: FormFillManager, wcId: number): TestPanelState {
   const state = testManager(manager).panelState.get(wcId);
   if (!state) throw new Error(`Missing panel state for ${wcId}`);
   return state;
@@ -109,6 +115,9 @@ function createMockPasswordStore() {
     deletePassword: vi.fn(),
     getNeverSavePasswordOrigins: vi.fn().mockReturnValue([]),
     removeNeverSavePassword: vi.fn(),
+    getFormFillSuggestions: vi.fn().mockReturnValue([]),
+    addFormFillValue: vi.fn().mockReturnValue(1),
+    markFormFillValueUsed: vi.fn(),
   };
 }
 
@@ -151,8 +160,8 @@ function createManager(
   const eventService = overrides.eventService ?? createMockEventService();
   const viewManager = overrides.viewManager ?? createMockViewManager();
 
-  const manager = new AutofillManager({
-    passwordStore,
+  const manager = new FormFillManager({
+    formFillStore: passwordStore,
     eventService: eventService as unknown as EventService,
     getViewManager: () => viewManager as unknown as ViewManager,
     autofillOverlayPreloadPath: "/fake/preload.js",
@@ -181,7 +190,7 @@ function makeCredential(
   };
 }
 
-describe("AutofillManager", () => {
+describe("FormFillManager", () => {
   describe("attachToWebContents", () => {
     it("registers dom-ready and navigation listeners", () => {
       const { manager } = createManager();
@@ -349,7 +358,7 @@ describe("AutofillManager", () => {
   });
 
   describe("signal tier logic", () => {
-    function setupWithSnapshot(manager: AutofillManager, wcId: number) {
+    function setupWithSnapshot(manager: FormFillManager, wcId: number) {
       const state = getPanelState(manager, wcId);
       state.hasPendingSnapshot = true;
       state.origin = "https://example.com";
@@ -603,6 +612,50 @@ describe("AutofillManager", () => {
       // Selectors are also JSON-stringified
       expect(script).toContain(JSON.stringify("#user"));
       expect(script).toContain(JSON.stringify("#pass"));
+    });
+  });
+
+  describe("structured form-fill learning", () => {
+    it("keeps submitted values in main memory until explicit save", async () => {
+      const { manager, passwordStore, eventService } = createManager();
+      const wc = createMockWebContents(1, "https://example.com/profile");
+      manager.attachToWebContents(1, wc);
+      const state = getPanelState(manager, 1);
+      state.origin = "https://example.com";
+      state.pendingFormFill = {
+        timestamp: Date.now(),
+        pageUrl: "https://example.com/profile",
+        actionUrl: "https://example.com/profile",
+        values: [
+          { type: "email", value: "alice@example.com", label: "Email" },
+          { type: "tel", value: "+1 555 0100", label: "Phone" },
+        ],
+      };
+
+      await testManager(manager).addSignal(1, "strong");
+
+      expect(eventService.emit).toHaveBeenCalledWith("autofill:form-fill-save-prompt", {
+        panelId: "panel-1",
+        origin: "https://example.com",
+        fields: [
+          { type: "email", label: "Email" },
+          { type: "tel", label: "Phone" },
+        ],
+      });
+      expect(passwordStore.addFormFillValue).not.toHaveBeenCalled();
+
+      const service = manager.getServiceDefinition();
+      await service.handler!(
+        { caller: createVerifiedCaller("shell", "shell") },
+        "confirmFormFill",
+        ["panel-1", "save"]
+      );
+      expect(passwordStore.addFormFillValue).toHaveBeenCalledTimes(2);
+      expect(passwordStore.addFormFillValue).toHaveBeenCalledWith({
+        type: "email",
+        value: "alice@example.com",
+        displayLabel: "Email",
+      });
     });
   });
 });

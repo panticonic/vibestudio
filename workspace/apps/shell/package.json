@@ -83,6 +83,15 @@
           "evidence": "intentional-broad"
         },
         {
+          "capability": "browser-form-fill.manage",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
           "capability": "browser-passwords.manage",
           "resource": {
             "kind": "prefix",
@@ -442,6 +451,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/browser-data": "workspace:*",
     "@vibestudio/identity": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shell-core": "workspace:*",

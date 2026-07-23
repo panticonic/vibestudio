@@ -1,67 +1,64 @@
 import {
-  detectBrowsers,
   exportChromiumBookmarks,
   exportCsvPasswords,
-  exportJson,
   exportNetscapeBookmarks,
   exportNetscapeCookies,
-  previewImportPipeline,
-  readOpenTabs,
-  runImportPipeline,
-} from "@workspace/browser-data";
-import type { PreviewResult } from "@workspace/browser-data";
-import { resolveProfilePath } from "@vibestudio/browser-data";
-import type {
-  BrowserOpenTabsRequest,
-  ImportDataType,
-  ImportRequest,
-  ImportResult,
-  ImportedAutofillEntry,
-  ImportedBookmark,
-  ImportedCookie,
-  ImportedFavicon,
-  ImportedHistoryEntry,
-  ImportBatchMeta,
-  ImportHistoryBatchMeta,
-  ImportedOpenTab,
-  ImportedPassword,
-  ImportedPermission,
-  ImportedSearchEngine,
-  OpenTabsAsPanelsResult,
-  RecordHistoryVisitRequest,
-  UpdateHistoryTitleRequest,
+  LocalBrowserImportProvider,
+} from "@vibestudio/browser-import";
+import {
+  BrowserImportCoordinator,
+  RemoteBrowserImportProvider,
+  type BrowserCookieInput,
+  type BrowserEnvironmentIdentity,
+  type BrowserImportDataType,
+  type BrowserImportSelection,
+  type BrowserImportStore,
+  type FormFillValueInput,
+  type ImportBatch,
+  type ImportedBookmark,
+  type ImportedCookie,
+  type ImportedPassword,
+  type ImportJobSnapshot,
+  type ImportHostSummary,
+  type PageFavicon,
+  type RecordHistoryVisitRequest,
+  type UpdateHistoryTitleRequest,
 } from "@vibestudio/browser-data";
 
 interface InvocationLike {
   current(): {
-    caller: { callerId?: string; callerKind: string; callerTitle?: string };
+    caller: {
+      callerId?: string;
+      callerKind: string;
+      callerTitle?: string;
+      userId?: string;
+      workspaceId?: string;
+    };
     chainCaller?: { callerId: string; callerKind: string };
   } | null;
+  signal?(): AbortSignal | null;
 }
 
-interface ApprovalDetailLike {
-  label: string;
-  value: string;
-  format?: "plain" | "markdown" | "code";
-}
-
-/** Mirrors `UserlandApprovalRequest` from `@vibestudio/extension` (inlined to avoid a type-only dependency). */
 interface UserlandApprovalRequestLike {
   subject: { id: string; label?: string };
   title: string;
   summary?: string;
   warning?: string;
-  details?: ApprovalDetailLike[];
+  details?: Array<{ label: string; value: string; format?: "plain" | "markdown" | "code" }>;
   severity?: "standard" | "dangerous";
   defaultAction?: "allow" | "deny";
   promptOptions?: "scoped" | "choices";
 }
 
-/** Mirrors `UserlandApprovalChoice` from `@vibestudio/extension`. */
 type UserlandApprovalChoiceLike =
   | { kind: "choice"; choice: string }
   | { kind: "dismissed" }
   | { kind: "uncallable"; reason: string };
+
+interface ResolvedDurableObject {
+  targetId: string;
+  objectKey?: string;
+}
 
 interface ExtensionContextLike {
   rpc: {
@@ -72,13 +69,16 @@ interface ExtensionContextLike {
       source: string,
       className: string,
       objectKey: string
-    ): Promise<{ targetId: string }>;
+    ): Promise<ResolvedDurableObject>;
   };
   invocation: InvocationLike;
   approvals: {
     request(req: UserlandApprovalRequestLike): Promise<UserlandApprovalChoiceLike>;
   };
-  log: { info(message: string): void };
+  log: {
+    info(message: string): void;
+    warn?(message: string): void;
+  };
   health?: {
     healthy(detail?: { summary: string }): void;
     degraded(detail: { summary: string; reasons?: string[] }): void;
@@ -89,237 +89,424 @@ interface ExtensionContextLike {
 
 const DO_SOURCE = "vibestudio/internal";
 const DO_CLASS = "BrowserDataDO";
-const DO_KEY = "global";
-
-/**
- * Caller kinds that are trusted host infrastructure (the desktop shell's main
- * process — including the in-app history recorder and address-bar autocomplete —
- * and the server). They bypass the approval gate so first-party browsing never
- * prompts. Every other userland caller (panel/worker/do) is gated.
- */
+const DO_RESOLUTION_SENTINEL = "browser-environment";
 const TRUSTED_CALLER_KINDS = new Set(["shell", "server"]);
 
-/**
- * Methods gated behind a userland approval prompt instead of being shell-only.
- * Two axes: methods that REVEAL a secret value (cookies/passwords/full history/
- * exports) and methods that have a MODIFYING effect (imports, writes, deletes,
- * opening panels). Pure non-sensitive reads (detectBrowsers, bookmarks, search
- * engines, permissions, open-tab listing, import history, and the secret-free
- * "view" methods) are NOT gated. Trusted callers (see TRUSTED_CALLER_KINDS) skip
- * the prompt entirely.
- */
-const GATED_METHODS = new Set<string>([
-  // Sensitive value reads / exports
-  "getCookies",
+const GATED_METHODS = new Set([
+  "listImportHosts",
+  "listImportSources",
+  "previewImport",
+  "startImport",
+  "cancelImport",
+  "resumeImport",
+  "listOpenTabs",
+  "openTabsAsPanels",
   "getPasswords",
   "getPasswordForSite",
-  "getHistory",
-  "searchHistory",
-  "searchHistoryForAutocomplete",
-  "getAutofillSuggestions",
-  "getAutocompleteDebug",
+  "addPassword",
+  "updatePassword",
+  "deletePassword",
+  "getFormFillSuggestions",
+  "addFormFillValue",
+  "updateFormFillValue",
+  "deleteFormFillValue",
+  "clearFormFillValues",
+  "applyCookieMutations",
+  "getCookieSnapshot",
+  "getCookiesForOrigin",
+  "clearCookiesForOrigin",
+  "clearAllCookies",
+  "endBrowserSession",
+  "listDownloads",
+  "listDownloadRecords",
+  "upsertDownloadRecord",
+  "pauseDownload",
+  "resumeDownload",
+  "cancelDownload",
+  "openDownload",
+  "revealDownload",
   "exportBookmarks",
   "exportPasswords",
   "exportCookies",
-  "exportAll",
-  // Modifying effects
-  "startImport",
-  "openTabsAsPanels",
   "addBookmark",
   "updateBookmark",
   "deleteBookmark",
   "moveBookmark",
-  "addPassword",
-  "updatePassword",
-  "updatePasswordLastUsed",
-  "addNeverSavePassword",
-  "removeNeverSavePassword",
+  "getHistory",
+  "deleteHistoryEntry",
+  "deleteHistoryRange",
+  "clearAllHistory",
   "recordHistoryVisit",
   "updateHistoryTitle",
-  "setPermission",
   "setDefaultEngine",
-  "deleteCookie",
-  "clearCookies",
-  "deletePassword",
-  "deleteHistoryEntry",
-  "deleteHistoryRange",
-  "clearAllHistory",
+  "putPageFavicon",
 ]);
 
-/** Methods whose approval is shown as dangerous (bulk secret egress or destructive). */
-const DANGEROUS_METHODS = new Set<string>([
-  "getCookies",
+const DANGEROUS_METHODS = new Set([
   "getPasswords",
   "getPasswordForSite",
-  "exportBookmarks",
+  "getCookieSnapshot",
+  "getCookiesForOrigin",
+  "clearCookiesForOrigin",
+  "clearAllCookies",
+  "endBrowserSession",
+  "deletePassword",
+  "clearFormFillValues",
+  "clearAllHistory",
   "exportPasswords",
   "exportCookies",
-  "exportAll",
-  "deleteCookie",
-  "clearCookies",
-  "deletePassword",
-  "deleteHistoryEntry",
-  "deleteHistoryRange",
-  "clearAllHistory",
 ]);
 
-/** Human-facing labels for the approval prompt, keyed by method name. */
 const METHOD_LABELS: Record<string, string> = {
-  getCookies: "Read your cookies",
-  getPasswords: "Read your saved passwords",
-  getPasswordForSite: "Read a saved password",
-  getHistory: "Read your browsing history",
-  searchHistory: "Search your browsing history",
-  searchHistoryForAutocomplete: "Suggest sites from your history",
-  getAutofillSuggestions: "Read your saved form entries",
-  getAutocompleteDebug: "Read full addresses from your address bar suggestions",
-  exportBookmarks: "Export your bookmarks",
-  exportPasswords: "Export your passwords",
-  exportCookies: "Export your cookies",
-  exportAll: "Export all your browser data",
+  listImportHosts: "Find devices with browser data",
+  listImportSources: "Inspect installed browsers",
+  previewImport: "Review browser data to import",
   startImport: "Import browser data",
-  openTabsAsPanels: "Show your browser tabs in Vibestudio",
-  addBookmark: "Add a bookmark",
-  updateBookmark: "Change a bookmark",
-  deleteBookmark: "Delete a bookmark",
-  moveBookmark: "Move a bookmark",
-  addPassword: "Save a password",
-  updatePassword: "Change a saved password",
-  updatePasswordLastUsed: "Mark a password as recently used",
-  addNeverSavePassword: "Stop saving passwords for a site",
-  removeNeverSavePassword: "Resume saving passwords for a site",
-  recordHistoryVisit: "Add to your browsing history",
-  updateHistoryTitle: "Update a page title in your history",
-  setPermission: "Change a website's permission",
-  setDefaultEngine: "Change your default search engine",
-  deleteCookie: "Delete a cookie",
-  clearCookies: "Clear all cookies",
-  deletePassword: "Delete a saved password",
-  deleteHistoryEntry: "Delete a history entry",
-  deleteHistoryRange: "Delete history from a time range",
-  clearAllHistory: "Clear all your browsing history",
+  cancelImport: "Cancel browser import",
+  resumeImport: "Resume browser import",
+  listOpenTabs: "Inspect open browser tabs",
+  openTabsAsPanels: "Open imported browser tabs",
+  getPasswords: "Read saved passwords",
+  getPasswordForSite: "Fill a saved password",
+  getFormFillSuggestions: "Read saved form-fill values",
+  getCookieSnapshot: "Read browser cookies",
+  getCookiesForOrigin: "Read site cookies",
+  clearCookiesForOrigin: "Clear site data",
+  clearAllCookies: "Clear all browser cookies",
+  endBrowserSession: "End the browser session",
+  listDownloads: "Review browser downloads",
+  listDownloadRecords: "Read canonical browser download metadata",
+  upsertDownloadRecord: "Record canonical browser download metadata",
+  exportBookmarks: "Export bookmarks",
+  exportPasswords: "Export passwords",
+  exportCookies: "Export cookies",
 };
 
-/** Public API surface of this extension — the awaited return of {@link activate}. */
+/** Public API surface of this extension. */
 export type Api = Awaited<ReturnType<typeof activate>>;
 
 export async function activate(ctx: ExtensionContextLike) {
   ctx.log.info("browser-data extension activating");
-  ctx.health?.healthy({ summary: "Browser data extension ready" });
+  ctx.health?.healthy({ summary: "Browser environment ready" });
 
-  let storeTargetPromise: Promise<string> | null = null;
-  const getStoreTarget = () => {
-    storeTargetPromise ??= ctx.workers
-      .resolveDurableObject(DO_SOURCE, DO_CLASS, DO_KEY)
-      .then((target) => target.targetId);
-    return storeTargetPromise;
+  const resolvedStores = new Map<
+    string,
+    Promise<{ identity: BrowserEnvironmentIdentity; targetId: string }>
+  >();
+  const targetByEnvironment = new Map<string, string>();
+  const unregisterServerHosts = new Map<string, () => void>();
+  const desktopHosts = new Map<
+    string,
+    { hostId: string; unregister: () => void }
+  >();
+  const hostLabels = new Map<string, string>();
+  const sourceBrowsers = new Map<string, string>();
+  const provider = new LocalBrowserImportProvider();
+
+  const currentIdentity = async (): Promise<{
+    identity: BrowserEnvironmentIdentity;
+    targetId: string;
+  }> => {
+    const invocation = ctx.invocation.current();
+    const userId = invocation?.caller.userId?.trim();
+    const workspaceId = invocation?.caller.workspaceId?.trim();
+    if (!userId || !workspaceId || userId === "system") {
+      throw Object.assign(
+        new Error("Browser data requires a verified user and workspace"),
+        { code: "ENOCALLER" }
+      );
+    }
+    const cacheKey = `${workspaceId}\x00${userId}`;
+    let pending = resolvedStores.get(cacheKey);
+    if (!pending) {
+      pending = ctx.workers
+        .resolveDurableObject(DO_SOURCE, DO_CLASS, DO_RESOLUTION_SENTINEL)
+        .then((target) => {
+          const environmentKey =
+            target.objectKey ?? target.targetId.split(":").at(-1) ?? "";
+          if (!environmentKey || environmentKey === DO_RESOLUTION_SENTINEL) {
+            throw new Error("Server did not derive a browser environment key");
+          }
+          const identity = {
+            workspaceId,
+            ownerUserId: userId,
+            environmentKey,
+          };
+          targetByEnvironment.set(environmentKey, target.targetId);
+          return { identity, targetId: target.targetId };
+        });
+      resolvedStores.set(cacheKey, pending);
+    }
+    return pending;
   };
-  const callStore = <T>(method: string, ...args: unknown[]) =>
-    getStoreTarget().then((targetId) => ctx.rpc.call<T>(targetId, method, ...args));
+
+  const callStoreForIdentity = <T>(
+    identity: BrowserEnvironmentIdentity,
+    method: string,
+    ...args: unknown[]
+  ): Promise<T> => {
+    const targetId = targetByEnvironment.get(identity.environmentKey);
+    if (!targetId) throw new Error("Browser environment target is not resolved");
+    return ctx.rpc.call<T>(targetId, method, ...args);
+  };
+
+  const store: BrowserImportStore = {
+    async storeBatch(identity, batch) {
+      await storeImportBatch(batch, (method, ...args) =>
+        callStoreForIdentity(identity, method, ...args)
+      );
+      await callStoreForIdentity(identity, "recordImportBatch", {
+        jobId: batch.jobId,
+        dataType: batch.dataType,
+        batchIndex: batch.batchIndex,
+        idempotencyKey: batch.idempotencyKey,
+        itemCount: batch.items.length,
+      });
+      ctx.emit("data-changed", { dataType: batch.dataType });
+    },
+    persistJob(identity, job) {
+      return callStoreForIdentity(identity, "upsertImportJob", {
+        jobId: job.jobId,
+        hostId: job.hostId,
+        hostLabel: hostLabels.get(job.hostId) ?? "Browser host",
+        sourceId: job.sourceId,
+        browser: sourceBrowsers.get(job.sourceId) ?? "unknown",
+        phase: job.phase,
+        startedAt: job.startedAt,
+        updatedAt: job.updatedAt,
+        finishedAt: job.finishedAt,
+        dataTypes: job.requestedDataTypes,
+        progress: job.progress,
+        warnings: job.warnings,
+        error: job.error,
+        resumable: job.resumable,
+      });
+    },
+    getJob(identity, jobId) {
+      return callStoreForIdentity(identity, "getImportJob", jobId);
+    },
+  };
+  const coordinator = new BrowserImportCoordinator(store, (identity, job) => {
+    ctx.emit("import-job-changed", {
+      environmentKey: identity.environmentKey,
+      job,
+    });
+  });
+
+  const ensureServerHost = (identity: BrowserEnvironmentIdentity): void => {
+    if (unregisterServerHosts.has(identity.environmentKey)) return;
+    const unregister = coordinator.registerHost({
+      hostId: `server:${identity.workspaceId}`,
+      ownerUserId: identity.ownerUserId,
+      displayName: "Server",
+      platform: normalizedPlatform(),
+      location: "server",
+      connected: true,
+      provider,
+    });
+    unregisterServerHosts.set(identity.environmentKey, unregister);
+    hostLabels.set(`server:${identity.workspaceId}`, "Server");
+  };
+
+  const ensureDesktopHost = async (
+    identity: BrowserEnvironmentIdentity
+  ): Promise<ImportHostSummary | null> => {
+    try {
+      const summary = await ctx.rpc.call<ImportHostSummary>(
+        "main",
+        "browserEnvironment.getImportHost"
+      );
+      const current = desktopHosts.get(identity.environmentKey);
+      if (current?.hostId === summary.hostId) return summary;
+      current?.unregister();
+      const remoteProvider = new RemoteBrowserImportProvider(
+        (method, ...args) =>
+          ctx.rpc.call("main", `browserEnvironment.${method}`, ...args)
+      );
+      const unregister = coordinator.registerHost({
+        ...summary,
+        ownerUserId: identity.ownerUserId,
+        provider: remoteProvider,
+      });
+      desktopHosts.set(identity.environmentKey, {
+        hostId: summary.hostId,
+        unregister,
+      });
+      hostLabels.set(summary.hostId, summary.displayName);
+      return summary;
+    } catch {
+      desktopHosts.get(identity.environmentKey)?.unregister();
+      desktopHosts.delete(identity.environmentKey);
+      return null;
+    }
+  };
+
+  const ensureImportHosts = async (identity: BrowserEnvironmentIdentity): Promise<void> => {
+    ensureServerHost(identity);
+    await ensureDesktopHost(identity);
+  };
 
   const requireApproval = async (method: string): Promise<void> => {
     const caller = ctx.invocation.current()?.caller;
-    const callerKind = caller?.callerKind;
-    // Trusted host infrastructure (desktop shell, server) is never prompted.
-    if (callerKind && TRUSTED_CALLER_KINDS.has(callerKind)) return;
-    if (!caller || callerKind === "http") {
-      const err = new Error(
-        `browser-data.${method} requires a panel, worker, or DO caller`
-      ) as NodeJS.ErrnoException;
-      err.code = "ENOCALLER";
-      throw err;
+    if (caller && TRUSTED_CALLER_KINDS.has(caller.callerKind)) return;
+    if (!caller || caller.callerKind === "http") {
+      throw Object.assign(
+        new Error(`browser-data.${method} requires an interactive caller`),
+        { code: "ENOCALLER" }
+      );
     }
-    const label = METHOD_LABELS[method] ?? method;
+    const label = METHOD_LABELS[method] ?? humanizeMethod(method);
     const dangerous = DANGEROUS_METHODS.has(method);
-    const callerLabel = caller.callerTitle ?? callerKind ?? "Something";
     const choice = await ctx.approvals.request({
       subject: { id: `browser-data:${method}`, label },
       title: `${label}?`,
-      summary: `${callerLabel} wants to ${label.toLowerCase()}.`,
+      summary: `${caller.callerTitle ?? caller.callerKind} wants to ${label.toLowerCase()}.`,
       ...(dangerous
-        ? { warning: `Your saved browser data (passwords, cookies, history) will be ${label.startsWith("Delete") || label.startsWith("Clear") ? "changed or deleted" : label.startsWith("Export") ? "exported" : "accessible"}.` }
+        ? { warning: "This action reads or changes personal browser data." }
         : {}),
-      details: [
-        { label: "Requested by", value: callerLabel },
-      ],
+      details: [{ label: "Requested by", value: caller.callerTitle ?? caller.callerKind }],
       severity: dangerous ? "dangerous" : "standard",
       defaultAction: "deny",
       promptOptions: "scoped",
     });
     if (choice.kind === "uncallable") {
-      const err = new Error(
-        `browser-data.${method} requires an interactive caller`
-      ) as NodeJS.ErrnoException;
-      err.code = "ENOCALLER";
-      throw err;
+      throw Object.assign(new Error(`browser-data.${method} requires an interactive caller`), {
+        code: "ENOCALLER",
+      });
     }
     if (choice.kind === "dismissed" || choice.choice === "deny") {
-      const err = new Error(`browser-data.${method} denied by user`) as NodeJS.ErrnoException;
-      err.code = "EACCES";
-      throw err;
+      throw Object.assign(new Error(`browser-data.${method} denied by user`), {
+        code: "EACCES",
+      });
     }
   };
 
   const guarded =
-    <Args extends unknown[], R>(method: string, fn: (...args: Args) => Promise<R>) =>
-    async (...args: Args): Promise<R> => {
+    <Args extends unknown[], Result>(
+      method: string,
+      fn: (...args: Args) => Promise<Result>
+    ) =>
+    async (...args: Args): Promise<Result> => {
       if (GATED_METHODS.has(method)) await requireApproval(method);
       return fn(...args);
     };
 
-  const emitChanged = (dataType: ImportDataType | "passwords" | "searchEngines"): void => {
-    ctx.emit("data-changed", { dataType });
+  const callStore = async <T>(method: string, ...args: unknown[]): Promise<T> => {
+    const { targetId } = await currentIdentity();
+    return ctx.rpc.call<T>(targetId, method, ...args);
   };
-
   const mutate = async <T>(
-    dataType: ImportDataType | "passwords" | "searchEngines",
-    doMethod: string,
+    dataType: string,
+    method: string,
     ...args: unknown[]
   ): Promise<T> => {
-    const result = await callStore<T>(doMethod, ...args);
-    emitChanged(dataType);
+    const result = await callStore<T>(method, ...args);
+    ctx.emit("data-changed", { dataType });
     return result;
   };
 
   const browserData = {
-    detectBrowsers: guarded("detectBrowsers", async () => detectBrowsers()),
-    getOpenTabs: guarded("getOpenTabs", async (request: BrowserOpenTabsRequest) =>
-      readOpenTabs(request)
+    getBrowserEnvironment: guarded("getBrowserEnvironment", async () => {
+      const invocation = ctx.invocation.current();
+      if (!invocation || !TRUSTED_CALLER_KINDS.has(invocation.caller.callerKind)) {
+        throw Object.assign(
+          new Error("Browser environment identity is available only to the trusted host"),
+          { code: "EACCES" }
+        );
+      }
+      return (await currentIdentity()).identity;
+    }),
+    listImportHosts: guarded("listImportHosts", async () => {
+      const { identity } = await currentIdentity();
+      await ensureImportHosts(identity);
+      return coordinator.listHosts(identity);
+    }),
+    listImportSources: guarded("listImportSources", async (hostId: string) => {
+      const { identity } = await currentIdentity();
+      await ensureImportHosts(identity);
+      const sources = await coordinator.listSources(
+        identity,
+        hostId,
+        ctx.invocation.signal?.() ?? undefined
+      );
+      for (const source of sources) sourceBrowsers.set(source.sourceId, source.browser);
+      return sources;
+    }),
+    previewImport: guarded("previewImport", async (selection: BrowserImportSelection) => {
+      const { identity } = await currentIdentity();
+      await ensureImportHosts(identity);
+      return coordinator.preview(identity, selection, ctx.invocation.signal?.() ?? undefined);
+    }),
+    startImport: guarded("startImport", async (selection: BrowserImportSelection) => {
+      const { identity } = await currentIdentity();
+      await ensureImportHosts(identity);
+      const started = coordinator.start(identity, selection);
+      void coordinator.waitForJob(identity, started.jobId).then((completed) => {
+        reportImportHealth(ctx, completed);
+        ctx.emit("import-complete", completed);
+      });
+      return started;
+    }),
+    cancelImport: guarded("cancelImport", async (jobId: string) => {
+      const { identity } = await currentIdentity();
+      coordinator.cancel(identity, jobId);
+    }),
+    resumeImport: guarded("resumeImport", async (jobId: string) => {
+      const { identity } = await currentIdentity();
+      await ensureImportHosts(identity);
+      const resumed = await coordinator.resume(identity, jobId);
+      void coordinator.waitForJob(identity, resumed.jobId).then((completed) => {
+        reportImportHealth(ctx, completed);
+        ctx.emit("import-complete", completed);
+      });
+      return resumed;
+    }),
+    getImportJob: guarded("getImportJob", async (jobId: string) => {
+      const { identity } = await currentIdentity();
+      return coordinator.getJob(identity, jobId) ?? callStore("getImportJob", jobId);
+    }),
+    listImportJobs: guarded("listImportJobs", async () => {
+      const { identity } = await currentIdentity();
+      const live = coordinator.listJobs(identity);
+      return live.length > 0 ? live : callStore("listImportJobs");
+    }),
+    listOpenTabs: guarded(
+      "listOpenTabs",
+      async (request: { hostId: string; sourceId: string }) => {
+        const { identity } = await currentIdentity();
+        await ensureImportHosts(identity);
+        return coordinator.listOpenTabs(
+          identity,
+          request.hostId,
+          request.sourceId,
+          ctx.invocation.signal?.() ?? undefined
+        );
+      }
     ),
-    openTabsAsPanels: guarded("openTabsAsPanels", async (request: BrowserOpenTabsRequest) =>
-      openTabsAsPanels(request, ctx)
+    openTabsAsPanels: guarded(
+      "openTabsAsPanels",
+      async (request: { hostId: string; sourceId: string; selection: string[] }) => {
+        const { identity } = await currentIdentity();
+        await ensureImportHosts(identity);
+        const tabs = await coordinator.listOpenTabs(
+          identity,
+          request.hostId,
+          request.sourceId,
+          ctx.invocation.signal?.() ?? undefined
+        );
+        return openTabsAsPanels(
+          request.selection.length > 0
+            ? tabs.filter((tab) => request.selection.includes(tab.tabId))
+            : tabs,
+          ctx
+        );
+      }
     ),
-
-    startImport: guarded("startImport", async (request: ImportRequest) =>
-      importBrowserData(request, callStore, emitChanged, ctx)
+    getSitePreferences: guarded("getSitePreferences", async (origin: string) =>
+      callStore("getSitePreferences", origin)
     ),
-
-    getImportHistory: guarded("getImportHistory", async () => callStore("getImportHistory")),
-    getProfileImportState: guarded(
-      "getProfileImportState",
-      async (query: { browser: string; profilePath?: string; profile?: unknown }) =>
-        callStore("getProfileImportState", {
-          browser: query.browser,
-          profilePath: query.profilePath ?? resolveProfilePath(query as ImportRequest),
-        })
-    ),
-    previewImport: guarded("previewImport", async (request: ImportRequest) =>
-      previewBrowserData(request, callStore)
-    ),
-
-    getCookieDomains: guarded("getCookieDomains", async () => callStore("getCookieDomains")),
-    getHistoryDomains: guarded("getHistoryDomains", async (limit?: number) =>
-      callStore("getHistoryDomains", limit)
-    ),
-    getPasswordOrigins: guarded("getPasswordOrigins", async () => callStore("getPasswordOrigins")),
-    getAutofillFieldNames: guarded("getAutofillFieldNames", async () =>
-      callStore("getAutofillFieldNames")
-    ),
-    getDomainReadiness: guarded("getDomainReadiness", async (domain: string) =>
-      callStore("getDomainReadiness", domain)
-    ),
-    getAutocompleteDebug: guarded("getAutocompleteDebug", async (query: string) =>
-      getAutocompleteDebug(query, callStore)
+    setSiteZoom: guarded("setSiteZoom", async (origin: string, zoomFactor: number) =>
+      mutate("sitePreferences", "setSiteZoom", origin, zoomFactor)
     ),
 
     getBookmarks: guarded("getBookmarks", async (folderPath?: string) =>
@@ -334,8 +521,10 @@ export async function activate(ctx: ExtensionContextLike) {
     deleteBookmark: guarded("deleteBookmark", async (id: number) =>
       mutate("bookmarks", "deleteBookmark", id)
     ),
-    moveBookmark: guarded("moveBookmark", async (id: number, folder: string, position: number) =>
-      mutate("bookmarks", "moveBookmark", id, folder, position)
+    moveBookmark: guarded(
+      "moveBookmark",
+      async (id: number, folderPath: string, position: number) =>
+        mutate("bookmarks", "moveBookmark", id, folderPath, position)
     ),
     searchBookmarks: guarded("searchBookmarks", async (query: string) =>
       callStore("searchBookmarks", query)
@@ -348,23 +537,30 @@ export async function activate(ctx: ExtensionContextLike) {
     deleteHistoryRange: guarded("deleteHistoryRange", async (start: number, end: number) =>
       mutate("history", "deleteHistoryRange", start, end)
     ),
-    clearAllHistory: guarded("clearAllHistory", async () => mutate("history", "clearAllHistory")),
+    clearAllHistory: guarded("clearAllHistory", async () =>
+      mutate("history", "clearAllHistory")
+    ),
     searchHistory: guarded("searchHistory", async (query: string, limit?: number) =>
       callStore("searchHistory", query, limit)
     ),
-    searchHistoryForAutocomplete: guarded("searchHistoryForAutocomplete", async (query: unknown) =>
-      callStore("searchHistoryForAutocomplete", query)
+    searchHistoryForAutocomplete: guarded(
+      "searchHistoryForAutocomplete",
+      async (query: unknown) => callStore("searchHistoryForAutocomplete", query)
     ),
-    recordHistoryVisit: guarded("recordHistoryVisit", async (request: RecordHistoryVisitRequest) =>
-      mutate("history", "recordHistoryVisit", validateHistoryVisit(request))
+    recordHistoryVisit: guarded(
+      "recordHistoryVisit",
+      async (request: RecordHistoryVisitRequest) =>
+        mutate("history", "recordHistoryVisit", validateHistoryVisit(request))
     ),
-    updateHistoryTitle: guarded("updateHistoryTitle", async (request: UpdateHistoryTitleRequest) =>
-      mutate("history", "updateHistoryTitle", validateHistoryTitle(request))
+    updateHistoryTitle: guarded(
+      "updateHistoryTitle",
+      async (request: UpdateHistoryTitleRequest) =>
+        mutate("history", "updateHistoryTitle", validateHistoryTitle(request))
     ),
 
     getPasswords: guarded("getPasswords", async () => callStore("getPasswords")),
-    getPasswordForSite: guarded("getPasswordForSite", async (origin: string) =>
-      callStore("getPasswordForSite", origin)
+    getPasswordForSite: guarded("getPasswordForSite", async (url: string) =>
+      callStore("getPasswordForSite", url)
     ),
     addPassword: guarded("addPassword", async (password: unknown) =>
       mutate("passwords", "addPassword", password)
@@ -390,69 +586,184 @@ export async function activate(ctx: ExtensionContextLike) {
     removeNeverSavePassword: guarded("removeNeverSavePassword", async (origin: string) =>
       mutate("passwords", "removeNeverSave", origin)
     ),
-    getAutofillSuggestions: guarded(
-      "getAutofillSuggestions",
-      async (origin: string, fieldName?: string) =>
-        callStore("getAutofillSuggestions", origin, fieldName)
+
+    getFormFillSuggestions: guarded(
+      "getFormFillSuggestions",
+      async (query: unknown) => callStore("getFormFillSuggestions", query)
+    ),
+    addFormFillValue: guarded("addFormFillValue", async (value: FormFillValueInput) =>
+      mutate("formFill", "addFormFillValue", value)
+    ),
+    updateFormFillValue: guarded(
+      "updateFormFillValue",
+      async (id: number, partial: unknown) =>
+        mutate("formFill", "updateFormFillValue", id, partial)
+    ),
+    markFormFillValueUsed: guarded("markFormFillValueUsed", async (id: number) =>
+      mutate("formFill", "markFormFillValueUsed", id)
+    ),
+    deleteFormFillValue: guarded("deleteFormFillValue", async (id: number) =>
+      mutate("formFill", "deleteFormFillValue", id)
+    ),
+    clearFormFillValues: guarded("clearFormFillValues", async () =>
+      mutate("formFill", "clearFormFillValues")
     ),
 
     getSearchEngines: guarded("getSearchEngines", async () => callStore("getSearchEngines")),
     setDefaultEngine: guarded("setDefaultEngine", async (id: number) =>
       mutate("searchEngines", "setDefaultEngine", id)
     ),
-    getPermissions: guarded("getPermissions", async (origin?: string) =>
-      callStore("getPermissions", origin)
+
+    applyCookieMutations: guarded("applyCookieMutations", async (request: unknown) =>
+      mutate("cookies", "applyCookieMutations", request)
     ),
-    setPermission: guarded("setPermission", async (origin: string, perm: string, value: string) =>
-      mutate("permissions", "setPermission", origin, perm, value)
+    getCookieSnapshot: guarded("getCookieSnapshot", async (query?: unknown) =>
+      callStore("getCookieSnapshot", query ?? {})
+    ),
+    getCookiesForOrigin: guarded("getCookiesForOrigin", async (origin: string) =>
+      callStore("getCookiesForOrigin", origin)
+    ),
+    clearCookiesForOrigin: guarded("clearCookiesForOrigin", async (origin: string) =>
+      mutate("cookies", "clearCookiesForOrigin", origin)
+    ),
+    clearAllCookies: guarded("clearAllCookies", async () =>
+      mutate("cookies", "clearAllCookies")
+    ),
+    endBrowserSession: guarded("endBrowserSession", async () =>
+      mutate("cookies", "endBrowserSession")
+    ),
+    getCookieSiteSummary: guarded("getCookieSiteSummary", async (origin: string) =>
+      callStore("getCookieSiteSummary", origin)
+    ),
+    flushCookieProjection: guarded("flushCookieProjection", async (origins?: string[]) =>
+      ctx.rpc.call("main", "browserEnvironment.flushCookieProjection", origins ?? [])
+    ),
+    getCookieProjectionDiagnostics: guarded("getCookieProjectionDiagnostics", async () =>
+      ctx.rpc.call("main", "browserEnvironment.getCookieProjectionDiagnostics")
+    ),
+    listDownloads: guarded("listDownloads", async () =>
+      ctx.rpc.call("main", "browserEnvironment.listDownloads")
+    ),
+    listDownloadRecords: guarded("listDownloadRecords", async (hostId: string) => {
+      const caller = ctx.invocation.current()?.caller;
+      if (!caller || !TRUSTED_CALLER_KINDS.has(caller.callerKind)) {
+        throw new Error("Canonical download metadata is host-only");
+      }
+      const { identity } = await currentIdentity();
+      const rows = await callStoreForIdentity<Array<Record<string, unknown>>>(
+        identity,
+        "listDownloadRecords",
+        hostId
+      );
+      return rows.map((row) => ({ ...row, environmentKey: identity.environmentKey }));
+    }),
+    upsertDownloadRecord: guarded("upsertDownloadRecord", async (record: unknown) => {
+      const caller = ctx.invocation.current()?.caller;
+      if (!caller || !TRUSTED_CALLER_KINDS.has(caller.callerKind)) {
+        throw new Error("Canonical download metadata is host-only");
+      }
+      if (!record || typeof record !== "object" || Array.isArray(record)) {
+        throw new Error("Download metadata must be an object");
+      }
+      const { identity } = await currentIdentity();
+      await callStoreForIdentity(identity, "upsertDownloadRecord", {
+        ...(record as Record<string, unknown>),
+        environmentKey: identity.environmentKey,
+      });
+    }),
+    pauseDownload: guarded("pauseDownload", async (id: string) =>
+      ctx.rpc.call("main", "browserEnvironment.pauseDownload", id)
+    ),
+    resumeDownload: guarded("resumeDownload", async (id: string) =>
+      ctx.rpc.call("main", "browserEnvironment.resumeDownload", id)
+    ),
+    cancelDownload: guarded("cancelDownload", async (id: string) =>
+      ctx.rpc.call("main", "browserEnvironment.cancelDownload", id)
+    ),
+    openDownload: guarded("openDownload", async (id: string) =>
+      ctx.rpc.call("main", "browserEnvironment.openDownload", id)
+    ),
+    revealDownload: guarded("revealDownload", async (id: string) =>
+      ctx.rpc.call("main", "browserEnvironment.revealDownload", id)
     ),
 
-    exportBookmarks: guarded("exportBookmarks", async (format: "html" | "json" | "chrome-json") =>
-      exportBookmarks(format, await callStore<Array<Record<string, unknown>>>("getAllBookmarks"))
+    putPageFavicon: guarded("putPageFavicon", async (favicon: PageFavicon) =>
+      mutate("favicons", "putPageFavicon", favicon)
+    ),
+    getPageFavicon: guarded("getPageFavicon", async (pageUrl: string) =>
+      callStore("getPageFavicon", pageUrl)
+    ),
+
+    exportBookmarks: guarded(
+      "exportBookmarks",
+      async (format: "html" | "json" | "chrome-json") =>
+        exportBookmarks(
+          format,
+          await callStore<Array<Record<string, unknown>>>("getAllBookmarks")
+        )
     ),
     exportPasswords: guarded(
       "exportPasswords",
       async (format: "csv-chrome" | "csv-firefox" | "json") =>
-        exportPasswords(format, await callStore<Array<Record<string, unknown>>>("getPasswords"))
+        exportPasswords(
+          format,
+          await callStore<Array<Record<string, unknown>>>("getPasswords")
+        )
     ),
-    exportCookies: guarded("exportCookies", async (format: "json" | "netscape-txt") =>
-      exportCookies(format, await callStore<Array<Record<string, unknown>>>("getCookies"))
-    ),
-    exportAll: guarded("exportAll", async () =>
-      exportAll(
-        await callStore<Array<Record<string, unknown>>>("getAllBookmarks"),
-        await callStore<Array<Record<string, unknown>>>("getHistory", { limit: 2147483647 }),
-        await callStore<Array<Record<string, unknown>>>("getCookies"),
-        await callStore<Array<Record<string, unknown>>>("getPasswords")
-      )
-    ),
-
-    getCookies: guarded("getCookies", async (domain?: string) => callStore("getCookies", domain)),
-    deleteCookie: guarded("deleteCookie", async (id: number) =>
-      mutate("cookies", "deleteCookie", id)
-    ),
-    clearCookies: guarded("clearCookies", async (domain?: string) =>
-      mutate("cookies", "clearCookies", domain)
+    exportCookies: guarded(
+      "exportCookies",
+      async (format: "json" | "netscape-txt") => {
+        const snapshot = await callStore<{
+          cookies: Array<Record<string, unknown>>;
+        }>("getCookieSnapshot", {});
+        return exportCookies(format, snapshot.cookies);
+      }
     ),
   };
+
   return { providerContracts: { browserData } };
 }
 
-async function openTabsAsPanels(
-  request: BrowserOpenTabsRequest,
-  ctx: ExtensionContextLike
-): Promise<OpenTabsAsPanelsResult> {
-  const allTabs = readOpenTabs(request);
-  const selection = request.selection;
-  const tabs = selection
-    ? allTabs.filter((tab) =>
-        selection.some((s) => s.windowIndex === tab.windowIndex && s.tabIndex === tab.tabIndex)
-      )
-    : allTabs;
-  const parentId = parentPanelIdFromInvocation(ctx.invocation.current());
-  const panels: OpenTabsAsPanelsResult["panels"] = [];
-  const skipped: OpenTabsAsPanelsResult["skipped"] = [];
+async function storeImportBatch(
+  batch: ImportBatch,
+  callStore: <T>(method: string, ...args: unknown[]) => Promise<T>
+): Promise<void> {
+  const source = { sourceId: batch.sourceId };
+  switch (batch.dataType) {
+    case "bookmarks":
+      await callStore("addBookmarksBatch", batch.items, source);
+      return;
+    case "history":
+      await callStore("addHistoryBatch", batch.items, source);
+      return;
+    case "cookies":
+      await callStore("addCookiesBatch", {
+        jobId: batch.jobId,
+        batchIndex: batch.batchIndex,
+        cookies: batch.items as BrowserCookieInput[],
+      });
+      return;
+    case "passwords":
+      await callStore("addPasswordsBatch", batch.items, source);
+      return;
+    case "formFill":
+      await callStore("addFormFillBatch", batch.items, source);
+      return;
+    case "searchEngines":
+      await callStore("addSearchEnginesBatch", batch.items, source);
+      return;
+    case "favicons":
+      await callStore("addFaviconsBatch", batch.items);
+  }
+}
 
+async function openTabsAsPanels(
+  tabs: Array<{ url: string; title?: string }>,
+  ctx: ExtensionContextLike
+) {
+  const parentId = parentPanelIdFromInvocation(ctx.invocation.current());
+  const panels: Array<{ id: string; title: string; url: string }> = [];
+  const skipped: Array<{ url: string; reason: string }> = [];
   for (const tab of tabs) {
     if (!/^https?:\/\//i.test(tab.url)) {
       skipped.push({ url: tab.url, reason: "unsupported browser-panel URL scheme" });
@@ -465,19 +776,18 @@ async function openTabsAsPanels(
         tab.url,
         {
           ...(parentId ? { parentId } : {}),
-          name: panelNameForOpenTab(tab),
+          name: (tab.title?.trim() || hostnameFromUrl(tab.url) || "Imported Tab").slice(0, 80),
           focus: false,
         }
       );
       panels.push({ id: created.id, title: created.title, url: tab.url });
-    } catch (err) {
+    } catch (error) {
       skipped.push({
         url: tab.url,
-        reason: err instanceof Error ? err.message : String(err),
+        reason: error instanceof Error ? error.message : String(error),
       });
     }
   }
-
   return {
     tabsFound: tabs.length,
     panelsOpened: panels.length,
@@ -490,256 +800,11 @@ function parentPanelIdFromInvocation(
   invocation: ReturnType<InvocationLike["current"]>
 ): string | undefined {
   const caller = invocation?.chainCaller ?? invocation?.caller;
-  if (!caller?.callerId) return undefined;
-  if (
-    caller.callerKind === "panel" ||
-    caller.callerKind === "app" ||
-    caller.callerKind === "worker" ||
-    caller.callerKind === "do"
-  ) {
-    return caller.callerId;
-  }
-  return undefined;
-}
-
-function panelNameForOpenTab(tab: ImportedOpenTab): string {
-  const fallback = hostnameFromUrl(tab.url) ?? "Imported Tab";
-  const base = (tab.title?.trim() || fallback).replace(/\s+/g, " ").slice(0, 80);
-  return `${base} (${tab.windowIndex + 1}.${tab.tabIndex + 1})`;
-}
-
-function hostnameFromUrl(url: string): string | null {
-  try {
-    return new URL(url).hostname || null;
-  } catch {
-    return null;
-  }
-}
-
-async function importBrowserData(
-  request: ImportRequest,
-  callStore: <T>(method: string, ...args: unknown[]) => Promise<T>,
-  emitChanged: (dataType: ImportDataType | "passwords" | "searchEngines") => void,
-  ctx: ExtensionContextLike
-): Promise<ImportResult[]> {
-  const profilePath = resolveProfilePath(request);
-  const meta: ImportBatchMeta = { browser: request.browser, profilePath };
-  const store = {
-    bookmarks: {
-      addBatch: (items: ImportedBookmark[], m?: ImportBatchMeta) =>
-        callStore<number>("addBookmarksBatch", items, m ?? meta),
-    },
-    history: {
-      addBatch: (items: ImportedHistoryEntry[], m?: ImportHistoryBatchMeta) =>
-        callStore<number>("addHistoryBatch", items, m ?? meta),
-    },
-    cookies: {
-      addBatch: (items: ImportedCookie[]) => callStore<number>("addCookiesBatch", items, meta),
-    },
-    passwords: {
-      addBatch: (items: ImportedPassword[]) => callStore<number>("addPasswordsBatch", items, meta),
-    },
-    autofill: {
-      addBatch: (items: ImportedAutofillEntry[], m?: ImportBatchMeta) =>
-        callStore<number>("addAutofillBatch", items, m ?? meta),
-    },
-    searchEngines: {
-      addBatch: (items: ImportedSearchEngine[], m?: ImportBatchMeta) =>
-        callStore<number>("addSearchEnginesBatch", items, m ?? meta),
-    },
-    permissions: {
-      addBatch: (items: ImportedPermission[]) =>
-        callStore<number>("addPermissionsBatch", items, meta),
-    },
-    favicons: {
-      addBatch: (items: ImportedFavicon[]) => callStore<number>("addFaviconsBatch", items, meta),
-    },
-  };
-  const startedAt = Date.now();
-  const results = await runImportPipeline(request, store);
-  const finishedAt = Date.now();
-  const failures = results.filter((result) => !result.success);
-  await callStore("recordImportRun", {
-    browser: request.browser,
-    profilePath,
-    mode: "import",
-    status:
-      failures.length === 0 ? "success" : failures.length === results.length ? "error" : "partial",
-    startedAt,
-    finishedAt,
-    dataTypes: results.map((result) => result.dataType),
-    warnings: results.flatMap((result) => result.warnings ?? []),
-    summaries: results.map((result) => ({
-      dataType: result.dataType,
-      // Until the dry-run classifier lands, `added`/`changed`/`unchanged` are not
-      // distinguishable here; record the counts the pipeline does produce.
-      scanned: result.itemCount + result.skippedCount,
-      skipped: result.skippedCount,
-      errors: result.success ? 0 : 1,
-    })),
-  });
-  for (const result of results) {
-    if (result.success) emitChanged(result.dataType);
-  }
-  reportImportHealth(ctx, results);
-  ctx.emit("import-complete", results);
-  return results;
-}
-
-async function previewBrowserData(
-  request: ImportRequest,
-  callStore: <T>(method: string, ...args: unknown[]) => Promise<T>
-): Promise<PreviewResult[]> {
-  return previewImportPipeline(request, (dataType, items, meta) =>
-    callStore("classifyAgainstStore", dataType, items, meta)
-  );
-}
-
-interface AutocompleteDebugSuggestion {
-  url?: string;
-  title?: string;
-  keyword?: string;
-  source: "history" | "bookmark" | "search-engine";
-  score: number;
-  reasons: string[];
-}
-
-/**
- * Returns the ranked address-bar candidates for `query` with a transparent
- * score breakdown. Mirrors the scoring weights in panelChrome.ts so the panel's
- * debugger explains why each suggestion ranks where it does. Session/open-panel
- * suggestions are added client-side (panels are not visible from the extension).
- */
-async function getAutocompleteDebug(
-  query: string,
-  callStore: <T>(method: string, ...args: unknown[]) => Promise<T>
-): Promise<{ query: string; suggestions: AutocompleteDebugSuggestion[] }> {
-  const normalized = query.trim().toLowerCase();
-  const [history, bookmarks, engines] = await Promise.all([
-    callStore<Array<Record<string, unknown>>>("searchHistoryForAutocomplete", { query, limit: 25 }),
-    callStore<Array<Record<string, unknown>>>("searchBookmarks", query),
-    callStore<Array<Record<string, unknown>>>("getSearchEngines"),
-  ]);
-
-  const scoreEntry = (
-    source: "history" | "bookmark",
-    url: string,
-    title: string,
-    typedCount: number,
-    visitCount: number,
-    lastVisit: number
-  ): AutocompleteDebugSuggestion => {
-    const haystacks = [url.toLowerCase(), title.toLowerCase()];
-    const reasons: string[] = [];
-    let score = 0;
-    if (normalized && haystacks.some((h) => h === normalized)) {
-      score += 500_000_000_000_000;
-      reasons.push("exact match");
-    } else if (normalized && haystacks.some((h) => h.startsWith(normalized))) {
-      score += 100_000_000_000_000;
-      reasons.push("prefix match");
-    } else if (normalized && haystacks.some((h) => h.includes(normalized))) {
-      score += 10_000_000_000_000;
-      reasons.push("substring match");
-    }
-    const sourceBoost = source === "bookmark" ? 500_000_000_000 : 100_000_000_000;
-    score += sourceBoost;
-    reasons.push(`source: ${source}`);
-    if (typedCount > 0) {
-      score += typedCount * 10_000_000_000;
-      reasons.push(`typed ${typedCount}×`);
-    }
-    if (visitCount > 0) {
-      score += visitCount * 1_000_000;
-      reasons.push(`${visitCount} visits`);
-    }
-    score += lastVisit;
-    return { url, title, source, score, reasons };
-  };
-
-  const suggestions: AutocompleteDebugSuggestion[] = [];
-  for (const h of history) {
-    suggestions.push(
-      scoreEntry(
-        "history",
-        String(h["url"] ?? ""),
-        String(h["title"] ?? ""),
-        Number(h["typed_count"] ?? 0),
-        Number(h["visit_count"] ?? 0),
-        Number(h["last_visit"] ?? 0)
-      )
-    );
-  }
-  for (const b of bookmarks) {
-    suggestions.push(
-      scoreEntry(
-        "bookmark",
-        String(b["url"] ?? ""),
-        String(b["title"] ?? ""),
-        0,
-        0,
-        Number(b["date_added"] ?? 0)
-      )
-    );
-  }
-  for (const e of engines) {
-    const keyword = String(e["keyword"] ?? "");
-    if (!keyword) continue;
-    if (
-      normalized &&
-      (keyword.toLowerCase() === normalized || keyword.toLowerCase().startsWith(normalized))
-    ) {
-      suggestions.push({
-        source: "search-engine",
-        keyword,
-        title: String(e["name"] ?? keyword),
-        score: 1_000_000_000_000,
-        reasons: [`keyword "${keyword}"`],
-      });
-    }
-  }
-
-  suggestions.sort((a, b) => b.score - a.score);
-  return { query, suggestions: suggestions.slice(0, 20) };
-}
-
-function reportImportHealth(ctx: ExtensionContextLike, results: ImportResult[]): void {
-  const failures = results.filter((result) => !result.success);
-  const warnings = results.flatMap((result) => result.warnings ?? []);
-  if (failures.length > 0) {
-    ctx.health?.degraded({
-      summary: "Some browser data imports failed",
-      reasons: failures.map((result) => `${result.dataType}: ${result.error ?? "import failed"}`),
-    });
-    return;
-  }
-  if (warnings.length > 0) {
-    ctx.health?.degraded({
-      summary: "Browser data import completed with warnings",
-      reasons: warnings.slice(0, 8),
-    });
-    return;
-  }
-  ctx.health?.healthy({ summary: "Browser data import completed" });
-}
-
-function exportBookmarks(
-  format: "html" | "json" | "chrome-json",
-  allBookmarks: Array<Record<string, unknown>>
-): string {
-  const imported: ImportedBookmark[] = allBookmarks.map((b) => ({
-    title: String(b["title"] ?? ""),
-    url: String(b["url"] ?? ""),
-    dateAdded: Number(b["date_added"] ?? Date.now()),
-    folder: String(b["folder_path"] ?? "/")
-      .split("/")
-      .filter(Boolean),
-    tags: b["tags"] ? (JSON.parse(String(b["tags"])) as string[]) : undefined,
-    keyword: b["keyword"] ? String(b["keyword"]) : undefined,
-  }));
-  if (format === "html") return exportNetscapeBookmarks(imported);
-  if (format === "chrome-json") return exportChromiumBookmarks(imported);
-  return JSON.stringify(imported, null, 2);
+  return caller &&
+    ["panel", "app", "worker", "do"].includes(caller.callerKind) &&
+    caller.callerId
+    ? caller.callerId
+    : undefined;
 }
 
 function validateHistoryVisit(request: RecordHistoryVisitRequest): RecordHistoryVisitRequest {
@@ -749,7 +814,7 @@ function validateHistoryVisit(request: RecordHistoryVisitRequest): RecordHistory
     title: request.title?.trim() || undefined,
     visitTime: request.visitTime ?? Date.now(),
     transition: request.transition ?? "link",
-    typed: Boolean(request.typed),
+    typed: request.typed === true,
     source: request.source ?? "vibestudio",
     panelId: request.panelId?.trim() || undefined,
   };
@@ -758,76 +823,105 @@ function validateHistoryVisit(request: RecordHistoryVisitRequest): RecordHistory
 function validateHistoryTitle(request: UpdateHistoryTitleRequest): UpdateHistoryTitleRequest {
   validateHttpUrl(request.url);
   return {
-    ...request,
+    url: request.url,
     title: request.title.trim(),
     observedAt: request.observedAt ?? Date.now(),
   };
 }
 
-function validateHttpUrl(url: string): void {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new Error("unsupported protocol");
-    }
-  } catch {
-    throw new Error(`Invalid browser history URL (must be http/https): ${url}`);
+function validateHttpUrl(raw: string): void {
+  const url = new URL(raw);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Browser history URL must use http or https");
   }
+}
+
+function exportBookmarks(
+  format: "html" | "json" | "chrome-json",
+  rows: Array<Record<string, unknown>>
+): string {
+  const bookmarks: ImportedBookmark[] = rows.map((row) => ({
+    title: String(row["title"] ?? ""),
+    url: String(row["url"] ?? ""),
+    dateAdded: Number(row["date_added"] ?? Date.now()),
+    folder: String(row["folder_path"] ?? "/").split("/").filter(Boolean),
+    tags: row["tags"] ? String(row["tags"]).split(",").filter(Boolean) : undefined,
+    keyword: row["keyword"] ? String(row["keyword"]) : undefined,
+  }));
+  if (format === "html") return exportNetscapeBookmarks(bookmarks);
+  if (format === "chrome-json") return exportChromiumBookmarks(bookmarks);
+  return JSON.stringify(bookmarks, null, 2);
 }
 
 function exportPasswords(
   format: "csv-chrome" | "csv-firefox" | "json",
-  allPasswords: Array<Record<string, unknown>>
+  rows: Array<Record<string, unknown>>
 ): string {
-  const imported: ImportedPassword[] = allPasswords.map((p) => ({
-    url: String(p["origin_url"] ?? ""),
-    username: String(p["username"] ?? ""),
-    password: String(p["password"] ?? ""),
-    actionUrl: p["action_url"] ? String(p["action_url"]) : undefined,
-    realm: p["realm"] ? String(p["realm"]) : undefined,
+  const passwords: ImportedPassword[] = rows.map((row) => ({
+    url: String(row["origin_url"] ?? ""),
+    username: String(row["username"] ?? ""),
+    password: String(row["password"] ?? ""),
+    actionUrl: row["action_url"] ? String(row["action_url"]) : undefined,
+    realm: row["realm"] ? String(row["realm"]) : undefined,
   }));
-  if (format === "csv-chrome") return exportCsvPasswords(imported, "chrome");
-  if (format === "csv-firefox") return exportCsvPasswords(imported, "firefox");
-  return JSON.stringify(imported, null, 2);
+  if (format === "csv-chrome") return exportCsvPasswords(passwords, "chrome");
+  if (format === "csv-firefox") return exportCsvPasswords(passwords, "firefox");
+  return JSON.stringify(passwords, null, 2);
 }
 
 function exportCookies(
   format: "json" | "netscape-txt",
-  allCookies: Array<Record<string, unknown>>
+  rows: Array<Record<string, unknown>>
 ): string {
-  const mapped = allCookies.map(storedCookieToImported);
-  if (format === "netscape-txt") return exportNetscapeCookies(mapped);
-  return JSON.stringify(mapped, null, 2);
+  const cookies: ImportedCookie[] = rows.map((row) => ({
+    name: String(row["name"] ?? ""),
+    value: String(row["value"] ?? ""),
+    domain: String(row["domain"] ?? ""),
+    hostOnly: Boolean(row["hostOnly"]),
+    path: String(row["path"] ?? "/"),
+    expirationDate:
+      row["expirationDate"] == null ? undefined : Number(row["expirationDate"]),
+    secure: Boolean(row["secure"]),
+    httpOnly: Boolean(row["httpOnly"]),
+    sameSite: String(row["sameSite"] ?? "unspecified") as ImportedCookie["sameSite"],
+    sourceScheme: String(row["sourceScheme"] ?? "unset") as ImportedCookie["sourceScheme"],
+    sourcePort: Number(row["sourcePort"] ?? -1),
+  }));
+  return format === "netscape-txt"
+    ? exportNetscapeCookies(cookies)
+    : JSON.stringify(cookies, null, 2);
 }
 
-function exportAll(
-  bookmarks: Array<Record<string, unknown>>,
-  history: Array<Record<string, unknown>>,
-  cookies: Array<Record<string, unknown>>,
-  passwords: Array<Record<string, unknown>>
-): string {
-  return exportJson({
-    exportedAt: new Date().toISOString(),
-    version: 1,
-    bookmarks,
-    history,
-    cookies: cookies.map(storedCookieToImported),
-    passwords,
-  } as never);
+function reportImportHealth(ctx: ExtensionContextLike, job: ImportJobSnapshot): void {
+  if (job.phase === "failed" || job.phase === "cancelled") {
+    ctx.health?.degraded({
+      summary: job.phase === "cancelled" ? "Browser import cancelled" : "Browser import failed",
+      reasons: job.error ? [job.error] : undefined,
+    });
+  } else if (job.phase === "partial" || job.warnings.length > 0) {
+    ctx.health?.degraded({
+      summary: "Browser import completed with warnings",
+      reasons: job.warnings.slice(0, 8),
+    });
+  } else {
+    ctx.health?.healthy({ summary: "Browser data import completed" });
+  }
 }
 
-function storedCookieToImported(c: Record<string, unknown>): ImportedCookie {
-  return {
-    name: String(c["name"] ?? ""),
-    value: String(c["value"] ?? ""),
-    domain: String(c["domain"] ?? ""),
-    hostOnly: Number(c["host_only"] ?? 0) === 1,
-    path: String(c["path"] ?? "/"),
-    expirationDate: c["expiration_date"] == null ? undefined : Number(c["expiration_date"]),
-    secure: Number(c["secure"] ?? 0) === 1,
-    httpOnly: Number(c["http_only"] ?? 0) === 1,
-    sameSite: String(c["same_site"] ?? "unspecified") as ImportedCookie["sameSite"],
-    sourceScheme: String(c["source_scheme"] ?? "unset") as ImportedCookie["sourceScheme"],
-    sourcePort: Number(c["source_port"] ?? -1),
-  };
+function normalizedPlatform(): "darwin" | "linux" | "win32" {
+  return process.platform === "darwin" || process.platform === "win32"
+    ? process.platform
+    : "linux";
+}
+
+function hostnameFromUrl(raw: string): string | null {
+  try {
+    return new URL(raw).hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+function humanizeMethod(method: string): string {
+  return method.replace(/([a-z])([A-Z])/g, "$1 $2").toLocaleLowerCase();
 }

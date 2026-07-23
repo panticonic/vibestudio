@@ -9,5 +9,7 @@
  */
 
 import { exposeAutofillBridge } from "./autofillBridge.js";
+import { exposeWebsiteNotificationBridge } from "./websiteNotificationBridge.js";
 
 exposeAutofillBridge();
+exposeWebsiteNotificationBridge();

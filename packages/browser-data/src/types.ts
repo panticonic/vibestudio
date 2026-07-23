@@ -3,9 +3,22 @@ import { z } from "zod";
 // ---- Browser Detection ----
 
 export const BROWSER_NAMES = [
-  "firefox", "zen", "chrome", "chrome-beta", "chrome-dev", "chrome-canary",
-  "chromium", "edge", "edge-beta", "edge-dev", "brave", "vivaldi",
-  "opera", "opera-gx", "arc", "safari",
+  "firefox",
+  "zen",
+  "chrome",
+  "chrome-beta",
+  "chrome-dev",
+  "chrome-canary",
+  "chromium",
+  "edge",
+  "edge-beta",
+  "edge-dev",
+  "brave",
+  "vivaldi",
+  "opera",
+  "opera-gx",
+  "arc",
+  "safari",
 ] as const;
 
 export type BrowserName = (typeof BROWSER_NAMES)[number];
@@ -56,9 +69,19 @@ export const DetectedBrowserSchema = z.object({
 // ---- History Transition Types ----
 
 export const HISTORY_TRANSITIONS = [
-  "link", "typed", "auto_bookmark", "auto_subframe", "manual_subframe",
-  "generated", "auto_toplevel", "form_submit", "reload", "keyword",
-  "keyword_generated", "redirect_permanent", "redirect_temporary",
+  "link",
+  "typed",
+  "auto_bookmark",
+  "auto_subframe",
+  "manual_subframe",
+  "generated",
+  "auto_toplevel",
+  "form_submit",
+  "reload",
+  "keyword",
+  "keyword_generated",
+  "redirect_permanent",
+  "redirect_temporary",
   "back_forward",
 ] as const;
 
@@ -222,22 +245,21 @@ export interface BrowserOpenTabsRequest {
   profile?: DetectedProfile | string;
   /**
    * Optional subset of tabs to open (used by `openTabsAsPanels`). Each entry
-   * identifies a tab by its window/tab index from `getOpenTabs`. When omitted,
+   * identifies a tab by its window/tab index from `listOpenTabs`. When omitted,
    * every http(s) tab is opened.
    */
   selection?: Array<{ windowIndex: number; tabIndex: number }>;
 }
 
-export const BrowserOpenTabsRequestSchema = z.object({
-  browser: BrowserNameSchema,
-  profile: z.union([DetectedProfileSchema, z.string()]).optional(),
-  selection: z
-    .array(z.object({ windowIndex: z.number(), tabIndex: z.number() }))
-    .optional(),
-}).refine(
-  (r) => r.profile != null,
-  { message: "'profile' (DetectedProfile or path string) is required" },
-);
+export const BrowserOpenTabsRequestSchema = z
+  .object({
+    browser: BrowserNameSchema,
+    profile: z.union([DetectedProfileSchema, z.string()]).optional(),
+    selection: z.array(z.object({ windowIndex: z.number(), tabIndex: z.number() })).optional(),
+  })
+  .refine((r) => r.profile != null, {
+    message: "'profile' (DetectedProfile or path string) is required",
+  });
 
 export interface OpenTabsAsPanelsResult {
   tabsFound: number;
@@ -256,8 +278,16 @@ export interface OpenTabsAsPanelsResult {
 // ---- Import Pipeline ----
 
 export const IMPORT_DATA_TYPES = [
-  "bookmarks", "history", "cookies", "passwords", "autofill",
-  "searchEngines", "extensions", "permissions", "settings", "favicons",
+  "bookmarks",
+  "history",
+  "cookies",
+  "passwords",
+  "autofill",
+  "searchEngines",
+  "extensions",
+  "permissions",
+  "settings",
+  "favicons",
 ] as const;
 
 export type ImportDataType = (typeof IMPORT_DATA_TYPES)[number];
@@ -273,16 +303,17 @@ export interface ImportRequest {
   csvPasswordFile?: string;
 }
 
-export const ImportRequestSchema = z.object({
-  browser: BrowserNameSchema,
-  profile: z.union([DetectedProfileSchema, z.string()]).optional(),
-  dataTypes: z.array(ImportDataTypeSchema),
-  masterPassword: z.string().optional(),
-  csvPasswordFile: z.string().optional(),
-}).refine(
-  (r) => r.profile != null,
-  { message: "'profile' (DetectedProfile or path string) is required" },
-);
+export const ImportRequestSchema = z
+  .object({
+    browser: BrowserNameSchema,
+    profile: z.union([DetectedProfileSchema, z.string()]).optional(),
+    dataTypes: z.array(ImportDataTypeSchema),
+    masterPassword: z.string().optional(),
+    csvPasswordFile: z.string().optional(),
+  })
+  .refine((r) => r.profile != null, {
+    message: "'profile' (DetectedProfile or path string) is required",
+  });
 
 /** Resolve an ImportRequest's profile to a concrete path string. */
 export function resolveProfilePath(request: ImportRequest): string {
@@ -293,8 +324,13 @@ export function resolveProfilePath(request: ImportRequest): string {
 }
 
 export type ImportPhase =
-  | "copying" | "reading" | "decrypting" | "normalizing"
-  | "storing" | "done" | "error";
+  | "copying"
+  | "reading"
+  | "decrypting"
+  | "normalizing"
+  | "storing"
+  | "done"
+  | "error";
 
 export interface ImportProgress {
   requestId: string;
@@ -320,12 +356,12 @@ export interface CryptoProvider {
   decryptChromiumValue(
     encrypted: Buffer,
     browser: BrowserName,
-    localStatePath: string,
+    localStatePath: string
   ): Promise<string>;
   decryptFirefoxLogin(
     encryptedBase64: string,
     key4DbPath: string,
-    masterPassword?: string,
+    masterPassword?: string
   ): Promise<string>;
   canDecryptChromiumPasswords(): boolean;
   canDecryptChromiumCookies(): boolean;

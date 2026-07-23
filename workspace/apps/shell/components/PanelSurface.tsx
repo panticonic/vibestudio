@@ -9,6 +9,12 @@ interface PanelSurfaceProps {
   bindingKey?: string;
   focused: boolean;
   className?: string;
+  /**
+   * Counter bumped on every committed layout/viewport change. ResizeObserver is
+   * blind to position-only movement, so an epoch change forces a bounds resync
+   * regardless of observer silence (multi-column layout plan §5.4).
+   */
+  layoutEpoch?: number;
   onPointerDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
 }
 
@@ -33,6 +39,7 @@ export function PanelSurface({
   bindingKey,
   focused,
   className,
+  layoutEpoch,
   onPointerDown,
 }: PanelSurfaceProps) {
   const elementRef = useRef<HTMLDivElement | null>(null);
@@ -135,6 +142,26 @@ export function PanelSurface({
       syncSlot();
     });
   }, [syncSlot]);
+
+  // An epoch change means the layout committed (or a column animation settled):
+  // the box may have moved without resizing, which no observer reports. Resync
+  // unconditionally, and in dev flag any drift between the DOM box and the
+  // last-sent native bounds one frame later.
+  useEffect(() => {
+    if (layoutEpoch === undefined) return;
+    scheduleSync();
+    if (!(import.meta as { env?: { DEV?: boolean } }).env?.DEV) return;
+    const raf = window.requestAnimationFrame(() => {
+      const bounds = readBounds(elementRef.current);
+      if (bounds && lastBoundsRef.current && !sameBounds(lastBoundsRef.current, bounds)) {
+        console.warn(
+          `[PanelSurface] bounds drift after layout epoch ${layoutEpoch} for ${panelId}`,
+          { dom: bounds, sent: lastBoundsRef.current }
+        );
+      }
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [layoutEpoch, panelId, scheduleSync]);
 
   useEffect(() => {
     if (bindingKeyRef.current === bindingKey) return;

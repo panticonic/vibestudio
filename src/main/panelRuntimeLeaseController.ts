@@ -16,7 +16,6 @@ import {
 } from "@vibestudio/shared/panel/panelLease";
 import { classifyRuntimeLeaseChange } from "@vibestudio/shared/panel/leaseTracker";
 import type { PanelHttpServerLike, PanelViewLike } from "@vibestudio/shared/panelInterfaces";
-import { BROWSER_SESSION_PARTITION } from "@vibestudio/shared/panelInterfaces";
 import { contextIdToPartition } from "@vibestudio/shared/contextIdToPartition";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { panelRuntimeMethods } from "@vibestudio/service-schemas/panelRuntime";
@@ -50,7 +49,14 @@ export interface PanelRuntimeLeaseControllerDeps {
   sendPanelEvent: (panelId: string, event: string, payload: unknown) => void;
   gatewayPort: number;
   gatewayBasePath?: string;
+  getBrowserSessionPartition: () => string;
   pinStore?: PanelPinStoreApi;
+  /**
+   * Panel ids currently bound to native slots (resident in the shell's
+   * column viewport); the GC protects them alongside the focused panel (§5.3).
+   * Absent on hosts without native slots (headless), where it is empty.
+   */
+  getResidentPanelIds?: () => string[];
   client: Partial<PanelHostRegistration> & {
     maxAssignedPanelViews?: number;
     uiIdleUnloadMs?: number;
@@ -112,6 +118,7 @@ export class PanelRuntimeLeaseController {
           : PANEL_UI_IDLE_SWEEP_MS),
       now: () => Date.now(),
       getFocusedPanelId: () => this.deps.registry.getFocusedPanelId(),
+      getResidentPanelIds: () => this.deps.getResidentPanelIds?.() ?? [],
       isPinned: (panelId) => this.deps.pinStore?.has(panelId) ?? false,
       isKeepLoaded: (panelId) => Boolean(this.deps.registry.getRuntimeLease(panelId)?.keepLoaded),
       panelExists: (panelId) => Boolean(this.deps.registry.getPanel(panelId)),
@@ -650,7 +657,7 @@ export class PanelRuntimeLeaseController {
   ): void {
     if (!view.hasView(panelId)) return;
     const target = snapshot.source.startsWith("browser:")
-      ? BROWSER_SESSION_PARTITION
+      ? this.deps.getBrowserSessionPartition()
       : snapshot.contextId
         ? contextIdToPartition(snapshot.contextId)
         : undefined;

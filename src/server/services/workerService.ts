@@ -19,6 +19,10 @@ import type { BuildSystemV2 } from "../buildV2/index.js";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import { findReviewedInternalDurableObjectTarget } from "../reviewedInternalDurableObjectTargets.js";
 import { resolveWorkspaceService, type ResolvedWorkspaceService } from "../workspaceServices.js";
+import {
+  browserEnvironmentIdentityFromContext,
+  isBrowserDataDurableObject,
+} from "../browserEnvironmentIdentity.js";
 
 type ServiceListRow =
   | {
@@ -78,6 +82,7 @@ const WorkerSourceSchema = z
 export function createWorkerService(deps: {
   buildSystem: BuildSystemV2;
   workspaceDecls: WorkspaceDeclarations;
+  workspaceId?: string;
   getCallerContextId?: (callerId: string) => string | null;
   loadContextDeclarations?: (contextId: string) => Promise<WorkspaceDeclarations | null>;
   // Resolution makes a declared target available; it does not create ownership.
@@ -95,6 +100,18 @@ export function createWorkerService(deps: {
   ) => void | Promise<void>;
 }): ServiceDefinition {
   const { buildSystem, workspaceDecls } = deps;
+  const resolvedDurableObjectKey = (
+    ctx: ServiceContext,
+    source: string,
+    className: string,
+    requestedObjectKey: string
+  ): string => {
+    if (!isBrowserDataDurableObject(source, className)) return requestedObjectKey;
+    if (!deps.workspaceId) {
+      throw new Error("Browser environment resolution is unavailable without a workspace id");
+    }
+    return browserEnvironmentIdentityFromContext(deps.workspaceId, ctx).environmentKey;
+  };
   const dynamicWorkspaceServiceLeaf = {
     capability: "workspace-service:*",
     tier: "gated" as const,
@@ -216,13 +233,19 @@ export function createWorkerService(deps: {
         ];
       },
       "workers.resolveDurableObject.target": async (ctx, [source, className, objectKey]) => {
-        const scoped = await resolveDurableObjectForCaller(
+        const resolvedObjectKey = resolvedDurableObjectKey(
           ctx,
           String(source),
           String(className),
           String(objectKey)
         );
-        const targetId = `do:${String(source)}:${String(className)}:${String(objectKey)}`;
+        const scoped = await resolveDurableObjectForCaller(
+          ctx,
+          String(source),
+          String(className),
+          resolvedObjectKey
+        );
+        const targetId = `do:${String(source)}:${String(className)}:${resolvedObjectKey}`;
         for (const authority of scoped.authority) {
           if (!authority.capability.startsWith("workspace-service:")) continue;
           if (source !== INTERNAL_DO_SOURCE) {
@@ -291,8 +314,14 @@ export function createWorkerService(deps: {
         return service;
       },
       resolveDurableObject: async (ctx, [source, className, objectKey]) => {
-        const scoped = await resolveDurableObjectForCaller(ctx, source, className, objectKey);
-        const targetId = `do:${source}:${className}:${objectKey}`;
+        const resolvedObjectKey = resolvedDurableObjectKey(ctx, source, className, objectKey);
+        const scoped = await resolveDurableObjectForCaller(
+          ctx,
+          source,
+          className,
+          resolvedObjectKey
+        );
+        const targetId = `do:${source}:${className}:${resolvedObjectKey}`;
         const singleton = scoped.decls.singletons.find(source, className);
         const contextId = singleton?.contextId ?? scoped.contextId;
         const buildRef = singleton?.contextId
@@ -301,11 +330,17 @@ export function createWorkerService(deps: {
         await deps.activateDurableObject?.({
           source,
           className,
-          objectKey,
+          objectKey: resolvedObjectKey,
           ...(contextId ? { contextId } : {}),
           ...(buildRef ? { buildRef } : {}),
         });
-        return { kind: "durable-object", source, className, objectKey, targetId };
+        return {
+          kind: "durable-object",
+          source,
+          className,
+          objectKey: resolvedObjectKey,
+          targetId,
+        };
       },
     }),
   };
@@ -355,7 +390,11 @@ export function createWorkerService(deps: {
     objectKey: string
   ): Promise<ScopedDurableObject> {
     if (source === INTERNAL_DO_SOURCE) {
-      const reviewed = findReviewedInternalDurableObjectTarget(source, className, objectKey);
+      const reviewed = findReviewedInternalDurableObjectTarget(
+        source,
+        className,
+        isBrowserDataDurableObject(source, className) ? "browser-environment" : objectKey
+      );
       if (!reviewed) throw new Error(missingDurableObjectMessage(source, className));
       return {
         decls: workspaceDecls,

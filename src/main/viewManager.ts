@@ -185,6 +185,8 @@ interface NativePanelSlotState {
   focused: boolean;
   ownerViewId: string;
   ownerGeneration: number;
+  /** Removes the WebContents "focus" listener installed at bind time. */
+  detachFocusListener?: () => void;
 }
 
 interface NativePanelSlotModel {
@@ -271,6 +273,10 @@ export class ViewManager {
   private viewOrderChangedCallbacks: Array<() => void> = [];
   /** Callbacks invoked when a panel view is hidden */
   private viewHiddenCallbacks: Array<(viewId: string) => void> = [];
+  /** Callbacks invoked when a slot-bound panel view's WebContents gains focus */
+  private nativeSlotFocusedCallbacks: Array<
+    (payload: { nativeSlotId: string; panelId: string }) => void
+  > = [];
   private readonly compositorRecovery: CompositorRecovery;
 
   constructor(options: {
@@ -986,12 +992,22 @@ export class ViewManager {
     const previousSlot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
     if (previousSlot && previousSlot.panelId !== panelId) {
       this.clearPanelSlotInternal(nativeSlotId);
+    } else if (previousSlot) {
+      // Same panel rebinding the same slot: drop the old focus listener so the
+      // fresh bind below never stacks a duplicate.
+      previousSlot.detachFocusListener?.();
     }
 
     log.verbose(` Bind native panel slot ${nativeSlotId} -> ${panelId}`);
     const bounds = this.normalizeAndClampPanelSlotBounds(request.bounds);
     const generation = this.nativePanelSlots.hostedShellGeneration;
     const focused = request.focused === true;
+    // Native→shell focus feedback (§5.2): observe every route by which the
+    // bound view's WebContents can gain focus (keyboard traversal, programmatic
+    // wc.focus(), click) so shell layout focus can follow.
+    const wc = managed.view.webContents;
+    const onViewFocus = (): void => this.handleNativeSlotViewFocus(nativeSlotId);
+    wc.on("focus", onViewFocus);
     this.nativePanelSlots.activeSlots.set(nativeSlotId, {
       nativeSlotId,
       panelId,
@@ -999,6 +1015,9 @@ export class ViewManager {
       focused,
       ownerViewId,
       ownerGeneration: generation,
+      detachFocusListener: () => {
+        if (!wc.isDestroyed()) wc.off("focus", onViewFocus);
+      },
     });
     this.nativePanelSlots.panelToSlot.set(panelId, nativeSlotId);
     this.visiblePanelId = panelId;
@@ -1383,6 +1402,7 @@ export class ViewManager {
     const slot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
     if (!slot) return;
 
+    slot.detachFocusListener?.();
     this.nativePanelSlots.activeSlots.delete(nativeSlotId);
     this.nativePanelSlots.panelToSlot.delete(slot.panelId);
     if (this.nativePanelSlots.focusedNativeSlotId === nativeSlotId) {
@@ -1402,6 +1422,47 @@ export class ViewManager {
         }
       }
     }
+  }
+
+  /**
+   * A slot-bound panel view's WebContents gained focus (by any route). Keep
+   * main-side focus state coherent and notify listeners so the shell's layout
+   * focus can follow (§5.2). Deliberately does NOT call focusVisibleView —
+   * the view already holds focus; re-focusing would loop.
+   */
+  private handleNativeSlotViewFocus(nativeSlotId: string): void {
+    const slot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
+    if (!slot) return;
+    for (const other of this.nativePanelSlots.activeSlots.values()) {
+      other.focused = other.nativeSlotId === nativeSlotId;
+    }
+    this.nativePanelSlots.focusedNativeSlotId = nativeSlotId;
+    this.visiblePanelId = slot.panelId;
+    for (const cb of this.nativeSlotFocusedCallbacks) {
+      cb({ nativeSlotId, panelId: slot.panelId });
+    }
+  }
+
+  /**
+   * Panel ids currently bound to a native slot (i.e. resident in the shell's
+   * column viewport). The resource policy protects these from GC (§5.3).
+   */
+  getSlotBoundPanelIds(): string[] {
+    return [...this.nativePanelSlots.panelToSlot.keys()];
+  }
+
+  /**
+   * Register a callback for slot-bound native view focus transitions.
+   * Returns an unsubscribe function.
+   */
+  onNativeSlotFocused(
+    callback: (payload: { nativeSlotId: string; panelId: string }) => void
+  ): () => void {
+    this.nativeSlotFocusedCallbacks.push(callback);
+    return () => {
+      const idx = this.nativeSlotFocusedCallbacks.indexOf(callback);
+      if (idx !== -1) this.nativeSlotFocusedCallbacks.splice(idx, 1);
+    };
   }
 
   private setFocusedNativePanelSlot(nativeSlotId: string): void {
@@ -1592,7 +1653,7 @@ export class ViewManager {
 
   /**
    * Register a callback invoked after every native layer-order change.
-   * Used by AutofillManager to re-add the dropdown overlay on top.
+   * Used by FormFillManager to re-add the dropdown overlay on top.
    */
   onViewOrderChanged(callback: () => void): () => void {
     this.viewOrderChangedCallbacks.push(callback);
@@ -1604,7 +1665,7 @@ export class ViewManager {
 
   /**
    * Register a callback invoked when a panel view is hidden.
-   * Used by AutofillManager to dismiss overlays on panel switch.
+   * Used by FormFillManager to dismiss overlays on panel switch.
    */
   onViewHidden(callback: (viewId: string) => void): () => void {
     this.viewHiddenCallbacks.push(callback);
@@ -2356,6 +2417,7 @@ export class ViewManager {
     // Clear all callbacks
     this.viewOrderChangedCallbacks.length = 0;
     this.viewHiddenCallbacks.length = 0;
+    this.nativeSlotFocusedCallbacks.length = 0;
     this.crashCallbacks.length = 0;
   }
 

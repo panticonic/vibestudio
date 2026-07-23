@@ -1,20 +1,47 @@
 const BROWSER_DATA_READ = new Set([
-  "classifyAgainstStore", "getAllBookmarks", "getAutofillFieldNames",
-  "getAutofillSuggestions", "getBookmarks", "getCookieDomains", "getCookies",
-  "getDomainReadiness", "getHistory", "getHistoryDomains", "getImportHistory",
-  "getNeverSaveOrigins", "getPasswordForSite", "getPasswordOrigins", "getPasswords",
-  "getPermissions", "getProfileImportState", "getSearchEngines", "isNeverSave",
-  "searchBookmarks", "searchHistory", "searchHistoryForAutocomplete",
+  "getAllBookmarks",
+  "getBookmarks",
+  "getCookieSiteSummary",
+  "getCookieSnapshot",
+  "getCookiesForOrigin",
+  "getFormFillSuggestions",
+  "getHistory",
+  "getImportJob",
+  "getNeverSaveOrigins",
+  "getPageFavicon",
+  "getPasswordForSite",
+  "getPasswords",
+  "getSearchEngines",
+  "getSitePreferences",
+  "isNeverSave",
+  "listDownloadRecords",
+  "listImportJobs",
+  "searchBookmarks",
+  "searchHistory",
+  "searchHistoryForAutocomplete",
 ]);
 
 const BROWSER_DATA_DELETE = new Set([
-  "clearAllHistory", "clearCookies", "deleteBookmark", "deleteCookie",
-  "deleteHistoryEntry", "deleteHistoryRange", "deletePassword", "removeNeverSave",
+  "clearAllCookies",
+  "clearAllHistory",
+  "clearCookiesForOrigin",
+  "clearFormFillValues",
+  "deleteBookmark",
+  "deleteFormFillValue",
+  "deleteHistoryEntry",
+  "deleteHistoryRange",
+  "deletePassword",
+  "endBrowserSession",
+  "removeNeverSave",
 ]);
 
 const WORKSPACE_GRAPH_DELETE = new Set([
-  "deleteChannelInvite", "deleteChannelMembership", "deleteLogHead", "deleteRef",
-  "purgeRevokedUserChannelIndexes", "vcsDropContext",
+  "deleteChannelInvite",
+  "deleteChannelMembership",
+  "deleteLogHead",
+  "deleteRef",
+  "purgeRevokedUserChannelIndexes",
+  "vcsDropContext",
 ]);
 
 /**

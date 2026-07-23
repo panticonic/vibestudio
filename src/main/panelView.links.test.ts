@@ -19,7 +19,10 @@ function makePanel(id: string, source = "about/new"): Panel {
 }
 
 function makeWebContents() {
-  type WindowOpenHandler = (details: { url: string }) => { action: "deny" };
+  type WindowOpenHandler = (details: {
+    url: string;
+    disposition?: Electron.HandlerDetails["disposition"];
+  }) => { action: "deny" };
   let windowOpenHandler: WindowOpenHandler | null = null;
   const webContents = Object.assign(new EventEmitter(), {
     id: 10,
@@ -32,7 +35,7 @@ function makeWebContents() {
   });
   return {
     webContents,
-    windowOpen(details: { url: string }) {
+    windowOpen(details: { url: string; disposition?: Electron.HandlerDetails["disposition"] }) {
       if (!windowOpenHandler) throw new Error("window open handler not registered");
       return windowOpenHandler(details);
     },
@@ -97,6 +100,7 @@ function createHarness(
     panelOrchestrator,
     sendPanelEvent,
     appPreloadPath: "/app-preload.js",
+    getBrowserSessionPartition: () => "persist:browser-test",
   } as never);
 
   return { panelId, panelView, panelOrchestrator, sendPanelEvent, ...wc };
@@ -272,11 +276,32 @@ describe("PanelView plain panel links", () => {
       expect(panelOrchestrator.createBrowserUrlPanel).toHaveBeenCalledWith(
         panelId,
         "https://example.com/",
-        { focus: true },
+        { focus: true, placement: "child" },
         undefined
       );
     });
     expect(event.preventDefault).toHaveBeenCalled();
+  });
+
+  it("opens middle-clicked web links as unfocused child panels", async () => {
+    const { panelId, panelView, windowOpen, panelOrchestrator } = createHarness();
+    await panelView.createViewForBrowser(panelId, "https://source.example/", "ctx-current");
+
+    const result = windowOpen({
+      url: "http://127.0.0.1:1234/panels/chat/",
+      disposition: "background-tab",
+    });
+
+    expect(result).toEqual({ action: "deny" });
+    await vi.waitFor(() => {
+      expect(panelOrchestrator.createBrowserUrlPanel).toHaveBeenCalledWith(
+        panelId,
+        "http://127.0.0.1:1234/panels/chat/",
+        { focus: false, placement: "child" },
+        undefined
+      );
+    });
+    expect(panelOrchestrator.createPanel).not.toHaveBeenCalled();
   });
 
   it("opens managed links from app views as app-scoped root panels", async () => {

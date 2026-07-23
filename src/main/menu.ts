@@ -3,6 +3,7 @@ import type { EventName, EventPayloads, EventService } from "@vibestudio/shared/
 import type { ViewManager } from "./viewManager.js";
 import type { BridgePanelLifecycle } from "@vibestudio/shared/panelInterfaces";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
+import { PANEL_KEYBOARD_ACCELERATORS } from "@vibestudio/shared/panelCommands";
 import { assertPresent } from "../lintHelpers";
 // These page ids identify workspace-provided units under `about/` that the menu
 // assumes exist. The `navigate-about` payload is a page id (not a source); the
@@ -166,7 +167,7 @@ export function buildCommonMenuItems(
   dev: MenuItemConstructorOptions[];
 } {
   const isMac = process.platform === "darwin";
-  const newPanelAccelerator = isMac ? "Cmd+T" : "Ctrl+Shift+T";
+  const newPanelAccelerator = PANEL_KEYBOARD_ACCELERATORS.newPanel;
   const reloadPanelAccelerator = isMac ? "Cmd+R" : "Ctrl+Shift+R";
   const forceReloadAccelerator = isMac ? "Cmd+Shift+R" : "Ctrl+Alt+R";
   const addressBarAccelerator = isMac ? "Cmd+L" : "Ctrl+Shift+L";
@@ -209,6 +210,20 @@ export function buildCommonMenuItems(
       label: "Permissions...",
       click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.PERMISSIONS }),
     },
+    {
+      label: "Downloads...",
+      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.DOWNLOADS }),
+    },
+    {
+      label: "Bookmarks...",
+      accelerator: "CmdOrCtrl+Shift+B",
+      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.BOOKMARKS }),
+    },
+    {
+      label: "History...",
+      accelerator: "CmdOrCtrl+Y",
+      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.HISTORY }),
+    },
   ];
 
   const edit: MenuItemConstructorOptions[] = [
@@ -218,6 +233,12 @@ export function buildCommonMenuItems(
     { label: "Cut", accelerator: "CmdOrCtrl+X", role: "cut" },
     { label: "Copy", accelerator: "CmdOrCtrl+C", role: "copy" },
     { label: "Paste", accelerator: "CmdOrCtrl+V", role: "paste" },
+    { type: "separator" },
+    {
+      label: "Find in Page…",
+      accelerator: "CmdOrCtrl+F",
+      click: () => emitMenuEvent("toggle-find-in-page"),
+    },
   ];
 
   const view: MenuItemConstructorOptions[] = [];
@@ -354,11 +375,11 @@ export function setupMenu(
   interceptPanelDevToolsShortcut(shellContents);
 
   const isMac = process.platform === "darwin";
-  const newPanelAccelerator = isMac ? "Cmd+T" : "Ctrl+Shift+T";
+  const newPanelAccelerator = PANEL_KEYBOARD_ACCELERATORS.newPanel;
   const reloadPanelAccelerator = isMac ? "Cmd+R" : "Ctrl+Shift+R";
   const forceReloadAccelerator = isMac ? "Cmd+Shift+R" : "Ctrl+Alt+R";
   const addressBarAccelerator = isMac ? "Cmd+L" : "Ctrl+Shift+L";
-  const closePanelAccelerator = isMac ? "Cmd+W" : "Ctrl+Shift+W";
+  const closePanelAccelerator = PANEL_KEYBOARD_ACCELERATORS.closePanel;
   const commandPaletteAccelerator = isMac ? "Cmd+K" : "Ctrl+Shift+K";
   const redoAccelerator = isMac ? "Cmd+Shift+Z" : "Ctrl+Shift+Z";
   const viewSubmenu: MenuItemConstructorOptions[] = [];

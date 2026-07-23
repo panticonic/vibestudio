@@ -23,20 +23,24 @@ describe("reviewed internal Durable Object targets", () => {
     });
   });
 
-  it("reviews only the one BrowserDataDO storage identity for broker code", () => {
+  it("reviews only the server-derived BrowserDataDO resolver for broker code", () => {
     expect(
-      findReviewedInternalDurableObjectTarget("vibestudio/internal", "BrowserDataDO", "global")
+      findReviewedInternalDurableObjectTarget(
+        "vibestudio/internal",
+        "BrowserDataDO",
+        "browser-environment"
+      )
     ).toEqual({
       source: "vibestudio/internal",
       className: "BrowserDataDO",
-      objectKey: "global",
+      objectKey: "browser-environment",
       authority: {
         capability: "service:workers.resolveDurableObject",
         principals: ["code"],
       },
     });
     expect(
-      findReviewedInternalDurableObjectTarget("vibestudio/internal", "BrowserDataDO", "guessed")
+      findReviewedInternalDurableObjectTarget("vibestudio/internal", "BrowserDataDO", "global")
     ).toBeNull();
   });
 

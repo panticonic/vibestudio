@@ -168,6 +168,7 @@
     "@types/json-schema": "^7.0.15",
     "@types/ws": "^8.18.1",
     "@vibestudio/browser-data": "workspace:*",
+    "@vibestudio/browser-import": "workspace:*",
     "@vibestudio/content-addressing": "workspace:*",
     "@vibestudio/credential-client": "workspace:*",
     "@vibestudio/dev-log": "workspace:*",

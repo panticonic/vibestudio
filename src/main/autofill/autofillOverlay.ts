@@ -12,7 +12,7 @@ import { createDevLogger } from "@vibestudio/dev-log";
 const overlayLog = createDevLogger("AutofillOverlay");
 
 export interface OverlayCallbacks {
-  onSelect: (credentialId: number) => void;
+  onSelect: (itemId: number) => void;
   onDismiss: () => void;
 }
 
@@ -91,18 +91,26 @@ export class AutofillOverlay {
   }
 
   show(
-    credentials: Array<{ id: number; username: string; origin: string }>,
+    items: Array<{
+      id: number;
+      username?: string;
+      origin?: string;
+      primary?: string;
+      secondary?: string;
+    }>,
     bounds: { x: number; y: number; width: number; height: number }
   ): void {
     if (!this.window) return;
     const view = this.ensureView();
-    this.credentialIds = credentials.map((credential) => credential.id);
+    this.credentialIds = items.map((item) => item.id);
     this.selectedIndex = 0;
 
-    const itemsHtml = credentials
+    const itemsHtml = items
       .map(
-        (c) =>
-          `<div class="item" data-id="${c.id}" tabindex="0">${escapeHtml(c.username || "(no username)")}<div class="origin">${escapeHtml(c.origin)}</div></div>`
+        (item) =>
+          `<div class="item" data-id="${item.id}" tabindex="0">${escapeHtml(
+            item.primary ?? item.username ?? "(no username)"
+          )}<div class="origin">${escapeHtml(item.secondary ?? item.origin ?? "")}</div></div>`
       )
       .join("");
 
@@ -155,7 +163,7 @@ ${itemsHtml}
 </body></html>`;
 
     const itemHeight = 48;
-    const dropdownHeight = Math.min(credentials.length * itemHeight + 2, 200);
+    const dropdownHeight = Math.min(items.length * itemHeight + 2, 200);
     const dropdownWidth = Math.max(bounds.width, 250);
 
     // Clamp to window bounds

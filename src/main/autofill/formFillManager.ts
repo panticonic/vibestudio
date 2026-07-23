@@ -1,5 +1,5 @@
 /**
- * AutofillManager — main process autofill orchestrator.
+ * FormFillManager — one main-process owner for passwords and structured values.
  *
  * Manages per-webContents state: form detection, credential matching,
  * auto-fill, credential dropdown, and save/update prompts.
@@ -15,13 +15,19 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ViewManager } from "../viewManager.js";
-import type { BrowserDataClient, StoredPassword } from "@vibestudio/browser-data";
+import type {
+  BrowserDataClient,
+  FormFillType,
+  StoredFormFill,
+  StoredPassword,
+} from "@vibestudio/browser-data";
 import {
   AUTOFILL_WORLD_ID,
   getContentScript,
   getPullStateScript,
   getReadSnapshotScript,
   getFillScript,
+  getFillValueScript,
   getInjectKeyIconScript,
 } from "./contentScript.js";
 import { AutofillOverlay } from "./autofillOverlay.js";
@@ -30,7 +36,7 @@ import { assertPresent } from "../../lintHelpers";
 
 const log = createDevLogger("Autofill");
 
-type PasswordStoreLike = Pick<
+type FormFillStoreLike = Pick<
   BrowserDataClient,
   | "getPasswords"
   | "getPasswordForSite"
@@ -42,6 +48,9 @@ type PasswordStoreLike = Pick<
   | "deletePassword"
   | "getNeverSavePasswordOrigins"
   | "removeNeverSavePassword"
+  | "getFormFillSuggestions"
+  | "addFormFillValue"
+  | "markFormFillValueUsed"
 >;
 
 interface FieldInfo {
@@ -69,7 +78,10 @@ interface FieldInfo {
 }
 
 interface FocusInfo {
-  fieldType: "username" | "password";
+  fieldType: "username" | "password" | "form-fill";
+  formFillType?: FormFillType;
+  selector?: string;
+  prefix?: string;
   rect: {
     x: number;
     y: number;
@@ -92,13 +104,21 @@ interface PulledState {
   fields: FieldInfo | null;
   focus: FocusInfo | null;
   pending: PendingSnapshot | null;
+  formPending: PendingFormFillSnapshot | null;
   fieldsRemoved: boolean;
   usernameSnapshot: string | null;
   overlayKey: "ArrowDown" | "ArrowUp" | "Enter" | "Escape" | null;
   forceRefill: boolean;
 }
 
-interface AutofillPanelState {
+interface PendingFormFillSnapshot {
+  timestamp: number;
+  pageUrl: string;
+  actionUrl: string | null;
+  values: Array<{ type: FormFillType; value: string; label: string }>;
+}
+
+interface FormFillPanelState {
   credentials: StoredPassword[];
   usernameContext?: string;
   origin: string;
@@ -115,6 +135,12 @@ interface AutofillPanelState {
    * during the current page load. Reset on navigation. Audit S3.
    */
   warnedSubFrameOrigins: Set<string>;
+  valueSuggestions: StoredFormFill[];
+  valueFocus?: {
+    type: FormFillType;
+    selector: string;
+  };
+  pendingFormFill?: PendingFormFillSnapshot;
 }
 
 interface PendingCredential {
@@ -138,26 +164,28 @@ type WebRequestDetailsWithWebContentsId = Electron.OnCompletedListenerDetails & 
   webContentsId?: number;
 };
 
-export class AutofillManager {
-  private panelState = new Map<number, AutofillPanelState>();
+export class FormFillManager {
+  private panelState = new Map<number, FormFillPanelState>();
   private pendingCredentials = new Map<string, PendingCredential>(); // panelId -> pending
-  private passwordStore: PasswordStoreLike;
+  private pendingFormFills = new Map<string, PendingFormFillSnapshot>();
+  private formFillStore: FormFillStoreLike;
   private eventService: EventService;
   private getViewManager: () => ViewManager;
   private overlay: AutofillOverlay;
   private activeOverlayWcId: number | null = null;
+  private activeOverlayKind: "password" | "value" | null = null;
   /** Active webRequest watchers by wcId, for multiplexed handler */
   private webRequestWatchers = new Map<number, { origin: string; actionUrl?: string }>();
   /** Sessions that already have a webRequest.onCompleted handler installed */
   private webRequestSessions = new Set<Electron.Session>();
 
   constructor(deps: {
-    passwordStore: PasswordStoreLike;
+    formFillStore: FormFillStoreLike;
     eventService: EventService;
     getViewManager: () => ViewManager;
     autofillOverlayPreloadPath: string;
   }) {
-    this.passwordStore = deps.passwordStore;
+    this.formFillStore = deps.formFillStore;
     this.eventService = deps.eventService;
     this.getViewManager = deps.getViewManager;
     this.overlay = new AutofillOverlay(deps.autofillOverlayPreloadPath);
@@ -220,6 +248,7 @@ export class AutofillManager {
       hasPendingSnapshot: false,
       hasAutoFilled: false,
       warnedSubFrameOrigins: new Set<string>(),
+      valueSuggestions: [],
     });
 
     // Inject content script on dom-ready and resolve origin if needed
@@ -250,6 +279,7 @@ export class AutofillManager {
         void this.refreshCredentialsForOrigin(newOrigin);
         state.signalCounts = { strong: 0, medium: 0, weak: 0 };
         state.hasPendingSnapshot = false;
+        state.pendingFormFill = undefined;
         state.hasInjected = false;
         state.fields = undefined;
         this.cleanupWebRequest(webContentsId, state);
@@ -273,7 +303,7 @@ export class AutofillManager {
     // SPA navigation = medium signal
     const inPageNavHandler = () => {
       const state = this.panelState.get(webContentsId);
-      if (state?.hasPendingSnapshot) {
+      if (state?.hasPendingSnapshot || state?.pendingFormFill) {
         void this.addSignal(webContentsId, "medium");
       }
     };
@@ -282,7 +312,7 @@ export class AutofillManager {
     // Full navigation after submit = strong signal
     const willNavigateHandler = () => {
       const state = this.panelState.get(webContentsId);
-      if (state?.hasPendingSnapshot) {
+      if (state?.hasPendingSnapshot || state?.pendingFormFill) {
         void this.addSignal(webContentsId, "strong");
       }
     };
@@ -317,6 +347,7 @@ export class AutofillManager {
     const viewId = vm.findViewIdByWebContentsId(webContentsId);
     if (viewId) {
       this.pendingCredentials.delete(viewId);
+      this.pendingFormFills.delete(viewId);
     }
 
     // Remove event listeners
@@ -351,8 +382,12 @@ export class AutofillManager {
           await this.handleConfirmSave(panelId, action);
           return;
         },
+        confirmFormFill: async (_ctx, [panelId, action]) => {
+          await this.handleConfirmFormFill(panelId, action);
+          return;
+        },
         listSavedPasswords: async () => {
-          const rows = await this.passwordStore.getPasswords();
+          const rows = await this.formFillStore.getPasswords();
           return rows.map((row) => ({
             id: row.id,
             origin: row.origin_url,
@@ -360,12 +395,12 @@ export class AutofillManager {
           }));
         },
         deleteSavedPassword: async (_ctx, [id]) => {
-          await this.passwordStore.deletePassword(id);
+          await this.formFillStore.deletePassword(id);
           return;
         },
-        listNeverSaveOrigins: async () => await this.passwordStore.getNeverSavePasswordOrigins(),
+        listNeverSaveOrigins: async () => await this.formFillStore.getNeverSavePasswordOrigins(),
         removeNeverSaveOrigin: async (_ctx, [origin]) => {
-          await this.passwordStore.removeNeverSavePassword(origin);
+          await this.formFillStore.removeNeverSavePassword(origin);
           return;
         },
       }),
@@ -421,7 +456,7 @@ export class AutofillManager {
    */
   private async executeInActiveFrame(
     wc: WebContents,
-    _state: AutofillPanelState,
+    _state: FormFillPanelState,
     code: string
   ): Promise<unknown> {
     return wc.executeJavaScriptInIsolatedWorld(AUTOFILL_WORLD_ID, [{ code }]);
@@ -454,7 +489,7 @@ export class AutofillManager {
   private async processPulledState(
     wcId: number,
     wc: WebContents,
-    state: AutofillPanelState,
+    state: FormFillPanelState,
     pulled: PulledState
   ): Promise<void> {
     // Update origin from actual URL
@@ -511,10 +546,31 @@ export class AutofillManager {
     }
 
     // Handle field focus -> show dropdown or re-fill
-    if (pulled.focus && state.credentials.length >= 2) {
+    if (
+      pulled.focus?.fieldType === "form-fill" &&
+      pulled.focus.formFillType &&
+      pulled.focus.selector
+    ) {
+      const suggestions = await this.formFillStore.getFormFillSuggestions({
+        type: pulled.focus.formFillType,
+        prefix: pulled.focus.prefix || undefined,
+        limit: 20,
+      });
+      state.valueSuggestions = suggestions;
+      state.valueFocus = {
+        type: pulled.focus.formFillType,
+        selector: pulled.focus.selector,
+      };
+      if (suggestions.length > 0) {
+        this.showValueOverlay(wcId, wc, state, pulled.focus);
+      } else if (this.activeOverlayWcId === wcId) {
+        this.hideOverlay();
+      }
+    } else if (pulled.focus && state.credentials.length >= 2) {
       this.showOverlay(wcId, wc, state, pulled.focus);
     } else if (
       pulled.focus &&
+      pulled.focus.fieldType !== "form-fill" &&
       state.credentials.length === 1 &&
       state.fields &&
       (!state.hasAutoFilled || pulled.forceRefill)
@@ -533,6 +589,16 @@ export class AutofillManager {
     if (pulled.pending && !state.hasPendingSnapshot) {
       state.hasPendingSnapshot = true;
       this.startWebRequestWatch(wcId, wc, state.origin, pulled.pending.actionUrl ?? undefined);
+    }
+
+    if (
+      pulled.formPending &&
+      Date.now() - pulled.formPending.timestamp < 30_000 &&
+      pulled.formPending.values.length > 0 &&
+      pulled.formPending.values.length <= 20
+    ) {
+      state.pendingFormFill = pulled.formPending;
+      this.startWebRequestWatch(wcId, wc, state.origin, pulled.formPending.actionUrl ?? undefined);
     }
 
     // Handle field removal (SPA signal)
@@ -572,7 +638,7 @@ export class AutofillManager {
 
     try {
       await this.executeInActiveFrame(wc, state, script);
-      await this.passwordStore.updatePasswordLastUsed(credential.id);
+      await this.formFillStore.updatePasswordLastUsed(credential.id);
       log.verbose(` Filled credential for ${credential.origin_url}`);
     } catch (err) {
       log.verbose(` Fill failed: ${err}`);
@@ -582,7 +648,7 @@ export class AutofillManager {
   private async fillUsernameOnly(
     wcId: number,
     wc: WebContents,
-    state: AutofillPanelState,
+    state: FormFillPanelState,
     credential: StoredPassword,
     usernameSelector: string
   ): Promise<void> {
@@ -614,7 +680,7 @@ export class AutofillManager {
    */
   private verifyTopFrameOriginForFill(
     wc: WebContents,
-    state: AutofillPanelState,
+    state: FormFillPanelState,
     credential: StoredPassword
   ): boolean {
     const liveOrigin = this.deriveOrigin(wc);
@@ -641,7 +707,7 @@ export class AutofillManager {
   private showOverlay(
     wcId: number,
     wc: WebContents,
-    state: AutofillPanelState,
+    state: FormFillPanelState,
     focus: FocusInfo
   ): void {
     const vm = this.getViewManager();
@@ -666,7 +732,37 @@ export class AutofillManager {
     }));
 
     this.activeOverlayWcId = wcId;
+    this.activeOverlayKind = "password";
     this.overlay.show(credentialItems, bounds);
+    void this.executeInActiveFrame(wc, state, "window.__vibestudio_af_overlay_visible = true");
+  }
+
+  private showValueOverlay(
+    wcId: number,
+    wc: WebContents,
+    state: FormFillPanelState,
+    focus: FocusInfo
+  ): void {
+    const viewId = this.getViewManager().findViewIdByWebContentsId(wcId);
+    if (!viewId) return;
+    const viewInfo = this.getViewManager().getViewInfo(viewId);
+    if (!viewInfo) return;
+    const bounds = {
+      x: viewInfo.bounds.x + focus.rect.viewportX,
+      y: viewInfo.bounds.y + focus.rect.viewportY,
+      width: focus.rect.width,
+      height: focus.rect.height,
+    };
+    this.activeOverlayWcId = wcId;
+    this.activeOverlayKind = "value";
+    this.overlay.show(
+      state.valueSuggestions.map((suggestion) => ({
+        id: suggestion.id,
+        primary: suggestion.value,
+        secondary: suggestion.displayLabel ?? humanizeFormFillType(suggestion.type),
+      })),
+      bounds
+    );
     void this.executeInActiveFrame(wc, state, "window.__vibestudio_af_overlay_visible = true");
   }
 
@@ -682,14 +778,34 @@ export class AutofillManager {
     }
     this.overlay.hide();
     this.activeOverlayWcId = null;
+    this.activeOverlayKind = null;
   }
 
-  private async handleOverlaySelect(credentialId: number): Promise<void> {
+  private async handleOverlaySelect(itemId: number): Promise<void> {
+    const activeWcId = this.activeOverlayWcId;
+    const activeKind = this.activeOverlayKind;
+    if (activeKind === "value" && activeWcId !== null) {
+      const state = this.panelState.get(activeWcId);
+      const suggestion = state?.valueSuggestions.find((value) => value.id === itemId);
+      const target = state?.valueFocus;
+      const viewId = this.getViewManager().findViewIdByWebContentsId(activeWcId);
+      const wc = viewId ? this.getViewManager().getWebContents(viewId) : null;
+      this.hideOverlay();
+      if (!state || !suggestion || !target || !wc || wc.isDestroyed()) return;
+      if (this.deriveOrigin(wc) !== state.origin) return;
+      await this.executeInActiveFrame(
+        wc,
+        state,
+        getFillValueScript(target.selector, suggestion.value)
+      );
+      await this.formFillStore.markFormFillValueUsed(suggestion.id);
+      return;
+    }
     this.hideOverlay();
 
     // Find which webContents this credential belongs to
     for (const [wcId, state] of this.panelState) {
-      const credential = state.credentials.find((c) => c.id === credentialId);
+      const credential = state.credentials.find((c) => c.id === itemId);
       if (!credential || !state.fields) continue;
 
       const vm = this.getViewManager();
@@ -710,13 +826,7 @@ export class AutofillManager {
 
   private async addSignal(wcId: number, tier: "strong" | "medium" | "weak"): Promise<void> {
     const state = this.panelState.get(wcId);
-    if (!state || !state.hasPendingSnapshot) return;
-
-    // Permanently suppressed
-    if (await this.passwordStore.isNeverSavePassword(state.origin)) return;
-
-    // Suppress if user recently dismissed save for this origin
-    if (state.dismissedAt && Date.now() - state.dismissedAt < 10 * 60 * 1000) return;
+    if (!state || (!state.hasPendingSnapshot && !state.pendingFormFill)) return;
 
     state.signalCounts[tier]++;
 
@@ -726,11 +836,38 @@ export class AutofillManager {
     // Single medium with no other signals: check if credential changed (update existing only)
     const shouldCheckChange = medium === 1 && strong === 0 && weak === 0;
 
+    if (state.pendingFormFill && shouldSave) {
+      this.triggerFormFillLearn(wcId);
+    }
+
+    if (!state.hasPendingSnapshot) return;
+    if (await this.formFillStore.isNeverSavePassword(state.origin)) return;
+    if (state.dismissedAt && Date.now() - state.dismissedAt < 10 * 60 * 1000) return;
+
     if (shouldSave) {
       void this.triggerSave(wcId, false);
     } else if (shouldCheckChange) {
       void this.triggerSave(wcId, true);
     }
+  }
+
+  private triggerFormFillLearn(wcId: number): void {
+    const state = this.panelState.get(wcId);
+    const pending = state?.pendingFormFill;
+    if (!state || !pending) return;
+    const panelId = this.getViewManager().findViewIdByWebContentsId(wcId);
+    if (!panelId) return;
+
+    state.pendingFormFill = undefined;
+    this.pendingFormFills.set(panelId, pending);
+    this.eventService.emit("autofill:form-fill-save-prompt", {
+      panelId,
+      origin: state.origin,
+      fields: pending.values.map((field) => ({
+        type: field.type,
+        label: field.label || humanizeFormFillType(field.type),
+      })),
+    });
   }
 
   private async triggerSave(wcId: number, onlyIfChanged: boolean): Promise<void> {
@@ -767,7 +904,7 @@ export class AutofillManager {
     if (existing) {
       if (existing.password === snapshot.password) {
         // Same credentials — silently update last used, clean up
-        await this.passwordStore.updatePasswordLastUsed(existing.id);
+        await this.formFillStore.updatePasswordLastUsed(existing.id);
         state.hasPendingSnapshot = false;
         state.signalCounts = { strong: 0, medium: 0, weak: 0 };
         this.cleanupWebRequest(wcId, state);
@@ -899,7 +1036,7 @@ export class AutofillManager {
     };
   }
 
-  private cleanupWebRequest(wcId: number, state: AutofillPanelState): void {
+  private cleanupWebRequest(wcId: number, state: FormFillPanelState): void {
     if (state.webRequestCleanup) {
       state.webRequestCleanup();
     }
@@ -917,11 +1054,11 @@ export class AutofillManager {
 
     if (action === "save") {
       if (pending.isUpdate && pending.existingId !== undefined) {
-        await this.passwordStore.updatePassword(pending.existingId, {
+        await this.formFillStore.updatePassword(pending.existingId, {
           password: pending.password,
         });
       } else {
-        await this.passwordStore.addPassword({
+        await this.formFillStore.addPassword({
           url: pending.origin,
           username: pending.username,
           password: pending.password,
@@ -932,7 +1069,7 @@ export class AutofillManager {
       this.eventService.emit("browser-data-changed", { dataType: "passwords" });
     } else if (action === "never") {
       // Permanently suppress saves for this origin
-      await this.passwordStore.addNeverSavePassword(pending.origin);
+      await this.formFillStore.addNeverSavePassword(pending.origin);
     } else if (action === "dismiss") {
       // Temporarily suppress for 10 minutes
       for (const state of this.panelState.values()) {
@@ -943,9 +1080,25 @@ export class AutofillManager {
     }
   }
 
+  private async handleConfirmFormFill(panelId: string, action: "save" | "dismiss"): Promise<void> {
+    const pending = this.pendingFormFills.get(panelId);
+    if (!pending) return;
+    this.pendingFormFills.delete(panelId);
+    if (action === "dismiss") return;
+
+    for (const field of pending.values) {
+      await this.formFillStore.addFormFillValue({
+        type: field.type,
+        value: field.value,
+        displayLabel: field.label || humanizeFormFillType(field.type),
+      });
+    }
+    this.eventService.emit("browser-data-changed", { dataType: "formFill" });
+  }
+
   private async injectKeyIcon(
     wc: WebContents,
-    state: AutofillPanelState,
+    state: FormFillPanelState,
     fieldSelector: string
   ): Promise<void> {
     if (wc.isDestroyed()) return;
@@ -961,7 +1114,7 @@ export class AutofillManager {
   // ===========================================================================
 
   private async refreshCredentialsForOrigin(origin: string): Promise<void> {
-    const freshCredentials = await this.passwordStore.getPasswordForSite(origin);
+    const freshCredentials = await this.formFillStore.getPasswordForSite(origin);
     for (const state of this.panelState.values()) {
       if (state.origin === origin) {
         state.credentials = freshCredentials;
@@ -987,4 +1140,8 @@ export class AutofillManager {
     this.overlay.destroy();
     ipcMain.removeAllListeners("vibestudio:autofill:ping");
   }
+}
+
+function humanizeFormFillType(type: FormFillType): string {
+  return type.replace(/-/g, " ");
 }

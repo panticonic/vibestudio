@@ -226,6 +226,14 @@
       "principals": ["user", "host", "code"]
     },
     "methods": {
+      "confirmFormFill": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
       "confirmSave": {
         "authority": {
           "inherits": true
@@ -264,6 +272,943 @@
         },
         "access": {
           "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "browserEnvironment": {
+    "service": {
+      "principals": ["host", "code"]
+    },
+    "methods": {
+      "cancelDownload": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.cancelDownload"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.cancelDownload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.cancelDownload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.cancelDownload"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.cancelDownload",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.cancelDownload",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "cancelImportRead": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.cancelImportRead"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.cancelImportRead"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.cancelImportRead"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.cancelImportRead"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.cancelImportRead",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.cancelImportRead",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "flushCookieProjection": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.flushCookieProjection"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.flushCookieProjection"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.flushCookieProjection"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.flushCookieProjection"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.flushCookieProjection",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.flushCookieProjection",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "getCookieProjectionDiagnostics": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.getCookieProjectionDiagnostics"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.getCookieProjectionDiagnostics"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.getCookieProjectionDiagnostics"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.getCookieProjectionDiagnostics"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.getCookieProjectionDiagnostics",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.getCookieProjectionDiagnostics",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getImportHost": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.getImportHost"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.getImportHost"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.getImportHost"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.getImportHost"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.getImportHost",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.getImportHost",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listDownloads": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.listDownloads"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.listDownloads"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.listDownloads"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.listDownloads"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.listDownloads",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.listDownloads",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listImportOpenTabs": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.listImportOpenTabs"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.listImportOpenTabs"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.listImportOpenTabs"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.listImportOpenTabs"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.listImportOpenTabs",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.listImportOpenTabs",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listImportSources": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.listImportSources"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.listImportSources"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.listImportSources"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.listImportSources"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.listImportSources",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.listImportSources",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "nextImportFrame": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.nextImportFrame"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.nextImportFrame"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.nextImportFrame"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.nextImportFrame"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.nextImportFrame",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.nextImportFrame",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "openDownload": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.openDownload"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.openDownload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.openDownload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.openDownload"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.openDownload",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.openDownload",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "pauseDownload": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.pauseDownload"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.pauseDownload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.pauseDownload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.pauseDownload"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.pauseDownload",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.pauseDownload",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "previewImportSource": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.previewImportSource"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.previewImportSource"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.previewImportSource"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.previewImportSource"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.previewImportSource",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.previewImportSource",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "resumeDownload": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.resumeDownload"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.resumeDownload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.resumeDownload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.resumeDownload"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.resumeDownload",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.resumeDownload",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "revealDownload": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.revealDownload"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.revealDownload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.revealDownload"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.revealDownload"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.revealDownload",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.revealDownload",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "startImportRead": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:browserEnvironment.startImportRead"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:browserEnvironment.startImportRead"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:browserEnvironment.startImportRead"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:browserEnvironment.startImportRead"
+          },
+          "prepared": {
+            "resolver": "browserEnvironment.broker.startImportRead",
+            "leaves": [
+              {
+                "capability": "service:browserEnvironment.startImportRead",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": ["code"]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
         }
       }
     }
@@ -501,12 +1446,28 @@
       "principals": ["user", "code"]
     },
     "methods": {
+      "clearBrowserSiteData": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
       "ensureLoaded": {
         "authority": {
           "inherits": true
         },
         "access": {
           "sensitivity": "write"
+        }
+      },
+      "findInPage": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
         }
       },
       "forceReloadView": {
@@ -533,6 +1494,14 @@
           "sensitivity": "read"
         }
       },
+      "getBrowserSiteState": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
       "getChromeState": {
         "authority": {
           "inherits": true
@@ -542,6 +1511,14 @@
         }
       },
       "getFocusedPanelId": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getPanelLayout": {
         "authority": {
           "inherits": true
         },
@@ -581,6 +1558,14 @@
           "sensitivity": "write"
         }
       },
+      "printBrowserPage": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
       "reloadView": {
         "authority": {
           "inherits": true
@@ -589,7 +1574,63 @@
           "sensitivity": "write"
         }
       },
+      "saveBrowserPagePdf": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "savePanelLayout": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "setBrowserZoom": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "setFocusedPanelId": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "stopBrowserMedia": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "stopFindInPage": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
       "takeOver": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "toggleBrowserBookmark": {
         "authority": {
           "inherits": true
         },

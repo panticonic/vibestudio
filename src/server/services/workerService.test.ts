@@ -74,6 +74,7 @@ function createDeps() {
     },
   ];
   return {
+    workspaceId: "workspace-test",
     buildSystem: {
       getGraph: () => ({ allNodes: () => workerNodes }),
       listBuildUnits: async () =>
@@ -120,20 +121,26 @@ function createProductionAuthorityDispatcher(deps: ReturnType<typeof createDeps>
 }
 
 function browserDataExtensionCaller() {
-  return createVerifiedCaller("extension:browser-data", "extension", {
-    callerId: "extension:browser-data",
-    callerKind: "extension",
-    repoPath: "extensions/browser-data",
-    effectiveVersion: "browser-data-test",
-    executionDigest: "b".repeat(64),
-    requested: [
-      {
-        capability: "service:workers.resolveDurableObject",
-        resource: { kind: "prefix", prefix: "" },
-      },
-    ],
-    evalCeilings: [],
-  });
+  return createVerifiedCaller(
+    "extension:browser-data",
+    "extension",
+    {
+      callerId: "extension:browser-data",
+      callerKind: "extension",
+      repoPath: "extensions/browser-data",
+      effectiveVersion: "browser-data-test",
+      executionDigest: "b".repeat(64),
+      requested: [
+        {
+          capability: "service:workers.resolveDurableObject",
+          resource: { kind: "prefix", prefix: "" },
+        },
+      ],
+      evalCeilings: [],
+    },
+    null,
+    { userId: "usr_alice", handle: "alice" }
+  );
 }
 
 describe("workerService workspace service resolution", () => {
@@ -488,7 +495,7 @@ describe("workerService workspace service resolution", () => {
     });
   });
 
-  it("resolves BrowserDataDO only for its reviewed broker code and exact key", async () => {
+  it("derives BrowserDataDO identity from the verified broker user and workspace", async () => {
     const dispatcher = createProductionAuthorityDispatcher(createDeps());
     const caller = browserDataExtensionCaller();
 
@@ -496,19 +503,20 @@ describe("workerService workspace service resolution", () => {
       dispatcher.dispatch({ caller }, "workers", "resolveDurableObject", [
         "vibestudio/internal",
         "BrowserDataDO",
-        "global",
+        "browser-environment",
       ])
     ).resolves.toMatchObject({
-      targetId: "do:vibestudio/internal:BrowserDataDO:global",
+      targetId: expect.stringMatching(/^do:vibestudio\/internal:BrowserDataDO:v1_[A-Za-z0-9_-]+$/),
     });
 
-    await expect(
-      dispatcher.dispatch({ caller }, "workers", "resolveDurableObject", [
-        "vibestudio/internal",
-        "BrowserDataDO",
-        "guessed",
-      ])
-    ).rejects.toThrow("No Durable Object class registered");
+    const second = await dispatcher.dispatch({ caller }, "workers", "resolveDurableObject", [
+      "vibestudio/internal",
+      "BrowserDataDO",
+      "caller-controlled-key",
+    ]);
+    expect(second).toMatchObject({
+      targetId: expect.stringMatching(/^do:vibestudio\/internal:BrowserDataDO:v1_[A-Za-z0-9_-]+$/),
+    });
   });
 
   it("does not expose arbitrary internal classes or let users bypass broker authority", async () => {
@@ -530,7 +538,7 @@ describe("workerService workspace service resolution", () => {
       dispatcher.dispatch({ caller: user }, "workers", "resolveDurableObject", [
         "vibestudio/internal",
         "BrowserDataDO",
-        "global",
+        "browser-environment",
       ])
     ).rejects.toMatchObject({ code: "EACCES" });
   });

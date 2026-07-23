@@ -659,6 +659,85 @@ describe("PanelManager", () => {
     });
   });
 
+  it("resolves the manifest placement hint into the snapshot when the call site has none", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
+    tempDirs.push(workspacePath);
+
+    const panelDir = path.join(workspacePath, "panels", "docs");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({
+        name: "docs",
+        vibestudio: {
+          title: "Docs",
+          placement: { disposition: "split-below", preferredWidth: 500 },
+        },
+      })
+    );
+
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps(workspacePath);
+    const manager = new PanelManager({ registry, ...deps });
+
+    const created = await manager.create("panels/docs", { isRoot: true, addAsRoot: true });
+    const snapshot = getCurrentSnapshot(registry.getPanel(created.panelId)!);
+    expect(snapshot.placement).toEqual({ disposition: "split-below", preferredWidth: 500 });
+    // The hint also rides the persisted per-entry options blob.
+    expect(snapshot.options.placement).toEqual({
+      disposition: "split-below",
+      preferredWidth: 500,
+    });
+  });
+
+  it("prefers the call-site placement hint over the manifest default", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
+    tempDirs.push(workspacePath);
+
+    const panelDir = path.join(workspacePath, "panels", "docs");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({
+        name: "docs",
+        vibestudio: { title: "Docs", placement: { disposition: "split-below" } },
+      })
+    );
+
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps(workspacePath);
+    const manager = new PanelManager({ registry, ...deps });
+
+    const created = await manager.create("panels/docs", {
+      isRoot: true,
+      addAsRoot: true,
+      placement: { disposition: "replace", minWidth: 420 },
+    });
+    expect(getCurrentSnapshot(registry.getPanel(created.panelId)!).placement).toEqual({
+      disposition: "replace",
+      minWidth: 420,
+    });
+  });
+
+  it("leaves snapshot placement unset when neither call site nor manifest declares one", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
+    tempDirs.push(workspacePath);
+
+    const panelDir = path.join(workspacePath, "panels", "plain");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({ name: "plain", vibestudio: { title: "Plain" } })
+    );
+
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps(workspacePath);
+    const manager = new PanelManager({ registry, ...deps });
+
+    const created = await manager.create("panels/plain", { isRoot: true, addAsRoot: true });
+    expect(getCurrentSnapshot(registry.getPanel(created.panelId)!).placement).toBeUndefined();
+  });
+
   it("updates live navigation state and resolved URL through the shared manager", async () => {
     const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);

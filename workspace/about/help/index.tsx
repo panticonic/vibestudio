@@ -43,7 +43,7 @@ const helpSections: HelpSection[] = [
     title: "Panels",
     icon: <DashboardIcon />,
     content:
-      "Panels can be chats, terminals, personal apps, tools, or websites. Use Cmd+T on macOS or Ctrl+Shift+T elsewhere to open one, " +
+      "Panels can be chats, terminals, personal apps, tools, or websites. Use Cmd/Ctrl+T to open one and Cmd/Ctrl+W to close the current one, " +
       "and Cmd/Ctrl+K to find actions contributed by the panel you are using.",
   },
   {
@@ -135,8 +135,8 @@ function HelpPage() {
             Press <Kbd>Cmd/Ctrl + /</Kbd> for the full list of keyboard shortcuts.
           </Text>
           <Text size="2" color="gray">
-            Press <Kbd>Cmd + T</Kbd> on macOS or <Kbd>Ctrl + Shift + T</Kbd> elsewhere to open the
-            panel launcher.
+            Press <Kbd>Cmd/Ctrl + T</Kbd> to open the panel launcher and <Kbd>Cmd/Ctrl + W</Kbd> to
+            close the current panel.
           </Text>
           <Text size="2" color="gray">
             Press <Kbd>Cmd/Ctrl + K</Kbd> to search actions for the app and current panel.

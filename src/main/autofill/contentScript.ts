@@ -25,6 +25,7 @@ export function getContentScript(): string {
   window.__vibestudio_af_fields = null;       // detected form info
   window.__vibestudio_af_focus = null;        // focused field info + rect
   window.__vibestudio_af_pending = null;      // snapshot of credentials on submit
+  window.__vibestudio_af_form_pending = null; // structured values awaiting submission success
   window.__vibestudio_af_fields_removed = false;
   window.__vibestudio_af_username_snapshot = null; // carried forward for multi-step login
   window.__vibestudio_af_overlay_visible = false;
@@ -42,6 +43,8 @@ export function getContentScript(): string {
   // =========================================================================
 
   var trackedForms = new WeakSet();
+  var trackedValueFields = new WeakSet();
+  var trackedValueForms = new WeakSet();
   var iconHosts = new WeakMap();
 
   function findUsernameField(passwordEl) {
@@ -205,6 +208,117 @@ export function getContentScript(): string {
     passwordEl.addEventListener('keydown', onKeyDown, true);
   }
 
+  function classifyValueField(el) {
+    if (!el || el.disabled || el.readOnly || el.type === 'hidden' || el.type === 'password') return null;
+    if (el.offsetWidth === 0 || el.offsetHeight === 0 || getComputedStyle(el).visibility === 'hidden') return null;
+    var excluded = ((el.autocomplete || '') + ' ' + (el.name || '') + ' ' + (el.id || '')).toLowerCase();
+    if (/cc-|card|cvc|cvv|password|passwd|one-time|otp|token|secret/.test(excluded)) return null;
+    var allowed = [
+      'name','given-name','additional-name','family-name','honorific-prefix','honorific-suffix',
+      'email','tel','organization','street-address','address-line1','address-line2',
+      'address-line3','address-level1','address-level2','postal-code','country','country-name'
+    ];
+    var autocomplete = (el.autocomplete || '').toLowerCase().split(/\\s+/);
+    for (var i = autocomplete.length - 1; i >= 0; i--) {
+      if (allowed.indexOf(autocomplete[i]) >= 0) return autocomplete[i];
+    }
+    var label = '';
+    if (el.labels && el.labels.length) label = Array.from(el.labels).map(function(item) { return item.textContent || ''; }).join(' ');
+    var hint = ((el.type || '') + ' ' + (el.name || '') + ' ' + (el.id || '') + ' ' +
+      (el.placeholder || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' + label)
+      .toLowerCase().replace(/_/g, '-');
+    if (el.type === 'email' || /e-?mail/.test(hint)) return 'email';
+    if (el.type === 'tel' || /phone|mobile|telephone/.test(hint)) return 'tel';
+    if (/first|given/.test(hint) && /name/.test(hint)) return 'given-name';
+    if (/last|family|surname/.test(hint) && /name/.test(hint)) return 'family-name';
+    if (/full.?name|your.?name/.test(hint)) return 'name';
+    if (/company|organisation|organization/.test(hint)) return 'organization';
+    if (/zip|postal|postcode/.test(hint)) return 'postal-code';
+    if (/city|town/.test(hint)) return 'address-level2';
+    if (/state|province|region/.test(hint)) return 'address-level1';
+    if (/country/.test(hint)) return 'country-name';
+    if (/address.?2|address-line.?2/.test(hint)) return 'address-line2';
+    if (/address.?1|address-line.?1/.test(hint)) return 'address-line1';
+    if (/street|address/.test(hint)) return 'street-address';
+    return null;
+  }
+
+  function setupValueField(field, formFillType) {
+    if (trackedValueFields.has(field)) return;
+    trackedValueFields.add(field);
+    function onKeyDown(evt) {
+      if (!window.__vibestudio_af_overlay_visible) return;
+      if (evt.key !== 'ArrowDown' && evt.key !== 'ArrowUp' && evt.key !== 'Enter' && evt.key !== 'Escape') return;
+      evt.preventDefault();
+      evt.stopPropagation();
+      window.__vibestudio_af_overlay_key = evt.key;
+      ping();
+    }
+    field.addEventListener('focus', function() {
+      window.__vibestudio_af_focus = {
+        fieldType: 'form-fill',
+        formFillType: formFillType,
+        selector: buildSelector(field),
+        rect: getFieldRect(field),
+        element: field,
+      };
+      ping();
+    }, true);
+    field.addEventListener('input', function() {
+      if (document.activeElement === field) {
+        window.__vibestudio_af_focus.prefix = field.value || '';
+        ping();
+      }
+    }, true);
+    field.addEventListener('blur', function() {
+      setTimeout(function() {
+        if (document.activeElement !== field) {
+          window.__vibestudio_af_focus = null;
+          ping();
+        }
+      }, 200);
+    }, true);
+    field.addEventListener('keydown', onKeyDown, true);
+  }
+
+  function scanValueFields() {
+    var fields = document.querySelectorAll('input, textarea');
+    for (var i = 0; i < fields.length; i++) {
+      var type = classifyValueField(fields[i]);
+      if (type) setupValueField(fields[i], type);
+    }
+
+    var forms = document.querySelectorAll('form');
+    for (var j = 0; j < forms.length; j++) {
+      var form = forms[j];
+      if (trackedValueForms.has(form)) continue;
+      trackedValueForms.add(form);
+      form.addEventListener('submit', function(event) {
+        var submitted = event.currentTarget;
+        if (!submitted || (submitted.method || '').toLowerCase() === 'get') return;
+        if (submitted.querySelector('input[type="password"]')) return;
+        var candidates = submitted.querySelectorAll('input, textarea');
+        var values = [];
+        for (var k = 0; k < candidates.length && values.length < 20; k++) {
+          var field = candidates[k];
+          var fieldType = classifyValueField(field);
+          var value = String(field.value || '').trim();
+          if (!fieldType || !value || value.length > 1000) continue;
+          var label = field.getAttribute('aria-label') || field.placeholder || field.name || '';
+          values.push({ type: fieldType, value: value, label: String(label).slice(0, 120) });
+        }
+        if (values.length === 0) return;
+        window.__vibestudio_af_form_pending = {
+          timestamp: Date.now(),
+          pageUrl: location.href,
+          actionUrl: submitted.action || null,
+          values: values,
+        };
+        ping();
+      }, true);
+    }
+  }
+
   // =========================================================================
   // Credential Snapshot on Submit
   // =========================================================================
@@ -339,6 +453,7 @@ export function getContentScript(): string {
           ping();
         }
       }
+      scanValueFields();
       return;
     }
 
@@ -367,6 +482,7 @@ export function getContentScript(): string {
       setupSnapshotListeners(usernameEl, passwordEl, form);
       ping();
     }
+    scanValueFields();
   }
 
   // Expose for main process to call via getInjectKeyIconScript
@@ -410,6 +526,9 @@ export function getPullStateScript(): string {
     var rect = focus.element.getBoundingClientRect();
     focus = {
       fieldType: focus.fieldType,
+      formFillType: focus.formFillType,
+      selector: focus.selector,
+      prefix: focus.prefix || '',
       rect: {
         x: Math.round(rect.left + window.scrollX),
         y: Math.round(rect.top + window.scrollY),
@@ -423,13 +542,16 @@ export function getPullStateScript(): string {
   var fieldsRemoved = window.__vibestudio_af_fields_removed || false;
   var overlayKey = window.__vibestudio_af_overlay_key || null;
   var forceRefill = window.__vibestudio_af_force_refill || false;
+  var formPending = window.__vibestudio_af_form_pending || null;
   window.__vibestudio_af_fields_removed = false; // consume — prevent stale re-reads
   window.__vibestudio_af_overlay_key = null;
   window.__vibestudio_af_force_refill = false;
+  window.__vibestudio_af_form_pending = null;
   return {
     fields: window.__vibestudio_af_fields || null,
     focus: focus || null,
     pending: window.__vibestudio_af_pending || null,
+    formPending: formPending,
     fieldsRemoved: fieldsRemoved,
     usernameSnapshot: window.__vibestudio_af_username_snapshot || null,
     overlayKey: overlayKey,
@@ -473,6 +595,21 @@ export function getFillScript(
   }
   ${usernameSelector ? `fillField(document.querySelector(${JSON.stringify(usernameSelector)}), ${JSON.stringify(username)});` : ""}
   fillField(document.querySelector(${JSON.stringify(passwordSelector)}), ${JSON.stringify(password)});
+})()`;
+}
+
+/** Generate an explicit user-selected structured value fill. */
+export function getFillValueScript(selector: string, value: string): string {
+  return `(function() {
+  var el = document.querySelector(${JSON.stringify(selector)});
+  if (!el || el.disabled || el.readOnly) return;
+  if (el.type === 'hidden' || el.type === 'password') return;
+  if (el.offsetWidth === 0 || el.offsetHeight === 0 || getComputedStyle(el).visibility === 'hidden') return;
+  var prototype = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  var setter = Object.getOwnPropertyDescriptor(prototype, 'value').set;
+  setter.call(el, ${JSON.stringify(value)});
+  el.dispatchEvent(new Event('input', {bubbles:true}));
+  el.dispatchEvent(new Event('change', {bubbles:true}));
 })()`;
 }
 

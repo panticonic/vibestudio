@@ -21,13 +21,16 @@ export type ApprovalProvenanceKind =
   | "userland"
   | "unit-batch"
   | "device-code"
-  | "external-agent";
+  | "external-agent"
+  | "browser-permission";
 
 /** The terminal decision recorded on a resolution (§5). */
 export type ApprovalProvenanceDecision =
   | "once"
   | "session"
   | "version"
+  | "always"
+  | "block"
   | "deny"
   | "dismiss"
   | "submit";
@@ -36,7 +39,7 @@ export type ApprovalProvenanceDecision =
 export type ResolvedVia = "shell" | "mobile-notification" | "app" | "server";
 
 /** The grant scope the server persisted for this resolution (null for once/deny). */
-export type GrantScopeStored = "session" | "version" | null;
+export type GrantScopeStored = "session" | "version" | "always" | "block" | null;
 
 /** WHO approved — the verified human (INV-3). */
 export interface ApprovalResolvedBy {

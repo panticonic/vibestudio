@@ -15,7 +15,7 @@ import "@radix-ui/themes/styles.css";
 import "@workspace/ui/tokens.css";
 import { panel } from "@workspace/runtime";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
-import { BrowserProfileRail, ProfileSelection } from "./components/BrowserProfileRail";
+import { ImportSourceRail, type ImportSourceSelection } from "./components/ImportSourceRail";
 import { MigrateTab } from "./components/MigrateTab";
 import { InspectTab } from "./components/InspectTab";
 import { DebugTab } from "./components/DebugTab";
@@ -37,7 +37,7 @@ export default function BrowserImportInspector() {
   const theme = usePanelTheme();
   const stateArgs = useStateArgs<InspectorStateArgs>();
   const now = useNow();
-  const [selection, setSelection] = useState<ProfileSelection | null>(null);
+  const [selection, setSelection] = useState<ImportSourceSelection | null>(null);
   const [tab, setTab] = useState<string>(stateArgs.activeTab ?? "migrate");
 
   const changeTab = (value: string) => {
@@ -48,7 +48,7 @@ export default function BrowserImportInspector() {
   return (
     <Theme appearance={theme} accentColor="iris" radius="medium">
     <Flex style={{ height: "100vh", width: "100%" }}>
-      <BrowserProfileRail selected={selection} onSelect={setSelection} now={now} />
+      <ImportSourceRail selected={selection} onSelect={setSelection} />
       <Box style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column" }}>
         <Tabs.Root
           value={tab}
@@ -65,7 +65,7 @@ export default function BrowserImportInspector() {
               {selection ? (
                 <MigrateTab selection={selection} now={now} />
               ) : (
-                <EmptyState message="Select a browser profile on the left to plan an import." />
+                <EmptyState message="Choose a device and browser to plan an import." />
               )}
             </Tabs.Content>
             <Tabs.Content value="inspect" style={{ height: "100%" }}>

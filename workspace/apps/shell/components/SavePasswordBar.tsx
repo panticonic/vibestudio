@@ -3,12 +3,22 @@ import { Flex, Text, Button, Callout } from "@radix-ui/themes";
 import { useShellEvent } from "../shell/useShellEvent";
 import { autofill } from "../shell/client";
 
-interface SavePromptData {
+interface PasswordSavePrompt {
+  kind: "password";
   panelId: string;
   origin: string;
   username: string;
   isUpdate: boolean;
 }
+
+interface FormFillSavePrompt {
+  kind: "form-fill";
+  panelId: string;
+  origin: string;
+  fields: Array<{ type: string; label: string }>;
+}
+
+type SavePromptData = PasswordSavePrompt | FormFillSavePrompt;
 
 interface SavePasswordBarProps {
   visiblePanelId: string | null;
@@ -17,18 +27,31 @@ interface SavePasswordBarProps {
 export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
   // Map of panelId -> prompt data; supports background panels queueing prompts
   const [prompts, setPrompts] = useState<Map<string, SavePromptData>>(new Map());
-  const [confirmed, setConfirmed] = useState(false);
+  const [confirmation, setConfirmation] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   useShellEvent(
     "autofill:save-prompt",
-    useCallback((data: SavePromptData) => {
-      setConfirmed(false);
+    useCallback((data: Omit<PasswordSavePrompt, "kind">) => {
+      setConfirmation(null);
       setSaveError(null);
       setPrompts((prev) => {
         const next = new Map(prev);
-        next.set(data.panelId, data);
+        next.set(data.panelId, { ...data, kind: "password" });
+        return next;
+      });
+    }, [])
+  );
+
+  useShellEvent(
+    "autofill:form-fill-save-prompt",
+    useCallback((data: Omit<FormFillSavePrompt, "kind">) => {
+      setConfirmation(null);
+      setSaveError(null);
+      setPrompts((prev) => {
+        const next = new Map(prev);
+        next.set(data.panelId, { ...data, kind: "form-fill" });
         return next;
       });
     }, [])
@@ -42,11 +65,12 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
   const timerCleanups = useRef<Map<string, () => void>>(new Map());
 
   useEffect(() => {
-    for (const [panelId, _data] of prompts) {
+    for (const [panelId, data] of prompts) {
       if (timerCleanups.current.has(panelId)) continue; // already has a timer
       const timer = setTimeout(() => {
-        void autofill
-          .confirmSave(panelId, "dismiss")
+        void (data.kind === "password"
+          ? autofill.confirmSave(panelId, "dismiss")
+          : autofill.confirmFormFill(panelId, "dismiss"))
           .catch((err: unknown) => console.warn("[SavePasswordBar] Dismiss failed:", err));
         setPrompts((prev) => {
           const next = new Map(prev);
@@ -81,14 +105,14 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
 
   // Show confirmation briefly then hide
   useEffect(() => {
-    if (!confirmed) return;
+    if (!confirmation) return;
     const timer = setTimeout(() => {
-      setConfirmed(false);
+      setConfirmation(null);
     }, 1500);
     return () => clearTimeout(timer);
-  }, [confirmed]);
+  }, [confirmation]);
 
-  if (confirmed) {
+  if (confirmation) {
     return (
       <Flex
         data-shell-top-chrome="save-password-bar"
@@ -102,7 +126,7 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
         }}
       >
         <Text size="2" style={{ color: "var(--intent-success)" }}>
-          Password saved
+          {confirmation}
         </Text>
       </Flex>
     );
@@ -129,9 +153,13 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
     setSaving(true);
     setSaveError(null);
     try {
-      await autofill.confirmSave(prompt.panelId, "save");
+      if (prompt.kind === "password") {
+        await autofill.confirmSave(prompt.panelId, "save");
+      } else {
+        await autofill.confirmFormFill(prompt.panelId, "save");
+      }
       removePrompt(prompt.panelId);
-      setConfirmed(true);
+      setConfirmation(prompt.kind === "password" ? "Password saved" : "Form-fill values saved");
     } catch (err) {
       console.error("[SavePasswordBar] Save failed:", err);
       setSaveError(err instanceof Error ? err.message : String(err));
@@ -141,6 +169,7 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
   };
 
   const handleNever = async () => {
+    if (prompt.kind !== "password") return;
     if (
       !window.confirm(
         `Never offer to save passwords for ${hostname}? This preference remains until you remove it from Credentials.`
@@ -161,15 +190,21 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
   };
 
   const handleDismiss = () => {
-    void autofill
-      .confirmSave(prompt.panelId, "dismiss")
+    void (prompt.kind === "password"
+      ? autofill.confirmSave(prompt.panelId, "dismiss")
+      : autofill.confirmFormFill(prompt.panelId, "dismiss"))
       .catch((err: unknown) => console.warn("[SavePasswordBar] Dismiss failed:", err));
     removePrompt(prompt.panelId);
   };
 
-  const message = prompt.isUpdate
-    ? `Update password for ${prompt.username} on ${hostname}?`
-    : `Save password for ${prompt.username} on ${hostname}?`;
+  const message =
+    prompt.kind === "password"
+      ? prompt.isUpdate
+        ? `Update password for ${prompt.username} on ${hostname}?`
+        : `Save password for ${prompt.username} on ${hostname}?`
+      : `Save ${prompt.fields.length} form-fill ${
+          prompt.fields.length === 1 ? "value" : "values"
+        } from ${hostname}?`;
 
   return (
     <Flex
@@ -191,7 +226,7 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
         </Text>
         {saveError ? (
           <Callout.Root size="1" color="red" role="alert">
-            <Callout.Text>Couldn&apos;t save the password: {saveError}</Callout.Text>
+            <Callout.Text>Couldn&apos;t save: {saveError}</Callout.Text>
           </Callout.Root>
         ) : null}
       </Flex>
@@ -203,17 +238,23 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
           disabled={saving}
           onClick={() => void handleSave()}
         >
-          {saving ? "Saving…" : prompt.isUpdate ? "Update" : "Save"}
+          {saving
+            ? "Saving…"
+            : prompt.kind === "password" && prompt.isUpdate
+              ? "Update"
+              : "Save"}
         </Button>
-        <Button
-          size="1"
-          variant="soft"
-          className="app-touch-target"
-          disabled={saving}
-          onClick={() => void handleNever()}
-        >
-          Never for this site
-        </Button>
+        {prompt.kind === "password" ? (
+          <Button
+            size="1"
+            variant="soft"
+            className="app-touch-target"
+            disabled={saving}
+            onClick={() => void handleNever()}
+          >
+            Never for this site
+          </Button>
+        ) : null}
         <Button
           size="1"
           variant="ghost"

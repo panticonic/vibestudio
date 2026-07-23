@@ -108,6 +108,12 @@
       "specifier": "@workspace/terminal-shim",
       "category": "workspace-reference",
       "reason": "host-owned contract definition: canonical workspace scope/module names live here by design"
+    },
+    {
+      "file": "src/server/buildV2/platformModules.ts",
+      "specifier": "@workspace/ui/tokens.css",
+      "category": "workspace-reference",
+      "reason": "host-owned React build contract declares the workspace theme token stylesheet delivered to generated panels"
     }
   ]
 }

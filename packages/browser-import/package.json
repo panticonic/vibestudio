@@ -1,13 +1,16 @@
 {
-  "name": "@workspace/browser-data",
+  "name": "@vibestudio/browser-import",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Workspace-owned browser data import, export, detection, and profile readers",
+  "description": "Trusted-host browser discovery, reading, normalization, import, and export engine",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "vibestudio": {
+    "buildProfile": "source-only"
   },
   "dependencies": {
     "@vibestudio/browser-data": "workspace:*",

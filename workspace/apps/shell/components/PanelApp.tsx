@@ -137,21 +137,8 @@ function PanelAppContent() {
   }, [openPanelDevTools]);
   useShellEvent("toggle-panel-devtools", handleTogglePanelDevTools);
 
-  // Listen for shell panel created event to navigate to the new panel
-  useEffect(() => {
-    const handleShellPanelCreated = (event: Event) => {
-      const customEvent = event as CustomEvent<{ panelId: string }>;
-      const { panelId } = customEvent.detail;
-      if (panelId) {
-        navigateToId(panelId);
-      }
-    };
-
-    window.addEventListener("shell-panel-created", handleShellPanelCreated);
-    return () => {
-      window.removeEventListener("shell-panel-created", handleShellPanelCreated);
-    };
-  }, [navigateToId]);
+  // shell-panel-created is handled by PanelStack, which routes it through the
+  // layout placement engine with full open-child intent when a parent is known.
 
   useEffect(() => {
     let active = true;

@@ -116,6 +116,7 @@ export function flattenTree(
         childCount: panel.children.length,
         buildState: panel.artifacts?.buildState,
         position: index,
+        favicon: panel.navigation?.favicon,
       },
       collapsed: isCollapsed,
     });
@@ -333,6 +334,7 @@ function panelToSummary(panel: Panel, position: number): PanelSummary {
     childCount: panel.children.length,
     buildState: panel.artifacts?.buildState,
     position,
+    favicon: panel.navigation?.favicon,
   };
 }
 

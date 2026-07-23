@@ -52,8 +52,7 @@ export const DATA_TYPES: ReadonlyArray<{ key: string; label: string }> = [
   { key: "history", label: "History" },
   { key: "cookies", label: "Cookies" },
   { key: "passwords", label: "Passwords" },
-  { key: "autofill", label: "Autofill" },
+  { key: "formFill", label: "Form fill" },
   { key: "searchEngines", label: "Search engines" },
-  { key: "permissions", label: "Permissions" },
   { key: "favicons", label: "Favicons" },
 ];

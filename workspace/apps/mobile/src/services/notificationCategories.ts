@@ -3,6 +3,8 @@ import {
   APPROVAL_CATEGORY_INPUT_REQUIRED,
   NOTIFICATION_ACTION_IDS_INPUT_REQUIRED,
   NOTIFICATION_ACTION_IDS_STANDARD,
+  NOTIFICATION_ACTION_IDS_BROWSER_PERMISSION,
+  APPROVAL_CATEGORY_BROWSER_PERMISSION,
 } from "@vibestudio/shared/approvalContract";
 import { Platform } from "react-native";
 import { requireApprovedAppCapability } from "./appCapabilities";
@@ -14,7 +16,8 @@ export const APPROVAL_NOTIFICATION_CHANNEL_ID = "approvals";
 
 export type NotificationActionId =
   | (typeof NOTIFICATION_ACTION_IDS_STANDARD)[number]
-  | (typeof NOTIFICATION_ACTION_IDS_INPUT_REQUIRED)[number];
+  | (typeof NOTIFICATION_ACTION_IDS_INPUT_REQUIRED)[number]
+  | (typeof NOTIFICATION_ACTION_IDS_BROWSER_PERMISSION)[number];
 
 export interface NotificationActionDefinition {
   id: NotificationActionId;
@@ -67,20 +70,25 @@ const ACTION_COPY: Record<NotificationActionId, string> = {
   deny: "Deny",
   open: "Open",
   version: "Trust Version",
+  always: "Always Allow",
+  block: "Always Block",
 };
 
 export function getNotificationActionDefinitions(
   category: string | undefined,
 ): NotificationActionDefinition[] {
-  const ids = category === APPROVAL_CATEGORY_INPUT_REQUIRED
-    ? NOTIFICATION_ACTION_IDS_INPUT_REQUIRED
-    : NOTIFICATION_ACTION_IDS_STANDARD;
+  const ids =
+    category === APPROVAL_CATEGORY_INPUT_REQUIRED
+      ? NOTIFICATION_ACTION_IDS_INPUT_REQUIRED
+      : category === APPROVAL_CATEGORY_BROWSER_PERMISSION
+        ? NOTIFICATION_ACTION_IDS_BROWSER_PERMISSION
+        : NOTIFICATION_ACTION_IDS_STANDARD;
 
   return ids.map((id) => ({
     id,
     title: ACTION_COPY[id],
     foreground: id === "open",
-    destructive: id === "deny",
+    destructive: id === "deny" || id === "block",
   }));
 }
 

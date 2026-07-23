@@ -6,7 +6,8 @@ import { createDevLogger } from "@vibestudio/dev-log";
 import { ViewManager } from "./viewManager.js";
 import { PanelView } from "./panelView.js";
 import type { PanelOrchestrator } from "./panelOrchestrator.js";
-import type { AutofillManager } from "./autofill/autofillManager.js";
+import type { FormFillManager } from "./autofill/formFillManager.js";
+import type { BrowserFaviconObserver } from "./services/browserFaviconObserver.js";
 import type { ApprovalAttention } from "./approvalAttention.js";
 import type { SessionConnection } from "./serverSession.js";
 import { BrowserHistoryRecorder } from "./browserHistoryRecorder.js";
@@ -34,7 +35,8 @@ export interface WorkspaceWindowServices {
   panelOrchestrator: PanelOrchestrator;
   serverSession: SessionConnection;
   cdpHost: CdpRegistrationAdapter;
-  autofillManager: AutofillManager | null;
+  formFillManager: FormFillManager | null;
+  browserFaviconObserver: BrowserFaviconObserver | null;
 }
 
 export interface ApplicationWindowControllerDeps {
@@ -47,6 +49,7 @@ export interface ApplicationWindowControllerDeps {
   drainPendingReadyElectronLaunch: () => Promise<void>;
   initializePanelTreeOnce: (reason: string) => void;
   onWindowClosed: () => void;
+  getBrowserSessionPartition?: () => string;
 }
 
 interface ApplicationWindowLifetime {
@@ -252,14 +255,28 @@ export class ApplicationWindowController {
       onPanelResponsivenessChanged: (panelId, responsive) => {
         this.deps.eventService.emit("panel-responsiveness-changed", { panelId, responsive });
       },
-      ...(services.autofillManager ? { autofillManager: services.autofillManager } : {}),
+      ...(services.formFillManager ? { formFillManager: services.formFillManager } : {}),
+      ...(services.browserFaviconObserver
+        ? { browserFaviconObserver: services.browserFaviconObserver }
+        : {}),
       autofillPreloadPath: path.join(__dirname, "autofillPreload.cjs"),
       panelPreloadPath: path.join(__dirname, "panelPreload.cjs"),
       appPreloadPath: path.join(__dirname, "appPreload.cjs"),
       browserPreloadPath: path.join(__dirname, "browserPreload.cjs"),
       browserHistoryRecorder,
+      getBrowserSessionPartition:
+        this.deps.getBrowserSessionPartition ??
+        (() => {
+          throw new Error("Browser environment is not initialized");
+        }),
     });
     lifetime.panelView = panelView;
+    // Native→shell focus feedback (§5.2): surface native view focus
+    // transitions so the shell's layout focus follows every route, not just
+    // shell-initiated clicks. Cleared with the viewManager on window teardown.
+    viewManager.onNativeSlotFocused((payload) => {
+      this.deps.eventService.emit("native-slot-focused", payload);
+    });
     const appOrchestrator = new AppOrchestrator({
       getPanelView: () => lifetime.panelView,
       statePath: services.serverSession.statePath,
@@ -289,11 +306,11 @@ export class ApplicationWindowController {
         );
       });
 
-    const autofillManager = services.autofillManager;
-    if (autofillManager) {
-      autofillManager.setWindow(window);
-      viewManager.onViewOrderChanged(() => autofillManager.onViewOrderChanged());
-      viewManager.onViewHidden((viewId) => autofillManager.onPanelHidden(viewId));
+    const formFillManager = services.formFillManager;
+    if (formFillManager) {
+      formFillManager.setWindow(window);
+      viewManager.onViewOrderChanged(() => formFillManager.onViewOrderChanged());
+      viewManager.onViewHidden((viewId) => formFillManager.onPanelHidden(viewId));
     }
     viewManager.onViewCrashed((viewId, reason) => panelView.handleViewCrashed(viewId, reason));
     setupTestApi(services.panelOrchestrator, services.panelRegistry, panelView);

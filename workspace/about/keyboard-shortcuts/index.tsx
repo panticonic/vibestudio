@@ -42,11 +42,11 @@ const shortcutGroups: ShortcutGroup[] = [
   {
     title: "General",
     shortcuts: [
-      { description: "New panel / launcher", mac: ["⌘", "T"], other: ["Ctrl", "Shift", "T"] },
+      { description: "New panel / launcher", mac: ["⌘", "T"], other: ["Ctrl", "T"] },
       { description: "Command palette", mac: ["⌘", "K"] },
       { description: "Focus pending approval", mac: ["⌘", "⇧", "A"] },
       { description: "Switch workspace", mac: ["⌘", "⇧", "O"] },
-      { description: "Close current panel", mac: ["⌘", "W"], other: ["Ctrl", "Shift", "W"] },
+      { description: "Close current panel", mac: ["⌘", "W"], other: ["Ctrl", "W"] },
       { description: "Keyboard shortcuts", mac: ["⌘", "/"] },
       { description: "Quit application", mac: ["⌘", "Q"] },
     ],

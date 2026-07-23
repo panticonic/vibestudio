@@ -453,6 +453,20 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
       allowedDecisions: z.array(z.enum(APPROVAL_DECISIONS)).optional(),
     })
     .strict(),
+  z
+    .object({
+      ...pendingApprovalBaseShape,
+      kind: z.literal("browser-permission"),
+      ownerUserId: z.string(),
+      workspaceId: z.string(),
+      environmentKey: z.string(),
+      panelId: z.string(),
+      origin: z.string().url(),
+      topLevelUrl: z.string().url(),
+      capabilities: z.array(z.enum(["camera", "microphone", "geolocation", "notifications"])),
+      deviceLabel: z.string(),
+    })
+    .strict(),
   pendingUnitBatchApprovalSchema,
   z
     .object({

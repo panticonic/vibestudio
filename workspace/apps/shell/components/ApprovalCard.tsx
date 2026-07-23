@@ -39,6 +39,7 @@ import type {
   ApprovalDetailFormat,
   PendingApproval,
   PendingCapabilityApproval,
+  PendingBrowserPermissionApproval,
   PendingCredentialApproval,
   PendingCredentialInputApproval,
   PendingSecretInputApproval,
@@ -131,6 +132,10 @@ export function ApprovalCard({
       } else if (approval.kind === "userland") {
         const deny = approval.options.find((option) => option.value === "deny");
         if (deny) emitForApproval({ type: "resolve-userland", choice: deny.value });
+      } else if (approval.kind === "browser-permission") {
+        // Browser permission decisions have no one-shot "deny": dismissing
+        // denies only this request, while "block" is the explicit durable act.
+        emitForApproval({ type: "decide", decision: "dismiss" });
       } else if (approval.kind !== "device-code") {
         emitForApproval({ type: "decide", decision: "deny" });
       }
@@ -152,7 +157,9 @@ export function ApprovalCard({
         emitForApproval({
           type: "decide",
           decision:
-            approval.kind === "unit-batch" ? "once" : getRecommendedStandardDecision(approval),
+            approval.kind === "unit-batch" || approval.kind === "browser-permission"
+              ? "once"
+              : getRecommendedStandardDecision(approval),
         });
       }
     }
@@ -194,6 +201,11 @@ export function ApprovalCard({
       />
     ) : approval.kind === "device-code" ? (
       <DeviceCodeActions onCancel={() => emitForApproval({ type: "device-cancel" })} />
+    ) : approval.kind === "browser-permission" ? (
+      <BrowserPermissionActions
+        approval={approval}
+        decide={(decision) => emitForApproval({ type: "decide", decision })}
+      />
     ) : approval.kind === "unit-batch" ? (
       <UnitBatchActions
         approval={approval}
@@ -481,6 +493,7 @@ export function ApprovalKindIcon({
   if (approval.kind === "unit-batch") return <ExclamationTriangleIcon width={size} height={size} />;
   if (approval.kind === "device-code") return <ExternalLinkIcon width={size} height={size} />;
   if (approval.kind === "capability") return <GlobeIcon width={size} height={size} />;
+  if (approval.kind === "browser-permission") return <GlobeIcon width={size} height={size} />;
   if (approval.kind === "external-agent") return <PersonIcon width={size} height={size} />;
   if (approval.kind === "client-config" || approval.kind === "credential-input")
     return <GearIcon width={size} height={size} />;
@@ -665,6 +678,51 @@ function StandardApprovalActions({
           onClick={onBlock}
         />
       ) : null}
+      <Tooltip content={HOST_APPROVAL_COPY.chrome.dismiss}>
+        <IconButton size="1" variant="ghost" color="gray" onClick={() => decide("dismiss")}>
+          <Cross2Icon />
+        </IconButton>
+      </Tooltip>
+    </Flex>
+  );
+}
+
+function BrowserPermissionActions({
+  approval: _approval,
+  decide,
+}: {
+  approval: PendingBrowserPermissionApproval;
+  decide: (decision: ApprovalDecision) => void;
+}) {
+  const copy = HOST_APPROVAL_COPY.actions.browserPermission;
+  return (
+    <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
+      <DecisionButton
+        label={copy.once.label}
+        description={copy.once.description}
+        color="sky"
+        variant="solid"
+        onClick={() => decide("once")}
+      />
+      <DecisionButton
+        label={copy.session.label}
+        description={copy.session.description}
+        variant="surface"
+        onClick={() => decide("session")}
+      />
+      <DecisionButton
+        label={copy.always.label}
+        description={copy.always.description}
+        variant="surface"
+        onClick={() => decide("always")}
+      />
+      <DecisionButton
+        label={copy.block.label}
+        description={copy.block.description}
+        color="red"
+        variant="surface"
+        onClick={() => decide("block")}
+      />
       <Tooltip content={HOST_APPROVAL_COPY.chrome.dismiss}>
         <IconButton size="1" variant="ghost" color="gray" onClick={() => decide("dismiss")}>
           <Cross2Icon />
@@ -1206,6 +1264,8 @@ function ApprovalDetails({
           <UnitBatchDetails approval={approval} />
         ) : approval.kind === "secret-input" ? (
           <SecretInputDetails approval={approval} />
+        ) : approval.kind === "browser-permission" ? (
+          <BrowserPermissionDetails approval={approval} />
         ) : (
           <CapabilityDetails approval={approval} />
         )}
@@ -1603,6 +1663,28 @@ function CapabilityDetails({ approval }: { approval: PendingCapabilityApproval }
           value={<InlineCode>{detail.value}</InlineCode>}
         />
       ))}
+    </>
+  );
+}
+
+function BrowserPermissionDetails({ approval }: { approval: PendingBrowserPermissionApproval }) {
+  return (
+    <>
+      <Detail
+        icon={<GlobeIcon />}
+        label="Site"
+        value={<InlineCode>{approval.origin}</InlineCode>}
+      />
+      <Detail
+        icon={<LockClosedIcon />}
+        label="Permissions"
+        value={<InlineCode>{approval.capabilities.join(", ")}</InlineCode>}
+      />
+      <Detail
+        icon={<GearIcon />}
+        label="Device"
+        value={<InlineCode>{approval.deviceLabel}</InlineCode>}
+      />
     </>
   );
 }

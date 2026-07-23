@@ -1,0 +1,67 @@
+{
+  "name": "@workspace-about/bookmarks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "title": "Bookmarks",
+    "description": "Browse and manage saved websites",
+    "hiddenInLauncher": false,
+    "autoArchiveWhenEmpty": true,
+    "authority": {
+      "requests": [
+        {
+          "capability": "agent.credentials.manage",
+          "resource": { "kind": "prefix", "prefix": "" },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "context.boundary",
+          "resource": { "kind": "prefix", "prefix": "context" },
+          "tier": "critical",
+          "evidence": "bounded-dynamic"
+        },
+        {
+          "capability": "context.materialize",
+          "resource": { "kind": "prefix", "prefix": "" },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "subagents.create",
+          "resource": { "kind": "prefix", "prefix": "" },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "user-approval.request",
+          "resource": { "kind": "prefix", "prefix": "" },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace-service:channel",
+          "resource": { "kind": "prefix", "prefix": "" },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace-service:models",
+          "resource": { "kind": "prefix", "prefix": "" },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        }
+      ],
+      "evalCeilings": []
+    }
+  },
+  "dependencies": {
+    "@vibestudio/browser-data": "workspace:*",
+    "@workspace/about-shared": "workspace:*",
+    "@workspace/runtime": "workspace:*",
+    "@radix-ui/themes": "^3.2.1",
+    "@radix-ui/react-icons": "^1.3.2",
+    "react": "^19.1.1"
+  }
+}

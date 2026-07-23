@@ -139,6 +139,11 @@ export const SHOULD_AUTO_MOUNT_EXPORT = "shouldAutoMount";
 
 export const REACT_FRAMEWORK_MODULE = "@workspace/react";
 export const REACT_FRAMEWORK_ENTRY_MODULE = "@workspace/react/auto-mount";
+/** Base styles required by every generated React panel, in cascade order. */
+export const REACT_SHARED_STYLE_MODULES: readonly string[] = [
+  "@radix-ui/themes/styles.css",
+  "@workspace/ui/tokens.css",
+];
 export const SVELTE_FRAMEWORK_MODULE = "@workspace/svelte";
 
 /**

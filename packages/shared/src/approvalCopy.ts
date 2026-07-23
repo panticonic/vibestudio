@@ -115,6 +115,9 @@ export function getApprovalRiskTone(approval: PendingApproval): ApprovalRiskTone
 }
 
 export function getApprovalCategoryLabel(approval: PendingApproval): string {
+  if (approval.kind === "browser-permission") {
+    return "Website permission";
+  }
   if (approval.kind === "credential") {
     if (isOAuthCredentialConnectionApproval(approval)) {
       return HOST_APPROVAL_COPY.categories.connectionRequest;
@@ -555,6 +558,13 @@ export function getApprovalCopy(approval: PendingApproval): {
   summary: string;
   warning?: string;
 } {
+  if (approval.kind === "browser-permission") {
+    const capabilities = approval.capabilities.join(" and ");
+    return {
+      title: `Allow ${capabilities} on ${approval.origin}?`,
+      summary: `${approval.origin} wants to use ${capabilities} on ${approval.deviceLabel}.`,
+    };
+  }
   if (approval.kind === "unit-batch") {
     const count = approval.units.length;
     const unitLabel = unitBatchLabel(approval);

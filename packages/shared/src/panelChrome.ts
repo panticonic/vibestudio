@@ -20,10 +20,15 @@ export interface PanelChromeState {
   editableAddress: string;
   browserUrl?: string;
   resolvedUrl?: string;
+  favicon?: {
+    pageUrl: string;
+    updatedAt: number;
+  };
   ref?: string;
   isLoading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
+  mediaPlaying: boolean;
 }
 
 export interface PanelSourceSuggestion {
@@ -561,10 +566,12 @@ export function buildPanelChromeState(args: {
     editableAddress: getPanelEditableAddress(args.panel, navigation),
     browserUrl,
     resolvedUrl: navigation.url ?? snapshot.resolvedUrl ?? browserUrl,
+    favicon: navigation.favicon,
     ref,
     isLoading: Boolean(navigation.isLoading),
     canGoBack: Boolean(navigation.canGoBack || history.canGoBack),
     canGoForward: Boolean(navigation.canGoForward || history.canGoForward),
+    mediaPlaying: Boolean(navigation.mediaPlaying),
   };
 }
 

@@ -1,0 +1,67 @@
+{
+  "name": "@workspace-about/downloads",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "title": "Downloads",
+    "description": "Review and control browser downloads",
+    "hiddenInLauncher": false,
+    "autoArchiveWhenEmpty": true,
+    "authority": {
+      "requests": [
+        {
+          "capability": "agent.credentials.manage",
+          "resource": { "kind": "prefix", "prefix": "" },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "context.boundary",
+          "resource": { "kind": "prefix", "prefix": "context" },
+          "tier": "critical",
+          "evidence": "bounded-dynamic"
+        },
+        {
+          "capability": "context.materialize",
+          "resource": { "kind": "prefix", "prefix": "" },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "subagents.create",
+          "resource": { "kind": "prefix", "prefix": "" },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "user-approval.request",
+          "resource": { "kind": "prefix", "prefix": "" },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace-service:channel",
+          "resource": { "kind": "prefix", "prefix": "" },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace-service:models",
+          "resource": { "kind": "prefix", "prefix": "" },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        }
+      ],
+      "evalCeilings": []
+    }
+  },
+  "dependencies": {
+    "@vibestudio/browser-data": "workspace:*",
+    "@workspace/react": "workspace:*",
+    "@workspace/runtime": "workspace:*",
+    "@workspace/ui": "workspace:*",
+    "@radix-ui/themes": "^3.2.1",
+    "react": "^19.1.1"
+  }
+}

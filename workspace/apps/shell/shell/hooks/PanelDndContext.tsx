@@ -52,6 +52,7 @@ import {
   type FlattenedPanel,
 } from "./PanelTreeContext.js";
 import { assertPresent } from "../../utils/assertPresent";
+import { dispatchLayoutDrop, parseLayoutDropId } from "../../layout/dropTargets";
 
 // ============================================================================
 // Constants
@@ -440,7 +441,19 @@ export function PanelDndProvider({ children }: PanelDndProviderProps) {
       setOverId(null);
       setOffsetLeft(0);
 
-      if (!over || !currentProjection) {
+      if (!over) {
+        return;
+      }
+
+      // A drop on a layout target (pane header / column gutter) is explicit
+      // placement (D8), not a tree move — hand it to the layout engine host.
+      const layoutTarget = parseLayoutDropId(String(over.id));
+      if (layoutTarget) {
+        dispatchLayoutDrop(String(active.id), layoutTarget);
+        return;
+      }
+
+      if (!currentProjection) {
         return;
       }
 

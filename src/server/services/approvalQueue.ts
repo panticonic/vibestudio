@@ -20,6 +20,7 @@ import type {
   DiffReviewEntry,
   PendingApproval,
   PendingCapabilityApproval,
+  PendingBrowserPermissionApproval,
   PendingCredentialApproval,
   PendingCredentialInputApproval,
   PendingSecretInputApproval,
@@ -50,9 +51,10 @@ import type {
 } from "@vibestudio/shared/governance/types";
 
 /** A grant-or-deny verdict that can be represented by an authority row. */
-export type GrantedDecision = "once" | "session" | "version" | "deny";
+export type GrantedDecision = "once" | "session" | "version" | "always" | "block" | "deny";
 /** Terminal queue result. Dismiss is deliberately distinct from an explicit deny. */
-export type ApprovalQueueDecision = GrantedDecision | "dismiss";
+export type ApprovalQueueDecision = "once" | "session" | "version" | "deny" | "dismiss";
+export type BrowserPermissionApprovalDecision = "once" | "session" | "always" | "block" | "dismiss";
 
 /**
  * The resolver's verified identity + surface (WP5 §4/§5), threaded from the
@@ -128,6 +130,18 @@ export interface CapabilityApprovalQueueRequest extends ApprovalQueueRequestBase
   snapshot?: PendingCapabilityApproval["snapshot"];
   cardType?: PendingCapabilityApproval["cardType"];
   allowedDecisions?: PendingCapabilityApproval["allowedDecisions"];
+}
+
+export interface BrowserPermissionApprovalQueueRequest extends ApprovalQueueRequestBase {
+  kind: "browser-permission";
+  ownerUserId: string;
+  workspaceId: string;
+  environmentKey: string;
+  panelId: string;
+  origin: string;
+  topLevelUrl: string;
+  capabilities: PendingBrowserPermissionApproval["capabilities"];
+  deviceLabel: string;
 }
 
 export interface UnitBatchApprovalQueueRequest extends ApprovalQueueRequestBase {
@@ -232,7 +246,8 @@ export type ApprovalQueueRequest =
   | ClientConfigApprovalQueueRequest
   | CredentialInputApprovalQueueRequest
   | SecretInputApprovalQueueRequest
-  | DeviceCodeApprovalQueueRequest;
+  | DeviceCodeApprovalQueueRequest
+  | BrowserPermissionApprovalQueueRequest;
 export type DecisionApprovalQueueRequest =
   | CredentialApprovalQueueRequest
   | CapabilityApprovalQueueRequest
@@ -245,7 +260,7 @@ export type FieldInputApprovalResult = ClientConfigApprovalResult;
 export type UserlandApprovalResult = UserlandApprovalChoice;
 
 interface QueueWaiter {
-  resolve: (decision: ApprovalQueueDecision) => void;
+  resolve: (decision: ApprovalQueueDecision | BrowserPermissionApprovalDecision) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
 }
@@ -289,6 +304,9 @@ interface QueueEntry {
 
 export interface ApprovalQueue {
   request(req: DecisionApprovalQueueRequest): Promise<ApprovalQueueDecision>;
+  requestBrowserPermission?(
+    req: BrowserPermissionApprovalQueueRequest
+  ): Promise<BrowserPermissionApprovalDecision>;
   requestClientConfig(req: ClientConfigApprovalQueueRequest): Promise<ClientConfigApprovalResult>;
   requestCredentialInput(
     req: CredentialInputApprovalQueueRequest
@@ -464,6 +482,11 @@ export function createApprovalQueue(deps: {
           capability: approval.capability,
           ...(approval.resource?.value ? { value: approval.resource.value } : {}),
         };
+      case "browser-permission":
+        return {
+          capability: approval.capabilities.join(","),
+          value: approval.origin,
+        };
       case "credential":
         return { credentialId: approval.credentialId, value: approval.credentialLabel };
       case "credential-input":
@@ -577,7 +600,12 @@ export function createApprovalQueue(deps: {
 
   /** Grant scope the server persisted for a decision (null for once/deny/dismiss). */
   function grantScopeFor(decision: GrantedDecision): GrantScopeStored {
-    return decision === "session" || decision === "version" ? decision : null;
+    return decision === "session" ||
+      decision === "version" ||
+      decision === "always" ||
+      decision === "block"
+      ? decision
+      : null;
   }
 
   function dedupKeyFor(req: ApprovalQueueRequest): string {
@@ -598,6 +626,17 @@ export function createApprovalQueue(deps: {
         req.effectiveVersion,
         req.capability,
         req.resource?.value ?? "",
+      ]);
+    }
+    if (req.kind === "browser-permission") {
+      return canonicalKey([
+        "browser-permission",
+        req.ownerUserId,
+        req.workspaceId,
+        req.environmentKey,
+        req.panelId,
+        req.origin,
+        ...req.capabilities.slice().sort(),
       ]);
     }
     if (req.kind === "unit-batch") {
@@ -703,6 +742,13 @@ export function createApprovalQueue(deps: {
   }
 
   function defaultOperationFor(req: ApprovalQueueRequest): ApprovalOperationDescriptor {
+    if (req.kind === "browser-permission") {
+      return {
+        kind: "browser",
+        verb: `use ${req.capabilities.join(" and ")}`,
+        object: { type: "site", label: "Website", value: req.origin },
+      };
+    }
     if (req.kind === "capability") {
       const object = req.resource
         ? {
@@ -805,6 +851,20 @@ export function createApprovalQueue(deps: {
         cardType: req.cardType,
         allowedDecisions: req.allowedDecisions,
       } satisfies PendingCapabilityApproval;
+    }
+    if (req.kind === "browser-permission") {
+      return {
+        ...base,
+        kind: "browser-permission",
+        ownerUserId: req.ownerUserId,
+        workspaceId: req.workspaceId,
+        environmentKey: req.environmentKey,
+        panelId: req.panelId,
+        origin: req.origin,
+        topLevelUrl: req.topLevelUrl,
+        capabilities: req.capabilities,
+        deviceLabel: req.deviceLabel,
+      } satisfies PendingBrowserPermissionApproval;
     }
     if (req.kind === "unit-batch") {
       const approval = {
@@ -1012,7 +1072,10 @@ export function createApprovalQueue(deps: {
     );
   }
 
-  function settleDecisionEntry(entry: QueueEntry, decision: ApprovalQueueDecision): void {
+  function settleDecisionEntry(
+    entry: QueueEntry,
+    decision: ApprovalQueueDecision | BrowserPermissionApprovalDecision
+  ): void {
     removeEntry(entry);
     for (const waiter of entry.waiters.values()) {
       if (waiter.signal && waiter.onAbort) {
@@ -1126,73 +1189,90 @@ export function createApprovalQueue(deps: {
     throw new Error("Capability approval offers no auto-allow decision");
   }
 
+  function enqueueDecision(req: DecisionApprovalQueueRequest): Promise<ApprovalQueueDecision>;
+  function enqueueDecision(
+    req: BrowserPermissionApprovalQueueRequest
+  ): Promise<BrowserPermissionApprovalDecision>;
+  function enqueueDecision(
+    req: DecisionApprovalQueueRequest | BrowserPermissionApprovalQueueRequest
+  ): Promise<ApprovalQueueDecision | BrowserPermissionApprovalDecision> {
+    if (autoApproveDecision) {
+      if (req.kind === "browser-permission") {
+        return Promise.resolve(autoApproveDecision === "deny" ? "block" : "once");
+      }
+      return Promise.resolve(
+        req.kind === "capability" ? autoApproveCapabilityDecision(req) : autoApproveDecision
+      );
+    }
+
+    const dedupKey = dedupKeyFor(req);
+    let entry = entriesByDedupKey.get(dedupKey);
+    let newEntry = false;
+    if (!entry) {
+      const approval = createPendingApproval(req);
+      entry = {
+        approval,
+        dedupKey,
+        requestedByUserId: req.requestedByUserId,
+        waiters: new Map(),
+        fieldInputWaiters: new Map(),
+        userlandWaiters: new Map(),
+        deviceCodeWaiters: new Map(),
+        externalAgentWaiters: new Map(),
+        nextWaiterId: 0,
+      };
+      entriesById.set(approval.approvalId, entry);
+      entriesByDedupKey.set(dedupKey, entry);
+      newEntry = true;
+    }
+
+    const bound = entry;
+    return new Promise<ApprovalQueueDecision | BrowserPermissionApprovalDecision>((resolve) => {
+      const waiterId = bound.nextWaiterId++;
+      const waiter: QueueWaiter = { resolve, signal: req.signal };
+
+      if (req.signal) {
+        const onAbort = () => {
+          const e = entriesById.get(bound.approval.approvalId);
+          if (!e) {
+            resolve("deny");
+            return;
+          }
+          if (e.settlement) return;
+          e.waiters.delete(waiterId);
+          if (
+            e.waiters.size === 0 &&
+            e.fieldInputWaiters.size === 0 &&
+            e.userlandWaiters.size === 0
+          ) {
+            removeEntry(e);
+            emitPendingChanged();
+          }
+          resolve("deny");
+        };
+        waiter.onAbort = onAbort;
+        if (req.signal.aborted) {
+          queueMicrotask(onAbort);
+        } else {
+          req.signal.addEventListener("abort", onAbort, { once: true });
+        }
+      }
+
+      bound.waiters.set(waiterId, waiter);
+
+      if (newEntry) {
+        emitPendingChanged();
+      }
+    });
+  }
+
   return {
     request(req) {
-      if (autoApproveDecision) {
-        return Promise.resolve(
-          req.kind === "capability" ? autoApproveCapabilityDecision(req) : autoApproveDecision
-        );
-      }
+      return enqueueDecision(req);
+    },
 
-      const dedupKey = dedupKeyFor(req);
-      let entry = entriesByDedupKey.get(dedupKey);
-      let newEntry = false;
-      if (!entry) {
-        const approval = createPendingApproval(req);
-        entry = {
-          approval,
-          dedupKey,
-          requestedByUserId: req.requestedByUserId,
-          waiters: new Map(),
-          fieldInputWaiters: new Map(),
-          userlandWaiters: new Map(),
-          deviceCodeWaiters: new Map(),
-          externalAgentWaiters: new Map(),
-          nextWaiterId: 0,
-        };
-        entriesById.set(approval.approvalId, entry);
-        entriesByDedupKey.set(dedupKey, entry);
-        newEntry = true;
-      }
-
-      const bound = entry;
-      return new Promise<ApprovalQueueDecision>((resolve) => {
-        const waiterId = bound.nextWaiterId++;
-        const waiter: QueueWaiter = { resolve, signal: req.signal };
-
-        if (req.signal) {
-          const onAbort = () => {
-            const e = entriesById.get(bound.approval.approvalId);
-            if (!e) {
-              resolve("deny");
-              return;
-            }
-            if (e.settlement) return;
-            e.waiters.delete(waiterId);
-            if (
-              e.waiters.size === 0 &&
-              e.fieldInputWaiters.size === 0 &&
-              e.userlandWaiters.size === 0
-            ) {
-              removeEntry(e);
-              emitPendingChanged();
-            }
-            resolve("deny");
-          };
-          waiter.onAbort = onAbort;
-          if (req.signal.aborted) {
-            queueMicrotask(onAbort);
-          } else {
-            req.signal.addEventListener("abort", onAbort, { once: true });
-          }
-        }
-
-        bound.waiters.set(waiterId, waiter);
-
-        if (newEntry) {
-          emitPendingChanged();
-        }
-      });
+    requestBrowserPermission(req) {
+      return enqueueDecision(req);
     },
 
     requestClientConfig(req) {
@@ -1507,6 +1587,18 @@ export function createApprovalQueue(deps: {
         throw new Error(`Capability approval does not accept decision '${decision}'`);
       }
       if (
+        entry.approval.kind === "browser-permission" &&
+        !["once", "session", "always", "block", "dismiss"].includes(decision)
+      ) {
+        throw new Error(`Browser permission approval does not accept decision '${decision}'`);
+      }
+      if (
+        entry.approval.kind !== "browser-permission" &&
+        (decision === "always" || decision === "block")
+      ) {
+        throw new Error(`Approval kind '${entry.approval.kind}' does not accept '${decision}'`);
+      }
+      if (
         entry.approval.kind === "capability" &&
         entry.approval.cardType === "confirm.critical" &&
         decision !== "once" &&
@@ -1521,7 +1613,7 @@ export function createApprovalQueue(deps: {
         entry,
         {
           decision,
-          granted: granted !== "deny" && granted !== "dismiss",
+          granted: granted !== "deny" && granted !== "block" && granted !== "dismiss",
           grantScopeStored: granted === "dismiss" ? null : grantScopeFor(granted),
           resolver,
         },

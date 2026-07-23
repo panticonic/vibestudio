@@ -193,6 +193,25 @@ export const HOST_APPROVAL_COPY = {
       },
       deny: "Don't open this site.",
     },
+    browserPermission: {
+      once: { label: "Allow once", description: "Allow only this request." },
+      session: {
+        label: "This session",
+        description: "Allow until Vibestudio closes or the browser session ends.",
+      },
+      always: {
+        label: "Always allow",
+        description: "Remember this decision for this site.",
+      },
+      block: {
+        label: "Always block",
+        description: "Block future requests from this site.",
+      },
+      dismiss: {
+        label: "Dismiss",
+        description: "Close without changing the current site decision.",
+      },
+    },
     workspaceSource: {
       once: { label: "Commit once", description: "Allow this code update once." },
       sessionLabel: "Commit for now",

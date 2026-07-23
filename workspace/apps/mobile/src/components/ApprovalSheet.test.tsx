@@ -198,6 +198,21 @@ const unitBatch: PendingApproval = {
   ],
 };
 
+const browserPermission: PendingApproval = {
+  ...base,
+  callerId: "panel-browser-1",
+  callerKind: "panel",
+  kind: "browser-permission",
+  ownerUserId: "usr_owner",
+  workspaceId: "workspace-1",
+  environmentKey: "browser-env-1",
+  panelId: "panel-browser-1",
+  origin: "https://meet.example.com",
+  topLevelUrl: "https://meet.example.com/room",
+  capabilities: ["camera", "microphone"],
+  deviceLabel: "This device",
+};
+
 function renderSheet(
   approval: PendingApproval | PendingApproval[],
   overrides: Partial<React.ComponentProps<typeof ApprovalSheet>> = {}
@@ -227,6 +242,7 @@ describe("ApprovalSheet", () => {
     [userland, "Allow foo?"],
     [deviceCode, "Sign in to GitHub"],
     [unitBatch, "Start 1 extension and 1 app"],
+    [browserPermission, "Allow camera and microphone on https://meet.example.com?"],
   ] as const)("renders %s", (approval, title) => {
     const { getByText } = renderSheet(approval);
     expect(getByText(title)).toBeTruthy();
@@ -251,6 +267,21 @@ describe("ApprovalSheet", () => {
       const onResolve = jest.fn(async () => undefined);
       const { getByTestId } = renderSheet(capability, { onResolve });
 
+      fireEvent.press(getByTestId(`approval-action-${decision}`));
+
+      await waitFor(() => expect(onResolve).toHaveBeenCalledWith("approval-1", decision));
+    }
+  );
+
+  it.each(["once", "session", "always", "block", "dismiss"] as const)(
+    "resolves browser permission decision %s",
+    async (decision) => {
+      const onResolve = jest.fn(async () => undefined);
+      const { getByTestId, getByText } = renderSheet(browserPermission, { onResolve });
+
+      fireEvent.press(getByText("Request details"));
+      expect(getByText("camera, microphone")).toBeTruthy();
+      expect(getByText("This device")).toBeTruthy();
       fireEvent.press(getByTestId(`approval-action-${decision}`));
 
       await waitFor(() => expect(onResolve).toHaveBeenCalledWith("approval-1", decision));

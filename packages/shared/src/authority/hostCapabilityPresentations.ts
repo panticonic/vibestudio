@@ -102,6 +102,13 @@ export const HOST_CAPABILITY_PRESENTATIONS = {
       "Allows {requesterKind} to save a password or remember that password saving is disabled for this site.",
     group: "credentials",
   },
+  "autofill.confirmFormFill": {
+    title: "Save form-fill values",
+    action: "save personal form-fill values",
+    description:
+      "Allows {requesterKind} to save the personal form values shown in a browser submission prompt.",
+    group: "credentials",
+  },
   "autofill.deleteSavedPassword": {
     title: "Delete a saved password",
     action: "permanently delete a saved password",
@@ -1088,6 +1095,7 @@ export const HOST_SEMANTIC_CAPABILITY_PRESENTATIONS = {
   "approvals.block": effect("Block future access requests", "approvals"),
   "approvals.decide": effect("Respond to access requests", "approvals"),
   "approvals.read": effect("View requests awaiting your decision", "approvals"),
+  "browser-form-fill.manage": effect("Fill forms with saved credentials", "credentials"),
   "browser-passwords.delete": effect("Delete saved passwords", "credentials"),
   "browser-passwords.manage": effect("Change password-saving preferences", "credentials"),
   "browser-passwords.read": effect("View saved password accounts and preferences", "credentials"),

@@ -1,4 +1,4 @@
-import { REACT_FRAMEWORK_ENTRY_MODULE } from "../platformModules.js";
+import { REACT_FRAMEWORK_ENTRY_MODULE, REACT_SHARED_STYLE_MODULES } from "../platformModules.js";
 import type { FrameworkAdapter } from "./types.js";
 
 export const reactAdapter: FrameworkAdapter = {
@@ -13,7 +13,7 @@ export const reactAdapter: FrameworkAdapter = {
     "@radix-ui/themes",
   ],
 
-  sharedStyles: ["@radix-ui/themes/styles.css", "@workspace/ui/tokens.css"],
+  sharedStyles: REACT_SHARED_STYLE_MODULES,
 
   jsx: "automatic",
   tsconfigJsx: "react-jsx",

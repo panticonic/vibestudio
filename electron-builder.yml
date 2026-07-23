@@ -101,6 +101,10 @@ mac:
   entitlements: build-resources/entitlements.mac.plist
   entitlementsInherit: build-resources/entitlements.mac.plist
   icon: build-resources/icon.icns
+  extendInfo:
+    NSCameraUsageDescription: "Allow websites you approve in Vibestudio to use the camera."
+    NSMicrophoneUsageDescription: "Allow websites you approve in Vibestudio to use the microphone."
+    NSLocationWhenInUseUsageDescription: "Allow websites you approve in Vibestudio to use your location."
 
 # DMG configuration
 dmg:

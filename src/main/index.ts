@@ -143,6 +143,7 @@ import { corsApprovalMethods } from "@vibestudio/service-schemas/corsApproval";
 import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
 import { PanelPinStore } from "./panelPinStore.js";
+import { PanelLayoutStore } from "./panelLayoutStore.js";
 import { PANEL_UI_IDLE_UNLOAD_MS, PANEL_UI_MAX_LOADED_DESKTOP } from "@vibestudio/shared/constants";
 import type { PanelView } from "./panelView.js";
 import type { AppAvailableEvent } from "./appOrchestrator.js";
@@ -189,7 +190,6 @@ import { createApprovalAttention, type ApprovalAttention } from "./approvalAtten
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { filterBootstrapApprovalsForTarget } from "@vibestudio/shared/bootstrapApprovals";
 import { RuntimeDiagnosticsStore } from "../server/runtimeDiagnosticsStore.js";
-import { BROWSER_SESSION_PARTITION } from "@vibestudio/shared/panelInterfaces";
 
 import {
   createHostCaller,
@@ -366,6 +366,13 @@ let shellCore: ReturnType<
   typeof import("./shellCore/createElectronShellCore.js").createElectronShellCore
 > | null = null;
 let serverSession: SessionConnection | null = null;
+let activeBrowserSessionPartition: string | null = null;
+const getBrowserSessionPartition = (): string => {
+  if (!activeBrowserSessionPartition) {
+    throw new Error("Browser environment is not initialized");
+  }
+  return activeBrowserSessionPartition;
+};
 let panelLocationForWorkspaceRelaunch: PanelLocation | null = null;
 let approvalAttention: ApprovalAttention | null = null;
 let isCleaningUp = false; // Prevent re-entry in will-quit handler
@@ -390,16 +397,35 @@ const applicationWindow = new ApplicationWindowController({
     appliedElectronHostTargetKey = null;
     electronHostLaunchLastStatusKey = null;
   },
+  getBrowserSessionPartition,
 });
 
 app.on("second-instance", () => {
   applicationWindow.showAndFocus();
 });
-let autofillManager: import("./autofill/autofillManager.js").AutofillManager | null = null;
+let formFillManager: import("./autofill/formFillManager.js").FormFillManager | null = null;
 const corsApprovalCache = new Set<string>();
 const pendingCorsApprovals = new Map<string, Promise<{ allowed: boolean; cacheable: boolean }>>();
 let browserDataStoreForCredentialCapture:
   | import("@vibestudio/browser-data").BrowserDataClient
+  | null = null;
+let browserCookieProjection:
+  | import("./services/browserCookieProjection.js").BrowserCookieProjectionApi
+  | null = null;
+let browserFaviconObserver:
+  | import("./services/browserFaviconObserver.js").BrowserFaviconObserver
+  | null = null;
+let browserDownloadManager:
+  | import("./services/browserDownloadManager.js").BrowserDownloadManager
+  | null = null;
+let browserPermissionController:
+  | import("./services/browserPermissionController.js").BrowserPermissionController
+  | null = null;
+let websiteNotificationBridge:
+  | import("./services/websiteNotificationBridge.js").WebsiteNotificationBridge
+  | null = null;
+let browserImportHostProvider:
+  | import("./services/browserImportHostProvider.js").BrowserImportHostProvider
   | null = null;
 
 type AppCapability = import("@vibestudio/shared/unitManifest").AppCapability;
@@ -612,59 +638,8 @@ function normalizeCaptureOrigins(value: unknown): string[] {
   return [...new Set(origins)];
 }
 
-function buildCookieHeader(
-  cookies: Electron.Cookie[],
-  cookieNames: string[]
-): {
-  header: string;
-  expiresAt?: number;
-  cookies: Record<string, unknown>[];
-} | null {
-  const byName = new Map(cookies.map((cookie) => [cookie.name, cookie]));
-  const selected: Electron.Cookie[] = [];
-  for (const name of cookieNames) {
-    const cookie = byName.get(name);
-    if (!cookie || !cookie.value) return null;
-    selected.push(cookie);
-  }
-  const expiringCookies = selected
-    .map((cookie) =>
-      typeof cookie.expirationDate === "number"
-        ? Math.floor(cookie.expirationDate * 1000)
-        : undefined
-    )
-    .filter((value): value is number => typeof value === "number" && value > 0);
-  return {
-    header: selected.map((cookie) => `${cookie.name}=${cookie.value}`).join("; "),
-    expiresAt: expiringCookies.length > 0 ? Math.min(...expiringCookies) : undefined,
-    cookies: selected.map((cookie) => ({
-      name: cookie.name,
-      value: cookie.value,
-      domain: cookie.domain,
-      path: cookie.path,
-      secure: cookie.secure,
-      httpOnly: cookie.httpOnly,
-      sameSite: cookie.sameSite,
-      expirationDate: cookie.expirationDate,
-      partitionKey:
-        typeof (cookie as { partitionKey?: unknown }).partitionKey === "string"
-          ? (cookie as { partitionKey?: string }).partitionKey
-          : undefined,
-    })),
-  };
-}
-
-function buildImportedCookieHeader(
-  cookies: Array<{
-    name: string;
-    value: string;
-    domain: string;
-    path: string;
-    expiration_date: number | null;
-    secure: number;
-    http_only: number;
-    same_site: string;
-  }>,
+function buildCanonicalCookieHeader(
+  cookies: import("@vibestudio/browser-data").StoredCookie[],
   cookieNames: string[],
   origins: string[]
 ): {
@@ -685,11 +660,11 @@ function buildImportedCookieHeader(
   }
   const nowSeconds = Math.floor(Date.now() / 1000);
   const expiringCookies = selected
-    .map((cookie) => cookie.expiration_date ?? undefined)
+    .map((cookie) => cookie.expirationDate)
     .filter((value): value is number => typeof value === "number" && value > nowSeconds);
   if (
     selected.some(
-      (cookie) => typeof cookie.expiration_date === "number" && cookie.expiration_date <= nowSeconds
+      (cookie) => typeof cookie.expirationDate === "number" && cookie.expirationDate <= nowSeconds
     )
   ) {
     return null;
@@ -702,25 +677,26 @@ function buildImportedCookieHeader(
       value: cookie.value,
       domain: cookie.domain,
       path: cookie.path,
-      secure: cookie.secure === 1,
-      httpOnly: cookie.http_only === 1,
-      sameSite: cookie.same_site,
-      expirationDate: cookie.expiration_date ?? undefined,
+      secure: cookie.secure,
+      httpOnly: cookie.httpOnly,
+      sameSite: cookie.sameSite,
+      expirationDate: cookie.expirationDate,
+      partitionKey: cookie.partitionKey,
     })),
   };
 }
 
 function importedCookieMatchesOrigin(
-  cookie: { domain: string; path: string; secure: number },
+  cookie: { domain: string; path: string; secure: boolean; hostOnly: boolean },
   origin: string
 ): boolean {
   const url = new URL(origin);
-  if (cookie.secure === 1 && url.protocol !== "https:") return false;
+  if (cookie.secure && url.protocol !== "https:") return false;
   const cookieDomain = cookie.domain.replace(/^\./, "").toLowerCase();
   const host = url.hostname.toLowerCase();
-  const domainMatches = cookie.domain.startsWith(".")
-    ? host === cookieDomain || host.endsWith(`.${cookieDomain}`)
-    : host === cookieDomain;
+  const domainMatches = cookie.hostOnly
+    ? host === cookieDomain
+    : host === cookieDomain || host.endsWith(`.${cookieDomain}`);
   if (!domainMatches) return false;
   const cookiePath = cookie.path || "/";
   return (
@@ -863,8 +839,11 @@ async function handleCredentialSessionCaptureRequest(
       if (!browserDataStoreForCredentialCapture) {
         return { error: "external browser cookie import is unavailable" };
       }
-      const imported = await browserDataStoreForCredentialCapture.getCookies();
-      const material = buildImportedCookieHeader(imported, cookieNames, origins);
+      const browserDataStore = browserDataStoreForCredentialCapture;
+      const imported = (
+        await Promise.all(origins.map((origin) => browserDataStore.getCookiesForOrigin(origin)))
+      ).flat();
+      const material = buildCanonicalCookieHeader(imported, cookieNames, origins);
       if (!material) {
         return {
           error: "external browser cookie import did not contain the declared session cookies",
@@ -903,23 +882,22 @@ async function handleCredentialSessionCaptureRequest(
         return { error: "failed to create browser panel" };
       }
 
-      const browserSession = session.fromPartition(BROWSER_SESSION_PARTITION);
       const completionPattern =
         typeof msg.completionUrlPattern === "string" ? msg.completionUrlPattern : undefined;
       const timeout = 300_000;
 
       // Helper to check if cookies are captured
       const tryCaptureCredentials = async (): Promise<Record<string, unknown> | null> => {
-        const captured: Electron.Cookie[] = [];
-        for (const origin of origins) {
-          const originCookies = await browserSession.cookies.get({ url: origin });
-          for (const cookie of originCookies) {
-            if (cookieNames.includes(cookie.name)) {
-              captured.push(cookie);
-            }
-          }
+        if (!browserCookieProjection || !browserDataStoreForCredentialCapture) {
+          return null;
         }
-        const material = buildCookieHeader(captured, cookieNames);
+        const projection = browserCookieProjection;
+        const browserDataStore = browserDataStoreForCredentialCapture;
+        await projection.flush(origins);
+        const captured = (
+          await Promise.all(origins.map((origin) => browserDataStore.getCookiesForOrigin(origin)))
+        ).flat();
+        const material = buildCanonicalCookieHeader(captured, cookieNames, origins);
         if (material) {
           const maxTtlSeconds =
             typeof msg.maxTtlSeconds === "number" && msg.maxTtlSeconds > 0
@@ -961,7 +939,9 @@ async function handleCredentialSessionCaptureRequest(
 
         const cleanup = () => {
           clearTimeout(timeoutId);
-          browserSession.cookies.off("changed", onCookiesChanged);
+          session
+            .fromPartition(getBrowserSessionPartition())
+            .cookies.off("changed", onCookiesChanged);
           webContents.off("did-navigate", onNavigate);
           webContents.off("did-navigate-in-page", onNavigate);
           webContents.off("did-redirect-navigation", onRedirect);
@@ -1012,7 +992,7 @@ async function handleCredentialSessionCaptureRequest(
         const onDestroyed = () => finish({ error: "user closed sign-in window" });
         const timeoutId = setTimeout(() => finish({ error: "session capture timed out" }), timeout);
 
-        browserSession.cookies.on("changed", onCookiesChanged);
+        session.fromPartition(getBrowserSessionPartition()).cookies.on("changed", onCookiesChanged);
         webContents.on("did-navigate", onNavigate);
         webContents.on("did-navigate-in-page", onNavigate);
         webContents.on("did-redirect-navigation", onRedirect);
@@ -1698,16 +1678,29 @@ app.on("ready", async () => {
     const viewManager = applicationWindow.viewManager;
     if (!contents || !viewManager) return false;
     const viewId = viewManager.findViewIdByWebContentsId(contents.id);
-    const viewInfo = viewId ? viewManager.getViewInfo(viewId) : null;
     // Keep the request and check handlers consistent: Chromium may consult the
     // check handler before it reaches the request handler.
-    if (permission === "fullscreen" && viewInfo?.type === "browser") return true;
+    if (
+      permission === "fullscreen" &&
+      viewId &&
+      activeBrowserSessionPartition &&
+      viewManager.getViewPartition(viewId) === activeBrowserSessionPartition
+    ) {
+      return true;
+    }
     return appWebContentsHasPermissionCapability(contents, permission);
   };
 
   const installPermissionHandlers = (targetSession: Session): void => {
-    targetSession.setPermissionRequestHandler((contents, permission, callback) => {
+    targetSession.setPermissionRequestHandler((contents, permission, callback, details) => {
       if (SENSITIVE_PERMISSIONS.has(permission)) {
+        if (
+          browserPermissionController &&
+          (permission === "media" || permission === "geolocation" || permission === "notifications")
+        ) {
+          browserPermissionController.requestPermission(contents, permission, callback, details);
+          return;
+        }
         const viewManager = applicationWindow.viewManager;
         const viewId = contents ? viewManager?.findViewIdByWebContentsId(contents.id) : null;
         const viewInfo = viewId ? viewManager?.getViewInfo(viewId) : null;
@@ -1732,8 +1725,19 @@ app.on("ready", async () => {
       // Permissive default for non-sensitive permissions (clipboard read/etc.)
       callback(true);
     });
-    targetSession.setPermissionCheckHandler((contents, permission) => {
+    targetSession.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => {
       if (SENSITIVE_PERMISSIONS.has(permission)) {
+        if (
+          browserPermissionController &&
+          (permission === "media" || permission === "geolocation" || permission === "notifications")
+        ) {
+          return browserPermissionController.checkPermission(
+            contents,
+            permission,
+            requestingOrigin,
+            details
+          );
+        }
         return webContentsMayUseSensitivePermission(contents, permission);
       }
       return true;
@@ -2092,6 +2096,7 @@ app.on("ready", async () => {
     onCredentialCaptureRequest: (payload) =>
       handleCredentialSessionCaptureRequest(payload as CredentialSessionCaptureRequest),
     onNotificationAction: async (_id, actionId) => {
+      websiteNotificationBridge?.handleAction(_id, actionId);
       if (actionId === "desktop-update-download") {
         if (!desktopAutoUpdater) throw new Error("Desktop updater is unavailable");
         await desktopAutoUpdater.downloadUpdate();
@@ -2347,16 +2352,18 @@ app.on("ready", async () => {
 
     // A workspace selected in-process cannot safely repoint Electron's userData
     // directory, so derive the pin path from the resolved workspace itself.
+    const clientLocalStateDir =
+      startupMode.kind === "local"
+        ? path.join(startupMode.wsDir, "state")
+        : app.getPath("userData");
     const panelPinStore = IS_HEADLESS_HOST
       ? undefined
-      : new PanelPinStore(
-          path.join(
-            startupMode.kind === "local"
-              ? path.join(startupMode.wsDir, "state")
-              : app.getPath("userData"),
-            "panel-pins.json"
-          )
-        );
+      : new PanelPinStore(path.join(clientLocalStateDir, "panel-pins.json"));
+    // Per-device panel layout persistence (multi-column plan §3.3): same
+    // client-local directory as pins, one file per (workspace, account).
+    const panelLayoutStore = IS_HEADLESS_HOST
+      ? undefined
+      : new PanelLayoutStore(clientLocalStateDir);
 
     // Create PanelOrchestrator
     panelOrchestrator = new PanelOrchestrator({
@@ -2371,6 +2378,7 @@ app.on("ready", async () => {
       protocol: conn.protocol,
       gatewayPort: conn.gatewayPort,
       gatewayBasePath,
+      getBrowserSessionPartition,
       sendPanelEvent: (panelId, event, payload) => {
         const wc = applicationWindow.viewManager?.getWebContents(panelId);
         if (wc && !wc.isDestroyed()) {
@@ -2379,6 +2387,9 @@ app.on("ready", async () => {
       },
       workspaceConfig: conn.workspaceConfig,
       pinStore: panelPinStore,
+      // Resident-set GC protection (§5.3): every slot-bound (visible) pane's
+      // panel is protected from idle sweep and cap eviction, not just focus.
+      getResidentPanelIds: () => applicationWindow.viewManager?.getSlotBoundPanelIds() ?? [],
       runtimeClient: IS_HEADLESS_HOST
         ? {
             label: "Headless",
@@ -2520,7 +2531,7 @@ app.on("ready", async () => {
     const adBlockManager = new AdBlockManager();
 
     // Autofill manager — password auto-fill for browser panels
-    const { AutofillManager } = await import("./autofill/autofillManager.js");
+    const { FormFillManager } = await import("./autofill/formFillManager.js");
 
     // Register all Electron-main RPC services via ServiceContainer. Window-owned
     // hosts are resolved from their lifecycle owner when an RPC is invoked.
@@ -2544,6 +2555,7 @@ app.on("ready", async () => {
     const electronContainer = new ServiceContainer(dispatcher);
 
     const { serverClient: sc } = conn;
+    const browserDataClient = createBrowserDataClient(sc);
 
     // Shell-only services
     electronContainer.registerRpc(
@@ -2564,6 +2576,17 @@ app.on("ready", async () => {
         onWorkspaceRoute: handleWorkspaceRoute,
       })
     );
+    // The layout store is keyed main-side by (workspace, signed-in account);
+    // the shell never passes identity (§3.3). The account subject is stable
+    // for the life of this authenticated connection, so resolve it lazily once.
+    let cachedAccountUserId: string | null = null;
+    const getAccountUserId = async (): Promise<string> => {
+      if (cachedAccountUserId) return cachedAccountUserId;
+      const profile = (await sc.call("account", "getProfile", [])) as { userId?: string } | null;
+      if (!profile?.userId) throw new Error("Signed-in account user id unavailable");
+      cachedAccountUserId = profile.userId;
+      return cachedAccountUserId;
+    };
     electronContainer.registerRpc(
       createPanelShellService({
         panelOrchestrator,
@@ -2573,6 +2596,9 @@ app.on("ready", async () => {
         },
         getViewManager,
         serverClient: sc,
+        panelLayoutStore,
+        getWorkspaceId: () => conn.workspaceConfig.id,
+        getAccountUserId,
       })
     );
     electronContainer.registerRpc(createViewService({ getViewManager }));
@@ -2613,40 +2639,115 @@ app.on("ready", async () => {
       electronContainer.registerManaged({
         name: "browser-data-host",
         async start() {
-          const browserDataClient = createBrowserDataClient(sc);
+          const { BrowserImportHostProvider } =
+            await import("./services/browserImportHostProvider.js");
+          browserImportHostProvider = new BrowserImportHostProvider({
+            hostId: `desktop:${cdpHostConnectionId}`,
+            displayName: "This device",
+          });
           browserDataStoreForCredentialCapture = browserDataClient;
-          autofillManager = new AutofillManager({
-            passwordStore: browserDataClient,
+          formFillManager = new FormFillManager({
+            formFillStore: browserDataClient,
             eventService,
             getViewManager,
             autofillOverlayPreloadPath: path.join(__dirname, "autofillOverlayPreload.cjs"),
           });
+          const { CanonicalBrowserFaviconObserver } =
+            await import("./services/browserFaviconObserver.js");
+          browserFaviconObserver = new CanonicalBrowserFaviconObserver(browserDataClient);
           return browserDataClient;
         },
         async stop() {
+          browserImportHostProvider?.stop();
+          browserImportHostProvider = null;
           browserDataStoreForCredentialCapture = null;
-          if (autofillManager) {
-            autofillManager.destroy();
-            autofillManager = null;
+          if (formFillManager) {
+            formFillManager.destroy();
+            formFillManager = null;
           }
+          browserFaviconObserver = null;
         },
       });
-      const { createBrowserSessionSyncService } = await import("./services/browserSessionSync.js");
+      const { createBrowserCookieProjectionService } =
+        await import("./services/browserCookieProjection.js");
       electronContainer.registerManaged(
-        createBrowserSessionSyncService({
+        createBrowserCookieProjectionService({
+          browserDataClient,
           serverClient: sc,
-          browserDataClient: createBrowserDataClient(sc),
+          hostId: `desktop:${conn.workspaceId}`,
+          outboxRoot: app.getPath("userData"),
+          setActivePartition(partition) {
+            activeBrowserSessionPartition = partition;
+          },
+          async onReady(api) {
+            browserCookieProjection = api;
+            const { BrowserPermissionController } =
+              await import("./services/browserPermissionController.js");
+            const permissionController = new BrowserPermissionController({
+              partition: api.partition,
+              serverClient: sc,
+              eventService,
+              getViewManager: () => applicationWindow.viewManager,
+            });
+            await permissionController.start();
+            browserPermissionController = permissionController;
+            const { WebsiteNotificationBridge } =
+              await import("./services/websiteNotificationBridge.js");
+            websiteNotificationBridge = new WebsiteNotificationBridge({
+              permissions: permissionController,
+              eventService,
+              getViewManager: () => applicationWindow.viewManager,
+            });
+            websiteNotificationBridge.start();
+            const { BrowserDownloadManager } = await import("./services/browserDownloadManager.js");
+            const manager = new BrowserDownloadManager({
+              browserSession: session.fromPartition(api.partition),
+              environmentKey: api.identity.environmentKey,
+              hostId: `desktop:${cdpHostConnectionId}`,
+              downloadsDirectory: app.getPath("downloads"),
+              browserData: browserDataClient,
+              eventService,
+              getViewManager: () => applicationWindow.viewManager,
+            });
+            await manager.start();
+            browserDownloadManager = manager;
+          },
+          async onStopped() {
+            websiteNotificationBridge?.stop();
+            websiteNotificationBridge = null;
+            browserPermissionController?.stop();
+            browserPermissionController = null;
+            await browserDownloadManager?.stop();
+            browserDownloadManager = null;
+            browserCookieProjection = null;
+            activeBrowserSessionPartition = null;
+          },
         })
       );
     }
 
-    // Register autofill service (uses lazy resolution since autofillManager is created in browser-data start)
+    // Register autofill service (uses lazy resolution since formFillManager is created in browser-data start)
     electronContainer.registerRpc(
       createAutofillService({
         invoke: (ctx, method, args) => {
-          if (!autofillManager) throw new Error("Autofill not initialized");
-          return autofillManager.getServiceDefinition().handler(ctx, method, args);
+          if (!formFillManager) throw new Error("Autofill not initialized");
+          return formFillManager.getServiceDefinition().handler(ctx, method, args);
         },
+      })
+    );
+    const { createBrowserEnvironmentService } =
+      await import("./services/browserEnvironmentService.js");
+    const { workspaceProviderExtensionRepoPath } =
+      await import("@vibestudio/workspace/configParser");
+    electronContainer.registerRpc(
+      createBrowserEnvironmentService({
+        getProjection: () => browserCookieProjection,
+        getDownloads: () => browserDownloadManager,
+        getImportProvider: () => browserImportHostProvider,
+        browserDataBrokerRepoPath: workspaceProviderExtensionRepoPath(
+          conn.workspaceConfig,
+          "browserData"
+        ),
       })
     );
     // Each local watch retains its server topics for exactly the lifetime of
@@ -2849,7 +2950,8 @@ app.on("ready", async () => {
       panelOrchestrator,
       serverSession: conn,
       cdpHost: createCdpRegistrationAdapter(),
-      autofillManager,
+      formFillManager,
+      browserFaviconObserver,
     });
     if (IS_HEADLESS_HOST) {
       performance.mark("startup:window-created");

@@ -45,7 +45,10 @@ export const REVIEWED_INTERNAL_DURABLE_OBJECT_TARGETS: readonly ReviewedInternal
     {
       source: INTERNAL_DO_SOURCE,
       className: "BrowserDataDO",
-      objectKey: "global",
+      // This is a reviewed resolver sentinel, never the storage object key.
+      // WorkerService replaces every caller-supplied key with a server-derived
+      // user/workspace environment key before activation.
+      objectKey: "browser-environment",
       authority: {
         capability: "service:workers.resolveDurableObject",
         principals: ["code"],
