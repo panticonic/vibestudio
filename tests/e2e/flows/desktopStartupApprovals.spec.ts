@@ -563,7 +563,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
         ? await executePanelScript(
             testApp.app,
             firstPanelId,
-            `globalThis.__vibestudioRequire__("@workspace/runtime").rpc.call(${JSON.stringify(targetId)}, "getParticipants", [])`
+            `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(targetId)}, "getParticipants", []))`
           ).catch((error: unknown) => ({
             error: error instanceof Error ? error.message : String(error),
           }))
@@ -573,7 +573,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
         ? await executePanelScript(
             testApp.app,
             firstPanelId,
-            `(() => globalThis.__vibestudioRequire__("@workspace/runtime").rpc.call(${JSON.stringify(targetId)}, "getReplayAfter", [{ after: 0 }]).then((replay) => ({
+            `(() => globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(targetId)}, "getReplayAfter", [{ after: 0 }])).then((replay) => ({
               ready: replay?.ready,
               snapshots: replay?.snapshots,
               logEvents: (replay?.logEvents ?? []).map((event) => ({
@@ -605,7 +605,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
         ? await executePanelScript(
             testApp.app,
             firstPanelId,
-            `globalThis.__vibestudioRequire__("@workspace/runtime").rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}])`
+            `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}]))`
           ).catch((error: unknown) => ({
             error: error instanceof Error ? error.message : String(error),
           }))
@@ -719,8 +719,8 @@ async function collectStartupAgentCompletion(
     const snapshot = await executePanelScript(
       testApp.app,
       firstPanelId,
-      `(() => {
-        const rpc = globalThis.__vibestudioRequire__("@workspace/runtime").rpc;
+      `(async () => {
+        const { rpc } = await globalThis.__vibestudioRequireAsync__("@workspace/runtime");
         const normalize = (event) => {
           const outer = event?.payload;
           const agentic = outer?.kind === "agentic.event" ? outer.payload : (outer?.payload?.kind ? outer.payload : outer);
@@ -872,7 +872,7 @@ async function collectStartupAgentCompletion(
       const debugState = await executePanelScript(
         testApp.app,
         firstPanelId,
-        `globalThis.__vibestudioRequire__("@workspace/runtime").rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}])`
+        `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}]))`
       ).catch((error: unknown) => {
         return null;
       });
