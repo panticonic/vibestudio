@@ -72,6 +72,25 @@ See the sandbox skill's [INTERACTION_PATTERNS.md](../sandbox/INTERACTION_PATTERN
 5. **Eval injected globals + package imports** — in eval, the **ambient-only** globals `services`, `scope`, `scopes`, `db`, `ctx`, `help`, and (in agent eval) `chat` are injected free variables; do **not** `import` them (the engine rejects it). `rpc` and `fs` are injected ambiently **and** importable from `@workspace/runtime`. `@workspace/runtime` is importable in eval and exposes the same portable surface as panels — including `openPanel`/`listPanels`/`getPanelHandle`/`panelTree`, `vcs`/`workspace`/`gad`/`credentials`/`git`. Both static `import` and dynamic `await import(...)` work. See `sandbox/EVAL.md` for the full surface.
 6. **Close panels you open for temporary work** — keep the one development panel the user is reviewing, but close duplicate, browser, child, and diagnostic panels with `await handle.close()` when done. Use `listPanels()` to reuse existing panels instead of opening another copy.
 7. **Read the capabilities skill before adding authority** — workspace services are resolved from the caller's live semantic context; manifests request but never grant; generated catalogs are not authoring surfaces.
+8. **Eval is a notebook kernel** — `scope` retains live objects across cells while
+   the EvalDO's 30-minute idle lease is active. Store a working `PanelHandle` or
+   `CdpPage` there when a multi-cell workflow benefits from it, and also retain
+   stable identity/provenance needed for cold recovery. The durable scope
+   snapshot preserves only exact data, never degraded class instances; after an
+   explicit `[kernel] Restarted` result, reacquire each named lost handle with
+   `getPanelHandle(scope.panelId)` rather than opening a duplicate panel.
+9. **Discover accessible names before live UI actions** — read
+   [BROWSER.md](BROWSER.md) before using `handle.cdp.page()`. Inspect the intended
+   roles and their computed accessible names before clicking or filling; do not
+   guess from a visual label or source snippet because descendant badges and
+   labels contribute to the name.
+10. **Collection actions need item-specific accessible names** — controls
+    repeated per row/card/item must include that item's visible identity, for
+    example `aria-label={\`Complete ${todo.text}\`}`and`aria-label={\`Delete ${todo.text}\`}`. Repeated identical action names are
+an accessibility defect: repair the panel before exercising the flow.
+Never use `.first()`, `.last()`, or `.nth()`to guess which repeated control
+belongs to an item. Ordinals are acceptable only after`inspect()` proves
+    the intended rendered ancestor context.
 
 ## Quick Start Workflow
 
@@ -86,10 +105,29 @@ eval({ code: `
 ```
 
 Success returns `{ created, files, preflight, publication }`.
+`name` is a stable repository identifier matching `^[a-z][a-z0-9-]*$`. For an
+isolated suffix use lowercase base 36, for example
+`` `my-app-${Date.now().toString(36)}` ``; a raw ISO timestamp is invalid.
 `preflight.ok === true` proves that the complete planned repository passed the
 same canonical project-type, package identity, executable entry, strict
-authority-manifest, skill-instruction, and imported-dependency checks used for
-forks before the first VCS edit. `publication` then names the exact
+authority-manifest, skill-instruction, and module-dependency contract used for
+forks before the first VCS edit. The dependency contract uses the same shared
+syntax-aware analyzer as eval import validation and sandbox-renderer linting;
+comments, strings, templates, regular expressions, Node built-ins, and
+self-imports do not become phantom packages. Value imports in production source
+must be in `dependencies` or `peerDependencies`; test-only and type-only imports
+may be in `devDependencies` (DefinitelyTyped packages satisfy their matching
+type-only module).
+
+A failure is a `ProjectPreflightError`, not a flat compiler string. Eval
+preserves `errorData.code === "project_preflight_failed"`,
+`stage: "dependency-contract"`, and one issue per package with the exact source
+file, specifier, import kind/syntax, line/column, expected manifest field,
+observed wrong field, accepted coordinates, and remediation. Repair the
+manifest/source named by that packet and rerun the same operation; do not try a
+different canonical source merely to escape its contract.
+
+`publication` then names the exact
 `committedEventId`, `publishedEventId`, `mainEventId`, `effectId`, and
 `appliedAt`. If repository creation and commit succeed but
 protected publication fails, the helper throws `ScaffoldPublicationError`.
@@ -100,6 +138,11 @@ retry policy. Do not call `createProject` again. Pass the error or its
 `errorData` to `recoverProjectPublication`; it verifies the context is clean at
 that exact commit and either replays the identical uncertain command or
 reobserves main and uses a fresh command after a known refusal.
+
+`Project already exists: <path>` is not a recoverable publication failure. It
+means the requested repository is outside this creation attempt. Stop or choose
+a genuinely new name; never adopt, edit, or publish the existing repository as
+if this call had created it.
 
 Edit the generated files with the `edit`/`write` tools — each edit is recorded as
 authored intent on the context's exact working head and projected to disk.
@@ -142,32 +185,49 @@ const local = await openPanel("panels/my-app", {
 });
 const observation = await local.observe();
 const snapshot = await local.snapshot();
-return { observation, snapshot };
+return { panelId: local.id, observation, snapshot };
 ```
 
-For create/fork/open work, return both the ready observation and snapshot.
+Boot readiness and rendered verification are deliberately distinct. A
+successful `openPanel(...)` or `observe()` proves that the selected immutable
+attempt reached its application boot handshake; it does **not** prove that the
+rendered UI is correct. For every create/fork/open/rebuild task, call
+`snapshot()` after the ready observation and return both values from the same
+eval. Do not report success from a panel id, `phase: "ready"`, or build key
+alone. The snapshot is the provenance-bound rendered evidence that catches
+blank, error, stale, and semantically wrong UI.
+
 Returning only a panel id proves tree allocation, not a working application.
+For later cells, keep the live handle and stable identity together:
+`scope.panelHandle = handle; scope.panelId = handle.id`. Reuse
+`scope.panelHandle` while present. Only after `[kernel] Restarted` reports that
+key as lost should you reconstruct it with `getPanelHandle(scope.panelId)`.
 
 ## Common Tasks
 
-| Task                        | How                                                                                                                                                                                                                                                                                                                                                |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Create project              | `eval` — `import { createProject } from "@workspace-skills/workspace-dev"` then `return await createProject({ projectType, name, title })`; retain its exact `publication`, or recover the committed event from structured `scaffold_publication_failed` data without rerunning creation                                                           |
-| Fork panel                  | `eval` — `import { forkProject } from "@workspace-skills/workspace-dev"` then `forkProject({ from: "panels/chat", to: "panels/chat-experiment", title })`                                                                                                                                                                                          |
-| Fork worker                 | `eval` — run `forkProject({ from, to, title, dryRun: true })` first; pass `classMap` for multi-class workers                                                                                                                                                                                                                                       |
-| Build app database          | Create a worker Durable Object with `DurableObjectBase` + `this.sql`, declare it as a manifest service with `policy.allowed`, then call it from panels/apps/eval via `workers.resolveService(protocol, objectKey?)` + `rpc.call(...)`. See [WORKERS.md](WORKERS.md#durable-object-backed-app-databases).                                           |
-| Add repo guidance           | Edit or create `<repo>/SKILL.md` next to the code it documents, such as `packages/foo/SKILL.md`; create `skills/<name>` only for cross-repo or reusable skill packages                                                                                                                                                                             |
-| Launch panel                | `eval` — `const handle = await openPanel(source)` for pushed/main code, or `openPanel(source, { contextId: ctx.contextId, ref: \`ctx:${ctx.contextId}\` })` for intentional context-local code.                                                                                                                                                    |
-| Launch worker               | `eval` — `rpc.call("main", "runtime.createEntity", [{ kind: "worker", source: "workers/my-worker", key: "my-worker", contextId: ctx.contextId }])`; the owning context is the default code ref. Pass `ref: "main"` only for protected-main code. Retire with `rpc.call("main", "runtime.retireEntity", [{ id }])` using the returned handle's `id` |
-| Read a file                 | `Read({ file_path: "panels/my-app/index.tsx" })`                                                                                                                                                                                                                                                                                                   |
-| Edit a file                 | `Edit({ file_path: "panels/my-app/index.tsx", old_string: "...", new_string: "..." })`                                                                                                                                                                                                                                                             |
-| Check compiler/build        | `eval` — invoke installed `@workspace-extensions/typecheck-service.checkPanel` exactly as documented in `TOOLS.md` (it is not indexed by `docs_search`); if unavailable, use `services.build.getBuildReport("panels/my-app", \`ctx:${ctx.contextId}\`)`                                                                                            |
-| Run tests                   | `eval` — `await extensions.invoke("@workspace-extensions/test-runner", "run", [{ target: "packages/my-lib" }])`                                                                                                                                                                                                                                    |
-| Operate workspace VCS       | Read [vibestudio-vcs](../vibestudio-vcs/SKILL.md); retain the exact working head, integrate in local steps, commit the complete chain, then publish                                                                                                                                                                                                |
-| Move/copy managed files     | Use `vcs.move` or `vcs.copy`; runtime `fs.rename`/`fs.copyFile` and agent `move_file`/`copy_file` route through the same identity-aware adapter                                                                                                                                                                                                    |
-| Import an external snapshot | Use `vcs.importSnapshot` with a canonical credential-free source URI, exact source revision, and complete repository/file descriptors; the semantic workspace verifies host-observed CAS descriptors and derives the snapshot digest                                                                                                               |
+| Task                        | How                                                                                                                                                                                                                                                                                                                                                                  |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Create project              | `eval` — `import { createProject } from "@workspace-skills/workspace-dev"` then `return await createProject({ projectType, name, title })`; retain its exact `publication`, or recover the committed event from structured `scaffold_publication_failed` data without rerunning creation                                                                             |
+| Fork panel                  | `eval` — `import { forkPanel } from "@workspace-skills/workspace-dev"`; return the `dryRun: true` plan, apply the same typed helper with `dryRun: false`, then `const handle = await openPanel(created.created); return { plan, created, observation: await handle.observe(), snapshot: await handle.snapshot() }`. Never claim the fork works from readiness alone. |
+| Fork worker                 | `eval` — `import { forkWorker } from "@workspace-skills/workspace-dev"` then `forkWorker({ from: "workers/source", name: "new-worker", title, dryRun: true })`; pass `classMap` for multi-class workers                                                                                                                                                              |
+| Build app database          | Create a worker Durable Object with `DurableObjectBase` + `this.sql`, declare it as a manifest service with `policy.allowed`, then call it from panels/apps/eval via `workers.resolveService(protocol, objectKey?)` + `rpc.call(...)`. See [WORKERS.md](WORKERS.md#durable-object-backed-app-databases).                                                             |
+| Add repo guidance           | Edit or create `<repo>/SKILL.md` next to the code it documents, such as `packages/foo/SKILL.md`; create `skills/<name>` only for cross-repo or reusable skill packages                                                                                                                                                                                               |
+| Launch panel                | `eval` — `const handle = await openPanel(source)` for pushed/main code, or `openPanel(source, { contextId: ctx.contextId, ref: \`ctx:${ctx.contextId}\` })`for intentional context-local code; return both`await handle.observe()`and`await handle.snapshot()` before reporting success.                                                                             |
+| Inspect panel console       | `eval` — `const history = await handle.cdp.consoleHistory({ limit: 200, errorLimit: 100 })`; read `history.errors`, `history.entries`, `history.dropped`, and `history.capacity`. The return value is an object, not an array.                                                                                                                                       |
+| Launch worker               | `eval` — `rpc.call("main", "runtime.createEntity", [{ kind: "worker", source: "workers/my-worker", key: "my-worker", contextId: ctx.contextId }])`; the owning context is the default code ref. Pass `ref: "main"` only for protected-main code. Retire with `rpc.call("main", "runtime.retireEntity", [{ id }])` using the returned handle's `id`                   |
+| Read a file                 | `Read({ file_path: "panels/my-app/index.tsx" })`                                                                                                                                                                                                                                                                                                                     |
+| Edit a file                 | `Edit({ file_path: "panels/my-app/index.tsx", old_string: "...", new_string: "..." })`                                                                                                                                                                                                                                                                               |
+| Check compiler/build        | `eval` — `return await services.build.getBuildReport("panels/my-app", \`ctx:${ctx.contextId}\`)`; inspect its structured target diagnostics and rerun after repairs.                                                                                                                                                                                                 |
+| Run tests                   | `eval` — `await extensions.invoke("@workspace-extensions/test-runner", "run", [{ target: "packages/my-lib" }])`                                                                                                                                                                                                                                                      |
+| Operate workspace VCS       | Read [vibestudio-vcs](../vibestudio-vcs/SKILL.md); retain the exact working head, integrate in local steps, commit the complete chain, then publish                                                                                                                                                                                                                  |
+| Move/copy managed files     | Use `vcs.move` or `vcs.copy`; runtime `fs.rename`/`fs.copyFile` and agent `move_file`/`copy_file` route through the same identity-aware adapter                                                                                                                                                                                                                      |
+| Import an external snapshot | Use `vcs.importSnapshot` with a canonical credential-free source URI, exact source revision, and complete repository/file descriptors; the semantic workspace verifies host-observed CAS descriptors and derives the snapshot digest                                                                                                                                 |
 
-(`extensions` is a runtime client — the same surface bare, as `services.extensions`, or `import { extensions } from "@workspace/runtime"`. `use(name).method(...)` is typed sugar; `extensions.invoke(name, method, [args])` is the untyped equivalent. Both work everywhere — panel, worker, and server-side eval.)
+(`extensions` is a runtime client — the same surface bare, as
+`services.extensions`, or imported from `@workspace/runtime`.
+`use(name).method(...)` is typed sugar; `extensions.invoke(name, method,
+[args])` is the untyped equivalent. Invocation preserves the admitted caller
+and execution-session context in panels, workers, and server-side eval.)
 
 The development loop is semantic: author work from the exact working head;
 compare with an exact committed source event; integrate incoming changes in

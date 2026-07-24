@@ -85,7 +85,7 @@ describe("generateExposeModuleCode", () => {
     expect(code).toContain('globalThis.__vibestudioModuleMap__["zod"] = mod');
   });
 
-  it("panel target does not preload the lightweight CDP client when runtime is exposed", () => {
+  it("panel target does not preload the canonical CDP client when runtime is exposed", () => {
     const code = generateExposeModuleCode(["@workspace/runtime"], "panel");
     expect(code).toContain('import("./_expose_module_0.js")');
     expect(code).not.toContain("@workspace/cdp-client");
@@ -107,7 +107,7 @@ describe("generateExposeModuleCode", () => {
     expect(code).toContain('import * as __mod0__ from "@workspace/runtime"');
   });
 
-  it("worker target preloads only the lightweight CDP client when runtime handles are exposed", () => {
+  it("worker target preloads only the canonical CDP client when runtime handles are exposed", () => {
     const code = generateExposeModuleCode(["@workspace/runtime"], "worker");
     expect(code).toContain('import * as __mod1__ from "@workspace/cdp-client"');
     expect(code).toContain(

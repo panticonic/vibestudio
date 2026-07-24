@@ -26,7 +26,7 @@ registered a credential for one through the app's credentials system.
   question. Always follow up with `web_fetch` on the best result.
 - Provider preference is fixed: **Tavily > Brave > Exa > DuckDuckGo**.
   The tool selects the first one whose credential is registered. See
-  the *Upgrading the search provider* section below if DDG is failing
+  the _Upgrading the search provider_ section below if DDG is failing
   or you want longer snippets.
 
 ### web_fetch
@@ -185,7 +185,7 @@ fetch through a real browser panel instead:
 
 `openPanel`/`panelTree` are part of the portable runtime surface from
 `@workspace/runtime`; they work from server-side eval, panels, workers, and DOs.
-The `handle.cdp.lightweightPage()` automation is workerd-native and runs over a
+The `handle.cdp.page()` automation is workerd-native and runs over a
 WebSocket to the panel's CDP endpoint, so a browser panel opened from eval can be
 driven there directly:
 
@@ -194,8 +194,8 @@ import { openPanel } from "@workspace/runtime";
 import { htmlToReadableMarkdown } from "@workspace/harness/web-extract";
 
 const browser = await openPanel("https://example.com/article");
-const page = await browser.cdp.lightweightPage();
-await page.waitForLoadState("networkidle");
+const page = await browser.cdp.page();
+await page.waitForLoadState("load");
 const html = await page.content();
 const { title, markdown } = htmlToReadableMarkdown(html, page.url());
 const { digest, size } = await rpc.call("main", "blobstore.putText", [markdown]);
@@ -224,7 +224,7 @@ over 50 URLs this way. For batch crawls, prefer `web_fetch` and accept
 the partial results.
 
 For login flows or interactive pages, see the `sandbox` skill's
-`BROWSER_AUTOMATION.md` for the Playwright-style page API on the lightweight CDP
+`BROWSER_AUTOMATION.md` for the Playwright-style page API on the workerd-native CDP
 client.
 
 ## Summarizing long pages with an aux model (eval)

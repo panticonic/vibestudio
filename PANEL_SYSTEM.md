@@ -202,7 +202,7 @@ await handle.refresh(); // Hydrate metadata for an existing slot
 handle.call.method(args); // Call exposed RPC method
 handle.emit("event", payload); // Emit event to the panel
 handle.on("event", handler); // Listen for events from the panel
-handle.cdp.lightweightPage(); // Approval-gated CDP page access
+handle.cdp.page(); // Approval-gated CDP page access
 handle.ensureLoaded(); // Explicit load for RPC/introspection
 handle.close(); // Approval-gated structural operation
 ```

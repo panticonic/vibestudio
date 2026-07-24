@@ -72,13 +72,17 @@ for example `file-tools find timed out after 15000ms`. Do not wait on or retry
 a stalled helper; continue from the successful fallback result. Abort remains
 an abort and is never converted into a fallback.
 
-The context filesystem transport itself is also bounded to 15 seconds per
-operation. If the context cannot materialize or its filesystem service stops
-settling, the tool returns a structured `fs_runtime_unresponsive` infrastructure
-failure naming the exact `fs.*` method and deadline. This is distinct from a
-normal missing path (a successful discovery diagnostic) and from explicit
-tool cancellation. Reobserve context health before retrying; do not keep a
-filesystem call pending.
+The context filesystem transport has no invented per-operation deadline. Its
+RPC remains owned by the enclosing tool/run and follows that caller's explicit
+cancellation. A slow valid filesystem operation therefore cannot be relabeled
+as an infrastructure failure merely because a fixed wall-clock threshold
+elapsed. This is distinct from a normal missing path (a successful discovery
+diagnostic) and from explicit tool cancellation.
+
+The 15-second values above and below bound one replaceable optimization or one
+durably retried delivery attempt; they are not RPC operation deadlines. The
+logical filesystem operation, eval run, system-test run, and durable delivery
+remain alive under caller cancellation or durable state respectively.
 
 Every ordinary in-process agent tool also has a runtime-owned 30-second
 wall-clock boundary, including tool-registry and host-RPC work before the
@@ -161,8 +165,12 @@ eval({ code: `
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `projectType` | string | Yes | One of: `panel`, `package`, `skill`, `project`, `worker` |
-| `name` | string | Yes | Project name (kebab-case) |
+| `name` | string | Yes | Stable kebab-case identifier matching `^[a-z][a-z0-9-]*$` |
 | `title` | string | No | Human-readable title (defaults to name) |
+
+For an isolated generated name, append a lowercase base-36 suffix such as
+`` `todo-list-${Date.now().toString(36)}` ``. Do not append a raw ISO timestamp:
+its uppercase `T`/`Z`, colons, and periods are not valid repository identity.
 
 The successful result includes `{ created, files, preflight, publication }`.
 `preflight` is the mutation-free proof that the complete planned repository
@@ -170,6 +178,35 @@ passed the canonical manifest and source checks. Both fresh scaffolds and forks
 must pass it; there is no legacy-fork bypass.
 `publication.published` is `true` and the remaining fields name the exact
 committed/published event, new main, durable effect, and application time.
+
+Module dependency validation is one shared platform contract, not a
+`forkProject` regex. It recognizes static imports/exports, literal dynamic
+imports, and literal `require` calls while excluding comments, embedded source
+examples, regular expressions, Node built-ins, and self-references.
+Production value imports belong in `dependencies` (or `peerDependencies`);
+test-only and type-only imports may use `devDependencies`. For type-only
+imports, the matching `@types` coordinate is accepted.
+
+On failure, inspect the structured `ProjectPreflightError.errorData`:
+
+- `code: "project_preflight_failed"` and `stage: "dependency-contract"`;
+- `projectType`, `projectName`, and canonical `packageName`;
+- `issues[].code` (`dependency_missing` or `dependency_wrong_field`);
+- the `coordinate`, `expectedField`, optional `declaredField`, and
+  `acceptedCoordinates`; and
+- every source occurrence with `file`, `specifier`, `kind`, `syntax`,
+  `line`, and `column`, plus an actionable `remediation`.
+
+This packet is the repair plan. Do not probe unrelated fork sources after a
+canonical source reports a dependency defect.
+
+Forking owns `package.json` through a structural manifest rewrite: package name,
+entry, title, and Durable Object class metadata are updated as typed fields.
+Generic worker source-string replacement never runs over the rewritten
+manifest, including when the destination name contains the source name as a
+prefix (for example `source` → `source-copy`). Run `dryRun: true` first and
+inspect `preflight`, `rewrites`, and `warnings`; use `classMap` for workers with
+multiple Durable Object classes.
 
 If protected publication fails after commit, the helper throws
 `ScaffoldPublicationError`; eval shows its `errorData` in the tool details.
@@ -201,7 +238,16 @@ auto-recovered.
 
 ## eval
 
-Execute TypeScript/JavaScript code server-side in your own persistent sandbox (a per-agent EvalDO). It runs even when no panel is open. In eval, `rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`, `db`, `help` (and, in agent eval, `chat`) are injected free variables; reach raw service catalog methods through `rpc.call("<svc>.<method>", [args])`. Use rich runtime bindings (`workers`, `vcs`, `fs`, etc.) directly for normal workspace operations; `services.<svc>` is convenience sugar for non-colliding service names. Do **not** import the injected names from `@workspace/runtime`.
+Execute TypeScript/JavaScript code server-side in your own notebook sandbox (a
+per-agent EvalDO). It runs even when no panel is open. The same live heap is
+retained for 30 minutes after the latest cell; every cell renews the lease.
+After an unavoidable restart, `[kernel] Restarted` reports exact restored and
+lost scope keys. In eval, `rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`,
+`db`, `help` (and, in agent eval, `chat`) are injected free variables; reach
+raw service catalog methods through `rpc.call("<svc>.<method>", [args])`. Use
+rich runtime bindings (`workers`, `vcs`, `fs`, etc.) directly for normal
+workspace operations; `services.<svc>` is convenience sugar for non-colliding
+service names. Do **not** import the injected names from `@workspace/runtime`.
 
 **IMPORTANT:**
 
@@ -370,20 +416,20 @@ and typed recovery.
 
 Core routing:
 
-| Intent                       | Runtime surface                                                                                                                    |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Orient in a context          | `vcs.status` returns committed event, working head, main relation, and local counts                                                |
-| Compare committed work       | `vcs.compare` from an exact target state to one source event                                                                       |
-| Account for incoming changes | `vcs.integrate` with one explicit adopt, reconcile, or decline decision                                                            |
-| Commit coherent context work | `vcs.commit` consumes the complete local application chain                                                                         |
-| Publish committed work       | `vcs.push` advances protected main to one exact committed event                                                                    |
-| Read or list managed files   | `vcs.readFile` and `vcs.listFiles` at an event/application state                                                                   |
-| Move managed identities      | `vcs.move` preserves file or repository identity                                                                                   |
-| Copy managed content         | `vcs.copy` mints file identity and records immediate copy provenance                                                               |
-| Import external content      | `vcs.importSnapshot` records one exact complete snapshot and an honest provenance boundary; it does not import per-path authorship |
-| Undo named changes           | `vcs.revert` authors explicit counteractions                                                                                       |
-| Explain history or content   | `vcs.inspect`, `vcs.neighbors`, `vcs.history`, and `vcs.blame`                                                                     |
-| Validate a working build     | use the ordinary typecheck, test, and build services for the context                                                               |
+| Intent                       | Runtime surface                                                                                                                     |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Orient in a context          | `vcs.status()` uses the runtime's bound semantic context and returns committed event, working head, main relation, and local counts |
+| Compare committed work       | `vcs.compare` from an exact target state to one source event                                                                        |
+| Account for incoming changes | `vcs.integrate` with one explicit adopt, reconcile, or decline decision                                                             |
+| Commit coherent context work | `vcs.commit` consumes the complete local application chain                                                                          |
+| Publish committed work       | `vcs.push` advances protected main to one exact committed event                                                                     |
+| Read or list managed files   | `vcs.readFile` and `vcs.listFiles` at an event/application state                                                                    |
+| Move managed identities      | `vcs.move` preserves file or repository identity                                                                                    |
+| Copy managed content         | `vcs.copy` mints file identity and records immediate copy provenance                                                                |
+| Import external content      | `vcs.importSnapshot` records one exact complete snapshot and an honest provenance boundary; it does not import per-path authorship  |
+| Undo named changes           | `vcs.revert` authors explicit counteractions                                                                                        |
+| Explain history or content   | `vcs.inspect`, `vcs.neighbors`, `vcs.history`, and `vcs.blame`                                                                      |
+| Validate a working build     | use the ordinary typecheck, test, and build services for the context                                                                |
 
 Every context mutation includes `contextId`, `expectedWorkingHead`, and a stable
 `commandId`. A command ID identifies
@@ -422,62 +468,48 @@ Explanatory text is for humans, not control flow. Preserve the user's semantic
 goal across recovery, but rederive applicability, liveness, dependencies, and
 publication reachability at the newly observed working head.
 
-For a project fork, use `forkProject` when package metadata, source names,
-runtime registrations, or Durable Object classes must change as one lifecycle
-intent. Use `vcs.copy` when the desired fact is specifically a set of file
-copies with explicit ancestry. Dry-run unfamiliar worker forks and provide a
-`classMap` when multiple Durable Object classes exist.
+For panel and worker forks, prefer `forkPanel({ from, name, ... })` and
+`forkWorker({ from, name, ... })`. They own the destination section and remove
+the possibility of accidentally planning a worker under `projects/`; isolation
+comes from `dryRun: true`, not from changing project type. Use generic
+`forkProject` only when the destination path/project type is deliberately part
+of an advanced lifecycle operation. Use `vcs.copy` when the desired fact is
+specifically a set of file copies with explicit ancestry. Dry-run unfamiliar
+worker forks and provide a `classMap` when multiple Durable Object classes
+exist.
 
-#### @workspace-extensions/typecheck-service.checkPanel (recommended)
+#### services.build.getBuildReport (recommended)
 
-Type-check a panel. The extension infers the current eval/agent context and checks that context folder, not canonical workspace source. Workspace package imports resolve through the same context tree, so context-local package edits are visible. Pass `{ contextId }` only when intentionally checking a different context. Pass the panel source path, or omit it to auto-detect from a panel caller ID.
-
-Returns `{ diagnostics, errorCount, warningCount }` where each diagnostic has `{ file, line, column, message, severity, code }`.
-
-This is an installed extension method, not a static service-catalog method, so
-`docs_search` does not enumerate `checkPanel`. Invoke the exact extension call
-below instead of repeatedly searching the service catalog. If the extension is
-unavailable, use `services.build.getBuildReport(source, \`ctx:${ctx.contextId}\`)`;
-its target diagnostics and `status` are the canonical compiler/build fallback.
-
-```
-eval({ code: `
-  // Type-check a specific panel (extensions reached via services.extensions.invoke in eval)
-  const result = await services.extensions.invoke(
-    "@workspace-extensions/typecheck-service",
-    "checkPanel",
-    ["panels/my-app"],
-  ).catch((error) => ({
-    error: String(error),
-  }));
-  if ("error" in result) return result;
-  if (result.errorCount > 0) {
-    console.log(result.errorCount + " errors:");
-    for (const d of result.diagnostics) {
-      if (d.severity === "error") console.log(d.file + ":" + d.line + " " + d.message);
-    }
-  } else {
-    console.log("No type errors");
-  }
-`
-})
-```
-
-#### @workspace-extensions/typecheck-service.check (advanced)
-
-Lower-level type checking with positional args. Prefer `checkPanel` for simple whole-panel checks.
+Compile a panel against the current context working head and return the
+canonical structured build report. Pass the panel source path and the exact
+context ref. The report contains `status`, top-level `diagnostics`, and
+per-target `builds`; diagnostics include source, severity, file, line, column,
+message, and optional source context.
 
 ```
 eval({ code: `
-  const result = await services.extensions.invoke(
-    "@workspace-extensions/typecheck-service",
-    "check",
-    ["panels/my-app"],
+  return await services.build.getBuildReport(
+    "panels/my-app",
+    \`ctx:\${ctx.contextId}\`,
   );
-  console.log(result);
 `
 })
 ```
+
+This advisory check neither creates a semantic event nor publishes source.
+Fix the reported files through managed edits, then request a new report for
+the same context.
+
+#### @workspace-extensions/typecheck-service (alternative)
+
+Installed panels, workers, extensions, and admitted eval sessions may invoke
+`@workspace-extensions/typecheck-service.checkPanel` or its lower-level `check`
+method. Prefer `services.build.getBuildReport` in eval because it is the
+canonical build result used by panel launch and includes every build target.
+
+`checkPanel` returns `{ diagnostics, errorCount, warningCount }` and infers the
+installed caller's context. Pass `{ contextId }` only when intentionally
+checking a different context.
 
 #### @workspace-extensions/test-runner.run
 
@@ -599,8 +631,16 @@ You can drive panel lifecycle from eval, panel code, or an
 import { openPanel } from "@workspace/runtime";
 // Opens the main/pushed build. Plain openPanel() does not infer code provenance
 // from your contextId; pass { ref: `ctx:${contextId}` } when intended.
-await openPanel("panels/my-app");
+const handle = await openPanel("panels/my-app");
+const observation = await handle.observe();
+const snapshot = await handle.snapshot();
+return { panelId: handle.id, observation, snapshot };
 ```
+
+`openPanel()` resolving and `observation.phase === "ready"` establish boot
+readiness only. They are not rendered verification. Never report a
+create/fork/open/rebuild task as successful until `snapshot()` returns rendered
+content for the same `panelId`, `attemptId`, `runtimeEntityId`, and `buildKey`.
 
 #### Rebuild after edits
 
@@ -613,9 +653,22 @@ const observation = await handle.rebuild();
 console.log(observation.phase, observation.effectiveVersion, observation.buildKey);
 ```
 
-When iterating on an already-open panel after code changes, reuse its
-handle from `scope` or rediscover it with `listPanels()`, then call
-`handle.rebuild()`. It transactionally prepares a new immutable attempt,
+When iterating on an already-open panel after code changes, keep its live handle
+and stable id together:
+
+```ts
+const handle = scope.panelHandle ?? getPanelHandle(scope.panelId);
+scope.panelHandle = handle; // live across cells while this EvalDO kernel is warm
+scope.panelId = handle.id; // durable identity for cold recovery
+const observation = await handle.rebuild();
+```
+
+The live notebook heap is not replaced after each eval; its idle lease lasts 30
+minutes from the latest cell. Its durable recovery snapshot contains only exact
+data and never reconstructs class instances, so a restarted kernel rehydrates
+`panelId` and reports `panelHandle` as lost. Reconstruct from the id only in
+that case. Reopening the source instead creates duplicates and can evict the
+panel you meant to inspect. `rebuild()` transactionally prepares a new immutable attempt,
 activates it without adding a history entry, and waits for its boot handshake.
 It is target-only and does not recurse into children. `handle.reload()` reloads
 the current renderer and also waits for boot-ready.
@@ -624,7 +677,8 @@ Lifecycle calls return `PanelObservation`, including `phase`, `attemptId`,
 `runtimeEntityId`, `requestedRef`, `effectiveVersion`, and `buildKey`. Use
 `handle.observe()` for a cheap current read, `handle.diagnose()` for a bounded
 post-mortem packet, and `handle.snapshot().document` for rendered content tied
-to the observed attempt.
+to the observed attempt. A ready observation without a matching snapshot is an
+incomplete verification result, not permission to claim that the panel works.
 
 ---
 

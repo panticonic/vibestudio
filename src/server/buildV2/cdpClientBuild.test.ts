@@ -9,8 +9,8 @@ import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource
 beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
 afterAll(() => setBuildSourceProvider(null));
 
-describe("lightweight CDP client build", () => {
-  it("keeps the lightweight CDP client free of any vendored browser engine", () => {
+describe("canonical CDP client build", () => {
+  it("keeps the canonical CDP client free of any vendored browser engine", () => {
     const workspaceRoot = path.resolve("workspace");
     const graph = discoverPackageGraph(workspaceRoot);
     const client = graph.get("@workspace/cdp-client");
@@ -19,7 +19,7 @@ describe("lightweight CDP client build", () => {
     expect(client.internalDeps).not.toContain("@workspace/playwright-core");
   });
 
-  it("builds the lightweight CDP client standalone (no vendored engine, exports CdpConnection)", async () => {
+  it("builds the canonical CDP client standalone (no vendored engine, exports CdpConnection)", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cdp-client-"));
     try {
       const outfile = path.join(tempDir, "bundle.js");

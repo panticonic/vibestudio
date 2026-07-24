@@ -380,8 +380,7 @@ There is no repository-group push, staging path, or rebase shortcut.
 ```typescript
 import { contextId, vcs } from "@workspace/runtime";
 
-const command = (operation: string) =>
-  `panel-dev:${operation}:${contextId}:${crypto.randomUUID()}`;
+const command = (operation: string) => `panel-dev:${operation}:${contextId}:${crypto.randomUUID()}`;
 const status = await vcs.status({ contextId });
 if (status.mainRelation === "behind" || status.mainRelation === "diverged") {
   throw new Error("Compare and integrate current main before committing");
@@ -432,11 +431,11 @@ import { openPanel, openExternal, panelTree } from "@workspace/runtime";
 
 // panelTree is a top-level export, not workspace.panelTree.
 const handle = await openPanel("https://example.com", { focus: true });
-const page = await handle.cdp.lightweightPage();
+const page = await handle.cdp.page();
 
-await page.fill("input[name=query]", "Vibestudio");
-await page.click(".search-button");
-const text = await page.textContent(".results .first");
+await page.locator("input[name=query]").fill("Vibestudio");
+await page.locator(".search-button").click();
+const text = await page.locator(".results .first").textContent();
 const currentUrl = page.url(); // string, synchronous like Playwright
 
 await handle.cdp.navigate("https://other.com");
@@ -445,15 +444,15 @@ await handle.cdp.reload();
 
 // Existing panels: discover or get by slot id.
 const parent = panelTree.self().parent();
-await parent?.cdp.lightweightPage();
+await parent?.cdp.page();
 
 const allPanels = await panelTree.list();
 const existing = allPanels.find((panel) => panel.source === "panels/spectrolite");
-const existingPage = await existing?.cdp.lightweightPage();
+const existingPage = await existing?.cdp.page();
 
 const known = panelTree.get("panel-slot-id");
 await known.refresh(); // hydrate metadata when you start from a known slot id
-await known.cdp.lightweightPage();
+await known.cdp.page();
 
 // Or open in system browser (no CDP access)
 await openExternal("https://docs.example.com");
@@ -479,21 +478,21 @@ window.open("https://example.com");
 
 #### PanelHandle CDP methods
 
-| Method                  | Description                                                   |
-| ----------------------- | ------------------------------------------------------------- |
-| `cdp.lightweightPage()` | Connect the lightweight CDP client and return the active page |
-| `cdp.getCdpEndpoint()`  | Get CDP WebSocket URL and token for Playwright                |
-| `cdp.navigate(url)`     | Load a URL                                                    |
-| `cdp.goBack()`          | Navigate back                                                 |
-| `cdp.goForward()`       | Navigate forward                                              |
-| `cdp.reload()`          | Reload page                                                   |
-| `cdp.stop()`            | Stop loading                                                  |
-| `close()`               | Close browser panel                                           |
+| Method                 | Description                                                            |
+| ---------------------- | ---------------------------------------------------------------------- |
+| `cdp.page()`           | Connect the canonical CDP automation client and return the active page |
+| `cdp.getCdpEndpoint()` | Get CDP WebSocket URL and token for Playwright                         |
+| `cdp.navigate(url)`    | Load a URL                                                             |
+| `cdp.goBack()`         | Navigate back                                                          |
+| `cdp.goForward()`      | Navigate forward                                                       |
+| `cdp.reload()`         | Reload page                                                            |
+| `cdp.stop()`           | Stop loading                                                           |
+| `close()`              | Close browser panel                                                    |
 
 Use `handle.ensureLoaded()` before RPC calls to an unloaded panel. CDP access
 loads targets automatically after approval.
 
-The lightweight page API follows Playwright's sync/async split: actions and
+The CDP page API follows Playwright's sync/async split: actions and
 DOM reads are async, while `page.url()` returns the cached current URL as a
 plain string. Do not `await page.url()` or attach `.catch()` to it; use
 `await page.evaluate(() => location.href)` only when the URL must be computed in

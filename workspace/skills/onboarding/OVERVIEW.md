@@ -51,7 +51,9 @@ Panels in the same context share a filesystem. The chat panel's agent and its ch
 
 The chat panel hosts an AI agent that can:
 
-- **Run code** via the `eval` tool — runs server-side in the agent's own persistent sandbox (works even if the panel is closed)
+- **Run code** via the `eval` tool — runs server-side in the agent's own notebook
+  kernel (30-minute live-object lease plus durable exact recovery; works even
+  if the panel is closed)
 - **Render UI** via `inline_ui` (persistent components in chat), `load_action_bar` / panel `actionBarFile` (compact pinned panel controls), and `feedback_custom` (interactive forms)
 - **Preserve transcript state** through typed PubSub events: messages,
   invocations, inline UI, and action bars all replay from the same channel log
@@ -60,7 +62,7 @@ The chat panel hosts an AI agent that can:
 - **Connect API provider integrations** — Gmail, GitHub, Slack, and other OAuth/credential-backed services
 - **Tune its own model defaults** — the host chat agent's provider, effort, approval, and chattiness are configurable
 - **Import browser data** — cookies, passwords, bookmarks, history
-- **Automate browsers** via Playwright-style CDP automation (`handle.cdp.lightweightPage()`)
+- **Automate browsers** via Playwright-style CDP automation (`handle.cdp.page()`)
 - **Use private eval SQLite for scratch work**, call DO-backed app databases,
   call AI models, manage workers
 
@@ -86,7 +88,7 @@ All panels and sandbox code can import from `@workspace/runtime`:
 | `workspace` | List, create, configure, switch workspaces           |
 | `rpc`       | Call services on the main process or other panels    |
 
-Additional surfaces: `browserData` from `@workspace/runtime` (browser data import/export), and `@workspace/cdp-client` (the lightweight, workerd-native CDP client used by `handle.cdp.lightweightPage()` — the single Playwright-style browser-automation surface; reach it through the handle, and use its exported `CdpConnection` only for protocol-level work).
+Additional surfaces: `browserData` from `@workspace/runtime` (browser data import/export), and `@workspace/cdp-client` (the workerd-native CDP client used by `handle.cdp.page()` — the single Playwright-style browser-automation surface; reach it through the handle, and use its exported `CdpConnection` only for protocol-level work).
 
 ### Build System
 

@@ -23,7 +23,7 @@ panel.
 | [FEEDBACK.md](FEEDBACK.md)                         | Feedback forms — block until user responds                                                                                                  |
 | [RUNTIME_API.md](RUNTIME_API.md)                   | Full runtime API reference — fs, eval `db`, worker/DO app databases, workers, ai, git, browser data, custom shared-resource approval grants |
 | [CHAT_API.md](CHAT_API.md)                         | Chat API — publish messages, call methods, interact with the conversation                                                                   |
-| [BROWSER_AUTOMATION.md](BROWSER_AUTOMATION.md)     | Browser automation — Playwright-style page API via the lightweight CDP client                                                               |
+| [BROWSER_AUTOMATION.md](BROWSER_AUTOMATION.md)     | Browser automation — Playwright-style page API via the workerd-native CDP client                                                            |
 | [PATTERNS.md](PATTERNS.md)                         | Common patterns and recipes                                                                                                                 |
 | [INTERACTION_PATTERNS.md](INTERACTION_PATTERNS.md) | When to use inline UI for side-effect actions with choices/complexity                                                                       |
 
@@ -43,12 +43,12 @@ context-relative `path` where noted; file-loaded sources support static relative
 imports and infer bare package imports from the nearest `package.json` when
 possible. The execution modes differ in presentation:
 
-| Tool              | Where it runs          | Rendering                          | Lifecycle                         | Response                             |
-| ----------------- | ---------------------- | ---------------------------------- | --------------------------------- | ------------------------------------ |
-| `eval`            | server-side (`EvalDO`) | imperative (run + return)          | persistent scope/`db`             | immediate (result to agent)          |
-| `inline_ui`       | panel                  | component (render React)           | persistent (in chat history)      | none (fire-and-forget)               |
-| `load_action_bar` | panel                  | component from file (render React) | persistent (top of current panel) | immediate tool result                |
-| `feedback_custom` | panel                  | component (render React)           | transient                         | deferred (blocks until user submits) |
+| Tool              | Where it runs          | Rendering                          | Lifecycle                                      | Response                             |
+| ----------------- | ---------------------- | ---------------------------------- | ---------------------------------------------- | ------------------------------------ |
+| `eval`            | server-side (`EvalDO`) | imperative (run + return)          | 30-minute live heap + durable exact scope/`db` | immediate (result to agent)          |
+| `inline_ui`       | panel                  | component (render React)           | persistent (in chat history)                   | none (fire-and-forget)               |
+| `load_action_bar` | panel                  | component from file (render React) | persistent (top of current panel)              | immediate tool result                |
+| `feedback_custom` | panel                  | component (render React)           | transient                                      | deferred (blocks until user submits) |
 
 Perspective matters. In agent eval, `panelTree.self()` is the EvalDO runtime,
 not the visible chat panel. Use `parent`/`getParent()` and
@@ -132,8 +132,8 @@ component code:
 
 ### On-demand imports (require `imports` parameter)
 
-For browser automation, use `handle.cdp.lightweightPage()` — it returns a
-Playwright-style page driven by our own lightweight, workerd-native CDP client
+For browser automation, use `handle.cdp.page()` — it returns the canonical
+Playwright-style page driven by our workerd-native CDP client
 and is the single browser-automation surface (there is no separate "full
 Playwright" tier; do not import or install any `playwright*` package). It loads
 the standalone `@workspace/cdp-client` internally, so eval code should not import
