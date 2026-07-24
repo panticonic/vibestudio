@@ -37,11 +37,7 @@ export interface PanelHandleHostOps {
   diagnose?(id: string): Promise<PanelDiagnosticPacket>;
   children?(id: string): Promise<PanelHandle[]>;
   parent?(id: string, parentId: string | null): PanelHandle | null;
-  navigate?(
-    id: string,
-    source: string,
-    options?: PanelNavigateOptions
-  ): Promise<PanelObservation>;
+  navigate?(id: string, source: string, options?: PanelNavigateOptions): Promise<PanelObservation>;
   reload?(id: string): Promise<PanelObservation>;
   close?(id: string): Promise<PanelLifecycleResult>;
   archive?(id: string): Promise<void>;
@@ -67,8 +63,16 @@ export function createCallProxy<T extends Rpc.ExposedMethods>(
   rpc: Pick<RpcClient, "call">,
   targetId: RpcTargetResolver
 ): TypedCallProxy<T> {
-  return new Proxy({} as TypedCallProxy<T>, {
-    get(_target, method: string) {
+  const target = {} as TypedCallProxy<T>;
+  return new Proxy(target, {
+    get(_target, method: string | symbol) {
+      if (method === Symbol.toPrimitive) return () => "[PanelHandle RPC call proxy]";
+      if (method === Symbol.toStringTag) return "PanelHandleRpc";
+      // A dynamic RPC method named "then" would make every handle.call proxy a
+      // thenable, so Promise resolution and eval result serialization would
+      // invoke a remote method merely by observing the value.
+      if (method === "then") return undefined;
+      if (typeof method !== "string") return Reflect.get(target, method);
       return async (...args: unknown[]) => {
         const resolvedTargetId = typeof targetId === "function" ? await targetId() : targetId;
         return rpc.call(resolvedTargetId, method, [...args]);
@@ -272,7 +276,7 @@ export function createPanelHandle<
 export function unavailableCdp(id: string): CdpAutomation {
   const unavailable = () => Promise.reject(new Error(`CDP is not available for panel ${id}`));
   return {
-    lightweightPage: unavailable,
+    page: unavailable,
     consoleHistory: unavailable,
     getCdpEndpoint: unavailable,
     navigate: unavailable,

@@ -7,7 +7,7 @@ debugging that app, but do not use them as disposable web pages.
 
 > **Where this runs.** `openPanel`, `panelTree`, and `getPanelHandle` are part
 > of the portable runtime surface from `@workspace/runtime`; they work from
-> server-side eval, panels, workers, and DOs. The lightweight CDP client is
+> server-side eval, panels, workers, and DOs. The workerd-native CDP client is
 > workerd-native and runs over a WebSocket to the panel's CDP endpoint, so a
 > browser panel opened from eval can be driven there directly. The "Inline UI:
 > Browser Control Panel" example below shows the panel/component
@@ -24,7 +24,7 @@ re-open or re-connect for the same target.
 ```tsx
 // Open browser panel once, hold the handle
 const handle = await openPanel("https://example.com");
-const page = await handle.cdp.lightweightPage();
+const page = await handle.cdp.page();
 console.log("Opened:", await page.title());
 
 // Reuse — no new panel, same page
@@ -42,12 +42,19 @@ console.log("Scraped", results.length, "items");
 Two lines to get started:
 
 1. `const handle = await openPanel(url)` — opens a browser panel; may prompt on first structural use
-2. `const page = await handle.cdp.lightweightPage()` — connects the lightweight CDP client
+2. `const page = await handle.cdp.page()` — connects the canonical CDP client
 
-Reuse the same `page` for subsequent interactions — do not call `openPanel()` or
-`handle.cdp.lightweightPage()` repeatedly for the same target. Repeated opens
-create duplicate panels; repeated CDP client calls create duplicate CDP
-connections.
+Reuse the same `page` while `handle.observe().runtimeEntityId` is unchanged.
+Do not call `openPanel()` or `handle.cdp.page()` repeatedly for one runtime
+incarnation: repeated opens create duplicate panels and repeated page calls
+create duplicate CDP connections. `handle.navigate()` and `handle.rebuild()`
+replace the runtime incarnation; after either resolves, discard the old page
+and obtain one fresh `await handle.cdp.page()` from the same handle.
+
+Before the first live interaction, discover the intended roles and computed
+accessible names with `getByRole(role).all()` plus `locator.inspect()`.
+Descendant text and badges contribute to accessible names; do not guess them
+from visual labels or source snippets.
 
 When a task specifically requires a child panel from a genuinely headless
 session, `getParent()` is null because there is no initial UI node. The tree is
@@ -72,7 +79,7 @@ const panels = await panelTree.list();
 const target = panels.find((handle) => handle.source === "panels/spectrolite");
 if (!target) throw new Error("target panel not found");
 
-const page = await target.cdp.lightweightPage();
+const page = await target.cdp.page();
 console.log(await page.title());
 ```
 
@@ -83,7 +90,7 @@ import { panelTree } from "@workspace/runtime";
 
 const handle = panelTree.get("panel-slot-id");
 const observation = await handle.observe(); // exact attempt, host state, and provenance
-const page = await handle.cdp.lightweightPage();
+const page = await handle.cdp.page();
 ```
 
 `openPanel()` returns only at application boot-ready. Existing-panel handles are
@@ -118,7 +125,7 @@ code, then reconnect the CDP page:
 import { getPanelHandle } from "@workspace/runtime";
 
 const handle = getPanelHandle(savedBrowserId); // panel id survives as a plain string
-const page = await handle.cdp.lightweightPage();
+const page = await handle.cdp.page();
 console.log("Reconnected:", await page.title());
 ```
 
@@ -129,19 +136,19 @@ handle persisting.
 ## Page API Reference
 
 Obtain a `page` from a panel handle, then use the methods below.
-`handle.cdp.lightweightPage()` returns a Playwright-style page driven by our own
-lightweight, workerd-native CDP client (`@workspace/cdp-client`). It is the
-single browser-automation surface — there is no separate "full Playwright" tier
+`handle.cdp.page()` returns the canonical Playwright-style page driven by our
+workerd-native CDP client (`@workspace/cdp-client`). It is the single
+browser-automation surface — there is no separate compatibility tier
 to choose, and you do not import or install any `playwright*` package.
 
 ```typescript
 const browser = await openPanel("https://example.com");
-const page = await browser.cdp.lightweightPage();
+const page = await browser.cdp.page();
 ```
 
-`handle.cdp.lightweightPage()` loads the standalone `@workspace/cdp-client`
+`handle.cdp.page()` loads the standalone `@workspace/cdp-client`
 internally; do not import that package directly for ordinary page work. There is
-no `handle.cdp.page()` alias.
+no second page-acquisition API.
 
 Historical console diagnostics are not a CDP page feature. CDP console events
 only include messages after the client connects. For "something already went
@@ -195,6 +202,7 @@ it, so you can build a locator before the element exists.
 ```typescript
 page.locator("css selector");
 page.getByRole("button", { name: "Sign in", exact: true });
+page.getByRole("button", { name: /delete .* item/i });
 page.getByText("Welcome");
 page.getByLabel("Email");
 page.getByPlaceholder("Search");
@@ -203,7 +211,10 @@ page.getByAltText("Logo");
 page.getByTitle("Close");
 
 // Chaining
-page.getByRole("listitem").filter({ hasText: "active" }).nth(2);
+page
+  .getByRole("listitem")
+  .filter({ hasText: /active/i })
+  .nth(2);
 page.locator(".row").first();
 page.locator(".row").last();
 const rows = await page.locator(".row").all();
@@ -213,8 +224,6 @@ const rows = await page.locator(".row").all();
 
 ```typescript
 await page.goto(url); // navigate (waits for load)
-await page.goto(url, { waitUntil: "networkidle" }); // wait for network quiet
-await page.goto(url, { waitUntil: "domcontentloaded" });
 await page.reload();
 await page.goBack();
 await page.goForward();
@@ -233,9 +242,14 @@ await page.getByRole("button", { name: "Submit" }).click();
 await page.locator(".item").dblclick();
 await page.locator(".item").hover();
 await page.getByLabel("Email").fill("user@example.com");
-await page.getByLabel("Search").type("query"); // types character by character
+await page.getByLabel("Search").type("query"); // appends to the current value
 await page.getByLabel("Email").clear();
 await page.locator("input").press("Enter");
+await page.keyboard.press("Control+A");
+await page.keyboard.type("replacement");
+await page.keyboard.insertText("inserted in one browser operation");
+await page.setViewportSize({ width: 390, height: 844 });
+page.viewportSize(); // synchronous current CSS viewport
 await page.getByRole("checkbox").check();
 await page.getByRole("checkbox").uncheck();
 await page.getByRole("checkbox").setChecked(true);
@@ -248,6 +262,12 @@ await page.locator(".far-below").scrollIntoViewIfNeeded();
 await page.locator("button.submit").click();
 await page.locator('input[name="email"]').fill("user@example.com");
 ```
+
+Text locators accept strings or `RegExp`; regular expressions retain their
+source and flags across the workerd/CDP boundary. `fill()`, `type()`, `clear()`,
+and checked-state actions use the element's native property setter before
+dispatching browser events, so controlled React inputs observe the same state
+change as a user edit.
 
 ### Reads & state
 
@@ -265,8 +285,10 @@ await page.locator(".title").innerText();
 await page.locator(".title").textContent();
 await page.locator(".row").allInnerTexts();
 await page.locator(".row").allTextContents();
+await page.locator(".row").evaluateAll((rows) => rows.map((row) => row.textContent?.trim()));
 await page.locator(".box").boundingBox();
 await page.locator(".box").inspect();
+// inspect() includes role and accessibleName in addition to DOM/visibility data.
 ```
 
 ### DOM waits
@@ -274,7 +296,7 @@ await page.locator(".box").inspect();
 ```typescript
 await page.waitForSelector(".loaded"); // wait for element to appear
 await page.waitForFunction(() => document.readyState === "complete");
-await page.waitForLoadState("networkidle"); // wait for load lifecycle
+await page.waitForLoadState("domcontentloaded"); // or "load"
 ```
 
 ### Evaluate JavaScript in Page
@@ -302,6 +324,13 @@ await page.evaluate(() => {
 });
 ```
 
+`page.evaluate`, `waitForFunction`, and `locator.evaluateAll` serialize the
+callback into the browser realm. Pass outside data through the explicit
+argument instead of closing over eval variables. Browser exceptions retain
+their real exception description and stack; locator failures additionally name
+the rendered locator. If an error only says `Uncaught`, that is a platform
+regression—capture it with `handle.diagnose()` rather than guessing.
+
 ### Screenshots
 
 Prefer the panel handle for a reliable whole-panel capture. It uses the active
@@ -321,11 +350,11 @@ return {
 };
 ```
 
-When you specifically need a screenshot from the lightweight page, it returns
+When you specifically need a screenshot from the CDP page, it returns
 raw bytes. Store those bytes with the runtime convenience method:
 
 ```typescript
-const png = await page.screenshot(); // PNG Uint8Array
+const png = await page.screenshot({ fullPage: true }); // PNG Uint8Array
 const jpeg = await page.screenshot({ type: "jpeg", quality: 80 });
 const stored = await blobstore.putBytes(png);
 return { ...stored, mimeType: "image/png" };
@@ -333,17 +362,19 @@ return { ...stored, mimeType: "image/png" };
 
 Blobstore content is addressed by bytes and does not store MIME metadata. Keep
 the MIME type beside the digest; do not pass it as a second `putBase64` argument.
+The workerd-native page has no filesystem `path` option; unsupported screenshot
+options are rejected instead of ignored.
 
 ### Close
 
 ```typescript
-await page.close?.(); // close the CDP page/client if available
-await browser.close(); // close the browser panel
+await page.close(); // disconnect this automation client; panel remains open
+await browser.close(); // close the owned browser panel handle
 ```
 
 ### Not supported
 
-The lightweight client deliberately omits a few full-Playwright features. Out of
+The CDP client deliberately omits a few Playwright features. Out of
 scope: file uploads (`setInputFiles`), multiple pages/popups, cross-origin
 frames, and full network request interception (`route`). For protocol-level
 needs beyond the page surface, use raw `CdpConnection.send` (see below).
@@ -373,7 +404,7 @@ The handle also has direct navigation methods (no page object needed):
 
 | Method                                             | Description                                                                |
 | -------------------------------------------------- | -------------------------------------------------------------------------- |
-| `handle.cdp.lightweightPage()`                     | Connect the lightweight CDP client and return the Playwright-style page    |
+| `handle.cdp.page()`                                | Connect the canonical CDP client and return the Playwright-style page      |
 | `handle.cdp.getCdpEndpoint()`                      | Get `{ wsEndpoint, token }` for raw `CdpConnection.connect`                |
 | `handle.cdp.consoleHistory({ limit, errorLimit })` | Read host-captured historical console logs and the separate error buffer   |
 | `handle.cdp.screenshot({ format, quality })`       | Capture through the active host; returns base64, MIME type, and dimensions |
@@ -388,7 +419,7 @@ The handle also has direct navigation methods (no page object needed):
 ## Examples
 
 These examples acquire a panel handle in panel/component code; the
-`handle.cdp.lightweightPage()` automation itself also works from server-side
+`handle.cdp.page()` automation itself also works from server-side
 eval once you hold the handle.
 
 ### Multi-Step Workflow: Scrape + Process
@@ -398,7 +429,7 @@ import { openPanel } from "@workspace/runtime";
 
 // Open and navigate
 const browser = await openPanel("https://news.ycombinator.com");
-const page = await browser.cdp.lightweightPage();
+const page = await browser.cdp.page();
 
 // Scrape data
 const stories = await page.evaluate(() =>
@@ -420,7 +451,7 @@ console.log("Top 5:", JSON.stringify(top5, null, 2));
 import { openPanel } from "@workspace/runtime";
 
 const browser = await openPanel("https://example.com/login");
-const page = await browser.cdp.lightweightPage();
+const page = await browser.cdp.page();
 
 await page.getByLabel("Email").fill("user@example.com");
 await page.getByLabel("Password").fill("secret");
@@ -458,7 +489,7 @@ if (host) {
 
 // Step 2: Open browser — now has imported cookies
 const browser = await openPanel("https://github.com");
-const page = await browser.cdp.lightweightPage();
+const page = await browser.cdp.page();
 
 const title = await page.title();
 console.log("Page title:", title);
@@ -490,7 +521,7 @@ export default function BrowserController({ props, chat }) {
     setStatus("connecting...");
     const handle = await openPanel(url);
     handleRef.current = handle;
-    const page = await handle.cdp.lightweightPage();
+    const page = await handle.cdp.page();
     pageRef.current = page;
     setStatus("connected");
     setPageTitle(await page.title());
@@ -530,11 +561,19 @@ export default function BrowserController({ props, chat }) {
 
 ## Tips
 
-- **Acquire or create one handle and reuse it** — `openPanel`/`panelTree`/`getPanelHandle` work from server-side eval, panels, workers, and DOs; once you hold the handle, `handle.cdp.lightweightPage()` drives the browser page.
-- **Hold a handle/page in component state and reuse it** — re-open and re-connect only for a new target; reuse the same `page` for follow-up interactions.
+- **Acquire or create one handle and reuse it** — `openPanel`/`panelTree`/`getPanelHandle` work from server-side eval, panels, workers, and DOs; once you hold the handle, `handle.cdp.page()` drives the browser page.
+- **Hold a handle/page in component state and reuse it within one runtime incarnation** — re-open only for a new target. After `handle.navigate()` or `handle.rebuild()`, keep the handle but replace the page with one fresh `await handle.cdp.page()`.
 - **Prefer locators with auto-wait** — `page.getByRole(...)` / `page.locator(...)` wait for the element automatically; reach for `page.evaluate()` for complex DOM queries that need full DOM API access.
-- **Use `page.goto(url, { waitUntil: "networkidle" })` for SPAs** — waits for AJAX requests to finish.
+- **For SPAs, wait for application state** — after `page.goto(url)`, use
+  `page.waitForFunction(...)` or a stable locator that represents the loaded
+  application. The CDP page does not claim full-Playwright
+  `waitUntil: "networkidle"` semantics.
 - **Use `page.waitForSelector()` or `locator.waitFor()` before interacting** — ensures elements exist before clicking/filling.
 - **Wait on the page condition you need** — prefer explicit page state checks over wall-clock limits.
 - **Imported cookies are auto-synced** — if you imported browser data via the browser-import skill, browser panels will have those cookies available automatically.
-- **After a reload, reconnect via the saved panel id** — the id is a plain string you can persist; re-acquire the handle with `getPanelHandle(id)` and reconnect the CDP page without re-opening the panel.
+- **Connection lifetime follows the runtime incarnation** — browser
+  `page.goto()` navigation keeps the same page connection. Workspace-panel
+  `handle.navigate()` and `handle.rebuild()` replace the runtime, so keep the
+  handle and obtain a fresh page without opening a duplicate panel. If another
+  lifecycle operation returns a different `runtimeEntityId`, treat it the same
+  way.

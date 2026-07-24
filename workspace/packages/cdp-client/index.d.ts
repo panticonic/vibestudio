@@ -1,4 +1,4 @@
-// Public type surface for @workspace/cdp-client — a lightweight, workerd-native
+// Public type surface for @workspace/cdp-client — a workerd-native
 // CDP client with a Playwright-style Page/Locator API implemented over raw CDP.
 // Kept in sync with src/worker.ts (the implementation for the worker/workerd and
 // vibestudio-panel conditions).
@@ -10,22 +10,42 @@ export interface BoundingBox {
   height: number;
 }
 
-export interface LightweightConsoleEvent {
+export interface CdpViewportSize {
+  width: number;
+  height: number;
+}
+
+export interface CdpScreenshotOptions {
+  type?: "png" | "jpeg";
+  quality?: number;
+  fullPage?: boolean;
+}
+
+export interface CdpConsoleEvent {
   type: string;
   text: string;
   args: unknown[];
 }
 
-export interface LightweightDomInspection {
+export interface CdpDomInspection {
   selector: string;
   found: boolean;
   tagName?: string;
   id?: string;
   className?: string;
   text?: string;
+  role?: string;
+  accessibleName?: string;
   visible?: boolean;
   attributes?: Record<string, string>;
   boundingBox?: BoundingBox;
+  /** Nearest rendered ancestors first, for disambiguating repeated controls. */
+  ancestors?: Array<{
+    tagName: string;
+    role: string;
+    accessibleName: string;
+    text: string;
+  }>;
 }
 
 export type WaitState = "attached" | "detached" | "visible" | "hidden";
@@ -35,23 +55,28 @@ export interface ActionOptions {
 export interface ByTextOptions {
   exact?: boolean;
 }
+export type TextMatcher = string | RegExp;
 export interface ByRoleOptions {
-  name?: string;
+  name?: TextMatcher;
   exact?: boolean;
 }
 
-/** A Playwright-style locator. Actions auto-wait for the element to be ready. */
+/**
+ * A Playwright-style locator. Actions auto-wait for readiness and resolve
+ * after their browser event turn, so the next action observes framework state.
+ */
 export interface CdpLocator {
   // Scoping / chaining
+  /** CSS, or `text=...` compiled into the same semantic engine as getByText. */
   locator(selector: string): CdpLocator;
   getByRole(role: string, options?: ByRoleOptions): CdpLocator;
-  getByText(text: string, options?: ByTextOptions): CdpLocator;
-  getByLabel(text: string, options?: ByTextOptions): CdpLocator;
-  getByPlaceholder(text: string, options?: ByTextOptions): CdpLocator;
+  getByText(text: TextMatcher, options?: ByTextOptions): CdpLocator;
+  getByLabel(text: TextMatcher, options?: ByTextOptions): CdpLocator;
+  getByPlaceholder(text: TextMatcher, options?: ByTextOptions): CdpLocator;
   getByTestId(testId: string): CdpLocator;
-  getByAltText(text: string, options?: ByTextOptions): CdpLocator;
-  getByTitle(text: string, options?: ByTextOptions): CdpLocator;
-  filter(options?: { hasText?: string; hasTextExact?: boolean }): CdpLocator;
+  getByAltText(text: TextMatcher, options?: ByTextOptions): CdpLocator;
+  getByTitle(text: TextMatcher, options?: ByTextOptions): CdpLocator;
+  filter(options?: { hasText?: TextMatcher; hasTextExact?: boolean }): CdpLocator;
   nth(index: number): CdpLocator;
   first(): CdpLocator;
   last(): CdpLocator;
@@ -87,8 +112,16 @@ export interface CdpLocator {
   textContent(): Promise<string | null>;
   allInnerTexts(): Promise<string[]>;
   allTextContents(): Promise<string[]>;
+  evaluate<Result, Arg = unknown>(
+    pageFunction: (element: Element, arg: Arg) => Result | Promise<Result>,
+    arg?: Arg
+  ): Promise<Result>;
+  evaluateAll<Result, Arg = unknown>(
+    pageFunction: (elements: Element[], arg: Arg) => Result | Promise<Result>,
+    arg?: Arg
+  ): Promise<Result>;
   boundingBox(): Promise<BoundingBox | null>;
-  inspect(): Promise<LightweightDomInspection>;
+  inspect(): Promise<CdpDomInspection>;
   /** Playwright-style description, e.g. `getByRole("button", { name: "Go" })`. */
   toString(): string;
 }
@@ -105,17 +138,24 @@ export interface CdpPage {
   content(): Promise<string>;
   /** Set the default timeout (ms) for auto-waiting actions/reads. Default 30000. */
   setDefaultTimeout(timeoutMs: number): void;
+  /** Emulate a CSS viewport on the current target. */
+  setViewportSize(viewportSize: CdpViewportSize): Promise<void>;
+  /** Current configured or observed CSS viewport. */
+  viewportSize(): CdpViewportSize | null;
   evaluate(pageFunction: string | ((arg?: unknown) => unknown), arg?: unknown): Promise<unknown>;
-  /** Find by CSS selector. Prefer the `getBy*` helpers for resilient locators. */
+  /**
+   * Find by CSS or `text=...`. A quoted JSON string is exact text; unquoted
+   * text is substring matching. Prefer getBy* helpers for resilient locators.
+   */
   locator(selector: string): CdpLocator;
   /** Find by ARIA role, optionally narrowed by accessible name. */
   getByRole(role: string, options?: ByRoleOptions): CdpLocator;
-  getByText(text: string, options?: ByTextOptions): CdpLocator;
-  getByLabel(text: string, options?: ByTextOptions): CdpLocator;
-  getByPlaceholder(text: string, options?: ByTextOptions): CdpLocator;
+  getByText(text: TextMatcher, options?: ByTextOptions): CdpLocator;
+  getByLabel(text: TextMatcher, options?: ByTextOptions): CdpLocator;
+  getByPlaceholder(text: TextMatcher, options?: ByTextOptions): CdpLocator;
   getByTestId(testId: string): CdpLocator;
-  getByAltText(text: string, options?: ByTextOptions): CdpLocator;
-  getByTitle(text: string, options?: ByTextOptions): CdpLocator;
+  getByAltText(text: TextMatcher, options?: ByTextOptions): CdpLocator;
+  getByTitle(text: TextMatcher, options?: ByTextOptions): CdpLocator;
   waitForTimeout(timeout: number): Promise<void>;
   waitForFunction(
     pageFunction: string | ((arg?: unknown) => unknown),
@@ -130,10 +170,20 @@ export interface CdpPage {
     selector: string,
     options?: { state?: WaitState; timeout?: number }
   ): Promise<CdpLocator | null>;
+  keyboard: {
+    down(key: string): Promise<void>;
+    up(key: string): Promise<void>;
+    press(key: string): Promise<void>;
+    type(text: string): Promise<void>;
+    insertText(text: string): Promise<void>;
+  };
+  /** Alias for `keyboard.press(key)`. */
   pressKey(key: string): Promise<void>;
-  consoleEvents(): LightweightConsoleEvent[];
+  consoleEvents(): CdpConsoleEvent[];
   clearConsoleEvents(): void;
-  screenshot(options?: { type?: "png" | "jpeg"; quality?: number }): Promise<Uint8Array>;
+  screenshot(options?: CdpScreenshotOptions): Promise<Uint8Array>;
+  /** Disconnect this automation client. The owning panel remains open. */
+  close(): Promise<void>;
 }
 
 /** Low-level raw CDP connection. Use for protocol-level work beyond the Page API. */

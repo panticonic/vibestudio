@@ -1,4 +1,5 @@
 import type { RpcClient } from "@vibestudio/rpc";
+import type { Browser, CdpPage } from "@workspace/cdp-client";
 import type {
   CdpAutomation,
   CdpEndpoint,
@@ -10,11 +11,11 @@ import type {
 
 export type { CdpAutomation, CdpEndpoint };
 
-type LightweightCdpClientModule = {
-  BrowserImpl: { connect(ws: string, opts: object): Promise<any> };
+type CdpClientModule = {
+  BrowserImpl: { connect(ws: string, opts: object): Promise<Browser> };
 };
 
-const LIGHTWEIGHT_CDP_MODULE = "@workspace/cdp-client";
+const CDP_CLIENT_MODULE = "@workspace/cdp-client";
 
 interface CdpAutomationOptions {
   kind?: "workspace" | "browser";
@@ -23,13 +24,13 @@ interface CdpAutomationOptions {
   loadModule?: (id: string) => unknown | Promise<unknown>;
 }
 
-function isLightweightCdpClientModule(value: unknown): value is LightweightCdpClientModule {
-  return Boolean((value as LightweightCdpClientModule | undefined)?.BrowserImpl?.connect);
+function isCdpClientModule(value: unknown): value is CdpClientModule {
+  return Boolean((value as CdpClientModule | undefined)?.BrowserImpl?.connect);
 }
 
-async function loadLightweightClient(
+async function loadCdpClient(
   loadModule?: (id: string) => unknown | Promise<unknown>
-): Promise<LightweightCdpClientModule> {
+): Promise<CdpClientModule> {
   const loadErrors: string[] = [];
   const rememberLoadError = (source: string, error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
@@ -37,8 +38,8 @@ async function loadLightweightClient(
   };
   if (loadModule) {
     try {
-      const loaded = await loadModule(LIGHTWEIGHT_CDP_MODULE);
-      if (isLightweightCdpClientModule(loaded)) return loaded;
+      const loaded = await loadModule(CDP_CLIENT_MODULE);
+      if (isCdpClientModule(loaded)) return loaded;
       throw new Error("module does not expose BrowserImpl.connect");
     } catch (error) {
       rememberLoadError("host module loader", error);
@@ -49,8 +50,8 @@ async function loadLightweightClient(
     | undefined;
   if (runtimeRequire) {
     try {
-      const loaded = runtimeRequire(LIGHTWEIGHT_CDP_MODULE);
-      if (isLightweightCdpClientModule(loaded)) return loaded;
+      const loaded = runtimeRequire(CDP_CLIENT_MODULE);
+      if (isCdpClientModule(loaded)) return loaded;
     } catch (error) {
       rememberLoadError("__vibestudioRequire__", error);
       // Panels can lazily import npm packages via __vibestudioRequireAsync__ below.
@@ -63,8 +64,8 @@ async function loadLightweightClient(
     | undefined;
   if (runtimeLoadImport) {
     try {
-      const loaded = await runtimeLoadImport(LIGHTWEIGHT_CDP_MODULE, "latest");
-      if (isLightweightCdpClientModule(loaded)) return loaded;
+      const loaded = await runtimeLoadImport(CDP_CLIENT_MODULE, "latest");
+      if (isCdpClientModule(loaded)) return loaded;
     } catch (error) {
       rememberLoadError("__vibestudioLoadImport__", error);
       // Try the panel loader next, then native dynamic import outside the hosted runtime.
@@ -75,8 +76,8 @@ async function loadLightweightClient(
   ] as ((id: string) => Promise<unknown>) | undefined;
   if (runtimeRequireAsync) {
     try {
-      const loaded = await runtimeRequireAsync(LIGHTWEIGHT_CDP_MODULE);
-      if (isLightweightCdpClientModule(loaded)) return loaded;
+      const loaded = await runtimeRequireAsync(CDP_CLIENT_MODULE);
+      if (isCdpClientModule(loaded)) return loaded;
     } catch (error) {
       rememberLoadError("__vibestudioRequireAsync__", error);
       // Fall through to dynamic import for non-runtime test/node environments.
@@ -84,17 +85,17 @@ async function loadLightweightClient(
   }
   const dynamicImport = new Function("id", "return import(id)") as (
     id: string
-  ) => Promise<LightweightCdpClientModule>;
+  ) => Promise<CdpClientModule>;
   try {
-    const loaded = await dynamicImport(LIGHTWEIGHT_CDP_MODULE);
-    if (isLightweightCdpClientModule(loaded)) return loaded;
+    const loaded = await dynamicImport(CDP_CLIENT_MODULE);
+    if (isCdpClientModule(loaded)) return loaded;
   } catch (error) {
     rememberLoadError("dynamic import", error);
     // Throw the clearer message below.
   }
   throw new Error(
-    `Unable to load ${LIGHTWEIGHT_CDP_MODULE} for CDP automation. ` +
-      `Call handle.cdp.lightweightPage() only from contexts that expose @workspace/cdp-client.` +
+    `Unable to load ${CDP_CLIENT_MODULE} for CDP automation. ` +
+      `Call handle.cdp.page() only from contexts that expose @workspace/cdp-client.` +
       (loadErrors.length ? ` Last load error: ${loadErrors[loadErrors.length - 1]}` : "")
   );
 }
@@ -112,8 +113,8 @@ export function createCdpAutomation(
     return rpc.call<CdpEndpoint>("main", "panelCdp.getCdpEndpoint", [id]);
   };
 
-  const connectPage = async (): Promise<any> => {
-    const { BrowserImpl } = await loadLightweightClient(options.loadModule);
+  const connectPage = async (): Promise<CdpPage> => {
+    const { BrowserImpl } = await loadCdpClient(options.loadModule);
     const endpoint = await getCdpEndpoint();
     const connectOptions: { isElectronWebview: boolean; transportOptions?: { authToken: string } } =
       {
@@ -122,12 +123,19 @@ export function createCdpAutomation(
     if (endpoint.token) connectOptions.transportOptions = { authToken: endpoint.token };
     const browser = await BrowserImpl.connect(endpoint.wsEndpoint, connectOptions);
     const resolvedPage = browser.contexts()[0]?.pages()[0];
-    if (!resolvedPage) throw new Error("No page found in panel CDP target");
+    if (!resolvedPage) {
+      await browser.close();
+      throw new Error(
+        `CDP connected to panel ${JSON.stringify(id)}, but the target exposed no page. ` +
+          "The panel may still be starting or its target may have been replaced; inspect " +
+          "handle.diagnose() and retry handle.cdp.page() once the panel is ready."
+      );
+    }
     return resolvedPage;
   };
 
   return {
-    lightweightPage: connectPage,
+    page: connectPage,
     consoleHistory: (options?: PanelConsoleHistoryOptions) => {
       return rpc.call<PanelConsoleHistoryResult>("main", "panelCdp.consoleHistory", [id, options]);
     },

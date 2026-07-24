@@ -2,7 +2,7 @@
   "name": "@workspace/cdp-client",
   "version": "0.1.0-git.67fa4b3-dirty.41ae7e46b385",
   "type": "module",
-  "description": "Standalone lightweight CDP client for Vibestudio panel targets",
+  "description": "Workerd-native Playwright-style CDP client for Vibestudio panel targets",
   "license": "Apache-2.0",
   "exports": {
     ".": {

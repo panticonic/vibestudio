@@ -4,6 +4,7 @@
  */
 
 import type { ZodType } from "zod";
+import type { CdpPage } from "@workspace/cdp-client";
 import type * as Rpc from "./rpc.js";
 import type { PanelLifecycleResult, PanelPlacementHint } from "@vibestudio/shared/types";
 import type {
@@ -124,8 +125,8 @@ export interface PanelConsoleHistoryOptions {
 export type PanelDiagnosticsResult = PanelDiagnosticPacket;
 
 export interface CdpAutomation {
-  /** Explicit lightweight @workspace/cdp-client page. */
-  lightweightPage(): Promise<any>;
+  /** The canonical @workspace/cdp-client automation page for this panel target. */
+  page(): Promise<CdpPage>;
   /**
    * Historical console messages captured by the Electron host from panel
    * creation time. This is separate from live CDP console events.

@@ -19,6 +19,9 @@ class FakeWebSocket {
   private nextUrl = "https://example.com/current";
   private html = "<html><body>Hello</body></html>";
   private inputValue = "";
+  private checked = false;
+  private checking = false;
+  closed = false;
 
   constructor(readonly url: string) {
     FakeWebSocket.instances.push(this);
@@ -53,6 +56,14 @@ class FakeWebSocket {
     }
     if (typeof message.id !== "number") return;
     if (message.method) FakeWebSocket.sent.push({ method: message.method, params: message.params });
+    if (
+      message.method === "Input.dispatchMouseEvent" &&
+      message.params?.["type"] === "mouseReleased" &&
+      this.checking
+    ) {
+      this.checked = !this.checked;
+      this.checking = false;
+    }
     if (message.method === "Runtime.enable") {
       setTimeout(
         () =>
@@ -85,6 +96,12 @@ class FakeWebSocket {
   }
 
   close(): void {
+    this.closed = true;
+    this.dispatch("close", {});
+  }
+
+  remoteClose(): void {
+    this.closed = true;
     this.dispatch("close", {});
   }
 
@@ -100,12 +117,29 @@ class FakeWebSocket {
     if (method !== "Runtime.evaluate") return {};
 
     const expression = (params?.["expression"] as string) ?? "";
+    if (expression.includes("boom-marker")) {
+      return {
+        exceptionDetails: {
+          text: "Uncaught",
+          url: "https://example.com/panel.js",
+          lineNumber: 11,
+          columnNumber: 6,
+          exception: {
+            description:
+              "ReferenceError: boom-marker is not defined\n    at save (https://example.com/panel.js:12:7)",
+          },
+        },
+      };
+    }
     // Op-protocol eval: decode the trailing JSON payload and simulate __nsRun.
     if (expression.includes("__nsRun")) {
       return { result: { value: this.runOp(expression) } };
     }
     // Direct arrow-function evals.
     if (expression.includes("location.href")) return { result: { value: this.nextUrl } };
+    if (expression.includes("window.innerWidth")) {
+      return { result: { value: { width: 1280, height: 720 } } };
+    }
     if (expression.includes("document.title")) return { result: { value: this.nextTitle } };
     if (expression.includes("document.readyState")) return { result: { value: true } };
     if (expression.includes("document.documentElement")) return { result: { value: this.html } };
@@ -118,14 +152,24 @@ class FakeWebSocket {
     const end = expression.lastIndexOf(")");
     const payload = JSON.parse(expression.slice(start, end)) as {
       op: string;
-      arg: { name?: string; value?: string; values?: string[]; checked?: boolean } | null;
+      arg: {
+        name?: string;
+        value?: string;
+        values?: string[];
+        checked?: boolean;
+        retainToken?: string;
+        token?: string;
+      } | null;
       descriptor: { steps: Array<Record<string, unknown>> };
     };
     const targetsMissing = payload.descriptor.steps.some(
-      (s) => s["by"] === "testid" && s["value"] === "missing"
+      (s) =>
+        (s["by"] === "testid" && s["value"] === "missing") ||
+        (s["by"] === "role" && (s["name"] === "Done" || s["name"] === "Completed"))
     );
     switch (payload.op) {
       case "probe":
+        if (payload.arg?.retainToken) this.checking = true;
         return targetsMissing
           ? { ok: false, reason: "not found" }
           : { ok: true, x: 50, y: 10, box: { x: 0, y: 0, width: 100, height: 20 } };
@@ -139,7 +183,15 @@ class FakeWebSocket {
       case "isEnabled":
       case "isEditable":
         return true;
+      case "checkedState":
+        this.checking = true;
+        return this.checked;
+      case "retainedCheckedState":
+        return this.checked;
+      case "releaseRetainedElement":
+        return true;
       case "isChecked":
+        return this.checked;
       case "isDisabled":
         return false;
       case "textContent":
@@ -156,6 +208,22 @@ class FakeWebSocket {
         return ["Hello text"];
       case "allInnerTexts":
         return ["Hello"];
+      case "evaluateAll":
+        return ["Hello"];
+      case "evaluate":
+        return "<strong>Hello</strong>";
+      case "roleCandidates":
+        if (payload.descriptor.steps.some((step) => step["name"] === "Completed")) {
+          return [
+            { role: "radio", accessibleName: "Completed" },
+            { role: "tab", accessibleName: "Completed" },
+          ];
+        }
+        return [
+          { role: "button", accessibleName: "All 5" },
+          { role: "button", accessibleName: "Open 2" },
+          { role: "button", accessibleName: "Done 3" },
+        ];
       case "inspect":
         return {
           found: true,
@@ -163,9 +231,19 @@ class FakeWebSocket {
           id: "",
           className: "ready",
           text: "Hello",
+          role: "document",
+          accessibleName: "Hello",
           visible: true,
           attributes: { class: "ready" },
           boundingBox: { x: 0, y: 0, width: 100, height: 20 },
+          ancestors: [
+            {
+              tagName: "MAIN",
+              role: "main",
+              accessibleName: "Example panel",
+              text: "Example panel Hello",
+            },
+          ],
         };
       case "fill":
         this.inputValue = payload.arg?.value ?? "";
@@ -175,7 +253,6 @@ class FakeWebSocket {
         return true;
       case "selectOption":
         return payload.arg?.values ?? [];
-      case "setChecked":
       case "focus":
       case "blur":
       case "scrollIntoView":
@@ -203,6 +280,7 @@ function installFakeWebSocket(): void {
 
 describe("worker CDP client", () => {
   const originalWebSocket = globalThis.WebSocket;
+  const originalFetch = globalThis.fetch;
 
   afterEach(() => {
     FakeWebSocket.instances = [];
@@ -213,6 +291,51 @@ describe("worker CDP client", () => {
       writable: true,
       value: originalWebSocket,
     });
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: originalFetch,
+    });
+  });
+
+  it("uses the Workers fetch-upgrade transport when WebSocket is not global", async () => {
+    Object.defineProperty(globalThis, "WebSocket", {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
+    const socket = new FakeWebSocket("ws://cdp");
+    const accept = vi.fn();
+    Object.assign(socket, { accept });
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        ({
+          status: 101,
+          webSocket: socket,
+        }) as unknown as Response
+    );
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: fetchMock,
+    });
+
+    const connection = await CdpConnection.connect("ws://cdp", "token");
+    await expect(connection.send("Runtime.evaluate", {})).resolves.toEqual({
+      result: { value: undefined },
+    });
+
+    const [upgradeUrl, init] = fetchMock.mock.calls[0]!;
+    expect(init).toEqual({ headers: { Upgrade: "websocket" } });
+    const parsedUpgradeUrl = new URL(String(upgradeUrl));
+    const encodedHeaders = parsedUpgradeUrl.searchParams.get("__vibestudio_ws_headers");
+    expect(encodedHeaders).toBeTruthy();
+    const normalized = encodedHeaders!.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
+    expect(JSON.parse(atob(padded))).toEqual([["x-vibestudio-cdp-grant", "token"]]);
+    parsedUpgradeUrl.searchParams.delete("__vibestudio_ws_headers");
+    expect(parsedUpgradeUrl).toEqual(new URL("http://cdp/"));
+    expect(accept).toHaveBeenCalledOnce();
   });
 
   it("authenticates and exposes page navigation + console capture", async () => {
@@ -237,25 +360,110 @@ describe("worker CDP client", () => {
     expect(page.consoleEvents()).toEqual([]);
   });
 
-  it("supports CSS + getBy locators and reads", async () => {
+  it("compiles CSS, text selectors, and getBy locators into one descriptor model", async () => {
     installFakeWebSocket();
     const browser = await BrowserImpl.connect("ws://cdp");
     const page = browser.contexts()[0]!.pages()[0]!;
 
     await expect(page.locator("body").count()).resolves.toBe(1);
     await expect(page.locator("body").textContent()).resolves.toBe("Hello text");
+    await expect(page.locator('text="Hello"').innerText()).resolves.toBe("Hello");
+    expect(page.locator('text="Hello"')).toMatchObject({
+      descriptor: { steps: [{ by: "text", value: "Hello", exact: true }] },
+    });
+    expect(page.locator("text=Hello")).toMatchObject({
+      descriptor: { steps: [{ by: "text", value: "Hello", exact: false }] },
+    });
+    expect(() => page.locator('text="unterminated')).toThrow(
+      "quoted text must be a valid JSON string"
+    );
     await expect(page.getByText("Hello").innerText()).resolves.toBe("Hello");
+    const textEvaluation = FakeWebSocket.sent
+      .filter((entry) => entry.method === "Runtime.evaluate")
+      .map((entry) => String(entry.params?.["expression"] ?? ""))
+      .find((expression) => expression.includes('"op":"innerText"'));
+    expect(textEvaluation).toContain("nsHasTextMatchingDescendant");
     await expect(page.getByRole("button", { name: "Sign in" }).isVisible()).resolves.toBe(true);
     await expect(page.getByTestId("widget").isEnabled()).resolves.toBe(true);
     await expect(page.getByLabel("Email").getAttribute("id")).resolves.toBe("main");
     await expect(page.locator("li").allInnerTexts()).resolves.toEqual(["Hello"]);
+    await expect(
+      page.locator("li").evaluateAll((elements) => elements.map((element) => element.textContent))
+    ).resolves.toEqual(["Hello"]);
+    await expect(page.locator("body").evaluate((element) => element.innerHTML)).resolves.toBe(
+      "<strong>Hello</strong>"
+    );
     await expect(page.locator("body").inspect()).resolves.toMatchObject({
       found: true,
       tagName: "BODY",
       className: "ready",
+      role: "document",
+      accessibleName: "Hello",
+      ancestors: [
+        {
+          tagName: "MAIN",
+          role: "main",
+          accessibleName: "Example panel",
+          text: "Example panel Hello",
+        },
+      ],
     });
     expect("innerText" in page).toBe(false);
     expect("isVisible" in page).toBe(false);
+  });
+
+  it("disconnects page automation without implying target ownership", async () => {
+    installFakeWebSocket();
+    const browser = await BrowserImpl.connect("ws://cdp");
+    const page = browser.contexts()[0]!.pages()[0]!;
+    const socket = FakeWebSocket.instances[0]!;
+
+    await page.close();
+    await page.close();
+
+    expect(socket.closed).toBe(true);
+    await expect(page.title()).rejects.toThrow(
+      "Cannot send Runtime.evaluate: CDP connection closed by the client"
+    );
+  });
+
+  it("preserves the runtime-replacement recovery reason after a remote target close", async () => {
+    installFakeWebSocket();
+    const browser = await BrowserImpl.connect("ws://cdp");
+    const page = browser.contexts()[0]!.pages()[0]!;
+    const socket = FakeWebSocket.instances[0]!;
+
+    socket.remoteClose();
+
+    await expect(page.title()).rejects.toThrow(
+      "runtime may have been replaced by handle.navigate() or handle.rebuild()"
+    );
+    await expect(page.title()).rejects.toThrow(
+      "obtain a fresh page with await handle.cdp.page(); do not reuse the cached page"
+    );
+  });
+
+  it("sets and reports the CSS viewport through CDP emulation", async () => {
+    installFakeWebSocket();
+    const browser = await BrowserImpl.connect("ws://cdp");
+    const page = browser.contexts()[0]!.pages()[0]!;
+
+    expect(page.viewportSize()).toEqual({ width: 1280, height: 720 });
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    expect(page.viewportSize()).toEqual({ width: 390, height: 844 });
+    expect(FakeWebSocket.sent).toContainEqual({
+      method: "Emulation.setDeviceMetricsOverride",
+      params: {
+        width: 390,
+        height: 844,
+        deviceScaleFactor: 1,
+        mobile: false,
+      },
+    });
+    await expect(page.setViewportSize({ width: 0, height: 844 })).rejects.toThrow(
+      "positive integer width and height"
+    );
   });
 
   it("dispatches a real CDP mouse sequence for click (auto-waited)", async () => {
@@ -272,6 +480,16 @@ describe("worker CDP client", () => {
       "mouseReleased",
     ]);
     expect(mouse[1]?.params).toMatchObject({ x: 50, y: 10, button: "left", clickCount: 1 });
+    const releaseIndex = FakeWebSocket.sent.findIndex(
+      (event) =>
+        event.method === "Input.dispatchMouseEvent" && event.params?.["type"] === "mouseReleased"
+    );
+    expect(FakeWebSocket.sent.slice(releaseIndex + 1)).toContainEqual({
+      method: "Runtime.evaluate",
+      params: expect.objectContaining({
+        expression: "new Promise((resolve) => setTimeout(resolve, 0))",
+      }),
+    });
   });
 
   it("fills and reads back input value, and toggles a checkbox", async () => {
@@ -281,11 +499,71 @@ describe("worker CDP client", () => {
 
     await page.getByPlaceholder("Name").fill("abc");
     await expect(page.locator("input").inputValue()).resolves.toBe("abc");
+    const fillEvaluation = FakeWebSocket.sent
+      .filter((entry) => entry.method === "Runtime.evaluate")
+      .map((entry) => String(entry.params?.["expression"] ?? ""))
+      .find((expression) => expression.includes('"op":"fill"'));
+    expect(fillEvaluation).toContain("Object.getOwnPropertyDescriptor(proto,name)");
+    expect(fillEvaluation).toContain("new InputEvent");
+    expect(fillEvaluation).toContain("await nsAfterAction()");
     await page.locator("input").type("123");
     await expect(page.locator("input").inputValue()).resolves.toBe("abc123");
 
     await page.getByRole("checkbox").check();
+    await expect(page.getByRole("checkbox").isChecked()).resolves.toBe(true);
+    await page.getByRole("checkbox").uncheck();
+    await expect(page.getByRole("checkbox").isChecked()).resolves.toBe(false);
+    const checkboxOps = FakeWebSocket.sent
+      .filter((entry) => entry.method === "Runtime.evaluate")
+      .map((entry) => String(entry.params?.["expression"] ?? ""));
+    expect(
+      checkboxOps.some((expression) => expression.includes('"op":"retainedCheckedState"'))
+    ).toBe(true);
+    expect(
+      checkboxOps.some((expression) => expression.includes('"op":"releaseRetainedElement"'))
+    ).toBe(true);
     await expect(page.getByRole("combobox").selectOption("two")).resolves.toEqual(["two"]);
+  });
+
+  it("supports page keyboard chords and text insertion", async () => {
+    installFakeWebSocket();
+    const browser = await BrowserImpl.connect("ws://cdp");
+    const page = browser.contexts()[0]!.pages()[0]!;
+
+    await page.keyboard.press("Control+A");
+    await page.keyboard.insertText("replacement");
+
+    const keyEvents = FakeWebSocket.sent.filter(
+      (event) => event.method === "Input.dispatchKeyEvent"
+    );
+    expect(
+      keyEvents.some(
+        (event) =>
+          event.params?.["key"] === "A" &&
+          event.params?.["type"] === "keyDown" &&
+          event.params?.["modifiers"] === 2
+      )
+    ).toBe(true);
+    expect(
+      FakeWebSocket.sent.some(
+        (event) => event.method === "Input.insertText" && event.params?.["text"] === "replacement"
+      )
+    ).toBe(true);
+  });
+
+  it("surfaces browser exception identity, message, and stack", async () => {
+    installFakeWebSocket();
+    const browser = await BrowserImpl.connect("ws://cdp");
+    const page = browser.contexts()[0]!.pages()[0]!;
+
+    await expect(
+      page.evaluate(() => {
+        throw new Error("boom-marker");
+      })
+    ).rejects.toThrow(
+      "Browser evaluation failed: ReferenceError: boom-marker is not defined\n" +
+        "    at save (https://example.com/panel.js:12:7)"
+    );
   });
 
   it("captures a screenshot via Page.captureScreenshot and maps type to CDP format", async () => {
@@ -302,6 +580,21 @@ describe("worker CDP client", () => {
       method: "Page.captureScreenshot",
       params: { format: "jpeg", quality: 80 },
     });
+  });
+
+  it("supports full-page capture and rejects silently ignored screenshot options", async () => {
+    installFakeWebSocket();
+    const browser = await BrowserImpl.connect("ws://cdp");
+    const page = browser.contexts()[0]!.pages()[0]!;
+
+    await page.screenshot({ fullPage: true });
+    expect(FakeWebSocket.sent).toContainEqual({
+      method: "Page.captureScreenshot",
+      params: { captureBeyondViewport: true },
+    });
+    await expect(
+      page.screenshot({ path: ".tmp/panel.png" } as unknown as { type?: "png" })
+    ).rejects.toThrow("store it explicitly with @workspace/runtime blobstore.putBytes");
   });
 
   it("exposes a raw CdpConnection for protocol-level work", async () => {
@@ -321,8 +614,22 @@ describe("worker CDP client", () => {
     expect(page.getByRole("button", { name: "Go" }).toString()).toBe(
       'getByRole("button", { name: "Go" })'
     );
+    expect(page.getByRole("button", { name: /delete item/i }).toString()).toBe(
+      'getByRole("button", { name: /delete item/i })'
+    );
+    expect(page.getByRole("button", { name: /delete item/i })).toMatchObject({
+      descriptor: {
+        steps: [
+          {
+            by: "role",
+            name: { regex: { source: "delete item", flags: "i" } },
+          },
+        ],
+      },
+    });
     expect(page.getByText("Hello").nth(2).toString()).toBe('getByText("Hello").nth(2)');
     expect(page.locator("div").first().toString()).toBe('locator("div").first()');
+    expect(page.locator('text="Hello"').toString()).toBe('getByText("Hello", { exact: true })');
     expect(page.getByTestId("save").toString()).toBe('getByTestId("save")');
   });
 
@@ -338,6 +645,34 @@ describe("worker CDP client", () => {
     expect(err).toBeInstanceOf(CdpError);
     expect((err as CdpError).message).toContain('getByTestId("missing")');
     expect((err as CdpError).locator).toBe('getByTestId("missing")');
+  });
+
+  it("reports available accessible names when a named role locator misses", async () => {
+    installFakeWebSocket();
+    const browser = await BrowserImpl.connect("ws://cdp");
+    const page = browser.contexts()[0]!.pages()[0]!;
+
+    const err = await page
+      .getByRole("button", { name: "Done" })
+      .click()
+      .catch((error: unknown) => error);
+
+    expect((err as Error).message).toContain('Available button names: "All 5", "Open 2", "Done 3"');
+  });
+
+  it("reports matching accessible targets when the requested role is wrong", async () => {
+    installFakeWebSocket();
+    const browser = await BrowserImpl.connect("ws://cdp");
+    const page = browser.contexts()[0]!.pages()[0]!;
+
+    const err = await page
+      .getByRole("button", { name: "Completed" })
+      .click()
+      .catch((error: unknown) => error);
+
+    expect((err as Error).message).toContain(
+      'Available accessible targets: radio "Completed", tab "Completed"'
+    );
   });
 
   it("honors setDefaultTimeout in actionability errors", async () => {

@@ -1,6 +1,6 @@
 # @workspace/cdp-client
 
-A lightweight, **workerd-native** Chrome DevTools Protocol client with a
+A **workerd-native** Chrome DevTools Protocol client with a
 **Playwright-style `Page`/`Locator` API**, implemented entirely over raw CDP
 (`Runtime`/`DOM`/`Input`/`Page` domains) and a single `WebSocket`. No Node
 dependencies and no vendored browser bundle, so it runs in panels, workers, and
@@ -15,10 +15,18 @@ From any panel handle (panels, workers, server-side eval — anywhere you hold a
 handle):
 
 ```ts
-const page = await handle.cdp.lightweightPage();
+const page = await handle.cdp.page();
 await page.goto("https://example.com");
 await page.getByRole("button", { name: "Sign in" }).click();
 ```
+
+The handle owns the panel target; the page owns one automation connection to a
+runtime incarnation. `await page.close()` disconnects that client without
+closing the panel. `await handle.close()` closes an owned panel. Browser
+navigation and reload keep the page connected while the target survives.
+Workspace-panel `handle.navigate()` and `handle.rebuild()` replace the runtime
+incarnation and disconnect the old page; acquire one fresh page from the same
+handle after either operation.
 
 ## Playwright compatibility notes
 
@@ -27,7 +35,7 @@ That includes synchronous accessors:
 
 ```ts
 const url = page.url(); // string, not Promise<string>
-const events = page.consoleEvents(); // LightweightConsoleEvent[], not a Promise
+const events = page.consoleEvents(); // CdpConsoleEvent[], not a Promise
 page.clearConsoleEvents(); // void
 ```
 
@@ -53,6 +61,7 @@ Resilient, Playwright-style locators (resolved fresh on every use):
 
 ```ts
 page.getByRole("button", { name: "Save", exact: true });
+page.getByRole("button", { name: /delete .* item/i });
 page.getByText("Welcome");
 page.getByLabel("Email");
 page.getByPlaceholder("Search…");
@@ -65,7 +74,10 @@ page.locator("css .selector"); // CSS escape hatch
 Chain and narrow:
 
 ```ts
-page.getByRole("listitem").filter({ hasText: "Active" }).first();
+page
+  .getByRole("listitem")
+  .filter({ hasText: /active/i })
+  .first();
 page.locator("table").getByRole("row").nth(2).getByRole("cell").last();
 const rows = await page.getByRole("row").all(); // Locator[]
 ```
@@ -81,17 +93,43 @@ await loc.fill("text"); // also: type, clear, press("Enter")
 await loc.check(); // also: uncheck, setChecked(true)
 await loc.selectOption("value");
 await loc.focus(); // also: blur, scrollIntoViewIfNeeded
+
+await page.keyboard.press("Control+A"); // Ctrl/Cmd aliases are accepted
+await page.keyboard.type("replacement");
+await page.keyboard.insertText("pasted as one input operation");
+await page.setViewportSize({ width: 390, height: 844 });
+page.viewportSize(); // synchronous current CSS viewport
 ```
+
+Text matchers accept strings or `RegExp`. Matcher source/flags are serialized
+explicitly instead of degrading to `{}` at the CDP boundary. Form actions use
+native DOM property setters plus input/change events, including for controlled
+React inputs.
 
 ## Reads & state
 
 ```ts
 await loc.textContent(); // innerText, inputValue, getAttribute("href")
 await loc.count(); // allTextContents, allInnerTexts
+await loc.evaluate((element) => element.innerHTML);
+await loc.evaluateAll((elements) => elements.map((element) => element.textContent));
 await loc.isVisible(); // isChecked, isEnabled, isDisabled, isEditable
 await loc.boundingBox();
-await loc.inspect(); // { tagName, id, className, text, visible, attributes, boundingBox }
+await loc.inspect();
+// { tagName, id, className, text, role, accessibleName, visible, attributes,
+//   boundingBox }
 ```
+
+Before acting on a newly rendered UI, inspect its live accessibility names:
+
+```ts
+const buttons = await page.getByRole("button").all();
+const semantics = await Promise.all(buttons.map((button) => button.inspect()));
+```
+
+Descendant text contributes to the accessible name (`Done` plus a `3` badge is
+typically `"Done 3"`). A failed named-role locator includes the available names
+in its `CdpError`.
 
 ## Waiting
 
@@ -101,6 +139,17 @@ await page.waitForLoadState("domcontentloaded");
 await page.waitForFunction(() => document.readyState === "complete");
 await page.waitForSelector(".ready");
 ```
+
+## Screenshots
+
+```ts
+const bytes = await page.screenshot({ type: "png", fullPage: true });
+```
+
+The result is `Uint8Array`; there is no filesystem `path` option in a
+workerd-native client. Store bytes explicitly with `@workspace/runtime`
+`blobstore.putBytes`. Unknown options are rejected with the supported option
+list instead of being silently ignored.
 
 ## Timeouts
 
@@ -131,6 +180,17 @@ try {
 
 `locator.toString()` returns the same description, handy for logging.
 
+Exceptions from `page.evaluate`, locator callbacks, and in-page operations
+preserve the browser exception description and stack. The message begins with
+`Browser evaluation failed:` and includes the actual error name/message instead
+of collapsing every exception to CDP's generic `Uncaught` label. Locator
+operations wrap that detail in `CdpError` without discarding it.
+
+Functions passed to `page.evaluate`, `waitForFunction`, `locator.evaluate`, or
+`locator.evaluateAll` are serialized into the page realm. They must be
+self-contained apart from the explicit argument. Eval's cooperative deadline
+instrumentation remains realm-safe when such a callback is serialized.
+
 ## Console capture
 
 ```ts
@@ -159,7 +219,7 @@ params)` / `.on(event, cb)` give you the entire CDP protocol.
 | condition          | entry            |
 | ------------------ | ---------------- |
 | `worker`/`workerd` | `src/worker.ts`  |
-| `vibestudio-panel`   | `src/browser.ts` |
+| `vibestudio-panel` | `src/browser.ts` |
 | `default`          | `src/index.ts`   |
 
 Types are published from `index.d.ts` (kept in sync with `src/worker.ts`).

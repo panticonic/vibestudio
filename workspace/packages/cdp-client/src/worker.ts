@@ -1,4 +1,4 @@
-// Lightweight, workerd-native CDP client. Speaks raw Chrome DevTools Protocol
+// Workerd-native CDP client. Speaks raw Chrome DevTools Protocol
 // over a WebSocket (via globalThis.WebSocket), so it runs in a Cloudflare
 // Worker / Durable Object isolate AND in panels. Exposes a Playwright-shaped
 // `Page`/`Locator` surface implemented entirely over the Runtime/DOM/Input/Page
@@ -25,54 +25,151 @@ type CdpEvent = {
   params?: unknown;
 };
 
-export type LightweightConsoleEvent = {
+export type CdpConsoleEvent = {
   type: string;
   text: string;
   args: unknown[];
 };
 
-export type LightweightDomInspection = {
+export type CdpDomInspection = {
   selector: string;
   found: boolean;
   tagName?: string;
   id?: string;
   className?: string;
   text?: string;
+  role?: string;
+  accessibleName?: string;
   visible?: boolean;
   attributes?: Record<string, string>;
   boundingBox?: { x: number; y: number; width: number; height: number };
+  /** Nearest rendered ancestors first, for disambiguating repeated controls. */
+  ancestors?: Array<{
+    tagName: string;
+    role: string;
+    accessibleName: string;
+    text: string;
+  }>;
 };
 
 export type BoundingBox = { x: number; y: number; width: number; height: number };
+export type CdpViewportSize = { width: number; height: number };
+export type CdpScreenshotOptions = {
+  type?: "png" | "jpeg";
+  quality?: number;
+  fullPage?: boolean;
+};
 
 /** How a locator finds its element(s). Chains resolve left-to-right. */
+type TextMatcher = string | RegExp;
+type SerializedTextMatcher = string | { regex: { source: string; flags: string } };
+
 type LocatorStep =
   | { by: "css"; value: string }
-  | { by: "role"; value: string; name?: string; exact?: boolean }
-  | { by: "text"; value: string; exact?: boolean }
-  | { by: "label"; value: string; exact?: boolean }
-  | { by: "placeholder"; value: string; exact?: boolean }
+  | { by: "role"; value: string; name?: SerializedTextMatcher; exact?: boolean }
+  | { by: "text"; value: SerializedTextMatcher; exact?: boolean }
+  | { by: "label"; value: SerializedTextMatcher; exact?: boolean }
+  | { by: "placeholder"; value: SerializedTextMatcher; exact?: boolean }
   | { by: "testid"; value: string }
-  | { by: "alt"; value: string; exact?: boolean }
-  | { by: "title"; value: string; exact?: boolean }
-  | { filter: { hasText?: string; hasTextExact?: boolean } }
+  | { by: "alt"; value: SerializedTextMatcher; exact?: boolean }
+  | { by: "title"; value: SerializedTextMatcher; exact?: boolean }
+  | { filter: { hasText?: SerializedTextMatcher; hasTextExact?: boolean } }
   | { nth: number };
 
 type LocatorDescriptor = { steps: LocatorStep[] };
 
 type ByTextOptions = { exact?: boolean };
-type ByRoleOptions = { name?: string; exact?: boolean };
+type ByRoleOptions = { name?: TextMatcher; exact?: boolean };
 type ActionOptions = { timeout?: number };
 type WaitState = "attached" | "detached" | "visible" | "hidden";
+type Keyboard = {
+  down(key: string): Promise<void>;
+  up(key: string): Promise<void>;
+  press(key: string): Promise<void>;
+  type(text: string): Promise<void>;
+  insertText(text: string): Promise<void>;
+};
+
+/**
+ * Compile the public locator selector dialect into the one descriptor model
+ * used by every locator engine. CSS is the default; Playwright's common
+ * `text=<JSON string>` form is semantic text matching, not a string forwarded
+ * to querySelectorAll.
+ */
+function compileLocatorSelector(selector: string): LocatorStep {
+  if (!selector.startsWith("text=")) return { by: "css", value: selector };
+
+  const source = selector.slice("text=".length).trim();
+  if (!source.startsWith('"')) {
+    return { by: "text", value: source, exact: false };
+  }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(source);
+  } catch (cause) {
+    throw new TypeError(
+      `Invalid text locator ${JSON.stringify(
+        selector
+      )}: quoted text must be a valid JSON string, for example locator('text="Save changes"').`,
+      { cause }
+    );
+  }
+  if (typeof value !== "string") {
+    throw new TypeError(
+      `Invalid text locator ${JSON.stringify(
+        selector
+      )}: text= must be followed by text or a quoted JSON string.`
+    );
+  }
+  return { by: "text", value, exact: true };
+}
 
 type WebSocketCtor = new (url: string) => WebSocket;
 
-function getWebSocketCtor(): WebSocketCtor {
+type WorkerClientWebSocket = WebSocket & { accept?: () => void };
+
+async function openWebSocket(
+  wsEndpoint: string,
+  authToken?: string
+): Promise<{ socket: WorkerClientWebSocket; waitForOpen: boolean }> {
   const ctor = (globalThis as { WebSocket?: WebSocketCtor }).WebSocket;
-  if (!ctor) {
-    throw new Error("WebSocket is not available in this worker runtime");
+  if (ctor) {
+    return { socket: new ctor(wsEndpoint), waitForOpen: true };
   }
-  return ctor;
+
+  if (typeof fetch !== "function") {
+    throw new Error(
+      "CDP WebSocket transport is unavailable: this runtime exposes neither WebSocket nor fetch"
+    );
+  }
+
+  const upgradeUrl = new URL(wsEndpoint);
+  if (upgradeUrl.protocol === "ws:") upgradeUrl.protocol = "http:";
+  else if (upgradeUrl.protocol === "wss:") upgradeUrl.protocol = "https:";
+  else {
+    throw new Error(`CDP endpoint must use ws: or wss:, received ${upgradeUrl.protocol}`);
+  }
+  if (authToken) {
+    const headerPairs = JSON.stringify([["x-vibestudio-cdp-grant", authToken]]);
+    const encoded = btoa(headerPairs).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    // Workerd's outbound WebSocket proxy cannot carry arbitrary upgrade
+    // headers directly. This transport metadata is decoded by the egress
+    // boundary, verified there, and removed before the upstream handshake.
+    upgradeUrl.searchParams.set("__vibestudio_ws_headers", encoded);
+  }
+
+  const response = (await fetch(upgradeUrl, {
+    headers: { Upgrade: "websocket" },
+  })) as Response & { webSocket?: WorkerClientWebSocket | null };
+  const socket = response.webSocket;
+  if (!socket) {
+    throw new Error(
+      `CDP WebSocket upgrade failed with HTTP ${response.status}: response contained no WebSocket`
+    );
+  }
+  socket.accept?.();
+  return { socket, waitForOpen: false };
 }
 
 function once(
@@ -132,27 +229,32 @@ export class CdpConnection {
   private nextId = 1;
   private pending = new Map<number, PendingCommand>();
   private eventListeners = new Map<string, Set<(params: unknown) => void>>();
+  private closed = false;
+  private closeError: Error | null = null;
 
   private constructor(private readonly ws: WebSocket) {
     ws.addEventListener("message", (event) => {
       void this.handleMessage((event as MessageEvent).data);
     });
     ws.addEventListener("error", () => {
-      const error = new Error("CDP WebSocket error");
-      for (const pending of this.pending.values()) pending.reject(error);
-      this.pending.clear();
+      this.disconnect(
+        new Error(
+          "CDP target connection failed. Inspect the panel diagnostics and acquire a new page if the target still exists."
+        )
+      );
     });
     ws.addEventListener("close", () => {
-      const error = new Error("CDP WebSocket closed");
-      for (const pending of this.pending.values()) pending.reject(error);
-      this.pending.clear();
+      this.disconnect(
+        new Error(
+          "CDP target connection closed. The panel may have been closed, or its runtime may have been replaced by handle.navigate() or handle.rebuild(). If the panel still exists, obtain a fresh page with await handle.cdp.page(); do not reuse the cached page."
+        )
+      );
     });
   }
 
   static async connect(wsEndpoint: string, authToken?: string): Promise<CdpConnection> {
-    const WebSocketImpl = getWebSocketCtor();
-    const ws = new WebSocketImpl(wsEndpoint);
-    await once(ws, "open");
+    const { socket: ws, waitForOpen } = await openWebSocket(wsEndpoint, authToken);
+    if (waitForOpen) await once(ws, "open");
     if (authToken) {
       ws.send(JSON.stringify({ type: "vibestudio:cdp-auth", token: authToken }));
       const event = (await once(ws, "message")) as MessageEvent;
@@ -165,16 +267,42 @@ export class CdpConnection {
   }
 
   send(method: string, params?: Record<string, unknown>): Promise<unknown> {
+    if (this.closed) {
+      const reason =
+        this.closeError?.message ??
+        "CDP connection is closed. Obtain a fresh page before sending more commands.";
+      return Promise.reject(new Error(`Cannot send ${method}: ${reason}`));
+    }
     const id = this.nextId++;
     const message = params ? { id, method, params } : { id, method };
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      this.ws.send(JSON.stringify(message));
+      try {
+        this.ws.send(JSON.stringify(message));
+      } catch (error) {
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
   close(): void {
+    if (this.closed) return;
+    this.disconnect(
+      new Error(
+        "CDP connection closed by the client. Create a new connection before sending more commands."
+      )
+    );
     this.ws.close();
+  }
+
+  private disconnect(error: Error): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.closeError = error;
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+    this.eventListeners.clear();
   }
 
   on(method: string, listener: (params: unknown) => void): () => void {
@@ -230,9 +358,15 @@ export class CdpConnection {
 const INPAGE = String.raw`
 function nsNorm(s){ return (s==null?"":String(s)).replace(/\s+/g," ").trim(); }
 function nsDedupe(a){ return a.filter(function(e,i){ return a.indexOf(e)===i; }); }
+function nsRetainedElements(){ var key=Symbol.for("@vibestudio/cdp-client/retained-elements"); var registry=globalThis[key]; if(!(registry instanceof Map)){ registry=new Map(); globalThis[key]=registry; } return registry; }
+function nsRetainedElement(token){ var e=nsRetainedElements().get(token); if(!e) throw new Error("Retained element lease is no longer available"); return e; }
 function nsText(el){ return nsNorm((el && (el.innerText!=null?el.innerText:el.textContent)) || ""); }
-function nsTextMatch(el, q, exact){ var t=nsText(el); var n=nsNorm(q); return exact ? t===n : t.indexOf(n)!==-1; }
+function nsValueMatch(value, q, exact){ var t=nsNorm(value); if(q&&typeof q==="object"&&q.regex){ return new RegExp(q.regex.source,q.regex.flags).test(t); } var n=nsNorm(q); return exact ? t===n : t.indexOf(n)!==-1; }
+function nsTextMatch(el, q, exact){ return nsValueMatch(nsText(el),q,exact); }
+function nsHasTextMatchingDescendant(el,q,exact){ var all=el&&el.querySelectorAll?el.querySelectorAll("*"):[]; for(var i=0;i<all.length;i++){ if(nsTextMatch(all[i],q,exact)) return true; } return false; }
 function nsAttr(el, name){ return el && el.getAttribute ? el.getAttribute(name) : null; }
+function nsSetNativeProperty(el,name,value){ var proto=Object.getPrototypeOf(el); var descriptor=proto&&Object.getOwnPropertyDescriptor(proto,name); if(descriptor&&descriptor.set) descriptor.set.call(el,value); else el[name]=value; }
+function nsDispatchInput(el,value){ var event; try { event=new InputEvent("input",{bubbles:true,inputType:"insertText",data:value==null?null:String(value)}); } catch(e) { event=new Event("input",{bubbles:true}); } el.dispatchEvent(event); el.dispatchEvent(new Event("change",{bubbles:true})); }
 function nsRole(el){
   var r = nsAttr(el,"role"); if(r) return r.trim().toLowerCase().split(/\s+/)[0];
   var tag = el.tagName ? el.tagName.toLowerCase() : "";
@@ -272,6 +406,7 @@ function nsVisible(el){
   return s.visibility!=="hidden" && s.display!=="none" && Number(s.opacity||"1")>0 && r.width>0 && r.height>0;
 }
 function nsEnabled(el){ return !el.disabled && nsAttr(el,"aria-disabled")!=="true"; }
+function nsCheckedState(el){ if("checked" in el) return !!el.checked; var aria=nsAttr(el,"aria-checked"); if(aria==="true"||aria==="false") return aria==="true"; var data=nsAttr(el,"data-state"); if(data==="checked"||data==="on") return true; if(data==="unchecked"||data==="off") return false; throw new Error("Element is not checkable"); }
 function nsEditable(el){
   if(el.isContentEditable) return true;
   var tag=el.tagName ? el.tagName.toLowerCase() : "";
@@ -286,13 +421,13 @@ function nsStepFind(roots, step){
   }
   var pred=function(e){
     switch(step.by){
-      case "role": { if(nsRole(e)!==String(step.value).toLowerCase()) return false; if(step.name!=null){ var n=nsAccName(e); return step.exact?n===nsNorm(step.name):n.indexOf(nsNorm(step.name))!==-1; } return true; }
+      case "role": { if(nsRole(e)!==String(step.value).toLowerCase()) return false; if(step.name!=null) return nsValueMatch(nsAccName(e),step.name,step.exact); return true; }
       case "text": return nsTextMatch(e, step.value, step.exact);
-      case "label": { var tag=e.tagName?e.tagName.toLowerCase():""; var formish=(tag==="input"||tag==="textarea"||tag==="select"||tag==="button")||e.isContentEditable; if(!formish) return false; var n=nsAccName(e); return step.exact?n===nsNorm(step.value):n.indexOf(nsNorm(step.value))!==-1; }
-      case "placeholder": { var ph=nsAttr(e,"placeholder"); if(ph==null) return false; var v=nsNorm(ph); return step.exact?v===nsNorm(step.value):v.indexOf(nsNorm(step.value))!==-1; }
+      case "label": { var tag=e.tagName?e.tagName.toLowerCase():""; var formish=(tag==="input"||tag==="textarea"||tag==="select"||tag==="button")||e.isContentEditable; return formish && nsValueMatch(nsAccName(e),step.value,step.exact); }
+      case "placeholder": { var ph=nsAttr(e,"placeholder"); return ph!=null && nsValueMatch(ph,step.value,step.exact); }
       case "testid": return nsAttr(e,"data-testid")===step.value;
-      case "alt": { var a=nsAttr(e,"alt"); if(a==null) return false; var v2=nsNorm(a); return step.exact?v2===nsNorm(step.value):v2.indexOf(nsNorm(step.value))!==-1; }
-      case "title": { var ti=nsAttr(e,"title"); if(ti==null) return false; var v3=nsNorm(ti); return step.exact?v3===nsNorm(step.value):v3.indexOf(nsNorm(step.value))!==-1; }
+      case "alt": { var a=nsAttr(e,"alt"); return a!=null && nsValueMatch(a,step.value,step.exact); }
+      case "title": { var ti=nsAttr(e,"title"); return ti!=null && nsValueMatch(ti,step.value,step.exact); }
       default: return false;
     }
   };
@@ -301,7 +436,8 @@ function nsStepFind(roots, step){
     var all=scope.querySelectorAll("*");
     for(var m=0;m<all.length;m++){ if(pred(all[m])) out.push(all[m]); }
   }
-  return nsDedupe(out);
+  var unique=nsDedupe(out);
+  return step.by==="text" ? unique.filter(function(e){ return !nsHasTextMatchingDescendant(e,step.value,step.exact); }) : unique;
 }
 function nsLocate(descriptor){
   var cur=[document];
@@ -315,12 +451,14 @@ function nsLocate(descriptor){
   return cur;
 }
 function nsFirst(descriptor){ var e=nsLocate(descriptor); return e.length?e[0]:null; }
+function nsFirstVisible(descriptor){ var e=nsLocate(descriptor); for(var i=0;i<e.length;i++){ if(nsVisible(e[i])) return e[i]; } return null; }
 function nsBox(el){ var r=el.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height}; }
 function nsSleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
+function nsAfterAction(){ return nsSleep(0); }
 async function nsWaitForState(descriptor, state, timeout){
   var deadline=Date.now()+timeout;
   for(;;){
-    var el=nsFirst(descriptor);
+    var el=state==="visible"?nsFirstVisible(descriptor):nsFirst(descriptor);
     var ok;
     if(state==="detached") ok=!el;
     else if(state==="attached") ok=!!el;
@@ -331,14 +469,17 @@ async function nsWaitForState(descriptor, state, timeout){
     await nsSleep(50);
   }
 }
-async function nsActionable(descriptor, timeout){
+async function nsActionable(descriptor, timeout, retainToken){
   var deadline=Date.now()+timeout; var prev=null;
   for(;;){
-    var el=nsFirst(descriptor);
+    var matches=nsLocate(descriptor), el=null, visible=null;
+    for(var mi=0;mi<matches.length;mi++){ if(nsVisible(matches[mi])){ if(!visible) visible=matches[mi]; if(nsEnabled(matches[mi])){ el=matches[mi]; break; } } }
+    if(!el) el=visible;
     if(el && nsVisible(el) && nsEnabled(el)){
       try{ el.scrollIntoView({block:"center",inline:"center"}); }catch(e){}
       var b=nsBox(el);
       if(prev && Math.abs(prev.x-b.x)<1 && Math.abs(prev.y-b.y)<1 && prev.width===b.width && prev.height===b.height){
+        if(retainToken) nsRetainedElements().set(retainToken,el);
         return {ok:true, x:b.x+b.width/2, y:b.y+b.height/2, box:b};
       }
       prev=b;
@@ -350,12 +491,15 @@ async function nsActionable(descriptor, timeout){
 async function __nsRun(P){
   var d=P.descriptor, a=P.arg, t=P.timeout;
   switch(P.op){
-    case "probe": return await nsActionable(d, t);
+    case "probe": return await nsActionable(d, t, a&&a.retainToken);
     case "waitFor": { await nsWaitForState(d, P.state||"visible", t); return true; }
     case "count": return nsLocate(d).length;
     case "exists": return !!nsFirst(d);
     case "isVisible": { var e=nsFirst(d); return !!e && nsVisible(e); }
-    case "isChecked": { var e=await nsWaitForState(d,"attached",t); return !!e.checked; }
+    case "checkedState":
+    case "isChecked": { var e=await nsWaitForState(d,"attached",t); return nsCheckedState(e); }
+    case "retainedCheckedState": { var e=nsRetainedElement(a.token); if(!e.isConnected) throw new Error("Retained element was detached during the action"); return nsCheckedState(e); }
+    case "releaseRetainedElement": return nsRetainedElements().delete(a.token);
     case "isEnabled": { var e=await nsWaitForState(d,"attached",t); return nsEnabled(e); }
     case "isDisabled": { var e=await nsWaitForState(d,"attached",t); return !nsEnabled(e); }
     case "isEditable": { var e=await nsWaitForState(d,"attached",t); return nsEditable(e); }
@@ -366,22 +510,52 @@ async function __nsRun(P){
     case "boundingBox": { var e=nsFirst(d); return e?nsBox(e):null; }
     case "allTextContents": return nsLocate(d).map(function(e){ return e.textContent||""; });
     case "allInnerTexts": return nsLocate(d).map(function(e){ return e.innerText!=null?e.innerText:(e.textContent||""); });
+    case "evaluate": { var e=await nsWaitForState(d,"attached",t); var fn=(0,eval)("("+a.source+")"); return await fn(e,a.arg); }
+    case "evaluateAll": { var fn=(0,eval)("("+a.source+")"); return await fn(nsLocate(d),a.arg); }
+    case "roleCandidates": {
+      var original=d.steps||[]; var roleIndex=-1;
+      for(var ri=original.length-1;ri>=0;ri--){ if(original[ri].by==="role"&&original[ri].name!=null){ roleIndex=ri; break; } }
+      if(roleIndex<0) return [];
+      var steps=original.slice(0,roleIndex+1); var named=steps[roleIndex];
+      var relaxed={}; for(var key in named){ if(key!=="name"&&key!=="exact") relaxed[key]=named[key]; }
+      steps[roleIndex]=relaxed;
+      var sameRole=nsLocate({steps:steps}).filter(nsVisible);
+      var seen={}, sameName=Array.prototype.slice.call(document.querySelectorAll("*")).filter(function(e){
+        if(!nsVisible(e)||!nsValueMatch(nsAccName(e),named.name,named.exact)) return false;
+        var role=nsRole(e), name=nsAccName(e), key=role+"\n"+name;
+        if(!role||seen[key]) return false;
+        seen[key]=true;
+        return true;
+      });
+      var included={};
+      return sameName.concat(sameRole).filter(function(e){
+        var key=nsRole(e)+"\n"+nsAccName(e);
+        if(included[key]) return false;
+        included[key]=true;
+        return true;
+      }).slice(0,10).map(function(e){ return {role:nsRole(e), accessibleName:nsAccName(e), text:nsText(e).slice(0,160)}; });
+    }
     case "inspect": {
       var e=nsFirst(d);
       if(!e) return {found:false};
       var attrs={}; for(var i=0;i<e.attributes.length;i++){ attrs[e.attributes[i].name]=e.attributes[i].value; }
-      return {found:true, tagName:e.tagName, id:e.id||"", className:typeof e.className==="string"?e.className:"", text:nsText(e).slice(0,4000), visible:nsVisible(e), attributes:attrs, boundingBox:nsBox(e)};
+      var ancestors=[]; var parent=e.parentElement;
+      while(parent&&ancestors.length<4){
+        var parentText=nsText(parent);
+        if(parentText){ ancestors.push({tagName:parent.tagName,role:nsRole(parent),accessibleName:nsAccName(parent),text:parentText.slice(0,400)}); }
+        parent=parent.parentElement;
+      }
+      return {found:true, tagName:e.tagName, id:e.id||"", className:typeof e.className==="string"?e.className:"", text:nsText(e).slice(0,4000), role:nsRole(e), accessibleName:nsAccName(e), visible:nsVisible(e), attributes:attrs, boundingBox:nsBox(e), ancestors:ancestors};
     }
-    case "fill": { var e=await nsWaitForState(d,"visible",t); if(!("value" in e) && !e.isContentEditable) throw new Error("Element is not fillable"); e.focus&&e.focus(); if(e.isContentEditable){ e.textContent=a.value; } else { e.value=a.value; } e.dispatchEvent(new Event("input",{bubbles:true})); e.dispatchEvent(new Event("change",{bubbles:true})); return true; }
-    case "clear": { var e=await nsWaitForState(d,"visible",t); e.focus&&e.focus(); if(e.isContentEditable) e.textContent=""; else e.value=""; e.dispatchEvent(new Event("input",{bubbles:true})); e.dispatchEvent(new Event("change",{bubbles:true})); return true; }
-    case "setChecked": { var e=await nsWaitForState(d,"visible",t); if(e.checked!==a.checked){ e.checked=a.checked; e.dispatchEvent(new Event("input",{bubbles:true})); e.dispatchEvent(new Event("change",{bubbles:true})); } return true; }
-    case "selectOption": { var e=await nsWaitForState(d,"visible",t); var vals=a.values; var picked=[]; for(var i=0;i<e.options.length;i++){ var o=e.options[i]; var hit=vals.indexOf(o.value)!==-1||vals.indexOf(o.label)!==-1||vals.indexOf(nsNorm(o.textContent))!==-1; o.selected=hit; if(hit) picked.push(o.value); } e.dispatchEvent(new Event("input",{bubbles:true})); e.dispatchEvent(new Event("change",{bubbles:true})); return picked; }
-    case "focus": { var e=await nsWaitForState(d,"visible",t); e.focus&&e.focus(); return true; }
-    case "blur": { var e=await nsWaitForState(d,"attached",t); e.blur&&e.blur(); return true; }
-    case "scrollIntoView": { var e=await nsWaitForState(d,"attached",t); e.scrollIntoView({block:"center",inline:"center"}); return true; }
-    case "selectText": { var e=await nsWaitForState(d,"visible",t); if(e.select) e.select(); else { var r=document.createRange(); r.selectNodeContents(e); var sel=getSelection(); sel.removeAllRanges(); sel.addRange(r); } return true; }
-    case "dispatchEvent": { var e=await nsWaitForState(d,"attached",t); e.dispatchEvent(new Event(a.type,{bubbles:true})); return true; }
-    case "focusForKey": { var e=await nsWaitForState(d,"visible",t); e.focus&&e.focus(); return true; }
+    case "fill": { var e=await nsWaitForState(d,"visible",t); if(!("value" in e) && !e.isContentEditable) throw new Error("Element is not fillable"); e.focus&&e.focus(); if(e.isContentEditable) e.textContent=a.value; else nsSetNativeProperty(e,"value",a.value); nsDispatchInput(e,a.value); await nsAfterAction(); return true; }
+    case "clear": { var e=await nsWaitForState(d,"visible",t); e.focus&&e.focus(); if(e.isContentEditable) e.textContent=""; else nsSetNativeProperty(e,"value",""); nsDispatchInput(e,""); await nsAfterAction(); return true; }
+    case "selectOption": { var e=await nsWaitForState(d,"visible",t); var vals=a.values; var picked=[]; for(var i=0;i<e.options.length;i++){ var o=e.options[i]; var hit=vals.indexOf(o.value)!==-1||vals.indexOf(o.label)!==-1||vals.indexOf(nsNorm(o.textContent))!==-1; o.selected=hit; if(hit) picked.push(o.value); } e.dispatchEvent(new Event("input",{bubbles:true})); e.dispatchEvent(new Event("change",{bubbles:true})); await nsAfterAction(); return picked; }
+    case "focus": { var e=await nsWaitForState(d,"visible",t); e.focus&&e.focus(); await nsAfterAction(); return true; }
+    case "blur": { var e=await nsWaitForState(d,"attached",t); e.blur&&e.blur(); await nsAfterAction(); return true; }
+    case "scrollIntoView": { var e=await nsWaitForState(d,"attached",t); e.scrollIntoView({block:"center",inline:"center"}); await nsAfterAction(); return true; }
+    case "selectText": { var e=await nsWaitForState(d,"visible",t); if(e.select) e.select(); else { var r=document.createRange(); r.selectNodeContents(e); var sel=getSelection(); sel.removeAllRanges(); sel.addRange(r); } await nsAfterAction(); return true; }
+    case "dispatchEvent": { var e=await nsWaitForState(d,"attached",t); e.dispatchEvent(new Event(a.type,{bubbles:true})); await nsAfterAction(); return true; }
+    case "focusForKey": { var e=await nsWaitForState(d,"visible",t); e.focus&&e.focus(); await nsAfterAction(); return true; }
     default: throw new Error("Unknown op: "+P.op);
   }
 }
@@ -402,7 +576,75 @@ const KEY_DEFS: Record<string, { keyCode?: number; key?: string; text?: string }
   PageUp: { keyCode: 33, key: "PageUp" },
   PageDown: { keyCode: 34, key: "PageDown" },
   Space: { keyCode: 32, key: " ", text: " " },
+  Alt: { keyCode: 18, key: "Alt" },
+  Control: { keyCode: 17, key: "Control" },
+  Meta: { keyCode: 91, key: "Meta" },
+  Shift: { keyCode: 16, key: "Shift" },
 };
+
+const MODIFIER_BITS: Record<string, number> = {
+  Alt: 1,
+  Control: 2,
+  Meta: 4,
+  Shift: 8,
+};
+
+function normalizeKey(key: string): string {
+  if (key === "Ctrl") return "Control";
+  if (key === "Cmd") return "Meta";
+  return key;
+}
+
+type RuntimeExceptionDetails = {
+  text?: string;
+  lineNumber?: number;
+  columnNumber?: number;
+  url?: string;
+  exception?: { value?: unknown; description?: string };
+  stackTrace?: {
+    callFrames?: Array<{
+      functionName?: string;
+      url?: string;
+      lineNumber?: number;
+      columnNumber?: number;
+    }>;
+  };
+};
+
+function formatRuntimeException(details: RuntimeExceptionDetails): string {
+  const remote = details.exception;
+  const value =
+    remote && Object.prototype.hasOwnProperty.call(remote, "value")
+      ? String(remote.value)
+      : undefined;
+  const primary = remote?.description || value || details.text || "Unknown browser exception";
+  const frames = details.stackTrace?.callFrames ?? [];
+  const stack =
+    frames.length > 0 && !primary.includes("\n")
+      ? frames
+          .slice(0, 8)
+          .map((frame) => {
+            const name = frame.functionName || "<anonymous>";
+            const url = frame.url || details.url || "<page>";
+            const line = typeof frame.lineNumber === "number" ? `:${frame.lineNumber + 1}` : "";
+            const column =
+              typeof frame.columnNumber === "number" ? `:${frame.columnNumber + 1}` : "";
+            return `    at ${name} (${url}${line}${column})`;
+          })
+          .join("\n")
+      : "";
+  const location =
+    !stack &&
+    !primary.includes("\n") &&
+    (details.url ||
+      typeof details.lineNumber === "number" ||
+      typeof details.columnNumber === "number")
+      ? `\n    at ${details.url || "<page>"}${
+          typeof details.lineNumber === "number" ? `:${details.lineNumber + 1}` : ""
+        }${typeof details.columnNumber === "number" ? `:${details.columnNumber + 1}` : ""}`
+      : "";
+  return `Browser evaluation failed: ${primary}${stack ? `\n${stack}` : location}`;
+}
 
 /**
  * Error thrown by locator actions/reads. `message` names the target locator
@@ -419,13 +661,23 @@ export class CdpError extends Error {
   }
 }
 
+function serializeTextMatcher(value: TextMatcher): SerializedTextMatcher {
+  return typeof value === "string"
+    ? value
+    : { regex: { source: value.source, flags: value.flags } };
+}
+
 /** Render a locator descriptor as a Playwright-style string for errors/toString(). */
 function describeLocator(descriptor: LocatorDescriptor): string {
   const q = (s: string) => JSON.stringify(s);
+  const matcher = (value: SerializedTextMatcher) =>
+    typeof value === "string"
+      ? q(value)
+      : `/${value.regex.source.replace(/\//g, "\\/")}/${value.regex.flags}`;
   const parts = descriptor.steps.map((step) => {
     if ("filter" in step) {
       return `filter(${
-        step.filter.hasText != null ? `{ hasText: ${q(step.filter.hasText)} }` : "{}"
+        step.filter.hasText != null ? `{ hasText: ${matcher(step.filter.hasText)} }` : "{}"
       })`;
     }
     if ("nth" in step) {
@@ -439,22 +691,22 @@ function describeLocator(descriptor: LocatorDescriptor): string {
         return `locator(${q(step.value)})`;
       case "role": {
         const opts: string[] = [];
-        if (step.name != null) opts.push(`name: ${q(step.name)}`);
+        if (step.name != null) opts.push(`name: ${matcher(step.name)}`);
         if (step.exact) opts.push("exact: true");
         return `getByRole(${q(step.value)}${opts.length ? `, { ${opts.join(", ")} }` : ""})`;
       }
       case "text":
-        return `getByText(${q(step.value)}${exact})`;
+        return `getByText(${matcher(step.value)}${exact})`;
       case "label":
-        return `getByLabel(${q(step.value)}${exact})`;
+        return `getByLabel(${matcher(step.value)}${exact})`;
       case "placeholder":
-        return `getByPlaceholder(${q(step.value)}${exact})`;
+        return `getByPlaceholder(${matcher(step.value)}${exact})`;
       case "testid":
         return `getByTestId(${q(step.value)})`;
       case "alt":
-        return `getByAltText(${q(step.value)}${exact})`;
+        return `getByAltText(${matcher(step.value)}${exact})`;
       case "title":
-        return `getByTitle(${q(step.value)}${exact})`;
+        return `getByTitle(${matcher(step.value)}${exact})`;
     }
   });
   return parts.length ? parts.join(".") : "locator()";
@@ -462,8 +714,32 @@ function describeLocator(descriptor: LocatorDescriptor): string {
 
 class WorkerCdpPage {
   private currentUrl = "";
+  private currentViewportSize: CdpViewportSize | null = null;
   private defaultTimeout = 30_000;
-  private readonly consoleBuffer: LightweightConsoleEvent[] = [];
+  private readonly consoleBuffer: CdpConsoleEvent[] = [];
+  private readonly pressedModifiers = new Set<string>();
+  private retainedElementSequence = 0;
+  private readonly retainedElementOwner = `${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2)}`;
+  readonly keyboard: Keyboard = {
+    down: async (key) => {
+      await this.keyDown(key);
+      await this.afterAction();
+    },
+    up: async (key) => {
+      await this.keyUp(key);
+      await this.afterAction();
+    },
+    press: (key) => this.pressKey(key),
+    type: async (text) => {
+      for (const character of text) await this.pressKey(character);
+    },
+    insertText: async (text) => {
+      await this.connection.send("Input.insertText", { text });
+      await this.afterAction();
+    },
+  };
 
   constructor(readonly connection: CdpConnection) {
     this.connection.on("Runtime.consoleAPICalled", (params) => {
@@ -489,6 +765,18 @@ class WorkerCdpPage {
       this.connection.send("DOM.enable"),
     ]);
     this.currentUrl = String((await this.evaluate(() => location.href).catch(() => "")) ?? "");
+    const viewport = await this.evaluate(() => ({
+      width: window.innerWidth,
+      height: window.innerHeight,
+    })).catch(() => null);
+    if (
+      viewport &&
+      typeof viewport === "object" &&
+      typeof (viewport as CdpViewportSize).width === "number" &&
+      typeof (viewport as CdpViewportSize).height === "number"
+    ) {
+      this.currentViewportSize = viewport as CdpViewportSize;
+    }
   }
 
   // ---- Navigation -------------------------------------------------------
@@ -568,6 +856,29 @@ class WorkerCdpPage {
     this.defaultTimeout = timeoutMs;
   }
 
+  /** Emulate a CSS viewport using the canonical CDP device-metrics override. */
+  async setViewportSize(viewportSize: CdpViewportSize): Promise<void> {
+    const { width, height } = viewportSize;
+    if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
+      throw new TypeError(
+        `setViewportSize requires positive integer width and height; received ${JSON.stringify(
+          viewportSize
+        )}`
+      );
+    }
+    await this.connection.send("Emulation.setDeviceMetricsOverride", {
+      width,
+      height,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    this.currentViewportSize = { width, height };
+  }
+
+  viewportSize(): CdpViewportSize | null {
+    return this.currentViewportSize ? { ...this.currentViewportSize } : null;
+  }
+
   // ---- Evaluate ---------------------------------------------------------
   async evaluate(
     pageFunction: string | ((arg?: unknown) => unknown),
@@ -581,9 +892,9 @@ class WorkerCdpPage {
       expression,
       awaitPromise: true,
       returnByValue: true,
-    })) as { result?: { value?: unknown }; exceptionDetails?: { text?: string } };
+    })) as { result?: { value?: unknown }; exceptionDetails?: RuntimeExceptionDetails };
     if (result.exceptionDetails) {
-      throw new Error(result.exceptionDetails.text ?? "Evaluation failed");
+      throw new Error(formatRuntimeException(result.exceptionDetails));
     }
     return result.result?.value;
   }
@@ -616,39 +927,46 @@ class WorkerCdpPage {
 
   // ---- Locators ---------------------------------------------------------
   locator(selector: string): WorkerCdpLocator {
-    return new WorkerCdpLocator(this, { steps: [{ by: "css", value: selector }] });
+    return new WorkerCdpLocator(this, { steps: [compileLocatorSelector(selector)] });
   }
   getByRole(role: string, options: ByRoleOptions = {}): WorkerCdpLocator {
     return new WorkerCdpLocator(this, {
-      steps: [{ by: "role", value: role, name: options.name, exact: options.exact }],
+      steps: [
+        {
+          by: "role",
+          value: role,
+          name: options.name === undefined ? undefined : serializeTextMatcher(options.name),
+          exact: options.exact,
+        },
+      ],
     });
   }
-  getByText(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
+  getByText(text: TextMatcher, options: ByTextOptions = {}): WorkerCdpLocator {
     return new WorkerCdpLocator(this, {
-      steps: [{ by: "text", value: text, exact: options.exact }],
+      steps: [{ by: "text", value: serializeTextMatcher(text), exact: options.exact }],
     });
   }
-  getByLabel(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
+  getByLabel(text: TextMatcher, options: ByTextOptions = {}): WorkerCdpLocator {
     return new WorkerCdpLocator(this, {
-      steps: [{ by: "label", value: text, exact: options.exact }],
+      steps: [{ by: "label", value: serializeTextMatcher(text), exact: options.exact }],
     });
   }
-  getByPlaceholder(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
+  getByPlaceholder(text: TextMatcher, options: ByTextOptions = {}): WorkerCdpLocator {
     return new WorkerCdpLocator(this, {
-      steps: [{ by: "placeholder", value: text, exact: options.exact }],
+      steps: [{ by: "placeholder", value: serializeTextMatcher(text), exact: options.exact }],
     });
   }
   getByTestId(testId: string): WorkerCdpLocator {
     return new WorkerCdpLocator(this, { steps: [{ by: "testid", value: testId }] });
   }
-  getByAltText(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
+  getByAltText(text: TextMatcher, options: ByTextOptions = {}): WorkerCdpLocator {
     return new WorkerCdpLocator(this, {
-      steps: [{ by: "alt", value: text, exact: options.exact }],
+      steps: [{ by: "alt", value: serializeTextMatcher(text), exact: options.exact }],
     });
   }
-  getByTitle(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
+  getByTitle(text: TextMatcher, options: ByTextOptions = {}): WorkerCdpLocator {
     return new WorkerCdpLocator(this, {
-      steps: [{ by: "title", value: text, exact: options.exact }],
+      steps: [{ by: "title", value: serializeTextMatcher(text), exact: options.exact }],
     });
   }
 
@@ -739,9 +1057,15 @@ class WorkerCdpPage {
   /** Resolve a stable, actionable hit point for a descriptor (auto-waits). */
   async resolveHitPoint(
     descriptor: LocatorDescriptor,
-    timeout: number = this.defaultTimeout
+    timeout: number = this.defaultTimeout,
+    retainToken?: string
   ): Promise<{ x: number; y: number }> {
-    const probe = (await this.runLocatorOp("probe", descriptor, null, { timeout })) as {
+    const probe = (await this.runLocatorOp(
+      "probe",
+      descriptor,
+      retainToken ? { retainToken } : null,
+      { timeout }
+    )) as {
       ok: boolean;
       x?: number;
       y?: number;
@@ -749,19 +1073,43 @@ class WorkerCdpPage {
     };
     if (!probe.ok || typeof probe.x !== "number" || typeof probe.y !== "number") {
       const where = describeLocator(descriptor);
+      const candidates =
+        probe.reason === "not found"
+          ? ((await this.runLocatorOp("roleCandidates", descriptor, null, {
+              timeout: 0,
+            }).catch(() => [])) as Array<{
+              role?: string;
+              accessibleName?: string;
+            }>)
+          : [];
+      const candidateHint =
+        candidates.length > 0
+          ? candidates.every((candidate) => candidate.role === candidates[0]?.role)
+            ? ` Available ${candidates[0]?.role ?? "role"} names: ${candidates
+                .map((candidate) => JSON.stringify(candidate.accessibleName ?? ""))
+                .join(", ")}. Inspect the role locator before choosing a name.`
+            : ` Available accessible targets: ${candidates
+                .map(
+                  (candidate) =>
+                    `${candidate.role ?? "unknown role"} ${JSON.stringify(
+                      candidate.accessibleName ?? ""
+                    )}`
+                )
+                .join(", ")}. Use the rendered role and accessible name.`
+          : "";
       throw new CdpError(
-        `not actionable (${probe.reason ?? "timeout"}) after ${timeout}ms: ${where}`,
+        `not actionable (${probe.reason ?? "timeout"}) after ${timeout}ms: ${where}.${candidateHint}`,
         { locator: where }
       );
     }
     return { x: probe.x, y: probe.y };
   }
 
-  async clickDescriptor(
-    descriptor: LocatorDescriptor,
-    opts: { clickCount?: number; button?: "left" | "right" | "middle"; timeout?: number } = {}
+  private async dispatchClickAt(
+    point: { x: number; y: number },
+    opts: { clickCount?: number; button?: "left" | "right" | "middle" } = {}
   ): Promise<void> {
-    const { x, y } = await this.resolveHitPoint(descriptor, opts.timeout);
+    const { x, y } = point;
     const button = opts.button ?? "left";
     const clickCount = opts.clickCount ?? 1;
     await this.connection.send("Input.dispatchMouseEvent", {
@@ -784,6 +1132,15 @@ class WorkerCdpPage {
       button,
       clickCount,
     });
+    await this.afterAction();
+  }
+
+  async clickDescriptor(
+    descriptor: LocatorDescriptor,
+    opts: { clickCount?: number; button?: "left" | "right" | "middle"; timeout?: number } = {}
+  ): Promise<void> {
+    const point = await this.resolveHitPoint(descriptor, opts.timeout);
+    await this.dispatchClickAt(point, opts);
   }
 
   async hoverDescriptor(descriptor: LocatorDescriptor, opts: ActionOptions = {}): Promise<void> {
@@ -794,6 +1151,7 @@ class WorkerCdpPage {
       y,
       button: "none",
     });
+    await this.afterAction();
   }
 
   async pressDescriptor(
@@ -805,30 +1163,112 @@ class WorkerCdpPage {
     await this.pressKey(key);
   }
 
-  /** Dispatch a key by name (e.g. "Enter") or single character. */
-  async pressKey(key: string): Promise<void> {
-    const def = KEY_DEFS[key];
-    const base: Record<string, unknown> = def
+  async setCheckedDescriptor(
+    descriptor: LocatorDescriptor,
+    checked: boolean,
+    opts: ActionOptions = {}
+  ): Promise<void> {
+    const retainToken = `${this.retainedElementOwner}-check-${++this.retainedElementSequence}`;
+    const point = await this.resolveHitPoint(descriptor, opts.timeout, retainToken);
+    try {
+      const retainedArg = { token: retainToken };
+      const current = (await this.runLocatorOp("retainedCheckedState", descriptor, retainedArg, {
+        timeout: opts.timeout,
+      })) as boolean;
+      if (current === checked) return;
+      await this.dispatchClickAt(point);
+      const updated = (await this.runLocatorOp("retainedCheckedState", descriptor, retainedArg, {
+        timeout: opts.timeout,
+      })) as boolean;
+      if (updated !== checked) {
+        const where = describeLocator(descriptor);
+        throw new CdpError(
+          `${checked ? "check" : "uncheck"} did not update ${where}'s checked state`,
+          { locator: where }
+        );
+      }
+    } finally {
+      await this.runLocatorOp(
+        "releaseRetainedElement",
+        descriptor,
+        { token: retainToken },
+        { timeout: 0 }
+      ).catch(() => undefined);
+    }
+  }
+
+  private keyboardModifiers(): number {
+    let modifiers = 0;
+    for (const key of this.pressedModifiers) modifiers |= MODIFIER_BITS[key] ?? 0;
+    return modifiers;
+  }
+
+  private keyDefinition(key: string): Record<string, unknown> {
+    const normalized = normalizeKey(key);
+    const def = KEY_DEFS[normalized];
+    return def
       ? {
-          key: def.key ?? key,
+          key: def.key ?? normalized,
           windowsVirtualKeyCode: def.keyCode,
           nativeVirtualKeyCode: def.keyCode,
         }
-      : { key, text: key.length === 1 ? key : undefined };
-    await this.connection.send("Input.dispatchKeyEvent", { type: "keyDown", ...base });
-    const text = def?.text ?? (key.length === 1 ? key : undefined);
+      : { key: normalized, text: normalized.length === 1 ? normalized : undefined };
+  }
+
+  private async keyDown(key: string): Promise<void> {
+    const normalized = normalizeKey(key);
+    if (MODIFIER_BITS[normalized]) this.pressedModifiers.add(normalized);
+    await this.connection.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      ...this.keyDefinition(normalized),
+      modifiers: this.keyboardModifiers(),
+    });
+  }
+
+  private async keyUp(key: string): Promise<void> {
+    const normalized = normalizeKey(key);
+    await this.connection.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      ...this.keyDefinition(normalized),
+      modifiers: this.keyboardModifiers(),
+    });
+    this.pressedModifiers.delete(normalized);
+  }
+
+  /** Dispatch a key or chord (for example "Enter" or "Control+A"). */
+  async pressKey(key: string): Promise<void> {
+    const parts = key.split("+").map(normalizeKey);
+    const main = parts.pop();
+    if (!main) throw new Error("keyboard.press requires a key");
+    for (const modifier of parts) await this.keyDown(modifier);
+    await this.keyDown(main);
+    const def = KEY_DEFS[main];
+    const text =
+      parts.length === 0 ? (def?.text ?? (main.length === 1 ? main : undefined)) : undefined;
     if (text) {
       await this.connection.send("Input.dispatchKeyEvent", {
         type: "char",
         text,
-        key: base["key"],
+        key: this.keyDefinition(main)["key"],
+        modifiers: this.keyboardModifiers(),
       });
     }
-    await this.connection.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+    await this.keyUp(main);
+    for (const modifier of parts.reverse()) await this.keyUp(modifier);
+    await this.afterAction();
+  }
+
+  /**
+   * A completed action is observable by the next action. Yielding one browser
+   * task lets framework event batches commit without imposing arbitrary sleeps
+   * or waiting for application-specific DOM state.
+   */
+  private async afterAction(): Promise<void> {
+    await this.evaluate("new Promise((resolve) => setTimeout(resolve, 0))");
   }
 
   // ---- Console ----------------------------------------------------------
-  consoleEvents(): LightweightConsoleEvent[] {
+  consoleEvents(): CdpConsoleEvent[] {
     return [...this.consoleBuffer];
   }
   clearConsoleEvents(): void {
@@ -836,16 +1276,50 @@ class WorkerCdpPage {
   }
 
   // ---- Screenshot -------------------------------------------------------
-  async screenshot(options: { type?: "png" | "jpeg"; quality?: number } = {}): Promise<Uint8Array> {
+  async screenshot(options: CdpScreenshotOptions = {}): Promise<Uint8Array> {
+    const supported = new Set(["type", "quality", "fullPage"]);
+    const unsupported = Object.keys(options).filter((key) => !supported.has(key));
+    if (unsupported.length > 0) {
+      const pathHint = unsupported.includes("path")
+        ? " CdpPage.screenshot returns Uint8Array; store it explicitly with @workspace/runtime blobstore.putBytes."
+        : "";
+      throw new TypeError(
+        `Unsupported screenshot option${unsupported.length === 1 ? "" : "s"} ${unsupported
+          .map((key) => JSON.stringify(key))
+          .join(", ")}.${pathHint} Supported options: type, quality, fullPage.`
+      );
+    }
+    if (
+      options.quality !== undefined &&
+      (!Number.isInteger(options.quality) || options.quality < 0 || options.quality > 100)
+    ) {
+      throw new TypeError(
+        `screenshot quality must be an integer from 0 to 100; received ${JSON.stringify(
+          options.quality
+        )}`
+      );
+    }
+    if (options.quality !== undefined && options.type !== "jpeg") {
+      throw new TypeError('screenshot quality is supported only when type is "jpeg"');
+    }
     // Keep the public page API Playwright-shaped (`type`) while speaking the
     // Chrome DevTools Protocol shape (`format`) on the wire.
-    const { type, ...rest } = options;
-    const params = type ? { ...rest, format: type } : rest;
+    const { type, fullPage, ...rest } = options;
+    const params = {
+      ...rest,
+      ...(type ? { format: type } : {}),
+      ...(fullPage ? { captureBeyondViewport: true } : {}),
+    };
     const result = (await this.connection.send("Page.captureScreenshot", params)) as {
       data?: string;
     };
     if (!result.data) throw new Error("CDP screenshot did not return image data");
     return decodeBase64(result.data);
+  }
+
+  /** Disconnect this automation client. Target/panel lifecycle remains handle-owned. */
+  async close(): Promise<void> {
+    this.connection.close();
   }
 }
 
@@ -866,32 +1340,44 @@ class WorkerCdpLocator {
 
   // ---- Scoped sub-locators / chaining -----------------------------------
   locator(selector: string): WorkerCdpLocator {
-    return this.extend({ by: "css", value: selector });
+    return this.extend(compileLocatorSelector(selector));
   }
   getByRole(role: string, options: ByRoleOptions = {}): WorkerCdpLocator {
-    return this.extend({ by: "role", value: role, name: options.name, exact: options.exact });
+    return this.extend({
+      by: "role",
+      value: role,
+      name: options.name === undefined ? undefined : serializeTextMatcher(options.name),
+      exact: options.exact,
+    });
   }
-  getByText(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
-    return this.extend({ by: "text", value: text, exact: options.exact });
+  getByText(text: TextMatcher, options: ByTextOptions = {}): WorkerCdpLocator {
+    return this.extend({ by: "text", value: serializeTextMatcher(text), exact: options.exact });
   }
-  getByLabel(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
-    return this.extend({ by: "label", value: text, exact: options.exact });
+  getByLabel(text: TextMatcher, options: ByTextOptions = {}): WorkerCdpLocator {
+    return this.extend({ by: "label", value: serializeTextMatcher(text), exact: options.exact });
   }
-  getByPlaceholder(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
-    return this.extend({ by: "placeholder", value: text, exact: options.exact });
+  getByPlaceholder(text: TextMatcher, options: ByTextOptions = {}): WorkerCdpLocator {
+    return this.extend({
+      by: "placeholder",
+      value: serializeTextMatcher(text),
+      exact: options.exact,
+    });
   }
   getByTestId(testId: string): WorkerCdpLocator {
     return this.extend({ by: "testid", value: testId });
   }
-  getByAltText(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
-    return this.extend({ by: "alt", value: text, exact: options.exact });
+  getByAltText(text: TextMatcher, options: ByTextOptions = {}): WorkerCdpLocator {
+    return this.extend({ by: "alt", value: serializeTextMatcher(text), exact: options.exact });
   }
-  getByTitle(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
-    return this.extend({ by: "title", value: text, exact: options.exact });
+  getByTitle(text: TextMatcher, options: ByTextOptions = {}): WorkerCdpLocator {
+    return this.extend({ by: "title", value: serializeTextMatcher(text), exact: options.exact });
   }
-  filter(options: { hasText?: string; hasTextExact?: boolean } = {}): WorkerCdpLocator {
+  filter(options: { hasText?: TextMatcher; hasTextExact?: boolean } = {}): WorkerCdpLocator {
     return this.extend({
-      filter: { hasText: options.hasText, hasTextExact: options.hasTextExact },
+      filter: {
+        hasText: options.hasText === undefined ? undefined : serializeTextMatcher(options.hasText),
+        hasTextExact: options.hasTextExact,
+      },
     });
   }
   nth(index: number): WorkerCdpLocator {
@@ -944,13 +1430,13 @@ class WorkerCdpLocator {
     await this.page.pressDescriptor(this.descriptor, key, opts);
   }
   async check(opts: ActionOptions = {}): Promise<void> {
-    await this.page.runLocatorOp("setChecked", this.descriptor, { checked: true }, opts);
+    await this.page.setCheckedDescriptor(this.descriptor, true, opts);
   }
   async uncheck(opts: ActionOptions = {}): Promise<void> {
-    await this.page.runLocatorOp("setChecked", this.descriptor, { checked: false }, opts);
+    await this.page.setCheckedDescriptor(this.descriptor, false, opts);
   }
   async setChecked(checked: boolean, opts: ActionOptions = {}): Promise<void> {
-    await this.page.runLocatorOp("setChecked", this.descriptor, { checked }, opts);
+    await this.page.setCheckedDescriptor(this.descriptor, checked, opts);
   }
   async selectOption(value: string | string[], opts: ActionOptions = {}): Promise<string[]> {
     const values = Array.isArray(value) ? value : [value];
@@ -1022,6 +1508,24 @@ class WorkerCdpLocator {
   async allTextContents(): Promise<string[]> {
     return (await this.page.runLocatorOp("allTextContents", this.descriptor, null)) as string[];
   }
+  async evaluate<Result, Arg = unknown>(
+    pageFunction: (element: Element, arg: Arg) => Result | Promise<Result>,
+    arg?: Arg
+  ): Promise<Result> {
+    return (await this.page.runLocatorOp("evaluate", this.descriptor, {
+      source: pageFunction.toString(),
+      arg,
+    })) as Result;
+  }
+  async evaluateAll<Result, Arg = unknown>(
+    pageFunction: (elements: Element[], arg: Arg) => Result | Promise<Result>,
+    arg?: Arg
+  ): Promise<Result> {
+    return (await this.page.runLocatorOp("evaluateAll", this.descriptor, {
+      source: pageFunction.toString(),
+      arg,
+    })) as Result;
+  }
   async boundingBox(): Promise<BoundingBox | null> {
     return (await this.page.runLocatorOp(
       "boundingBox",
@@ -1029,13 +1533,13 @@ class WorkerCdpLocator {
       null
     )) as BoundingBox | null;
   }
-  async inspect(): Promise<LightweightDomInspection> {
+  async inspect(): Promise<CdpDomInspection> {
     const raw = (await this.page.runLocatorOp("inspect", this.descriptor, null)) as
-      | (Omit<LightweightDomInspection, "selector"> & { found: boolean })
+      | (Omit<CdpDomInspection, "selector"> & { found: boolean })
       | { found: false };
     const selector = JSON.stringify(this.descriptor.steps);
     if (!raw.found) return { selector, found: false };
-    return { selector, ...(raw as object) } as LightweightDomInspection;
+    return { selector, ...(raw as object) } as CdpDomInspection;
   }
 }
 

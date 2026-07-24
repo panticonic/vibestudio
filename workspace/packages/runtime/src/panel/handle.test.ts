@@ -562,7 +562,7 @@ describe("PanelHandle", () => {
     );
   });
 
-  it("loads the explicit lightweight CDP client only when requested", async () => {
+  it("loads the canonical CDP page client only when requested", async () => {
     const page = { marker: "async-page" };
     const connect = vi.fn(async () => ({
       contexts: () => [{ pages: () => [page] }],
@@ -581,7 +581,7 @@ describe("PanelHandle", () => {
     const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
     _initPanelHandleBridge({ call: rpcCall, on: vi.fn() } as never);
 
-    await expect(getPanelHandle("panel-1", "browser").cdp.lightweightPage()).resolves.toBe(page);
+    await expect(getPanelHandle("panel-1", "browser").cdp.page()).resolves.toBe(page);
 
     expect((globalThis as any).__vibestudioRequireAsync__).toHaveBeenNthCalledWith(
       1,
