@@ -24,6 +24,7 @@ import {
   type EntityActivationInput,
   type EntityKind,
   type EntityRecord,
+  type PanelReservationInput,
 } from "../../../packages/shared/src/runtime/entitySpec.js";
 import {
   parseUnitAuthorityManifest,
@@ -787,7 +788,7 @@ export class WorkspaceDO extends DurableObjectBase {
     tier: "gated",
     sensitivity: "write",
   })
-  entityReservePanel(input: EntityActivateInput): EntityRecord {
+  entityReservePanel(input: PanelReservationInput): EntityRecord {
     if (input.kind !== "panel") {
       throw new Error("entityReservePanel only accepts panel entities");
     }
@@ -805,6 +806,14 @@ export class WorkspaceDO extends DurableObjectBase {
         this.assertIdentityMatches(id, existing, input);
         if (existing.status === "retired") {
           throw new Error(`Cannot reserve retired panel entity ${id}`);
+        }
+        if (input.lifecycleOwner) {
+          this.upsertContextEdge({
+            contextId: input.contextId,
+            ownerContextId: input.lifecycleOwner.contextId,
+            kind: "lifecycle",
+            ownerEntityId: input.lifecycleOwner.entityId,
+          });
         }
         return this.rowToEntity(existing);
       }
@@ -826,6 +835,14 @@ export class WorkspaceDO extends DurableObjectBase {
         input.ownerUserId ?? null,
         now
       );
+      if (input.lifecycleOwner) {
+        this.upsertContextEdge({
+          contextId: input.contextId,
+          ownerContextId: input.lifecycleOwner.contextId,
+          kind: "lifecycle",
+          ownerEntityId: input.lifecycleOwner.entityId,
+        });
+      }
       const row = this.readEntityRow(id);
       if (!row) throw new Error(`entityReservePanel: failed to read row after insert: ${id}`);
       return this.rowToEntity(row);
@@ -1743,6 +1760,35 @@ export class WorkspaceDO extends DurableObjectBase {
     kind: "lifecycle" | "lineage";
     ownerEntityId?: string;
   }): void {
+    this.ctx.storage.transactionSync(() => this.upsertContextEdge(input));
+  }
+
+  private upsertContextEdge(input: {
+    contextId: string;
+    ownerContextId: string;
+    kind: "lifecycle" | "lineage";
+    ownerEntityId?: string;
+  }): void {
+    if (input.contextId === input.ownerContextId) {
+      throw new Error(`A context cannot be its own ${input.kind} owner: ${input.contextId}`);
+    }
+    if (input.kind === "lifecycle") {
+      const owners = this.sql
+        .exec(
+          `SELECT owner_context_id FROM context_edges
+           WHERE context_id = ? AND kind = 'lifecycle'`,
+          input.contextId
+        )
+        .toArray() as unknown as Array<{ owner_context_id: string }>;
+      const conflictingOwner = owners.find(
+        ({ owner_context_id }) => owner_context_id !== input.ownerContextId
+      );
+      if (conflictingOwner) {
+        throw new Error(
+          `Context ${input.contextId} already belongs to lifecycle owner ${conflictingOwner.owner_context_id}; cannot re-parent it to ${input.ownerContextId}`
+        );
+      }
+    }
     this.sql.exec(
       `INSERT INTO context_edges (context_id, owner_context_id, kind, owner_entity_id, created_at)
        VALUES (?, ?, ?, ?, ?)

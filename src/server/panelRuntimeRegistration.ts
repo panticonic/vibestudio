@@ -287,6 +287,16 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     resolveContextOwnerLabel: deps.resolveContextOwnerLabel,
     resolveCallerContext: async (callerId: string) => panelGateEntityCache.resolveContext(callerId),
     resolveEntityContext: (entityId: string) => panelGateEntityCache.resolveContext(entityId),
+    isEntityControlledBy: (entityId: string, callerId: string) => {
+      const visited = new Set<string>();
+      let current = panelGateEntityCache.resolve(entityId);
+      while (current && !visited.has(current.id)) {
+        if (current.parentId === callerId) return true;
+        visited.add(current.id);
+        current = current.parentId ? panelGateEntityCache.resolve(current.parentId) : null;
+      }
+      return false;
+    },
     resolveSubjectCaller: (entityId: string) => {
       const rec = panelGateEntityCache.resolveActive(entityId);
       if (!rec) return null;

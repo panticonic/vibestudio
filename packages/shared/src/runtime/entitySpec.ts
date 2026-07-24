@@ -279,6 +279,21 @@ export interface EntityActivationInput {
 }
 
 /**
+ * Durable input for reserving a panel before its executable image is ready.
+ *
+ * A panel whose context was minted for this launch is born as a lifecycle
+ * child of the verified creator's context in the same transaction as its
+ * entity row. Explicitly shared contexts omit this field and retain their
+ * existing ownership.
+ */
+export interface PanelReservationInput extends EntityActivationInput {
+  lifecycleOwner?: {
+    contextId: string;
+    entityId: string;
+  };
+}
+
+/**
  * Optional code build selector for runtime entities.
  *
  * `contextId` selects the entity's filesystem/state context. It does not select

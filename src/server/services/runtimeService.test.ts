@@ -294,7 +294,7 @@ const sessionCaller = (id = "agent:session") =>
     null,
     null,
     null,
-    createTestExecutionSession({ runtimeId: id })
+    createTestExecutionSession({ runtimeId: id, mode: "interactive" })
   );
 
 const shellCaller = createVerifiedCaller("shell", "shell");
@@ -345,6 +345,55 @@ describe("runtimeService deferred panel activation", () => {
     });
     expect(entityCache.resolveActive(reserved.id)?.id).toBe(reserved.id);
     expect(preparePanel).toHaveBeenCalledTimes(1);
+  });
+
+  it("atomically makes an implicit panel context a lifecycle child of its verified creator", async () => {
+    const { service, instance } = await buildDeps();
+    const creator = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "panel",
+        source: "panels/creator",
+        contextId: "ctx-creator",
+        key: "creator",
+      },
+    ])) as { id: string };
+    const mediatedCreator = createVerifiedCaller(creator.id, "server");
+
+    const reserved = (await service.handler({ caller: mediatedCreator }, "reservePanelEntity", [
+      { kind: "panel", source: "panels/child", key: "child" },
+    ])) as { id: string; contextId: string };
+
+    expect(reserved.contextId).not.toBe("ctx-creator");
+    expect(instance.entityResolve(reserved.id)).toMatchObject({
+      parentId: creator.id,
+      contextId: reserved.contextId,
+    });
+    expect(instance.contextEdgeListByOwner({ ownerContextId: "ctx-creator" })).toEqual([
+      {
+        contextId: reserved.contextId,
+        kind: "lifecycle",
+        ownerEntityId: creator.id,
+      },
+    ]);
+  });
+
+  it("reuses the exact implicit panel context when a stable reservation is retried", async () => {
+    const { service, instance } = await buildDeps();
+    const spec = { kind: "panel" as const, source: "panels/child", key: "stable-child" };
+
+    const first = (await service.handler({ caller: serverCaller }, "reservePanelEntity", [
+      spec,
+    ])) as { id: string; contextId: string };
+    const second = (await service.handler({ caller: serverCaller }, "reservePanelEntity", [
+      spec,
+    ])) as { id: string; contextId: string };
+
+    expect(second).toEqual(first);
+    expect(instance.entityResolve(first.id)).toMatchObject({
+      id: first.id,
+      contextId: first.contextId,
+      status: "preparing",
+    });
   });
 
   it("retires a cancelled reservation without invoking executable release", async () => {

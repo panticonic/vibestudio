@@ -27,6 +27,8 @@ export interface PanelAccessPermissionDeps extends ContextBoundaryDeps {
   resolveCallerContext(callerId: string): Promise<string | null>;
   /** Resolve a target/anchor entity's context — sync (active cache). */
   resolveEntityContext(entityId: string): string | null;
+  /** True when the target entity's durable parent lineage reaches the caller. */
+  isEntityControlledBy?(entityId: string, callerId: string): boolean;
   /**
    * Build a code-identity subject caller from an anchor entity id (for
    * host-mediated `server`/`shell` calls whose true initiator is that entity).
@@ -120,6 +122,12 @@ export async function preparePanelAccessAuthority(
     const anchor = anchorId ? deps.resolveSubjectCaller(anchorId) : null;
     if (!anchor) return [];
     subjectCaller = anchor;
+  }
+  if (
+    target.runtimeEntityId &&
+    deps.isEntityControlledBy?.(target.runtimeEntityId, subjectCaller.runtime.id)
+  ) {
+    return [];
   }
   const targetContextId = destinationContextId(deps, op, target);
   if (targetContextId == null) return [];

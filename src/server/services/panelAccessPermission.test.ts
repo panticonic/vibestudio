@@ -60,6 +60,18 @@ describe("preparePanelAccessAuthority", () => {
     ]);
   });
 
+  it("keeps creator-controlled panel operations inside the caller's authority", async () => {
+    const isEntityControlledBy = vi.fn(() => true);
+    await expect(
+      preparePanelAccessAuthority(deps({ isEntityControlledBy }), ctx, "close", {
+        id: "created-panel",
+        runtimeEntityId: "panel:created-runtime",
+        contextId: "ctx-created-panel",
+      })
+    ).resolves.toEqual([]);
+    expect(isEntityControlledBy).toHaveBeenCalledWith("panel:created-runtime", "panel:requester");
+  });
+
   it("selects critical for privileged targets and bypasses authorized chrome", async () => {
     await expect(
       preparePanelAccessAuthority(deps(), ctx, "close", {

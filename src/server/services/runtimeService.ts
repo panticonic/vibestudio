@@ -449,8 +449,24 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     if (!isTrustedRuntimeHost(caller)) {
       throw new Error("Deferred panel runtime entities are host-managed");
     }
-    const contextId = await resolveTargetContext(caller, spec.contextId, undefined);
+    // A panel without an explicit shared context gets a fresh semantic world.
+    // The bridge retains the verified creator id under host attestation, so the
+    // runtime can attach that world to the creator's context without exposing a
+    // forgeable ownership coordinate in the public panel spec.
+    const explicitContextId = spec.contextId;
     const key = spec.key ?? randomUUID();
+    // The panel key is the durable reservation identity. Derive the implicit
+    // context from that same identity so an ambiguous transport retry reaches
+    // the exact reservation already committed by WorkspaceDO instead of
+    // inventing a conflicting semantic world.
+    const contextId =
+      explicitContextId != null && explicitContextId !== ""
+        ? explicitContextId
+        : deriveContextId(`panel-reservation:${canonicalEntityId({ kind: "panel", key })}`);
+    const hasExplicitContext = explicitContextId != null && explicitContextId !== "";
+    const ownerContextId = hasExplicitContext
+      ? null
+      : await store.resolveContext(caller.runtime.id);
     const record = await store.reservePanel({
       kind: "panel",
       source: { repoPath: spec.source, effectiveVersion: "" },
@@ -459,6 +475,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       stateArgs: spec.stateArgs,
       parentId: caller.runtime.id,
       ownerUserId: caller.subject?.userId,
+      ...(ownerContextId && ownerContextId !== contextId
+        ? {
+            lifecycleOwner: {
+              contextId: ownerContextId,
+              entityId: caller.runtime.id,
+            },
+          }
+        : {}),
     });
     return panelHandle(record);
   }

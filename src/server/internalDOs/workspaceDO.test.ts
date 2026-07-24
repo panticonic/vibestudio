@@ -44,7 +44,7 @@ async function createDbAtSchemaVersion(schemaVersion: number) {
   return db;
 }
 
-function panelInput(overrides: Partial<Parameters<WorkspaceDO["entityActivate"]>[0]> = {}) {
+function panelInput(overrides: Partial<Parameters<WorkspaceDO["entityReservePanel"]>[0]> = {}) {
   return {
     kind: "panel" as const,
     source: { repoPath: SOURCE, effectiveVersion: VERSION },
@@ -234,6 +234,43 @@ describe("WorkspaceDO.entityActivate", () => {
       createdAt: reserved.createdAt,
     });
     expect(instance.entityResolveActive(reserved.id)?.id).toBe(reserved.id);
+  });
+
+  it("commits a fresh panel's lifecycle owner in the reservation transaction", () => {
+    const reserved = instance.entityReservePanel(
+      panelInput({
+        source: { repoPath: SOURCE, effectiveVersion: "" },
+        lifecycleOwner: { contextId: "ctx-owner", entityId: "do:creator" },
+      })
+    );
+
+    expect(instance.contextEdgeListByChild(reserved.contextId)).toEqual([
+      {
+        ownerContextId: "ctx-owner",
+        kind: "lifecycle",
+        ownerEntityId: "do:creator",
+      },
+    ]);
+  });
+
+  it("rejects a second lifecycle parent and rolls back the conflicting reservation", () => {
+    instance.entityReservePanel(
+      panelInput({
+        source: { repoPath: SOURCE, effectiveVersion: "" },
+        lifecycleOwner: { contextId: "ctx-owner-a", entityId: "do:creator-a" },
+      })
+    );
+
+    expect(() =>
+      instance.entityReservePanel(
+        panelInput({
+          source: { repoPath: "panels/other", effectiveVersion: "" },
+          key: "entry-2",
+          lifecycleOwner: { contextId: "ctx-owner-b", entityId: "do:creator-b" },
+        })
+      )
+    ).toThrow(/already belongs to lifecycle owner ctx-owner-a/);
+    expect(instance.entityResolve(canonicalEntityId({ kind: "panel", key: "entry-2" }))).toBeNull();
   });
 
   it("rejects malformed or unbound immutable build keys at the durable boundary", () => {

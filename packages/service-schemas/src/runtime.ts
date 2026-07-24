@@ -150,6 +150,16 @@ export const PanelEntityCreateSpecSchema = z
   })
   .strict();
 
+const PanelReservationSpecSchema = PanelEntityCreateSpecSchema.extend({
+  contextId: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "Existing semantic context to share deliberately. Omit/null to mint a fresh panel context owned by the verified creator's lifecycle."
+    ),
+}).strict();
+
 export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
   PanelEntityCreateSpecSchema,
   z.object({
@@ -363,8 +373,8 @@ export const runtimeMethods = defineServiceMethods({
   },
   reservePanelEntity: {
     description:
-      "Reserve a panel's stable durable identity and context without waiting for its immutable runtime image. Reserved entities are non-executable until activatePanelEntity completes.",
-    args: z.tuple([PanelEntityCreateSpecSchema]),
+      "Reserve a panel's stable durable identity and context without waiting for its immutable runtime image. Omitted contextId atomically creates a fresh lifecycle-owned panel context; an explicit contextId shares that existing context. Reserved entities are non-executable until activatePanelEntity completes.",
+    args: z.tuple([PanelReservationSpecSchema]),
     returns: RuntimeEntityHandleSchema,
     authority: { principals: ["host"] },
     access: { sensitivity: "write" },
