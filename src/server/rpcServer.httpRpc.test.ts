@@ -50,7 +50,6 @@ function makeDoRecord(
         tier: "gated" as const,
         evidence: "exact" as const,
       })),
-      evalCeilings: [],
     },
     ...(agentBinding ? { agentBinding } : {}),
   };
@@ -89,11 +88,6 @@ function createTestSetup(opts?: {
   const handler: ServiceDefinition["handler"] = async (ctx, method, args) => {
     const service = serviceForMethod(method);
     dispatched.push({ ctx, service, method, args });
-    // When the caller opted into deferral (ctx.deferral present), park the
-    // call — return the sentinel so the server acks {deferred,requestId}.
-    const deferral = (ctx as { deferral?: { run: (w: () => Promise<unknown>) => unknown } })
-      .deferral;
-    if (deferral) return deferral.run(async () => ({ deferredResolved: true }));
     const key = `${service}.${method}`;
     if (dispatchResults.has(key)) return dispatchResults.get(key);
     return { ok: true };
@@ -210,7 +204,6 @@ function toEnvelope(body: Record<string, unknown>): Record<string, unknown> {
       fromId: caller.callerId,
       method: body["method"],
       args: body["args"] ?? [],
-      ...(body["deferrable"] ? { deferrable: true } : {}),
       ...(body["causalParent"] ? { causalParent: body["causalParent"] } : {}),
     },
   };
@@ -515,7 +508,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         authorization: { authorizingOrigin: { kind: "host" } },
         causalParent,
       });
-      expect(setup.dispatched.at(-1)?.ctx.caller.sessionOrigin).toBeUndefined();
+      expect(setup.dispatched.at(-1)?.ctx.caller.executionSession).toBeUndefined();
     });
 
     it("uses a verified concrete DO caller for service dispatch", async () => {
@@ -635,7 +628,6 @@ describe("RpcServer HTTP POST /rpc", () => {
               evidence: "exact",
             },
           ],
-          evalCeilings: [],
         },
         codeApproved: true,
         agentBinding: {
@@ -789,45 +781,6 @@ describe("RpcServer HTTP POST /rpc", () => {
       // HTTP 200, error in body (RPC convention)
       expect(status).toBe(200);
       expect(body["error"]).toBe("token expired");
-    });
-  });
-
-  // ── Deferral (callDeferred opt-in) ──────────────────────────────────────────
-
-  describe("deferral", () => {
-    it("parks a deferrable call from a worker and acks {deferred,requestId}", async () => {
-      const res = await postRpc(port, setup.workerToken, {
-        deferrable: true,
-        requestId: "rid-defer-1",
-        method: "credentials.resolveCredential",
-        args: [{}],
-      });
-      expect(res.status).toBe(200);
-      // postRpc surfaces the raw deferral ack (not an envelope).
-      expect(res.body).toMatchObject({ deferred: true, requestId: "rid-defer-1" });
-    });
-
-    it("does NOT defer a plain (non-deferrable) call — completes inline", async () => {
-      const res = await postRpc(port, setup.workerToken, {
-        requestId: "rid-plain-1",
-        method: "credentials.resolveCredential",
-        args: [{}],
-      });
-      expect(res.status).toBe(200);
-      expect(res.body["result"]).toEqual({ ok: true });
-      expect("deferred" in res.body).toBe(false);
-    });
-
-    it("ignores the deferrable flag for a shell caller (defer is do/worker-only)", async () => {
-      const res = await postRpc(port, setup.shellToken, {
-        deferrable: true,
-        requestId: "rid-shell-1",
-        method: "credentials.resolveCredential",
-        args: [{}],
-      });
-      expect(res.status).toBe(200);
-      expect(res.body["result"]).toEqual({ ok: true });
-      expect("deferred" in res.body).toBe(false);
     });
   });
 
@@ -1313,7 +1266,6 @@ describe("RpcServer HTTP POST /rpc", () => {
                     evidence: "exact",
                   },
                 ],
-                evalCeilings: [],
               },
               codeApproved: true,
             },
@@ -1322,7 +1274,7 @@ describe("RpcServer HTTP POST /rpc", () => {
           expect.any(AbortSignal)
         );
         expect(assertAuthority).toHaveBeenCalledWith(
-          expect.objectContaining({ authorityAcquisition: "wait" }),
+          expect.objectContaining({ caller: expect.any(Object) }),
           "credentials",
           "proxyFetch",
           [{ url: "https://example.com/", method: "GET" }]

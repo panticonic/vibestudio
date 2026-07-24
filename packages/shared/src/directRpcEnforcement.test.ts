@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AuthorizationContext, DirectAuthorityAttestation } from "@vibestudio/rpc";
+import type { AuthorizationContext } from "@vibestudio/rpc";
+import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import {
   DirectRpcNonceWindow,
   assertEventIntakeRules,
@@ -22,6 +23,8 @@ const context: AuthorizationContext = {
   initiatorChain: [code],
   ownerChain: ["user:test"],
   agentBinding: null,
+  executionSession: null,
+  testPolicy: null,
   workspace: { workspaceId: "ws", member: true, role: "member", revision: "1" },
   session: { id: "s", audience: "do:x", version: "1", expiresAt: 10_000 },
   contextIntegrity: { class: "not-applicable", latchEpoch: 0, externalKeys: [] },

@@ -25,7 +25,6 @@ describe("RuntimeImageStore sealed execution identity", () => {
             evidence: "exact",
           },
         ],
-        authorityEvalCeilings: [],
         effectiveVersion: "d".repeat(64),
       });
 
@@ -77,7 +76,7 @@ describe("RuntimeImageStore sealed execution identity", () => {
     }
   });
 
-  it("atomically migrates the previous authority-envelope epoch", () => {
+  it("rejects the previous authority-envelope epoch without a legacy migration", () => {
     const statePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-images-"));
     try {
       const filePath = stateLayout(statePath).runtimeImagesFile;
@@ -117,30 +116,9 @@ describe("RuntimeImageStore sealed execution identity", () => {
         })
       );
 
-      const store = new RuntimeImageStore(statePath);
-      expect(store.get("worker:workers/a:one")).toMatchObject({
-        authorityEvalCeilings: [
-          {
-            audience: "eval",
-            purpose: "agentic-code-execution",
-            capabilities: [],
-          },
-        ],
-      });
-      expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toMatchObject({
-        version: 4,
-        records: [
-          {
-            authorityEvalCeilings: [
-              {
-                audience: "eval",
-                purpose: "agentic-code-execution",
-                capabilities: [],
-              },
-            ],
-          },
-        ],
-      });
+      expect(() => new RuntimeImageStore(statePath)).toThrow(
+        /predates the supported production baseline/
+      );
     } finally {
       fs.rmSync(statePath, { recursive: true, force: true });
     }
@@ -154,7 +132,7 @@ describe("RuntimeImageStore sealed execution identity", () => {
       fs.writeFileSync(
         filePath,
         JSON.stringify({
-          version: 4,
+          version: 5,
           records: [{ id: "worker:workers/a:one", executionDigest: "not-a-digest" }],
         })
       );

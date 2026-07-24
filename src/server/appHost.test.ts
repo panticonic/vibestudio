@@ -32,7 +32,7 @@ const TEST_EXECUTION_IDENTITY: NonNullable<BuildMetadata["execution"]> = {
 };
 const TEST_SEALED_APP_BUILD_METADATA = {
   execution: TEST_EXECUTION_IDENTITY,
-  authority: { requests: [], evalCeilings: [] },
+  authority: { requests: [] },
 } satisfies Pick<BuildMetadata, "execution" | "authority">;
 
 function publicationEvent(): ProtectedPublicationEvent {
@@ -105,7 +105,7 @@ function makeHarness(
           capabilities: ["notifications"],
           ...(opts.invalidManifest ? { preload: "preload.ts" } : {}),
         },
-        authority: { requests: [], evalCeilings: [] },
+        authority: { requests: [] },
       },
     })
   );
@@ -156,7 +156,7 @@ function makeHarness(
         ev: "ev-app",
         sourceStateHash: "state:test",
         execution: TEST_EXECUTION_IDENTITY,
-        authority: { requests: [], evalCeilings: [] },
+        authority: { requests: [] },
         details: { kind: "app", target: "electron", integrity: "sha256-app" },
       },
       artifacts: [artifact],
@@ -171,9 +171,7 @@ function makeHarness(
               ev: "ev-app",
               sourceStateHash: "state:test",
               execution: TEST_EXECUTION_IDENTITY,
-              authority: { requests: [], evalCeilings: [] } as NonNullable<
-                BuildMetadata["authority"]
-              >,
+              authority: { requests: [] } as NonNullable<BuildMetadata["authority"]>,
               details: { kind: "app", target: "electron", integrity: "sha256-app" },
             },
             artifacts: [artifact],
@@ -325,7 +323,7 @@ function createAppGraphNode(
           renderer: opts.target === "terminal" ? "index.mjs" : "index.tsx",
           capabilities: opts.capabilities ?? [],
         },
-        authority: { requests: [], evalCeilings: [] },
+        authority: { requests: [] },
       },
     })
   );
@@ -373,7 +371,7 @@ function setAppManifestTarget(
       vibestudio: {
         displayName: node.manifest.displayName,
         app: appBlock,
-        authority: { requests: [], evalCeilings: [] },
+        authority: { requests: [] },
       },
     })
   );
@@ -492,7 +490,7 @@ describe("AppHost", () => {
         vibestudio: {
           displayName: "Shell App",
           app: { target: "electron", renderer: "index.tsx" },
-          authority: { requests: [], evalCeilings: [] },
+          authority: { requests: [] },
         },
       })
     );
@@ -537,7 +535,7 @@ describe("AppHost", () => {
       source: { repoPath: "apps/shell", effectiveVersion: "ev-app" },
       activeBuildKey: "app-key",
       activeExecutionDigest: TEST_EXECUTION_IDENTITY.executionDigest,
-      activeAuthority: { requests: [], evalCeilings: [] },
+      activeAuthority: { requests: [] },
       status: "active",
     });
     const connectionGrants = new ConnectionGrantService({ entityCache });
@@ -836,20 +834,6 @@ describe("AppHost", () => {
               evidence: "exact",
             },
           ],
-          evalCeilings: [
-            {
-              audience: "eval",
-              purpose: "agentic-code-execution",
-              capabilities: [
-                {
-                  capability: "runtime:entity.create",
-                  resource: { kind: "prefix", prefix: "panels/" },
-                  tier: "gated",
-                  evidence: "bounded-dynamic",
-                },
-              ],
-            },
-          ],
         },
         details: { kind: "app", target: "electron", integrity: "sha256-app" },
       },
@@ -885,18 +869,6 @@ describe("AppHost", () => {
         {
           capability: "service:events.watch",
           resource: { kind: "exact", key: "service:events.watch" },
-        },
-      ],
-      authorityEvalCeilings: [
-        {
-          audience: "eval",
-          purpose: "agentic-code-execution",
-          capabilities: [
-            {
-              capability: "runtime:entity.create",
-              resource: { kind: "prefix", prefix: "panels/" },
-            },
-          ],
         },
       ],
     });
@@ -1409,7 +1381,7 @@ describe("AppHost", () => {
         ...activeBuild?.metadata,
         buildKey: "app-key",
         sourcePath: "apps/shell",
-        authority: { requests: [], evalCeilings: [] },
+        authority: { requests: [] },
         execution: {
           version: 1,
           source: { repoPath: "apps/shell", effectiveVersion: "e".repeat(64) },
@@ -1435,7 +1407,6 @@ describe("AppHost", () => {
         integrity: "sha256-app",
         executionDigest: "d".repeat(64),
         authorityRequests: [],
-        authorityEvalCeilings: [],
       },
     });
     expect(fs.existsSync(path.join(outDir, "manifest.json"))).toBe(true);
@@ -1480,7 +1451,7 @@ describe("AppHost", () => {
       source: { repoPath: "apps/mobile", effectiveVersion: "ev-mobile" },
       activeBuildKey: "mobile-key",
       activeExecutionDigest: "a".repeat(64),
-      activeAuthority: { requests: [], evalCeilings: [] },
+      activeAuthority: { requests: [] },
       status: "active",
     });
     const connectionGrants = new ConnectionGrantService({ entityCache });
@@ -1602,7 +1573,7 @@ describe("AppHost", () => {
             entry: "index.ts",
             capabilities: ["clipboard"],
           },
-          authority: { requests: [], evalCeilings: [] },
+          authority: { requests: [] },
         },
       })
     );
@@ -1617,7 +1588,7 @@ describe("AppHost", () => {
         ev: "ev-terminal",
         sourceStateHash: "state:test",
         execution: TEST_EXECUTION_IDENTITY,
-        authority: { requests: [], evalCeilings: [] },
+        authority: { requests: [] },
         details: {
           kind: "app",
           target: "terminal",
@@ -1698,7 +1669,7 @@ describe("AppHost", () => {
         ev: "ev-terminal",
         sourceStateHash: "state:test",
         execution: TEST_EXECUTION_IDENTITY,
-        authority: { requests: [], evalCeilings: [] },
+        authority: { requests: [] },
         details: {
           kind: "app" as const,
           target: "terminal" as const,

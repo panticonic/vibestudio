@@ -36,6 +36,7 @@ describe("HeadlessSession", () => {
     expect(snap.connected).toBe(false);
     expect(snap.messages).toEqual([]);
     expect(snap.invocations).toEqual([]);
+    expect(snap.cleanup).toMatchObject({ phase: "idle" });
     expect(snap.cleanupErrors).toEqual([]);
     expect(snap.participants).toEqual({});
   });
@@ -251,7 +252,10 @@ describe("HeadlessSession", () => {
       }
     );
 
-    const close = session.close();
+    const phases: string[] = [];
+    const close = session.close({
+      onPhase: (state) => phases.push(state.phase),
+    });
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]).toEqual({
       target: "do:workers/agent-worker:AiChatWorker:obj-1",
@@ -273,6 +277,41 @@ describe("HeadlessSession", () => {
         method: "runtime.retireEntity",
         args: [{ id: "do:workers/agent-worker:AiChatWorker:obj-1" }],
       },
+    ]);
+    expect(phases).toEqual([
+      "unsubscribing-agent",
+      "disconnecting-client",
+      "retiring-agent",
+      "complete",
+    ]);
+    expect(session.snapshot().cleanup).toMatchObject({
+      phase: "complete",
+      completedAt: expect.any(Number),
+    });
+  });
+
+  it("shares one acknowledged remote teardown across concurrent close callers", async () => {
+    const session = HeadlessSession.create({ config: createConfig() });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => (release = resolve));
+    const rpcCall = vi.fn(async (_target: string, method: string) => {
+      if (method === "unsubscribeChannel") await blocked;
+      return undefined;
+    });
+    (session as any)._agentEntityId = "entity-1";
+    (session as any)._agentTargetId = "agent-target";
+    (session as any)._channelId = "ch-1";
+    (session as any)._agentRpcCall = rpcCall;
+
+    const first = session.close();
+    const second = session.close();
+    expect(first).toBe(second);
+    release();
+    await Promise.all([first, second]);
+
+    expect(rpcCall.mock.calls.map((call) => call[1])).toEqual([
+      "unsubscribeChannel",
+      "runtime.retireEntity",
     ]);
   });
 
@@ -304,6 +343,48 @@ describe("HeadlessSession", () => {
         method: "runtime.destroyContext",
         args: [{ contextId: "ctx-isolated", recursive: true }],
       },
+    ]);
+  });
+
+  it("unsubscribes the agent before disconnecting the headless participant", async () => {
+    const session = HeadlessSession.create({ config: createConfig() });
+    const order: string[] = [];
+    (session as any)._agentEntityId = "do:workers/agent-worker:AiChatWorker:obj-1";
+    (session as any)._agentTargetId = "do:workers/agent-worker:AiChatWorker:obj-1";
+    (session as any)._channelId = "ch-1";
+    (session as any)._agentRpcCall = vi.fn(async (_target: string, method: string) => {
+      order.push(method);
+      return undefined;
+    });
+    vi.spyOn(session, "disconnect").mockImplementation(async () => {
+      order.push("disconnect");
+    });
+
+    await session.close();
+
+    expect(order).toEqual(["unsubscribeChannel", "disconnect", "runtime.retireEntity"]);
+  });
+
+  it("closes effect admission before collecting terminal model evidence", async () => {
+    const session = HeadlessSession.create({ config: createConfig() });
+    const order: string[] = [];
+    (session as any)._agentEntityId = "do:workers/agent-worker:AiChatWorker:obj-1";
+    (session as any)._agentTargetId = "do:workers/agent-worker:AiChatWorker:obj-1";
+    (session as any)._channelId = "ch-1";
+    (session as any)._client = {};
+    (session as any)._agentRpcCall = vi.fn(async (_target: string, method: string) => {
+      order.push(method);
+      if (method === "getModelExecutionEvidence") return { totalCalls: 1 };
+      return undefined;
+    });
+    vi.spyOn(session, "disconnect").mockResolvedValue();
+
+    await session.close();
+
+    expect(order).toEqual([
+      "unsubscribeChannel",
+      "getModelExecutionEvidence",
+      "runtime.retireEntity",
     ]);
   });
 

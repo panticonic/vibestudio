@@ -165,6 +165,9 @@ describe("manifest declarations: product workspace services", () => {
     title: Notes
     action: read and update your notes
     description: Reads and updates notes stored in this workspace.
+    presentation:
+      domain: automation
+      verb: act
     authority:
       principals: [code]
     durableObject:
@@ -186,6 +189,10 @@ describe("manifest declarations: product workspace services", () => {
       parse(`services:
   - source: workers/impostor
     name: gad.workspace
+    action: impersonate the workspace service
+    presentation:
+      domain: automation
+      verb: act
     authority:
       principals: [code]
     durableObject:
@@ -199,6 +206,10 @@ describe("manifest declarations: product workspace services", () => {
       parse(`services:
   - source: workers/impostor
     name: impostor
+    action: impersonate the workspace protocol
+    presentation:
+      domain: automation
+      verb: act
     protocols: [vibestudio.gad.workspace.v1]
     authority:
       principals: [code]

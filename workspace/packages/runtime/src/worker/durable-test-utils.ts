@@ -3,10 +3,10 @@ import type {
   AuthenticatedCaller,
   AuthorizationContext,
   AuthorityGrant,
-  DirectAuthorityAttestation,
   Principal,
   PrincipalKind,
 } from "@vibestudio/rpc";
+import type { AttestedCaller, DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import { rpcMethodAuthority } from "@vibestudio/rpc";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 
@@ -186,7 +186,9 @@ export function createTestDirectAuthority(input: {
   const subject = (kind === "code" ? `code:test@${"a".repeat(64)}` : `${kind}:test`) as Principal;
   const actingUser = kind === "host" ? null : ("user:test" as const);
   const entity = input.callerKind === "agent" ? ("entity:test" as const) : null;
-  const capabilities = [...new Set([capability, input.targetCapability].filter(Boolean))] as string[];
+  const capabilities = [
+    ...new Set([capability, input.targetCapability].filter(Boolean)),
+  ] as string[];
   const requested = capabilities.map((requestedCapability) => ({
     capability: requestedCapability,
     resource: { kind: "exact" as const, key: audience },
@@ -205,14 +207,12 @@ export function createTestDirectAuthority(input: {
             sourceLineage: { class: "internal", externalKeys: [] },
           }
         : null,
-    initiatorChain: [
-      ...(actingUser ? [actingUser] : []),
-      ...(entity ? [entity] : []),
-      subject,
-    ],
+    initiatorChain: [...(actingUser ? [actingUser] : []), ...(entity ? [entity] : []), subject],
     ownerChain: actingUser ? [actingUser] : [],
     agentBinding:
       entity === null ? null : { entity, contextId: "ctx:test", channelId: "channel:test" },
+    executionSession: null,
+    testPolicy: null,
     workspace: { workspaceId: "test", member: true, role: null, revision: "test" },
     session: { id: "test-session", audience, version: "1.0.0", expiresAt: now + 5_000 },
     contextIntegrity:
@@ -383,7 +383,7 @@ export async function createTestDO<T>(
             className: String(mergedEnv["WORKER_CLASS_NAME"]),
             objectKey,
           }),
-        } satisfies AuthenticatedCaller,
+        } satisfies AttestedCaller,
       },
       provenance: [],
       message: { type: "request", requestId: crypto.randomUUID(), fromId: "main", method, args },

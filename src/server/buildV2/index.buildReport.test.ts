@@ -147,7 +147,7 @@ async function loadWithMocks(): Promise<{
               ev,
               sourceStateHash: stateRef,
               sourcemap: false,
-              authority: { requests: [], evalCeilings: [] },
+              authority: { requests: [] },
               details: { kind: "generic" as const },
               builtAt: new Date().toISOString(),
             }

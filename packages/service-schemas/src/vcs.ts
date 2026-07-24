@@ -1511,6 +1511,10 @@ export const vcsFileListEntrySchema = z
     fileId: id("Stable file identity."),
     path: canonicalFilePath,
     contentHash: id("Exact content blob."),
+    authoredChangeId: id("Exact semantic change that authored this file version."),
+    authoredByWorkUnitId: id("Work unit carrying this file version's persisted content class."),
+    contentClass: z.enum(["internal", "external"]),
+    externalKeys: z.array(z.string().min(1)).max(256),
     mode: z.number().int().nonnegative().max(0o777),
     ...contentDescriptorFields,
   })

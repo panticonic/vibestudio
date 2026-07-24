@@ -21,9 +21,15 @@ import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import path from "node:path";
 import { Buffer } from "node:buffer";
 import type { RpcCaller } from "@vibestudio/rpc";
-import { createExtensionProxy } from "@vibestudio/extension";
 import type { RuntimeFs, Dirent } from "./runtime-fs.js";
 import { resolveToCwd } from "./path-utils.js";
+import {
+  describeOptionalExtensionFallback,
+  invokeOptionalExtension,
+  isOptionalExtensionAbort,
+  isOptionalExtensionTimeout,
+  isOptionalExtensionUnavailable,
+} from "./optional-extension.js";
 import {
   DEFAULT_MAX_BYTES,
   formatSize,
@@ -96,18 +102,6 @@ function warnFallbackOnce(): void {
       "Pattern length is capped and structural ReDoS shapes are rejected, but matching is " +
       "no longer guaranteed linear-time. Install build tooling (python3, make, g++) and " +
       "re-run `pnpm install` in workspace/packages/harness to enable RE2."
-  );
-}
-
-function isFileToolsExtensionFallback(err: unknown): boolean {
-  const code =
-    typeof err === "object" && err !== null ? (err as { code?: unknown }).code : undefined;
-  // ENOEXT = not installed/enabled; ENOTREADY = declared but not yet running.
-  // Both mean the extension can't serve this call, so fall back to runtime-fs.
-  if (code === "ENOEXT" || code === "ENOTREADY") return true;
-  const message = err instanceof Error ? err.message : String(err);
-  return /Extension @workspace-extensions\/file-tools(?:\.\w+)? invocation failed: Extension is not installed|Extension is not running|\b(?:ENOENT|path not found|no such file)\b/i.test(
-    message
   );
 }
 
@@ -189,19 +183,6 @@ interface GrepToolResult {
   details: GrepToolDetails | undefined;
 }
 
-interface FileToolsApi {
-  grep(request: {
-    pattern: string;
-    path?: string;
-    cwd: string;
-    glob?: string;
-    ignoreCase?: boolean;
-    literal?: boolean;
-    context?: number;
-    limit?: number;
-  }): Promise<GrepToolResult>;
-}
-
 export interface GrepToolDetails {
   type?: "console";
   content?: string;
@@ -212,10 +193,13 @@ export interface GrepToolDetails {
   engine?: "ripgrep" | "fs-service" | "runtime-fs";
   missingSearchPath?: string;
   patternFallback?: "recallKeywords" | "literal";
+  extensionFallback?: string;
 }
 
 export interface GrepToolDeps {
   rpc?: RpcCaller;
+  /** Test/embedding override; production always uses the shared finite default. */
+  optionalExtensionTimeoutMs?: number;
 }
 
 const DEFAULT_LIMIT = 100;
@@ -241,9 +225,6 @@ export function createGrepTool(
   fs: RuntimeFs,
   deps?: GrepToolDeps
 ): AgentTool<typeof grepSchema, GrepToolDetails | undefined> {
-  const fileTools = deps?.rpc
-    ? createExtensionProxy<FileToolsApi>(deps.rpc, FILE_TOOLS_EXTENSION, () => false)
-    : null;
   return {
     name: "grep",
     label: "grep",
@@ -275,7 +256,8 @@ export function createGrepTool(
         throw new Error("Operation aborted");
       }
 
-      if (fileTools) {
+      let extensionFallback: string | undefined;
+      if (deps?.rpc) {
         try {
           const request = {
             pattern,
@@ -289,24 +271,50 @@ export function createGrepTool(
           };
           let result: GrepToolResult;
           try {
-            result = (await fileTools.grep(request)) as GrepToolResult;
+            result = await invokeOptionalExtension<GrepToolResult>({
+              rpc: deps.rpc,
+              extension: FILE_TOOLS_EXTENSION,
+              method: "grep",
+              args: [request],
+              signal,
+              ...(deps.optionalExtensionTimeoutMs === undefined
+                ? {}
+                : { timeoutMs: deps.optionalExtensionTimeoutMs }),
+            });
           } catch (error) {
             if (literalSearch || !isInvalidRegexError(error)) throw error;
             literalSearch = true;
             patternFallback = "literal";
-            result = (await fileTools.grep({ ...request, literal: true })) as GrepToolResult;
+            result = await invokeOptionalExtension<GrepToolResult>({
+              rpc: deps.rpc,
+              extension: FILE_TOOLS_EXTENSION,
+              method: "grep",
+              args: [{ ...request, literal: true }],
+              signal,
+              ...(deps.optionalExtensionTimeoutMs === undefined
+                ? {}
+                : { timeoutMs: deps.optionalExtensionTimeoutMs }),
+            });
           }
           return patternFallback
             ? { ...result, details: { ...(result.details ?? {}), patternFallback } }
             : result;
         } catch (err) {
-          if (!isFileToolsExtensionFallback(err)) throw err;
+          if (isOptionalExtensionAbort(err)) throw err;
+          if (
+            !isOptionalExtensionUnavailable(err, FILE_TOOLS_EXTENSION) &&
+            !isOptionalExtensionTimeout(err) &&
+            !isMissingSearchPathError(err)
+          ) {
+            throw err;
+          }
+          extensionFallback = describeOptionalExtensionFallback(err, "file-tools", "grep");
           if (onUpdate) {
             onUpdate({
               content: [],
               details: {
                 type: "console",
-                content: "file-tools extension unavailable; falling back to RuntimeFs grep",
+                content: `${extensionFallback}; falling back to the host fs service`,
               },
             });
           }
@@ -369,6 +377,7 @@ export function createGrepTool(
             details: {
               engine: "fs-service",
               ...(patternFallback ? { patternFallback } : {}),
+              ...(extensionFallback ? { extensionFallback } : {}),
               ...(result.truncated ? { matchLimitReached: result.matchCount } : {}),
             },
           };
@@ -403,6 +412,7 @@ export function createGrepTool(
             engine: "runtime-fs",
             missingSearchPath: displayPath,
             ...(patternFallback ? { patternFallback } : {}),
+            ...(extensionFallback ? { extensionFallback } : {}),
           },
         };
       }
@@ -526,7 +536,14 @@ export function createGrepTool(
       if (matchCount === 0) {
         return {
           content: [{ type: "text", text: "No matches found" }],
-          details: patternFallback ? { engine: "runtime-fs" as const, patternFallback } : undefined,
+          details:
+            patternFallback || extensionFallback
+              ? {
+                  engine: "runtime-fs" as const,
+                  ...(patternFallback ? { patternFallback } : {}),
+                  ...(extensionFallback ? { extensionFallback } : {}),
+                }
+              : undefined,
         };
       }
 
@@ -535,6 +552,7 @@ export function createGrepTool(
       let output = truncation.content;
       const details: GrepToolDetails = { engine: "runtime-fs" };
       if (patternFallback) details.patternFallback = patternFallback;
+      if (extensionFallback) details.extensionFallback = extensionFallback;
       const notices: string[] = [];
 
       if (matchLimitReached) {
@@ -564,6 +582,11 @@ export function createGrepTool(
       };
     },
   };
+}
+
+function isMissingSearchPathError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(?:ENOENT|path not found|no such file)\b/iu.test(message);
 }
 
 /**

@@ -3,19 +3,18 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { Duplex } from "node:stream";
 import { z } from "zod";
 import {
   createAndRegisterWorkspace,
   deleteAndUnregisterWorkspace,
   deleteUnregisteredWorkspace,
-  getCentralConfigPaths,
   recoverStagedWorkspaceDeletions,
 } from "@vibestudio/workspace/loader";
 import { EPHEMERAL_DEV_WORKSPACE_NAME } from "@vibestudio/workspace-contracts/ephemeral";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
-import { getWorkspaceDir } from "@vibestudio/env-paths";
+import { getCentralDataPath, getWorkspaceDir } from "@vibestudio/env-paths";
 import { TokenManager, type TokenEntry } from "@vibestudio/shared/tokenManager";
 import {
   DEVICE_ID_PATTERN,
@@ -150,6 +149,8 @@ export interface HubRuntimeState {
   adminToken: string;
   tokenSource: "env" | "persisted" | "generated";
   version: string;
+  /** SHA-256 identity of the exact server entry artifact loaded by this process. */
+  buildId: string;
   gatewayPort: number;
   protocol: "http" | "https";
   externalHost: string;
@@ -159,8 +160,6 @@ export interface HubRuntimeState {
   identityDbPath: string;
   /** Exact child-runtime identities mapped to the workspace they represent. */
   workspaceChildTokens: Map<string, string>;
-  /** Freshly registered workspaces whose first startup units may self-approve. */
-  autoApproveStartupWorkspaceIds?: Set<string>;
   /** Latest live-session projection reported by each workspace child (WP8 §4.4). */
   workspacePresence: Map<string, HubWorkspacePresenceSnapshot>;
   runtimes: Map<string, WorkspaceRuntime | PendingWorkspaceRuntime>;
@@ -696,6 +695,7 @@ export function buildHubReadyPayload(
     gatewayPort: state.gatewayPort,
     pid,
     version: state.version,
+    buildId: state.buildId,
     workspaces: listHubWorkspaces(state, LOCAL_OPERATOR_VIEW),
   });
 }
@@ -735,10 +735,6 @@ function isRuntimeRunning(state: HubRuntimeState, name: string): boolean {
 function isWorkspaceEphemeral(state: HubRuntimeState, name: string): boolean {
   const ephemeral = state.centralData.getEphemeralWorkspace();
   return ephemeral?.ownerBootId === state.serverBootId && ephemeral.name === name;
-}
-
-function workspaceConfigExists(name: string): boolean {
-  return fs.existsSync(path.join(getWorkspaceDir(name), "source", "meta/vibestudio.yml"));
 }
 
 function normalizeWorkspaceName(raw: unknown): string {
@@ -1687,10 +1683,6 @@ async function startHubControlTransport(
   const { createApprovalQueue } = await import("./services/approvalQueue.js");
   const approvalQueue = createApprovalQueue({
     eventService: new EventService(),
-    autoApprove:
-      process.env["NODE_ENV"] === "development" &&
-      (process.env["VIBESTUDIO_HUB_AUTO_APPROVE"] === "1" ||
-        process.env["VIBESTUDIO_AUTO_APPROVE"] === "1"),
   });
   const { AcquisitionCoordinator } = await import("./services/acquisitionCoordinator.js");
   const acquisitions = new AcquisitionCoordinator({ approvalQueue, grantStore });
@@ -1698,6 +1690,8 @@ async function startHubControlTransport(
     request: (input) => acquisitions.request(input),
     acquire: (input, signal) => acquisitions.requestAndWait(input, signal),
     consume: (grantId) => acquisitions.consume(grantId),
+    touch: (grantId) => acquisitions.touch(grantId),
+    priorInteractiveApprovalCount: (input) => grantStore.priorInteractiveApprovalCount(input),
     invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
       acquisitions.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
   });
@@ -1708,7 +1702,6 @@ async function startHubControlTransport(
   dispatcher.registerService(
     createShellApprovalService({
       approvalQueue,
-      capabilityGrantStore: grantStore,
       deviceLabelFor: (deviceId) => state.identityDb.getDevice(deviceId)?.label,
     })
   );
@@ -2053,7 +2046,6 @@ export function buildWorkspaceChildEnv(input: {
   identityDbPath: string;
   workspaceChildToken: string;
   ephemeral: boolean;
-  autoApproveStartupUnits: boolean;
 }): NodeJS.ProcessEnv {
   const reach = workspaceReachPaths(input.advertisedWorkspaceName);
   const env: NodeJS.ProcessEnv = {
@@ -2091,18 +2083,7 @@ export function buildWorkspaceChildEnv(input: {
   } else {
     delete env["VIBESTUDIO_WORKSPACE_EPHEMERAL"];
   }
-  // An explicit unattended-run policy belongs to the supervising process and
-  // must survive the hub/workspace process boundary. The per-workspace bit is
-  // additive: it grants the same policy to a freshly bootstrapped workspace,
-  // but must not erase a policy the caller deliberately supplied.
-  if (
-    input.autoApproveStartupUnits ||
-    input.baseEnv["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] === "1"
-  ) {
-    env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] = "1";
-  } else {
-    delete env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"];
-  }
+  delete env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"];
   return env;
 }
 
@@ -2183,10 +2164,6 @@ async function startWorkspaceRuntime(
   // A new child instance owns a fresh report stream. Never retain endpoints
   // from a prior process while the replacement is starting.
   state.workspacePresence.delete(workspaceId);
-  const shouldAutoApproveDefaultStartup =
-    advertisedName === "default" &&
-    state.autoApproveStartupWorkspaceIds?.has(workspaceId) === true &&
-    !workspaceConfigExists("default");
   if (options.reuseEphemeralDiskName && !isEphemeralDevWorkspace) {
     throw new Error("Only an ephemeral dev runtime may reuse an ephemeral disk coordinate");
   }
@@ -2237,7 +2214,6 @@ async function startWorkspaceRuntime(
     identityDbPath: state.identityDbPath,
     workspaceChildToken: randomBytes(32).toString("base64url"),
     ephemeral: isEphemeralDevWorkspace === true,
-    autoApproveStartupUnits: shouldAutoApproveDefaultStartup,
   });
   const runtimeToken = childEnv["VIBESTUDIO_WORKSPACE_CHILD_TOKEN"];
   if (!runtimeToken) throw new Error("Workspace child environment has no runtime identity token");
@@ -2320,7 +2296,6 @@ async function startWorkspaceRuntime(
     }
     port = ready["gatewayPort"] as number;
     state.centralData.touchWorkspace(advertisedName);
-    state.autoApproveStartupWorkspaceIds?.delete(workspaceId);
   } catch (error) {
     await terminateWorkspaceChild(child);
     state.workspaceChildTokens.delete(runtimeToken);
@@ -2610,6 +2585,7 @@ async function startHubGateway(input: {
           gatewayPort: state.gatewayPort,
           pid: process.pid,
           version: state.version,
+          buildId: state.buildId,
         });
         return;
       }
@@ -2693,12 +2669,11 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     getState: () => state,
   });
 
-  const centralPaths = getCentralConfigPaths();
   // CentralDataManager owns workspace registry rows referenced by identity DB
   // foreign keys, so an identity-path override must move both stores together.
   const identityDbPath =
     process.env["VIBESTUDIO_IDENTITY_DB_PATH"] ??
-    path.join(centralPaths.configDir, "server-auth", "identity.db");
+    path.join(getCentralDataPath(), "server-auth", "identity.db");
   const serverBootId = `boot_${randomBytes(18).toString("base64url")}`;
   const { centralData, identityDb } = openHubDataStores(identityDbPath);
   try {
@@ -2737,6 +2712,11 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   recoverStagedWorkspaceDeletions(centralData);
   const version =
     process.env["VIBESTUDIO_APP_VERSION"] ?? process.env["npm_package_version"] ?? "0.1.0";
+  const serverEntryPath = process.argv[1];
+  if (!serverEntryPath) {
+    throw new Error("The hub requires an exact server entry artifact");
+  }
+  const buildId = createHash("sha256").update(fs.readFileSync(serverEntryPath)).digest("hex");
   const tokenManager = new TokenManager();
   const { adminToken, tokenSource } = resolveAdminToken();
   tokenManager.setAdminToken(adminToken);
@@ -2751,12 +2731,9 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   const membershipStore = new MembershipStore(identityDb, userStore);
   const bootstrap = selectBootstrapWorkspace(args, centralData.listWorkspaces());
   const bootstrapWorkspace = bootstrap.name;
-  let bootstrapWasCreated = false;
   if (bootstrap.lifecycle === "ephemeral") {
     centralData.addEphemeralWorkspace(bootstrapWorkspace, serverBootId);
-    bootstrapWasCreated = true;
   } else if (bootstrap.lifecycle === "register") {
-    bootstrapWasCreated = !centralData.hasWorkspace(bootstrapWorkspace);
     centralData.addWorkspace(bootstrapWorkspace);
   }
   const bootstrapWorkspaceId = centralData.getWorkspaceIdByName(bootstrapWorkspace);
@@ -2795,6 +2772,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     adminToken,
     tokenSource,
     version,
+    buildId,
     gatewayPort,
     protocol: hostConfig.protocol,
     externalHost: hostConfig.externalHost,
@@ -2802,15 +2780,12 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     connectUrl,
     identityDbPath,
     workspaceChildTokens: new Map(),
-    autoApproveStartupWorkspaceIds: new Set(
-      bootstrapWasCreated && bootstrapWorkspace === "default" ? [bootstrapWorkspaceId] : []
-    ),
     workspacePresence: new Map(),
     runtimes: new Map(),
     shuttingDown: false,
   };
   const activeState = state;
-  await startHubControlTransport(activeState, centralPaths.configDir);
+  await startHubControlTransport(activeState, getCentralDataPath());
 
   let startupInvite: HubPairingInvite | null = null;
   // Prewarm every registered workspace runtime WITHOUT blocking hub readiness.

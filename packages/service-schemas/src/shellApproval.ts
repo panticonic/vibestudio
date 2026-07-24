@@ -9,6 +9,7 @@ import type {
   ApprovalRequesterIdentity,
   DiffReviewEntry,
   PendingApproval,
+  PendingMissionReviewApproval,
   PendingUnitBatchApproval,
   UnitBatchEntry,
 } from "@vibestudio/shared/approvals";
@@ -16,7 +17,11 @@ import type { AuthorityRequirement, InvocationSnapshot } from "@vibestudio/rpc";
 import { APPROVAL_DECISIONS } from "@vibestudio/shared/approvalContract";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
-import { EvalAuthorityCeilingSchema, UnitAuthorityRequestSchema } from "./build.js";
+import { AUTHORITY_DOMAINS, AUTHORITY_VERBS } from "@vibestudio/shared/authority/capabilityDomains";
+import type { AuthorityRow } from "@vibestudio/shared/authority/authorityRows";
+import type { AuthorityRowDiff } from "@vibestudio/shared/authority/authorityRowDiff";
+import { AuthorityResourceScopeSchema, UnitAuthorityRequestSchema } from "./build.js";
+import { missionCharterSchema } from "./mission.js";
 
 export const shellApprovalValuesSchema = z
   .record(z.string().min(1).max(128), z.string().max(4096))
@@ -161,25 +166,47 @@ const pendingApprovalBaseShape = {
   diffReview: z.array(diffReviewSchema).optional(),
 };
 
-const authorityGroupSchema = z
+export const authorityRowSchema = z
   .object({
-    id: z.string(),
-    label: z.string(),
-    description: z.string(),
-    requestCount: z.number().int().nonnegative(),
-    addedCount: z.number().int().nonnegative(),
-    items: z.array(
-      z
-        .object({
-          capability: z.string(),
-          title: z.string(),
-          description: z.string(),
-          added: z.boolean(),
-        })
-        .strict()
+    capability: z.string(),
+    domain: z.enum(Object.keys(AUTHORITY_DOMAINS) as [keyof typeof AUTHORITY_DOMAINS, ...(keyof typeof AUTHORITY_DOMAINS)[]]),
+    verb: z.enum(Object.keys(AUTHORITY_VERBS) as [keyof typeof AUTHORITY_VERBS, ...(keyof typeof AUTHORITY_VERBS)[]]),
+    action: z.string(),
+    resource: z.string(),
+    resourceScope: AuthorityResourceScopeSchema,
+    tier: z.enum(["gated", "critical"]),
+    statement: z.enum(["declared", "allowed", "snapshot", "prospective"]),
+    state: z.enum(["active", "suspended", "locked"]).optional(),
+    provenance: z
+      .object({
+        source: z.enum(["manifest", "approval", "profile", "mission", "receiver"]),
+        decidedAt: z.number().optional(),
+        decidedBy: z.string().optional(),
+        surface: z.string().optional(),
+        lineageClasses: z.array(z.string()).readonly().optional(),
+      })
+      .strict(),
+    flags: z
+      .object({
+        lineageTainted: z.boolean().optional(),
+        irreversible: z.boolean().optional(),
+        newInDiff: z.boolean().optional(),
+        removedInDiff: z.boolean().optional(),
+      })
+      .strict(),
+  })
+  .strict() satisfies z.ZodType<AuthorityRow>;
+
+export const authorityRowDiffSchema = z
+  .object({
+    added: z.array(authorityRowSchema),
+    removed: z.array(authorityRowSchema),
+    unchanged: z.array(authorityRowSchema),
+    retiered: z.array(
+      z.object({ before: authorityRowSchema, after: authorityRowSchema }).strict()
     ),
   })
-  .strict();
+  .strict() satisfies z.ZodType<AuthorityRowDiff>;
 
 const unitBatchEntrySchema = z
   .object({
@@ -196,19 +223,8 @@ const unitBatchEntrySchema = z
     authority: z
       .object({
         requests: z.array(UnitAuthorityRequestSchema).readonly(),
-        evalCeilings: z.array(EvalAuthorityCeilingSchema).readonly(),
-        groups: z.array(authorityGroupSchema),
-        removedCount: z.number().int().nonnegative(),
-        eval: z.array(
-          z
-            .object({
-              purpose: z.enum(["agentic-code-execution", "tool-eval", "test-eval"]),
-              label: z.string(),
-              groups: z.array(authorityGroupSchema),
-              removedCount: z.number().int().nonnegative(),
-            })
-            .strict()
-        ),
+        rows: z.array(authorityRowSchema),
+        diff: authorityRowDiffSchema,
       })
       .strict()
       .optional(),
@@ -253,6 +269,48 @@ export const pendingUnitBatchApprovalSchema = z
       .optional(),
   })
   .strict() satisfies z.ZodType<PendingUnitBatchApproval>;
+
+export const pendingMissionReviewApprovalSchema = z
+  .object({
+    ...pendingApprovalBaseShape,
+    kind: z.literal("mission-review"),
+    missionId: z.string().min(1),
+    revision: z.number().int().positive(),
+    closureDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+    reviewKind: z.enum(["draft", "revision", "out-of-charter"]),
+    title: z.string().min(1),
+    taskSummary: z.string().min(1),
+    triggerSummary: z.string().min(1),
+    authority: z
+      .object({
+        rows: z.array(authorityRowSchema),
+        diff: authorityRowDiffSchema,
+      })
+      .strict(),
+    toolkitDomains: z.array(
+      z.enum(
+        Object.keys(AUTHORITY_DOMAINS) as [
+          keyof typeof AUTHORITY_DOMAINS,
+          ...(keyof typeof AUTHORITY_DOMAINS)[],
+        ]
+      )
+    ),
+    networkSummary: z.string().min(1),
+    lineageSummary: z.string().min(1),
+    charter: missionCharterSchema,
+    charterChanges: z.array(
+      z
+        .object({
+          field: z.enum(["task", "schedule", "toolkit", "network", "data-flow", "model"]),
+          before: z.string().optional(),
+          after: z.string(),
+          widening: z.boolean(),
+        })
+        .strict()
+    ),
+    blockedAt: z.number().optional(),
+  })
+  .strict() satisfies z.ZodType<PendingMissionReviewApproval>;
 
 const audienceSchema = z
   .object({ url: z.string(), match: z.enum(["origin", "path-prefix", "exact"]) })
@@ -349,6 +407,12 @@ const invocationSnapshotSchema = z
     preparedStateDigest: z.string(),
     callerPrincipal: z.string() as z.ZodType<InvocationSnapshot["callerPrincipal"]>,
     sessionId: z.string(),
+    taskRef: z.string().optional(),
+    agentBindingId: z.string().optional(),
+    agentName: z.string().optional(),
+    lineageClasses: z.array(z.string()).readonly().optional(),
+    irreversible: z.boolean().optional(),
+    agentScopeEligible: z.boolean().optional(),
     mission: z.string() as z.ZodType<InvocationSnapshot["mission"]>,
     snippetDigest: z.string(),
     codeLineage: z
@@ -366,6 +430,8 @@ const invocationSnapshotSchema = z
       .strict()
       .nullable(),
     initiatorChain: z.array(z.string()).readonly(),
+    executionMode: z.enum(["interactive", "mission", "test"]).optional(),
+    testPolicyId: z.string().optional(),
     at: z.number(),
   })
   .strict() satisfies z.ZodType<InvocationSnapshot>;
@@ -451,6 +517,16 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
       snapshot: invocationSnapshotSchema.optional(),
       cardType: z.enum(["permission.gated", "permission.outside", "confirm.critical"]).optional(),
       allowedDecisions: z.array(z.enum(APPROVAL_DECISIONS)).optional(),
+      authorityRow: authorityRowSchema.optional(),
+      operationSubstance: z
+        .object({
+          kind: z.enum(["change-set", "send", "deletion", "custom"]),
+          summary: z.string(),
+          detail: z.string().optional(),
+          digest: z.string(),
+        })
+        .strict()
+        .optional(),
     })
     .strict(),
   z
@@ -468,6 +544,7 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
   pendingUnitBatchApprovalSchema,
+  pendingMissionReviewApprovalSchema,
   z
     .object({
       ...pendingApprovalBaseShape,
@@ -587,12 +664,24 @@ export const shellApprovalMethods = defineServiceMethods({
     access: RESOLVE_ACCESS,
     examples: [{ args: ["approval-123", "once"] }],
   },
-  blockCapability: {
+  resolveMissionReview: {
     description:
-      "Deny a pending capability request and remember that denial for this exact code version until revoked.",
-    args: z.tuple([z.string()]),
+      "Approve an exact pending mission closure with the selected new authority rows, or leave it unapproved.",
+    args: z.tuple([
+      z.string(),
+      z.discriminatedUnion("decision", [
+        z
+          .object({
+            decision: z.literal("approve"),
+            selectedAuthorityKeys: z.array(z.string().min(1)),
+          })
+          .strict(),
+        z.object({ decision: z.literal("dismiss") }).strict(),
+      ]),
+    ]),
     returns: z.void(),
     access: RESOLVE_ACCESS,
+    examples: [{ args: ["approval-123", { decision: "dismiss" }] }],
   },
   resolveBootstrap: {
     description:

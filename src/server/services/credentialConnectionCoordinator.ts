@@ -30,12 +30,7 @@ import {
   normalizeCredentialInjection,
   normalizeUrlAudiences,
 } from "@vibestudio/credential-client/urlAudience";
-import type {
-  CallerKind,
-  DeferredResult,
-  ServiceContext,
-} from "@vibestudio/shared/serviceDispatcher";
-import { deferIfNeeded } from "@vibestudio/shared/serviceDispatcher";
+import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import {
   ConnectCredentialParamsSchema,
   type ConnectCredentialParams,
@@ -128,17 +123,7 @@ type OAuthRedirectStrategy =
   | "client-loopback"
   | "app-scheme";
 
-/** Connect flows that block on a human (browser auth / device code) — eligible
- * for out-of-band deferral. Machine flows (client-credentials, jwt-bearer,
- * api-key, etc.) complete inline. */
-const INTERACTIVE_CONNECT_FLOWS = new Set<string>([
-  "oauth2-auth-code-pkce",
-  "oauth2-device-code",
-  "oauth1a",
-  "browser-cookie-session",
-  "saml-browser-session",
-]);
-
+/** Maximum lifetime for a pending interactive OAuth transaction. */
 const PENDING_OAUTH_TTL_MS = 10 * 60 * 1000;
 const OAUTH_USERINFO_TIMEOUT_MS = 15_000;
 const DEFAULT_LOOPBACK_HOST = "127.0.0.1";
@@ -336,10 +321,7 @@ export interface CredentialConnectionCoordinatorDeps {
 }
 
 export interface CredentialConnectionCoordinator {
-  connect(
-    ctx: ServiceContext,
-    params: ConnectCredentialParams
-  ): Promise<StoredCredentialSummary | DeferredResult>;
+  connect(ctx: ServiceContext, params: ConnectCredentialParams): Promise<StoredCredentialSummary>;
   forwardOAuthCallback(ctx: ServiceContext, request: ForwardOAuthCallbackRequest): Promise<void>;
   cancelOAuth(ctx: ServiceContext, request: { transactionId: string }): Promise<void>;
   resolveRelayOAuthCallback(frame: {
@@ -933,7 +915,7 @@ export function createCredentialConnectionCoordinator(
   async function connectCredential(
     ctx: ServiceContext,
     params: ConnectCredentialParams
-  ): Promise<StoredCredentialSummary | DeferredResult> {
+  ): Promise<StoredCredentialSummary> {
     const parsedParams = ConnectCredentialParamsSchema.parse(params);
     const { request, handoffTarget } = normalizeConnectInvocation(ctx, parsedParams);
     const dispatch = (signal?: AbortSignal): Promise<StoredCredentialSummary> => {
@@ -969,14 +951,7 @@ export function createCredentialConnectionCoordinator(
           throw new OAuthConnectionError("unsupported_flow");
       }
     };
-    // Interactive flows block on a human (browser auth / device code). For a
-    // deferrable DO caller, complete them out-of-band so the DO need not hold the
-    // request open through the handshake. The delivered result is the credential
-    // *summary* — submitted secrets are consumed server-side and never persisted
-    // in any deferred-result store. Non-interactive (machine) flows run inline.
-    return deferIfNeeded(ctx, INTERACTIVE_CONNECT_FLOWS.has(request.flow.type), (signal) =>
-      dispatch(signal)
-    );
+    return dispatch(ctx.signal);
   }
 
   function normalizeConnectInvocation(

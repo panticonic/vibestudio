@@ -21,7 +21,6 @@ describe("browserEnvironment authority", () => {
       effectiveVersion: "version-1",
       executionDigest: "a".repeat(64),
       requested: [],
-      evalCeilings: [],
     });
     const prepare = definition.authorityPreparation?.["browserEnvironment.broker.startImportRead"];
     expect(prepare?.({ caller }, ["source", ["passwords"]])).toEqual([

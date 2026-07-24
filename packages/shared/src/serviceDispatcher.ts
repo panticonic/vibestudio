@@ -8,10 +8,11 @@
 
 import { z } from "zod";
 import type { PreparedAuthoritySelection, ServiceDefinition } from "./serviceDefinition.js";
-import type {
-  MethodAuthorityDescriptor,
-  MethodSchema,
-  PreparedAuthorityRequirement,
+import {
+  preparedAuthoritySelectorKey,
+  type MethodAuthorityDescriptor,
+  type MethodSchema,
+  type PreparedAuthorityRequirement,
 } from "./typedServiceClient.js";
 import type { CallerKind, CodeIdentityCallerKind } from "./principalKinds.js";
 import {
@@ -41,14 +42,19 @@ import {
   invocationSnapshotDigest,
   sha256Canonical,
 } from "./authority/invocationSnapshot.js";
-import { capabilityPatternCovers } from "./authorityManifest.js";
 import {
   authorityFailureForDecision,
   bindMethodCapability,
   evaluateAuthority,
   requirementForPrincipals,
+  lineageClasses,
 } from "./authorization.js";
+import {
+  receiverAuthorityPolicy,
+  standingAgentScopeEligible,
+} from "./authority/receiverAuthorityPolicy.js";
 import { methodTier, type MethodTierDecision } from "./authority/tierTable.js";
+import { resolveMethodTierPolicy } from "./serviceAuthority.js";
 import { hostMethodCapability } from "./authority/hostMethodCapabilities.js";
 import { describeCapability } from "./authorityPresentation.js";
 export type { CallerKind } from "./principalKinds.js";
@@ -210,16 +216,12 @@ export interface VerifiedCodeIdentity {
   executionDigest?: string;
   /** Immutable requests sealed into the exact execution recipe. */
   requested?: readonly import("@vibestudio/rpc").CapabilityScope[];
-  /** Immutable eval ceiling sealed into the exact execution recipe. */
-  evalCeilings?: readonly import("./authorityManifest.js").EvalAuthorityCeiling[];
   /**
-   * Host-verified owner projection for a concrete EvalDO. Presence proves the
-   * parent link, exact owner build, and selected reviewed ceiling purpose were
-   * resolved from durable entity state rather than caller input.
+   * Host-verified owner projection for a concrete EvalDO. This is attribution
+   * only; dynamic authority comes from an AgentExecutionSessionFact.
    */
   evalOrigin?: {
     ownerId: string;
-    purpose: import("./authorityManifest.js").EvalCeilingPurpose;
   };
 }
 
@@ -257,7 +259,13 @@ export interface VerifiedCaller {
    * runtime code transporting it. Agent binding alone is only a relationship
    * fact and never selects the authorizing origin.
    */
-  sessionOrigin?: true;
+  executionSession?: import("@vibestudio/rpc").AgentExecutionSessionFact;
+  /**
+   * Host-derived policy inherited by reviewed code running inside a canonical
+   * system-test context. This does not change the authorizing origin to a
+   * session and is never accepted from an RPC payload.
+   */
+  testPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicy;
   /**
    * Host-verified account subject (WP0 §3.4) — derived and stamped by the
    * host at auth time, never accepted from the wire. Absent only for the
@@ -272,7 +280,8 @@ export function createVerifiedCaller(
   code?: VerifiedCodeIdentity | null,
   agentBinding?: AgentBinding | RuntimeAgentBinding | null,
   subject?: UserSubject | null,
-  sessionOrigin = false
+  executionSession?: import("@vibestudio/rpc").AgentExecutionSessionFact | null,
+  testPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicy | null
 ): VerifiedCaller {
   return {
     runtime: { id: callerId, kind: callerKind },
@@ -289,7 +298,8 @@ export function createVerifiedCaller(
             : {}),
         }
       : {}),
-    ...(sessionOrigin ? { sessionOrigin: true as const } : {}),
+    ...(executionSession ? { executionSession } : {}),
+    ...(testPolicy ? { testPolicy } : {}),
     ...(subject ? { subject } : {}),
   };
 }
@@ -339,63 +349,6 @@ export interface WsClientInfo {
   clientPlatform?: "desktop" | "headless" | "mobile";
 }
 
-/**
- * Sentinel a service handler returns (via `ctx.deferral.run`) to signal that
- * the call will complete out-of-band: the transport sends a `{deferred,requestId}`
- * ack instead of a response body, and the eventual result is delivered to the
- * caller through `onDeferredResult`. Used for human-gated calls (approvals,
- * credential use) so a hibernatable DO caller need not hold an inbound request open.
- */
-export const DEFERRED_RESULT: unique symbol = Symbol.for("vibestudio.rpc.deferredResult");
-
-export interface DeferredResult {
-  readonly [DEFERRED_RESULT]: true;
-  readonly requestId: string;
-}
-
-export function isDeferredResult(value: unknown): value is DeferredResult {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as Record<PropertyKey, unknown>)[DEFERRED_RESULT] === true
-  );
-}
-
-export interface DeferralApi {
-  /**
-   * True when this call can complete out-of-band — the caller stamped a
-   * `requestId` and is a principal that can receive an inbound `onDeferredResult`
-   * (a DO/worker). Handlers must check this before calling `run`.
-   */
-  readonly canDefer: boolean;
-  /**
-   * Park the call: run `work` detached and deliver its eventual result (or error)
-   * to the caller via `onDeferredResult`. Returns the sentinel the handler must
-   * return so the transport sends a deferred ack instead of a body. Reissued or
-   * concurrent calls sharing an `idempotencyKey` collapse onto one `work` run.
-   */
-  run(work: (signal: AbortSignal) => Promise<unknown>): DeferredResult;
-}
-
-/**
- * Run `produce` inline, or — when the caller opted into deferral and the call
- * would otherwise block on a human — park it via `ctx.deferral.run` and return
- * the sentinel for the transport to ack. `needsApproval` is the cheap pre-check
- * that decides; when false (e.g. a grant already exists) the fast path runs
- * inline with no extra round-trip. This keeps UX identical for the common case
- * and only changes the hold-open behavior when an approval is actually pending.
- */
-export function deferIfNeeded<T>(
-  ctx: ServiceContext,
-  needsApproval: boolean,
-  produce: (signal: AbortSignal) => Promise<T>
-): Promise<T> | DeferredResult {
-  if (needsApproval && ctx.deferral?.canDefer) {
-    return ctx.deferral.run(produce);
-  }
-  return produce(new AbortController().signal);
-}
-
 export type ServiceContext = {
   /** Canonical verified identity. Boundary code constructs this once. */
   caller: VerifiedCaller;
@@ -403,13 +356,11 @@ export type ServiceContext = {
    * handlers pass this through to nested work rather than inventing deadlines. */
   signal?: AbortSignal;
   /**
-   * Host-owned continuation policy for authority acquisition. The dispatcher
-   * sets this only inside work parked by the authenticated deferral registry;
-   * callers cannot opt an ordinary installed-code request into an inline
-   * human wait. After the decision, the complete live authority contract is
-   * resolved again before any handler effect runs.
+   * Lifecycle policy selected by trusted boundary code. Connection-holding
+   * callers and non-replayable streams wait at the canonical acquisition
+   * rendezvous; durable effect owners leave this unset and journal EACQUIRE.
    */
-  authorityAcquisition?: "wait";
+  authorityAcquisition?: "wait" | "return";
   /** Immutable verified runtime that transported a live eval call. The
    * dispatcher snapshots this before replacing `caller` with evaluated code,
    * so methods with multiple authority leaves revalidate the same deputy. */
@@ -468,15 +419,10 @@ export type ServiceContext = {
   connectionId?: string;
   /** WS client state when caller connected via WebSocket */
   wsClient?: WsClientInfo;
-  /** Correlation id stamped by the caller; present on deferrable calls. */
+  /** Correlation id stamped by the caller. */
   requestId?: string;
   /** Dedup key stamped by the caller, when provided. */
   idempotencyKey?: string;
-  /**
-   * Out-of-band completion controller, present only when the caller can receive
-   * a deferred reply. Handlers gate on `deferral?.canDefer` before deferring.
-   */
-  deferral?: DeferralApi;
   /**
    * Read-only containment. When true, the dispatcher refuses any method not
    * declared `access.sensitivity === "read"` (default-deny: unknown/unmarked
@@ -512,8 +458,31 @@ export interface AuthorityChallengePresentation {
     object: { type: string; label: string; value: string };
     groupKey?: string;
   };
+  /** Receiver-owned presentation of the exact prepared effect. The dispatcher
+   * seals it to `preparedStateDigest`; agent-authored text is never accepted. */
+  substance?: {
+    kind: import("./approvals.js").OperationSubstance["kind"];
+    summary: string;
+    detail?: string;
+  };
+  /** Sealed workspace-service categorization. Host-census capabilities ignore
+   * caller data and are joined from the static reviewed table instead. */
+  authorityVocabulary?: {
+    domain: import("./authority/capabilityDomains.js").AuthorityDomainId;
+    verb: import("./authority/capabilityDomains.js").AuthorityVerb;
+    declaredBy: string;
+    substanceKind?: import("./approvals.js").OperationSubstance["kind"];
+  };
   details?: readonly { label: string; value: string; format?: ApprovalDetailFormat }[];
   diffReview?: readonly DiffReviewEntry[];
+  /** Rich unit/config review rendered by the canonical authority acquisition.
+   * This changes only the card projection; capability, resource, principal,
+   * grant, cancellation, and settlement remain owned by the dispatcher. */
+  unitBatch?: {
+    trigger: import("./approvals.js").PendingUnitBatchApproval["trigger"];
+    units: readonly import("./approvals.js").UnitBatchEntry[];
+    configWrite?: import("./approvals.js").PendingUnitBatchApproval["configWrite"];
+  };
   /**
    * Exact decisions meaningful for this operation. This is host-derived policy,
    * not UI presentation: authority brokers must intersect their ordinary grant
@@ -636,11 +605,24 @@ export class ServiceDispatcher {
       signal?: AbortSignal
     ): Promise<{
       state: "decided" | "closed";
-      decision?: "once" | "session" | "version" | "deny";
+      decision?: "once" | "task" | "agent" | "lock" | "version" | "deny";
       info?: AcquisitionInfo;
     }>;
     consume(grantId: string): boolean;
+    touch?(grantId: string): boolean;
+    priorInteractiveApprovalCount?(input: {
+      agentBindingId: string;
+      capability: string;
+      resource: ResourceScope;
+    }): number;
     invalidate(snapshotDigest: string, ownerRuntimeId: string, callerPrincipal: string): void;
+    proposeMissionRevision?(input: {
+      snapshot: InvocationSnapshot;
+      tier: "gated" | "critical";
+      renderedAction: string;
+      resource: ResourceScope;
+      presentation?: AuthorityChallengePresentation;
+    }): void | Promise<void>;
   };
 
   constructor(
@@ -672,20 +654,24 @@ export class ServiceDispatcher {
     | {
         context: AuthorizationContext;
         grants: readonly AuthorityGrant[];
+        locks?: readonly import("@vibestudio/rpc").AuthorityLock[];
         effectiveCaller?: VerifiedCaller;
         authorizingCaller?: VerifiedCaller;
         contextId?: string;
         readOnly?: boolean;
         decision?: "once" | "session" | "version";
+        missionChangeRequired?: boolean;
       }
     | Promise<{
         context: AuthorizationContext;
         grants: readonly AuthorityGrant[];
+        locks?: readonly import("@vibestudio/rpc").AuthorityLock[];
         effectiveCaller?: VerifiedCaller;
         authorizingCaller?: VerifiedCaller;
         contextId?: string;
         readOnly?: boolean;
         decision?: "once" | "session" | "version";
+        missionChangeRequired?: boolean;
       }>;
 
   setAuthorityResolver(
@@ -705,20 +691,24 @@ export class ServiceDispatcher {
       | {
           context: AuthorizationContext;
           grants: readonly AuthorityGrant[];
+          locks?: readonly import("@vibestudio/rpc").AuthorityLock[];
           effectiveCaller?: VerifiedCaller;
           authorizingCaller?: VerifiedCaller;
           contextId?: string;
           readOnly?: boolean;
           decision?: "once" | "session" | "version";
+          missionChangeRequired?: boolean;
         }
       | Promise<{
           context: AuthorizationContext;
           grants: readonly AuthorityGrant[];
+          locks?: readonly import("@vibestudio/rpc").AuthorityLock[];
           effectiveCaller?: VerifiedCaller;
           authorizingCaller?: VerifiedCaller;
           contextId?: string;
           readOnly?: boolean;
           decision?: "once" | "session" | "version";
+          missionChangeRequired?: boolean;
         }>
   ): void {
     this.authorityResolver = resolver;
@@ -773,10 +763,11 @@ export class ServiceDispatcher {
     const usedPreparers = new Set<string>();
     for (const [method, schema] of Object.entries(def.methods)) {
       const qualifiedMethod = `${def.name}.${method}`;
-      const reviewedTier = schema.tier ?? this.tierLookup(qualifiedMethod);
-      if (!reviewedTier) {
-        throw new Error(`Service method ${qualifiedMethod} has no reviewed tier decision`);
-      }
+      const reviewedTier = resolveMethodTierPolicy(
+        qualifiedMethod,
+        schema.tier,
+        this.tierLookup(qualifiedMethod)
+      );
       if (!reviewedTier.rationale.trim()) {
         throw new Error(`Service method ${qualifiedMethod} has an empty tier rationale`);
       }
@@ -805,10 +796,10 @@ export class ServiceDispatcher {
             `Service method ${def.name}.${method} declares an empty prepared leaf set`
           );
         }
-        const capabilities = new Set(leaves.map((leaf) => leaf.capability));
-        if (capabilities.size !== leaves.length) {
+        const selectors = new Set(leaves.map(preparedAuthoritySelectorKey));
+        if (selectors.size !== leaves.length) {
           throw new Error(
-            `Service method ${def.name}.${method} declares duplicate prepared capability leaves`
+            `Service method ${def.name}.${method} declares duplicate prepared authority selectors`
           );
         }
         usedPreparers.add(resolver);
@@ -905,30 +896,6 @@ export class ServiceDispatcher {
     };
 
     try {
-      // Authority acquisition is part of the protected invocation, not a
-      // transport prelude. A hibernatable caller that explicitly opted into
-      // deferral must receive its acknowledgement before a human decision is
-      // awaited. Preflight is side-effect free and tells us whether the exact
-      // live invocation would prompt; the detached continuation then resolves
-      // authority again and invokes the handler only after the grant exists.
-      //
-      // Remove `deferral` from that continuation. A handler may have its own
-      // approval boundary (credential use is the canonical example); nesting
-      // another run under the same request/idempotency key would settle the
-      // outer continuation with a deferred sentinel instead of the real result.
-      if (ctx.deferral?.canDefer) {
-        const preflight = await this.preflightAuthority(ctx, service, method, args);
-        if (preflight.decision === "acquirable") {
-          const { deferral: _deferral, ...continuationBase } = ctx;
-          return ctx.deferral.run(async (signal) =>
-            invoke({
-              ...continuationBase,
-              signal,
-              authorityAcquisition: "wait",
-            })
-          );
-        }
-      }
       return await invoke(ctx);
     } catch (error) {
       if (error instanceof ServiceError) {
@@ -1034,7 +1001,7 @@ export class ServiceDispatcher {
     if (
       methodTierDecision.session === "codeOnly" &&
       (ctx.authorization?.authorizingOrigin.kind === "session" ||
-        (!ctx.authorization && ctx.caller.sessionOrigin === true))
+        (!ctx.authorization && ctx.caller.executionSession !== undefined))
     ) {
       if (preflight) {
         return preflightResult(
@@ -1078,7 +1045,9 @@ export class ServiceDispatcher {
       const seen = new Set<string>();
       for (const selection of selected) {
         const matchingLeaves = prepareDescriptor.leaves.filter((leaf) =>
-          capabilityPatternCovers(leaf.capability, selection.capability)
+          leaf.capability !== undefined
+            ? leaf.capability === selection.capability
+            : selection.capability.startsWith(leaf.capabilityPrefix)
         );
         if (matchingLeaves.length !== 1) {
           throw new ServiceError(
@@ -1109,31 +1078,32 @@ export class ServiceDispatcher {
       return collected;
     };
     const preparedDigest = (selections: readonly PreparedSelection[]): string =>
-      selections.length
-        ? sha256Canonical(
-            selections.map(({ selection, requirement, tier }) => ({
-              capability: selection.capability,
-              resourceKey: selection.resourceKey,
-              requirement,
-              authorizingCaller: selection.authorizingCaller
-                ? {
-                    runtime: selection.authorizingCaller.runtime,
-                    hostOriginated: selection.authorizingCaller.hostOriginated === true,
-                    code: selection.authorizingCaller.code
-                      ? {
-                          principal: selection.authorizingCaller.code.repoPath,
-                          effectiveVersion: selection.authorizingCaller.code.effectiveVersion,
-                          executionDigest: selection.authorizingCaller.code.executionDigest ?? null,
-                        }
-                      : null,
-                    subject: selection.authorizingCaller.subject?.userId ?? null,
-                  }
-                : null,
-              challenge: selection.challenge ?? null,
-              tier: tier ?? null,
-            }))
-          )
-        : "-";
+      sha256Canonical({
+        service,
+        method,
+        args,
+        selections: selections.map(({ selection, requirement, tier }) => ({
+          capability: selection.capability,
+          resourceKey: selection.resourceKey,
+          requirement,
+          authorizingCaller: selection.authorizingCaller
+            ? {
+                runtime: selection.authorizingCaller.runtime,
+                hostOriginated: selection.authorizingCaller.hostOriginated === true,
+                code: selection.authorizingCaller.code
+                  ? {
+                      principal: selection.authorizingCaller.code.repoPath,
+                      effectiveVersion: selection.authorizingCaller.code.effectiveVersion,
+                      executionDigest: selection.authorizingCaller.code.executionDigest ?? null,
+                    }
+                  : null,
+                subject: selection.authorizingCaller.subject?.userId ?? null,
+              }
+            : null,
+          challenge: selection.challenge ?? null,
+          tier: tier ?? null,
+        })),
+      });
     const preparedSelections = await collectPreparedSelections();
     const preparedStateDigest = preparedDigest(preparedSelections);
     ctx.authority = {
@@ -1317,6 +1287,31 @@ export class ServiceDispatcher {
       throw new ServiceError(service, method, "Reviewed method tier is unavailable");
     }
     const reviewedTier = tierOverride ?? reviewedMethod.tier;
+    const receiverPolicy = receiverAuthorityPolicy(capability, challenge?.authorityVocabulary);
+    const operationPresentation =
+      challenge?.operation ?? methodDef.access?.approval?.[0]?.operation;
+    const preparedTarget =
+      validatedArgs.length === 1
+        ? safeJsonArg(validatedArgs[0])
+        : validatedArgs.length > 1
+          ? safeJsonArg(validatedArgs)
+          : resourceKey;
+    const substance = receiverPolicy.requiresSubstance
+      ? {
+          kind: challenge?.substance?.kind ?? receiverPolicy.substanceKind ?? "custom",
+          summary:
+            challenge?.substance?.summary ??
+            `${operationPresentation?.verb ?? describeCapability(capability).action} ${
+              operationPresentation && "object" in operationPresentation
+                ? operationPresentation.object.value
+                : preparedTarget
+            }`,
+          ...(challenge?.substance?.detail ? { detail: challenge.substance.detail } : {}),
+          digest: preparedStateDigest,
+        }
+      : challenge?.substance
+        ? { ...challenge.substance, digest: preparedStateDigest }
+        : null;
     const resolver = this.authorityResolver;
     if (!resolver) {
       throw new ServiceError(service, method, "Compositional authority resolver is unavailable");
@@ -1337,6 +1332,7 @@ export class ServiceDispatcher {
         sessionAdmission: reviewedMethod.session,
       });
 
+    let preauthorizedRetry = false;
     for (;;) {
       const resolved = await resolveLive();
       if (!preflight) {
@@ -1359,6 +1355,35 @@ export class ServiceDispatcher {
         preparedStateDigest,
         callerPrincipal: resolved.context.authorizingOrigin.principal,
         sessionId: resolved.context.session.id,
+        ...(resolved.context.session.taskRef ? { taskRef: resolved.context.session.taskRef } : {}),
+        ...(resolved.context.executionSession?.agentBinding?.bindingId
+          ? {
+              agentBindingId: resolved.context.executionSession.agentBinding.bindingId,
+              agentName: resolved.context.executionSession.agentBinding.entityId,
+            }
+          : {}),
+        lineageClasses: resolved.context.contextIntegrity
+          ? lineageClasses(resolved.context.contextIntegrity)
+          : ["none"],
+        irreversible: receiverPolicy.irreversible,
+        agentScopeEligible: standingAgentScopeEligible({
+          capability,
+          tier: reviewedTier,
+          policy: receiverPolicy,
+          domain: challenge?.authorityVocabulary?.domain,
+          priorInteractiveApprovals:
+            resolved.context.executionSession?.agentBinding?.bindingId === undefined
+              ? 0
+              : (this.authorityAcquirer?.priorInteractiveApprovalCount?.({
+                  agentBindingId: resolved.context.executionSession.agentBinding.bindingId,
+                  capability,
+                  resource: { kind: "exact", key: resourceKey },
+                }) ?? 0),
+        }),
+        executionMode:
+          resolved.context.executionSession?.mode ??
+          (resolved.context.testPolicy ? "test" : undefined),
+        testPolicyId: resolved.context.testPolicy?.policyId,
         mission: resolved.context.session.mission
           ? `mission:${resolved.context.session.mission.missionId}@${resolved.context.session.mission.closureDigest}`
           : "-",
@@ -1376,14 +1401,24 @@ export class ServiceDispatcher {
         initiatorChain: resolved.context.initiatorChain,
       });
       const snapshotDigest = invocationSnapshotDigest(snapshot);
-      const decision = evaluateAuthority({
+      const evaluated = evaluateAuthority({
         context: resolved.context,
         requirement,
         resourceKey,
         grants: resolved.grants,
+        locks: resolved.locks,
         tier: reviewedTier,
         invocationDigest: snapshotDigest,
       });
+      const decision =
+        resolved.missionChangeRequired === true
+          ? {
+              allowed: false as const,
+              code: "mission-change-required" as const,
+              reason: "This operation is outside the active mission charter",
+              requirement,
+            }
+          : evaluated;
       if (decision.allowed) {
         if (preflight) {
           return {
@@ -1405,17 +1440,39 @@ export class ServiceDispatcher {
             continue;
           }
         }
+        if (!decision.consumable && decision.grantId) {
+          this.authorityAcquirer?.touch?.(decision.grantId);
+        }
         return;
       }
 
-      const acquirable =
-        reviewedTier !== "open" &&
-        (decision.code === "missing-grant" || decision.code === "lineage");
+      const acquirable = reviewedTier !== "open" && decision.code === "approval-required";
       const authorityFailure = authorityFailureForDecision(decision, {
         capability,
         resourceKey,
         tier: reviewedTier,
       });
+      if (decision.code === "mission-change-required") {
+        if (!preflight) {
+          await this.authorityAcquirer?.proposeMissionRevision?.({
+            snapshot,
+            tier: reviewedTier === "open" ? "gated" : reviewedTier,
+            renderedAction:
+              challenge?.operation.verb ??
+              methodDef.access?.approval?.[0]?.operation.verb ??
+              describeCapability(capability).action,
+            resource: { kind: "exact", key: resourceKey },
+            ...(challenge ? { presentation: challenge } : {}),
+          });
+        }
+        throw new ServiceAccessError(
+          service,
+          method,
+          `The mission must be revised before this operation can run${formatAccessHint(methodDef)}`,
+          "EMISSIONCHANGE",
+          { denied: true, authorityFailure }
+        );
+      }
       if (acquirable) {
         const tier = reviewedTier as "gated" | "critical";
         const renderedAction =
@@ -1449,13 +1506,14 @@ export class ServiceDispatcher {
           caller,
           renderedAction,
           resource: { kind: "exact" as const, key: resourceKey },
+          ...(substance ? { substance } : {}),
           ...(challenge ? { presentation: challenge } : {}),
         };
         let presented: AcquisitionInfo | undefined;
         if (
           this.authorityAcquirer &&
-          (resolved.context.authorizingOrigin.kind !== "code" ||
-            ctx.authorityAcquisition === "wait")
+          (ctx.authorityAcquisition === "wait" ||
+            resolved.context.authorizingOrigin.kind !== "code")
         ) {
           this.authorityAcquirer.invalidate(
             snapshotDigest,
@@ -1470,7 +1528,7 @@ export class ServiceDispatcher {
               {
                 ...decision,
                 allowed: false,
-                code: "denied",
+                code: "user-denied",
                 reason: "The authority request was denied",
               },
               { capability, resourceKey, tier: reviewedTier }
@@ -1485,6 +1543,19 @@ export class ServiceDispatcher {
           }
         } else if (this.authorityAcquirer) {
           presented = this.authorityAcquirer.request(acquisitionInput);
+          if (presented.preauthorized) {
+            if (preauthorizedRetry) {
+              throw new ServiceAccessError(
+                service,
+                method,
+                "Host preauthorization did not admit the exact invocation",
+                "EACCES",
+                { denied: true, authorityFailure }
+              );
+            }
+            preauthorizedRetry = true;
+            continue;
+          }
         }
         const acquisitionInfo: AcquisitionInfo = presented ?? {
           acquisitionId: `acq:${snapshotDigest}`,
@@ -1527,7 +1598,7 @@ export class ServiceDispatcher {
         `${decision.reason} (${decision.code})${formatAccessHint(methodDef)}`,
         "EACCES",
         {
-          ...(decision.code === "denied" ? { denied: true } : {}),
+          ...(decision.code === "user-denied" ? { denied: true } : {}),
           authorityFailure,
         }
       );

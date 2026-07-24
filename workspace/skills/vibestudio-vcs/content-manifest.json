@@ -4,7 +4,7 @@
   "files": [
     {
       "path": "SKILL.md",
-      "sha256": "2044c524d62bb17ee49237d51f9840978d60e79343a8126e353342650e7cb27e"
+      "sha256": "bb53cd9edc579ab89d065966763bd2dae6e275796d36b4292a9a68cced8ea7a5"
     },
     {
       "path": "agents/openai.yaml",
@@ -20,7 +20,7 @@
     },
     {
       "path": "references/authoring-basics.md",
-      "sha256": "9fec9c921d0f1b4f58a6a6cb0aa86d97f76ee5a3281b3f3c40865d7df9daaf61"
+      "sha256": "e5af01ac1291218726698c56d334a7f547663ce00d830f3100dc8138c0ebf81a"
     },
     {
       "path": "references/checks-and-publication.md",
@@ -48,7 +48,7 @@
     },
     {
       "path": "references/public-contract.json",
-      "sha256": "e48006794f1750cdafb71dd07541c5d893f6dd980e335a939832635683fc9d10"
+      "sha256": "afbe11573d555fe3f55e5787dd6a0ce0f55d0fc5e386e0e6b9176b56021fb50c"
     },
     {
       "path": "references/public-contract.md",
@@ -71,5 +71,5 @@
       "sha256": "6233c96b7827b26543230a204e9b2c0342fb888186b76a60e717e3f688e1fc33"
     }
   ],
-  "packageDigest": "6adad15a2adc7bf08246362668f9d5fd42d11488acf333a08d3ec41e6b6df5b6"
+  "packageDigest": "7ed9d5cc65ddc46cc84293db4d41d079e373220fed3a08512fab87fafcc613bc"
 }

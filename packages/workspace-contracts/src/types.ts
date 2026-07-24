@@ -188,8 +188,20 @@ export type WorkspaceServiceDecl = {
   name: string;
   title?: string;
   /** Verb phrase completing "Allow X to …" — e.g. "send and receive messages". */
-  action?: string;
+  action: string;
   description?: string;
+  presentation: {
+    domain:
+      | "files"
+      | "sharing"
+      | "accounts"
+      | "web"
+      | "automation"
+      | "people"
+      | "computer";
+    verb: "see" | "act" | "manage";
+    substanceKind?: "change-set" | "send" | "deletion" | "custom";
+  };
   protocols?: string[];
   authority: { principals: ("host" | "user" | "code" | "session" | "mission")[] };
 } & (

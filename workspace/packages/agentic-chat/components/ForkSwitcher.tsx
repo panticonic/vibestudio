@@ -47,7 +47,7 @@ function ForkItem({
   );
 }
 
-export function ForkSwitcher() {
+export function ForkSwitcher({ variant = "button" }: { variant?: "button" | "submenu" }) {
   const { forkState } = useChatContext();
   const [treeOpen, setTreeOpen] = useState(false);
   if (!forkState) return null;
@@ -59,72 +59,91 @@ export function ForkSwitcher() {
   const handleSwitch = (e: ForkEntry) => actions.switchTo(e.channelId, e.contextId);
   const handleOpen = (e: ForkEntry) => actions.openInNewPanel(e.channelId, e.contextId);
 
+  const content = (
+    <>
+      {parent && (
+        <>
+          <DropdownMenu.Item
+            onSelect={() =>
+              parent.contextId && actions.switchTo(parent.channelId, parent.contextId)
+            }
+          >
+            ↑ Parent conversation
+          </DropdownMenu.Item>
+          <DropdownMenu.Separator />
+        </>
+      )}
+      {siblings.length > 0 && (
+        <>
+          <DropdownMenu.Label>Sibling forks</DropdownMenu.Label>
+          {siblings.map((entry) => (
+            <ForkItem
+              key={entry.forkId}
+              entry={entry}
+              onSwitch={handleSwitch}
+              onOpen={handleOpen}
+            />
+          ))}
+          <DropdownMenu.Separator />
+        </>
+      )}
+      {children.length > 0 && (
+        <>
+          <DropdownMenu.Label>Forks from here</DropdownMenu.Label>
+          {children.map((entry) => (
+            <ForkItem
+              key={entry.forkId}
+              entry={entry}
+              onSwitch={handleSwitch}
+              onOpen={handleOpen}
+            />
+          ))}
+          <DropdownMenu.Separator />
+        </>
+      )}
+      {!hasForks && provenance?.kind !== "fork" && (
+        <DropdownMenu.Label>No forks yet</DropdownMenu.Label>
+      )}
+      <DropdownMenu.Item disabled={forking} onSelect={() => void actions.newFork()}>
+        New fork from here
+      </DropdownMenu.Item>
+      <DropdownMenu.Item onSelect={() => setTreeOpen(true)}>Show tree…</DropdownMenu.Item>
+    </>
+  );
+
   return (
     <>
-      <DropdownMenu.Root onOpenChange={(open) => open && refresh()}>
-        <DropdownMenu.Trigger>
-          <Button size="1" variant="soft" color="gray" disabled={forking} aria-label="Switch fork">
-            <Flex align="center" gap="1">
-              <Text size="1" aria-hidden="true">
-                ⑂
-              </Text>
-              <Text size="1" truncate style={{ maxWidth: 140 }}>
-                {forking ? "Forking…" : currentLabel}
-              </Text>
-              <ChevronDownIcon />
-            </Flex>
-          </Button>
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Content align="start">
-          {parent && (
-            <>
-              <DropdownMenu.Item
-                onSelect={() =>
-                  parent.contextId && actions.switchTo(parent.channelId, parent.contextId)
-                }
-              >
-                ↑ Parent conversation
-              </DropdownMenu.Item>
-              <DropdownMenu.Separator />
-            </>
-          )}
-          {siblings.length > 0 && (
-            <>
-              <DropdownMenu.Label>Sibling forks</DropdownMenu.Label>
-              {siblings.map((entry) => (
-                <ForkItem
-                  key={entry.forkId}
-                  entry={entry}
-                  onSwitch={handleSwitch}
-                  onOpen={handleOpen}
-                />
-              ))}
-              <DropdownMenu.Separator />
-            </>
-          )}
-          {children.length > 0 && (
-            <>
-              <DropdownMenu.Label>Forks from here</DropdownMenu.Label>
-              {children.map((entry) => (
-                <ForkItem
-                  key={entry.forkId}
-                  entry={entry}
-                  onSwitch={handleSwitch}
-                  onOpen={handleOpen}
-                />
-              ))}
-              <DropdownMenu.Separator />
-            </>
-          )}
-          {!hasForks && provenance?.kind !== "fork" && (
-            <DropdownMenu.Label>No forks yet</DropdownMenu.Label>
-          )}
-          <DropdownMenu.Item disabled={forking} onSelect={() => void actions.newFork()}>
-            New fork from here
-          </DropdownMenu.Item>
-          <DropdownMenu.Item onSelect={() => setTreeOpen(true)}>Show tree…</DropdownMenu.Item>
-        </DropdownMenu.Content>
-      </DropdownMenu.Root>
+      {variant === "submenu" ? (
+        <DropdownMenu.Sub onOpenChange={(open) => open && refresh()}>
+          <DropdownMenu.SubTrigger disabled={forking}>
+            Branch: {forking ? "Forking…" : currentLabel}
+          </DropdownMenu.SubTrigger>
+          <DropdownMenu.SubContent>{content}</DropdownMenu.SubContent>
+        </DropdownMenu.Sub>
+      ) : (
+        <DropdownMenu.Root onOpenChange={(open) => open && refresh()}>
+          <DropdownMenu.Trigger>
+            <Button
+              size="1"
+              variant="soft"
+              color="gray"
+              disabled={forking}
+              aria-label="Switch fork"
+            >
+              <Flex align="center" gap="1">
+                <Text size="1" aria-hidden="true">
+                  ⑂
+                </Text>
+                <Text size="1" truncate style={{ maxWidth: 140 }}>
+                  {forking ? "Forking…" : currentLabel}
+                </Text>
+                <ChevronDownIcon />
+              </Flex>
+            </Button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content align="start">{content}</DropdownMenu.Content>
+        </DropdownMenu.Root>
+      )}
       <ForkTreeView open={treeOpen} onClose={() => setTreeOpen(false)} />
     </>
   );

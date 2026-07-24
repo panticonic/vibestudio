@@ -51,7 +51,7 @@ export interface StreamingRelayDeps {
   dispatcher: ServiceDispatcher;
   egressProxy?: EgressStreamProxy;
   authenticateHttp(req: IncomingMessage): HttpRpcAdmission;
-  verifiedCaller(caller: AuthenticatedHttpRpcCaller): VerifiedCaller;
+  verifiedCaller(caller: AuthenticatedHttpRpcCaller, request: RpcStreamRequest): VerifiedCaller;
   authorizeRelay(
     callerId: string,
     callerKind: CallerKind,
@@ -152,7 +152,16 @@ export class StreamingRelay {
     }
 
     const { callerId, callerKind } = admission.caller;
-    const verifiedCaller = this.deps.verifiedCaller(admission.caller);
+    let verifiedCaller: VerifiedCaller;
+    try {
+      verifiedCaller = this.deps.verifiedCaller(admission.caller, request);
+    } catch (error) {
+      writeJson(res, 403, {
+        error: error instanceof Error ? error.message : String(error),
+        errorCode: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
+      });
+      return;
+    }
     let causalParent: RpcCausalParent | undefined;
     try {
       causalParent = await this.deps.resolveCausalParent(verifiedCaller, request);

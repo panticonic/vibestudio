@@ -373,6 +373,14 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	/** Human-readable label for UI display. */
 	label: string;
 	/**
+	 * Maximum wall time for one in-process invocation.
+	 *
+	 * The durable agent runtime supplies a finite default when omitted. Tools
+	 * with a legitimately longer bounded operation may declare that contract
+	 * here; unbounded work must use a deferred tool protocol instead.
+	 */
+	executionTimeoutMs?: number;
+	/**
 	 * Optional compatibility shim for raw tool-call arguments before schema validation.
 	 * Must return an object that matches `TParameters`.
 	 */

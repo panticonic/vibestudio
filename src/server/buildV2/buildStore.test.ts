@@ -30,7 +30,7 @@ function build(overrides: Partial<BuildResult> = {}): BuildResult {
       ev: "ev-worker",
       sourceStateHash: null,
       sourcemap: false,
-      authority: { requests: [], evalCeilings: [] },
+      authority: { requests: [] },
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
     },

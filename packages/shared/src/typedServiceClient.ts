@@ -40,6 +40,29 @@ export type PreparedAuthorityRequirement =
   | AuthorityRequirement
   | { kind: "selected"; principals: readonly PrincipalKind[] };
 
+export type PreparedAuthoritySelector =
+  | { capability: string; capabilityPrefix?: never }
+  | { capabilityPrefix: string; capability?: never };
+
+export function preparedAuthoritySelectorKey(selector: PreparedAuthoritySelector): string {
+  const capability = typeof selector.capability === "string" ? selector.capability : undefined;
+  const capabilityPrefix =
+    typeof selector.capabilityPrefix === "string" ? selector.capabilityPrefix : undefined;
+  if ((capability === undefined) === (capabilityPrefix === undefined)) {
+    throw new Error("Prepared authority selector must declare exactly one capability or prefix");
+  }
+  if (capability !== undefined) {
+    if (capability.length === 0) {
+      throw new Error("Prepared authority capability must not be empty");
+    }
+    return `capability:${capability}`;
+  }
+  if (!capabilityPrefix || !capabilityPrefix.endsWith(":")) {
+    throw new Error("Prepared authority capability prefix must be non-empty and end with ':'");
+  }
+  return `prefix:${capabilityPrefix}`;
+}
+
 export interface MethodAuthorityDescriptor {
   requirement: AuthorityRequirement;
   resource: AuthorityResourceDerivation;
@@ -53,12 +76,11 @@ export interface MethodAuthorityDescriptor {
   }[];
   prepared?: {
     resolver: string;
-    leaves: readonly {
-      capability: string;
+    leaves: readonly (PreparedAuthoritySelector & {
       requirement: PreparedAuthorityRequirement;
       /** Dynamic leaves may be stricter than the discovery method that selects them. */
       tier?: "open" | "gated" | "critical" | { selectedFrom: readonly ("gated" | "critical")[] };
-    }[];
+    })[];
   };
 }
 

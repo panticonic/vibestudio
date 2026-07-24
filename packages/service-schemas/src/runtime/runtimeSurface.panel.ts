@@ -7,7 +7,7 @@ import {
 } from "./runtimeSurface.core.js";
 
 const panelTreeDescription =
-  "Top-level export, not workspace.panelTree. Signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle | null; navigate(id, source, opts?): Promise<{ id, title }>. Use list/roots/children/get for existing panels; navigate replaces an existing panel slot; openPanel creates a new panel. PanelHandle.focus({ placement?, anchorPanelId? }) can present an existing panel beside, below, or in place relative to an anchor. self/get are sync; async methods refresh metadata as needed.";
+  "Top-level export, not workspace.panelTree. self/get are synchronous handle factories. navigate/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. Use list/roots/children/get for existing panels and openPanel to create.";
 
 // Panel-only affordances, grouped under one `panel` namespace (was ~16 flat
 // top-level exports). Identity/introspection/theme/focus/lifecycle + stateArgs.
@@ -40,7 +40,7 @@ export const panelRuntimeSurface: RuntimeSurface = {
       "workspace"
     ),
     openPanel: valueEntry(
-      'Create a child panel and return its handle. options.placement accepts disposition "side" (default), "replace", or "split-below", plus preferredWidth/minWidth.'
+      'Create a child panel and return its handle only after the exact attempt is application boot-ready; throws structured PanelOperationError on failure. options.placement accepts disposition "side" (default), "replace", or "split-below", plus preferredWidth/minWidth.'
     ),
     listPanels: valueEntry(),
     getPanelHandle: valueEntry(),

@@ -1892,13 +1892,13 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onChannelEnvelope",
+    id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onAuthorityChanged",
     rpcPlane: "workspace-do",
-    capability: "rpc:onChannelEnvelope",
-    authorityPrincipals: ["code"],
+    capability: "rpc:onAuthorityChanged",
+    authorityPrincipals: ["host"],
     owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
     source: "packages/agentic-do",
-    method: "onChannelEnvelope",
+    method: "onAuthorityChanged",
     sensitivity: "write",
     resourceDerivation: {
       kind: "direct-target",
@@ -1906,13 +1906,13 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onDeferredResult",
+    id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onChannelEnvelope",
     rpcPlane: "workspace-do",
-    capability: "rpc:onDeferredResult",
-    authorityPrincipals: ["host"],
+    capability: "rpc:onChannelEnvelope",
+    authorityPrincipals: ["code"],
     owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
     source: "packages/agentic-do",
-    method: "onDeferredResult",
+    method: "onChannelEnvelope",
     sensitivity: "write",
     resourceDerivation: {
       kind: "direct-target",
@@ -2930,7 +2930,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
   {
     id: "direct:workspace/packages/semantic-control-plane/src/index.ts:vcsDropContext",
     rpcPlane: "workspace-do",
-    capability: "workspace.graph.delete",
+    capability: "workspace-service:<live-declaration>",
     authorityPrincipals: ["host"],
     owner: "workspace/packages/semantic-control-plane/src/index.ts",
     source: "packages/semantic-control-plane",
@@ -3239,7 +3239,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     id: "direct:workspace/workers/model-settings/index.ts:getDefaultModel",
     rpcPlane: "workspace-do",
     capability: "workspace-service:<live-declaration>",
-    authorityPrincipals: ["code", "host", "user"],
+    authorityPrincipals: ["code", "host", "mission", "session", "user"],
     owner: "workspace/workers/model-settings/index.ts",
     source: "workers/model-settings",
     method: "getDefaultModel",
@@ -3253,7 +3253,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     id: "direct:workspace/workers/model-settings/index.ts:getSettings",
     rpcPlane: "workspace-do",
     capability: "workspace-service:<live-declaration>",
-    authorityPrincipals: ["code", "host", "user"],
+    authorityPrincipals: ["code", "host", "mission", "session", "user"],
     owner: "workspace/workers/model-settings/index.ts",
     source: "workers/model-settings",
     method: "getSettings",
@@ -3264,10 +3264,24 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "direct:workspace/workers/model-settings/index.ts:inspectModels",
+    rpcPlane: "workspace-do",
+    capability: "workspace-service:<live-declaration>",
+    authorityPrincipals: ["code", "host", "mission", "session", "user"],
+    owner: "workspace/workers/model-settings/index.ts",
+    source: "workers/model-settings",
+    method: "inspectModels",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/workers/model-settings/index.ts",
+    },
+  },
+  {
     id: "direct:workspace/workers/model-settings/index.ts:listCatalog",
     rpcPlane: "workspace-do",
     capability: "workspace-service:<live-declaration>",
-    authorityPrincipals: ["code", "host", "user"],
+    authorityPrincipals: ["code", "host", "mission", "session", "user"],
     owner: "workspace/workers/model-settings/index.ts",
     source: "workers/model-settings",
     method: "listCatalog",
@@ -4967,7 +4981,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:browserEnvironment.cancelDownload#service:browserEnvironment.cancelDownload",
+    id: "host:browserEnvironment.cancelDownload#capability:service:browserEnvironment.cancelDownload",
     rpcPlane: "host-service",
     capability: "service:browserEnvironment.cancelDownload",
     authorityPrincipals: ["code"],
@@ -4993,7 +5007,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:browserEnvironment.cancelImportRead#service:browserEnvironment.cancelImportRead",
+    id: "host:browserEnvironment.cancelImportRead#capability:service:browserEnvironment.cancelImportRead",
     rpcPlane: "host-service",
     capability: "service:browserEnvironment.cancelImportRead",
     authorityPrincipals: ["code"],
@@ -5019,7 +5033,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:browserEnvironment.flushCookieProjection#service:browserEnvironment.flushCookieProjection",
+    id: "host:browserEnvironment.flushCookieProjection#capability:service:browserEnvironment.flushCookieProjection",
     rpcPlane: "host-service",
     capability: "service:browserEnvironment.flushCookieProjection",
     authorityPrincipals: ["code"],
@@ -5045,7 +5059,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:browserEnvironment.getCookieProjectionDiagnostics#service:browserEnvironment.getCookieProjectionDiagnostics",
+    id: "host:browserEnvironment.getCookieProjectionDiagnostics#capability:service:browserEnvironment.getCookieProjectionDiagnostics",
     rpcPlane: "host-service",
     capability: "service:browserEnvironment.getCookieProjectionDiagnostics",
     authorityPrincipals: ["code"],
@@ -5071,7 +5085,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:browserEnvironment.getImportHost#service:browserEnvironment.getImportHost",
+    id: "host:browserEnvironment.getImportHost#capability:service:browserEnvironment.getImportHost",
     rpcPlane: "host-service",
     capability: "service:browserEnvironment.getImportHost",
     authorityPrincipals: ["code"],
@@ -5097,7 +5111,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:browserEnvironment.listDownloads#service:browserEnvironment.listDownloads",
+    id: "host:browserEnvironment.listDownloads#capability:service:browserEnvironment.listDownloads",
     rpcPlane: "host-service",
     capability: "service:browserEnvironment.listDownloads",
     authorityPrincipals: ["code"],
@@ -5123,7 +5137,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:browserEnvironment.listImportOpenTabs#service:browserEnvironment.listImportOpenTabs",
+    id: "host:browserEnvironment.listImportOpenTabs#capability:service:browserEnvironment.listImportOpenTabs",
     rpcPlane: "host-service",
     capability: "service:browserEnvironment.listImportOpenTabs",
     authorityPrincipals: ["code"],
@@ -5149,7 +5163,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:browserEnvironment.listImportSources#service:browserEnvironment.listImportSources",
+    id: "host:browserEnvironment.listImportSources#capability:service:browserEnvironment.listImportSources",
     rpcPlane: "host-service",
     capability: "service:browserEnvironment.listImportSources",
     authorityPrincipals: ["code"],
@@ -5175,7 +5189,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:browserEnvironment.nextImportFrame#service:browserEnvironment.nextImportFrame",
+    id: "host:browserEnvironment.nextImportFrame#capability:service:browserEnvironment.nextImportFrame",
     rpcPlane: "host-service",
     capability: "service:browserEnvironment.nextImportFrame",
     authorityPrincipals: ["code"],
@@ -5201,7 +5215,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:browserEnvironment.openDownload#service:browserEnvironment.openDownload",
+    id: "host:browserEnvironment.openDownload#capability:service:browserEnvironment.openDownload",
     rpcPlane: "host-service",
     capability: "service:browserEnvironment.openDownload",
     authorityPrincipals: ["code"],
@@ -5227,7 +5241,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:browserEnvironment.pauseDownload#service:browserEnvironment.pauseDownload",
+    id: "host:browserEnvironment.pauseDownload#capability:service:browserEnvironment.pauseDownload",
     rpcPlane: "host-service",
     capability: "service:browserEnvironment.pauseDownload",
     authorityPrincipals: ["code"],
@@ -5253,7 +5267,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:browserEnvironment.previewImportSource#service:browserEnvironment.previewImportSource",
+    id: "host:browserEnvironment.previewImportSource#capability:service:browserEnvironment.previewImportSource",
     rpcPlane: "host-service",
     capability: "service:browserEnvironment.previewImportSource",
     authorityPrincipals: ["code"],
@@ -5279,7 +5293,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:browserEnvironment.resumeDownload#service:browserEnvironment.resumeDownload",
+    id: "host:browserEnvironment.resumeDownload#capability:service:browserEnvironment.resumeDownload",
     rpcPlane: "host-service",
     capability: "service:browserEnvironment.resumeDownload",
     authorityPrincipals: ["code"],
@@ -5305,7 +5319,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:browserEnvironment.revealDownload#service:browserEnvironment.revealDownload",
+    id: "host:browserEnvironment.revealDownload#capability:service:browserEnvironment.revealDownload",
     rpcPlane: "host-service",
     capability: "service:browserEnvironment.revealDownload",
     authorityPrincipals: ["code"],
@@ -5331,7 +5345,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:browserEnvironment.startImportRead#service:browserEnvironment.startImportRead",
+    id: "host:browserEnvironment.startImportRead#capability:service:browserEnvironment.startImportRead",
     rpcPlane: "host-service",
     capability: "service:browserEnvironment.startImportRead",
     authorityPrincipals: ["code"],
@@ -5682,7 +5696,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:corsApproval.authorize#network.response.read",
+    id: "host:corsApproval.authorize#capability:network.response.read",
     rpcPlane: "host-service",
     capability: "network.response.read",
     authorityPrincipals: ["code"],
@@ -6269,7 +6283,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:externalOpen.openExternal#external.open",
+    id: "host:externalOpen.openExternal#capability:external.open",
     rpcPlane: "host-service",
     capability: "external.open",
     authorityPrincipals: ["code"],
@@ -7218,19 +7232,6 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:mission.approve",
-    rpcPlane: "host-service",
-    capability: "service:mission.approve",
-    authorityPrincipals: ["user", "host"],
-    owner: "mission",
-    method: "approve",
-    sensitivity: "admin",
-    resourceDerivation: {
-      kind: "literal",
-      key: "service:mission.approve",
-    },
-  },
-  {
     id: "host:mission.createDraft",
     rpcPlane: "host-service",
     capability: "service:mission.createDraft",
@@ -7296,6 +7297,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:mission.listRuns",
+    rpcPlane: "host-service",
+    capability: "service:mission.listRuns",
+    authorityPrincipals: ["user", "host"],
+    owner: "mission",
+    method: "listRuns",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:mission.listRuns",
+    },
+  },
+  {
     id: "host:mission.pause",
     rpcPlane: "host-service",
     capability: "service:mission.pause",
@@ -7306,6 +7320,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:mission.pause",
+    },
+  },
+  {
+    id: "host:mission.requestReview",
+    rpcPlane: "host-service",
+    capability: "service:mission.requestReview",
+    authorityPrincipals: ["user", "host"],
+    owner: "mission",
+    method: "requestReview",
+    sensitivity: "admin",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:mission.requestReview",
     },
   },
   {
@@ -7816,7 +7843,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelCdp.consoleHistory#context.boundary",
+    id: "host:panelCdp.consoleHistory#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -7842,7 +7869,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelCdp.getCdpEndpoint#context.boundary",
+    id: "host:panelCdp.getCdpEndpoint#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -7868,7 +7895,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelCdp.goBack#context.boundary",
+    id: "host:panelCdp.goBack#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -7894,7 +7921,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelCdp.goForward#context.boundary",
+    id: "host:panelCdp.goForward#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -7959,7 +7986,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelCdp.navigate#context.boundary",
+    id: "host:panelCdp.navigate#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -7985,7 +8012,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelCdp.reload#context.boundary",
+    id: "host:panelCdp.reload#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8011,7 +8038,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelCdp.screenshot#context.boundary",
+    id: "host:panelCdp.screenshot#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8037,7 +8064,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelCdp.stop#context.boundary",
+    id: "host:panelCdp.stop#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8154,7 +8181,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelTree.archive#context.boundary",
+    id: "host:panelTree.archive#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8193,7 +8220,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelTree.callAgent#context.boundary",
+    id: "host:panelTree.callAgent#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8219,7 +8246,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelTree.close#context.boundary",
+    id: "host:panelTree.close#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8245,7 +8272,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelTree.create#context.boundary",
+    id: "host:panelTree.create#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8258,10 +8285,23 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:panelTree.diagnose",
+    rpcPlane: "host-service",
+    capability: "service:panelTree.diagnose",
+    authorityPrincipals: ["code", "user", "host"],
+    owner: "panelTree",
+    method: "diagnose",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:panelTree.diagnose",
+    },
+  },
+  {
     id: "host:panelTree.ensureLoaded",
     rpcPlane: "host-service",
     capability: "service:panelTree.ensureLoaded",
-    authorityPrincipals: ["code", "user", "host"],
+    authorityPrincipals: ["host"],
     owner: "panelTree",
     method: "ensureLoaded",
     sensitivity: "write",
@@ -8284,7 +8324,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelTree.expandIds#context.boundary",
+    id: "host:panelTree.expandIds#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8339,7 +8379,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     id: "host:panelTree.getRuntimeLease",
     rpcPlane: "host-service",
     capability: "service:panelTree.getRuntimeLease",
-    authorityPrincipals: ["code", "user", "host"],
+    authorityPrincipals: ["host"],
     owner: "panelTree",
     method: "getRuntimeLease",
     sensitivity: "read",
@@ -8414,7 +8454,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelTree.movePanel#context.boundary",
+    id: "host:panelTree.movePanel#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8440,7 +8480,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelTree.navigate#context.boundary",
+    id: "host:panelTree.navigate#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8479,7 +8519,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelTree.navigateHistory#context.boundary",
+    id: "host:panelTree.navigateHistory#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8505,6 +8545,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:panelTree.observe",
+    rpcPlane: "host-service",
+    capability: "service:panelTree.observe",
+    authorityPrincipals: ["code", "user", "host"],
+    owner: "panelTree",
+    method: "observe",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:panelTree.observe",
+    },
+  },
+  {
     id: "host:panelTree.openDevTools",
     rpcPlane: "host-service",
     capability: "service:panelTree.openDevTools",
@@ -8518,7 +8571,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelTree.openDevTools#context.boundary",
+    id: "host:panelTree.openDevTools#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8528,32 +8581,6 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "prepared",
       resolver: "panelTree.openDevTools.contextBoundary",
-    },
-  },
-  {
-    id: "host:panelTree.rebuildAndReload",
-    rpcPlane: "host-service",
-    capability: "service:panelTree.rebuildAndReload",
-    authorityPrincipals: ["code", "host", "session", "user"],
-    owner: "panelTree",
-    method: "rebuildAndReload",
-    sensitivity: "write",
-    resourceDerivation: {
-      kind: "literal",
-      key: "service:panelTree.rebuildAndReload",
-    },
-  },
-  {
-    id: "host:panelTree.rebuildAndReload#context.boundary",
-    rpcPlane: "host-service",
-    capability: "context.boundary",
-    authorityPrincipals: ["code", "host", "session", "user"],
-    owner: "panelTree",
-    method: "rebuildAndReload",
-    sensitivity: "write",
-    resourceDerivation: {
-      kind: "prepared",
-      resolver: "panelTree.rebuildAndReload.contextBoundary",
     },
   },
   {
@@ -8570,7 +8597,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelTree.rebuildPanel#context.boundary",
+    id: "host:panelTree.rebuildPanel#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8596,7 +8623,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelTree.reload#context.boundary",
+    id: "host:panelTree.reload#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8635,7 +8662,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelTree.setCollapsed#context.boundary",
+    id: "host:panelTree.setCollapsed#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8661,7 +8688,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelTree.setStateArgs#context.boundary",
+    id: "host:panelTree.setStateArgs#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8700,7 +8727,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelTree.takeOver#context.boundary",
+    id: "host:panelTree.takeOver#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8726,7 +8753,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelTree.unload#context.boundary",
+    id: "host:panelTree.unload#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8752,7 +8779,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelTree.updatePanelState#context.boundary",
+    id: "host:panelTree.updatePanelState#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -8778,6 +8805,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:permissions.listAgentProfiles",
+    rpcPlane: "host-service",
+    capability: "service:permissions.listAgentProfiles",
+    authorityPrincipals: ["user", "host", "code"],
+    owner: "permissions",
+    method: "listAgentProfiles",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:permissions.listAgentProfiles",
+    },
+  },
+  {
     id: "host:permissions.revoke",
     rpcPlane: "host-service",
     capability: "service:permissions.revoke",
@@ -8788,6 +8828,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:permissions.revoke",
+    },
+  },
+  {
+    id: "host:permissions.updateAgentProfile",
+    rpcPlane: "host-service",
+    capability: "service:permissions.updateAgentProfile",
+    authorityPrincipals: ["user", "host", "code"],
+    owner: "permissions",
+    method: "updateAgentProfile",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:permissions.updateAgentProfile",
     },
   },
   {
@@ -9025,7 +9078,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:runtime.cloneContext#context.boundary",
+    id: "host:runtime.cloneContext#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -9051,7 +9104,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:runtime.createContext#context.boundary",
+    id: "host:runtime.createContext#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -9077,7 +9130,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:runtime.createEntity#context.boundary",
+    id: "host:runtime.createEntity#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -9103,7 +9156,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:runtime.createSubagentContext#context.boundary",
+    id: "host:runtime.createSubagentContext#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -9129,7 +9182,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:runtime.destroyContext#context.boundary",
+    id: "host:runtime.destroyContext#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -9220,7 +9273,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:runtime.retireEntity#context.boundary",
+    id: "host:runtime.retireEntity#capability:context.boundary",
     rpcPlane: "host-service",
     capability: "context.boundary",
     authorityPrincipals: ["code", "host", "session", "user"],
@@ -9298,19 +9351,6 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:shellApproval.blockCapability",
-    rpcPlane: "host-service",
-    capability: "service:shellApproval.blockCapability",
-    authorityPrincipals: ["user", "code", "host"],
-    owner: "shellApproval",
-    method: "blockCapability",
-    sensitivity: "write",
-    resourceDerivation: {
-      kind: "literal",
-      key: "service:shellApproval.blockCapability",
-    },
-  },
-  {
     id: "host:shellApproval.listPending",
     rpcPlane: "host-service",
     capability: "service:shellApproval.listPending",
@@ -9373,6 +9413,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:shellApproval.resolveExternalAgentByRequest",
+    },
+  },
+  {
+    id: "host:shellApproval.resolveMissionReview",
+    rpcPlane: "host-service",
+    capability: "service:shellApproval.resolveMissionReview",
+    authorityPrincipals: ["user", "code", "host"],
+    owner: "shellApproval",
+    method: "resolveMissionReview",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:shellApproval.resolveMissionReview",
     },
   },
   {
@@ -9441,10 +9494,23 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:systemAgent.resolveConversation",
+    rpcPlane: "host-service",
+    capability: "service:systemAgent.resolveConversation",
+    authorityPrincipals: ["user", "code"],
+    owner: "systemAgent",
+    method: "resolveConversation",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:systemAgent.resolveConversation",
+    },
+  },
+  {
     id: "host:userlandApproval.list",
     rpcPlane: "host-service",
     capability: "service:userlandApproval.list",
-    authorityPrincipals: ["code"],
+    authorityPrincipals: ["code", "session"],
     owner: "userlandApproval",
     method: "list",
     sensitivity: "read",
@@ -9457,7 +9523,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     id: "host:userlandApproval.request",
     rpcPlane: "host-service",
     capability: "service:userlandApproval.request",
-    authorityPrincipals: ["code"],
+    authorityPrincipals: ["code", "session"],
     owner: "userlandApproval",
     method: "request",
     sensitivity: "write",
@@ -9496,7 +9562,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     id: "host:userlandApproval.requestSecretInput",
     rpcPlane: "host-service",
     capability: "service:userlandApproval.requestSecretInput",
-    authorityPrincipals: ["code"],
+    authorityPrincipals: ["code", "session"],
     owner: "userlandApproval",
     method: "requestSecretInput",
     sensitivity: "write",
@@ -9522,7 +9588,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     id: "host:userlandApproval.revoke",
     rpcPlane: "host-service",
     capability: "service:userlandApproval.revoke",
-    authorityPrincipals: ["code"],
+    authorityPrincipals: ["code", "session"],
     owner: "userlandApproval",
     method: "revoke",
     sensitivity: "destructive",
@@ -10117,7 +10183,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:workerdInspector.getEndpoint#runtime.inspect",
+    id: "host:workerdInspector.getEndpoint#capability:runtime.inspect",
     rpcPlane: "host-service",
     capability: "runtime.inspect",
     authorityPrincipals: ["code"],
@@ -10195,23 +10261,10 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:workers.resolveDurableObject#service:workers.resolveDurableObject",
+    id: "host:workers.resolveDurableObject#capability:service:workers.resolveDurableObject",
     rpcPlane: "host-service",
     capability: "service:workers.resolveDurableObject",
     authorityPrincipals: ["code"],
-    owner: "workers",
-    method: "resolveDurableObject",
-    sensitivity: "read",
-    resourceDerivation: {
-      kind: "prepared",
-      resolver: "workers.resolveDurableObject.target",
-    },
-  },
-  {
-    id: "host:workers.resolveDurableObject#workspace-service:*",
-    rpcPlane: "host-service",
-    capability: "workspace-service:*",
-    authorityPrincipals: ["code", "host", "user"],
     owner: "workers",
     method: "resolveDurableObject",
     sensitivity: "read",
@@ -10231,19 +10284,6 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:workers.resolveService",
-    },
-  },
-  {
-    id: "host:workers.resolveService#workspace-service:*",
-    rpcPlane: "host-service",
-    capability: "workspace-service:*",
-    authorityPrincipals: ["code", "host", "user"],
-    owner: "workers",
-    method: "resolveService",
-    sensitivity: "read",
-    resourceDerivation: {
-      kind: "prepared",
-      resolver: "workers.resolveService.workspace-service",
     },
   },
   {
@@ -11043,25 +11083,25 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     id: "workspace-service:channel",
     rpcPlane: "workspace-service",
     capability: "workspace-service:channel",
-    authorityPrincipals: ["host", "user", "code"],
+    authorityPrincipals: ["host", "user", "code", "session", "mission"],
   },
   {
     id: "workspace-service:gad.workspace",
     rpcPlane: "workspace-service",
     capability: "workspace-service:gad.workspace",
-    authorityPrincipals: ["host", "user", "code"],
+    authorityPrincipals: ["host", "user", "code", "session", "mission"],
   },
   {
     id: "workspace-service:models",
     rpcPlane: "workspace-service",
     capability: "workspace-service:models",
-    authorityPrincipals: ["host", "user", "code"],
+    authorityPrincipals: ["host", "user", "code", "session", "mission"],
   },
   {
     id: "workspace-service:testkit-driver",
     rpcPlane: "workspace-service",
     capability: "workspace-service:testkit-driver",
-    authorityPrincipals: ["host", "user", "code"],
+    authorityPrincipals: ["host", "user", "code", "session"],
   },
 ] as const;
 
@@ -11665,10 +11705,6 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "mission",
-    method: "approve",
-  },
-  {
-    service: "mission",
     method: "createDraft",
   },
   {
@@ -11689,7 +11725,15 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "mission",
+    method: "listRuns",
+  },
+  {
+    service: "mission",
     method: "pause",
+  },
+  {
+    service: "mission",
+    method: "requestReview",
   },
   {
     service: "mission",
@@ -11813,6 +11857,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "panelTree",
+    method: "diagnose",
+  },
+  {
+    service: "panelTree",
     method: "ensureLoaded",
   },
   {
@@ -11865,11 +11913,11 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "panelTree",
-    method: "openDevTools",
+    method: "observe",
   },
   {
     service: "panelTree",
-    method: "rebuildAndReload",
+    method: "openDevTools",
   },
   {
     service: "panelTree",
@@ -11913,7 +11961,15 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "permissions",
+    method: "listAgentProfiles",
+  },
+  {
+    service: "permissions",
     method: "revoke",
+  },
+  {
+    service: "permissions",
+    method: "updateAgentProfile",
   },
   {
     service: "phoneProvisioning",
@@ -12029,10 +12085,6 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "shellApproval",
-    method: "blockCapability",
-  },
-  {
-    service: "shellApproval",
     method: "listPending",
   },
   {
@@ -12053,6 +12105,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "shellApproval",
+    method: "resolveMissionReview",
+  },
+  {
+    service: "shellApproval",
     method: "resolveUserland",
   },
   {
@@ -12070,6 +12126,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   {
     service: "shellPresence",
     method: "heartbeat",
+  },
+  {
+    service: "systemAgent",
+    method: "resolveConversation",
   },
   {
     service: "userlandApproval",
@@ -12490,11 +12550,11 @@ export const EVAL_DIRECT_SURFACE_REACHABILITY = {
     },
     {
       source: "packages/agentic-do",
-      method: "onChannelEnvelope",
+      method: "onAuthorityChanged",
     },
     {
       source: "packages/agentic-do",
-      method: "onDeferredResult",
+      method: "onChannelEnvelope",
     },
     {
       source: "packages/agentic-do",
@@ -12548,11 +12608,11 @@ export const EVAL_DIRECT_SURFACE_REACHABILITY = {
     },
     {
       source: "packages/agentic-do",
-      method: "onChannelEnvelope",
+      method: "onAuthorityChanged",
     },
     {
       source: "packages/agentic-do",
-      method: "onDeferredResult",
+      method: "onChannelEnvelope",
     },
     {
       source: "packages/agentic-do",
@@ -12606,11 +12666,11 @@ export const EVAL_DIRECT_SURFACE_REACHABILITY = {
     },
     {
       source: "packages/agentic-do",
-      method: "onChannelEnvelope",
+      method: "onAuthorityChanged",
     },
     {
       source: "packages/agentic-do",
-      method: "onDeferredResult",
+      method: "onChannelEnvelope",
     },
     {
       source: "packages/agentic-do",
@@ -12664,11 +12724,11 @@ export const EVAL_DIRECT_SURFACE_REACHABILITY = {
     },
     {
       source: "packages/agentic-do",
-      method: "onChannelEnvelope",
+      method: "onAuthorityChanged",
     },
     {
       source: "packages/agentic-do",
-      method: "onDeferredResult",
+      method: "onChannelEnvelope",
     },
     {
       source: "packages/agentic-do",
@@ -12722,11 +12782,11 @@ export const EVAL_DIRECT_SURFACE_REACHABILITY = {
     },
     {
       source: "packages/agentic-do",
-      method: "onChannelEnvelope",
+      method: "onAuthorityChanged",
     },
     {
       source: "packages/agentic-do",
-      method: "onDeferredResult",
+      method: "onChannelEnvelope",
     },
     {
       source: "packages/agentic-do",
@@ -12780,11 +12840,11 @@ export const EVAL_DIRECT_SURFACE_REACHABILITY = {
     },
     {
       source: "packages/agentic-do",
-      method: "onChannelEnvelope",
+      method: "onAuthorityChanged",
     },
     {
       source: "packages/agentic-do",
-      method: "onDeferredResult",
+      method: "onChannelEnvelope",
     },
     {
       source: "packages/agentic-do",
@@ -12838,11 +12898,11 @@ export const EVAL_DIRECT_SURFACE_REACHABILITY = {
     },
     {
       source: "packages/agentic-do",
-      method: "onChannelEnvelope",
+      method: "onAuthorityChanged",
     },
     {
       source: "packages/agentic-do",
-      method: "onDeferredResult",
+      method: "onChannelEnvelope",
     },
     {
       source: "packages/agentic-do",
@@ -13159,12 +13219,11 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:panelTree.callAgent",
   "service:panelTree.close",
   "service:panelTree.create",
-  "service:panelTree.ensureLoaded",
+  "service:panelTree.diagnose",
   "service:panelTree.expandIds",
   "service:panelTree.focus",
   "service:panelTree.getCollapsedIds",
   "service:panelTree.getFocusedPanelId",
-  "service:panelTree.getRuntimeLease",
   "service:panelTree.getStateArgs",
   "service:panelTree.getTreeSnapshot",
   "service:panelTree.list",
@@ -13172,8 +13231,8 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:panelTree.movePanel",
   "service:panelTree.navigate",
   "service:panelTree.navigateHistory",
+  "service:panelTree.observe",
   "service:panelTree.openDevTools",
-  "service:panelTree.rebuildAndReload",
   "service:panelTree.rebuildPanel",
   "service:panelTree.reload",
   "service:panelTree.roots",
@@ -13184,7 +13243,9 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:panelTree.unload",
   "service:panelTree.updatePanelState",
   "service:permissions.list",
+  "service:permissions.listAgentProfiles",
   "service:permissions.revoke",
+  "service:permissions.updateAgentProfile",
   "service:phoneProvisioning.devices",
   "service:phoneProvisioning.install",
   "service:phoneProvisioning.openPairing",
@@ -13211,17 +13272,18 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:serverLog.stats",
   "service:serverLog.tail",
   "service:settings.getData",
-  "service:shellApproval.blockCapability",
   "service:shellApproval.listPending",
   "service:shellApproval.resolve",
   "service:shellApproval.resolveBootstrap",
   "service:shellApproval.resolveExternalAgent",
   "service:shellApproval.resolveExternalAgentByRequest",
+  "service:shellApproval.resolveMissionReview",
   "service:shellApproval.resolveUserland",
   "service:shellApproval.submitClientConfig",
   "service:shellApproval.submitCredentialInput",
   "service:shellApproval.submitSecretInput",
   "service:shellPresence.heartbeat",
+  "service:systemAgent.resolveConversation",
   "service:userlandApproval.list",
   "service:userlandApproval.request",
   "service:userlandApproval.requestAs",

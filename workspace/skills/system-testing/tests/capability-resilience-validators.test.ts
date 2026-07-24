@@ -102,6 +102,23 @@ function preflight(projectType: "panel" | "package" | "worker") {
   };
 }
 
+function bootEvidence(panelId: string) {
+  const identity = {
+    panelId,
+    attemptId: `attempt:${panelId}`,
+    runtimeEntityId: `entity:${panelId}`,
+    buildKey: `build:${panelId}`,
+  };
+  return {
+    ready: { phase: "ready", ...identity },
+    snapshot: {
+      ...identity,
+      capturedAt: 1,
+      document: { kind: "synth", structure: { role: "document" } },
+    },
+  };
+}
+
 describe("capability and resilience prompts", () => {
   it("state user goals without proof protocols or API choreography", () => {
     const tests = [
@@ -200,8 +217,38 @@ describe("approval semantic validators", () => {
       ).passed
     ).toBe(true);
     expect(
+      scenario(approvalPermissionTests, "permissions-list").validate(
+        execution([
+          evalCall(
+            'const grants = await rpc.call("main", "permissions.list", []); return { grants };',
+            { grants: [] }
+          ),
+        ])
+      ).passed
+    ).toBe(true);
+    expect(
       scenario(approvalPermissionTests, "approvals-list").validate(
         execution([evalCall("return approvals.list();", [])])
+      ).passed
+    ).toBe(true);
+    expect(
+      scenario(approvalPermissionTests, "approvals-list").validate(
+        execution([
+          evalCall(
+            "const list = await approvals.list(); return { count: list.length, list };",
+            { count: 0, list: [] }
+          ),
+        ])
+      ).passed
+    ).toBe(true);
+    expect(
+      scenario(approvalPermissionTests, "approvals-list").validate(
+        execution([
+          evalCall(
+            "const decisions = await approvals.list(); return { count: decisions.length, decisions };",
+            { count: 0, decisions: [] }
+          ),
+        ])
       ).passed
     ).toBe(true);
   });
@@ -219,6 +266,340 @@ describe("approval semantic validators", () => {
       evalCall("return approvals.list();", []),
     ]);
     expect(test.validate(result)).toEqual({ passed: true, reason: undefined });
+    expect(
+      test.validate(
+        execution([
+          evalCall(
+            [
+              "const before = await rpc.call('main', 'userlandApproval.list', []);",
+              `const request = await rpc.call('main', 'userlandApproval.request', [{ subject: { id: '${subject}' } }]);`,
+              "const after = await rpc.call('main', 'userlandApproval.list', []);",
+              "return { beforeCount: before.length, request, after };",
+            ].join("\n"),
+            {
+              beforeCount: 0,
+              request: { kind: "choice", choice: "allow" },
+              after: [{ subject: { id: subject }, choice: "allow" }],
+            }
+          ),
+          evalCall(
+            [
+              `const revokeResult = await rpc.call('main', 'userlandApproval.revoke', ['${subject}']);`,
+              "const finalList = await rpc.call('main', 'userlandApproval.list', []);",
+              "return { revokeResult, finalCount: finalList.length, finalList };",
+            ].join("\n"),
+            { revokeResult: true, finalCount: 0, finalList: [] }
+          ),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+    expect(
+      test.validate(
+        execution([
+          evalCall(
+            [
+              `const subject = { id: "${subject}", label: "Harmless check" };`,
+              "const before = await approvals.list();",
+              "const decision = await approvals.request({ subject, title: 'Allow check?' });",
+              "const afterApprove = await approvals.list();",
+              "const revoked = await approvals.revoke(subject.id);",
+              "const afterRevoke = await approvals.list();",
+              "return {",
+              "  beforeCount: before.length,",
+              "  decision,",
+              "  afterApproveCount: afterApprove.length,",
+              "  revoked,",
+              "  afterRevokeCount: afterRevoke.length,",
+              "  leakedDecision: afterRevoke.some((entry) => entry.subject.id === subject.id),",
+              "};",
+            ].join("\n"),
+            {
+              beforeCount: 0,
+              decision: { kind: "choice", choice: "allow" },
+              afterApproveCount: 1,
+              revoked: true,
+              afterRevokeCount: 0,
+              leakedDecision: false,
+            }
+          ),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+    expect(
+      test.validate(
+        execution([
+          evalCall(
+            [
+              `const subjectId = "${subject}";`,
+              "const before = await approvals.list();",
+              "const request = await approvals.request({ subject: { id: subjectId } });",
+              "const afterApprove = await approvals.list();",
+              "await approvals.revoke(subjectId);",
+              "const afterRevoke = await approvals.list();",
+              "return {",
+              "  beforeCount: before.length,",
+              "  request,",
+              "  afterApproveCount: afterApprove.length,",
+              "  afterRevokeCount: afterRevoke.length,",
+              "  removed: !afterRevoke.some((entry) => entry.subject.id === subjectId),",
+              "};",
+            ].join("\n"),
+            {
+              beforeCount: 0,
+              request: { kind: "choice", choice: "allow" },
+              afterApproveCount: 1,
+              afterRevokeCount: 0,
+              removed: true,
+            }
+          ),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+    expect(
+      test.validate(
+        execution([
+          evalCall(
+            [
+              `const subjectId = "${subject}";`,
+              "const request = await approvals.request({ subject: { id: subjectId } });",
+              "const afterRequest = await approvals.list();",
+              "if (request.kind === 'choice') await approvals.revoke(subjectId);",
+              "const afterRevoke = await approvals.list();",
+              "return { request, afterRequest, afterRevoke };",
+            ].join("\n"),
+            {
+              request: { kind: "choice", choice: "allow" },
+              afterRequest: [{ subject: { id: subject }, choice: "allow" }],
+              afterRevoke: [],
+            }
+          ),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+    expect(
+      test.validate(
+        execution([
+          evalCall(
+            [
+              `const subjectId = "${subject}";`,
+              "const subject = { id: subjectId };",
+              "const before = await approvals.list();",
+              "const request = await approvals.request({ subject });",
+              "const afterRequest = await approvals.list();",
+              "const revoked = await approvals.revoke(subjectId);",
+              "const afterRevoke = await approvals.list();",
+              "return {",
+              "  beforeCount: before.length,",
+              "  request,",
+              "  afterRequestMatch: afterRequest.filter((entry) => entry.subject.id === subjectId),",
+              "  revoked,",
+              "  afterRevokeMatch: afterRevoke.filter((entry) => entry.subject.id === subjectId),",
+              "  afterRevokeCount: afterRevoke.length,",
+              "};",
+            ].join("\n"),
+            {
+              beforeCount: 0,
+              request: { kind: "choice", choice: "allow" },
+              afterRequestMatch: [{ subject: { id: subject }, choice: "allow" }],
+              revoked: true,
+              afterRevokeMatch: [],
+              afterRevokeCount: 0,
+            }
+          ),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+    expect(
+      test.validate(
+        execution([
+          evalCall("const before = await approvals.list(); return before;", []),
+          evalCall(
+            [
+              `const subjectId = "${subject}";`,
+              "const requested = await approvals.request({ subject: { id: subjectId } });",
+              "return { requested, listAfter: await approvals.list() };",
+            ].join("\n"),
+            {
+              requested: { kind: "choice", choice: "allow" },
+              listAfter: [{ subject: { id: subject }, choice: "allow" }],
+            }
+          ),
+          evalCall(
+            [`await approvals.revoke("${subject}");`, "return await approvals.list();"].join("\n"),
+            []
+          ),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+    expect(
+      test.validate(
+        execution([
+          evalCall(
+            [
+              `const subject = { id: "${subject}", label: "Harmless check" };`,
+              "const before = await rpc.call('main', 'userlandApproval.list', []);",
+              "const request = await rpc.call('main', 'userlandApproval.request', [{ subject }]);",
+              "const mid = await rpc.call('main', 'userlandApproval.list', []);",
+              "const revoked = await rpc.call('main', 'userlandApproval.revoke', [subject.id]);",
+              "const after = await rpc.call('main', 'userlandApproval.list', []);",
+              "const filter = (entries) => entries.filter((entry) => entry.subject.id === subject.id);",
+              "return { before: filter(before).length, request, mid: filter(mid), revoked, after: filter(after) };",
+            ].join("\n"),
+            {
+              before: 0,
+              request: { kind: "choice", choice: "allow" },
+              mid: [{ subject: { id: subject }, choice: "allow" }],
+              revoked: true,
+              after: [],
+            }
+          ),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+    expect(
+      test.validate(
+        execution([
+          evalCall(
+            [
+              `const subject = { id: "${subject}", label: "Harmless check" };`,
+              "const prompt = { subject, title: 'Allow check?' };",
+              "const before = await approvals.list();",
+              "const approval = await approvals.request(prompt);",
+              "const afterRequest = await approvals.list();",
+              "const revoked = await approvals.revoke(subject.id);",
+              "const afterRevoke = await approvals.list();",
+              "return {",
+              "  beforeCount: before.length,",
+              "  approval,",
+              "  afterRequestCount: afterRequest.length,",
+              "  revoked,",
+              "  afterRevokeCount: afterRevoke.length,",
+              "  matchingAfterRevoke: afterRevoke.filter((entry) => entry.subject.id === subject.id),",
+              "};",
+            ].join("\n"),
+            {
+              beforeCount: 0,
+              approval: { kind: "choice", choice: "allow" },
+              afterRequestCount: 1,
+              revoked: true,
+              afterRevokeCount: 0,
+              matchingAfterRevoke: [],
+            }
+          ),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+    expect(
+      test.validate(
+        execution([
+          evalCall(
+            [
+              `const subjectId = "${subject}";`,
+              "const before = await approvals.list();",
+              "const decision = await approvals.request({ subject: { id: subjectId } });",
+              "const afterRequest = await approvals.list();",
+              "await approvals.revoke(subjectId);",
+              "const afterRevoke = await approvals.list();",
+              "return { before, decision, afterRequest, afterRevoke };",
+            ].join("\n"),
+            {
+              before: [],
+              decision: { kind: "choice", choice: "allow" },
+              afterRequest: [{ subject: { id: subject }, choice: "allow" }],
+              afterRevoke: [],
+            }
+          ),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+    expect(
+      test.validate(
+        execution([
+          evalCall(
+            [
+              `const subjectId = "${subject}";`,
+              "const before = await approvals.list();",
+              "const requestResult = await approvals.request({ subject: { id: subjectId } });",
+              "const afterRequest = await approvals.list();",
+              "await approvals.revoke(subjectId);",
+              "const afterRevoke = await approvals.list();",
+              "return {",
+              "  beforeCount: before.length,",
+              "  requestResult,",
+              "  afterRequestCount: afterRequest.length,",
+              "  afterRevokeCount: afterRevoke.length,",
+              "  beforeHas: before.some((entry) => entry.subject.id === subjectId),",
+              "  afterRequestHas: afterRequest.some((entry) => entry.subject.id === subjectId),",
+              "  afterRevokeHas: afterRevoke.some((entry) => entry.subject.id === subjectId),",
+              "};",
+            ].join("\n"),
+            {
+              beforeCount: 0,
+              requestResult: { kind: "choice", choice: "allow" },
+              afterRequestCount: 1,
+              afterRevokeCount: 0,
+              beforeHas: false,
+              afterRequestHas: true,
+              afterRevokeHas: false,
+            }
+          ),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+    expect(
+      test.validate(
+        execution([
+          evalCall(
+            [
+              `const subject = { id: "${subject}", label: "Harmless check" };`,
+              "const before = await approvals.list();",
+              "const decision = await approvals.request({ subject, title: 'Allow check?', summary: 'Verify approval cleanup.' });",
+              "const afterRequest = await approvals.list();",
+              "const revoked = await approvals.revoke(subject.id);",
+              "const finalList = await approvals.list();",
+              "return { before, decision, afterRequest, revoked, finalList };",
+            ].join("\n"),
+            {
+              before: [],
+              decision: { kind: "choice", choice: "allow" },
+              afterRequest: [{ subject: { id: subject }, choice: "allow" }],
+              revoked: true,
+              finalList: [],
+            }
+          ),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+    expect(
+      test.validate(
+        execution([
+          evalCall("const before = await approvals.list(); return { before };", { before: [] }),
+          evalCall(
+            `return approvals.request({ subject: { id: "${subject}", label: "Harmless check" }, title: "Allow check?", summary: "Verify approval cleanup." });`,
+            { kind: "choice", choice: "allow" }
+          ),
+          evalCall(
+            [
+              "const afterAllow = await approvals.list();",
+              "const id = afterAllow[0].subject.id;",
+              "const revokeResult = await approvals.revoke(id);",
+              "const finalList = await approvals.list();",
+              "return { afterAllow, revokeResult, finalList };",
+            ].join("\n"),
+            {
+              afterAllow: [
+                {
+                  subject: { id: subject },
+                  choice: "allow",
+                },
+              ],
+              revokeResult: true,
+              finalList: [],
+            }
+          ),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
     expect(
       test.validate(
         execution([
@@ -331,6 +712,7 @@ describe("project lifecycle semantic validators", () => {
               preflight: preflight("panel"),
               publication: publication(),
               openedPanelId: "panel:1",
+              ...bootEvidence("panel:1"),
             }
           ),
         ])
@@ -350,6 +732,7 @@ describe("project lifecycle semantic validators", () => {
               preflight: preflight("panel"),
               publication: publication(),
               openedPanelId: "panel:2",
+              ...bootEvidence("panel:2"),
             }
           ),
         ])

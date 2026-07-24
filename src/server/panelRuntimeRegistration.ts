@@ -38,6 +38,11 @@ import { isPanelEntityId } from "@vibestudio/shared/panel/ids";
 import type { SlotRow } from "@vibestudio/shell-core/workspaceStateClient";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { ContextIngestionRecorder } from "./services/contextIntegrityStore.js";
+import { rpcErrorDataOf } from "@vibestudio/rpc";
+import {
+  panelFailure,
+  panelFailureBoundaryError,
+} from "@vibestudio/shared/panel/observation";
 
 const log = createDevLogger("PanelRuntimeRegistration");
 
@@ -297,7 +302,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         effectiveVersion: rec.source.effectiveVersion,
         executionDigest: rec.activeExecutionDigest,
         requested: rec.activeAuthority.requests,
-        evalCeilings: rec.activeAuthority.evalCeilings,
       });
     },
   };
@@ -318,15 +322,23 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           await deps.persistWorkspaceConfigField(ctx, key, value);
         },
         contextFiles: {
-          readFile: async (ctx, filePath) => {
+          readFile: async (ctx, filePath, contextId) => {
             const fsService =
               container.get<import("@vibestudio/shared/fsService").FsService>("fsService");
-            return (await fsService.handleCall(ctx, "readFile", [filePath, "utf8"])) as string;
+            return (await fsService.handleCall(
+              ctx,
+              "readFile",
+              contextId ? [contextId, filePath, "utf8"] : [filePath, "utf8"]
+            )) as string;
           },
-          glob: async (ctx, pattern, options) => {
+          readManagedFiles: async (ctx, patterns, contextId) => {
             const fsService =
               container.get<import("@vibestudio/shared/fsService").FsService>("fsService");
-            return (await fsService.handleCall(ctx, "glob", [pattern, options])) as string[];
+            return fsService.readManagedFiles(
+              ctx,
+              patterns,
+              contextId ? { explicitContextId: contextId } : undefined
+            );
           },
         },
         recordContextIngestion: deps.recordContextIngestion,
@@ -624,10 +636,55 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           validateOpenPanelSource: async ({ source, options }) => {
             if (!shouldValidateOpenPanelWorkspaceUnit(source)) return;
             const ref = panelOpenBuildRef(options);
-            const unit = await buildSystem.resolveBuildUnit(source, ref);
+            let unit;
+            try {
+              unit = await buildSystem.resolveBuildUnit(source, ref);
+            } catch (error) {
+              const details = rpcErrorDataOf(error);
+              const message = error instanceof Error ? error.message : String(error);
+              throw panelFailureBoundaryError(
+                panelFailure({
+                  code:
+                    (details as { code?: unknown } | undefined)?.code === "package_not_found"
+                      ? "unit_not_found"
+                      : /ref|context|state/iu.test(message)
+                        ? "ref_not_found"
+                        : "dependency_resolution_failed",
+                  stage: "resolve",
+                  message,
+                  provenance: {
+                    source,
+                    contextId:
+                      typeof options["contextId"] === "string"
+                        ? options["contextId"]
+                        : "unassigned",
+                    requestedRef: ref ?? "main",
+                  },
+                  ...(details && typeof details === "object"
+                    ? { details: details as Record<string, unknown> }
+                    : {}),
+                }),
+                error
+              );
+            }
             if (!unit) {
-              throw new Error(
-                ref ? `Unknown build unit at ${ref}: ${source}` : `Unknown build unit: ${source}`
+              const message = ref
+                ? `Unknown build unit at ${ref}: ${source}`
+                : `Unknown build unit: ${source}`;
+              throw panelFailureBoundaryError(
+                panelFailure({
+                  code: "unit_not_found",
+                  stage: "resolve",
+                  message,
+                  provenance: {
+                    source,
+                    contextId:
+                      typeof options["contextId"] === "string"
+                        ? options["contextId"]
+                        : "unassigned",
+                    requestedRef: ref ?? "main",
+                  },
+                })
               );
             }
           },

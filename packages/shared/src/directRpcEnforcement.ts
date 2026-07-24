@@ -3,10 +3,10 @@ import type {
   AuthorityFailureInfo,
   AuthorityGrant,
   AuthorityRequirement,
-  DirectAuthorityAttestation,
   PrincipalKind,
   RpcAuthorityEffect,
 } from "@vibestudio/rpc";
+import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import {
   authorityFailureForDecision,
   bindMethodCapability,
@@ -243,6 +243,7 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
     requirement: methodRequirement,
     resourceKey: input.resourceKey,
     grants: attestation.grants,
+    locks: attestation.locks,
     now,
     tier: declaration.tier,
     invocationDigest,
@@ -275,6 +276,7 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
       ),
       resourceKey: input.resourceKey,
       grants: attestation.grants,
+      locks: attestation.locks,
       now,
       tier: attestation.targetTier,
       invocationDigest,

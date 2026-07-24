@@ -13,7 +13,6 @@ import { DEV_WEBRTC_REMOTE_ARG } from "./startupInvocation.js";
 // resetModules + re-import in each test.
 
 const mockResolveWorkspaceName = vi.fn(() => null as string | null);
-const mockConsumeDesktopAutoApproveOnce = vi.fn(() => false);
 const mockIsDev = vi.fn(() => false);
 const mockResolveLocalWorkspaceStartup = vi.fn((_opts?: unknown) => ({
   resolved: {
@@ -27,7 +26,6 @@ const mockResolveLocalWorkspaceStartup = vi.fn((_opts?: unknown) => ({
 
 vi.mock("@vibestudio/workspace/loader", () => ({
   resolveWorkspaceName: () => mockResolveWorkspaceName(),
-  consumeDesktopAutoApproveOnce: () => mockConsumeDesktopAutoApproveOnce(),
   resolveOrCreateWorkspace: () => {
     throw new Error("not used in these tests");
   },
@@ -45,7 +43,6 @@ vi.mock("./paths.js", () => ({
 vi.mock("./utils.js", () => ({ isDev: () => mockIsDev() }));
 
 const ORIGINAL_ARGV = process.argv.slice();
-const ORIGINAL_AUTO_APPROVE_STARTUP_UNITS = process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"];
 
 function setArgv(args: string[]) {
   process.argv = [...ORIGINAL_ARGV.slice(0, 2), ...args];
@@ -60,11 +57,8 @@ describe("resolveStartupMode interactive desktop policy", () => {
 
   beforeEach(async () => {
     setArgv([]);
-    delete process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"];
     mockResolveWorkspaceName.mockReset();
     mockResolveWorkspaceName.mockReturnValue(null);
-    mockConsumeDesktopAutoApproveOnce.mockReset();
-    mockConsumeDesktopAutoApproveOnce.mockReturnValue(false);
     mockResolveLocalWorkspaceStartup.mockClear();
     mockIsDev.mockReset();
     mockIsDev.mockReturnValue(false);
@@ -74,11 +68,6 @@ describe("resolveStartupMode interactive desktop policy", () => {
 
   afterEach(() => {
     setArgv([]);
-    if (ORIGINAL_AUTO_APPROVE_STARTUP_UNITS === undefined) {
-      delete process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"];
-    } else {
-      process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] = ORIGINAL_AUTO_APPROVE_STARTUP_UNITS;
-    }
   });
 
   it("launches the local default/last workspace by default", () => {
@@ -109,7 +98,6 @@ describe("resolveStartupMode interactive desktop policy", () => {
       workspaceId: "dev",
       isEphemeral: true,
       ephemeralLifecycle: "replace",
-      autoApproveStartupUnits: false,
     });
     expect(mockResolveLocalWorkspaceStartup).not.toHaveBeenCalled();
   });
@@ -203,7 +191,6 @@ describe("resolveStartupMode interactive desktop policy", () => {
       workspaceId: "dev",
       isEphemeral: true,
       ephemeralLifecycle: "resume",
-      autoApproveStartupUnits: false,
     });
     expect(mockResolveLocalWorkspaceStartup).not.toHaveBeenCalled();
   });
@@ -242,68 +229,6 @@ describe("resolveStartupMode interactive desktop policy", () => {
       expect.not.objectContaining({ init: true })
     );
   });
-
-  it("auto-approves startup units for a newly created default workspace", () => {
-    mockResolveLocalWorkspaceStartup.mockReturnValueOnce({
-      resolved: {
-        wsDir: "/tmp/vibestudio-default-workspace",
-        workspace: { config: { id: "default-id" } },
-        name: "default",
-        created: true,
-      },
-      isEphemeral: false,
-    });
-
-    expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
-      kind: "local",
-      connectionIntent: "resume-saved-remote",
-      workspaceName: "default",
-      autoApproveStartupUnits: true,
-    });
-  });
-
-  it("auto-approves shipped startup units for every newly created named workspace", () => {
-    setArgv(["--workspace", "my-first-workspace", "--workspace-create-if-missing"]);
-    mockResolveWorkspaceName.mockReturnValue("my-first-workspace");
-    mockResolveLocalWorkspaceStartup.mockReturnValueOnce({
-      resolved: {
-        wsDir: "/tmp/vibestudio-my-first-workspace",
-        workspace: { config: { id: "my-first-workspace-id" } },
-        name: "my-first-workspace",
-        created: true,
-      },
-      isEphemeral: false,
-    });
-
-    expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
-      kind: "local",
-      connectionIntent: "local",
-      workspaceName: "my-first-workspace",
-      autoApproveStartupUnits: true,
-    });
-  });
-
-  it("honors the startup-unit auto-approval env for explicit workspaces", () => {
-    process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] = "1";
-    setArgv(["--workspace", "e2e-explicit"]);
-    mockResolveWorkspaceName.mockReturnValue("e2e-explicit");
-    mockResolveLocalWorkspaceStartup.mockReturnValueOnce({
-      resolved: {
-        wsDir: "/tmp/vibestudio-e2e-explicit",
-        workspace: { config: { id: "e2e-explicit-id" } },
-        name: "e2e-explicit",
-        created: false,
-      },
-      isEphemeral: false,
-    });
-
-    expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
-      kind: "local",
-      connectionIntent: "local",
-      workspaceName: "e2e-explicit",
-      autoApproveStartupUnits: true,
-    });
-  });
 });
 
 describe("shouldRequestSingleInstanceLock", () => {
@@ -320,7 +245,6 @@ describe("shouldRequestSingleInstanceLock", () => {
           workspaceId: "dev",
           isEphemeral: true,
           ephemeralLifecycle: "replace",
-          autoApproveStartupUnits: false,
         },
         { isHeadlessHost: false, isDevelopment: true }
       )
@@ -340,7 +264,6 @@ describe("shouldRequestSingleInstanceLock", () => {
           workspaceId: "default",
           isEphemeral: false,
           ephemeralLifecycle: null,
-          autoApproveStartupUnits: false,
         },
         { isHeadlessHost: false, isDevelopment: false }
       )

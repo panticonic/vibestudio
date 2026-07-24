@@ -3,9 +3,10 @@
 When system tests reveal bugs in Vibestudio, follow this workflow to fix them.
 
 For unattended live runs, launch a disposable server with
-`vibestudio remote serve --dev --auto-approve`. This reuses the host's existing
-development approval-queue auto-approver, including credential and userland
-requests that are separate from chat tool approval levels.
+`vibestudio remote serve --dev`. System tests carry a host-attested, per-run
+test policy for gated invocations; credential, userland, critical, and standing
+requests remain human decisions and are separate from chat tool approval
+levels.
 
 ## Priority: Fix Infrastructure First
 
@@ -337,6 +338,28 @@ explicit build against the test context when build confidence is part of the
 test. If a failure appears on the state-triggered post-publication build path,
 inspect the build event buffer before repairing source:
 
+For fixture-backed tests, publication and teardown authority come from the
+same fixture ownership. The runner emits paired rules for
+`workspace-source-change:<repoPath>:main` (`workspace-main-advance`) and
+`workspace-repo-delete:<repoPath>` (`workspace-repo-delete`): exact rules for a
+seeded repository, or section-prefix rules when the task owns one
+as-yet-unnamed created/derived repository. The latter is critical authority,
+but it is not a harness bypass—the cleanup context carries the same resident
+test policy and exercises the ordinary protected VCS path. Do not duplicate
+either rule in a scenario prompt or case policy. A request outside the fixture
+scope must fail immediately as an unexpected test prompt instead of entering
+the interactive approval queue.
+The originating VCS abort signal also owns the protected authority wait. When
+an eval deadline fires, acquisition, semantic publication, and the held EvalDO
+request must unwind together. If the tool reports a timeout while the EvalDO
+continues running, inspect this signal chain rather than increasing either
+deadline.
+Unit/config review does not own a separate decision path. The protected-main
+gate carries its typed unit rows and config summary through the canonical
+authority acquisition, preserving the same repository-qualified capability,
+test policy, grant, abort signal, and terminal result. An unattended test
+waiting on a unit-batch card indicates a host bypass, not missing prompt text.
+
 ```typescript
 // Eval uses the same portable `rpc.call(target, method, args)` shape as panels/workers.
 // Raw server services target "main".
@@ -601,10 +624,27 @@ Choose the restart boundary that owns the changed code:
   from the checkout on each process start.
 - For changes under `workspace/` (including this skill, agents, workers, and
   userland packages), stop the current server and start
-  `pnpm server:live --ephemeral`. The ephemeral workspace is copied fresh from
-  the checkout template. A named `--bootstrap-workspace` is durable product
-  state: restarting it correctly preserves its semantic source and build
-  projections, so it must never be treated as a checkout-sync mechanism.
+  `pnpm server:live --ephemeral --instance INSTANCE`. The supervisor creates an
+  isolated disposable hub and copies its workspace fresh from the checkout
+  template. Use `pnpm cli --instance INSTANCE ...` for every command in that
+  investigation. A named `--bootstrap-workspace` is durable product state:
+  restarting it correctly preserves its semantic source and build projections,
+  so it must never be treated as a checkout-sync mechanism.
+
+The headless host and desktop/mobile shells consume one shared, complete
+workspace-state/runtime adapter contract. If panel hosting reports a missing
+adapter method, repair that shared contract and its host typecheck; do not
+special-case panel loading or weaken the readiness validator. Panel tree slot
+creation is allowed to settle before renderer readiness, while `openPanel`
+remains the boot-ready public boundary.
+
+Desktop and headless inspecting hosts must also implement the same canonical
+`panelObservation` host command. Both use the shared bounded browser probe and
+parser for URL, document readiness, and the exact bootstrap identity. A
+registered CDP target, successful navigation event, view existence, or empty
+snapshot is not alternate readiness evidence. If a host says the command is
+unknown, classify it as a host-contract infrastructure failure and repair the
+host implementation before changing the agent prompt or validator.
 
 Before assuming a repair failed, verify:
 

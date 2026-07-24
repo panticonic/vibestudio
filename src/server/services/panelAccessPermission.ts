@@ -94,7 +94,6 @@ function verbFor(op: PanelAccessOperation): string {
     case "openDevTools":
       return "Open DevTools in";
     case "rebuildPanel":
-    case "rebuildAndReload":
       return "Rebuild panel in";
     case "updatePanelState":
     case "stateArgs.set":

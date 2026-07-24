@@ -123,7 +123,6 @@ initPanels:
 
         - `openExternal(authorizeUrl, { expectedRedirectUri })` for OAuth
         authorize URLs
-
 singletonObjects:
   - source: workers/model-settings
     className: ModelSettingsDO
@@ -136,7 +135,12 @@ services:
     name: channel
     title: Conversations
     action: send and receive messages in your conversations
-    description: Access your workspace's conversations, including sending messages and reading replies.
+    description: Access your workspace's conversations, including sending messages
+      and reading replies.
+    presentation:
+      domain: sharing
+      verb: act
+      substanceKind: send
     protocols:
       - vibestudio.channel.v1
     authority:
@@ -144,6 +148,8 @@ services:
         - host
         - user
         - code
+        - session
+        - mission
     durableObject:
       className: PubSubChannel
   - source: workers/model-settings
@@ -151,6 +157,9 @@ services:
     title: AI model settings
     action: read or change which AI models your workspace uses
     description: Read or change the AI model and provider settings for this workspace.
+    presentation:
+      domain: automation
+      verb: manage
     protocols:
       - vibestudio.models.v1
     authority:
@@ -158,6 +167,8 @@ services:
         - host
         - user
         - code
+        - session
+        - mission
     durableObject:
       className: ModelSettingsDO
   - source: workers/testkit-driver
@@ -165,6 +176,9 @@ services:
     title: Test runner
     action: run workspace tests and record results
     description: Run this workspace's test suite and record results.
+    presentation:
+      domain: automation
+      verb: act
     protocols:
       - vibestudio.testkit-driver.v1
     authority:
@@ -172,6 +186,7 @@ services:
         - host
         - user
         - code
+        - session
     durableObject:
       className: TestkitDriverDO
 routes: []
@@ -192,8 +207,6 @@ apps:
   - source: apps/shell
   - source: apps/mobile
   - source: apps/remote-cli
-# Provider slots: which workspace units fulfil host-integrated roles. A missing
-# slot cleanly disables the corresponding host feature (no hardcoded fallback).
 providers:
   evalEngine:
     source: "@workspace/eval"
@@ -207,14 +220,10 @@ providers:
     extension: extensions/git-bridge
   claudeCode:
     extension: extensions/claude-code
-# App trust grants (approval-gated like every meta edit): which workspace apps
-# may render host chrome.
 trust:
   chromeApps:
     - apps/shell
     - apps/mobile
-# Preferred app per host target, plus startup-ordering constraints
-# (extensions that must run before the app can build).
 hostTargets:
   electron:
     app: apps/shell
@@ -224,3 +233,16 @@ hostTargets:
       - extensions/react-native
   terminal:
     app: apps/remote-cli
+git:
+  remotes:
+    projects:
+      vibestudio:
+        origin:
+          url: https://github.com/panticonic/vibestudio
+          branch: main
+  upstreams:
+    projects:
+      vibestudio:
+        remote: origin
+        branch: main
+        autoPush: false

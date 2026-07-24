@@ -66,7 +66,7 @@ export function createWorkerdInspectorService(
       [WORKERD_INSPECTOR_AUTHORITY_RESOLVER]: (ctx, [rawTargetPath]) => {
         if (
           isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability }) ||
-          (!ctx.caller.code && ctx.caller.sessionOrigin !== true)
+          (!ctx.caller.code && !ctx.caller.executionSession)
         ) {
           return [];
         }

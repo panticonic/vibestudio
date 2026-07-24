@@ -25,7 +25,10 @@ type PendingApproval = {
   approvalId: string;
   kind: string;
   title?: string;
+  capability?: string;
   credentialLabel?: string;
+  allowedDecisions?: string[];
+  resource?: { type?: string; label?: string; value?: string };
   units?: Array<{ unitKind: string; unitName: string; target?: string | null }>;
 };
 
@@ -130,7 +133,7 @@ async function makeWorkspaceExtensionRequireApproval(workspaceDir: string): Prom
           displayName: "E2E Approval Extension",
           entry: "index.ts",
           extension: { activationEvents: ["*"] },
-          authority: { requests: [], evalCeilings: [] },
+          authority: { requests: [] },
         },
       },
       null,
@@ -152,8 +155,13 @@ async function makeWorkspaceExtensionRequireApproval(workspaceDir: string): Prom
   );
   const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
   const config = (YAML.parse(await fs.readFile(configPath, "utf8")) ?? {}) as {
+    defaultAgentConfig?: { model?: string };
     extensions?: unknown[];
     initPanels?: Array<{ source?: string; stateArgs?: Record<string, unknown> }>;
+  };
+  config.defaultAgentConfig = {
+    ...config.defaultAgentConfig,
+    model: "openai-codex:gpt-5.4-mini",
   };
   config.extensions = [
     ...(Array.isArray(config.extensions) ? config.extensions : []),
@@ -170,6 +178,17 @@ async function makeWorkspaceExtensionRequireApproval(workspaceDir: string): Prom
   }
   await fs.writeFile(configPath, YAML.stringify(config), "utf8");
   return initialPrompt;
+}
+
+async function setInitialChatPrompt(workspaceDir: string, prompt: string): Promise<void> {
+  const configPath = path.join(workspaceDir, "source", "meta", "vibestudio.yml");
+  const config = (YAML.parse(await fs.readFile(configPath, "utf8")) ?? {}) as {
+    initPanels?: Array<{ source?: string; stateArgs?: Record<string, unknown> }>;
+  };
+  const initialChat = config.initPanels?.find((panel) => panel.source === "panels/chat");
+  if (!initialChat) throw new Error("Expected an initial chat panel in the workspace config");
+  initialChat.stateArgs = { ...initialChat.stateArgs, initialPrompt: prompt };
+  await fs.writeFile(configPath, YAML.stringify(config), "utf8");
 }
 
 async function listPendingApprovals(testApp: TestApp): Promise<PendingApproval[]> {
@@ -257,6 +276,35 @@ async function credentialApprovalActionStyles(
           true
         );
         if (styles) return styles;
+      } catch {
+        // Ignore non-DOM and transiently navigating webContents.
+      }
+    }
+    return null;
+  });
+}
+
+async function capabilityApprovalUiSnapshot(
+  testApp: TestApp
+): Promise<{ text: string; buttons: string[] } | null> {
+  return testApp.app.evaluate(async ({ webContents }) => {
+    for (const contents of webContents.getAllWebContents()) {
+      if (contents.isDestroyed()) continue;
+      try {
+        const snapshot = await contents.executeJavaScript(
+          `(() => {
+            const card = document.querySelector(".approval-card");
+            if (!(card instanceof HTMLElement)) return null;
+            return {
+              text: card.innerText,
+              buttons: Array.from(card.querySelectorAll("button"))
+                .map((button) => button.innerText.trim())
+                .filter(Boolean),
+            };
+          })()`,
+          true
+        );
+        if (snapshot) return snapshot;
       } catch {
         // Ignore non-DOM and transiently navigating webContents.
       }
@@ -735,10 +783,12 @@ async function collectStartupAgentCompletion(
             ? agentic.payload.blocks.map((block) => ({
                 type: block?.type,
                 content: typeof block?.content === "string" ? block.content : "",
+                metadata: block?.metadata,
               }))
             : rawBlocks.map((block) => ({
                 type: block?.type,
                 content: typeof block?.content === "string" ? block.content : "",
+                metadata: block?.metadata,
               }));
           return {
             senderId: event?.senderId,
@@ -758,6 +808,7 @@ async function collectStartupAgentCompletion(
                 : "",
             outcome: body?.outcome ?? message?.outcome,
             reason: body?.reason,
+            error: body?.error,
             recoverable: body?.recoverable,
             blocks,
           };
@@ -866,7 +917,26 @@ async function collectStartupAgentCompletion(
         }
         return event["kind"] === "message.completed" && event["outcome"] === "empty";
       })
-      .map((event) => `${String(event["kind"])}:${String(event["outcome"] ?? "")}`);
+      .map(
+        (event) =>
+          `${String(event["kind"])}:${String(event["outcome"] ?? "")}:` +
+          `${String(event["reason"] ?? "")}:` +
+          `${JSON.stringify(event["error"] ?? event["result"] ?? null)}`
+      );
+    for (const event of events) {
+      if (event["kind"] !== "message.completed" || !isAgentEvent(event)) continue;
+      const blocks = Array.isArray(event["blocks"]) ? event["blocks"] : [];
+      for (const block of blocks) {
+        if (!block || typeof block !== "object") continue;
+        const record = block as { type?: unknown; metadata?: unknown };
+        if (record.type !== "diagnostic" || !record.metadata || typeof record.metadata !== "object")
+          continue;
+        const metadata = record.metadata as Record<string, unknown>;
+        failures.push(
+          `diagnostic:${String(metadata["code"] ?? "unknown")}:${String(metadata["reason"] ?? "")}`
+        );
+      }
+    }
     const pendingWork: string[] = [];
     for (const agentId of agentIds) {
       const debugState = await executePanelScript(
@@ -951,6 +1021,126 @@ function isOpenAiCredentialApproval(approval: PendingApproval): boolean {
   );
 }
 
+async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promise<void> {
+  let startupState: "approval" | "ready" | "waiting" = "waiting";
+  try {
+    await expect
+      .poll(
+        async () => {
+          const pending = await listPendingApprovals(testApp);
+          if (pending.some(isElectronHostAppApproval) && (await shellHasApprovalUi(testApp))) {
+            startupState = "approval";
+            return startupState;
+          }
+          if (await hostedShellHasChrome(testApp)) {
+            startupState = "ready";
+            return startupState;
+          }
+          startupState = "waiting";
+          return startupState;
+        },
+        { timeout: 90_000, intervals: [500, 1000, 2000] }
+      )
+      .not.toBe("waiting");
+  } catch (error) {
+    await attachStartupDiagnostics(testApp);
+    throw error;
+  }
+
+  if (startupState === "approval") {
+    expect(await clickShellButton(testApp, /^(Trust and start|Approve and start)$/)).toBe(true);
+  }
+
+  try {
+    await expect
+      .poll(() => hostedShellHasChrome(testApp), {
+        timeout: 180_000,
+        intervals: [500, 1000, 2000, 5000],
+      })
+      .toBe(true);
+  } catch (error) {
+    await attachStartupDiagnostics(testApp);
+    throw error;
+  }
+
+  await expect
+    .poll(() => bootstrapLaunchGateHasCredentialApproval(testApp), {
+      timeout: 10_000,
+      intervals: [500, 1000],
+    })
+    .toBe(false);
+
+  for (const panel of await getPanelTree(testApp.app)) {
+    await startPanelDiagnostics(testApp.app, panel.id).catch(() => {});
+  }
+
+  const drainDeadline = Date.now() + 120_000;
+  while (Date.now() < drainDeadline) {
+    const pending = await listPendingApprovals(testApp);
+    expect(pending.filter(isNonElectronHostAppApproval).map(describeApproval)).toEqual([]);
+    const pendingUnitBatchCount = pending.filter(isUnitBatchApproval).length;
+    const pendingCredentialCount = pending.filter(isOpenAiCredentialApproval).length;
+    const pendingTargetCount = pendingUnitBatchCount + pendingCredentialCount;
+    if (pendingTargetCount === 0) break;
+    if (pendingCredentialCount > 0) {
+      await expect
+        .poll(() => credentialApprovalActionStyles(testApp), {
+          timeout: 45_000,
+          intervals: [250, 500, 1_000, 2_000],
+        })
+        .toEqual({ trustVersion: "sky", useOnce: "" });
+    }
+    try {
+      await expect
+        .poll(
+          () =>
+            clickShellButtonByPreference(testApp, [
+              /^Trust version$/,
+              /^Use this session$/,
+              /^Trust and start$/,
+              /^Approve all$/,
+              /^Dev session$/,
+              /^Approve and start$/,
+              /^Approve$/,
+              /^Install and run$/,
+              /^Run once$/,
+              /^Allow for session$/,
+              /^Use once$/,
+            ]),
+          { timeout: 45_000, intervals: [500, 1000, 2000, 5000] }
+        )
+        .toBe(true);
+    } catch (error) {
+      await attachStartupDiagnostics(testApp);
+      throw error;
+    }
+    await expect
+      .poll(
+        async () => {
+          const next = await listPendingApprovals(testApp);
+          return (
+            next.filter(isUnitBatchApproval).length + next.filter(isOpenAiCredentialApproval).length
+          );
+        },
+        { timeout: 10_000, intervals: [500, 1000, 2000] }
+      )
+      .toBeLessThan(pendingTargetCount);
+  }
+
+  await expect
+    .poll(async () => (await listPendingApprovals(testApp)).filter(isUnitBatchApproval).length, {
+      timeout: 30_000,
+      intervals: [500, 1000, 2000],
+    })
+    .toBe(0);
+  await expect
+    .poll(
+      async () => (await listPendingApprovals(testApp)).filter(isOpenAiCredentialApproval).length,
+      { timeout: 30_000, intervals: [500, 1000, 2000] }
+    )
+    .toBe(0);
+}
+
 test.describe("Desktop Startup Approvals", () => {
   test.setTimeout(360_000);
 
@@ -976,136 +1166,19 @@ test.describe("Desktop Startup Approvals", () => {
       launchTimeout: 240_000,
     });
 
-    let startupState: "approval" | "ready" | "waiting" = "waiting";
+    await reachHostedShellAndDrainStartupApprovals(testApp);
+
     try {
       await expect
         .poll(
           async () => {
-            const pending = await listPendingApprovals(testApp!);
-            if (pending.some(isElectronHostAppApproval) && (await shellHasApprovalUi(testApp!))) {
-              startupState = "approval";
-              return startupState;
+            const state = await collectStartupAgentCompletion(testApp!, configuredInitialPrompt);
+            const failures = state.channels.flatMap((channel) => channel.failures);
+            if (failures.length > 0) {
+              throw new Error(`Initial agent turn failed: ${failures.join("; ")}`);
             }
-            if (await hostedShellHasChrome(testApp!)) {
-              startupState = "ready";
-              return startupState;
-            }
-            startupState = "waiting";
-            return startupState;
+            return state.complete;
           },
-          { timeout: 90_000, intervals: [500, 1000, 2000] }
-        )
-        .not.toBe("waiting");
-    } catch (error) {
-      await attachStartupDiagnostics(testApp);
-      throw error;
-    }
-
-    if (startupState === "approval") {
-      expect(await clickShellButton(testApp, /^(Trust and start|Approve and start)$/)).toBe(true);
-    }
-
-    try {
-      await expect
-        .poll(() => hostedShellHasChrome(testApp!), {
-          timeout: 180_000,
-          intervals: [500, 1000, 2000, 5000],
-        })
-        .toBe(true);
-    } catch (error) {
-      await attachStartupDiagnostics(testApp);
-      throw error;
-    }
-
-    await expect
-      .poll(() => bootstrapLaunchGateHasCredentialApproval(testApp!), {
-        timeout: 10_000,
-        intervals: [500, 1000],
-      })
-      .toBe(false);
-
-    for (const panel of await getPanelTree(testApp.app)) {
-      await startPanelDiagnostics(testApp.app, panel.id).catch(() => {});
-    }
-
-    const drainDeadline = Date.now() + 120_000;
-    while (Date.now() < drainDeadline) {
-      const pending = await listPendingApprovals(testApp);
-      expect(pending.filter(isNonElectronHostAppApproval).map(describeApproval)).toEqual([]);
-      const pendingUnitBatchCount = pending.filter(isUnitBatchApproval).length;
-      const pendingCredentialCount = pending.filter(isOpenAiCredentialApproval).length;
-      const pendingTargetCount = pendingUnitBatchCount + pendingCredentialCount;
-      if (pendingTargetCount === 0) break;
-      if (pendingCredentialCount > 0) {
-        await expect
-          .poll(() => credentialApprovalActionStyles(testApp!), {
-            timeout: 45_000,
-            intervals: [250, 500, 1_000, 2_000],
-          })
-          .toEqual({ trustVersion: "sky", useOnce: "" });
-      }
-      try {
-        await expect
-          .poll(
-            async () =>
-              clickShellButtonByPreference(testApp!, [
-                /^Trust version$/,
-                /^Use this session$/,
-                /^Trust and start$/,
-                /^Approve all$/,
-                /^Dev session$/,
-                /^Approve and start$/,
-                /^Approve$/,
-                /^Install and run$/,
-                /^Run once$/,
-                /^Allow for session$/,
-                /^Use once$/,
-              ]),
-            // Extension and agent panels compile on demand. The authoritative
-            // approval can exist before the hosted shell has mounted its card.
-            { timeout: 45_000, intervals: [500, 1000, 2000, 5000] }
-          )
-          .toBe(true);
-      } catch (error) {
-        await attachStartupDiagnostics(testApp);
-        throw error;
-      }
-      let currentCredentialCount = pendingCredentialCount;
-      await expect
-        .poll(
-          async () => {
-            const next = await listPendingApprovals(testApp!);
-            currentCredentialCount = next.filter(isOpenAiCredentialApproval).length;
-            return (
-              next.filter(isUnitBatchApproval).length +
-              next.filter(isOpenAiCredentialApproval).length
-            );
-          },
-          { timeout: 10_000, intervals: [500, 1000, 2000] }
-        )
-        .toBeLessThan(pendingTargetCount);
-    }
-
-    await expect
-      .poll(async () => (await listPendingApprovals(testApp!)).filter(isUnitBatchApproval).length, {
-        timeout: 30_000,
-        intervals: [500, 1000, 2000],
-      })
-      .toBe(0);
-
-    await expect
-      .poll(
-        async () =>
-          (await listPendingApprovals(testApp!)).filter(isOpenAiCredentialApproval).length,
-        { timeout: 30_000, intervals: [500, 1000, 2000] }
-      )
-      .toBe(0);
-
-    try {
-      await expect
-        .poll(
-          async () =>
-            (await collectStartupAgentCompletion(testApp!, configuredInitialPrompt)).complete,
           {
             timeout: 120_000,
             intervals: [1000, 2000, 5000],
@@ -1121,6 +1194,117 @@ test.describe("Desktop Startup Approvals", () => {
           2
         )
       );
+      await attachStartupDiagnostics(testApp);
+      throw error;
+    }
+  });
+
+  test("an ongoing agent chat pauses for scoped network authority and resumes the same turn", async () => {
+    workspaceDir = createManagedTestWorkspace();
+    await seedOpenAiCodexCredential(workspaceDir);
+    await makeWorkspaceExtensionRequireApproval(workspaceDir);
+    const prompt =
+      "Read skills/onboarding/SKILL.md first. Then run a short sandbox eval that fetches https://example.com and tell me the page title.";
+    await setInitialChatPrompt(workspaceDir, prompt);
+
+    testApp = await launchTestApp({
+      workspace: workspaceDir,
+      launchTimeout: 240_000,
+    });
+    await reachHostedShellAndDrainStartupApprovals(testApp);
+
+    let networkApproval: PendingApproval | undefined;
+    try {
+      await expect
+        .poll(
+          async () => {
+            networkApproval = (await listPendingApprovals(testApp!)).find(
+              (approval) =>
+                approval.kind === "capability" &&
+                approval.capability === "network.response.read" &&
+                approval.resource?.value === "https://example.com"
+            );
+            if (!networkApproval) {
+              const completion = await collectStartupAgentCompletion(testApp!, prompt);
+              const failures = completion.channels.flatMap((channel) => channel.failures);
+              if (failures.length > 0) {
+                throw new Error(`Agent failed before authority approval: ${failures.join("; ")}`);
+              }
+              if (completion.complete) {
+                throw new Error(
+                  "Agent turn completed without requesting network.response.read authority"
+                );
+              }
+            }
+            return networkApproval;
+          },
+          { timeout: 120_000, intervals: [500, 1000, 2000, 5000] }
+        )
+        .toBeTruthy();
+    } catch (error) {
+      console.log(
+        "ONGOING_AUTHORITY_AGENT_STATE",
+        JSON.stringify(await collectStartupAgentCompletion(testApp!, prompt), null, 2)
+      );
+      await attachStartupDiagnostics(testApp);
+      throw error;
+    }
+
+    expect(networkApproval).toMatchObject({
+      kind: "capability",
+      capability: "network.response.read",
+      title: "Connect to https://example.com",
+      resource: {
+        type: "url-origin",
+        label: "Website",
+        value: "https://example.com",
+      },
+      allowedDecisions: ["once", "task", "deny"],
+    });
+
+    let rendered: Awaited<ReturnType<typeof capabilityApprovalUiSnapshot>> = null;
+    await expect
+      .poll(
+        async () => {
+          rendered = await capabilityApprovalUiSnapshot(testApp!);
+          return rendered?.text ?? "";
+        },
+        { timeout: 45_000, intervals: [250, 500, 1000, 2000] }
+      )
+      .toContain("Connect to example.com");
+    expect(rendered?.buttons).toEqual(
+      expect.arrayContaining(["Connect once", "Allow for this task", "Don't allow"])
+    );
+    expect(rendered?.buttons).not.toContain("Always for AI Chat");
+    expect(rendered?.buttons).not.toContain("Don't allow and don't ask again");
+    expect(rendered?.buttons).not.toContain("Trust this version");
+
+    expect(await clickShellButton(testApp, /^Connect once$/)).toBe(true);
+    await expect
+      .poll(
+        async () =>
+          (await listPendingApprovals(testApp!)).some(
+            (approval) => approval.approvalId === networkApproval?.approvalId
+          ),
+        { timeout: 15_000, intervals: [250, 500, 1000] }
+      )
+      .toBe(false);
+
+    try {
+      await expect
+        .poll(
+          async () => {
+            const state = await collectStartupAgentCompletion(testApp!, prompt);
+            const failures = state.channels.flatMap((channel) => channel.failures);
+            if (failures.length > 0) {
+              throw new Error(`Authority-resumed chat turn failed: ${failures.join("; ")}`);
+            }
+            return state.complete;
+          },
+          { timeout: 120_000, intervals: [1000, 2000, 5000] }
+        )
+        .toBe(true);
+    } catch (error) {
       await attachStartupDiagnostics(testApp);
       throw error;
     }

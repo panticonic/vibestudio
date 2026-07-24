@@ -122,7 +122,6 @@ export interface RuntimeImageBinding {
   buildKey: string;
   executionDigest: string;
   authorityRequests: UnitAuthorityManifest["requests"];
-  authorityEvalCeilings: UnitAuthorityManifest["evalCeilings"];
 }
 
 // ---------------------------------------------------------------------------
@@ -660,7 +659,6 @@ export async function initBuildSystemV2(
         buildKey,
         executionDigest,
         authorityRequests: authority.requests,
-        authorityEvalCeilings: authority.evalCeilings,
       };
       runtimeBindingCache.set(identityKey, binding);
       return binding;

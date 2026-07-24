@@ -4,7 +4,6 @@ import {
   type DurableObjectContext,
   type DurableObjectSchemaMigration,
 } from "@vibestudio/durable";
-import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import type { RpcAuthorityPolicy } from "@vibestudio/rpc";
 import { allOf, anyOf, capability, relationship } from "@vibestudio/shared/authorization";
 import {
@@ -79,15 +78,6 @@ function browserDataAuthority(sensitivity: RpcAuthorityPolicy["sensitivity"]): R
   };
 }
 
-export function isBrowserDataDirectCaller(
-  caller: AuthenticatedCaller | null,
-  brokerCallerId: string | null
-): boolean {
-  const kind = caller?.callerKind;
-  if (kind === "server" || kind === "shell") return true;
-  return brokerCallerId !== null && kind === "extension" && caller?.callerId === brokerCallerId;
-}
-
 export class BrowserDataDO extends DurableObjectBase {
   static override schemaVersion = 7;
 
@@ -100,36 +90,9 @@ export class BrowserDataDO extends DurableObjectBase {
     this.ensureReady();
   }
 
-  private brokerCallerId(): string | null {
-    const value = this.env["BROWSER_DATA_BROKER_ID"];
-    return typeof value === "string" && value.length > 0 ? value : null;
-  }
-
   brokerRepoPath(): string | null {
     const value = this.env["BROWSER_DATA_BROKER_SOURCE"];
     return typeof value === "string" && value.length > 0 ? value : null;
-  }
-
-  protected override assertInboundAllowed(
-    caller: AuthenticatedCaller | null,
-    kind: "call" | "event"
-  ): void {
-    if (kind === "event") return;
-    const broker = this.brokerCallerId();
-    if (!isBrowserDataDirectCaller(caller, broker)) {
-      throw new Error(
-        `browser-data: BrowserDataDO is shell/server-only (holds user credentials); refusing caller kind ${caller?.callerKind ?? "unknown"}`
-      );
-    }
-    const userId = caller?.userId?.trim();
-    if (!userId || userId === "system") {
-      throw new Error("browser-data: a verified user is required");
-    }
-    const owner = this.getStateValue("browser_environment_owner");
-    if (owner && owner !== userId) {
-      throw new Error("browser-data: browser environment owner mismatch");
-    }
-    if (!owner) this.setStateValue("browser_environment_owner", userId);
   }
 
   protected createTables(): void {

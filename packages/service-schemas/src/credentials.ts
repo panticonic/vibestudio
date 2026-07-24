@@ -18,8 +18,6 @@ import type {
   StoredCredentialSummary,
   UrlAudience,
 } from "@vibestudio/credential-client/types";
-import type { DeferredResult } from "@vibestudio/shared/serviceDispatcher";
-import { isDeferredResult } from "@vibestudio/shared/serviceDispatcher";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
@@ -53,8 +51,7 @@ const STORE_CREDENTIAL_ACCESS: MethodAccessDescriptor = {
   ],
 };
 
-/** Interactive connection flow: may open a browser handoff and prompt the user,
- *  and may return a DeferredResult for hibernatable DO callers. */
+/** Interactive connection flow: may open a browser handoff and prompt the user. */
 const CONNECT_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
   approval: [
@@ -107,7 +104,7 @@ const DELETE_CLIENT_CONFIG_ACCESS: MethodAccessDescriptor = {
 };
 
 /** Resolves a stored credential for use; prompts for use approval when the
- *  caller is not already granted, and may return a DeferredResult. */
+ *  caller is not already granted. */
 const RESOLVE_CREDENTIAL_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
   approval: [
@@ -955,10 +952,6 @@ const ClientConfigStatusSchema = z
   })
   .strict() satisfies z.ZodType<ClientConfigStatus>;
 
-const DeferredResultSchema = z.custom<DeferredResult>((value) => isDeferredResult(value), {
-  message: "expected deferred result sentinel",
-});
-
 const CredentialProxyFetchResponseSchema = z
   .object({
     status: z.number().int().min(100).max(599),
@@ -999,11 +992,6 @@ const AuditEntrySchema = z
     breakerState: z.enum(["closed", "open", "half-open"]),
   })
   .strict() satisfies z.ZodType<AuditEntry>;
-
-const MaybeDeferredStoredCredentialSchema = z.union([
-  StoredCredentialSummarySchema,
-  DeferredResultSchema,
-]);
 
 export type StoreUrlBoundCredentialParams = z.infer<typeof StoreUrlBoundCredentialParamsSchema>;
 export type RequestClientConfigParams = z.infer<typeof RequestClientConfigParamsSchema>;
@@ -1046,9 +1034,9 @@ export const credentialsMethods = defineServiceMethods({
   },
   connect: {
     description:
-      "Run a connection flow (OAuth2/OAuth1a/API-key/SSH/browser-session) to obtain and store a credential; interactive flows open a browser sign-in and may return a DeferredResult for hibernatable DO callers.",
+      "Run a connection flow (OAuth2/OAuth1a/API-key/SSH/browser-session) to obtain and store a credential; interactive flows open a browser sign-in.",
     args: z.tuple([ConnectCredentialParamsSchema]),
-    returns: MaybeDeferredStoredCredentialSchema,
+    returns: StoredCredentialSummarySchema,
     access: CONNECT_ACCESS,
   },
   configureClient: {
@@ -1164,9 +1152,9 @@ export const credentialsMethods = defineServiceMethods({
   },
   resolveCredential: {
     description:
-      "Locate a stored credential by url/provider/id and authorize its use for the caller, returning a summary, null when nothing matches, or a DeferredResult while a use-approval prompt is awaited.",
+      "Locate a stored credential by url/provider/id and authorize its use for the caller, returning a summary or null when nothing matches.",
     args: z.tuple([ResolveCredentialParamsSchema]),
-    returns: z.union([StoredCredentialSummarySchema, z.null(), DeferredResultSchema]),
+    returns: z.union([StoredCredentialSummarySchema, z.null()]),
     access: RESOLVE_CREDENTIAL_ACCESS,
     examples: [{ args: [{ url: "https://api.example.test/v1" }] }],
   },

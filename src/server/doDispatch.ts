@@ -15,11 +15,8 @@
  */
 
 import { constantTimeStringEqual, type TokenManager } from "@vibestudio/shared/tokenManager";
-import {
-  RemoteRpcError,
-  type DirectAuthorityAttestation,
-  type RpcErrorKind,
-} from "@vibestudio/rpc";
+import { RemoteRpcError, type AgentExecutionTestPolicy, type RpcErrorKind } from "@vibestudio/rpc";
+import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import type {
   AlarmDoDispatcher,
   DoAlarmDispatchResult,
@@ -32,7 +29,10 @@ import type {
 } from "@vibestudio/shared/doDispatcher";
 import { assertPresent } from "../lintHelpers";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
-import { getWorkerdConnectionDispatcher } from "./workerdRpcRelay.js";
+import {
+  describeWorkerdFetchFailure,
+  getWorkerdConnectionDispatcher,
+} from "./workerdRpcRelay.js";
 
 /** Canonical string key for a DORef, used for maps and logging. */
 export function doRefKey(ref: DORef): string {
@@ -141,16 +141,28 @@ export async function postToDOWithToken(
     headers["X-Vibestudio-Dispatch-Secret"] = deps.dispatchSecret;
   }
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(envelope),
-    signal,
-    // The method's owner defines its semantic lifetime. In particular,
-    // `__alarm` may legitimately await an agent model effect, so Undici's
-    // response-header/body defaults must never become a hidden deadline.
-    dispatcher: getWorkerdConnectionDispatcher(),
-  } as RequestInit);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(envelope),
+      signal,
+      // The method's owner defines its semantic lifetime. In particular,
+      // `__alarm` may legitimately await an agent model effect, so Undici's
+      // response-header/body defaults must never become a hidden deadline.
+      dispatcher: getWorkerdConnectionDispatcher(),
+    } as RequestInit);
+  } catch (error) {
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error ? signal.reason : new Error("DO dispatch aborted");
+    }
+    const wrapped = new Error(
+      `DO dispatch fetch to ${url} failed: ${describeWorkerdFetchFailure(error)}`
+    ) as Error & { cause?: unknown };
+    wrapped.cause = error;
+    throw wrapped;
+  }
 
   if (!res.ok) {
     const body = await res.text();
@@ -282,6 +294,13 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
         args: readonly unknown[]
       ) => DirectAuthorityAttestation | Promise<DirectAuthorityAttestation>)
     | null = null;
+  private authorityParentRunner:
+    | (<T>(
+        receiverRuntimeId: string,
+        authorization: DirectAuthorityAttestation,
+        invoke: () => Promise<T>
+      ) => Promise<T>)
+    | null = null;
 
   /**
    * Set the TokenManager for per-instance identity tokens.
@@ -328,18 +347,35 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     this.authorityAttester = fn;
   }
 
+  setAuthorityParentRunner(
+    fn: <T>(
+      receiverRuntimeId: string,
+      authorization: DirectAuthorityAttestation,
+      invoke: () => Promise<T>
+    ) => Promise<T>
+  ): void {
+    this.authorityParentRunner = fn;
+  }
+
   private async serverCaller(
     ref: DORef,
     method: string,
-    args: readonly unknown[]
+    args: readonly unknown[],
+    testPolicy?: AgentExecutionTestPolicy
   ): Promise<DOCallerEnvelope> {
     if (!this.authorityAttester) {
       throw new Error("DODispatch requires a host authority attester");
     }
+    const authorization = await this.authorityAttester(ref, method, args);
     return {
       callerId: "main",
       callerKind: "server",
-      authorization: await this.authorityAttester(ref, method, args),
+      authorization: testPolicy
+        ? {
+            ...authorization,
+            context: { ...authorization.context, testPolicy },
+          }
+        : authorization,
     };
   }
 
@@ -458,15 +494,20 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
    * Fire a server-driven `__alarm` on a DO. Mirrors `dispatchLifecycle`'s
    * server-caller envelope so the DO can gate `__alarm` to the server.
    */
-  async dispatchAlarm(ref: DORef, signal?: AbortSignal): Promise<DoAlarmDispatchResult> {
+  async dispatchAlarm(
+    ref: DORef,
+    signal?: AbortSignal,
+    testPolicy?: AgentExecutionTestPolicy
+  ): Promise<DoAlarmDispatchResult> {
     return this.withSlowWarning(`${doRefKey(ref)}.__alarm`, () =>
-      this.dispatchAlarmImpl(ref, signal)
+      this.dispatchAlarmImpl(ref, signal, testPolicy)
     );
   }
 
   private async dispatchAlarmImpl(
     ref: DORef,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    testPolicy?: AgentExecutionTestPolicy
   ): Promise<DoAlarmDispatchResult> {
     if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
       throw new Error("DODispatch requires token-backed workerd configuration");
@@ -477,15 +518,25 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
       dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
     });
-    const serverCaller = await this.serverCaller(ref, "__alarm", []);
-    return (await postToDOWithToken(
-      ref,
-      "__alarm",
-      [],
-      buildDeps(),
-      "main",
-      serverCaller,
-      signal
-    )) as DoAlarmDispatchResult;
+    const serverCaller = await this.serverCaller(ref, "__alarm", [], testPolicy);
+    const invoke = () =>
+      postToDOWithToken(
+        ref,
+        "__alarm",
+        [],
+        buildDeps(),
+        "main",
+        serverCaller,
+        signal
+      ) as Promise<DoAlarmDispatchResult>;
+    if (!testPolicy) return await invoke();
+    if (!serverCaller.authorization || !this.authorityParentRunner) {
+      throw new Error("DODispatch requires an authority parent runner for test-scoped alarms");
+    }
+    return await this.authorityParentRunner(
+      `do:${ref.source}:${ref.className}:${ref.objectKey}`,
+      serverCaller.authorization,
+      invoke
+    );
   }
 }

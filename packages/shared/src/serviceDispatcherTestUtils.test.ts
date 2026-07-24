@@ -17,7 +17,6 @@ describe("service dispatcher test authority", () => {
           resource: { kind: "prefix", prefix: "" },
         },
       ],
-      evalCeilings: [],
     });
     const resolved = testAuthority(
       caller,
@@ -33,6 +32,6 @@ describe("service dispatcher test authority", () => {
         requirement: requirementForPrincipals(["code"], "settings.write"),
         resourceKey: "service:settings.update",
       })
-    ).toMatchObject({ allowed: false, code: "not-requested" });
+    ).toMatchObject({ allowed: false, code: "fixed-code-not-requested" });
   });
 });

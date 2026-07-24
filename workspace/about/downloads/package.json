@@ -12,48 +12,68 @@
       "requests": [
         {
           "capability": "agent.credentials.manage",
-          "resource": { "kind": "prefix", "prefix": "" },
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
           "tier": "gated",
           "evidence": "intentional-broad"
         },
         {
           "capability": "context.boundary",
-          "resource": { "kind": "prefix", "prefix": "context" },
+          "resource": {
+            "kind": "prefix",
+            "prefix": "context"
+          },
           "tier": "critical",
           "evidence": "bounded-dynamic"
         },
         {
           "capability": "context.materialize",
-          "resource": { "kind": "prefix", "prefix": "" },
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
           "tier": "gated",
           "evidence": "intentional-broad"
         },
         {
           "capability": "subagents.create",
-          "resource": { "kind": "prefix", "prefix": "" },
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
           "tier": "gated",
           "evidence": "intentional-broad"
         },
         {
           "capability": "user-approval.request",
-          "resource": { "kind": "prefix", "prefix": "" },
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
           "tier": "gated",
           "evidence": "intentional-broad"
         },
         {
           "capability": "workspace-service:channel",
-          "resource": { "kind": "prefix", "prefix": "" },
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
           "tier": "gated",
           "evidence": "intentional-broad"
         },
         {
           "capability": "workspace-service:models",
-          "resource": { "kind": "prefix", "prefix": "" },
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
           "tier": "gated",
           "evidence": "intentional-broad"
         }
-      ],
-      "evalCeilings": []
+      ]
     }
   },
   "dependencies": {

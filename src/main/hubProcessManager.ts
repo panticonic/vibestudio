@@ -55,6 +55,8 @@ export interface HubProcessManagerConfig {
   ephemeralLifecycle: "replace" | "resume" | null;
   appRoot: string;
   appVersion: string;
+  /** SHA-256 identity of the exact server bundle this desktop will execute. */
+  buildId: string;
   logLevel?: string;
   centralData: CentralDataManager;
   onCrash: (code: number | null) => void;
@@ -83,6 +85,7 @@ const HealthzPayloadSchema = z
     gatewayPort: z.number().int().min(1).max(65_535),
     pid: z.number().int().positive(),
     version: z.string().min(1),
+    buildId: z.string().regex(/^[a-f0-9]{64}$/),
   })
   .strict();
 
@@ -114,6 +117,7 @@ interface HubRuntime {
   serverBootId: string;
   startedAt: number;
   version: string;
+  buildId: string;
 }
 
 async function probeHealthz(gatewayPort: number): Promise<HealthzPayload | null> {
@@ -258,9 +262,9 @@ export class HubProcessManager {
       return null;
     }
     this.verifiedHubPids.add(lease.pid);
-    if (health.version !== this.config.appVersion) {
+    if (health.buildId !== this.config.buildId) {
       log.info(
-        `[attach] hub version mismatch (${health.version ?? "?"} != ${this.config.appVersion}); replacing it`
+        `[attach] hub build mismatch (${health.buildId} != ${this.config.buildId}); replacing it`
       );
       await this.waitForExit(lease.pid, false);
       return null;
@@ -273,6 +277,7 @@ export class HubProcessManager {
         serverBootId: health.serverBootId,
         startedAt: lease.acquiredAt,
         version: health.version,
+        buildId: health.buildId,
       },
       rootInviteCode: null,
       rootInviteExpiresAt: null,
@@ -362,6 +367,7 @@ export class HubProcessManager {
       serverBootId: ready.serverBootId,
       startedAt: spawnedAt,
       version: ready.version,
+      buildId: ready.buildId,
     };
     return {
       record,

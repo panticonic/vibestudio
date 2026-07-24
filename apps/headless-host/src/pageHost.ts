@@ -11,6 +11,11 @@
  *    state per attach, mirroring Electron's webContents.debugger lifecycle.
  */
 import { createDevLogger } from "@vibestudio/dev-log";
+import {
+  PANEL_PAGE_OBSERVATION_EXPRESSION,
+  parsePanelPageObservation,
+  type PanelPageObservation,
+} from "@vibestudio/shared/panel/observation";
 import { CdpConnection } from "./browser/cdpConnection.js";
 import {
   ConsoleHistoryStore,
@@ -417,6 +422,29 @@ export class PageHost {
       limits: value.limits as PanelDomSnapshot["limits"],
       observed: value.observed as PanelDomSnapshot["observed"],
     };
+  }
+
+  /**
+   * Canonical browser-side readiness observation shared with the desktop host.
+   * A loaded CDP target alone is not evidence that the current build booted.
+   */
+  async panelPageObservation(slotId: string): Promise<PanelPageObservation> {
+    const page = this.requirePage(slotId);
+    const result = (await this.cdp.send(
+      "Runtime.evaluate",
+      {
+        expression: PANEL_PAGE_OBSERVATION_EXPRESSION,
+        returnByValue: true,
+        awaitPromise: true,
+      },
+      page.mgmtSessionId
+    )) as { result?: { value?: unknown }; exceptionDetails?: { text?: string } };
+    if (result.exceptionDetails) {
+      throw new Error(
+        `Panel page observation failed: ${result.exceptionDetails.text ?? "Runtime.evaluate threw"}`
+      );
+    }
+    return parsePanelPageObservation(result.result?.value);
   }
 
   async captureScreenshot(

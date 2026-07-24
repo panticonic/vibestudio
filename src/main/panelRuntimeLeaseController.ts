@@ -668,8 +668,7 @@ export class PanelRuntimeLeaseController {
       /^[0-9a-f]{64}$/.test(panel.buildKey) &&
       panel.executionDigest &&
       /^[0-9a-f]{64}$/.test(panel.executionDigest) &&
-      panel.authorityRequests &&
-      panel.authorityEvalCeilings
+      panel.authorityRequests
     );
   }
 

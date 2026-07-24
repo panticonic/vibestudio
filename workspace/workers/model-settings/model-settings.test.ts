@@ -187,6 +187,27 @@ describe("ModelSettingsDO", () => {
     });
   });
 
+  it("inspects only requested model availability without transporting the catalog", async () => {
+    TestModelSettingsDO.config = { ...BASE_CONFIG };
+    const { call } = await createTestDO(TestModelSettingsDO);
+
+    await expect(
+      call("inspectModels", ["openai:gpt-5", "missing:model", "openai:gpt-5"])
+    ).resolves.toEqual({
+      defaultModel: "openai:gpt-5",
+      models: [
+        {
+          ref: "openai:gpt-5",
+          availability: { state: "ready", detail: "credentialed" },
+        },
+        {
+          ref: "missing:model",
+          availability: { state: "error", message: "Unknown model ref" },
+        },
+      ],
+    });
+  });
+
   it("falls back when the configured model is missing, keeping valid behavior", async () => {
     TestModelSettingsDO.config = {
       ...BASE_CONFIG,

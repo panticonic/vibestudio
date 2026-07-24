@@ -17,7 +17,7 @@ import {
   type DurableObjectSchemaMigration,
 } from "@vibestudio/durable";
 import type { SchemaSqlStorage } from "@vibestudio/durable/schema";
-import type { AuthenticatedCaller } from "@vibestudio/rpc";
+import type { AgentExecutionTestPolicy } from "@vibestudio/rpc";
 import {
   IdentityCollisionError,
   canonicalEntityId,
@@ -201,6 +201,7 @@ const WORKSPACE_REQUIRED_TABLES = [
   "lifecycle_leases",
   "lifecycle_ops",
   "do_alarms",
+  "do_alarm_test_policies",
   "recurring_jobs",
   "heartbeat_registry",
   "context_edges",
@@ -376,7 +377,7 @@ function assertWorkspaceEntityStatuses(
 }
 
 export class WorkspaceDO extends DurableObjectBase {
-  static override schemaVersion = 25;
+  static override schemaVersion = 26;
 
   protected override schemaProductionBaseline() {
     return { version: 24, name: "workspace-state-v24" } as const;
@@ -396,6 +397,32 @@ export class WorkspaceDO extends DurableObjectBase {
         // recognized durable lifecycle state written by entityReservePanel.
         migrate: () => {},
       },
+      {
+        version: 26,
+        name: "persist-test-authority-with-owned-alarms",
+        validateSource: (sql) => {
+          const alarmTable = sql
+            .exec(
+              `SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name = 'do_alarms'`
+            )
+            .toArray();
+          if (alarmTable.length !== 1) {
+            throw new Error("WorkspaceDO v25 is missing do_alarms");
+          }
+        },
+        migrate: (sql) => {
+          sql.exec(`
+            CREATE TABLE do_alarm_test_policies (
+              source TEXT NOT NULL,
+              class_name TEXT NOT NULL,
+              object_key TEXT NOT NULL,
+              test_policy_json TEXT NOT NULL,
+              PRIMARY KEY (source, class_name, object_key)
+            )
+          `);
+        },
+      },
     ];
   }
 
@@ -403,23 +430,6 @@ export class WorkspaceDO extends DurableObjectBase {
     super(ctx, env);
     this.ensureReady();
     this.repairLifecycleInvariants();
-  }
-
-  /**
-   * WorkspaceDO is the server's storage implementation, not a public service.
-   * Preserve the legacy receiver guard so direct DO relay calls cannot bypass
-   * workspace-state policy while the new `@rpc` metadata is being introduced.
-   */
-  protected override assertInboundAllowed(
-    caller: AuthenticatedCaller | null,
-    kind: "call" | "event"
-  ): void {
-    if (kind === "event") return;
-    if (caller?.callerKind !== "server") {
-      throw new Error(
-        `workspace-state: WorkspaceDO is server-only; refusing caller kind ${caller?.callerKind ?? "unknown"}`
-      );
-    }
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -603,11 +613,11 @@ export class WorkspaceDO extends DurableObjectBase {
 
   protected override validateSchema(): void {
     super.validateSchema();
-    assertWorkspaceEntityColumns(this.sql, `${this.constructor.name} v25`);
+    assertWorkspaceEntityColumns(this.sql, `${this.constructor.name} v26`);
     assertWorkspaceEntityStatuses(
       this.sql,
       ["preparing", "active", "retired"],
-      `${this.constructor.name} v25`
+      `${this.constructor.name} v26`
     );
   }
 
@@ -1111,7 +1121,7 @@ export class WorkspaceDO extends DurableObjectBase {
     tier: "gated",
     sensitivity: "write",
   })
-  alarmSet(input: LifecycleKey & { wakeAt: number }): void {
+  alarmSet(input: LifecycleKey & { wakeAt: number; testPolicy?: AgentExecutionTestPolicy }): void {
     this.assertLifecycleKey(input);
     this.ctx.storage.transactionSync(() => {
       const entityId = canonicalEntityId({
@@ -1136,6 +1146,19 @@ export class WorkspaceDO extends DurableObjectBase {
         input.objectKey,
         Math.round(input.wakeAt)
       );
+      if (input.testPolicy) {
+        this.sql.exec(
+          `INSERT INTO do_alarm_test_policies
+             (source, class_name, object_key, test_policy_json)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(source, class_name, object_key)
+             DO UPDATE SET test_policy_json = excluded.test_policy_json`,
+          input.source,
+          input.className,
+          input.objectKey,
+          JSON.stringify(input.testPolicy)
+        );
+      }
     });
   }
 
@@ -1150,6 +1173,13 @@ export class WorkspaceDO extends DurableObjectBase {
     this.assertLifecycleKey(input);
     this.sql.exec(
       `DELETE FROM do_alarms WHERE source = ? AND class_name = ? AND object_key = ?`,
+      input.source,
+      input.className,
+      input.objectKey
+    );
+    this.sql.exec(
+      `DELETE FROM do_alarm_test_policies
+        WHERE source = ? AND class_name = ? AND object_key = ?`,
       input.source,
       input.className,
       input.objectKey
@@ -1179,12 +1209,19 @@ export class WorkspaceDO extends DurableObjectBase {
     tier: "gated",
     sensitivity: "read",
   })
-  alarmListDue(now: number): Array<LifecycleKey & { wakeAt: number }> {
+  alarmListDue(
+    now: number
+  ): Array<LifecycleKey & { wakeAt: number; testPolicy?: AgentExecutionTestPolicy }> {
     const rows = this.sql
       .exec(
-        `SELECT source, class_name, object_key, wake_at
-           FROM do_alarms WHERE wake_at <= ?
-          ORDER BY wake_at, source, class_name, object_key`,
+        `SELECT a.source, a.class_name, a.object_key, a.wake_at, p.test_policy_json
+           FROM do_alarms AS a
+           LEFT JOIN do_alarm_test_policies AS p
+             ON p.source = a.source
+            AND p.class_name = a.class_name
+            AND p.object_key = a.object_key
+          WHERE a.wake_at <= ?
+          ORDER BY a.wake_at, a.source, a.class_name, a.object_key`,
         now
       )
       .toArray() as Array<{
@@ -1192,12 +1229,16 @@ export class WorkspaceDO extends DurableObjectBase {
       class_name: string;
       object_key: string;
       wake_at: number;
+      test_policy_json: string | null;
     }>;
     return rows.map((r) => ({
       source: r.source,
       className: r.class_name,
       objectKey: r.object_key,
       wakeAt: r.wake_at,
+      ...(r.test_policy_json
+        ? { testPolicy: JSON.parse(r.test_policy_json) as AgentExecutionTestPolicy }
+        : {}),
     }));
   }
 
@@ -2552,6 +2593,15 @@ export class WorkspaceDO extends DurableObjectBase {
       )
     `);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_do_alarms_wake ON do_alarms(wake_at)`);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS do_alarm_test_policies (
+        source TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        object_key TEXT NOT NULL,
+        test_policy_json TEXT NOT NULL,
+        PRIMARY KEY (source, class_name, object_key)
+      )
+    `);
     // Declarative recurring jobs from meta/vibestudio.yml `recurring:`. The
     // RecurringRegistry syncs declarations here and dispatches due jobs;
     // durable next_run_at survives restarts without re-running missed bursts.
@@ -2645,6 +2695,15 @@ export class WorkspaceDO extends DurableObjectBase {
             AND entities.source_repo_path = do_alarms.source
             AND entities.class_name = do_alarms.class_name
             AND entities.key = do_alarms.object_key
+       )
+    `);
+    this.sql.exec(`
+      DELETE FROM do_alarm_test_policies
+       WHERE NOT EXISTS (
+         SELECT 1 FROM do_alarms
+          WHERE do_alarms.source = do_alarm_test_policies.source
+            AND do_alarms.class_name = do_alarm_test_policies.class_name
+            AND do_alarms.object_key = do_alarm_test_policies.object_key
        )
     `);
   }

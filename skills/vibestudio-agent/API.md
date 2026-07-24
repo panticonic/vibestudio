@@ -140,7 +140,7 @@ Authority principals: `code`, `host`, `user`
 | Method | Description |
 |--------|-------------|
 | `credentials.storeCredential` | Persist a URL-bound credential (label, audience, injection, secret material); userland callers are prompted to approve it before it is stored, and the returned summary never echoes the secret. |
-| `credentials.connect` | Run a connection flow (OAuth2/OAuth1a/API-key/SSH/browser-session) to obtain and store a credential; interactive flows open a browser sign-in and may return a DeferredResult for hibernatable DO callers. |
+| `credentials.connect` | Run a connection flow (OAuth2/OAuth1a/API-key/SSH/browser-session) to obtain and store a credential; interactive flows open a browser sign-in. |
 | `credentials.configureClient` | Store (versioned) OAuth client configuration — authorize/token URLs and client fields such as client id/secret; userland callers are prompted to submit the material, and secrets are never returned in the status. |
 | `credentials.requestCredentialInput` | Prompt the user to enter exactly one secret field, then store the resulting credential; the submitted secret is never returned in the summary. |
 | `credentials.getClientConfigStatus` | Return the configured status of an OAuth client config (which fields are set, URLs, status) without revealing secret values; rejects callers outside the config's trust scope. |
@@ -150,7 +150,7 @@ Authority principals: `code`, `host`, `user`
 | `credentials.listStoredCredentials` | List summaries of stored URL-bound credentials visible to the caller; secret material is never included. |
 | `credentials.inspectStoredCredentials` | List administrator-facing credential summaries with runtime usage metadata; secret material is never included. |
 | `credentials.revokeCredential` | Revoke a stored credential by id (marks it revoked and best-effort revokes the upstream provider token); requires critical account-disconnection authority bound to the exact credential id. |
-| `credentials.resolveCredential` | Locate a stored credential by url/provider/id and authorize its use for the caller, returning a summary, null when nothing matches, or a DeferredResult while a use-approval prompt is awaited. |
+| `credentials.resolveCredential` | Locate a stored credential by url/provider/id and authorize its use for the caller, returning a summary or null when nothing matches. |
 | `credentials.proxyFetch` | Forward an outbound HTTP request through the egress proxy, injecting the resolved credential; returns status, ordered header pairs, final URL, and a base64 body. |
 | `credentials.proxyGitHttp` | Forward a Git smart-HTTP request through the egress proxy with credential injection; the request/response bodies are base64-encoded. |
 | `credentials.completeCapture` | Complete a pending server-initiated session credential capture (`credential:capture-request` event) with the captured material or an error; callable only by the attached desktop shell. |
@@ -185,7 +185,7 @@ Authority principals: `code`, `host`, `user`
 | `eval.getRun` | Poll an async run started with startRun: returns its status, latest durable progress heartbeat, and (when done) result. |
 | `eval.readScopeTextPage` | Read a bounded page from a string in the caller's current durable eval scope. Use this to retrieve a large eval result losslessly after an eval caches it under a scope key; pages are UTF-16LE base64 so every JavaScript string code unit round-trips exactly. |
 | `eval.deleteScopeValue` | Delete one value from the caller's current durable eval scope and persist the deletion. Intended for cleaning up temporary keys used by lossless large-result paging. |
-| `eval.cancel` | Cancel a single in-flight or pending run by runId (CAS to cancelled, then abort its outbound calls so a run wedged on an rpc.call unwinds). Other runs and the persistent scope are untouched. A no-op if the run is already terminal. |
+| `eval.cancel` | Cancel an in-flight or pending run by runId. Cooperative cancellation preserves other runs and scope and returns forcedReset:false. If the run or its cleanup does not settle within the recovery grace period, the EvalDO cancels all non-terminal runs, resets its shared scope/user db, and returns forcedReset:true. A terminal run is a no-op with forcedReset:false. |
 
 ## `events`
 
@@ -323,9 +323,10 @@ Authority principals: `host`, `user`
 |--------|-------------|
 | `mission.list` | List durable automation charters and their approval state. |
 | `mission.get` | Read one durable automation charter. |
+| `mission.listRuns` | List the durable run timeline for one visible mission. |
 | `mission.createDraft` | Create an inert mission draft; this grants and schedules nothing. |
 | `mission.edit` | Edit a mission; charter changes lapse its active authority. |
-| `mission.approve` | Approve the exact current mission closure and its exposed permission rows. |
+| `mission.requestReview` | Open the canonical approval-queue review for an inert mission closure. |
 | `mission.pause` | Pause an active mission without changing its charter. |
 | `mission.resume` | Resume a paused mission only if its approved closure still matches. |
 | `mission.retire` | Retire a mission permanently and revoke its standing allows. |
@@ -400,24 +401,23 @@ Authority principals: `code`, `host`, `user`
 | `panelTree.getTreeSnapshot` | Return a full snapshot of the panel tree (revision plus root panels). |
 | `panelTree.getFocusedPanelId` | Return the id of the currently focused panel, or null if none is focused. |
 | `panelTree.create` | Create a new panel from a workspace source path, optionally nested under a parent and focused. |
-| `panelTree.ensureLoaded` | Ensure the panel's runtime is loaded (building/restoring it if needed) without changing focus. |
-| `panelTree.focus` | Focus a panel, loading its runtime first if needed, with an optional client-local visual placement request. |
-| `panelTree.getRuntimeLease` | Return the current runtime lease held on a panel (which host/connection owns it), or null if unleased. |
+| `panelTree.focus` | Focus a panel and return only after its current attempt is boot-ready; throws the canonical structured failure otherwise. |
+| `panelTree.observe` | Return the canonical current panel attempt, including exact provenance, host/boot state, and structured failure. |
+| `panelTree.diagnose` | Return one bounded diagnostic packet with the canonical observation, host lifecycle/console history, and a document capture when ready. |
 | `panelTree.getStateArgs` | Return the validated state-args currently bound to a panel. |
 | `panelTree.setStateArgs` | Merge a patch into a panel's ordinary application state (null removes a key); returns the full resulting validated state. contextId is reserved for the panel's host-bound workspace branch and must be changed through explicit panel navigation, never state args. |
-| `panelTree.reload` | Reload a panel's view in place, keeping its current snapshot. |
+| `panelTree.reload` | Reload a panel's view and return only after that exact attempt is boot-ready; throws the canonical structured failure otherwise. |
 | `panelTree.close` | Close a panel, removing it (and its subtree) from the tree. |
 | `panelTree.archive` | Archive a panel, removing it from the active tree while preserving its history. |
 | `panelTree.unload` | Unload a panel's runtime/view to free resources while keeping the panel in the tree. |
 | `panelTree.movePanel` | Reparent and/or reposition a panel among its siblings (drag-and-drop move). |
-| `panelTree.navigate` | Navigate an existing panel to a new source path (optionally changing ref/context), returning the new panel descriptor or null. |
+| `panelTree.navigate` | Transactionally navigate to a prepared runtime and return only after the new attempt is boot-ready. |
 | `panelTree.navigateHistory` | Move a panel backward (-1) or forward (1) through its navigation history, returning the resulting panel descriptor or null. |
 | `panelTree.takeOver` | Take over a panel's runtime lease for the calling client, focusing it on this host. |
 | `panelTree.openDevTools` | Open developer tools for a panel, optionally docked to a side or detached. |
-| `panelTree.rebuildPanel` | Rebuild a panel's runtime artifacts from source without reloading its view. |
-| `panelTree.rebuildAndReload` | Rebuild a panel's runtime artifacts from source and then reload its view. |
+| `panelTree.rebuildPanel` | Transactionally replace the current runtime from source and return only after the new attempt is boot-ready. |
 | `panelTree.updatePanelState` | Update a panel's live navigation state (url, page title, loading/back/forward flags) from the rendering surface. |
-| `panelTree.snapshot` | Return a readable snapshot of one loaded panel, using its agent snapshot when available and accessibility-tree fallback otherwise. |
+| `panelTree.snapshot` | Wait for the current panel attempt to become boot-ready, then capture a provenance-bearing readable document; throws the canonical structured failure otherwise. |
 | `panelTree.callAgent` | Invoke a panel's in-process agent method (e.g. _agent.snapshot/_agent.tree/_agent.setMode) with optional arguments. |
 | `panelTree.metadata` | Return lightweight runtime-handle metadata for a panel id, or null if it does not exist. |
 | `panelTree.getCollapsedIds` | Return the ids of panels that are currently collapsed in the tree UI. |
@@ -434,6 +434,8 @@ Authority principals: `code`, `host`, `user`
 |--------|-------------|
 | `permissions.list` | List active session and durable capability, userland, and credential-use grants. |
 | `permissions.revoke` | Revoke one durable permission grant by its opaque id. |
+| `permissions.listAgentProfiles` | List the living authority profile for every agent with standing permissions or locks. |
+| `permissions.updateAgentProfile` | Restore, remove, unlock, or reset one agent's lasting authority settings. |
 
 ## `phoneProvisioning`
 
@@ -510,7 +512,7 @@ Authority principals: `code`, `host`, `user`
 | Method | Description |
 |--------|-------------|
 | `shellApproval.resolve` | Record the user's decision (once/session/version/deny/dismiss) on a pending approval, resolving its queued request. |
-| `shellApproval.blockCapability` | Deny a pending capability request and remember that denial for this exact code version until revoked. |
+| `shellApproval.resolveMissionReview` | Approve an exact pending mission closure with the selected new authority rows, or leave it unapproved. |
 | `shellApproval.resolveBootstrap` | Resolve a pending startup-app (bootstrap unit) approval with an allow-once or deny decision; rejects if the id is not a pending bootstrap approval. |
 | `shellApproval.resolveUserland` | Resolve a pending userland approval by selecting one of the presented option values (or 'dismiss'); rejects if the choice was not offered to the user. |
 | `shellApproval.resolveExternalAgent` | Record the user's allow/deny verdict on a pending external-agent tool-use approval, resolving the relayed permission request. |
@@ -629,8 +631,8 @@ Authority principals: `code`, `host`, `user`
 | `workspace.setInitPanels` | Replace the set of panels opened when this workspace starts; approval-gated for userland. |
 | `workspace.setConfigField` | Write an arbitrary field into the workspace config (meta/vibestudio.yml); approval-gated for userland. |
 | `workspace.getAgentsMd` | Read the workspace-level meta/AGENTS.md, returning an empty string if it is absent. |
-| `workspace.listSkills` | List repo-embedded workspace skills with name, description, repo path, and SKILL.md path parsed from each repo's top-level SKILL.md frontmatter. |
-| `workspace.readSkill` | Return raw SKILL.md contents for a canonical workspace repo path (`skills/code-review`, `packages/foo`, `workers/bar`, or `meta`). Path traversal is rejected. |
+| `workspace.listSkills` | List repo-embedded workspace skills with name, description, repo path, and SKILL.md path parsed from each repo's top-level SKILL.md frontmatter. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId. |
+| `workspace.readSkill` | Return raw SKILL.md contents for a canonical workspace repo path (`skills/code-review`, `packages/foo`, `workers/bar`, or `meta`). Path traversal is rejected. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId. |
 | `workspace.sourceTree` | Return the workspace source tree, annotating units, launchables, and skills. |
 | `workspace.ensureContextFolder` | Materialize a context's working folder on the server host (idempotent) and return its absolute path. Used by launch orchestrators (e.g. the shell extension) to place context-scoped terminal sessions inside a real VCS-branched working tree. |
 | `workspace.findUnitForPath` | Resolve a workspace-relative path to its owning unit and the path relative to that unit, or null if no unit owns it. |

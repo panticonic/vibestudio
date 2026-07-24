@@ -16,6 +16,7 @@ import type { CatalogEntry } from "@vibestudio/service-schemas/docs";
 import { serializeMethod } from "./serialize.js";
 import { methodTier } from "@vibestudio/shared/authority/tierTable";
 import type { MethodTierDecision } from "@vibestudio/shared/authority/tierTable";
+import { resolveMethodTierPolicy } from "@vibestudio/shared/serviceAuthority";
 
 export interface BuildCatalogDeps {
   definitions: ServiceDefinition[];
@@ -68,8 +69,11 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
     });
     for (const [methodName, method] of agentFacingMethods) {
       const qualifiedMethod = `${def.name}.${methodName}`;
-      const reviewedTier = method.tier ?? (deps.tierLookup ?? methodTier)(qualifiedMethod);
-      if (!reviewedTier) throw new Error(`Catalog method ${qualifiedMethod} has no reviewed tier`);
+      const reviewedTier = resolveMethodTierPolicy(
+        qualifiedMethod,
+        method.tier,
+        (deps.tierLookup ?? methodTier)(qualifiedMethod)
+      );
       const ser = serializeMethod(method);
       const principals = authorityPrincipals(method, def);
       const access = {

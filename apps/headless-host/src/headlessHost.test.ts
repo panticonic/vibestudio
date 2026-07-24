@@ -359,4 +359,49 @@ describe("HeadlessHost lifecycle guards", () => {
     ).resolves.toEqual(result);
     expect(captureScreenshot).toHaveBeenCalledWith("panel:tree/panel-1", { format: "png" });
   });
+
+  it("serves the canonical panel observation with lease provenance", async () => {
+    const host = new HeadlessHost(config());
+    const tracker = new LeaseTracker("headless-test");
+    const slotId = asPanelSlotId("panel:tree/panel-1");
+    tracker.reconcile({
+      version: { epoch: "boot", counter: 1 },
+      leases: [
+        {
+          slotId,
+          runtimeEntityId: asPanelEntityId("panel:nav-entry-1"),
+          clientSessionId: "headless-test",
+          hostConnectionId: "headless-test",
+          connectionId: "lease-1",
+          holderLabel: "Headless Test",
+          platform: "headless",
+          supportsCdp: true,
+          loadOnLeaseAssignment: true,
+          acquiredAt: 1,
+        },
+      ],
+    });
+    const panelPageObservation = vi.fn(async () => ({
+      view: { url: "http://127.0.0.1/panel", loading: false },
+      boot: { phase: "ready" as const },
+    }));
+    Object.assign(host as unknown as { tracker: LeaseTracker; pages: unknown }, {
+      tracker,
+      pages: { panelPageObservation },
+    });
+
+    await expect(
+      (
+        host as unknown as {
+          handleHostCommand(slotId: string, action: string, args: unknown[]): Promise<unknown>;
+        }
+      ).handleHostCommand(slotId, "panelObservation", [])
+    ).resolves.toEqual({
+      holderLabel: "Headless Test",
+      platform: "headless",
+      supportsInspection: true,
+      view: { exists: true, url: "http://127.0.0.1/panel", loading: false },
+      boot: { phase: "ready" },
+    });
+  });
 });

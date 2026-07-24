@@ -46,18 +46,23 @@ export const ApprovalRecordSchema = z
       "secret-input",
       "userland",
       "unit-batch",
+      "mission-review",
       "device-code",
       "external-agent",
       "browser-permission",
     ]),
     decision: z.enum([
       "once",
+      "task",
+      "agent",
+      "lock",
       "session",
       "version",
       "always",
       "block",
       "deny",
       "dismiss",
+      "approve",
       "submit",
     ]),
     granted: z.boolean(),
@@ -84,7 +89,10 @@ export const ApprovalRecordSchema = z
       })
       .strict()
       .optional(),
-    grantScopeStored: z.enum(["session", "version"]).nullable().optional(),
+    grantScopeStored: z
+      .enum(["task", "agent", "lock", "session", "version", "always", "block", "mission"])
+      .nullable()
+      .optional(),
   })
   .strict();
 

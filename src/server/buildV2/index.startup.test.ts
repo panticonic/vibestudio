@@ -121,7 +121,7 @@ describe("BuildSystemV2 startup", () => {
         type: "module",
         vibestudio: {
           title: "Cached",
-          authority: { requests: [], evalCeilings: [] },
+          authority: { requests: [] },
         },
       })
     );

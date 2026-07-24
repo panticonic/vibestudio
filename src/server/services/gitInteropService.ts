@@ -1,6 +1,7 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { rpcErrorDataOf } from "@vibestudio/rpc";
 import type {
   WorkspaceConfig,
   WorkspaceGitRemoteConfig,
@@ -63,6 +64,32 @@ type GitInteropServiceDeps = {
 
 type WorkspaceConfigMutation = (currentConfig: WorkspaceConfig) => WorkspaceConfig;
 type WorkspaceConfigMutationResult = { changed: boolean; nextConfig: WorkspaceConfig };
+
+function operationErrorDetail(error: unknown): {
+  message: string;
+  code?: string;
+  errorKind?: string;
+  errorData?: unknown;
+} {
+  const message = error instanceof Error ? error.message : String(error);
+  const code =
+    error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string"
+      ? (error as { code: string }).code
+      : undefined;
+  const errorKind =
+    error &&
+    typeof error === "object" &&
+    typeof (error as { errorKind?: unknown }).errorKind === "string"
+      ? (error as { errorKind: string }).errorKind
+      : undefined;
+  const errorData = rpcErrorDataOf(error);
+  return {
+    message,
+    ...(code ? { code } : {}),
+    ...(errorKind ? { errorKind } : {}),
+    ...(errorData === undefined ? {} : { errorData }),
+  };
+}
 
 export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDefinition {
   return {
@@ -521,6 +548,7 @@ async function importWorkspaceRepo(
     // remote/upstream config back (when this call wrote it) and say exactly
     // what happened and how to retry.
     let rolledBack = false;
+    let rollbackFailure: unknown;
     if (persisted.changed) {
       try {
         await persistWorkspaceConfigMutation(ctx, deps, {
@@ -533,22 +561,42 @@ async function importWorkspaceRepo(
           summary: `meta/vibestudio.yml rolls back failed import of ${validRepoPath}`,
         });
         rolledBack = true;
-      } catch {
+      } catch (error) {
+        rollbackFailure = error;
         // The error below reports that the declaration survived. There is no
         // source-tree notification: config persistence already publishes its
         // own semantic mutation, while Git checkout bytes live in host state.
       }
     }
     const detail = err instanceof Error ? err.message : String(err);
-    throw new Error(
+    const failure = new Error(
       `Import of ${validRepoPath} failed during clone: ${detail}. ` +
         (rolledBack || !persisted.changed
           ? `Nothing was persisted — re-run the same import command to retry.`
           : `The remote/upstream declaration WAS persisted but could not be rolled back; ` +
             `\`vibestudio vcs git status\` will show it as not-materialized — re-run the same ` +
             `import command to finish, or \`vibestudio vcs git disable --repo ${validRepoPath} ` +
-            `--forget-remote\` to remove it.`)
+            `--forget-remote\` to remove it.`),
+      { cause: err }
     );
+    Object.defineProperty(failure, "errorData", {
+      value: {
+        operation: "git.importProject",
+        repoPath: validRepoPath,
+        stage: "clone",
+        primary: operationErrorDetail(err),
+        config: {
+          changed: persisted.changed,
+          rolledBack,
+          ...(rollbackFailure === undefined
+            ? {}
+            : { rollbackFailure: operationErrorDetail(rollbackFailure) }),
+        },
+      },
+      writable: true,
+      configurable: true,
+    });
+    throw failure;
   }
   return { path: validRepoPath, remote: normalizedRemote, candidate };
 }

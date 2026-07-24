@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   collectExposableMethods,
-  createConnectionlessRpcClient,
   rpc,
   rpcExposedMethodNames,
   rpcMethodAuthority,
 } from "./connectionless.js";
+import { createInternalConnectionlessRpcClient } from "./internal.js";
 import type { RpcEnvelope } from "./types.js";
 
 const SELF = "do:test:EvalDO:obj1";
@@ -34,58 +34,41 @@ function requestEnvelope(method: string, args: unknown[], requestId = "q1"): Rpc
   };
 }
 
-function makeClient(fetchImpl: typeof fetch) {
-  return createConnectionlessRpcClient({
+function makeClient(fetchImpl: typeof fetch, authorityParentNonce?: () => string | undefined) {
+  return createInternalConnectionlessRpcClient({
     selfId: SELF,
     serverUrl: "http://gw.test",
     authToken: "T",
     callerKind: "do",
     fetch: fetchImpl,
+    ...(authorityParentNonce ? { authorityParentNonce } : {}),
   });
 }
 
 describe("createConnectionlessRpcClient", () => {
-  describe("callDeferred", () => {
-    it("surfaces a {deferred,requestId} ack (does NOT complete on the initial POST)", async () => {
-      const fetchMock = vi.fn(
-        async (_url: unknown, _init?: RequestInit) =>
-          new Response(JSON.stringify({ deferred: true, requestId: "caller-rid" }), { status: 200 })
-      );
-      const { client } = makeClient(fetchMock as unknown as typeof fetch);
-      const ack = await client.callDeferred("main", "credentials.resolveCredential", [{}], {
-        requestId: "caller-rid",
+  it("carries the current invocation authority parent on unary and streaming calls", async () => {
+    const seen: RpcEnvelope[] = [];
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const envelope = JSON.parse(String(init?.body)) as RpcEnvelope;
+      seen.push(envelope);
+      const requestId = (envelope.message as { requestId: string }).requestId;
+      if (String(_url).endsWith("/rpc/stream")) throw new Error("stop after capture");
+      return new Response(JSON.stringify(responseEnvelope(requestId, { result: "ok" })), {
+        status: 200,
       });
-      expect(ack).toEqual({ status: "deferred", requestId: "caller-rid" });
-      // The deferrable flag + caller-supplied requestId are on the wire.
-      const body = JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body));
-      expect(body.message).toMatchObject({ requestId: "caller-rid", deferrable: true });
     });
+    let nonce = "host-invocation-parent-1";
+    const { client } = makeClient(fetchMock as unknown as typeof fetch, () => nonce);
 
-    it("returns {completed,result} when the server answers inline", async () => {
-      const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
-        const env = JSON.parse(String(init!.body)) as RpcEnvelope;
-        const rid = (env.message as { requestId: string }).requestId;
-        return new Response(JSON.stringify(responseEnvelope(rid, { result: { ok: 1 } })), {
-          status: 200,
-        });
-      });
-      const { client } = makeClient(fetchMock as unknown as typeof fetch);
-      const ack = await client.callDeferred("main", "x.y", []);
-      expect(ack).toEqual({ status: "completed", result: { ok: 1 } });
-    });
+    await expect(client.call("main", "x.y", [])).resolves.toBe("ok");
+    nonce = "host-invocation-parent-2";
+    await expect(client.stream("main", "x.y", [])).rejects.toThrow("stop after capture");
 
-    it("throws when the inline response is an error envelope", async () => {
-      const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
-        const env = JSON.parse(String(init!.body)) as RpcEnvelope;
-        const rid = (env.message as { requestId: string }).requestId;
-        return new Response(
-          JSON.stringify(responseEnvelope(rid, { error: "boom", errorCode: "EBOOM" })),
-          { status: 200 }
-        );
-      });
-      const { client } = makeClient(fetchMock as unknown as typeof fetch);
-      await expect(client.callDeferred("main", "x.y", [])).rejects.toThrow("boom");
-    });
+    expect(
+      seen.map(
+        (envelope) => (envelope.message as { authorityParentNonce?: string }).authorityParentNonce
+      )
+    ).toEqual(["host-invocation-parent-1", "host-invocation-parent-2"]);
   });
 
   describe("respond (inbound request → response envelope, no POST)", () => {
@@ -147,12 +130,24 @@ class FrameworkBase {
   }
 }
 class IntermediateBase extends FrameworkBase {
-  @rpc({ effect: { kind: "runtime-intrinsic" }, tier: "open", principals: ["code"], sensitivity: "write" }) async chatOp(_op: string) {
+  @rpc({
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    principals: ["code"],
+    sensitivity: "write",
+  })
+  async chatOp(_op: string) {
     return "ok"; // decorated on an intermediate base → still exposed on the concrete DO
   }
 }
 class ConcreteDO extends IntermediateBase {
-  @rpc({ effect: { kind: "runtime-intrinsic" }, tier: "open", principals: ["code"], sensitivity: "write" }) async run(x: number) {
+  @rpc({
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    principals: ["code"],
+    sensitivity: "write",
+  })
+  async run(x: number) {
     return x + 1;
   }
   // NOT @rpc — an ungated app helper (like appendDurable/callGad): must be unreachable over RPC.
@@ -198,12 +193,24 @@ describe("@rpc opt-in exposure (default-deny, enforced)", () => {
 
 // Direct authority declarations register both exposure and their compositional requirement.
 class PolicyBase {
-  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" }) async serverOnly() {
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async serverOnly() {
     return "s"; // decorated on a base → policy lands on the concrete class too
   }
 }
 class PolicyDO extends PolicyBase {
-  @rpc({ principals: ["user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" }) async broad() {
+  @rpc({
+    principals: ["user", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
+  async broad() {
     return "b";
   }
 }
@@ -226,9 +233,6 @@ describe("@rpc direct authority declaration", () => {
   });
 
   it("the factory form still registers exposure", () => {
-    expect([...rpcExposedMethodNames(new PolicyDO())].sort()).toEqual([
-      "broad",
-      "serverOnly",
-    ]);
+    expect([...rpcExposedMethodNames(new PolicyDO())].sort()).toEqual(["broad", "serverOnly"]);
   });
 });

@@ -497,7 +497,6 @@ export class WorkerdManager {
       buildKey: binding.buildKey,
       executionDigest: binding.executionDigest,
       authorityRequests: binding.authorityRequests,
-      authorityEvalCeilings: binding.authorityEvalCeilings,
       effectiveVersion: binding.effectiveVersion,
       ...(scopeRef ? { scopeRef } : {}),
     });
@@ -513,7 +512,6 @@ export class WorkerdManager {
       buildKey: identity.buildKey,
       executionDigest: identity.executionDigest,
       authorityRequests: identity.authorityRequests,
-      authorityEvalCeilings: identity.authorityEvalCeilings,
       effectiveVersion: identity.effectiveVersion,
     });
   }
@@ -744,7 +742,6 @@ export class WorkerdManager {
     buildKey: string;
     executionDigest: string;
     authorityRequests: RuntimeImageRecord["authorityRequests"];
-    authorityEvalCeilings: RuntimeImageRecord["authorityEvalCeilings"];
   }> {
     if (!this.isSemanticControlPlane(args.source, args.className, args.key)) {
       this.requireWorkspaceProvider("Durable Object entity activation");
@@ -783,7 +780,6 @@ export class WorkerdManager {
       buildKey: image.buildKey,
       executionDigest: image.executionDigest,
       authorityRequests: image.authorityRequests,
-      authorityEvalCeilings: image.authorityEvalCeilings,
     };
   }
 
@@ -810,7 +806,6 @@ export class WorkerdManager {
     }
     const persistedAuthority = {
       requests: persistedImage.authorityRequests,
-      evalCeilings: persistedImage.authorityEvalCeilings,
     };
     if (
       persistedImage.buildKey !== record.activeBuildKey ||
@@ -837,7 +832,6 @@ export class WorkerdManager {
     const restored = this.runtimeImages.get(record.id) ?? persistedImage;
     const restoredAuthority = {
       requests: restored.authorityRequests,
-      evalCeilings: restored.authorityEvalCeilings,
     };
     if (
       restored.buildKey !== record.activeBuildKey ||
@@ -924,7 +918,6 @@ export class WorkerdManager {
     buildKey: string;
     executionDigest: string;
     authorityRequests: RuntimeImageRecord["authorityRequests"];
-    authorityEvalCeilings: RuntimeImageRecord["authorityEvalCeilings"];
   }> {
     this.requireWorkspaceProvider("worker start");
     const targetId = canonicalEntityId({ kind: "worker", source: args.source, key: args.key });
@@ -965,7 +958,6 @@ export class WorkerdManager {
           buildKey: image.buildKey,
           executionDigest: image.executionDigest,
           authorityRequests: image.authorityRequests,
-          authorityEvalCeilings: image.authorityEvalCeilings,
         };
       }
       throw new Error(
@@ -1058,7 +1050,6 @@ export class WorkerdManager {
         buildKey: image.buildKey,
         executionDigest: image.executionDigest,
         authorityRequests: image.authorityRequests,
-        authorityEvalCeilings: image.authorityEvalCeilings,
       };
     } catch (error) {
       instance.status = "error";
@@ -1166,7 +1157,6 @@ export class WorkerdManager {
       effectiveVersion: image.effectiveVersion,
       executionDigest: image.executionDigest,
       requested: image.authorityRequests,
-      evalCeilings: image.authorityEvalCeilings,
     });
     this.deps.registerEgressCaller(instance.callerId, caller);
   }
@@ -1428,7 +1418,7 @@ export class WorkerdManager {
     }
 
     return {
-      compatibilityDate: "2024-01-01",
+      compatibilityDate: "2025-12-01",
       compatibilityFlags: ["nodejs_compat"],
       mainModule: "worker.js",
       modules: { "worker.js": bundleContent },
@@ -1624,7 +1614,6 @@ export class WorkerdManager {
       effectiveVersion: image.effectiveVersion,
       executionDigest: image.executionDigest,
       requested: image.authorityRequests,
-      evalCeilings: image.authorityEvalCeilings,
     });
     this.deps.registerEgressCaller(identity, caller);
   }
@@ -1673,7 +1662,6 @@ export class WorkerdManager {
         effectiveVersion: serviceIdentity.effectiveVersion,
         executionDigest: serviceIdentity.executionDigest,
         requested: serviceIdentity.authorityRequests,
-        evalCeilings: serviceIdentity.authorityEvalCeilings,
       });
       const bindings: object[] = [
         { name: "RPC_AUTH_TOKEN", text: serviceToken },
@@ -1702,7 +1690,7 @@ export class WorkerdManager {
 
       // Manifest-declared provider bindings for this internal DO class
       // (meta/vibestudio.yml `providers.*` → e.g. EVAL_ENGINE_SOURCE for EvalDO,
-      // BROWSER_DATA_BROKER_ID for BrowserDataDO). Injected here so internal
+      // BROWSER_DATA_BROKER_SOURCE for BrowserDataDO). Injected here so internal
       // DOs consume workspace unit identities only through the manifest.
       const internalEnv = this.isSemanticControlPlane(doService.source, className)
         ? {}
@@ -2825,7 +2813,6 @@ export class WorkerdManager {
         buildKey: completedBuildKey,
         executionDigest: assertPresent(completed.metadata.execution).executionDigest,
         authorityRequests: assertPresent(completed.metadata.authority).requests,
-        authorityEvalCeilings: assertPresent(completed.metadata.authority).evalCeilings,
         effectiveVersion: completed.metadata.ev,
         ...(scopeRef ? { scopeRef } : {}),
       });

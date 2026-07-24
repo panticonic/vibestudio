@@ -1,5 +1,5 @@
 import type { CapabilityPresentation } from "../authorityPresentation.js";
-import type { HostSemanticCapability } from "./hostMethodCapabilities.js";
+import { HOST_SEMANTIC_CAPABILITY_COPY } from "../hostApprovalCopy.js";
 import { METHOD_TIERS, type ReviewedHostMethod } from "./tierTable.js";
 
 type PromptableHostMethod = {
@@ -256,12 +256,6 @@ export const HOST_CAPABILITY_PRESENTATIONS = {
     description: "Allows {requesterKind} to view which connected accounts are stored.",
     group: "credentials",
   },
-  "credentials.proxyFetch": {
-    title: "Use a connected account with an external service",
-    action: "use a connected account with an external service",
-    description: "Allows {requesterKind} to use a connected account with an external service.",
-    group: "credentials",
-  },
   "credentials.proxyGitHttp": {
     title: "Use a connected account with a Git remote",
     action: "use a connected account with a Git remote",
@@ -514,12 +508,6 @@ export const HOST_CAPABILITY_PRESENTATIONS = {
     description: "Allows {requesterKind} to change an account profile.",
     group: "accounts",
   },
-  "mission.approve": {
-    title: "Enable an automation",
-    action: "enable an automation",
-    description: "Allows {requesterKind} to enable an automation.",
-    group: "runtime",
-  },
   "mission.createDraft": {
     title: "Create an automation draft",
     action: "create an automation draft",
@@ -592,35 +580,23 @@ export const HOST_CAPABILITY_PRESENTATIONS = {
     description: "Allows {requesterKind} to view saved site permissions.",
     group: "approvals",
   },
+  "permissions.listAgentProfiles": {
+    title: "View saved agent choices",
+    action: "view saved agent choices",
+    description: "Allows {requesterKind} to view saved choices for agents.",
+    group: "approvals",
+  },
   "permissions.revoke": {
     title: "Remove a saved site permission",
     action: "remove a saved site permission",
     description: "Allows {requesterKind} to remove a saved site permission.",
     group: "approvals",
   },
-  "phoneProvisioning.devices": {
-    title: "View available mobile devices",
-    action: "view available mobile devices",
-    description: "Allows {requesterKind} to view available mobile devices.",
-    group: "host",
-  },
-  "phoneProvisioning.install": {
-    title: "Install a mobile build",
-    action: "install a mobile build",
-    description: "Allows {requesterKind} to install a mobile build.",
-    group: "host",
-  },
-  "phoneProvisioning.openPairing": {
-    title: "Open mobile-device pairing",
-    action: "open mobile-device pairing",
-    description: "Allows {requesterKind} to open mobile-device pairing.",
-    group: "host",
-  },
-  "phoneProvisioning.providers": {
-    title: "View mobile build providers",
-    action: "view mobile build providers",
-    description: "Allows {requesterKind} to view mobile build providers.",
-    group: "host",
+  "permissions.updateAgentProfile": {
+    title: "Change saved agent choices",
+    action: "change saved agent choices",
+    description: "Allows {requesterKind} to restore or remove saved choices for agents.",
+    group: "approvals",
   },
   "presence.getPanelActiveOwner": {
     title: "View who is using a panel",
@@ -736,12 +712,6 @@ export const HOST_CAPABILITY_PRESENTATIONS = {
     description: "Allows {requesterKind} to view application settings.",
     group: "host",
   },
-  "shellApproval.blockCapability": {
-    title: "Block a requested action",
-    action: "block a requested action",
-    description: "Allows {requesterKind} to block a requested action.",
-    group: "approvals",
-  },
   "shellApproval.listPending": {
     title: "View requests awaiting your decision",
     action: "view requests awaiting your decision",
@@ -752,6 +722,12 @@ export const HOST_CAPABILITY_PRESENTATIONS = {
     title: "Respond to a workspace request",
     action: "respond to a workspace request",
     description: "Allows {requesterKind} to respond to a workspace request.",
+    group: "approvals",
+  },
+  "shellApproval.resolveMissionReview": {
+    title: "Respond to an automation plan",
+    action: "respond to an automation plan",
+    description: "Allows {requesterKind} to respond to a queued automation plan.",
     group: "approvals",
   },
   "shellApproval.resolveBootstrap": {
@@ -1092,7 +1068,6 @@ export const HOST_SEMANTIC_CAPABILITY_PRESENTATIONS = {
   "agent.credentials.manage": effect("Manage agent sign-in keys", "accounts"),
   "application.shutdown": effect("Close Vibestudio", "host"),
   "application.update": effect("Install Vibestudio updates", "host"),
-  "approvals.block": effect("Block future access requests", "approvals"),
   "approvals.decide": effect("Respond to access requests", "approvals"),
   "approvals.read": effect("View requests awaiting your decision", "approvals"),
   "browser-form-fill.manage": effect("Fill forms with saved credentials", "credentials"),
@@ -1124,7 +1099,6 @@ export const HOST_SEMANTIC_CAPABILITY_PRESENTATIONS = {
   "mobile.devices.read": effect("View available mobile devices", "accounts"),
   "mobile.install": effect("Install an app on a mobile device", "host"),
   "mobile.pair": effect("Pair a mobile device", "accounts"),
-  "missions.approve": effect("Approve agent automation plans", "approvals"),
   "missions.edit": effect("Create and edit agent automation plans", "runtime"),
   "missions.pause": effect("Pause and resume agent automations", "runtime"),
   "missions.retire": effect("Retire agent automations", "runtime"),
@@ -1175,7 +1149,10 @@ export const HOST_SEMANTIC_CAPABILITY_PRESENTATIONS = {
   "workspaces.delete": effect("Delete workspaces", "workspace"),
   "workspaces.open": effect("Open workspaces", "workspace"),
   "workspaces.read": effect("View available workspaces", "workspace"),
-} as const satisfies Record<HostSemanticCapability, CapabilityPresentation>;
+} as const satisfies Record<string, CapabilityPresentation>;
+
+/** Complete semantic capability vocabulary, including reusable method contracts. */
+export type HostSemanticCapability = keyof typeof HOST_SEMANTIC_CAPABILITY_PRESENTATIONS;
 
 export function hostCapabilityPresentation(capability: string): CapabilityPresentation | null {
   if (Object.prototype.hasOwnProperty.call(HOST_SEMANTIC_CAPABILITY_PRESENTATIONS, capability)) {
@@ -1183,6 +1160,12 @@ export function hostCapabilityPresentation(capability: string): CapabilityPresen
       capability as keyof typeof HOST_SEMANTIC_CAPABILITY_PRESENTATIONS
     ];
   }
+  const semantic = HOST_SEMANTIC_CAPABILITY_COPY.find(({ prefix }) =>
+    prefix.endsWith(":")
+      ? capability.startsWith(prefix)
+      : capability === prefix || capability.startsWith(`${prefix}:`)
+  );
+  if (semantic) return semantic.presentation;
   if (!capability.startsWith("service:")) return null;
   const method = capability.slice("service:".length);
   return Object.prototype.hasOwnProperty.call(HOST_CAPABILITY_PRESENTATIONS, method)

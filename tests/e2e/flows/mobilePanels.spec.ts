@@ -28,6 +28,7 @@ import {
   isPanelContentReady,
   isPanelReady,
   launchTestApp,
+  approvePendingStartupUnits,
   removeManagedTestWorkspace,
   startPanelDiagnostics,
   type TestApp,
@@ -70,8 +71,8 @@ async function launchMobileTestApp(
     testApp = await launchTestApp({
       workspace: workspacePath,
       launchTimeout: 240_000,
-      env: { VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "1" },
     });
+    await approvePendingStartupUnits(testApp.app);
     const initialPanel = panels[0];
     if (initialPanel) {
       await waitForHostedShellChrome(testApp.app, initialPanel.source);

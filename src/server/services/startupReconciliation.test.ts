@@ -142,7 +142,7 @@ describe("runStartupReconciliation", () => {
       source: { repoPath: "workers/agent-worker", effectiveVersion: "v1" },
       activeBuildKey: "b".repeat(64),
       activeExecutionDigest: "a".repeat(64),
-      activeAuthority: { requests: [], evalCeilings: [] },
+      activeAuthority: { requests: [] },
       contextId: "ctx-agent",
       className: "AiChatWorker",
       key: "agent-1",

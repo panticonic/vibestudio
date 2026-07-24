@@ -1,4 +1,5 @@
 import { METHOD_TIERS, type ReviewedHostMethod } from "./tierTable.js";
+import type { HostSemanticCapability } from "./hostCapabilityPresentations.js";
 
 type PromptableHostMethod = {
   [Method in ReviewedHostMethod]: (typeof METHOD_TIERS)[Method]["tier"] extends "open"
@@ -65,7 +66,6 @@ const GROUPS = {
   "account-providers.configure": ["credentials.configureClient"],
   "account-providers.delete": ["credentials.deleteClientConfig"],
   "credential.use": [
-    "credentials.proxyFetch",
     "credentials.proxyGitHttp",
     "credentials.resolveCredential",
   ],
@@ -112,7 +112,6 @@ const GROUPS = {
   "users.revoke": ["hubControl.revokeUser"],
   "workspaces.open": ["hubControl.routeWorkspace"],
   "account.profile.update": ["hubControl.updateProfile"],
-  "missions.approve": ["mission.approve"],
   "missions.edit": ["mission.createDraft", "mission.edit"],
   "missions.run": ["mission.finishSession", "mission.startSession"],
   "missions.pause": ["mission.pause", "mission.resume"],
@@ -123,11 +122,8 @@ const GROUPS = {
     "panelCdp.hostProvider.open",
     "panelCdp.hostProvider.send",
   ],
-  "permissions.read": ["permissions.list"],
-  "permissions.revoke": ["permissions.revoke"],
-  "mobile.devices.read": ["phoneProvisioning.devices", "phoneProvisioning.providers"],
-  "mobile.install": ["phoneProvisioning.install"],
-  "mobile.pair": ["phoneProvisioning.openPairing"],
+  "permissions.read": ["permissions.list", "permissions.listAgentProfiles"],
+  "permissions.revoke": ["permissions.revoke", "permissions.updateAgentProfile"],
   "panel.presence.read": ["presence.getPanelActiveOwner"],
   "panel.presence.update": ["presence.markPanelActive", "presence.markPanelsOwned"],
   "push.manage": ["push.listRegistrations", "push.register", "push.unregister"],
@@ -140,10 +136,10 @@ const GROUPS = {
   "context.relationships.record": ["runtime.recordContextEdge"],
   "server-logs.read": ["serverLog.query", "serverLog.stats", "serverLog.tail"],
   "settings.read": ["settings.getData"],
-  "approvals.block": ["shellApproval.blockCapability"],
   "approvals.read": ["shellApproval.listPending", "userlandApproval.list"],
   "approvals.decide": [
     "shellApproval.resolve",
+    "shellApproval.resolveMissionReview",
     "shellApproval.resolveBootstrap",
     "shellApproval.resolveExternalAgent",
     "shellApproval.resolveExternalAgentByRequest",
@@ -206,7 +202,7 @@ const GROUPS = {
     "workspace-state.slot.setPosition",
     "workspace-state.slot.updateCurrentStateArgs",
   ],
-} as const satisfies Record<string, readonly CapabilityMappedHostMethod[]>;
+} as const satisfies Partial<Record<HostSemanticCapability, readonly CapabilityMappedHostMethod[]>>;
 
 type AssignedMethod = (typeof GROUPS)[keyof typeof GROUPS][number];
 type MissingMethod = Exclude<PromptableHostMethod, AssignedMethod>;
@@ -231,5 +227,3 @@ export function hostMethodCapability(method: string): string | null {
 export function hostCapabilityMethods(capability: string): readonly string[] {
   return GROUPS[capability as keyof typeof GROUPS] ?? [];
 }
-
-export type HostSemanticCapability = keyof typeof GROUPS;

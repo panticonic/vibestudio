@@ -5,17 +5,16 @@ import {
   type CodeIdentityCallerKind,
 } from "@vibestudio/shared/principalKinds";
 import type { UserSubject } from "@vibestudio/identity/types";
-import type { EvalCeilingPurpose } from "@vibestudio/shared/authorityManifest";
 
 const INTERNAL_DO_SOURCE = "vibestudio/internal";
 const EVAL_DO_CLASS = "EvalDO";
 
-function evalOwnerCeilingPurpose(record: {
+function evalOwner(record: {
   source: { repoPath: string };
   className?: string;
   parentId?: string;
   stateArgs?: unknown;
-}): { ownerId: string; purpose: EvalCeilingPurpose } | null {
+}): { ownerId: string } | null {
   if (record.source.repoPath !== INTERNAL_DO_SOURCE || record.className !== EVAL_DO_CLASS) {
     return null;
   }
@@ -27,16 +26,19 @@ function evalOwnerCeilingPurpose(record: {
     return null;
   }
   const stateArgs = record.stateArgs as Record<string, unknown>;
-  const ownerId = stateArgs["ownerPrincipalId"];
-  const purpose = stateArgs["authorityCeilingPurpose"];
-  if (
-    typeof ownerId !== "string" ||
-    record.parentId !== ownerId ||
-    (purpose !== "agentic-code-execution" && purpose !== "tool-eval" && purpose !== "test-eval")
-  ) {
+  const admission = stateArgs["agentExecutionAdmission"];
+  if (!admission || typeof admission !== "object" || Array.isArray(admission)) {
     return null;
   }
-  return { ownerId, purpose };
+  const ownerId = (admission as Record<string, unknown>)["ownerId"];
+  if (
+    (admission as Record<string, unknown>)["v"] !== 1 ||
+    typeof ownerId !== "string" ||
+    stateArgs["ownerPrincipalId"] !== ownerId ||
+    record.parentId !== ownerId
+  )
+    return null;
+  return { ownerId };
 }
 
 export interface ResolvedCodeIdentity {
@@ -46,8 +48,7 @@ export interface ResolvedCodeIdentity {
   effectiveVersion: string;
   executionDigest: string;
   requested: readonly import("@vibestudio/rpc").CapabilityScope[];
-  evalCeilings: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityCeiling[];
-  evalOrigin?: { ownerId: string; purpose: EvalCeilingPurpose };
+  evalOrigin?: { ownerId: string };
 }
 
 /**
@@ -63,9 +64,9 @@ export function resolveCodeIdentity(
 ): ResolvedCodeIdentity | null {
   const record = entityCache.resolveActive(callerId);
   if (!record) return null;
-  const evalOwner = evalOwnerCeilingPurpose(record);
-  if (evalOwner) {
-    const owner = entityCache.resolveActive(evalOwner.ownerId);
+  const resolvedEvalOwner = evalOwner(record);
+  if (resolvedEvalOwner) {
+    const owner = entityCache.resolveActive(resolvedEvalOwner.ownerId);
     if (
       !owner ||
       !isCodeIdentityCallerKind(owner.kind) ||
@@ -74,26 +75,24 @@ export function resolveCodeIdentity(
       !/^[0-9a-f]{64}$/.test(owner.activeExecutionDigest) ||
       !owner.activeAuthority
     ) {
-      return null;
+      // An inert user/session owner has no code identity by design. In that
+      // case the exact product-baked EvalDO is the mediating harness. Continue
+      // through the ordinary record validation below; forged/unsealed EvalDO
+      // records still fail closed because they lack a sealed execution image.
+    } else {
+      return {
+        // Runtime attribution remains the concrete EvalDO. The exact harness
+        // identity comes from its immutable host-recorded owner chain; it is not
+        // a request list for dynamic execution.
+        callerId,
+        callerKind: "do",
+        repoPath: owner.source.repoPath,
+        effectiveVersion: owner.source.effectiveVersion,
+        executionDigest: owner.activeExecutionDigest,
+        requested: [],
+        evalOrigin: { ownerId: resolvedEvalOwner.ownerId },
+      };
     }
-    const requested = owner.activeAuthority.evalCeilings
-      .filter((ceiling) => ceiling.audience === "eval" && ceiling.purpose === evalOwner.purpose)
-      .flatMap((ceiling) => ceiling.capabilities);
-    if (requested.length === 0) return null;
-    return {
-      // Runtime attribution remains the concrete EvalDO. Only the code digest
-      // and request ceiling come from its immutable, host-recorded owner chain.
-      callerId,
-      callerKind: "do",
-      repoPath: owner.source.repoPath,
-      effectiveVersion: owner.source.effectiveVersion,
-      executionDigest: owner.activeExecutionDigest,
-      requested,
-      // An eval cannot widen its owner's ceiling. A child installed
-      // unit must establish its own sealed identity and authority manifest.
-      evalCeilings: [],
-      evalOrigin: { ownerId: evalOwner.ownerId, purpose: evalOwner.purpose },
-    };
   }
   if (!isCodeIdentityCallerKind(record.kind)) return null;
   const callerKind = callerKindForPrincipalKind(record.kind);
@@ -110,7 +109,7 @@ export function resolveCodeIdentity(
     effectiveVersion: record.source.effectiveVersion,
     executionDigest: record.activeExecutionDigest,
     requested: record.activeAuthority.requests,
-    evalCeilings: record.activeAuthority.evalCeilings,
+    ...(resolvedEvalOwner ? { evalOrigin: { ownerId: resolvedEvalOwner.ownerId } } : {}),
   };
 }
 

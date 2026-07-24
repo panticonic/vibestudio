@@ -221,10 +221,6 @@ class TestGmailAgentWorker extends GmailAgentWorker {
   protected override get rpc(): never {
     return {
       call: this.rpcCall,
-      callDeferred: async (...args: unknown[]) => ({
-        status: "completed" as const,
-        result: await (this.rpcCall as (...rpcArgs: unknown[]) => Promise<unknown>)(...args),
-      }),
     } as never;
   }
 

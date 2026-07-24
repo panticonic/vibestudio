@@ -5,7 +5,7 @@ import { createHostCaller, type VerifiedCaller } from "@vibestudio/shared/servic
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { WorkspaceDeclarations } from "@vibestudio/workspace/singletonRegistry";
 import { PRODUCT_WORKSPACE_SERVICES } from "@vibestudio/shared/productWorkspaceServices.mjs";
-import type { DirectAuthorityAttestation } from "@vibestudio/rpc";
+import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import type { UserSubject } from "@vibestudio/identity/types";
 import { randomBytes } from "node:crypto";
 import { assertPresent } from "../../lintHelpers";
@@ -17,6 +17,7 @@ import { attestDirectRpc, attestWorkspaceDoRpc } from "../services/authorityRunt
 import { SEMANTIC_CONTROL_PLANE } from "../internalDOs/controlPlane.js";
 import type { WorkerdManager, WorkerdWorkspaceProvider } from "../workerdManager.js";
 import type { DORef } from "../workerdRpcRelay.js";
+import type { RpcServer } from "../rpcServer.js";
 
 export interface WorkerdGatewayBootstrapConfig {
   getPort(): number | null;
@@ -39,6 +40,12 @@ export interface WorkerdBootstrapDeps {
   getInternalDoEnv(className: string): Record<string, string>;
   runtimeDiagnostics: Pick<RuntimeDiagnosticsStore, "record">;
   eventService: Pick<EventService, "emit">;
+  /**
+   * Join a registered image identity to its current host-owned execution
+   * session and context policy. Egress is long-lived, so these facts must be
+   * resolved when a request arrives rather than captured at image startup.
+   */
+  resolveEgressCaller(caller: VerifiedCaller): VerifiedCaller | null;
   onManagerStarted(manager: WorkerdManager): void;
 }
 
@@ -205,7 +212,10 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         },
       });
       deps.onManagerStarted(manager);
-      deps.egressProxy.setCallerResolver((callerId) => egressCallers.get(callerId) ?? null);
+      deps.egressProxy.setCallerResolver((callerId) => {
+        const registered = egressCallers.get(callerId);
+        return registered ? deps.resolveEgressCaller(registered) : null;
+      });
 
       await manager.registerAllDOClasses([
         {
@@ -223,10 +233,11 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
 
   deps.container.registerManaged({
     name: "doDispatch",
-    dependencies: ["workerdManager"],
+    dependencies: ["workerdManager", "rpcServer"],
     async start(resolve) {
       const { DODispatch } = await import("../doDispatch.js");
       const manager = assertPresent(resolve<WorkerdManager>("workerdManager"));
+      const rpcServer = assertPresent(resolve<{ server: RpcServer }>("rpcServer")).server;
       const dispatch = new DODispatch();
       dispatch.setTokenManager(deps.tokenManager);
       dispatch.setGetWorkerdGatewayToken(() => deps.gatewayToken);
@@ -242,6 +253,9 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
           workspaceId: deps.workspaceId,
           services: deps.workspaceDeclarations.services,
         })
+      );
+      dispatch.setAuthorityParentRunner((receiverRuntimeId, authorization, invoke) =>
+        rpcServer.withAuthorityParent(receiverRuntimeId, authorization, invoke)
       );
       return dispatch;
     },

@@ -15,6 +15,7 @@ import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityKind, EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import { envelopeFromMessage, type RpcEnvelope, type RpcMessage } from "@vibestudio/rpc";
+import type { AttestedCaller } from "@vibestudio/rpc/internal";
 import {
   FRAME_DATA,
   FRAME_END,
@@ -31,7 +32,6 @@ import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import { SessionWebSocketShim, type PipeChannels } from "./webrtcSessionShim.js";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import { EventService } from "@vibestudio/shared/eventsService";
-import type { DeferralRegistry } from "./services/deferralRegistry.js";
 
 function makeRecord(
   id: string,
@@ -69,7 +69,7 @@ function makeRecord(
     ...(opts?.activeAuthority
       ? { activeAuthority: opts.activeAuthority }
       : executable
-        ? { activeAuthority: { requests: [], evalCeilings: [] } }
+        ? { activeAuthority: { requests: [] } }
         : {}),
     key: id,
     createdAt: Date.now(),
@@ -97,14 +97,24 @@ type TestRpcServer = {
   pendingAuthentications: Map<unknown, ReturnType<typeof setTimeout> | null>;
   verifiedCallerFor(
     callerId: string,
-    callerKind: CallerKind
+    callerKind: CallerKind,
+    agentBinding?: undefined,
+    subject?: undefined,
+    inheritedTestPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicy | null
   ): ReturnType<typeof createVerifiedCaller>;
+  beginAuthorityParent(
+    receiverRuntimeId: string,
+    authorization: import("@vibestudio/rpc/internal").DirectAuthorityAttestation
+  ): () => void;
+  testPolicyFromAuthorityParent(
+    callerRuntimeId: string,
+    authorityParentNonce: string | undefined
+  ): import("@vibestudio/rpc").AgentExecutionTestPolicy | null;
   connectionReconnectWaiters: Map<string, { resolve: () => void; reject: (err: Error) => void }>;
   reconnectWaiters: Map<
     string,
     { promise: Promise<void>; resolve: () => void; reject: (err: Error) => void }
   >;
-  deferrals: Pick<DeferralRegistry, "createApi" | "cancelAll" | "size">;
   handleAuth(ws: unknown, token: string | null, connectionId: string): Promise<void>;
   handleConnection(ws: unknown): void;
   handleMessage(client: WsClientState, data: Buffer): void;
@@ -141,7 +151,7 @@ type TestRpcServer = {
     readOnly?: boolean;
     waitForAuthority?: boolean;
     signal?: AbortSignal;
-  }): Promise<import("@vibestudio/rpc").DirectAuthorityAttestation>;
+  }): Promise<import("@vibestudio/rpc/internal").DirectAuthorityAttestation>;
   streamCallTarget(targetId: string, method: string, ...args: unknown[]): Promise<Response>;
   relayTargetStream(
     caller: ReturnType<typeof createVerifiedCaller>,
@@ -895,37 +905,6 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
 
     expect(shim.readyState).toBe(3); // terminated — the slow session, not the pipe
     expect(control.some((frame) => frame.t === "closed")).toBe(true);
-  });
-});
-
-describe("RpcServer deferred result lifecycle", () => {
-  it("does not deliver a settled result to a retired caller", async () => {
-    const created = createServer();
-    const callerId = "do:workers/agent-worker:AiChatWorker:cancelled";
-    const caller = makeRecord(callerId, "do");
-    created.entityCache._onActivate(caller);
-    const callTarget = vi.spyOn(created.server, "callTarget");
-    let resolveWork!: (value: unknown) => void;
-
-    testServer(created.server)
-      .deferrals.createApi({
-        callerId,
-        requestId: "deferred-cancelled",
-        service: "credentials",
-        method: "resolveCredential",
-      })
-      .run(() => new Promise((resolve) => (resolveWork = resolve)));
-
-    created.entityCache._onRetire({
-      ...caller,
-      status: "retired",
-      retiredAt: Date.now(),
-    });
-    resolveWork({ decision: "session" });
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(callTarget).not.toHaveBeenCalled();
   });
 });
 
@@ -1954,7 +1933,6 @@ describe("RpcServer relay behavior", () => {
               evidence: "intentional-broad",
             },
           ],
-          evalCeilings: [],
         },
       })
     );
@@ -1977,7 +1955,6 @@ describe("RpcServer relay behavior", () => {
       effectiveVersion: "ev-chat",
       executionDigest: "a".repeat(64),
       requested: [{ capability: "rpc:subscribe", resource: { kind: "prefix", prefix: "" } }],
-      evalCeilings: [],
     });
     client.caller.codeApproved = true;
     const request = {
@@ -1991,7 +1968,7 @@ describe("RpcServer relay behavior", () => {
 
     const [, init] = fetchMock.mock.calls[0]!;
     const relayed = JSON.parse(String((init as RequestInit).body)) as RpcEnvelope;
-    expect(relayed.delivery.caller.authorization).toMatchObject({
+    expect((relayed.delivery.caller as AttestedCaller).authorization).toMatchObject({
       audience: targetId,
       method: "subscribe",
       resourceKey: targetId,
@@ -2030,6 +2007,10 @@ describe("RpcServer relay behavior", () => {
           methodCapability: "channel.members.remove",
           methodTier: "critical",
           principals: ["code"],
+          presentation: { domain: "sharing", verb: "act" },
+          title: "Conversations",
+          action: "remove someone from a conversation",
+          declaredBy: "workers/pubsub-channel",
         },
       ],
       directAuthorityAcquirer: {
@@ -2049,7 +2030,6 @@ describe("RpcServer relay behavior", () => {
         { capability: "channel.members.remove", resource: { kind: "prefix", prefix: "" } },
         { capability: "workspace-service:channel", resource: { kind: "prefix", prefix: "" } },
       ],
-      evalCeilings: [],
     });
     delete caller.codeApproved;
 
@@ -2069,7 +2049,7 @@ describe("RpcServer relay behavior", () => {
       errorData: {
         acquisition: { acquisitionId: "acq:remove-member" },
         authorityFailure: {
-          reasonCode: "missing-grant",
+          reasonCode: "approval-required",
           capability: "channel.members.remove",
           remediation: { kind: "request-user-approval" },
         },
@@ -2097,6 +2077,10 @@ describe("RpcServer relay behavior", () => {
           methodCapability: "workspace-service:channel",
           methodTier: "open",
           principals: ["code"],
+          presentation: { domain: "sharing", verb: "act" },
+          title: "Conversations",
+          action: "use conversations",
+          declaredBy: "workers/pubsub-channel",
         },
       ],
       directAuthorityAcquirer: {
@@ -2113,7 +2097,6 @@ describe("RpcServer relay behavior", () => {
       effectiveVersion: "ev-news",
       executionDigest: "a".repeat(64),
       requested: [],
-      evalCeilings: [],
     });
     caller.codeApproved = true;
 
@@ -2133,10 +2116,10 @@ describe("RpcServer relay behavior", () => {
       errorKind: "access",
       errorData: {
         authorityFailure: {
-          reasonCode: "not-requested",
+          reasonCode: "fixed-code-not-requested",
           capability: "workspace-service:channel",
           remediation: {
-            kind: "update-authority-manifest",
+            kind: "update-installed-code-manifest",
             request: {
               capability: "workspace-service:channel",
               resource: {
@@ -2160,6 +2143,10 @@ describe("RpcServer relay behavior", () => {
           methodEffect: { kind: "runtime-intrinsic" },
           methodTier: "open",
           principals: ["code"],
+          presentation: { domain: "automation", verb: "act" },
+          title: "Probe",
+          action: "use the probe",
+          declaredBy: "workers/probe",
         },
       ],
     });
@@ -2172,7 +2159,6 @@ describe("RpcServer relay behavior", () => {
       requested: [
         { capability: "workspace-service:probe", resource: { kind: "prefix", prefix: "" } },
       ],
-      evalCeilings: [],
     });
     caller.codeApproved = true;
 
@@ -2214,6 +2200,10 @@ describe("RpcServer relay behavior", () => {
           methodCapability: "workspace-service:channel",
           methodTier: "open",
           principals: ["code"],
+          presentation: { domain: "sharing", verb: "act" },
+          title: "Conversations",
+          action: "use conversations",
+          declaredBy: "workers/pubsub-channel",
         },
       ],
       directAuthorityAcquirer: {
@@ -2235,7 +2225,6 @@ describe("RpcServer relay behavior", () => {
           resource: { kind: "prefix", prefix: "" },
         },
       ],
-      evalCeilings: [],
     });
     delete caller.codeApproved;
 
@@ -2257,6 +2246,327 @@ describe("RpcServer relay behavior", () => {
         snapshot: expect.objectContaining({ capability: "workspace-service:channel" }),
       })
     );
+  });
+
+  it("preserves admitted test-session policy in direct workspace-service acquisitions", async () => {
+    const request = vi.fn(() => ({
+      acquisitionId: "acq:test-models",
+      ownerRuntimeId: "do:vibestudio/internal:EvalDO:test-run",
+      snapshotDigest: "d".repeat(64),
+      capability: "workspace-service:models",
+      resourceKey: "do:workers/model-settings:ModelSettingsDO:workspace-model-settings",
+      tier: "gated" as const,
+      cardType: "permission.gated" as const,
+      renderedAction: "use model settings",
+      pending: false,
+    }));
+    const { server } = createServer({
+      resolveWorkspaceDirectAuthority: async () => [
+        {
+          capability: "workspace-service:models",
+          methodEffect: { kind: "workspace-service" },
+          methodTier: "open",
+          principals: ["session"],
+          presentation: { domain: "automation", verb: "manage" },
+          title: "AI model settings",
+          action: "use model settings",
+          declaredBy: "workers/model-settings",
+        },
+      ],
+      directAuthorityAcquirer: {
+        request,
+        acquire: vi.fn(),
+        consume: vi.fn(() => true),
+        invalidate: vi.fn(),
+      },
+    });
+    const runtimeId = "do:vibestudio/internal:EvalDO:test-run";
+    const digest = "a".repeat(64);
+    const caller = createVerifiedCaller(
+      runtimeId,
+      "do",
+      {
+        callerId: runtimeId,
+        callerKind: "do",
+        repoPath: "workers/system-test-runner",
+        effectiveVersion: "ev-runner",
+        executionDigest: digest,
+        requested: [
+          { capability: "workspace-service:models", resource: { kind: "prefix", prefix: "" } },
+        ],
+      },
+      null,
+      { userId: "user-1", handle: "user1" },
+      {
+        v: 1,
+        authoritySessionId: "authority:test-run",
+        authoritySessionVersion: 1,
+        mode: "test",
+        ownerUser: "user:user-1",
+        workspaceId: "test-workspace",
+        contextId: "ctx-test",
+        agentBinding: null,
+        taskRef: "eval:test-run",
+        harness: {
+          principal: `code:workers/system-test-runner@${digest}`,
+          repoPath: "workers/system-test-runner",
+          effectiveVersion: "ev-runner",
+        },
+        eval: { runtimeId, runId: "doctor" },
+        causalParent: null,
+        testPolicy: {
+          policyId: "test:doctor:test-run",
+          kind: "orchestrator",
+        },
+        issuedAt: Date.now() - 1_000,
+        expiresAt: Date.now() + 60_000,
+        nonce: "test-session-nonce",
+      }
+    );
+
+    await expect(
+      testServer(server).directDOAuthorization({
+        caller,
+        ref: {
+          source: "workers/model-settings",
+          className: "ModelSettingsDO",
+          objectKey: "workspace-model-settings",
+        },
+        method: "inspectModels",
+        args: [["openai-codex:gpt-5.4-mini"]],
+      })
+    ).rejects.toMatchObject({ code: "EACQUIRE" });
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshot: expect.objectContaining({
+          executionMode: "test",
+          testPolicyId: "test:doctor:test-run",
+        }),
+      })
+    );
+  });
+
+  it("inherits a canonical test-context policy without changing manifest-confined code into a session", async () => {
+    const policy = {
+      policyId: "test:st_context_inheritance",
+      kind: "orchestrator" as const,
+    };
+    const request = vi.fn(() => ({
+      acquisitionId: "acq:test-channel-gad",
+      ownerRuntimeId: "do:workers/pubsub-channel:PubSubChannel:headless-test",
+      snapshotDigest: "d".repeat(64),
+      capability: "workspace-service:gad.workspace",
+      resourceKey: "do:workers/gad-workspace:GadWorkspaceDO:workspace",
+      tier: "gated" as const,
+      cardType: "permission.gated" as const,
+      renderedAction: "use workspace history",
+      pending: false,
+    }));
+    const { server, entityCache } = createServer({
+      testPolicyForContext: (contextId) => (contextId === "ctx:test-child" ? policy : null),
+      userSubjectSource: {
+        resolve: () => ({ userId: "user-1", handle: "user1" }),
+      },
+      isCodeApproved: () => false,
+      resolveWorkspaceDirectAuthority: async () => [
+        {
+          capability: "workspace-service:gad.workspace",
+          methodEffect: { kind: "workspace-service" },
+          methodTier: "open",
+          principals: ["code"],
+          presentation: { domain: "automation", verb: "act" },
+          title: "Workspace history",
+          action: "use workspace history",
+          declaredBy: "workers/gad-workspace",
+        },
+      ],
+      directAuthorityAcquirer: {
+        request,
+        acquire: vi.fn(),
+        consume: vi.fn(() => true),
+        invalidate: vi.fn(),
+      },
+    });
+    const runtimeId = "do:workers/pubsub-channel:PubSubChannel:headless-test";
+    entityCache._onActivate(
+      makeRecord(runtimeId, "do", {
+        contextId: "ctx:test-child",
+        repoPath: "workers/pubsub-channel",
+        activeExecutionDigest: "b".repeat(64),
+        activeAuthority: {
+          requests: [
+            {
+              capability: "workspace-service:gad.workspace",
+              resource: { kind: "prefix", prefix: "" },
+              tier: "gated",
+              evidence: "intentional-broad",
+            },
+          ],
+        },
+      })
+    );
+    const caller = testServer(server).verifiedCallerFor(runtimeId, "do");
+    expect(caller.executionSession).toBeUndefined();
+    expect(caller.testPolicy).toEqual(policy);
+
+    await expect(
+      testServer(server).directDOAuthorization({
+        caller,
+        ref: {
+          source: "workers/gad-workspace",
+          className: "GadWorkspaceDO",
+          objectKey: "workspace",
+        },
+        method: "appendLogEvent",
+        args: [{ logId: "headless-test", events: [] }],
+      })
+    ).rejects.toMatchObject({ code: "EACQUIRE" });
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshot: expect.objectContaining({
+          callerPrincipal: `code:workers/pubsub-channel@${"b".repeat(64)}`,
+          executionMode: "test",
+          testPolicyId: policy.policyId,
+        }),
+      })
+    );
+  });
+
+  it("delegates a test policy only for the exact active invocation without mutating receiver context", () => {
+    const { server, entityCache } = createServer({
+      userSubjectSource: {
+        resolve: () => ({ userId: "user-1", handle: "user1" }),
+      },
+    });
+    const receiver = "do:workers/pubsub-channel:PubSubChannel:headless-test";
+    entityCache._onActivate(
+      makeRecord(receiver, "do", {
+        contextId: "ctx:test-receiver",
+        repoPath: "workers/pubsub-channel",
+        activeExecutionDigest: "b".repeat(64),
+        activeAuthority: { requests: [] },
+      })
+    );
+    const policy = {
+      policyId: "test:st_invocation_parent",
+      kind: "orchestrator" as const,
+    };
+    const nonce = "host-minted-direct-authority-nonce";
+    const release = testServer(server).beginAuthorityParent(receiver, {
+      nonce,
+      context: { testPolicy: policy },
+    } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation);
+
+    expect(testServer(server).testPolicyFromAuthorityParent(receiver, nonce)).toEqual(policy);
+    expect(() =>
+      testServer(server).testPolicyFromAuthorityParent(
+        "do:workers/other:OtherDO:headless-test",
+        nonce
+      )
+    ).toThrow(/another runtime/);
+    const caller = testServer(server).verifiedCallerFor(
+      receiver,
+      "do",
+      undefined,
+      undefined,
+      testServer(server).testPolicyFromAuthorityParent(receiver, nonce)
+    );
+    expect(caller.executionSession).toBeUndefined();
+    expect(caller.testPolicy).toEqual(policy);
+
+    release();
+    expect(() => testServer(server).testPolicyFromAuthorityParent(receiver, nonce)).toThrow(
+      /not active/
+    );
+  });
+
+  it("keeps a receiver's exact case policy when its orchestrator invokes it", () => {
+    const orchestrator = {
+      policyId: "test:st_invocation_parent",
+      kind: "orchestrator" as const,
+    };
+    const casePolicy: import("@vibestudio/rpc").AgentExecutionTestPolicy = {
+      policyId: `${orchestrator.policyId}:case:approval:abc`,
+      kind: "case",
+      orchestratorPolicyId: orchestrator.policyId,
+      case: {
+        testId: "approval",
+        authority: [],
+        userland: [],
+        unexpectedPrompts: "fail",
+      },
+    };
+    const { server, entityCache } = createServer({
+      testPolicyForContext: () => casePolicy,
+    });
+    const receiver = "do:workers/pubsub-channel:PubSubChannel:headless-case";
+    entityCache._onActivate(
+      makeRecord(receiver, "do", {
+        contextId: "ctx:test-case",
+        repoPath: "workers/pubsub-channel",
+        activeExecutionDigest: "b".repeat(64),
+        activeAuthority: { requests: [] },
+      })
+    );
+    const nonce = "host-minted-direct-authority-case-nonce";
+    const release = testServer(server).beginAuthorityParent(receiver, {
+      nonce,
+      context: { testPolicy: orchestrator },
+    } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation);
+
+    expect(testServer(server).testPolicyFromAuthorityParent(receiver, nonce)).toBe(casePolicy);
+    expect(
+      testServer(server).verifiedCallerFor(
+        receiver,
+        "do",
+        undefined,
+        undefined,
+        testServer(server).testPolicyFromAuthorityParent(receiver, nonce)
+      ).testPolicy
+    ).toBe(casePolicy);
+    release();
+  });
+
+  it("does not poison a shared orchestrator receiver when sequential cases invoke it", () => {
+    const orchestrator = {
+      policyId: "test:st_shared_receiver",
+      kind: "orchestrator" as const,
+    };
+    const casePolicy = (testId: string): import("@vibestudio/rpc").AgentExecutionTestPolicy => ({
+      policyId: `${orchestrator.policyId}:case:${testId}`,
+      kind: "case",
+      orchestratorPolicyId: orchestrator.policyId,
+      case: {
+        testId,
+        authority: [],
+        userland: [],
+        unexpectedPrompts: "fail",
+      },
+    });
+    const { server, entityCache } = createServer({
+      testPolicyForContext: () => orchestrator,
+    });
+    const receiver = "do:workers/pubsub-channel:PubSubChannel:shared";
+    entityCache._onActivate(
+      makeRecord(receiver, "do", {
+        contextId: "ctx:system-test-orchestrator",
+        repoPath: "workers/pubsub-channel",
+        activeExecutionDigest: "b".repeat(64),
+        activeAuthority: { requests: [] },
+      })
+    );
+
+    for (const [index, policy] of [casePolicy("first"), casePolicy("second")].entries()) {
+      const nonce = `host-minted-shared-receiver-nonce-${index}`;
+      const release = testServer(server).beginAuthorityParent(receiver, {
+        nonce,
+        context: { testPolicy: policy },
+      } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation);
+      expect(testServer(server).testPolicyFromAuthorityParent(receiver, nonce)).toBe(policy);
+      release();
+    }
+
+    expect(testServer(server).verifiedCallerFor(receiver, "do").testPolicy).toBe(orchestrator);
   });
 
   it("keeps an agent binding as a relationship fact rather than inventing a session origin", async () => {
@@ -2307,7 +2617,7 @@ describe("RpcServer relay behavior", () => {
 
     const [, init] = fetchMock.mock.calls[0]!;
     const relayed = JSON.parse(String((init as RequestInit).body)) as RpcEnvelope;
-    expect(relayed.delivery.caller.authorization?.context).toMatchObject({
+    expect((relayed.delivery.caller as AttestedCaller).authorization?.context).toMatchObject({
       authorizingOrigin: { kind: "user", principal: "user:user-1" },
       session: { id: "channel-stable", mission },
       contextIntegrity,
@@ -2569,7 +2879,6 @@ describe("RpcServer caller identity", () => {
               evidence: "exact",
             },
           ],
-          evalCeilings: [],
         },
       })
     );
@@ -3067,12 +3376,31 @@ describe("RpcServer caller identity", () => {
   });
 
   it("preserves app chain caller attribution for extension parent invocations", async () => {
+    const authorizingCaller = createVerifiedCaller(
+      "@workspace-apps/shell",
+      "app",
+      {
+        callerId: "@workspace-apps/shell",
+        callerKind: "app",
+        repoPath: "apps/shell",
+        effectiveVersion: "ev-shell",
+      },
+      null,
+      { userId: "usr_alice", handle: "alice" }
+    );
     const { server } = createServer({
       resolveExtensionInvocation: vi.fn(() => ({
         caller: {
           callerId: "@workspace-apps/shell",
           callerKind: "app" as const,
         },
+        chainCaller: {
+          callerId: "@workspace-apps/shell",
+          callerKind: "app" as const,
+          repoPath: "apps/shell",
+          effectiveVersion: "ev-shell",
+        },
+        authorizingCaller,
         causalParent: null,
       })),
     });
@@ -3097,11 +3425,56 @@ describe("RpcServer caller identity", () => {
       chainCaller: {
         callerId: "@workspace-apps/shell",
         callerKind: "app",
-        repoPath: "",
-        effectiveVersion: "",
+        repoPath: "apps/shell",
+        effectiveVersion: "ev-shell",
       },
+      authorizingCaller,
     });
     expect(dispatched[0]).not.toHaveProperty("causalParent");
+  });
+
+  it("preserves a verified shell subject across a nested extension host call", async () => {
+    const authorizingCaller = createVerifiedCaller("shell:dev_alice", "shell", null, null, {
+      userId: "usr_alice",
+      handle: "alice",
+    });
+    const { server } = createServer({
+      resolveExtensionInvocation: vi.fn(() => ({
+        caller: {
+          callerId: "shell:dev_alice",
+          callerKind: "shell" as const,
+          userId: "usr_alice",
+        },
+        authorizingCaller,
+        causalParent: null,
+      })),
+    });
+    const client = createClient("@workspace-extensions/browser-data");
+    client.caller = createVerifiedCaller("@workspace-extensions/browser-data", "extension");
+    const dispatched: unknown[] = [];
+    testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["extension"] });
+    testServer(server).dispatcher.getMethodPolicy.mockReturnValue(undefined);
+    testServer(server).dispatcher.dispatch.mockImplementation(async (ctx: unknown) => {
+      dispatched.push(ctx);
+      return { ok: true };
+    });
+
+    await handleRpc(server, client, {
+      ...rpcRequest("req-browser-data", "workers.resolveDurableObject"),
+      parentRequestId: "request:shell-browser-data",
+    });
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]).toMatchObject({
+      caller: {
+        runtime: { id: "@workspace-extensions/browser-data", kind: "extension" },
+      },
+      authorizingCaller: {
+        runtime: { id: "shell:dev_alice", kind: "shell" },
+        subject: { userId: "usr_alice", handle: "alice" },
+      },
+    });
+    expect(dispatched[0]).not.toHaveProperty("chainCaller");
   });
 
   it("derives a nested extension VCS call's causal parent from its host invocation", async () => {
@@ -3116,6 +3489,7 @@ describe("RpcServer caller identity", () => {
         callerId: "do:agents/AgentDO:agent-1",
         callerKind: "do" as const,
       },
+      authorizingCaller: createVerifiedCaller("do:agents/AgentDO:agent-1", "do"),
       causalParent,
     }));
     const verifyExactCausalInvocation = vi.fn(async () => true);
@@ -3348,22 +3722,6 @@ describe("RpcServer terminal lifecycle", () => {
     server.handleGatewayWsConnection(waitingSocket as never);
     expect(testServer(server).pendingAuthentications.size).toBe(1);
 
-    let deferredSignal: AbortSignal | undefined;
-    testServer(server)
-      .deferrals.createApi({
-        callerId: "worker:pending",
-        requestId: "request-pending",
-        service: "approval",
-        method: "request",
-      })
-      .run(
-        (signal) =>
-          new Promise(() => {
-            deferredSignal = signal;
-          })
-      );
-    expect(testServer(server).deferrals.size).toBe(1);
-
     const client = createClient("panel:nav-a");
     registerClient(server, client);
     await server.stop();
@@ -3372,8 +3730,6 @@ describe("RpcServer terminal lifecycle", () => {
     expect(disposeRevocation).toHaveBeenCalledTimes(1);
     expect(waitingSocket.close).toHaveBeenCalledWith(1001, "Server shutting down");
     expect(testServer(server).pendingAuthentications.size).toBe(0);
-    expect(deferredSignal?.aborted).toBe(true);
-    expect(testServer(server).deferrals.size).toBe(0);
     expect(testServer(server).sessions.hasSession("panel:nav-a")).toBe(false);
 
     // A real WebSocket emits close asynchronously after closeAll(). That late

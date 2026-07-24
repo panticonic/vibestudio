@@ -2,6 +2,15 @@ import { z } from "zod";
 import { PanelEntityIdSchema, PanelSlotIdSchema } from "./panel/ids.js";
 import type { PanelRuntimeLease } from "./panel/panelLease.js";
 import type {
+  PanelBootObservation,
+  PanelConsoleHistoryObservation,
+  PanelDiagnosticPacket,
+  PanelHostObservation,
+  PanelObservation,
+  PanelRuntimeFailure,
+  PanelSnapshotObservation,
+} from "./panel/observation.js";
+import type {
   AppInfo,
   Panel,
   PanelArtifacts,
@@ -51,13 +60,165 @@ export const PanelFocusResultSchema: z.ZodType<PanelFocusResult> = z.object({
 
 export const PanelLifecycleResultSchema: z.ZodType<PanelLifecycleResult> = z.object({
   panelId: z.string(),
-  operation: z.enum(["reload", "rebuild", "rebuildAndReload", "unload", "close"]),
+  operation: z.enum(["reload", "rebuild", "unload", "close"]),
   status: z.string(),
   loaded: z.boolean(),
   rebuilt: z.boolean(),
   reloaded: z.boolean(),
   buildRevision: z.number().optional(),
   effectiveVersion: z.string().nullable().optional(),
+});
+
+export const PanelFailureCodeSchema = z.enum([
+    "unit_not_found",
+    "ref_not_found",
+    "manifest_invalid",
+    "dependency_resolution_failed",
+    "compile_failed",
+    "build_identity_invalid",
+    "host_unavailable",
+    "lease_conflict",
+    "parent_resolution_timeout",
+    "navigation_failed",
+    "asset_unavailable",
+    "entry_threw",
+    "runtime_handshake_timeout",
+    "render_crashed",
+    "panel_not_found",
+    "unknown_failure",
+  ]);
+export const PanelFailureStageSchema = z.enum([
+  "resolve",
+  "build",
+  "host",
+  "load",
+  "boot",
+  "runtime",
+]);
+
+export const PanelRuntimeFailureSchema: z.ZodType<PanelRuntimeFailure> = z.object({
+  code: PanelFailureCodeSchema,
+  stage: PanelFailureStageSchema,
+  message: z.string(),
+  provenance: z.object({
+    panelId: z.string().optional(),
+    runtimeEntityId: z.string().nullable().optional(),
+    attemptId: z.string().optional(),
+    source: z.string(),
+    contextId: z.string(),
+    requestedRef: z.string(),
+    stateHash: z.string().optional(),
+    effectiveVersion: z.string().nullable().optional(),
+    buildKey: z.string().nullable().optional(),
+  }),
+  diagnosticId: z.string(),
+  occurredAt: z.number(),
+  details: z.record(z.unknown()).optional(),
+});
+
+export const PanelBootObservationSchema: z.ZodType<PanelBootObservation> = z.object({
+  phase: z.enum(["unavailable", "loading", "booting", "ready", "failed"]),
+  runtimeEntityId: z.string().nullable().optional(),
+  source: z.string().nullable().optional(),
+  contextId: z.string().nullable().optional(),
+  effectiveVersion: z.string().nullable().optional(),
+  buildKey: z.string().nullable().optional(),
+  message: z.string().optional(),
+  errorName: z.string().optional(),
+  stack: z.string().optional(),
+  updatedAt: z.number().optional(),
+});
+
+export const PanelHostObservationSchema: z.ZodType<PanelHostObservation> = z.object({
+  holderLabel: z.string().optional(),
+  platform: z.enum(["desktop", "headless", "mobile"]).optional(),
+  supportsInspection: z.boolean().optional(),
+  view: z.object({
+    exists: z.boolean(),
+    url: z.string().optional(),
+    loading: z.boolean().optional(),
+  }),
+  boot: PanelBootObservationSchema,
+  failure: z
+    .object({
+      code: PanelFailureCodeSchema,
+      stage: PanelFailureStageSchema,
+      message: z.string(),
+      details: z.record(z.unknown()).optional(),
+    })
+    .optional(),
+});
+
+export const PanelObservationSchema: z.ZodType<PanelObservation> = z.object({
+  panelId: z.string(),
+  title: z.string(),
+  source: z.string(),
+  kind: z.enum(["workspace", "browser"]),
+  parentId: z.string().nullable(),
+  contextId: z.string(),
+  requestedRef: z.string(),
+  runtimeEntityId: z.string().nullable(),
+  attemptId: z.string(),
+  effectiveVersion: z.string().nullable(),
+  buildKey: z.string().nullable(),
+  phase: z.enum([
+    "resolving",
+    "building",
+    "assigning-host",
+    "loading",
+    "booting",
+    "ready",
+    "failed",
+    "stopped",
+  ]),
+  failure: PanelRuntimeFailureSchema.optional(),
+  host: PanelHostObservationSchema.optional(),
+  updatedAt: z.number(),
+});
+
+export const PanelSnapshotObservationSchema: z.ZodType<PanelSnapshotObservation> = z.object({
+  panelId: z.string(),
+  attemptId: z.string(),
+  runtimeEntityId: z.string(),
+  buildKey: z.string().nullable(),
+  capturedAt: z.number(),
+  document: z.object({
+    kind: z.literal("synth"),
+    text: z.string(),
+    structure: z.record(z.unknown()),
+  }),
+});
+
+const PanelConsoleHistoryEntrySchema = z.object({
+  timestamp: z.number(),
+  level: z.enum(["debug", "info", "warning", "error", "unknown"]),
+  message: z.string(),
+  line: z.number(),
+  sourceId: z.string(),
+  url: z.string(),
+  source: z.enum(["console", "lifecycle"]).optional(),
+  fields: z.record(z.unknown()).optional(),
+});
+
+export const PanelConsoleHistoryObservationSchema: z.ZodType<PanelConsoleHistoryObservation> =
+  z.discriminatedUnion("available", [
+    z.object({
+      available: z.literal(true),
+      entries: z.array(PanelConsoleHistoryEntrySchema),
+      errors: z.array(PanelConsoleHistoryEntrySchema),
+      dropped: z.object({ entries: z.number(), errors: z.number() }),
+      capacity: z.object({ entries: z.number(), errors: z.number() }),
+    }),
+    z.object({
+      available: z.literal(false),
+      error: z.string(),
+    }),
+  ]);
+
+export const PanelDiagnosticPacketSchema: z.ZodType<PanelDiagnosticPacket> = z.object({
+  observation: PanelObservationSchema,
+  consoleHistory: PanelConsoleHistoryObservationSchema,
+  document: PanelSnapshotObservationSchema.optional(),
 });
 
 export const PanelNavigationStateSchema: z.ZodType<PanelNavigationState> = z.object({
@@ -164,9 +325,6 @@ export const PanelSchema: z.ZodType<Panel> = z.lazy(() =>
     executionDigest: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
     authorityRequests: z
       .array(z.custom<import("./authorityManifest.js").UnitAuthorityRequest>())
-      .optional(),
-    authorityEvalCeilings: z
-      .array(z.custom<import("./authorityManifest.js").EvalAuthorityCeiling>())
       .optional(),
     owner: z.string().optional(),
     children: z.array(PanelSchema),

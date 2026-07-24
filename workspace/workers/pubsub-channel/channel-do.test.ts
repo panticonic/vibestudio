@@ -1247,7 +1247,7 @@ describe("PubSubChannel", () => {
         // missing-DO eviction is driven by that delivery's fatal code.
         receivesChannelEnvelopes: true,
       });
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      await instance.alarm();
 
       expect(sql.exec(`SELECT id FROM participants WHERE id = ?`, missingDoId).toArray()).toEqual([
         { id: missingDoId },
@@ -1264,12 +1264,14 @@ describe("PubSubChannel", () => {
   it("surfaces non-lifecycle structured delivery failures", async () => {
     const agentId = "do:workers/agent-worker:AiChatWorker:headless-denied";
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let deliveryOptions: { readOnly?: boolean; timeoutMs?: number } | undefined;
     const { instance } = await createGadBackedChannel({
-      rpcCall: async (target, method, args) => {
+      rpcCall: async (target, method, args, options) => {
         if (target === "main" && method === "workspace-state.entity.resolveActive") {
           return { id: args[0], kind: "do" };
         }
         if (target === agentId && method === "onChannelEnvelope") {
+          deliveryOptions = options;
           const err = new Error("authority denied") as Error & { code?: string };
           err.code = "EACCES";
           throw err;
@@ -1293,12 +1295,14 @@ describe("PubSubChannel", () => {
         type: "panel",
       });
       await instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent());
+      await instance.alarm();
       await vi.waitFor(() =>
         expect(consoleError).toHaveBeenCalledWith(
           expect.stringContaining(`[Channel] delivery failed for ${agentId}`),
           expect.objectContaining({ code: "EACCES" })
         )
       );
+      expect(deliveryOptions).toMatchObject({ timeoutMs: 15_000 });
     } finally {
       consoleError.mockRestore();
     }
@@ -1342,7 +1346,7 @@ describe("PubSubChannel", () => {
     setRpcCaller(instance, "panel:user", "panel");
     await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
     await instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent());
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await instance.alarm();
 
     expect(envelopeTargets).toContain(agentDoId);
     expect(envelopeTargets).not.toContain(clientDoId);

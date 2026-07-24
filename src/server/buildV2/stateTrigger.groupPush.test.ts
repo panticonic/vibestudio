@@ -1,11 +1,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { discoverPackageGraph } from "./packageGraph.js";
 import { computeEffectiveVersions } from "./effectiveVersion.js";
-import type { BuildSourceProvider } from "./buildSource.js";
+import { setBuildSourceProvider, type BuildSourceProvider } from "./buildSource.js";
 import { StateTransitionTrigger, type WorkspaceStateSource } from "./stateTrigger.js";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 
@@ -36,6 +36,7 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
   afterEach(() => {
     trigger?.stop();
     trigger = null;
+    setBuildSourceProvider(null);
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -97,5 +98,83 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
     // Both repository path deltas must reach graph invalidation.
     expect(changed).toContain("packages/a");
     expect(changed).toContain("packages/b");
+  });
+
+  it("settles graph state without waiting for speculative cache warming", async () => {
+    const panelDir = path.join(workspaceRoot, "workers", "slow-worker");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace-workers/slow-worker",
+        version: "0.1.0",
+        private: true,
+        type: "module",
+        vibestudio: { title: "Slow worker", entry: "index.ts" },
+      })
+    );
+    fs.writeFileSync(
+      path.join(panelDir, "index.ts"),
+      "export default { fetch() { return new Response('ok'); } };\n"
+    );
+
+    const graph = discoverPackageGraph(workspaceRoot);
+    const { evMap, contentHashes } = computeEffectiveVersions(graph, {});
+    let publicationCb: ((event: ProtectedPublicationEvent) => void) | null = null;
+    let releaseMaterialization!: () => void;
+    const materializationReleased = new Promise<void>((resolve) => {
+      releaseMaterialization = resolve;
+    });
+    let materializationStarted = false;
+    const source: WorkspaceStateSource & BuildSourceProvider = {
+      ensureFresh: async () => ({ stateHash: "state:X" }),
+      unitHashes: async (stateHash, relPaths) =>
+        Object.fromEntries(relPaths.map((relPath) => [relPath, `h:${relPath}:${stateHash}`])),
+      resolveContextState: async () => "state:X",
+      discoverGraph: async () => graph,
+      onProtectedPublication: (cb) => {
+        publicationCb = cb;
+        return () => {};
+      },
+      recordBuild: async () => {},
+      materializeForBuild: async () => {
+        materializationStarted = true;
+        await materializationReleased;
+        return { sourceRoot: workspaceRoot };
+      },
+    };
+    setBuildSourceProvider(source);
+
+    trigger = new StateTransitionTrigger({
+      graph,
+      evMap,
+      contentHashes,
+      stateHash: "state:0",
+      workspaceRoot,
+      source,
+    });
+    trigger.start();
+    publicationCb!({
+      ...makeEvent("state:X"),
+      changedPaths: ["workers/slow-worker/index.ts"],
+      repositories: [
+        {
+          repoPath: "workers/slow-worker",
+          previousStateHash: "state:prev",
+          nextStateHash: "state:X",
+          fileChanges: [],
+        },
+      ],
+    });
+
+    await vi.waitFor(() => expect(materializationStarted).toBe(true), { timeout: 500 });
+    await Promise.race([
+      trigger.whenSettled(),
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error("graph settlement waited for cache warming")), 500)
+      ),
+    ]);
+    expect(trigger.getState().stateHash).toBe("state:X");
+    releaseMaterialization();
   });
 });

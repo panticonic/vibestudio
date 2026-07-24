@@ -249,7 +249,9 @@ export function renderEntry(entry: CatalogEntry): string {
   if (entry.access) {
     const a = entry.access as {
       callers?: string[];
+      principals?: string[];
       sensitivity?: string;
+      sessionAdmission?: "family" | "codeOnly";
       restrictedTo?: Array<{ when: string; callers: string[]; reason: string }>;
       approval?: Array<{ when?: string; capability?: string; reason: string }>;
       requires?: Array<{ kind: string; description: string }>;
@@ -267,6 +269,13 @@ export function renderEntry(entry: CatalogEntry): string {
     }
     for (const req of Array.isArray(a.requires) ? a.requires : []) {
       parts.push(`Requires ${req.kind}: ${req.description}`);
+    }
+    if (a.sessionAdmission === "codeOnly") {
+      parts.push(
+        "Caller identity: durable code only. This method cannot be called from eval/session code, " +
+          "and a caller descriptor cannot manufacture a durable identity. Use a session-admitted " +
+          "method when the action originates in eval."
+      );
     }
   }
   if (Array.isArray(entry.members)) parts.push(`Members: ${entry.members.join(", ")}`);
@@ -287,7 +296,7 @@ export function renderEntry(entry: CatalogEntry): string {
       if (rpcExample) {
         parts.push(
           `Eval/raw RPC call:\n${rpcExample}\n\n` +
-            "In eval, this raw service method is always reachable through the portable `rpc.call(target, method, args)` form. " +
+            "The portable `rpc.call(target, method, args)` form addresses this service; normal caller, authority, and session-admission checks still apply. " +
             "The `services.<name>` convenience binding may be an ergonomic runtime client when " +
             "the service name also exists in `@workspace/runtime`."
         );

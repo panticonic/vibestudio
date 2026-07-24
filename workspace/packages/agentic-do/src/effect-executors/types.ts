@@ -140,10 +140,8 @@ export interface HttpCallPort {
     target?: { service: string; method: string };
     idempotencyKey: string;
     request: unknown;
-    /** Branch-scoped outbox row id — the durable continuation key. Ports that support
-     *  server-side deferral (capability-gated calls parking across a human
-     *  approval) use it as the deferred requestId so onDeferredResult can
-     *  route back to deliverEffectOutcome. */
+    /** Branch-scoped outbox row id — the durable continuation key used to
+     * redrive the exact request after authority changes. */
     effectId: string;
     callback: { source: string; className: string; objectKey: string; method: string };
   }): Promise<{ deferred: true } | { deferred: false; result: unknown; isError: boolean }>;

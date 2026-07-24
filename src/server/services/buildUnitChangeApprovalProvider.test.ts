@@ -35,7 +35,6 @@ function packageJson(capability: string): string {
             evidence: "exact",
           },
         ],
-        evalCeilings: [],
       },
     },
   });
@@ -65,7 +64,7 @@ describe("createBuildUnitChangeApprovalProvider", () => {
       ),
     };
     const readWorkspaceFileAtState = vi.fn(async (at: string) =>
-      at === state ? packageJson("notifications") : packageJson("panel.navigate")
+      at === state ? packageJson("notifications") : packageJson("window-management")
     );
     const store = approvalStore();
     const provider = createBuildUnitChangeApprovalProvider({
@@ -91,10 +90,15 @@ describe("createBuildUnitChangeApprovalProvider", () => {
       unitKind: "panel",
       displayName: "Example panel",
       ev: "ev-new",
-      authority: { removedCount: 1 },
+      authority: {
+        diff: {
+          added: [expect.objectContaining({ capability: "notifications" })],
+          removed: [expect.objectContaining({ capability: "window-management" })],
+        },
+      },
     });
-    expect(review.units[0]?.authority?.groups[0]?.items).toContainEqual(
-      expect.objectContaining({ capability: "notifications", added: true })
+    expect(review.units[0]?.authority?.rows).toContainEqual(
+      expect.objectContaining({ capability: "notifications", domain: "computer" })
     );
     expect(review.identityKeys[0]).toMatch(/^workspace-unit:[0-9a-f]{64}$/u);
 
@@ -112,7 +116,6 @@ describe("createBuildUnitChangeApprovalProvider", () => {
               evidence: "exact",
             },
           ],
-          evalCeilings: [],
         },
       },
     ]);
@@ -153,7 +156,7 @@ describe("createBuildUnitChangeApprovalProvider", () => {
       getBuildSystem: () =>
         ({ listBuildUnitIdentities: vi.fn(async () => [panel, worker]) }) as never,
       readWorkspaceFileAtState: vi.fn(async (_at, path) =>
-        packageJson(path.startsWith("workers/") ? "notifications" : "panel.navigate").replace(
+        packageJson(path.startsWith("workers/") ? "notifications" : "window-management").replace(
           "@workspace-panels/example",
           path.startsWith("workers/") ? "@workspace-workers/example" : "@workspace-panels/example"
         )

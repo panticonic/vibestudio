@@ -202,20 +202,44 @@ test.describe("Content overlay", () => {
     await waitHostedShellReady(testApp);
 
     // Drive the reusable content overlay directly (the test API authenticates as
-    // the shell app, a view host) with a synthetic severe-capability approval.
+    // the shell app, a view host) with a consequential agent approval. This is
+    // the real subject shape produced by authority acquisition: one reviewed
+    // row, one prepared-state substance block, and the eligible scope ladder.
     const approval = {
       kind: "capability",
       approvalId: "e2e-cap",
-      callerId: "panel:e2e",
-      callerKind: "panel",
-      repoPath: "panels/e2e",
+      callerId: "agent:news",
+      callerKind: "agent",
+      callerTitle: "News",
+      requesterCategory: "agent",
+      repoPath: "workers/news-agent",
       effectiveVersion: "ev",
       requestedAt: 0,
-      capability: "panel.automate",
+      capability: "push.send",
       severity: "severe",
-      title: "E2E drive panel",
-      description: "Synthetic approval for the content-overlay e2e.",
-      resource: { type: "panel", label: "Panel", value: "Shell" },
+      title: "Send the nightly briefing",
+      description: "News wants to send its prepared workspace summary.",
+      resource: { type: "channel", label: "Recipient", value: "Briefings" },
+      allowedDecisions: ["once", "task", "agent", "deny", "lock"],
+      snapshot: { agentName: "News" },
+      authorityRow: {
+        capability: "push.send",
+        domain: "sharing",
+        verb: "act",
+        action: "send a notification",
+        resource: "Briefings",
+        resourceScope: { kind: "exact", key: "channel:briefings" },
+        tier: "gated",
+        statement: "prospective",
+        provenance: { source: "receiver" },
+        flags: {},
+      },
+      operationSubstance: {
+        kind: "send",
+        summary: "Send 1 briefing to Briefings",
+        detail: "Subject: Overnight workspace summary",
+        digest: "prepared:e2e-briefing",
+      },
     };
     await callShellView(testApp, "showContentOverlay", {
       surface: "approval-card",
@@ -243,13 +267,19 @@ test.describe("Content overlay", () => {
     }
     const probe = await probeOverlay(testApp);
     expect(probe?.tone).toBe("red");
-    expect(probe?.text).toContain("E2E drive panel");
+    expect(probe?.text).toContain("Send the nightly briefing");
+    expect(probe?.text).toContain("Publishing & sending");
+    expect(probe?.text).toContain("What exactly");
+    expect(probe?.text).toContain("Send 1 briefing to Briefings");
+    expect(probe?.text).toContain("Subject: Overnight workspace summary");
     expect(probe?.card?.height ?? 0).toBeGreaterThan(120);
-    // The full severe-capability action set rendered.
+    // The dynamic-agent scope ladder rendered and contains no installed-code
+    // trust decision.
     expect(probe?.text).toContain("Allow once");
-    expect(probe?.text).toContain("Allow for now");
-    expect(probe?.text).toContain("Trust this version");
-    expect(probe?.text).toContain("Deny");
+    expect(probe?.text).toContain("Allow for this task");
+    expect(probe?.text).toContain("Always for News");
+    expect(probe?.text).toContain("Don't allow");
+    expect(probe?.text).not.toContain("Trust this version");
 
     // Panels were NOT blanked — at least one panel remains in the live tree.
     await expect
@@ -281,6 +311,79 @@ test.describe("Content overlay", () => {
         intervals: [200, 400],
       })
       .toBe(true);
+
+    // Mission review uses the same overlay/card shell and the same authority
+    // row vocabulary, with charter side-sections and a mission-specific
+    // decision row.
+    const missionRow = {
+      capability: "push.send",
+      domain: "sharing",
+      verb: "act",
+      action: "send a notification",
+      resource: "Briefings",
+      resourceScope: { kind: "exact", key: "channel:briefings" },
+      tier: "gated",
+      statement: "snapshot",
+      provenance: { source: "mission" },
+      flags: { newInDiff: true },
+    };
+    const missionApproval = {
+      kind: "mission-review",
+      approvalId: "e2e-mission",
+      callerId: "mission:nightly",
+      callerKind: "system",
+      repoPath: "workers/system-agent",
+      effectiveVersion: "ev",
+      requestedAt: 1,
+      missionId: "mission:nightly",
+      revision: 1,
+      closureDigest: "b".repeat(64),
+      reviewKind: "draft",
+      title: "Nightly workspace briefing",
+      taskSummary: "Summarize today’s workspace changes and send one briefing.",
+      triggerSummary: "Every day at 02:00",
+      authority: {
+        rows: [missionRow],
+        diff: { added: [missionRow], removed: [], unchanged: [], retiered: [] },
+      },
+      toolkitDomains: ["files", "sharing"],
+      networkSummary: "No websites",
+      lineageSummary: "your workspace and its own work",
+      charter: {
+        agentBindingId: "binding:news",
+        taskSpec: "Summarize today’s workspace changes and send one briefing.",
+        harness: { unit: "workers/system-agent", ev: "a".repeat(64) },
+        skills: [],
+        toolExposure: {
+          services: ["push.send"],
+          userlandServices: [],
+          workspaceServiceDiscovery: "bound",
+          evalNetwork: "none",
+          declaredOrigins: [],
+        },
+        model: { modelId: "openai-codex:gpt-5.4-mini", params: {} },
+        declaredLineageClasses: ["none"],
+        trigger: { kind: "cron", cron: "0 2 * * *" },
+      },
+      charterChanges: [],
+    };
+    await callShellView(testApp, "showContentOverlay", {
+      surface: "approval-card",
+      bounds: { x: 200, y: 120, width: 700, height: 620 },
+      props: { approval: missionApproval, queue: null, decisionError: null },
+      theme: { appearance: "light" },
+    });
+    await expect
+      .poll(async () => (await probeOverlay(testApp!))?.text ?? "", {
+        timeout: 15_000,
+        intervals: [200, 400],
+      })
+      .toContain("Approve mission");
+    const missionProbe = await probeOverlay(testApp);
+    expect(missionProbe?.text).toContain("What it’s allowed to do without asking");
+    expect(missionProbe?.text).toContain("Publishing & sending");
+    expect(missionProbe?.text).toContain("Every day at 02:00");
+    expect(missionProbe?.text).toContain("Actions that can’t be undone always wait for you");
 
     // Hiding the overlay tears the card down.
     await callShellView(testApp, "hideContentOverlay");

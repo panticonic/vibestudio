@@ -28,7 +28,7 @@ if (typeof globalThis.Buffer === "undefined") {
 import {
   createConnectionlessRpcClient,
   type ConnectionlessRpcClient,
-  type DeferrableRpcClient,
+  type RpcClient,
   type RpcEnvelope,
   type RpcRequest,
 } from "@vibestudio/rpc";
@@ -149,7 +149,7 @@ let cachedRuntime: WorkerRuntime | null = null;
 let cachedWorkerId: string | null = null;
 let workerConsoleBridgeInstalled = false;
 
-function installWorkerConsoleBridge(rpc: Pick<DeferrableRpcClient, "call">): void {
+function installWorkerConsoleBridge(rpc: Pick<RpcClient, "call">): void {
   if (workerConsoleBridgeInstalled) return;
   workerConsoleBridgeInstalled = true;
   const workerLogService = createTypedServiceClient("workerLog", workerLogMethods, (svc, m, a) =>

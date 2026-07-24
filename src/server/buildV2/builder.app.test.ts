@@ -55,7 +55,6 @@ describe("buildUnit app builds", () => {
                 evidence: "exact",
               },
             ],
-            evalCeilings: [],
           },
           app: {
             target: "electron",
@@ -133,7 +132,6 @@ describe("buildUnit app builds", () => {
           evidence: "exact",
         },
       ],
-      evalCeilings: [],
     });
   });
 

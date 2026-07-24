@@ -117,7 +117,6 @@ describe("authority runtime", () => {
           resource: { kind: "exact", key: "service:hubControl.removeWorkspaceMember" },
         },
       ],
-      evalCeilings: [],
     });
     const resolved = authorizeVerifiedCaller(caller, {
       workspaceId: "hub",
@@ -145,7 +144,6 @@ describe("authority runtime", () => {
       repoPath: "extensions/new",
       effectiveVersion: "ev-new",
       executionDigest: digest,
-      evalCeilings: [],
       requested: [{ capability: unreviewed, resource: { kind: "prefix", prefix: "" } }],
     });
     const resolve = (capability: string) =>
@@ -181,7 +179,7 @@ describe("authority runtime", () => {
         now: 101,
         tier: "gated",
       })
-    ).toMatchObject({ allowed: false, code: "missing-grant" });
+    ).toMatchObject({ allowed: false, code: "approval-required" });
   });
 
   it("binds code authority to the exact execution and target", () => {
@@ -211,7 +209,6 @@ describe("authority runtime", () => {
           repoPath: "workers/example",
           effectiveVersion: "ev-1",
           executionDigest: digest,
-          evalCeilings: [],
           requested: [{ capability: "rpc:chatOp", resource: { kind: "prefix", prefix: "" } }],
         },
         null,
@@ -343,7 +340,6 @@ describe("authority runtime", () => {
         repoPath: "workers/agent-worker",
         effectiveVersion: "ev-agent",
         executionDigest: digest,
-        evalCeilings: [],
         requested: [{ capability, resource: { kind: "prefix", prefix: "" } }],
       },
       {
@@ -421,7 +417,6 @@ describe("authority runtime", () => {
         repoPath: "product/eval",
         effectiveVersion: "ev-1",
         executionDigest: digest,
-        evalCeilings: [],
         requested: [{ capability: `rpc:${method}`, resource: { kind: "prefix", prefix: "" } }],
       }),
       source: "workers/target",
@@ -441,7 +436,7 @@ describe("authority runtime", () => {
         grants: attestation.grants,
         now: 101,
       })
-    ).toMatchObject({ allowed: false, code: "missing-grant" });
+    ).toMatchObject({ allowed: false, code: "approval-required" });
   });
 
   it("keeps exact code identity while withholding a live provider grant", () => {
@@ -452,7 +447,6 @@ describe("authority runtime", () => {
         repoPath: "product/eval",
         effectiveVersion: "ev-1",
         executionDigest: digest,
-        evalCeilings: [],
         requested: [{ capability: "rpc:getCookies", resource: { kind: "prefix", prefix: "" } }],
       }),
       source: "product/browser-data",
@@ -475,7 +469,7 @@ describe("authority runtime", () => {
         grants: attestation.grants,
         now: 101,
       })
-    ).toMatchObject({ allowed: false, code: "missing-grant" });
+    ).toMatchObject({ allowed: false, code: "approval-required" });
   });
 
   it("does not let code borrow its acting user's grant", () => {
@@ -491,7 +485,6 @@ describe("authority runtime", () => {
           repoPath: "apps/unreviewed",
           effectiveVersion: "ev-1",
           executionDigest: digest,
-          evalCeilings: [],
           requested: [{ capability, resource: { kind: "exact", key: resourceKey } }],
         },
         null,
@@ -516,7 +509,7 @@ describe("authority runtime", () => {
         grants: resolved.grants,
         now: 101,
       })
-    ).toMatchObject({ allowed: false, code: "missing-grant" });
+    ).toMatchObject({ allowed: false, code: "approval-required" });
   });
 
   it("does not give sealed control-plane plumbing discretionary service authority", () => {
@@ -530,7 +523,6 @@ describe("authority runtime", () => {
         repoPath: identity.source,
         effectiveVersion: identity.effectiveVersion,
         executionDigest: identity.executionDigest,
-        evalCeilings: identity.authorityEvalCeilings,
         requested: identity.authorityRequests,
       }),
       codeApproved: true as const,
@@ -553,7 +545,7 @@ describe("authority runtime", () => {
         grants: resolved.grants,
         now: 101,
       })
-    ).toMatchObject({ allowed: false, code: "not-requested" });
+    ).toMatchObject({ allowed: false, code: "fixed-code-not-requested" });
 
     const unrequested = "service:credentials.listStoredCredentials";
     const denied = authorizeVerifiedCaller(caller, {
@@ -573,6 +565,6 @@ describe("authority runtime", () => {
         grants: denied.grants,
         now: 101,
       })
-    ).toMatchObject({ allowed: false, code: "not-requested" });
+    ).toMatchObject({ allowed: false, code: "fixed-code-not-requested" });
   });
 });

@@ -1,10 +1,8 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { stateLayout } from "../stateLayout.js";
-import { unitChangeSessionGrantKey, type UnitChangeApprovalProvider } from "@vibestudio/unit-host";
+import type { UnitChangeApprovalProvider } from "@vibestudio/unit-host";
 import type { DiffReviewEntry, DiffReviewFile, UnitBatchEntry } from "@vibestudio/shared/approvals";
 import type {
   HostAuthorityEffect,
+  AuthorityChallengePresentation,
   ServiceContext,
   VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
@@ -13,7 +11,6 @@ import { compareUtf16CodeUnits, EMPTY_STATE_HASH } from "@vibestudio/content-add
 import { countLines, countLineDiff } from "@vibestudio/shared/lineDiff";
 import { blobPath, diffTrees, getBytes, statBlob } from "./blobstoreService.js";
 import { joinRepoPrefix } from "../vcsHost/paths.js";
-import type { ApprovalQueue } from "./approvalQueue.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 import type { RefGate, RefGateBatch, RefGateBatchEntry } from "./protectedRefStore.js";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
@@ -25,6 +22,7 @@ const WORKSPACE_MAIN_ADVANCE_CAPABILITY = "workspace-main-advance";
 // destructive whole-repo deletion. The per-repo resource key (below) further
 // ensures approving the deletion of one repo never covers another.
 const WORKSPACE_REPO_DELETE_CAPABILITY = "workspace-repo-delete";
+const SLOW_PUBLICATION_STAGE_MS = 10_000;
 // Restoring a deleted repo re-creates its `main` ref (`expectedOld: null`), so it
 // flows through the GENERIC advance prompt as an add-repo (classified from the CAS
 // shape)—there is no distinct restore capability; restore semantics are GAD-owned.
@@ -37,6 +35,8 @@ const WORKSPACE_REPO_DELETE_CAPABILITY = "workspace-repo-delete";
  */
 export interface MainAdvanceApprovalCandidate {
   caller: VerifiedCaller;
+  /** Cancellation of the originating publication request. */
+  signal?: AbortSignal;
   /** The repo whose `main` ref is advancing. */
   repoPath: string;
   /** Server-computed changed paths, workspace-rooted. */
@@ -67,6 +67,8 @@ export type RefAdvanceGateContext =
   | {
       kind: "caller";
       caller: VerifiedCaller;
+      /** The protected-ref wait is part of this request, never detached work. */
+      signal?: AbortSignal;
       /** DO identity the write was dispatched through, for "requested by X via
        *  Y" prompt copy (§4). Never authoritative. */
       via?: string;
@@ -116,6 +118,7 @@ export function createMainRefAdvanceGate(deps: {
     if (batch.entries.length === 0) {
       await deps.approvalGate.approveSemanticAdvance({
         caller: context.caller,
+        ...(context.signal ? { signal: context.signal } : {}),
         previousEventId: batch.publication.previousEventId,
         publishedEventId: batch.publication.publishedEventId,
         ...(context.via ? { via: context.via } : {}),
@@ -128,8 +131,16 @@ export function createMainRefAdvanceGate(deps: {
     // coalesces a multi-repo batch into one prompt, exactly as group push does.
     const candidateView =
       context.candidateWorkspaceState ??
-      (await deps.workspaceViewWithReposAt(
-        batch.entries.map((entry) => ({ repoPath: entry.repoPath, stateHash: entry.next }))
+      (await observePublicationStage(
+        "compose-candidate-view",
+        {
+          repoPaths: batch.entries.map((entry) => entry.repoPath),
+          publicationId: batch.publication.publicationId,
+        },
+        () =>
+          deps.workspaceViewWithReposAt(
+            batch.entries.map((entry) => ({ repoPath: entry.repoPath, stateHash: entry.next }))
+          )
       ));
 
     // Build the whole-batch diff-review payload ONCE (one entry per batch entry,
@@ -143,7 +154,17 @@ export function createMainRefAdvanceGate(deps: {
       changedPaths: string[];
     }> = [];
     for (const entry of batch.entries) {
-      perEntry.push({ entry, ...(await buildDiffReviewEntry(deps, entry)) });
+      perEntry.push({
+        entry,
+        ...(await observePublicationStage(
+          "build-diff-review",
+          {
+            repoPaths: [entry.repoPath],
+            publicationId: batch.publication.publicationId,
+          },
+          () => buildDiffReviewEntry(deps, entry)
+        )),
+      });
     }
     const diffReview = perEntry.map((e) => e.review);
 
@@ -162,6 +183,7 @@ export function createMainRefAdvanceGate(deps: {
           : [];
         await deps.approvalGate.approveRepoDeletion({
           caller: context.caller,
+          ...(context.signal ? { signal: context.signal } : {}),
           repoPath: entry.repoPath,
           fileCount: review.diffStat.filesChanged,
           stateHash: entry.old ?? EMPTY_STATE_HASH,
@@ -175,6 +197,7 @@ export function createMainRefAdvanceGate(deps: {
       // re-rooted to the repo (never anything the caller proposed).
       await deps.approvalGate.approve({
         caller: context.caller,
+        ...(context.signal ? { signal: context.signal } : {}),
         repoPath: entry.repoPath,
         changedPaths,
         stateHash: candidateView,
@@ -358,9 +381,42 @@ function hasNullByte(bytes: Buffer): boolean {
   return bytes.includes(0);
 }
 
+async function observePublicationStage<T>(
+  stage: string,
+  detail: { repoPaths: string[]; publicationId?: string },
+  operation: () => Promise<T>
+): Promise<T> {
+  const startedAt = performance.now();
+  let reportedSlow = false;
+  const timer = setTimeout(() => {
+    reportedSlow = true;
+    console.warn("[Vcs] protected publication stage is slow", {
+      stage,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      repoPaths: detail.repoPaths,
+      ...(detail.publicationId ? { publicationId: detail.publicationId } : {}),
+    });
+  }, SLOW_PUBLICATION_STAGE_MS);
+  timer.unref?.();
+  try {
+    return await operation();
+  } finally {
+    clearTimeout(timer);
+    if (reportedSlow) {
+      console.info("[Vcs] protected publication stage settled", {
+        stage,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        repoPaths: detail.repoPaths,
+        ...(detail.publicationId ? { publicationId: detail.publicationId } : {}),
+      });
+    }
+  }
+}
+
 /** A pending whole-repo deletion awaiting the user's explicit, severe approval. */
 export interface RepoDeletionApprovalCandidate {
   caller: VerifiedCaller;
+  signal?: AbortSignal;
   repoPath: string;
   /** How many tracked files the deletion will remove (for the prompt). */
   fileCount: number;
@@ -376,6 +432,7 @@ export interface RepoDeletionApprovalCandidate {
 /** A protected semantic-main advance whose repository snapshot is unchanged. */
 export interface SemanticAdvanceApprovalCandidate {
   caller: VerifiedCaller;
+  signal?: AbortSignal;
   previousEventId: string;
   publishedEventId: string;
   /** Display-only host dispatch identity; never authorization or authorship. */
@@ -390,73 +447,7 @@ export interface MainAdvanceApprovalGate {
   approveRepoDeletion(candidate: RepoDeletionApprovalCandidate): Promise<void>;
 }
 
-export interface MetaApprovalGrantStore {
-  hasActive(key: string): boolean;
-  grant(key: string, ttlMs: number): void;
-}
-
-export class FileMetaApprovalGrantStore implements MetaApprovalGrantStore {
-  private readonly filePath: string;
-  private grants = new Map<string, number>();
-
-  constructor(opts: { statePath: string }) {
-    this.filePath = stateLayout(opts.statePath).units.metaApprovalGrantsFile;
-    this.load();
-  }
-
-  hasActive(key: string, now = Date.now()): boolean {
-    const expiresAt = this.grants.get(key);
-    if (!expiresAt) return false;
-    if (expiresAt > now) return true;
-    this.grants.delete(key);
-    this.save();
-    return false;
-  }
-
-  grant(key: string, ttlMs: number): void {
-    this.grants.set(key, Date.now() + ttlMs);
-    this.save();
-  }
-
-  private load(): void {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as {
-        grants?: Array<{ key: string; expiresAt: number }>;
-      };
-      this.grants = new Map(
-        (Array.isArray(parsed.grants) ? parsed.grants : [])
-          .filter((grant) => typeof grant.key === "string" && typeof grant.expiresAt === "number")
-          .map((grant) => [grant.key, grant.expiresAt])
-      );
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        console.warn("[MainAdvanceApproval] Failed to load meta approval grants:", err);
-      }
-      this.grants = new Map();
-    }
-  }
-
-  private save(): void {
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    const tmp = `${this.filePath}.tmp.${process.pid}.${Date.now()}`;
-    fs.writeFileSync(
-      tmp,
-      `${JSON.stringify(
-        {
-          grants: [...this.grants.entries()].map(([key, expiresAt]) => ({ key, expiresAt })),
-        },
-        null,
-        2
-      )}\n`
-    );
-    fs.renameSync(tmp, this.filePath);
-  }
-}
-
 export function createMainAdvanceApprovalGate(deps: {
-  approvalQueue: ApprovalQueue;
-  grantStore: MetaApprovalGrantStore;
-  grantTtlMs: number;
   authorizeEffect(ctx: ServiceContext, effect: HostAuthorityEffect): Promise<void>;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   getProviders(): Array<UnitChangeApprovalProvider<UnitBatchEntry> | null | undefined>;
@@ -487,48 +478,25 @@ export function createMainAdvanceApprovalGate(deps: {
           (provider): provider is UnitChangeApprovalProvider<UnitBatchEntry> =>
             provider !== null && provider !== undefined
         );
-      const approvals = await Promise.all(
-        providers.map(async (provider) => ({
-          provider,
-          approval: await provider.unitChangeApprovalForCommit(candidate.stateHash),
-        }))
+      const approvals = await observePublicationStage(
+        "resolve-unit-review",
+        { repoPaths: [candidate.repoPath] },
+        () =>
+          Promise.all(
+            providers.map(async (provider) => ({
+              provider,
+              approval: await provider.unitChangeApprovalForCommit(candidate.stateHash),
+            }))
+          )
       );
       const units = approvals.flatMap(({ approval }) => approval.units);
-      const identityKeys = approvals.flatMap(({ approval }) => approval.identityKeys);
 
       if (!metaChanged && units.length === 0) {
         await approveWorkspaceMainAdvance(deps, candidate);
         return;
       }
 
-      const grantKey = unitChangeSessionGrantKey(
-        candidate.caller.runtime.id,
-        "meta",
-        "meta",
-        "main"
-      );
-      const onlyMetaChanged = candidate.changedPaths.every(isMetaPath);
-      if (deps.grantStore.hasActive(grantKey) && units.length === 0 && onlyMetaChanged) return;
-
-      if (
-        units.length > 0 &&
-        identityKeys.length > 0 &&
-        identityKeys.every((key) => deps.grantStore.hasActive(metaIdentityGrantKey(key)))
-      ) {
-        for (const { provider, approval } of approvals) {
-          provider.acceptPreapprovedTrust(approval.identityKeys);
-        }
-        return;
-      }
-
-      const decision = await deps.approvalQueue.request({
-        kind: "unit-batch",
-        callerId: candidate.caller.runtime.id,
-        callerKind,
-        ...(candidate.caller.subject ? { requestedByUserId: candidate.caller.subject.userId } : {}),
-        repoPath: identity.repoPath,
-        effectiveVersion: identity.effectiveVersion,
-        dedupKey: `unit-meta-change:${candidate.caller.runtime.id}:${candidate.stateHash}`,
+      await approveWorkspaceMainAdvance(deps, candidate, {
         trigger: metaChanged ? "meta-change" : "source-change",
         title: unitChangeTitle(units, metaChanged),
         description: unitChangeDescription(units, metaChanged),
@@ -539,19 +507,9 @@ export function createMainAdvanceApprovalGate(deps: {
               summary: metaChangeSummary(candidate),
             }
           : null,
-        ...(candidate.diffReview ? { diffReview: candidate.diffReview } : {}),
       });
-      if (decision === "deny" || decision === "dismiss") {
-        throw new Error(metaChanged ? "Workspace config push denied" : "Workspace update denied");
-      }
       for (const { provider, approval } of approvals) {
         provider.acceptPreapprovedTrust(approval.identityKeys);
-      }
-      for (const key of identityKeys) {
-        deps.grantStore.grant(metaIdentityGrantKey(key), deps.grantTtlMs);
-      }
-      if (decision === "session") {
-        deps.grantStore.grant(grantKey, deps.grantTtlMs);
       }
     },
 
@@ -568,6 +526,7 @@ export function createMainAdvanceApprovalGate(deps: {
         throw new Error(`Unknown caller identity: ${candidate.caller.runtime.id}`);
       }
       await authorizeProtectedPublication(deps, candidate.caller, {
+        ...(candidate.signal ? { signal: candidate.signal } : {}),
         capability: WORKSPACE_MAIN_ADVANCE_CAPABILITY,
         resourceKey: "workspace-source-change:main",
         tier: "gated",
@@ -622,6 +581,7 @@ export function createMainAdvanceApprovalGate(deps: {
           ? ` WARNING: ${dependents.length} repo(s) depend on it and will likely fail to build: ${dependents.join(", ")}.`
           : "";
       await authorizeProtectedPublication(deps, candidate.caller, {
+        ...(candidate.signal ? { signal: candidate.signal } : {}),
         capability: WORKSPACE_REPO_DELETE_CAPABILITY,
         resourceKey: `workspace-repo-delete:${candidate.repoPath}`,
         tier: "critical",
@@ -660,27 +620,42 @@ export function createMainAdvanceApprovalGate(deps: {
 
 async function approveWorkspaceMainAdvance(
   deps: { authorizeEffect(ctx: ServiceContext, effect: HostAuthorityEffect): Promise<void> },
-  candidate: MainAdvanceApprovalCandidate
+  candidate: MainAdvanceApprovalCandidate,
+  unitBatch?: NonNullable<AuthorityChallengePresentation["unitBatch"]> & {
+    title: string;
+    description: string;
+  }
 ): Promise<void> {
+  const resourceKey = `workspace-source-change:${candidate.repoPath}:main`;
   await authorizeProtectedPublication(deps, candidate.caller, {
+    ...(candidate.signal ? { signal: candidate.signal } : {}),
     capability: WORKSPACE_MAIN_ADVANCE_CAPABILITY,
-    resourceKey: "workspace-source-change:main",
+    resourceKey,
     tier: "gated",
     args: [candidate.repoPath, candidate.stateHash, candidate.changedPaths],
     preparedState: candidate,
     challenge: {
-      dedupKey: `workspace-source-change:main:${candidate.stateHash}`,
-      resource: { type: "vcs-head", label: "Head", value: "workspace main" },
+      dedupKey: `${resourceKey}:${candidate.stateHash}`,
+      resource: { type: "vcs-head", label: "Head", value: `${candidate.repoPath} main` },
       operation: {
         kind: "workspace",
         verb: "update workspace main",
-        object: { type: "vcs-head", label: "Head", value: "workspace main" },
-        groupKey: `workspace-source-change:main:${candidate.stateHash}`,
+        object: { type: "vcs-head", label: "Head", value: `${candidate.repoPath} main` },
+        groupKey: `${resourceKey}:${candidate.stateHash}`,
       },
-      title: mainAdvanceTitle(candidate),
-      description: mainAdvanceDescription(candidate),
+      title: unitBatch?.title ?? mainAdvanceTitle(candidate),
+      description: unitBatch?.description ?? mainAdvanceDescription(candidate),
       details: mainAdvanceDetails(candidate),
       ...(candidate.diffReview ? { diffReview: candidate.diffReview } : {}),
+      ...(unitBatch
+        ? {
+            unitBatch: {
+              trigger: unitBatch.trigger,
+              units: unitBatch.units,
+              configWrite: unitBatch.configWrite ?? null,
+            },
+          }
+        : {}),
       deniedReason: "Workspace main update denied",
     },
   });
@@ -690,6 +665,7 @@ async function authorizeProtectedPublication(
   deps: { authorizeEffect(ctx: ServiceContext, effect: HostAuthorityEffect): Promise<void> },
   caller: VerifiedCaller,
   input: {
+    signal?: AbortSignal;
     capability: string;
     resourceKey: string;
     tier: "gated" | "critical";
@@ -698,19 +674,26 @@ async function authorizeProtectedPublication(
     challenge: NonNullable<HostAuthorityEffect["challenge"]>;
   }
 ): Promise<void> {
-  await deps.authorizeEffect({ caller, authorityAcquisition: "wait" } as ServiceContext, {
-    service: "vcs",
-    method: "vcsPush",
-    capability: input.capability,
-    resourceKey: input.resourceKey,
-    requirement: requirementForPrincipals(["host", "user", "code", "session"], input.capability),
-    tier: input.tier,
-    sessionAdmission: "family",
-    args: input.args,
-    preparedStateDigest: sha256Canonical(input.preparedState),
-    challenge: input.challenge,
-    sensitivity: "write",
-  });
+  await deps.authorizeEffect(
+    {
+      caller,
+      authorityAcquisition: "wait",
+      ...(input.signal ? { signal: input.signal } : {}),
+    },
+    {
+      service: "vcs",
+      method: "vcsPush",
+      capability: input.capability,
+      resourceKey: input.resourceKey,
+      requirement: requirementForPrincipals(["host", "user", "code", "session"], input.capability),
+      tier: input.tier,
+      sessionAdmission: "family",
+      args: input.args,
+      preparedStateDigest: sha256Canonical(input.preparedState),
+      challenge: input.challenge,
+      sensitivity: "write",
+    }
+  );
 }
 
 function isMetaPath(filePath: string): boolean {
@@ -836,3 +819,4 @@ function changedPathsSummary(paths: string[]): string {
   if (paths.length <= 3) return paths.join(", ");
   return `${paths.slice(0, 3).join(", ")} and ${paths.length - 3} more`;
 }
+import * as fs from "node:fs";

@@ -10,34 +10,16 @@
     "authority": {
       "requests": [
         {
-          "capability": "agent.credentials.manage",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "context.boundary",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "critical",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "context.materialize",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "permissions.read",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "governance.read",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -55,7 +37,7 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "subagents.create",
+          "capability": "missions.pause",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -64,34 +46,15 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "user-approval.request",
+          "capability": "missions.retire",
           "resource": {
             "kind": "prefix",
             "prefix": ""
           },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "workspace-service:channel",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "workspace-service:models",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
+          "tier": "critical",
           "evidence": "intentional-broad"
         }
-      ],
-      "evalCeilings": []
+      ]
     }
   },
   "dependencies": {

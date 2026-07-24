@@ -285,6 +285,37 @@ describe("modelCallExecutor", () => {
     expect(ensureLoaded).toHaveBeenCalledWith("lfm2.5-1.2b", controller.signal);
   });
 
+  it("does not start provider transport after cancellation during credential resolution", async () => {
+    let resolveCredential!: (value: { apiKey: string }) => void;
+    let credentialEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      credentialEntered = resolve;
+    });
+    const inputDeps = deps();
+    inputDeps.credentials.getApiKey = vi.fn(
+      () =>
+        new Promise<{ apiKey: string }>((resolve) => {
+          resolveCredential = resolve;
+          credentialEntered();
+        })
+    );
+    const controller = new AbortController();
+    const pending = modelCallExecutor.execute({
+      descriptor: descriptor(),
+      state: initialAgentState({ channelId: "channel-1", config }),
+      signal: controller.signal,
+      deps: inputDeps,
+      onEphemeral: () => {},
+    });
+    await entered;
+
+    controller.abort(new Error("channel retired"));
+    resolveCredential({ apiKey: "too-late" });
+
+    await expect(pending).rejects.toThrow("channel retired");
+    expect(mocks.stream).not.toHaveBeenCalled();
+  });
+
   it("fails a loopback request with a model error when the local-models port is absent", async () => {
     const getApiKey = vi.fn(async () => ({ apiKey: "cloud-key" }));
     const inputDeps = deps();
@@ -351,7 +382,7 @@ describe("modelCallExecutor", () => {
     );
   });
 
-  it("sets no default stream idle deadline and forwards only an explicit model configuration", async () => {
+  it("bounds an absent Codex transport and honors a tighter explicit idle deadline", async () => {
     const observedOptions: Array<Record<string, unknown>> = [];
     mocks.stream.mockImplementation((_model, _context, options) => {
       observedOptions.push(options as Record<string, unknown>);
@@ -393,8 +424,14 @@ describe("modelCallExecutor", () => {
       onEphemeral: () => {},
     });
 
-    expect(observedOptions[0]).not.toHaveProperty("streamIdleTimeoutMs");
-    expect(observedOptions[1]).toMatchObject({ streamIdleTimeoutMs: 45_000 });
+    expect(observedOptions[0]).toMatchObject({
+      timeoutMs: 60_000,
+      streamIdleTimeoutMs: 60_000,
+    });
+    expect(observedOptions[1]).toMatchObject({
+      timeoutMs: 45_000,
+      streamIdleTimeoutMs: 45_000,
+    });
   });
 
   it("closes and durably retries a Codex session whose explicit idle deadline expires", async () => {
@@ -1015,6 +1052,196 @@ describe("modelCallExecutor", () => {
         process.env["VIBESTUDIO_TEST_MODE"] = previous;
       }
     }
+  });
+
+  it("turns a natural web request into a real web_fetch invocation in deterministic test mode", async () => {
+    const inputDeps = deps();
+    inputDeps.env = { VIBESTUDIO_TEST_MODE: "1" };
+    inputDeps.blobstore.getText = async () => "";
+    const inputDescriptor = descriptor({
+      activeToolNames: ["web_fetch"],
+      contextThroughSeq: 2,
+    });
+    const state = initialAgentState({ channelId: "channel-1", config });
+    state.openTurn = {
+      turnId: "turn-web",
+      openedAtSeq: 2,
+      modelCallCount: 1,
+      consecutiveModelFailureCount: 0,
+      interrupted: false,
+      waitingCount: 0,
+    };
+    state.entries = [
+      {
+        kind: "user",
+        seq: 1,
+        envelopeId: "env-web",
+        content: {
+          blocks: [
+            {
+              type: "text",
+              content: "Read https://example.com and tell me its title.",
+            },
+          ],
+        },
+      },
+    ];
+
+    const requested = await modelCallExecutor.execute({
+      descriptor: inputDescriptor,
+      state,
+      signal: new AbortController().signal,
+      deps: inputDeps,
+      onEphemeral: () => {},
+    });
+
+    expect(requested).toMatchObject({
+      kind: "model",
+      stopReason: "completed",
+      outcome: "tool_calls_only",
+      blocks: [
+        {
+          type: "toolCall",
+          name: "web_fetch",
+          arguments: { url: "https://example.com" },
+        },
+      ],
+    });
+
+    state.entries.push(
+      {
+        kind: "assistant",
+        seq: 2,
+        messageId: "msg-web",
+        blocks: [
+          {
+            type: "toolCall",
+            id: "msg-web:test-web-fetch",
+            name: "web_fetch",
+            arguments: { url: "https://example.com" },
+          },
+        ],
+      },
+      {
+        kind: "tool-result",
+        seq: 3,
+        invocationId: "msg-web:test-web-fetch",
+        name: "web_fetch",
+        result: "<title>Example Domain</title>",
+        isError: false,
+      }
+    );
+
+    await expect(
+      modelCallExecutor.execute({
+        descriptor: { ...inputDescriptor, messageId: "msg-after-web" },
+        state,
+        signal: new AbortController().signal,
+        deps: inputDeps,
+        onEphemeral: () => {},
+      })
+    ).resolves.toMatchObject({
+      kind: "model",
+      blocks: [{ type: "text", content: "E2E model response: initial agent turn completed." }],
+    });
+    expect(mocks.stream).not.toHaveBeenCalled();
+  });
+
+  it("uses the real eval sandbox for a natural sandbox web request in deterministic test mode", async () => {
+    const inputDeps = deps();
+    inputDeps.env = { VIBESTUDIO_TEST_MODE: "1" };
+    inputDeps.blobstore.getText = async () => "";
+    const inputDescriptor = descriptor({
+      activeToolNames: ["eval", "web_fetch"],
+      contextThroughSeq: 2,
+    });
+    const state = initialAgentState({ channelId: "channel-1", config });
+    state.openTurn = {
+      turnId: "turn-eval-web",
+      openedAtSeq: 2,
+      modelCallCount: 1,
+      consecutiveModelFailureCount: 0,
+      interrupted: false,
+      waitingCount: 0,
+    };
+    state.entries = [
+      {
+        kind: "user",
+        seq: 1,
+        envelopeId: "env-eval-web",
+        content: {
+          blocks: [
+            {
+              type: "text",
+              content: "Use the sandbox eval to fetch https://example.com.",
+            },
+          ],
+        },
+      },
+    ];
+
+    const requested = await modelCallExecutor.execute({
+      descriptor: inputDescriptor,
+      state,
+      signal: new AbortController().signal,
+      deps: inputDeps,
+      onEphemeral: () => {},
+    });
+
+    expect(requested).toMatchObject({
+      kind: "model",
+      outcome: "tool_calls_only",
+      blocks: [
+        {
+          type: "toolCall",
+          name: "eval",
+          arguments: {
+            syntax: "javascript",
+          },
+        },
+      ],
+    });
+    expect(JSON.stringify(requested)).toContain(
+      'credentials.fetch(\\"https://example.com\\")'
+    );
+    expect(JSON.stringify(requested)).not.toContain('"name":"web_fetch"');
+
+    state.entries.push(
+      {
+        kind: "assistant",
+        seq: 2,
+        messageId: "msg-eval-web",
+        blocks: [
+          {
+            type: "toolCall",
+            id: "msg-eval-web:test-eval-fetch",
+            name: "eval",
+            arguments: {},
+          },
+        ],
+      },
+      {
+        kind: "tool-result",
+        seq: 3,
+        invocationId: "msg-eval-web:test-eval-fetch",
+        name: "eval",
+        result: { success: true, returnValue: { status: 200 } },
+        isError: false,
+      }
+    );
+
+    await expect(
+      modelCallExecutor.execute({
+        descriptor: { ...inputDescriptor, messageId: "msg-after-eval-web" },
+        state,
+        signal: new AbortController().signal,
+        deps: inputDeps,
+        onEphemeral: () => {},
+      })
+    ).resolves.toMatchObject({
+      kind: "model",
+      blocks: [{ type: "text", content: "E2E model response: initial agent turn completed." }],
+    });
   });
 
   it("substitutes inference for a credential-free local fallback in deterministic test mode", async () => {

@@ -52,6 +52,8 @@ function codeContext(): AuthorizationContext {
     initiatorChain: [user, code],
     ownerChain: [user],
     agentBinding: null,
+    executionSession: null,
+    testPolicy: null,
     workspace: { workspaceId: "ws-1", member: true, role: "member", revision: "7" },
     session: { id: "s1", audience: "host", version: "2.1", expiresAt: 10_000 },
     contextIntegrity: { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
@@ -63,6 +65,31 @@ function sessionContext(externalKeys: readonly string[] = []): AuthorizationCont
     ...codeContext(),
     authorizingOrigin: { kind: "session", principal: session },
     executingCode: null,
+    executionSession: {
+      v: 1,
+      authoritySessionId: "authority-session:s1",
+      authoritySessionVersion: 1,
+      mode: "interactive",
+      ownerUser: user,
+      workspaceId: "ws-1",
+      contextId: "context:s1",
+      taskRef: "task:s1",
+      eval: { runtimeId: "runtime:eval:s1", runId: "run:s1" },
+      harness: {
+        principal: code,
+        repoPath: "workers/example",
+        effectiveVersion: "ev:test",
+      },
+      agentBinding: {
+        bindingId: "binding:example",
+        entityId: "entity:worker:example",
+        channelId: "channel:s1",
+      },
+      causalParent: null,
+      issuedAt: 1,
+      expiresAt: 10_000,
+      nonce: "nonce:s1",
+    },
     session: {
       id: "s1",
       audience: "host",
@@ -93,11 +120,15 @@ function codeMediatedEvalContext(requestedCapability = "fs.write"): Authorizatio
 }
 
 function grant(
-  subject: Principal,
+  subject: AuthorityGrant["subject"],
   capabilityName = "fs.write",
   effect: "allow" | "deny" = "allow",
   constraints?: AuthorityGrant["constraints"]
 ): AuthorityGrant {
+  const sessionLineage =
+    subject.startsWith("session:") || subject.startsWith("mission:")
+      ? { lineageAtConsent: ["none"], ...constraints }
+      : constraints;
   return {
     id: `${effect}-${subject}`,
     subject,
@@ -106,13 +137,13 @@ function grant(
     effect,
     issuedBy: user,
     createdAt: 1,
-    ...(constraints ? { constraints } : {}),
+    ...(sessionLineage ? { constraints: sessionLineage } : {}),
     provenance: "test",
   };
 }
 
 describe("compositional authority", () => {
-  it("distinguishes an immutable manifest ceiling from a promptable missing grant", () => {
+  it("distinguishes an immutable installed-code declaration from a promptable missing grant", () => {
     const undeclared = codeContext();
     undeclared.executingCode = { ...undeclared.executingCode!, requested: [] };
     const notRequested = evaluateAuthority({
@@ -129,14 +160,14 @@ describe("compositional authority", () => {
         tier: "gated",
       })
     ).toEqual({
-      reasonCode: "not-requested",
+      reasonCode: "fixed-code-not-requested",
       reason: notRequested.reason,
       capability: "fs.write",
       resourceKey: RESOURCE,
       remediation: {
-        kind: "update-authority-manifest",
+        kind: "update-installed-code-manifest",
         message:
-          "Add this authority request to the installed unit manifest or owning agent eval ceiling, then submit the new exact version for user review.",
+          "Add this authority request to the installed unit manifest, then submit the new exact version for user review.",
         request: {
           capability: "fs.write",
           resource: { kind: "exact", key: RESOURCE },
@@ -182,7 +213,7 @@ describe("compositional authority", () => {
         grants: [grant(code)],
         now: 100,
       })
-    ).toMatchObject({ allowed: false, code: "not-requested" });
+    ).toMatchObject({ allowed: false, code: "fixed-code-not-requested" });
   });
 
   it("never unions the acting user's grants into a code origin", () => {
@@ -197,7 +228,7 @@ describe("compositional authority", () => {
         grants: [grant(user)],
         now: 100,
       })
-    ).toMatchObject({ allowed: false, code: "missing-grant" });
+    ).toMatchObject({ allowed: false, code: "approval-required" });
   });
 
   it("matches a session's exact session and authenticated mission subjects", () => {
@@ -222,7 +253,7 @@ describe("compositional authority", () => {
     ).toBe(true);
   });
 
-  it("caps code-mediated eval acquisition at the owner's sealed eval ceiling", () => {
+  it("uses evaluated code only for session attribution, never as an authority ceiling", () => {
     const requirement = requirementForPrincipals(["code"], "fs.write");
     expect(
       evaluateAuthority({
@@ -243,7 +274,7 @@ describe("compositional authority", () => {
         tier: "gated",
         now: 100,
       })
-    ).toMatchObject({ allowed: false, code: "not-requested" });
+    ).toMatchObject({ allowed: true, code: "allowed" });
   });
 
   it("applies deny precedence across session and mission facets", () => {
@@ -255,7 +286,7 @@ describe("compositional authority", () => {
         grants: [grant(mission), grant(session, "fs.write", "deny")],
         now: 100,
       })
-    ).toMatchObject({ allowed: false, code: "denied" });
+    ).toMatchObject({ allowed: false, code: "user-denied" });
   });
 
   it("lets codeOnly exclude eval sessions", () => {
@@ -268,7 +299,7 @@ describe("compositional authority", () => {
         grants: [grant(session)],
         now: 100,
       })
-    ).toMatchObject({ allowed: false, code: "missing-principal" });
+    ).toMatchObject({ allowed: false, code: "receiver-rejected" });
   });
 
   it("requires lineageAtConsent to cover every current outside source", () => {
@@ -278,10 +309,10 @@ describe("compositional authority", () => {
         context: ctx,
         requirement: capability("session", "fs.write"),
         resourceKey: RESOURCE,
-        grants: [grant(session, "fs.write", "allow", { lineageAtConsent: ["web:example.com"] })],
+        grants: [grant(session, "fs.write", "allow", { lineageAtConsent: ["web"] })],
         now: 100,
       })
-    ).toMatchObject({ allowed: false, code: "lineage" });
+    ).toMatchObject({ allowed: false, code: "approval-required" });
     expect(
       evaluateAuthority({
         context: ctx,
@@ -289,7 +320,7 @@ describe("compositional authority", () => {
         resourceKey: RESOURCE,
         grants: [
           grant(session, "fs.write", "allow", {
-            lineageAtConsent: ["web:example.com", "api:github"],
+            lineageAtConsent: ["web", "external"],
           }),
         ],
         now: 100,
@@ -299,7 +330,10 @@ describe("compositional authority", () => {
 
   it("binds once grants and critical confirmations to the exact invocation", () => {
     const once = {
-      ...grant(session, "fs.write", "allow", { invocationDigest: "ask-1" }),
+      ...grant(session, "fs.write", "allow", {
+        invocationDigest: "ask-1",
+        lineageAtConsent: ["none"],
+      }),
       provenance: "critical-confirmation",
     } satisfies AuthorityGrant;
     const base = {
@@ -320,7 +354,10 @@ describe("compositional authority", () => {
 
   it("never reuses a consumed invocation-bound grant at gated tier", () => {
     const consumed = {
-      ...grant(session, "fs.write", "allow", { invocationDigest: "ask-1" }),
+      ...grant(session, "fs.write", "allow", {
+        invocationDigest: "ask-1",
+        lineageAtConsent: ["none"],
+      }),
       consumedAt: 50,
     } satisfies AuthorityGrant;
     const fresh = {
@@ -338,7 +375,7 @@ describe("compositional authority", () => {
 
     expect(evaluateAuthority({ ...input, grants: [consumed] })).toMatchObject({
       allowed: false,
-      code: "missing-grant",
+      code: "approval-required",
     });
     expect(evaluateAuthority({ ...input, grants: [consumed, fresh] })).toMatchObject({
       allowed: true,
@@ -375,7 +412,7 @@ describe("compositional authority", () => {
     undeclared.executingCode = { ...undeclared.executingCode!, requested: [] };
     expect(evaluateAuthority({ ...base, context: undeclared })).toMatchObject({
       allowed: false,
-      code: "not-requested",
+      code: "fixed-code-not-requested",
     });
   });
 
@@ -389,7 +426,7 @@ describe("compositional authority", () => {
         grants: [grant(altered)],
         now: 100,
       })
-    ).toMatchObject({ allowed: false, code: "missing-grant", principal: code });
+    ).toMatchObject({ allowed: false, code: "approval-required", principal: code });
   });
 
   it("uses live relationship resolution instead of cached membership", () => {
@@ -402,6 +439,41 @@ describe("compositional authority", () => {
         now: 100,
         relation: () => false,
       })
-    ).toMatchObject({ allowed: false, code: "relationship" });
+    ).toMatchObject({ allowed: false, code: "receiver-rejected" });
+  });
+
+  it("binds standing agent grants to the host-attested agent binding", () => {
+    const standing = grant("agent:binding:example", "fs.write", "allow", {
+      agentBindingId: "binding:example",
+      lineageAtConsent: ["none"],
+    });
+    expect(
+      evaluateAuthority({
+        context: sessionContext(),
+        requirement: capability("session", "fs.write"),
+        resourceKey: RESOURCE,
+        grants: [standing],
+        now: 100,
+      })
+    ).toMatchObject({ allowed: true, grantId: standing.id });
+
+    const other = sessionContext();
+    other.executionSession = {
+      ...other.executionSession!,
+      agentBinding: {
+        bindingId: "binding:other",
+        entityId: "entity:worker:other",
+        channelId: "channel:other",
+      },
+    };
+    expect(
+      evaluateAuthority({
+        context: other,
+        requirement: capability("session", "fs.write"),
+        resourceKey: RESOURCE,
+        grants: [standing],
+        now: 100,
+      })
+    ).toMatchObject({ allowed: false, code: "approval-required" });
   });
 });

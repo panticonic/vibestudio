@@ -11,7 +11,7 @@ import * as fs from "fs";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { isDev } from "./utils.js";
 import { getAppRoot, getCentralConfigDirectory } from "./paths.js";
-import { consumeDesktopAutoApproveOnce, resolveWorkspaceName } from "@vibestudio/workspace/loader";
+import { resolveWorkspaceName } from "@vibestudio/workspace/loader";
 import { resolveLocalWorkspaceStartup } from "@vibestudio/workspace/startup";
 import { EPHEMERAL_DEV_WORKSPACE_NAME } from "@vibestudio/workspace-contracts/ephemeral";
 import type { CentralDataManager } from "@vibestudio/shared/centralData";
@@ -50,7 +50,6 @@ export type StartupMode =
        * already created. Non-ephemeral workspaces carry null.
        */
       ephemeralLifecycle: "replace" | "resume" | null;
-      autoApproveStartupUnits: boolean;
     };
 
 export type LocalStartupMode = Extract<StartupMode, { kind: "local" }>;
@@ -207,7 +206,6 @@ export function resolveEphemeralDevStartupMode(
     workspaceId: EPHEMERAL_DEV_WORKSPACE_NAME,
     isEphemeral: true,
     ephemeralLifecycle,
-    autoApproveStartupUnits: false,
   };
 }
 
@@ -229,10 +227,6 @@ export function resolveLocalStartupMode(
     `[Workspace] Loaded: ${startup.resolved.wsDir} (id: ${startup.resolved.workspace.config.id})`
   );
   const isEphemeral = startup.isEphemeral;
-  const createdInApp = consumeDesktopAutoApproveOnce(startup.resolved.wsDir);
-  const autoApproveStartupUnits =
-    process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] === "1" ||
-    ((startup.resolved.created || createdInApp) && !isEphemeral);
   return {
     kind: "local",
     connectionIntent,
@@ -241,6 +235,5 @@ export function resolveLocalStartupMode(
     workspaceId: startup.resolved.workspace.config.id,
     isEphemeral,
     ephemeralLifecycle: null,
-    autoApproveStartupUnits,
   };
 }

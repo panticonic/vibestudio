@@ -75,7 +75,6 @@ function appCaller() {
     effectiveVersion: "ev-shell",
     executionDigest: "a".repeat(64),
     requested: manifest.vibestudio.authority.requests,
-    evalCeilings: [],
   });
 }
 

@@ -9,6 +9,7 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 
 | Export | Kind | Members | Description |
 |--------|------|---------|-------------|
+| `PanelOperationError` | value |  | Structured error class thrown by panel create, navigation, reload, rebuild, and readiness operations. Inspect its failure provenance instead of parsing message text. |
 | `id` | value |  |  |
 | `contextId` | value |  |  |
 | `rpc` | value |  | Portable RPC client (the full createRpcClient). |
@@ -34,10 +35,10 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `approvals` | namespace | `request`, `revoke`, `list` |  |
 | `notifications` | namespace | `show`, `dismiss` |  |
 | `workspace` | namespace | `getInfo`, `getActive`, `getConfig`, `validateConfig`, `setInitPanels`, `setConfigField`, `getAgentsMd`, `listSkills`, `readSkill`, `sourceTree`, `ensureContextFolder`, `findUnitForPath`, `units`, `recurring`, `heartbeats`, `hostTargets`, `projects` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; use runtime.panelTree for panel-tree handles. |
-| `openPanel` | value |  | Open a workspace or browser panel and return a PanelHandle. options.placement accepts disposition "side" (default), "replace", or "split-below", plus preferredWidth/minWidth. |
+| `openPanel` | value |  | Open a workspace or browser panel and return a PanelHandle only after the exact attempt is application boot-ready; throws structured PanelOperationError on failure. options.placement accepts disposition "side" (default), "replace", or "split-below", plus preferredWidth/minWidth. |
 | `listPanels` | value |  | Alias for runtime.panelTree.list(). |
 | `getPanelHandle` | value |  | Alias for runtime.panelTree.get(id, kind?). |
-| `panelTree` | namespace | `self`, `get`, `list`, `roots`, `children`, `parent`, `navigate` | Runtime property, not workspace.panelTree. Signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle \| null; navigate(id, source, opts?): Promise<{ id, title }>. Use list/roots/children/get for existing panels; navigate replaces an existing panel slot; openPanel creates a new panel. PanelHandle.focus({ placement?, anchorPanelId? }) can present an existing panel beside, below, or in place relative to an anchor. self/get are sync; async methods refresh metadata as needed. |
+| `panelTree` | namespace | `self`, `get`, `list`, `roots`, `children`, `parent`, `navigate` | Runtime property, not workspace.panelTree. self/get are synchronous handle factories. navigate/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. Use list/roots/children/get for existing panels and openPanel to create. |
 | `handleRpcPost` | value |  |  |
 | `destroy` | value |  |  |
 <!-- END GENERATED: worker-runtime-surface -->
@@ -518,8 +519,7 @@ async onChannelOp(channelId: string): Promise<void> {
   ...
 }
 // this.rpcCallerId / this.rpcCallerKind / this.caller are server-set from the
-// validated token. (Server-realm DOs like EvalDO use a coarser per-DO
-// `assertInboundAllowed` override instead of @rpc policies.)
+// validated token. Every DO, including server-realm DOs, uses @rpc authority.
 ```
 
 ### When to add a USER-APPROVAL gate

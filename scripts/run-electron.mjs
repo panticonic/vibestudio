@@ -4,9 +4,7 @@ import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
 
 const electronBinary = resolveElectronExecutableForVibestudio();
 
-const rawExtraArgs = process.argv.slice(2);
-const autoApprove = rawExtraArgs.includes("--auto-approve");
-const extraArgs = rawExtraArgs.filter((arg) => arg !== "--auto-approve");
+const extraArgs = process.argv.slice(2);
 
 function initialElectronArgs() {
   const args = [];
@@ -41,7 +39,6 @@ async function runElectron(args) {
         // Increase Node.js memory limit for main process (3GB)
         NODE_OPTIONS: "--max-old-space-size=3072",
         VIBESTUDIO_DEV_RUNNER_IPC: "1",
-        ...(autoApprove ? { VIBESTUDIO_AUTO_APPROVE: "1" } : {}),
       },
     });
     child = currentChild;

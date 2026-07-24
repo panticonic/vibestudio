@@ -82,12 +82,12 @@ With a known slot id:
 import { panelTree } from "@workspace/runtime";
 
 const handle = panelTree.get("panel-slot-id");
-await handle.refresh(); // hydrates title/source/parent/runtime entity metadata
+const observation = await handle.observe(); // exact attempt, host state, and provenance
 const page = await handle.cdp.lightweightPage();
 ```
 
-For RPC or `_agent` calls on unloaded panels, call `await handle.ensureLoaded()`
-first. Existing-panel handles are non-owned: do not call `handle.navigate`,
+`openPanel()` returns only at application boot-ready. Existing-panel handles are
+non-owned: observe first, and do not call `handle.navigate`,
 `handle.reload`, or `handle.close` on them unless requested. Do not call
 `handle.cdp.navigate(url)` or `page.goto(url)` on the current chat panel, a
 parent chat panel, or any workspace panel discovered from `panelTree` unless
@@ -162,9 +162,11 @@ after the CDP connection is established.
 For broad post-mortem panel debugging, prefer the unified bundle:
 
 ```ts
-const diagnostics = await handle.diagnostics({ limit: 200, errorLimit: 100 });
-console.log(diagnostics.info);
-console.log(diagnostics.consoleHistory.errors);
+const diagnostics = await handle.diagnose();
+console.log(diagnostics.observation);
+if (diagnostics.consoleHistory.available) {
+  console.log(diagnostics.consoleHistory.errors);
+}
 ```
 
 The same historical capture includes renderer lifecycle failures such as
@@ -182,7 +184,7 @@ it. Use `await page.evaluate(() => location.href)` only when you need the page
 to compute a URL after client-side routing. Panel handles expose target RPC
 under `.call` and automation under `.cdp`; `handle.click(selector)` is a
 Playwright convenience wrapper for `handle.cdp.click(selector)`.
-Use `await parent.getInfo()` for handle metadata; the runtime's own
+Use `await parent.observe()` for canonical handle/runtime metadata; the runtime's own
 `panel.getInfo()` describes the current runtime, not arbitrary handles.
 
 ### Locators

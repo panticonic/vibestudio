@@ -31,7 +31,6 @@ const identity = {
         evidence: "exact" as const,
       },
     ],
-    evalCeilings: [],
   },
 };
 
@@ -60,22 +59,6 @@ describe("UnitVersionApprovalStore", () => {
               resource: { kind: "exact", key: "workspace" },
               tier: "gated",
               evidence: "exact",
-            },
-          ],
-          evalCeilings: [],
-        },
-      })
-    ).toBe(false);
-    expect(
-      new UnitVersionApprovalStore({ statePath: root }).has({
-        ...identity,
-        authority: {
-          ...identity.authority,
-          evalCeilings: [
-            {
-              audience: "eval",
-              purpose: "tool-eval",
-              capabilities: identity.authority.requests,
             },
           ],
         },

@@ -7,11 +7,64 @@ import {
   type VerifiedCaller,
 } from "./serviceDispatcher.js";
 import type { ServiceDefinition } from "./serviceDefinition.js";
-import { evaluateAuthority, type AuthorityRequirement } from "./authorization.js";
+import {
+  evaluateAuthority,
+  lineageClasses,
+  type AuthorityRequirement,
+} from "./authorization.js";
 import { methodTier } from "./authority/tierTable.js";
 
 const TEST_DIGEST = "0".repeat(64);
 const TEST_HOST = "host:test" as const;
+
+/** Host-attested execution-session fixture. Tests must provide the concrete
+ * runtime and harness identity instead of using the removed boolean shortcut. */
+export function createTestExecutionSession(input: {
+  runtimeId: string;
+  harnessPrincipal?: `code:${string}`;
+  repoPath?: string;
+  effectiveVersion?: string;
+  contextId?: string;
+  agentBinding?: {
+    entityId: string;
+    channelId: string;
+    bindingId?: string;
+  } | null;
+  mode?: "interactive" | "mission" | "test";
+}): import("@vibestudio/rpc").AgentExecutionSessionFact {
+  const now = Date.now();
+  const repoPath = input.repoPath ?? "tests/harness";
+  const effectiveVersion = input.effectiveVersion ?? "test";
+  return {
+    v: 1,
+    authoritySessionId: `test:${input.runtimeId}`,
+    authoritySessionVersion: 1,
+    mode: input.mode ?? "test",
+    ownerUser: "user:test",
+    workspaceId: "test",
+    contextId: input.contextId ?? "ctx-test",
+    agentBinding:
+      input.agentBinding === null
+        ? null
+        : {
+            entityId: input.agentBinding?.entityId ?? "agent:test",
+            channelId: input.agentBinding?.channelId ?? "channel:test",
+            bindingId: input.agentBinding?.bindingId ?? "binding:test",
+          },
+    taskRef: `task:${input.runtimeId}`,
+    harness: {
+      principal:
+        input.harnessPrincipal ?? (`code:${repoPath}@${TEST_DIGEST}` as `code:${string}`),
+      repoPath,
+      effectiveVersion,
+    },
+    eval: { runtimeId: input.runtimeId, runId: `run:${input.runtimeId}` },
+    causalParent: null,
+    issuedAt: now,
+    expiresAt: now + 60_000,
+    nonce: `nonce:${input.runtimeId}`,
+  };
+}
 
 /**
  * Exact, closed-world authority fixture for dispatcher tests. Production code
@@ -176,7 +229,7 @@ export function testAuthority(
   // authorizing origin or grant subject.
   const carriesCode =
     Boolean(caller.code) ||
-    (!(caller.sessionOrigin === true) &&
+    (!caller.executionSession &&
       ["panel", "app", "worker", "do", "extension"].includes(caller.runtime.kind));
   // Code identity and manifest requests are independent facts. Under-declared
   // code remains code and must fail as `not-requested`; erasing its identity
@@ -194,7 +247,7 @@ export function testAuthority(
       ? { kind: "host", principal: host ?? TEST_HOST }
       : code
         ? { kind: "code", principal: code }
-        : caller.sessionOrigin === true
+        : caller.executionSession
           ? { kind: "session", principal: sessionPrincipal }
         : actingUser
           ? { kind: "user", principal: actingUser }
@@ -228,6 +281,8 @@ export function testAuthority(
             channelId: caller.agentBinding.channelId,
           }
         : null,
+    executionSession: caller.executionSession ?? null,
+    testPolicy: caller.testPolicy ?? caller.executionSession?.testPolicy ?? null,
     workspace: { workspaceId: "test", member: true, role: "member", revision: "test" },
     session: {
       id: `test:${caller.runtime.id}`,
@@ -236,7 +291,7 @@ export function testAuthority(
       expiresAt: now + 60_000,
     },
     contextIntegrity:
-      caller.sessionOrigin === true
+      caller.executionSession
         ? { class: "internal", latchEpoch: 0, externalKeys: [] }
         : { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
   };
@@ -256,6 +311,11 @@ export function testAuthority(
       createdAt: now,
       expiresAt: now + 60_000,
       provenance: "test-fixture",
+      constraints: {
+        lineageAtConsent: context.contextIntegrity
+          ? lineageClasses(context.contextIntegrity)
+          : ["none"],
+      },
     })),
   };
 }

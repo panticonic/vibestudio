@@ -1,6 +1,7 @@
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
+import { createHash } from "node:crypto";
 import { app } from "electron";
 import { getCentralDataPath } from "@vibestudio/env-paths";
 import {
@@ -270,6 +271,18 @@ export function getServerProcessEntryPath(): string {
   return isDev()
     ? path.join(root, "dist", "server-electron.cjs")
     : getPhysicalAppPath(path.join("dist", "server-electron.cjs"));
+}
+
+/**
+ * Identity of the exact server artifact this desktop will execute.
+ *
+ * Product versions are intentionally too coarse for local attach-or-spawn:
+ * development rebuilds retain the same version while their server contract can
+ * change. Hashing the executable bundle makes attachment an exact-artifact
+ * decision instead of a best-effort compatibility guess.
+ */
+export function getServerProcessBuildId(): string {
+  return createHash("sha256").update(fs.readFileSync(getServerProcessEntryPath())).digest("hex");
 }
 
 /**

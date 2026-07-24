@@ -348,7 +348,6 @@ export interface RuntimeEntityHandle {
   buildKey?: string;
   executionDigest?: string;
   authorityRequests?: readonly import("../authorityManifest.js").UnitAuthorityRequest[];
-  authorityEvalCeilings?: readonly import("../authorityManifest.js").EvalAuthorityCeiling[];
   contextId: string;
   targetId: string;
 }

@@ -77,6 +77,7 @@ async function makeHarness(opts: {
    *  make the gad call throw (and record nothing). Used to verify the driver
    *  never silently drops an outcome on a transient store error (F3). */
   gadFault?: (method: string) => Error | null;
+  onGadCall?: (method: string) => void;
 }) {
   const gad = opts.gad ?? (await createTestDO(GadWorkspaceDO, { __objectKey: "gad" }));
   const driverHost =
@@ -110,6 +111,7 @@ async function makeHarness(opts: {
       // The driver runs INSIDE the agent DO, so its control-plane calls are attributed
       // as a durable entity — GAD write methods require entity authority.
       call: <T>(method: string, args: Record<string, unknown>) => {
+        opts.onGadCall?.(method);
         const fault = opts.gadFault?.(method);
         if (fault) return Promise.reject(fault);
         return gad.callAs<T>("do", method, args);
@@ -336,12 +338,9 @@ describe("AgentLoopDriver", () => {
     });
   });
 
-  it("publishes a read-ack EAGERLY at step time, not behind the (pending) model call", async () => {
-    // Regression for the steer-read-ack delay: a fire-and-forget publish_envelope
-    // (read-ack) co-emitted with a long model_call used to wait in the effect
-    // pump until the model finished. Prompt preparation is now a journaled
-    // prerequisite, so start the alarm pump and hang the model call: the
-    // read-ack must publish before the model outcome.
+  it("dispatches a read-ack before the pending model call completes", async () => {
+    // The receipt is a best-effort, idempotent publish with no semantic
+    // outcome, so it must not hold the durable chain behind a long model call.
     const started = deferred<void>();
     const hung = deferred<EffectOutcome>();
     const harness = await makeHarness({
@@ -430,28 +429,19 @@ describe("AgentLoopDriver", () => {
     await alarmA;
   });
 
-  it("awaits an aborted executor leaving the dispatch boundary", async () => {
+  it("does not let a non-cooperative executor hold the interrupt boundary", async () => {
     const started = deferred<void>();
-    const releaseCleanup = deferred<void>();
+    const finish = deferred<EffectOutcome>();
     const harness = await makeHarness({
       script: { model: [], tool: [] },
       executorOverride: (descriptor) =>
         descriptor.kind === "model_call"
           ? ({
               kind: "model_call",
-              execute: ({ signal }) =>
-                new Promise<EffectOutcome>((resolve) => {
-                  started.resolve();
-                  signal.addEventListener(
-                    "abort",
-                    () => {
-                      void releaseCleanup.promise.then(() =>
-                        resolve({ kind: "model", blocks: [], stopReason: "aborted" })
-                      );
-                    },
-                    { once: true }
-                  );
-                }),
+              execute: () => {
+                started.resolve();
+                return finish.promise;
+              },
             } as EffectExecutor)
           : null,
     });
@@ -465,17 +455,76 @@ describe("AgentLoopDriver", () => {
     await Promise.resolve();
     expect(completionSettled).toBe(false);
 
-    let settled = false;
-    const abort = harness.driver.interruptChannel(CHANNEL).then(() => {
-      settled = true;
+    await harness.driver.interruptChannel(CHANNEL);
+    await completion;
+    const kindsAfterInterrupt = await logKinds(harness.gad);
+
+    finish.resolve({
+      kind: "model",
+      blocks: [{ type: "text", text: "too late" }],
+      stopReason: "completed",
     });
     await Promise.resolve();
-    expect(settled).toBe(false);
+    expect(await logKinds(harness.gad)).toEqual(kindsAfterInterrupt);
+    expect(harness.driver.outbox.all()).toEqual([]);
+  });
 
-    releaseCleanup.resolve();
-    await abort;
-    expect(settled).toBe(true);
+  it("fences non-cooperative model work before channel retirement returns", async () => {
+    const started = deferred<void>();
+    const finish = deferred<EffectOutcome>();
+    const retirementOrder: string[] = [];
+    let retiring = false;
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      executorOverride: (descriptor) =>
+        descriptor.kind === "model_call"
+          ? ({
+              kind: "model_call",
+              execute: ({ signal }) => {
+                started.resolve();
+                signal.addEventListener(
+                  "abort",
+                  () => {
+                    retirementOrder.push("executor-aborted");
+                  },
+                  { once: true }
+                );
+                return finish.promise;
+              },
+            } as EffectExecutor)
+          : null,
+      onGadCall: (method) => {
+        if (retiring && method === "appendLogEvent") retirementOrder.push("retirement-journal");
+      },
+    });
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-channel-retire"));
+    const { completion } = await harness.driver.beginAlarmDispatch();
+    await started.promise;
+
+    retiring = true;
+    await harness.driver.abortChannel(CHANNEL, "channel_unsubscribe");
     await completion;
+    expect(retirementOrder[0]).toBe("executor-aborted");
+    expect(retirementOrder).toContain("retirement-journal");
+    const kindsAfterRetirement = await logKinds(harness.gad);
+
+    finish.resolve({
+      kind: "model",
+      blocks: [{ type: "text", text: "too late" }],
+      stopReason: "completed",
+    });
+    await Promise.resolve();
+    expect(await logKinds(harness.gad)).toEqual(kindsAfterRetirement);
+    expect(harness.driver.outbox.all()).toEqual([]);
+
+    await harness.driver.wake(CHANNEL);
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-after-retirement"));
+    await harness.driver.alarm();
+    expect(await logKinds(harness.gad)).toEqual(kindsAfterRetirement);
+
+    harness.driver.activateChannel(CHANNEL);
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-after-reactivation"));
+    expect(harness.driver.outbox.all()).not.toEqual([]);
   });
 
   it("persists channel retirement after a user interrupt without reusing its envelope id", async () => {
@@ -502,10 +551,7 @@ describe("AgentLoopDriver", () => {
       type: "command",
       command: { kind: "interrupt" },
     });
-    await harness.driver.handleIncoming(CHANNEL, {
-      type: "command",
-      command: { kind: "abort", reason: "channel_unsubscribe" },
-    });
+    await harness.driver.abortChannel(CHANNEL, "channel_unsubscribe");
     hung.resolve({ kind: "model", blocks: [], stopReason: "aborted" });
     await alarm;
 
@@ -1357,6 +1403,50 @@ describe("AgentLoopDriver", () => {
     ]);
   });
 
+  it("retries transient prompt-resource transport failures before failing the user turn", async () => {
+    let attempts = 0;
+    const harness = await makeHarness({
+      script: { model: [textReply("done")], tool: [] },
+      executorOverride: (descriptor) =>
+        descriptor.kind === "prompt_artifacts"
+          ? ({
+              kind: "prompt_artifacts",
+              async execute() {
+                attempts += 1;
+                if (attempts < 3) throw new TypeError("workspace.listSkills fetch failed");
+                return { kind: "prompt-artifacts", patch: config };
+              },
+            } satisfies EffectExecutor)
+          : null,
+    });
+
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-prompt-retry"));
+    await harness.driver.alarm();
+    expect(attempts).toBe(1);
+    expect(harness.driver.outbox.all()).toEqual([
+      expect.objectContaining({ kind: "prompt_artifacts", attempts: 1 }),
+    ]);
+
+    harness.setNow(1_800_000_000_000);
+    await harness.driver.alarm();
+    expect(attempts).toBe(2);
+    expect(harness.driver.outbox.all()).toEqual([
+      expect.objectContaining({ kind: "prompt_artifacts", attempts: 2 }),
+    ]);
+
+    harness.setNow(1_900_000_000_000);
+    await settle(harness.driver);
+    expect(attempts).toBe(3);
+    expect(harness.driver.outbox.all()).toEqual([]);
+    expect(await logKinds(harness.gad)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.started",
+      "message.completed",
+      "turn.closed",
+    ]);
+  });
+
   it("does not mark an unexpired leased model call failed after restart", async () => {
     const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
     const host = await createTestDO(GadWorkspaceDO, { __objectKey: "driver-host" });
@@ -1790,55 +1880,6 @@ describe("AgentLoopDriver", () => {
       "message.completed",
       "turn.closed",
     ]);
-  });
-
-  it("redrives a model call after deferred credential approval resolves", async () => {
-    let dispatches = 0;
-    let deferredRequestId = "";
-    const harness = await makeHarness({
-      script: { model: [], tool: [] },
-      executorOverride: (descriptor) => {
-        if (descriptor.kind !== "model_call") return null;
-        return {
-          kind: "model_call",
-          async execute() {
-            dispatches += 1;
-            deferredRequestId = descriptor.effectId;
-            return dispatches === 1 ? { deferred: true } : textReply("done");
-          },
-        } satisfies EffectExecutor;
-      },
-    });
-
-    await harness.driver.handleIncoming(CHANNEL, promptIncoming());
-    await harness.driver.alarm();
-
-    expect(dispatches).toBe(1);
-    expect(await logKinds(harness.gad)).toEqual([
-      "message.completed",
-      "turn.opened",
-      "message.started",
-    ]);
-    expect(harness.driver.outbox.all()).toEqual([
-      expect.objectContaining({
-        kind: "model_call",
-        leaseExpiresAt: null,
-        nextAttemptAt: expect.any(Number),
-      }),
-    ]);
-
-    await harness.driver.deliverDeferredResult(deferredRequestId, { id: "cred-1" }, false);
-    await harness.driver.alarm();
-
-    expect(dispatches).toBe(2);
-    expect(await logKinds(harness.gad)).toEqual([
-      "message.completed",
-      "turn.opened",
-      "message.started",
-      "message.completed",
-      "turn.closed",
-    ]);
-    expect(harness.driver.outbox.all()).toHaveLength(0);
   });
 
   it("does not mark a locally running model call failed when wake arrives during credential approval", async () => {

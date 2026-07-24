@@ -3,10 +3,11 @@
 The live catalog is the authority:
 
 ```bash
-pnpm cli system-test list --json
+pnpm cli --instance INSTANCE system-test list --json
 ```
 
-Use exact returned names. Counts and categories evolve with the product and
+Replace `INSTANCE` with the ID printed by the isolated `server:live` process and
+use exact returned names. Counts and categories evolve with the product and
 should not be copied into prompts or maintained as parallel prose constants.
 
 ## Coverage families

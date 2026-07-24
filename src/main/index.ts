@@ -2473,9 +2473,6 @@ app.on("ready", async () => {
         if (action === "rebuildPanel") {
           return panelOrchestrator?.rebuildPanel(panelId) ?? null;
         }
-        if (action === "rebuildAndReload") {
-          return panelOrchestrator?.rebuildAndReloadPanel(panelId) ?? null;
-        }
         if (action === "reloadPanel") {
           return panelOrchestrator?.reloadPanel(panelId) ?? null;
         }
@@ -2490,6 +2487,12 @@ app.on("ready", async () => {
         if (action === "domSnapshot") {
           if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
           return cdpHostProvider.getDomSnapshot(panelId);
+        }
+        if (action === "panelObservation") {
+          if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
+          if (!panelOrchestrator) throw new Error("Panel orchestrator not initialized");
+          const boot = await cdpHostProvider.getBootObservation(panelId);
+          return panelOrchestrator.getPanelHostObservation(panelId, boot);
         }
         if (action === "consoleHistory") {
           if (!cdpHostProvider) throw new Error("CDP host provider not initialized");

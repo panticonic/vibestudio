@@ -10,6 +10,7 @@ import {
   parseServiceMethod,
 } from "@vibestudio/shared/serviceDispatcher";
 import {
+  createTestExecutionSession,
   createTestServiceDispatcher,
   testAuthority,
 } from "@vibestudio/shared/serviceDispatcherTestUtils";
@@ -76,7 +77,15 @@ describe("ServiceDispatcher", () => {
         channelId: "chat-test",
       },
       { userId: "user-test", handle: "Test User" },
-      true
+      createTestExecutionSession({
+        runtimeId: "eval:test",
+        contextId: "ctx-test",
+        agentBinding: {
+          entityId: "agent:test",
+          channelId: "chat-test",
+          bindingId: "agent-test",
+        },
+      })
     );
     sd.setAuthorityResolver(({ capability, resourceKey }) => ({
       ...testAuthority(caller, capability, resourceKey),
@@ -102,12 +111,7 @@ describe("ServiceDispatcher", () => {
     const controller = new AbortController();
 
     await expect(
-      sd.dispatch(
-        { caller, signal: controller.signal, authorityAcquisition: "wait" },
-        "parked",
-        "run",
-        []
-      )
+      sd.dispatch({ caller, signal: controller.signal }, "parked", "run", [])
     ).rejects.toThrow(/lacks test:parked-authority/i);
     expect(acquire).toHaveBeenCalledTimes(1);
   });

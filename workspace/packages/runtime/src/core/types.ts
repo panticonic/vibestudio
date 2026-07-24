@@ -6,6 +6,13 @@
 import type { ZodType } from "zod";
 import type * as Rpc from "./rpc.js";
 import type { PanelLifecycleResult, PanelPlacementHint } from "@vibestudio/shared/types";
+import type {
+  PanelDiagnosticPacket,
+  PanelConsoleHistoryLevel,
+  PanelConsoleHistoryResult,
+  PanelObservation,
+  PanelSnapshotObservation,
+} from "@vibestudio/shared/panel/observation";
 
 export interface PanelFocusOptions {
   /** Visual placement request; omitted preserves ordinary focus behavior. */
@@ -102,19 +109,11 @@ export interface PanelScreenshotResult {
   height: number;
 }
 
-export type PanelConsoleHistoryLevel = "debug" | "info" | "warning" | "error" | "unknown";
-
-export interface PanelConsoleHistoryEntry {
-  timestamp: number;
-  level: PanelConsoleHistoryLevel;
-  message: string;
-  line: number;
-  sourceId: string;
-  url: string;
-  /** "lifecycle" marks host-recorded events (crash/unresponsive/did-fail-load). */
-  source?: "console" | "lifecycle";
-  fields?: Record<string, unknown>;
-}
+export type {
+  PanelConsoleHistoryEntry,
+  PanelConsoleHistoryLevel,
+  PanelConsoleHistoryResult,
+} from "@vibestudio/shared/panel/observation";
 
 export interface PanelConsoleHistoryOptions {
   limit?: number;
@@ -122,29 +121,7 @@ export interface PanelConsoleHistoryOptions {
   levels?: PanelConsoleHistoryLevel[];
 }
 
-export interface PanelConsoleHistoryResult {
-  entries: PanelConsoleHistoryEntry[];
-  errors: PanelConsoleHistoryEntry[];
-  dropped: {
-    entries: number;
-    errors: number;
-  };
-  capacity: {
-    entries: number;
-    errors: number;
-  };
-}
-
-export interface PanelDiagnosticsResult {
-  info: {
-    id: string;
-    title: string;
-    source: string;
-    kind: "workspace" | "browser";
-    parentId: string | null;
-  };
-  consoleHistory: PanelConsoleHistoryResult;
-}
+export type PanelDiagnosticsResult = PanelDiagnosticPacket;
 
 export interface CdpAutomation {
   /** Explicit lightweight @workspace/cdp-client page. */
@@ -204,29 +181,19 @@ export interface PanelHandle<
 > {
   /** Stable panel slot ID. CDP/control use this slot; RPC resolves the current runtime entity. */
   readonly id: string;
-  /** Last known title. Bare handles use the id until refresh/list hydrates them. */
+  /** Last observed title. Use observe() for authoritative lifecycle state. */
   readonly title: string;
   /** Last known source. Browser URLs are exposed without the internal browser: prefix. */
   readonly source: string;
   readonly kind: "workspace" | "browser";
   readonly parentId: string | null;
 
-  /** Current handle metadata. Refresh first when you need the latest host view. */
-  getInfo(): Promise<{
-    id: string;
-    title: string;
-    source: string;
-    kind: "workspace" | "browser";
-    parentId: string | null;
-    contextId: string | null;
-    runtimeEntityId: string | null;
-    effectiveVersion: string | null;
-    ref?: string;
-    build: {
-      effectiveVersion: string | null;
-      ref?: string;
-    };
-  }>;
+  /**
+   * Canonical, cheap lifecycle read for the current immutable runtime attempt.
+   * This is the only status surface: phase "ready" means host navigation and
+   * the application boot handshake both completed.
+   */
+  observe(): Promise<PanelObservation>;
 
   /**
    * Typed RPC call proxy for methods the target chose to expose.
@@ -284,27 +251,24 @@ export interface PanelHandle<
     role: Role
   ): PanelHandleFromContract<C, Role>;
 
-  refresh(): Promise<PanelHandle<T, E, EmitE>>;
   children(): Promise<PanelHandle[]>;
   parent(): PanelHandle | null;
-  ensureLoaded(): Promise<unknown>;
-  isLoaded(): Promise<boolean>;
-  navigate(source: string, options?: PanelNavigateOptions): Promise<{ id: string; title: string }>;
-  reload(): Promise<PanelLifecycleResult>;
+  navigate(source: string, options?: PanelNavigateOptions): Promise<PanelObservation>;
+  reload(): Promise<PanelObservation>;
   close(): Promise<PanelLifecycleResult>;
 
-  /** Bounded post-mortem diagnostics for this panel target. */
-  diagnostics(options?: PanelConsoleHistoryOptions): Promise<PanelDiagnosticsResult>;
+  /** One bounded post-mortem packet: observation, console history, and ready document. */
+  diagnose(): Promise<PanelDiagnosticsResult>;
   archive(): Promise<void>;
   unload(): Promise<PanelLifecycleResult>;
   movePanel(newParentId: string | null, targetPosition: number): Promise<void>;
   takeOver(): Promise<void>;
   openDevTools(mode?: "detach" | "right" | "bottom"): Promise<void>;
-  rebuildPanel(): Promise<PanelLifecycleResult>;
-  rebuildAndReload(): Promise<PanelLifecycleResult>;
+  /** Transactionally prepare and activate a new immutable attempt from source. */
+  rebuild(): Promise<PanelObservation>;
   updatePanelState(state: Record<string, unknown>): Promise<void>;
-  focus(options?: PanelFocusOptions): Promise<unknown>;
-  snapshot(): Promise<unknown>;
+  focus(options?: PanelFocusOptions): Promise<PanelObservation>;
+  snapshot(): Promise<PanelSnapshotObservation>;
   tree(): Promise<unknown>;
   state(): Promise<unknown>;
   routes(): Promise<unknown>;

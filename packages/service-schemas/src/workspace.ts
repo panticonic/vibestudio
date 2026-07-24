@@ -22,9 +22,8 @@ import type {
 import { WorkspaceConfigSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { WorkspaceNode } from "@vibestudio/shared/types";
 import { APP_CAPABILITIES_BY_TARGET } from "@vibestudio/shared/unitManifest";
-import { pendingUnitBatchApprovalSchema } from "./shellApproval.js";
+import { authorityRowSchema, pendingUnitBatchApprovalSchema } from "./shellApproval.js";
 import { UnitAuthorityRequestSchema } from "./build.js";
-import { EvalAuthorityCeilingSchema } from "./authority/evalCeiling.js";
 
 // ─── Access descriptors ───────────────────────────────────────────────────────
 // Mirrors the blobstore idiom of a shared `*_ACCESS` constant for the pure-read
@@ -132,7 +131,6 @@ export const HostTargetLaunchResultSchema = z.discriminatedUnion("status", [
       effectiveVersion: z.string().nullable().optional(),
       executionDigest: z.string().regex(/^[0-9a-f]{64}$/),
       authorityRequests: z.array(UnitAuthorityRequestSchema).readonly(),
-      authorityEvalCeilings: z.array(EvalAuthorityCeilingSchema).readonly(),
       adoptionPolicy: z.enum(["immediate", "prompt", "artifact-only"]).optional(),
     })
     .strict(),
@@ -267,6 +265,7 @@ export type WorkspaceAppVersions = z.infer<typeof WorkspaceAppVersionsSchema>;
 export const WorkspaceUnitStatusSchema = z.object({
   name: z.string(),
   kind: z.enum(["panel", "worker", "extension", "app"]),
+  isAgent: z.boolean().optional(),
   source: z.string(),
   displayName: z.string().optional(),
   status: z.enum(["running", "stopped", "error", "pending-approval", "building", "available"]),
@@ -308,6 +307,8 @@ export const WorkspaceUnitStatusSchema = z.object({
     .nullable()
     .optional(),
   inspectorUrl: z.string().nullable().optional(),
+  /** Reviewed projection of the exact active/source version's declared authority. */
+  authorityRows: z.array(authorityRowSchema).optional(),
 });
 export type WorkspaceUnitStatus = z.infer<typeof WorkspaceUnitStatusSchema>;
 
@@ -561,8 +562,14 @@ export const workspaceMethods = defineServiceMethods({
   },
   listSkills: {
     description:
-      "List repo-embedded workspace skills with name, description, repo path, and SKILL.md path parsed from each repo's top-level SKILL.md frontmatter.",
-    args: z.tuple([]),
+      "List repo-embedded workspace skills with name, description, repo path, and SKILL.md path parsed from each repo's top-level SKILL.md frontmatter. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId.",
+    args: z.tuple([
+      z
+        .object({ contextId: z.string().min(1) })
+        .strict()
+        .optional()
+        .describe("Explicit semantic context for a contextless host caller."),
+    ]),
     returns: z.array(SkillEntrySchema),
     access: READ_ACCESS,
     // Linked external sessions receive the workspace skill catalog through
@@ -571,8 +578,15 @@ export const workspaceMethods = defineServiceMethods({
   },
   readSkill: {
     description:
-      "Return raw SKILL.md contents for a canonical workspace repo path (`skills/code-review`, `packages/foo`, `workers/bar`, or `meta`). Path traversal is rejected.",
-    args: z.tuple([z.string().describe("Canonical workspace repo path containing SKILL.md.")]),
+      "Return raw SKILL.md contents for a canonical workspace repo path (`skills/code-review`, `packages/foo`, `workers/bar`, or `meta`). Path traversal is rejected. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId.",
+    args: z.tuple([
+      z.string().describe("Canonical workspace repo path containing SKILL.md."),
+      z
+        .object({ contextId: z.string().min(1) })
+        .strict()
+        .optional()
+        .describe("Explicit semantic context for a contextless host caller."),
+    ]),
     returns: z.string(),
     access: READ_ACCESS,
     // Read-only entity-principal access mirrors listSkills.

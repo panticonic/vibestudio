@@ -1,3 +1,5 @@
+import type { AgentExecutionTestPolicy } from "@vibestudio/rpc";
+
 /** Stable Durable Object identity used by host services. */
 export interface DORef {
   /** Workspace-relative source path, for example `workers/agent-worker`. */
@@ -93,5 +95,9 @@ export interface AlarmDoDispatcher extends DoDispatcher {
    * alarm row remains the source of truth until a completed result is
    * acknowledged.
    */
-  dispatchAlarm(ref: DORef, signal?: AbortSignal): Promise<DoAlarmDispatchResult>;
+  dispatchAlarm(
+    ref: DORef,
+    signal?: AbortSignal,
+    testPolicy?: AgentExecutionTestPolicy
+  ): Promise<DoAlarmDispatchResult>;
 }

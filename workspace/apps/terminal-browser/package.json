@@ -13,15 +13,6 @@
     "authority": {
       "requests": [
         {
-          "capability": "approvals.block",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "approvals.decide",
           "resource": {
             "kind": "prefix",
@@ -111,8 +102,7 @@
           "tier": "gated",
           "evidence": "intentional-broad"
         }
-      ],
-      "evalCeilings": []
+      ]
     }
   },
   "dependencies": {

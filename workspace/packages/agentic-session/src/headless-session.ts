@@ -89,6 +89,8 @@ export interface SessionSnapshot {
     error?: string;
   }>;
   debugEvents: readonly (AgentDebugPayload & { ts: number })[];
+  /** Live/terminal state of the one acknowledged session teardown path. */
+  cleanup: SessionCleanupState;
   cleanupErrors: readonly SessionCleanupError[];
   participants: Record<string, { name: string; type: string; handle: string; connected: boolean }>;
   localMethodNames: readonly string[];
@@ -99,6 +101,21 @@ export interface SessionSnapshot {
   /** Durable provider/model requests and aggregate usage captured from the agent journal. */
   modelExecutionEvidence?: unknown;
   modelExecutionEvidenceError?: string;
+}
+
+export type SessionCleanupPhase =
+  | "idle"
+  | "unsubscribing-agent"
+  | "capturing-model-evidence"
+  | "disconnecting-client"
+  | "destroying-agent-context"
+  | "retiring-agent"
+  | "complete";
+
+export interface SessionCleanupState {
+  phase: SessionCleanupPhase;
+  phaseStartedAt: number;
+  completedAt?: number;
 }
 
 export interface HeadlessSessionConfig {
@@ -113,6 +130,8 @@ export interface HeadlessWithAgentConfig extends HeadlessSessionConfig {
   objectKey?: string;
   /** Omit to allocate a fresh isolated agent context explicitly. */
   contextId?: string;
+  /** Exact host-attested authority policy for the isolated system-test case. */
+  testPolicy?: import("@vibestudio/shared/authority/testPolicy").AgentExecutionTestPolicySpec;
   channelId?: string;
   channelConfig?: ChannelConfig;
   methods?: Record<string, MethodDefinition>;
@@ -213,6 +232,11 @@ export class HeadlessSession {
   private _participants: Record<string, Participant<ChatParticipantMetadata>> = {};
   private _debugEvents: Array<AgentDebugPayload & { ts: number }> = [];
   private _cleanupErrors: SessionCleanupError[] = [];
+  private _cleanupState: SessionCleanupState = {
+    phase: "idle",
+    phaseStartedAt: Date.now(),
+  };
+  private _closePromise: Promise<void> | null = null;
   private _dirtyRepoWarnings = new Map<string, DirtyRepoDetails>();
   private _registeredMethodNames: string[] = [];
   private _modelExecutionEvidence: unknown;
@@ -313,7 +337,11 @@ export class HeadlessSession {
 
     const ownsAgentContext = !config.contextId;
     const agentContextId =
-      config.contextId ?? (await createHeadlessAgentContext({ rpcCall: config.rpcCall }));
+      config.contextId ??
+      (await createHeadlessAgentContext({
+        rpcCall: config.rpcCall,
+        ...(config.testPolicy ? { testPolicy: config.testPolicy } : {}),
+      }));
     try {
       await session.connect(channelId, {
         channelConfig,
@@ -775,21 +803,37 @@ export class HeadlessSession {
     this._messageListeners.clear();
   }
 
-  async close(): Promise<void> {
-    if (this._agentTargetId && this._client && this._modelExecutionEvidence === undefined) {
-      await this.captureModelExecutionEvidence().catch((error) => {
-        console.warn("[HeadlessSession] model execution evidence capture failed:", error);
-      });
+  close(options?: { onPhase?: (state: SessionCleanupState) => void }): Promise<void> {
+    if (!this._closePromise) {
+      this._closePromise = this.closeOnce(options);
+    } else if (options?.onPhase) {
+      options.onPhase({ ...this._cleanupState });
     }
+    return this._closePromise;
+  }
+
+  private setCleanupPhase(
+    phase: SessionCleanupPhase,
+    onPhase?: (state: SessionCleanupState) => void
+  ): void {
+    const now = Date.now();
+    this._cleanupState = {
+      phase,
+      phaseStartedAt: now,
+      ...(phase === "complete" ? { completedAt: now } : {}),
+    };
+    onPhase?.({ ...this._cleanupState });
+  }
+
+  private async closeOnce(options?: {
+    onPhase?: (state: SessionCleanupState) => void;
+  }): Promise<void> {
     const entityId = this._agentEntityId;
     const targetId = this._agentTargetId;
     const contextId = this._agentContextId;
     const ownsContext = this._ownsAgentContext;
     const channelId = this._channelId;
     const rpcCall = this._agentRpcCall;
-    this._agentEntityId = null;
-    this._agentTargetId = null;
-    this._agentRpcCall = null;
 
     const unsubscribe = async () => {
       if (!targetId || !channelId || !rpcCall) return;
@@ -801,31 +845,48 @@ export class HeadlessSession {
       if (!rpcCall) return;
       // A context minted for this launch is the lifecycle unit. Destroying it
       // recursively retires the root and descendants, so it has one owner and
-      // no entity-level fallback path. The channel subscription is a separate
-      // delivery relationship, however: close it and await the agent's
-      // interruption/unsubscribe terminal before deleting the membership that
-      // late delivery is authorized against.
+      // no entity-level fallback path.
       if (ownsContext && contextId) {
-        await unsubscribe();
         await destroyHeadlessAgentContext({ rpcCall, contextId }).catch((err) => {
           this.recordCleanupError("destroyHeadlessAgentContext", err);
         });
         return;
       }
 
-      // In a caller-owned context, the session owns only its subscription and
-      // entity. Unsubscription must finish before retirement can delete the DO
-      // that serves unsubscribeChannel. Both terminal results are observed.
-      await unsubscribe();
+      // In a caller-owned context, the session owns only its entity after the
+      // subscription has been closed. Retirement observes the terminal result.
       if (!entityId) return;
       await retireHeadlessAgent({ rpcCall, entityId }).catch((err) => {
         this.recordCleanupError("retireHeadlessAgent", err);
       });
     };
-    // The headless participant and agent are peers in one channel lifecycle.
-    // Await both acknowledged leaves before retiring the runtime context.
+    // Stop the agent's subscription before disconnecting the headless peer.
+    // A participant-left envelope is ordinary channel input; leaving the agent
+    // subscribed while the client departs can schedule a fresh model turn
+    // after the test has already reached its terminal result.
+    this.setCleanupPhase("unsubscribing-agent", options?.onPhase);
+    await unsubscribe();
+    // Close the agent's effect-admission boundary before collecting optional
+    // diagnostics. A final transcript message is visible slightly before its
+    // durable turn is fully quiescent; probing first left that window open for
+    // a queued continuation to begin just as the owning context was retired.
+    if (targetId && this._client && this._modelExecutionEvidence === undefined) {
+      this.setCleanupPhase("capturing-model-evidence", options?.onPhase);
+      await this.captureModelExecutionEvidence().catch((error) => {
+        console.warn("[HeadlessSession] model execution evidence capture failed:", error);
+      });
+    }
+    this._agentEntityId = null;
+    this._agentTargetId = null;
+    this._agentRpcCall = null;
+    this.setCleanupPhase("disconnecting-client", options?.onPhase);
     await this.dispose();
+    this.setCleanupPhase(
+      ownsContext && contextId ? "destroying-agent-context" : "retiring-agent",
+      options?.onPhase
+    );
     await cleanupRemote();
+    this.setCleanupPhase("complete", options?.onPhase);
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
@@ -934,6 +995,7 @@ export class HeadlessSession {
       messages: this.messages,
       invocations,
       debugEvents: this._debugEvents,
+      cleanup: { ...this._cleanupState },
       cleanupErrors: [...this._cleanupErrors],
       participants,
       localMethodNames: this._registeredMethodNames,

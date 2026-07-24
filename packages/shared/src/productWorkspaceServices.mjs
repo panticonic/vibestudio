@@ -13,9 +13,10 @@ export const PRODUCT_WORKSPACE_SERVICES = deepFreeze([
     title: "Workspace history",
     action: "read or update your workspace's collaboration history",
     description: "Read or update your workspace's collaboration and version history.",
+    presentation: { domain: "files", verb: "manage" },
     protocols: ["vibestudio.gad.workspace.v1"],
     source: "vibestudio/internal",
-    authority: { principals: ["host", "user", "code"] },
+    authority: { principals: ["host", "user", "code", "session", "mission"] },
     durableObject: {
       className: "GadWorkspaceDO",
       objectKey: "workspace-semantic-control-plane",
@@ -38,6 +39,9 @@ function assertValidCatalog(services) {
   for (const service of services) {
     if (service.authority.principals.length === 0) {
       throw new Error(`Product workspace service ${service.name} declares no principals`);
+    }
+    if (!service.action || !service.presentation?.domain || !service.presentation?.verb) {
+      throw new Error(`Product workspace service ${service.name} has no authority presentation`);
     }
     for (const key of [service.name, ...service.protocols]) {
       if (queryKeys.has(key)) {

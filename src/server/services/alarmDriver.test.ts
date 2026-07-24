@@ -134,8 +134,18 @@ describe("AlarmDriver", () => {
 
   it("persists the next schedule returned by an alarm handler after dispatch completes", async () => {
     vi.setSystemTime(0);
-    const alarms: Alarm[] = [
-      { source: "workers/poller", className: "PollerDO", objectKey: "p-1", wakeAt: 100 },
+    const testPolicy = {
+      policyId: "system-test:permissions-list",
+      kind: "orchestrator" as const,
+    };
+    const alarms: Array<Alarm & { testPolicy?: typeof testPolicy }> = [
+      {
+        source: "workers/poller",
+        className: "PollerDO",
+        objectKey: "p-1",
+        wakeAt: 100,
+        testPolicy,
+      },
     ];
     const dispatch = vi.fn(async (_ref: DORef, method: string, ...args: unknown[]) => {
       if (method === "alarmNextWakeAt") {
@@ -166,6 +176,12 @@ describe("AlarmDriver", () => {
 
     driver.start();
     await vi.advanceTimersByTimeAsync(100);
+    expect(dispatchAlarm).toHaveBeenNthCalledWith(
+      1,
+      { source: "workers/poller", className: "PollerDO", objectKey: "p-1" },
+      expect.any(AbortSignal),
+      testPolicy
+    );
     expect(alarms).toContainEqual({
       source: "workers/poller",
       className: "PollerDO",

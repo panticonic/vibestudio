@@ -6,8 +6,10 @@ import type { MissionCharter } from "@vibestudio/shared/authority/mission";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { MissionRegistry } from "./missionRegistry.js";
 import { createMissionService } from "./missionService.js";
+import { describeCapability } from "@vibestudio/shared/authorityPresentation";
 
 const charter = (): MissionCharter => ({
+  agentBindingId: "agent-summary",
   taskSpec: "Summarize the workspace",
   harness: { unit: "workers/system-agent", ev: "a".repeat(64) },
   skills: [],
@@ -19,6 +21,7 @@ const charter = (): MissionCharter => ({
     declaredOrigins: [],
   },
   model: { modelId: "openai-codex:gpt-5.3-codex-spark", params: {} },
+  declaredLineageClasses: ["none"],
   trigger: { kind: "manual" },
 });
 
@@ -52,6 +55,9 @@ describe("mission service ownership", () => {
     });
     const service = createMissionService({
       registry,
+      approvalQueue: {} as never,
+      capabilityGrants: grants,
+      describeCapability,
       contextIntegrityReady: () => true,
     });
 

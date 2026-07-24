@@ -55,8 +55,61 @@ import type { CdpBridge } from "./cdpBridge.js";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import type { PanelTreeBridgeRequest } from "./services/panelTreeService.js";
 import type { EventService } from "@vibestudio/shared/eventsService";
+import {
+  panelAttemptId,
+  panelFailure,
+  panelFailureBoundaryError,
+  panelFailureFromError,
+  type PanelHostObservation,
+  type PanelFailureCode,
+  type PanelFailureProvenance,
+  type PanelFailureStage,
+  type PanelObservation,
+  type PanelRuntimeFailure,
+  type PanelSnapshotObservation,
+} from "@vibestudio/shared/panel/observation";
 
 const log = createDevLogger("OwnerPanelTreeBridge");
+
+function operationFailure(
+  error: unknown,
+  provenance: PanelFailureProvenance,
+  fallback: { code: PanelFailureCode; stage: PanelFailureStage }
+): PanelRuntimeFailure {
+  const message = error instanceof Error ? error.message : String(error);
+  const record =
+    error && typeof error === "object" ? (error as Record<string, unknown>) : undefined;
+  const errorData =
+    record?.["errorData"] && typeof record["errorData"] === "object"
+      ? (record["errorData"] as Record<string, unknown>)
+      : undefined;
+  const diagnostics = Array.isArray(record?.["diagnostics"])
+    ? record?.["diagnostics"]
+    : undefined;
+  const unitMissing =
+    errorData?.["code"] === "package_not_found" ||
+    /unknown (?:runtime )?build unit|unknown build unit/iu.test(message);
+  const refMissing = !unitMissing && /(?:unknown|missing|invalid).*(?:ref|context|state)/iu.test(message);
+  const compileFailure = Boolean(diagnostics) || /(?:compile|esbuild|typescript|syntax)/iu.test(message);
+  return panelFailure({
+    code: unitMissing
+      ? "unit_not_found"
+      : refMissing
+        ? "ref_not_found"
+        : compileFailure
+          ? "compile_failed"
+          : fallback.code,
+    stage: unitMissing || refMissing ? "resolve" : compileFailure ? "build" : fallback.stage,
+    message,
+    provenance,
+    ...((errorData || diagnostics) && {
+      details: {
+        ...(errorData ?? {}),
+        ...(diagnostics ? { diagnostics } : {}),
+      },
+    }),
+  });
+}
 
 export interface OwnerPanelTreeBridgeDeps {
   container: ServiceContainer;
@@ -80,6 +133,36 @@ export interface OwnerPanelTreeBridgeDeps {
 }
 
 export type PanelTreeBridge = (request: PanelTreeBridgeRequest) => Promise<unknown>;
+
+export const PANEL_PARENT_RESOLUTION_TIMEOUT_MS = 5_000;
+
+export async function resolvePanelParentWithDeadline(
+  startId: string,
+  deps: Parameters<typeof resolveOwningPanelSlot>[1],
+  timeoutMs = PANEL_PARENT_RESOLUTION_TIMEOUT_MS
+) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      resolveOwningPanelSlot(startId, deps),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            Object.assign(
+              new Error(`Panel parent resolution did not settle within ${timeoutMs}ms`),
+              {
+                code: "parent_resolution_timeout",
+                errorData: { startId, timeoutMs },
+              }
+            )
+          );
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export async function waitForCdpTargetRegistered(
   bridge: CdpBridge,
@@ -415,6 +498,11 @@ export async function createServerPanelTreeBridge(
     },
     grantConnection: (panelId) => call<{ token: string }>("auth", "grantConnection", [panelId]),
   });
+  // Canonical terminal failures from asynchronous lifecycle work. Build
+  // artifacts describe build output; they must not be overloaded to represent
+  // host, load, or boot failures. The ledger is attempt-scoped and observation
+  // is its sole read surface.
+  const lifecycleFailures = new Map<string, PanelRuntimeFailure>();
 
   let panelTreeLoaded = false;
   let panelTreeLoadPromise: Promise<void> | null = null;
@@ -429,7 +517,6 @@ export async function createServerPanelTreeBridge(
         panel.buildKey = record?.activeBuildKey ?? null;
         panel.executionDigest = record?.activeExecutionDigest ?? null;
         panel.authorityRequests = authority?.requests;
-        panel.authorityEvalCeilings = authority?.evalCeilings;
         if (record?.status === "preparing") {
           preparingSlots.push(asPanelSlotId(panelId));
           panel.artifacts = {
@@ -591,7 +678,6 @@ export async function createServerPanelTreeBridge(
       buildKey?: string | null;
       executionDigest?: string | null;
       authorityRequests?: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
-      authorityEvalCeilings?: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityCeiling[];
     }
   > => {
     const slotId = asPanelSlotId(item.panelId);
@@ -608,7 +694,6 @@ export async function createServerPanelTreeBridge(
       ...(authority
         ? {
             authorityRequests: authority.requests,
-            authorityEvalCeilings: authority.evalCeilings,
           }
         : {}),
     };
@@ -725,6 +810,222 @@ export async function createServerPanelTreeBridge(
     return cdpBridge;
   };
 
+  const observePanel = async (panelId: string): Promise<PanelObservation> => {
+    await sync();
+    const panel = registry.getPanel(panelId);
+    if (!panel) {
+      const failure = panelFailure({
+        code: "panel_not_found",
+        stage: "runtime",
+        message: `Panel not found: ${panelId}`,
+        provenance: {
+          panelId,
+          source: "unknown",
+          contextId: "unknown",
+          requestedRef: "unknown",
+        },
+      });
+      throw panelFailureBoundaryError(failure);
+    }
+
+    const snapshot = getCurrentSnapshot(panel);
+    const source = getPanelSource(panel);
+    const contextId = getPanelContextId(panel);
+    const requestedRef = snapshot.options.ref ?? "main";
+    const runtimeEntityId = await panelManager.getCurrentEntityId(asPanelSlotId(panelId));
+    const record = await workspaceState.resolveEntity(runtimeEntityId);
+    const effectiveVersion = record?.source.effectiveVersion || null;
+    const buildKey = record?.activeBuildKey ?? panel.buildKey ?? null;
+    const attemptId = panelAttemptId(runtimeEntityId, buildKey);
+    const provenance = {
+      panelId,
+      runtimeEntityId,
+      attemptId,
+      source,
+      contextId,
+      requestedRef,
+      effectiveVersion,
+      buildKey,
+    };
+    let failure: PanelRuntimeFailure | undefined;
+    const recordedFailure = lifecycleFailures.get(panelId);
+    if (
+      recordedFailure &&
+      recordedFailure.provenance.runtimeEntityId === runtimeEntityId &&
+      recordedFailure.provenance.buildKey === buildKey
+    ) {
+      failure = recordedFailure;
+    } else if (recordedFailure) {
+      // A different runtime/build identity is a new attempt. Never let a
+      // terminal result from its predecessor poison the new observation.
+      lifecycleFailures.delete(panelId);
+    }
+    if (panel.artifacts.error) {
+      const message = panel.artifacts.error;
+      const missing = /unknown (?:runtime )?build unit|unknown build unit/iu.test(message);
+      failure ??= panelFailure({
+        code: missing ? "unit_not_found" : "compile_failed",
+        stage: missing ? "resolve" : "build",
+        message,
+        provenance,
+        details: {
+          progress: panel.artifacts.buildProgress ?? null,
+          buildLog: panel.artifacts.buildLog ?? null,
+        },
+      });
+    }
+
+    let host: PanelHostObservation | undefined;
+    const cdpBridge = deps.container.get<import("./cdpBridge.js").CdpBridge>("cdpBridge");
+    const holder = deps.panelRuntimeCoordinator?.resolveHostForSlot(panelId) ?? null;
+    if (
+      holder?.supportsCdp &&
+      cdpBridge.isProviderConnected(holder.hostConnectionId) &&
+      cdpBridge.isTargetRegisteredForHost(panelId, holder.hostConnectionId)
+    ) {
+      try {
+        host = (await cdpBridge.sendHostCommand(
+          panelId,
+          "panelObservation",
+          []
+        )) as PanelHostObservation;
+      } catch (error) {
+        failure ??= panelFailure({
+          code: "host_unavailable",
+          stage: "host",
+          message: error instanceof Error ? error.message : String(error),
+          provenance,
+        });
+      }
+    }
+    if (!failure && host?.failure) {
+      failure = panelFailure({
+        ...host.failure,
+        provenance,
+      });
+    }
+
+    const bootMatchesAttempt =
+      source.startsWith("browser:") ||
+      (host?.boot.runtimeEntityId === runtimeEntityId &&
+        host.boot.buildKey === buildKey &&
+        host.boot.source === source &&
+        host.boot.contextId === contextId);
+    let phase: PanelObservation["phase"];
+    if (failure) {
+      phase = "failed";
+    } else if (record?.status === "preparing" || !buildKey) {
+      phase = "building";
+    } else if (!holder) {
+      phase = "assigning-host";
+    } else if (!host?.view.exists) {
+      phase = "loading";
+    } else if (source.startsWith("browser:")) {
+      phase = host.view.loading === false ? "ready" : "loading";
+    } else if (host.boot.phase === "failed" && bootMatchesAttempt) {
+      failure = panelFailure({
+        code: "entry_threw",
+        stage: "boot",
+        message: host.boot.message ?? "Panel entry failed",
+        provenance,
+        details: {
+          errorName: host.boot.errorName ?? null,
+          stack: host.boot.stack ?? null,
+        },
+      });
+      phase = "failed";
+    } else if (
+      host.boot.phase === "ready" &&
+      host.view.loading === false &&
+      bootMatchesAttempt
+    ) {
+      phase = "ready";
+    } else {
+      phase = "booting";
+    }
+
+    return {
+      panelId,
+      title: panel.title,
+      source,
+      kind: source.startsWith("browser:") ? "browser" : "workspace",
+      parentId: registry.findParentId(panelId),
+      contextId,
+      requestedRef,
+      runtimeEntityId,
+      attemptId,
+      effectiveVersion,
+      buildKey,
+      phase,
+      ...(failure ? { failure } : {}),
+      ...(host ? { host } : {}),
+      updatedAt: Date.now(),
+    };
+  };
+
+  const waitForPanelReady = async (
+    panelId: string,
+    timeoutMs = 45_000
+  ): Promise<PanelObservation> => {
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      const observation = await observePanel(panelId);
+      if (observation.phase === "ready") return observation;
+      if (observation.phase === "failed" && observation.failure) {
+        throw panelFailureBoundaryError(observation.failure);
+      }
+      if (Date.now() >= deadline) {
+        const failure = panelFailure({
+          code: "runtime_handshake_timeout",
+          stage: "boot",
+          message: `Panel did not become boot-ready within ${timeoutMs}ms`,
+          provenance: {
+            panelId,
+            runtimeEntityId: observation.runtimeEntityId,
+            attemptId: observation.attemptId,
+            source: observation.source,
+            contextId: observation.contextId,
+            requestedRef: observation.requestedRef,
+            effectiveVersion: observation.effectiveVersion,
+            buildKey: observation.buildKey,
+          },
+          details: { lastPhase: observation.phase, host: observation.host ?? null },
+        });
+        throw panelFailureBoundaryError(failure);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  const loadAndWaitForPanelReady = async (
+    panelId: string,
+    operation: "create" | "focus" | "navigate" | "rebuild"
+  ): Promise<PanelObservation> => {
+    const loaded = await ensureDefaultLoaded(panelId);
+    if (loaded.loaded) return waitForPanelReady(panelId);
+
+    const observation = await observePanel(panelId);
+    throw panelFailureBoundaryError(
+      observation.failure ??
+        panelFailure({
+          code: loaded.status === "already_held" ? "lease_conflict" : "host_unavailable",
+          stage: "host",
+          message: `Panel host assignment failed during ${operation}: ${loaded.status}`,
+          provenance: {
+            panelId,
+            runtimeEntityId: observation.runtimeEntityId,
+            attemptId: observation.attemptId,
+            source: observation.source,
+            contextId: observation.contextId,
+            requestedRef: observation.requestedRef,
+            effectiveVersion: observation.effectiveVersion,
+            buildKey: observation.buildKey,
+          },
+          details: { holderLabel: loaded.holderLabel ?? null },
+        })
+    );
+  };
+
   const handleBridgeRequest = async (
     request: import("./services/panelTreeService.js").PanelTreeBridgeRequest
   ): Promise<unknown> => {
@@ -777,10 +1078,51 @@ export async function createServerPanelTreeBridge(
           buildKey: panel.buildKey ?? null,
           executionDigest: panel.executionDigest ?? null,
           authorityRequests: panel.authorityRequests,
-          authorityEvalCeilings: panel.authorityEvalCeilings,
           contextId: getPanelContextId(panel),
           ref: snapshot.options.ref,
           privileged: snapshot.privileged === true,
+        };
+      }
+      case "observe":
+        return observePanel(String(args[0]));
+      case "diagnose": {
+        const panelId = String(args[0]);
+        const observation = await observePanel(panelId);
+        const cdpBridge = deps.container.get<import("./cdpBridge.js").CdpBridge>("cdpBridge");
+        let consoleHistory: import("@vibestudio/shared/panel/observation").PanelDiagnosticPacket["consoleHistory"];
+        let document: PanelSnapshotObservation | undefined;
+        if (observation.host?.view.exists && cdpBridge.isTargetRegistered(panelId)) {
+          try {
+            const history = (await cdpBridge.sendHostCommand(panelId, "consoleHistory", [
+              { limit: 200, errorLimit: 100 },
+            ])) as import("@vibestudio/shared/panel/observation").PanelConsoleHistoryResult;
+            consoleHistory = { available: true, ...history };
+          } catch (error) {
+            consoleHistory = {
+              available: false,
+              error: error instanceof Error ? error.message : String(error),
+            };
+          }
+          if (observation.phase === "ready" && observation.runtimeEntityId) {
+            const captured = await snapshotBrowserPanelFromCdpBridge(cdpBridge, panelId);
+            document = {
+              panelId,
+              attemptId: observation.attemptId,
+              runtimeEntityId: observation.runtimeEntityId,
+              buildKey: observation.buildKey,
+              capturedAt: Date.now(),
+              document: captured,
+            };
+          }
+        }
+        consoleHistory ??= {
+          available: false,
+          error: "No inspectable host target is registered for this panel attempt",
+        };
+        return {
+          observation,
+          consoleHistory,
+          ...(document ? { document } : {}),
         };
       }
       case "create": {
@@ -790,6 +1132,7 @@ export async function createServerPanelTreeBridge(
           parentId?: string | null;
           name?: string;
           focus?: boolean;
+          contextId?: string;
           ref?: string;
           stateArgs?: Record<string, unknown>;
           placement?: import("@vibestudio/shared/types").PanelPlacementHint;
@@ -801,16 +1144,44 @@ export async function createServerPanelTreeBridge(
         const explicitParentProvided =
           options.parentId === null || typeof options.parentId === "string";
         const parentStartId = explicitParentProvided ? options.parentId : request.callerId;
-        const parentId =
-          parentStartId == null
-            ? undefined
-            : await resolveOwningPanelSlot(parentStartId, {
-                isOpenSlot: (id) => Boolean(registry.getPanel(id)),
-                resolveOpenSlotForEntity: async (id) =>
-                  (await workspaceState.resolveSlotByEntity(id)) ?? undefined,
-                resolveParentId: async (id) =>
-                  (await workspaceState.resolveActiveEntity(id))?.parentId,
-              });
+        let parentId: PanelSlotId | undefined;
+        try {
+          parentId =
+            parentStartId == null
+              ? undefined
+              : await resolvePanelParentWithDeadline(parentStartId, {
+                  isOpenSlot: (id) => Boolean(registry.getPanel(id)),
+                  resolveOpenSlotForEntity: async (id) =>
+                    (await workspaceState.resolveSlotByEntity(id)) ?? undefined,
+                  resolveParentId: async (id) =>
+                    (await workspaceState.resolveActiveEntity(id))?.parentId,
+                });
+        } catch (error) {
+          throw panelFailureBoundaryError(
+            panelFailure({
+              code: "parent_resolution_timeout",
+              stage: "resolve",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Panel parent resolution did not settle",
+              provenance: {
+                source,
+                contextId:
+                  typeof options.contextId === "string" ? options.contextId : "unassigned",
+                requestedRef: options.ref ?? "main",
+              },
+              details: {
+                callerId: request.callerId,
+                parentStartId: parentStartId ?? null,
+                timeoutMs: PANEL_PARENT_RESOLUTION_TIMEOUT_MS,
+                recovery:
+                  "Pass parentId:null for an owned root, or an explicit open panel slot id.",
+              },
+            }),
+            error
+          );
+        }
         const isBrowser = isOpenPanelBrowserUrl(source);
         // A null parent means a root panel. addPanel() treats a null parent
         // WITHOUT addAsRoot as "replace the tree with this single panel", so root
@@ -832,49 +1203,52 @@ export async function createServerPanelTreeBridge(
               addAsRoot: isRoot,
               ...(ownerUserId ? { ownerUserId } : {}),
             });
-        if (created.preparation) {
-          void created.preparation
-            .then(() => {
-              emitTreeSnapshot();
-            })
-            .catch((error: unknown) => {
-              const message = error instanceof Error ? error.message : String(error);
-              const panel = registry.getPanel(created.panelId);
-              if (panel) {
-                registry.updateArtifacts(created.panelId, {
-                  ...panel.artifacts,
-                  buildState: "error",
-                  error: message,
-                  buildProgress: "Panel runtime preparation failed",
-                });
-              }
-              emitTreeSnapshot();
-              log.warn(`Panel ${created.panelId} runtime preparation failed: ${message}`);
-            });
-        }
         emitTreeSnapshot();
-        const runtimeEntityId = await panelManager.getCurrentEntityId(
-          asPanelSlotId(created.panelId)
-        );
-        const entitySource = await panelManager.getCurrentEntitySource(
-          asPanelSlotId(created.panelId)
-        );
-        if (options.focus) {
-          // Focus is semantic state; renderer readiness is presentation state.
-          // Publish/select the new slot as soon as its durable identity exists,
-          // then let the assigned desktop or mobile host load it asynchronously.
-          // Waiting for CDP registration here made panel-tree.create block on a
-          // complete Electron page load before the shell could show progress.
-          await panelManager.notifyFocused(asPanelSlotId(created.panelId));
-          emitTreeSnapshot();
-          void ensureDefaultLoaded(created.panelId).catch((error: unknown) => {
+        const finishOpening = async (): Promise<void> => {
+          try {
+            if (created.preparation) {
+              await created.preparation;
+              emitTreeSnapshot();
+            }
+            await loadAndWaitForPanelReady(created.panelId, "create");
+            lifecycleFailures.delete(created.panelId);
+            if (options.focus) {
+              await panelManager.notifyFocused(asPanelSlotId(created.panelId));
+            }
+            emitTreeSnapshot();
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const current = await observePanel(created.panelId).catch(() => null);
+            const failure =
+              panelFailureFromError(error) ??
+              current?.failure ??
+              operationFailure(
+                error,
+                {
+                  panelId: created.panelId,
+                  runtimeEntityId: current?.runtimeEntityId ?? null,
+                  attemptId: current?.attemptId,
+                  source: current?.source ?? created.source,
+                  contextId: current?.contextId ?? created.contextId,
+                  requestedRef: current?.requestedRef ?? options.ref ?? "main",
+                  effectiveVersion: current?.effectiveVersion ?? null,
+                  buildKey: current?.buildKey ?? null,
+                },
+                { code: "unknown_failure", stage: "runtime" }
+              );
+            lifecycleFailures.set(created.panelId, failure);
+            emitTreeSnapshot();
             log.warn(
-              `Focused panel ${created.panelId} could not be assigned to a runtime host: ${
-                error instanceof Error ? error.message : String(error)
-              }`
+              `Panel ${created.panelId} asynchronous create lifecycle failed ` +
+                `[${failure.code}/${failure.stage}, diagnostic=${failure.diagnosticId}]: ${message}`
             );
-          });
-        }
+          }
+        };
+        // Slot creation is the transaction boundary. Runtime preparation,
+        // host assignment, and boot continue as an observable lifecycle; they
+        // must never hold the panel-tree service queue or owner seeding.
+        void finishOpening();
+        const observation = await observePanel(created.panelId);
         return {
           id: created.panelId,
           title: created.title,
@@ -882,12 +1256,12 @@ export async function createServerPanelTreeBridge(
           parentId: parentId ?? null,
           contextId: created.contextId,
           source: created.source,
-          runtimeEntityId,
-          effectiveVersion: entitySource?.effectiveVersion ?? null,
-          buildKey: registry.getPanel(created.panelId)?.buildKey ?? null,
+          runtimeEntityId: observation.runtimeEntityId,
+          effectiveVersion: observation.effectiveVersion,
+          buildKey: observation.buildKey,
           executionDigest: registry.getPanel(created.panelId)?.executionDigest ?? null,
           authorityRequests: registry.getPanel(created.panelId)?.authorityRequests,
-          authorityEvalCeilings: registry.getPanel(created.panelId)?.authorityEvalCeilings,
+          observation,
         };
       }
       case "focus": {
@@ -900,7 +1274,7 @@ export async function createServerPanelTreeBridge(
           typeof options.anchorPanelId === "string" && options.anchorPanelId.length > 0
             ? options.anchorPanelId
             : (registry.getFocusedPanelId() ?? undefined);
-        const loaded = await ensureDefaultLoaded(panelId);
+        const observation = await loadAndWaitForPanelReady(panelId, "focus");
         await panelManager.notifyFocused(asPanelSlotId(panelId));
         emitTreeSnapshot();
         if (options.placement) {
@@ -911,7 +1285,7 @@ export async function createServerPanelTreeBridge(
             intentId: `focus:${randomUUID()}`,
           });
         }
-        return { ...loaded, status: loaded.loaded ? "focused" : loaded.status, focused: true };
+        return observation;
       }
       case "ensureLoaded": {
         const panelId = String(args[0]);
@@ -1001,14 +1375,38 @@ export async function createServerPanelTreeBridge(
         // Server is the sole writer: mutate WorkspaceDO here, then broadcast.
         // The hosting client reloads the panel's view reactively from the new
         // snapshot (no per-mutation host command).
-        const result = await panelManager.navigate(asPanelSlotId(panelId), source, options);
+        let result;
+        try {
+          result = await panelManager.navigate(asPanelSlotId(panelId), source, options);
+        } catch (error) {
+          const current = registry.getPanel(panelId);
+          const currentSnapshot = current ? getCurrentSnapshot(current) : undefined;
+          throw panelFailureBoundaryError(
+            operationFailure(
+              error,
+              {
+                panelId,
+                source,
+                contextId: options?.contextId ?? currentSnapshot?.contextId ?? "unknown",
+                requestedRef: options?.ref ?? currentSnapshot?.options.ref ?? "main",
+              },
+              { code: "navigation_failed", stage: "load" }
+            ),
+            error
+          );
+        }
         emitTreeSnapshot();
+        const observation = await loadAndWaitForPanelReady(panelId, "navigate");
         return {
           id: result.panelId,
           title: result.title,
           kind: result.source.startsWith("browser:") ? "browser" : "workspace",
           source: result.source,
           contextId: result.contextId,
+          runtimeEntityId: observation.runtimeEntityId,
+          effectiveVersion: observation.effectiveVersion,
+          buildKey: observation.buildKey,
+          observation,
         };
       }
       case "historyTargetContext": {
@@ -1027,7 +1425,18 @@ export async function createServerPanelTreeBridge(
         emitTreeSnapshot();
         if (!panel) return null;
         const snap = getCurrentSnapshot(panel);
-        return { id: panel.id, title: panel.title, source: snap.source, contextId: snap.contextId };
+        const observation = await loadAndWaitForPanelReady(panelId, "navigate");
+        return {
+          id: panel.id,
+          title: panel.title,
+          kind: snap.source.startsWith("browser:") ? "browser" : "workspace",
+          source: snap.source,
+          contextId: snap.contextId,
+          runtimeEntityId: observation.runtimeEntityId,
+          effectiveVersion: observation.effectiveVersion,
+          buildKey: observation.buildKey,
+          observation,
+        };
       }
       case "updatePanelState":
         await panelManager.updatePanelState(
@@ -1049,30 +1458,42 @@ export async function createServerPanelTreeBridge(
       case "reload": {
         const panelId = String(args[0]);
         const cdpBridge = await ensureHostCommandTargetReady(panelId);
-        const result = await cdpBridge.sendHostCommand(panelId, "reloadPanel", []);
+        await cdpBridge.sendHostCommand(panelId, "reloadPanel", []);
         emitTreeSnapshot();
-        return result;
+        return waitForPanelReady(panelId);
       }
       case "snapshot": {
         const panelId = String(args[0]);
-        await sync();
-        const panel = registry.getPanel(panelId);
-        if (!panel) throw new Error(`Panel not found: ${panelId}`);
+        const observation = await waitForPanelReady(panelId);
+        if (!observation.runtimeEntityId) {
+          throw panelFailureBoundaryError(
+            panelFailure({
+              code: "host_unavailable",
+              stage: "host",
+              message: "Ready panel has no runtime entity",
+              provenance: {
+                panelId,
+                runtimeEntityId: null,
+                attemptId: observation.attemptId,
+                source: observation.source,
+                contextId: observation.contextId,
+                requestedRef: observation.requestedRef,
+                effectiveVersion: observation.effectiveVersion,
+                buildKey: observation.buildKey,
+              },
+            })
+          );
+        }
         const cdpBridge = await ensureHostCommandTargetReady(panelId);
-        if (getPanelSource(panel).startsWith("browser:")) {
-          return snapshotBrowserPanelFromCdpBridge(cdpBridge, panelId);
-        }
-        const runtimeEntityId = await panelManager.getCurrentEntityId(asPanelSlotId(panelId));
-        const { server: rpcServer } = deps.container.get<{
-          server: import("./rpcServer.js").RpcServer;
-        }>("rpcServer");
-        try {
-          return await rpcServer.callTarget(runtimeEntityId, "_agent.snapshot", []);
-        } catch {
-          // Not every workspace panel exposes an in-process agent API. The
-          // accessibility tree is the universal readable snapshot surface.
-          return snapshotBrowserPanelFromCdpBridge(cdpBridge, panelId);
-        }
+        const document = await snapshotBrowserPanelFromCdpBridge(cdpBridge, panelId);
+        return {
+          panelId,
+          attemptId: observation.attemptId,
+          runtimeEntityId: observation.runtimeEntityId,
+          buildKey: observation.buildKey,
+          capturedAt: Date.now(),
+          document,
+        };
       }
       case "callAgent": {
         const panelId = String(args[0]);
@@ -1157,13 +1578,26 @@ export async function createServerPanelTreeBridge(
       }
       case "rebuildPanel": {
         const panelId = String(args[0]);
-        const cdpBridge = await ensureHostCommandTargetReady(panelId);
-        return cdpBridge.sendHostCommand(panelId, "rebuildPanel", []);
-      }
-      case "rebuildAndReload": {
-        const panelId = String(args[0]);
-        const cdpBridge = await ensureHostCommandTargetReady(panelId);
-        return cdpBridge.sendHostCommand(panelId, "rebuildAndReload", []);
+        try {
+          await panelManager.replaceCurrentSnapshot(asPanelSlotId(panelId), {});
+        } catch (error) {
+          const current = await observePanel(panelId);
+          throw panelFailureBoundaryError(
+            operationFailure(
+              error,
+              {
+                panelId,
+                source: current.source,
+                contextId: current.contextId,
+                requestedRef: current.requestedRef,
+              },
+              { code: "compile_failed", stage: "build" }
+            ),
+            error
+          );
+        }
+        emitTreeSnapshot();
+        return loadAndWaitForPanelReady(panelId, "rebuild");
       }
       default:
         throw new Error(`Unknown panelTree bridge method: ${method}`);
@@ -1191,7 +1625,7 @@ export async function createServerPanelTreeBridge(
 export async function snapshotBrowserPanelFromCdpBridge(
   cdpBridge: Pick<CdpBridge, "isTargetRegistered" | "sendHostCommand">,
   panelId: string
-): Promise<{ kind: "synth"; text: string; structure: unknown }> {
+): Promise<{ kind: "synth"; text: string; structure: Record<string, unknown> }> {
   if (!cdpBridge.isTargetRegistered(panelId)) {
     throw new Error(`target-not-loaded: ${panelId}`);
   }
@@ -1200,8 +1634,18 @@ export async function snapshotBrowserPanelFromCdpBridge(
     text?: unknown;
     structure?: unknown;
   };
-  if (snapshot?.kind !== "synth" || typeof snapshot.text !== "string") {
+  if (
+    snapshot?.kind !== "synth" ||
+    typeof snapshot.text !== "string" ||
+    !snapshot.structure ||
+    typeof snapshot.structure !== "object" ||
+    Array.isArray(snapshot.structure)
+  ) {
     throw new Error("host returned an invalid DOM snapshot");
   }
-  return { kind: "synth", text: snapshot.text, structure: snapshot.structure ?? null };
+  return {
+    kind: "synth",
+    text: snapshot.text,
+    structure: snapshot.structure as Record<string, unknown>,
+  };
 }

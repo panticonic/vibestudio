@@ -19,6 +19,7 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 
 | Export | Kind | Members | Description |
 |--------|------|---------|-------------|
+| `PanelOperationError` | value |  | Structured error class thrown by panel create, navigation, reload, rebuild, and readiness operations. Inspect its failure provenance instead of parsing message text. |
 | `id` | value |  |  |
 | `contextId` | value |  |  |
 | `rpc` | value |  | Portable RPC client (the full createRpcClient). |
@@ -44,10 +45,10 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `approvals` | namespace | `request`, `revoke`, `list` |  |
 | `notifications` | namespace | `show`, `dismiss` |  |
 | `workspace` | namespace | `getInfo`, `getActive`, `getConfig`, `validateConfig`, `setInitPanels`, `setConfigField`, `getAgentsMd`, `listSkills`, `readSkill`, `sourceTree`, `ensureContextFolder`, `findUnitForPath`, `units`, `recurring`, `heartbeats`, `hostTargets`, `projects` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; import top-level panelTree for panel-tree handles. |
-| `openPanel` | value |  | Create a child panel and return its handle. options.placement accepts disposition "side" (default), "replace", or "split-below", plus preferredWidth/minWidth. |
+| `openPanel` | value |  | Create a child panel and return its handle only after the exact attempt is application boot-ready; throws structured PanelOperationError on failure. options.placement accepts disposition "side" (default), "replace", or "split-below", plus preferredWidth/minWidth. |
 | `listPanels` | value |  |  |
 | `getPanelHandle` | value |  |  |
-| `panelTree` | namespace | `self`, `get`, `list`, `roots`, `children`, `parent`, `navigate` | Top-level export, not workspace.panelTree. Signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle \| null; navigate(id, source, opts?): Promise<{ id, title }>. Use list/roots/children/get for existing panels; navigate replaces an existing panel slot; openPanel creates a new panel. PanelHandle.focus({ placement?, anchorPanelId? }) can present an existing panel beside, below, or in place relative to an anchor. self/get are sync; async methods refresh metadata as needed. |
+| `panelTree` | namespace | `self`, `get`, `list`, `roots`, `children`, `parent`, `navigate` | Top-level export, not workspace.panelTree. self/get are synchronous handle factories. navigate/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. Use list/roots/children/get for existing panels and openPanel to create. |
 | `Rpc` | value |  | RPC helpers namespace export. |
 | `z` | value |  | Zod export. |
 | `defineContract` | value |  |  |
@@ -321,13 +322,13 @@ import { panelTree, openPanel } from "@workspace/runtime";
 const created = await openPanel("https://example.com", { focus: true });
 const same = panelTree.get(created.id);
 const parent = panelTree.self().parent();
-const parentInfo = parent ? await parent.getInfo() : null;
+const parentObservation = parent ? await parent.observe() : null;
 const roots = await panelTree.roots();
 
 const all = await panelTree.list();
 const existing = all.find((handle) => handle.source === "panels/spectrolite");
 const byKnownSlot = panelTree.get("panel-slot-id");
-await byKnownSlot.refresh(); // hydrate title/source/parent/runtime entity metadata
+const before = await byKnownSlot.observe(); // exact attempt and provenance
 await byKnownSlot.navigate("panels/spectrolite", { contextId: "ctx-vault" }); // state/files only; code remains the default/current build
 await byKnownSlot.navigate("panels/spectrolite", {
   contextId: "ctx-vault",
@@ -385,11 +386,11 @@ panel as a disposable browser target. `handle.cdp.navigate(url)` and
 browser panel you intentionally opened or on a panel the user explicitly asked
 you to replace.
 
-`PanelHandle` combines metadata, RPC, lifecycle, state, tree, and CDP:
+`PanelHandle` combines observation, RPC, lifecycle, state, tree, and CDP:
 
 ```ts
-await same.refresh();
-await same.focus();
+const current = await same.observe();
+await same.focus(); // returns only after application boot-ready
 const state = await same.stateArgs.set({ mode: "review" });
 // set() merges a patch and returns the full authoritative state.
 // Use null to remove a key: await same.stateArgs.set({ mode: null });
@@ -401,12 +402,12 @@ page.url(); // string, synchronous like Playwright
 await same.click("button");
 ```
 
-`openPanel(source, { focus: true })` assigns a renderer and focuses the created
-panel. Without focus, call `await handle.ensureLoaded()` before interactive CDP
-work; it waits for a usable renderer target, while `handle.isLoaded()` reports
-whether a runtime lease exists. Readable `handle.snapshot()` ensures a target is
-loaded and falls back to a bounded host-captured DOM snapshot when the panel does
-not expose `_agent.snapshot` (older connected hosts use the accessibility tree).
+`await openPanel(...)` returns only after the selected immutable attempt is
+application boot-ready, whether or not the panel is focused. `focus()`,
+`navigate()`, `reload()`, and `rebuild()` have the same completion contract.
+There is no separate handle lease/load status. `observe().phase === "ready"` is
+the sole positive readiness answer. `snapshot()` returns
+`{ panelId, attemptId, runtimeEntityId, buildKey, capturedAt, document }`.
 
 `same.cdp.lightweightPage()` returns a Playwright-style page driven by our own
 lightweight, workerd-native CDP client (`@workspace/cdp-client`). It is the
@@ -427,10 +428,11 @@ browser target directly.
 
 CDP and structural operations are approval-gated on first use per requester
 runtime entity and target panel. Privileged shell/about targets use a severe
-danger-tone approval. CDP transparently loads unloaded targets after approval;
-RPC and `_agent` introspection do not auto-load; call `handle.ensureLoaded()`
-first. It refreshes metadata for `handle.call.*` / `emit(...)`. A target held by
-a mobile/non-CDP host rejects CDP access.
+danger-tone approval. If a target cannot become application-ready, the
+readiness-bearing operation throws `PanelOperationError` with structured
+stage/code/provenance. Call `handle.diagnose()` for one bounded observation,
+console/lifecycle history, and ready document. A target held by a mobile/non-CDP
+host rejects CDP access.
 
 ## Userland Approval Prompts
 
@@ -496,9 +498,22 @@ request resolves immediately with the stored choice and no prompt. Dismissal is
 not remembered.
 
 ```ts
-const grants = await approvals.list();
+// This is only the current caller's saved custom-resource choices.
+const savedChoices = await approvals.list();
 await approvals.revoke("team-x:calendar-write");
 ```
+
+`approvals.list()` is not the workspace permission inventory. When the user asks
+which permissions or grants are active across the workspace, call the trusted
+host service instead:
+
+```ts
+const grants = await rpc.call("main", "permissions.list", []);
+```
+
+That inventory includes active capability, custom-choice, credential-use, and
+browser-site grants. Use `permissions.listAgentProfiles` for each agent's
+human-readable standing authority and locks.
 
 Use stable, provider-owned `subject.id` values such as
 `team-x:calendar-write`. IDs must be 1-128 chars, use only

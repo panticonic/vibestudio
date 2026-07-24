@@ -181,7 +181,7 @@ export function PaneContent({
           <Button variant="soft" onClick={() => void panelService.reload(panelId)}>
             Reload
           </Button>
-          <Button onClick={() => void panelService.rebuildAndReload(panelId)}>Rebuild</Button>
+          <Button onClick={() => void panelService.rebuildPanel(panelId)}>Rebuild</Button>
         </Flex>
       </Flex>
     );

@@ -24,6 +24,29 @@ function tempStatePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-tree-"));
 }
 
+function readyPanelResult(id: string, title: string) {
+  return {
+    id,
+    title,
+    kind: "workspace" as const,
+    observation: {
+      panelId: id,
+      title,
+      source: "panels/target",
+      kind: "workspace" as const,
+      parentId: null,
+      contextId: "ctx-caller",
+      requestedRef: "main",
+      runtimeEntityId: `panel:${id}`,
+      attemptId: `attempt:${id}`,
+      effectiveVersion: "ev-test",
+      buildKey: "b".repeat(64),
+      phase: "ready" as const,
+      updatedAt: 1,
+    },
+  };
+}
+
 function approvalQueueMock(
   decision: Awaited<ReturnType<ApprovalQueue["request"]>> = "session"
 ): ApprovalQueue {
@@ -33,6 +56,10 @@ function approvalQueueMock(
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
+    requestMissionReview: vi.fn(async () => ({
+      decision: "dismiss" as const,
+      decidedBy: "user:test" as const,
+    })),
     presentDeviceCode: vi.fn(() => ({
       approvalId: "device-code-test",
       cancelled: new AbortController().signal,
@@ -40,6 +67,7 @@ function approvalQueueMock(
     })),
     resolve: vi.fn(),
     resolveUserland: vi.fn(),
+    resolveMissionReview: vi.fn(),
     requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
     resolveExternalAgent: vi.fn(),
     settleExternalAgent: vi.fn(() => 0),
@@ -359,7 +387,7 @@ describe("panelTreeService", () => {
             source: "panels/parent",
             contextId: "ctx-caller",
           }
-        : { id: "created", title: "Created", kind: "workspace" }
+        : readyPanelResult("created", "Created")
     );
     const deps = treeDeps({
       approvalQueue,
@@ -373,7 +401,7 @@ describe("panelTreeService", () => {
         "panels/child",
         { parentId: "parent", contextId: "ctx-foreign" },
       ])
-    ).resolves.toEqual({ id: "created", title: "Created", kind: "workspace" });
+    ).resolves.toMatchObject({ id: "created", title: "Created", kind: "workspace" });
 
     // Exactly one prompt for the single create call.
     expect(approvalQueue.request).toHaveBeenCalledTimes(1);
@@ -411,14 +439,14 @@ describe("panelTreeService", () => {
     const bridge = vi.fn(async (request: { method: string; args: unknown[] }) =>
       request.method === "metadata"
         ? { id: request.args[0] as string, title: "Parent", source: "panels/parent" }
-        : { id: "created", title: "Created", kind: "workspace" }
+        : readyPanelResult("created", "Created")
     );
     const deps = treeDeps({ approvalQueue, bridge });
     const service = createPanelTreeService(deps);
 
     await expect(
       service.handler(ctx(), "create", ["panels/child", { parentId: "parent" }])
-    ).resolves.toEqual({ id: "created", title: "Created", kind: "workspace" });
+    ).resolves.toMatchObject({ id: "created", title: "Created", kind: "workspace" });
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
   });
@@ -457,7 +485,7 @@ describe("panelTreeService", () => {
             source: "panels/parent",
             contextId: "ctx-caller",
           }
-        : { id: "created", title: "Created", kind: "workspace" }
+        : readyPanelResult("created", "Created")
     );
     const deps = treeDeps({ approvalQueue, bridge });
     const service = createPanelTreeService(deps);
@@ -485,13 +513,13 @@ describe("panelTreeService", () => {
       runtimeEntityId: "panel:requester",
     }));
     const bridge = vi.fn(async (request: { method: string }) =>
-      request.method === "create" ? { id: "created", title: "Created", kind: "workspace" } : null
+      request.method === "create" ? readyPanelResult("created", "Created") : null
     );
     const service = createPanelTreeService(
       treeDeps({ approvalQueue, resolveRequesterPanel, bridge })
     );
 
-    await expect(service.handler(ctx(), "create", ["panels/child", {}])).resolves.toEqual({
+    await expect(service.handler(ctx(), "create", ["panels/child", {}])).resolves.toMatchObject({
       id: "created",
       title: "Created",
       kind: "workspace",
@@ -599,7 +627,7 @@ describe("panelTreeService", () => {
             runtimeEntityId: "panel:requester",
             contextId: "ctx-x",
           }
-        : { id: "requester-slot", title: "Vault" }
+        : readyPanelResult("requester-slot", "Vault")
     );
     const service = createPanelTreeService(
       treeDeps({
@@ -617,7 +645,7 @@ describe("panelTreeService", () => {
         "panels/spectrolite",
         { contextId: "ctx-vault", stateArgs: { repoRoot: "/repo" } },
       ])
-    ).resolves.toEqual({ id: "requester-slot", title: "Vault" });
+    ).resolves.toMatchObject({ id: "requester-slot", title: "Vault" });
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(bridge).toHaveBeenLastCalledWith({
@@ -637,7 +665,7 @@ describe("panelTreeService", () => {
     const bridge = vi.fn(async (request: { method: string }) =>
       request.method === "metadata"
         ? { id: "target", title: "Target", source: "panels/target", contextId: "ctx-x" }
-        : { id: "target", title: "Next" }
+        : readyPanelResult("target", "Next")
     );
     const service = createPanelTreeService(
       treeDeps({ approvalQueue, bridge, resolveCallerContext: vi.fn(async () => "ctx-x") })
@@ -645,7 +673,7 @@ describe("panelTreeService", () => {
 
     await expect(
       service.handler(ctx(), "navigate", ["target", "panels/next", { stateArgs: { a: 1 } }])
-    ).resolves.toEqual({ id: "target", title: "Next" });
+    ).resolves.toMatchObject({ id: "target", title: "Next" });
 
     // No `contextId` in the navigate options ⇒ no context change ⇒ free, even
     // though the target currently lives in a (foreign, existing) context.
@@ -663,7 +691,7 @@ describe("panelTreeService", () => {
     const bridge = vi.fn(async (request: { method: string }) =>
       request.method === "metadata"
         ? { id: "target", title: "Target", source: "panels/target", contextId: "ctx-x" }
-        : { id: "target", title: "Next" }
+        : readyPanelResult("target", "Next")
     );
     const deps = treeDeps({
       approvalQueue,
@@ -679,7 +707,7 @@ describe("panelTreeService", () => {
         "panels/next",
         { contextId: "ctx-y" },
       ])
-    ).resolves.toEqual({ id: "target", title: "Next" });
+    ).resolves.toMatchObject({ id: "target", title: "Next" });
 
     // Exactly one prompt — keyed on the DESTINATION context (ctx-y), not ctx-x.
     expect(approvalQueue.request).toHaveBeenCalledTimes(1);
@@ -705,7 +733,7 @@ describe("panelTreeService", () => {
         return { id: "target", title: "Target", source: "panels/target", contextId: "ctx-x" };
       }
       if (request.method === "historyTargetContext") return "ctx-y";
-      return { id: "target", title: "Back" };
+      return readyPanelResult("target", "Back");
     });
     const deps = treeDeps({
       approvalQueue,
@@ -737,7 +765,7 @@ describe("panelTreeService", () => {
         return { id: "target", title: "Target", source: "panels/target", contextId: "ctx-x" };
       }
       if (request.method === "historyTargetContext") return "ctx-x";
-      return { id: "target", title: "Back" };
+      return readyPanelResult("target", "Back");
     });
     const service = createPanelTreeService(
       treeDeps({

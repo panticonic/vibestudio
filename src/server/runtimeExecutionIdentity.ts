@@ -1,6 +1,5 @@
 import {
   parseUnitAuthorityManifest,
-  type EvalAuthorityCeiling,
   type UnitAuthorityManifest,
 } from "@vibestudio/shared/authorityManifest";
 import type { EntityActivationInput, EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
@@ -8,7 +7,6 @@ import type { EntityActivationInput, EntityRecord } from "@vibestudio/shared/run
 export interface PreparedExecutionIdentity {
   executionDigest?: string;
   authorityRequests?: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
-  authorityEvalCeilings?: readonly EvalAuthorityCeiling[];
 }
 
 export interface ActiveExecutionIdentity {
@@ -60,14 +58,8 @@ export function requireActiveExecutionIdentity(
   if (!Array.isArray(prepared.authorityRequests)) {
     throw new Error(`${label} authority is missing normalized requests`);
   }
-  if (!Array.isArray(prepared.authorityEvalCeilings)) {
-    throw new Error(`${label} authority is missing normalized evalCeilings`);
-  }
   const activeAuthority = parseUnitAuthorityManifest(
-    {
-      requests: prepared.authorityRequests,
-      evalCeilings: prepared.authorityEvalCeilings,
-    },
+    { requests: prepared.authorityRequests },
     `${label} authority`
   );
   return {

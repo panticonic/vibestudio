@@ -14,7 +14,8 @@ The principal families are `host`, `user`, `code`, `session`, and `mission`. Run
 kinds such as panel, worker, Durable Object, shell, extension, and agent are facts used
 to derive those principals; they are not authority.
 
-An installed unit's checked-in authority manifest is a request ceiling, not a grant.
+An installed unit's checked-in authority manifest declares what that fixed code may
+request; it is not a grant.
 Open methods need no grant. Gated methods intersect the sealed request with a grant.
 Critical methods require a fresh approval for every exercise and never receive a
 standing grant.
@@ -61,13 +62,14 @@ through legitimate closure legs; a host or intermediate service must not substit
 its own principal. Receiver-specific ownership guards remain load-bearing alongside
 the shared evaluator.
 
-## Eval reachability
+## Eval admission and reachability
 
-An agent's EvalDO is a conduit with exact code identity and the owning authority
-session. Evaluated code is bounded by the owning artifact's `evalCeilings`, then by
-the session envelope and ordinary grants/fresh approvals. There is no presenter
-delegation that creates authority. Infrastructure failures must produce a durable
-terminal invocation; timeouts are opt-in and absent by default.
+An agent's EvalDO is a conduit with exact code identity and a live host-created
+execution-session fact. Interactive eval is admitted only for an attested task;
+unattended eval only for an approved mission closure. Once admitted, receiver policy,
+locks, task/agent/mission grants, and fresh approvals govern effects directly. The
+harness manifest grants and caps none of that authority. Infrastructure failures remain
+structured terminal invocations; human approval waits have no timeout.
 
 ## Credentials
 

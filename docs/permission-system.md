@@ -77,12 +77,23 @@ scope and audit model.
 Protected publication uses a main-aware authorizer. Caller identity identifies
 the requester; it does not authorize publication by itself.
 
-`workspace-main-advance` is keyed to the protected workspace main resource. The
-host computes the exact changed-ref set and content diff; a content-identical
-semantic advance instead shows the exact previous and proposed event IDs.
+`workspace-main-advance` is keyed to the exact protected repository ref as
+`workspace-source-change:<repoPath>:main`. The host computes the changed-ref set
+and content diff before authorization, so a grant for one repository cannot
+publish another. A content-identical semantic advance, which has no repository
+ref to scope, instead shows the exact previous and proposed workspace event IDs.
 
 Generic workspace source changes show their affected repositories and paths.
 Unit repos (`apps/*`, `extensions/*`) and `meta` retain their richer unit/config
-approval flows. Whole-repository deletion remains a separate severe
+review cards, but those cards are projections of the same canonical authority
+acquisition—not a second approval queue path. They therefore share the exact
+repository resource, test-policy preauthorization, grant store, cancellation,
+and structured terminal outcomes. Whole-repository deletion remains a separate severe
 `workspace-repo-delete` capability, so a main-advance grant cannot authorize
 destructive deletion.
+
+Every static promptable capability must have both reviewed user-facing copy and
+a reviewed authority domain/verb. The shared census test covers semantic
+capabilities as well as RPC-derived host methods. A partially defined
+capability fails closed before presentation; do not replace missing review
+metadata with generic transport names or an approval bypass.

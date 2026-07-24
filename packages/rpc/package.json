@@ -12,6 +12,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./internal": {
+      "types": "./dist/internal.d.ts",
+      "default": "./dist/internal.js"
+    },
     "./protocol/wsProtocol": {
       "types": "./dist/protocol/wsProtocol.d.ts",
       "default": "./dist/protocol/wsProtocol.js"

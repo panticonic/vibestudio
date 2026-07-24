@@ -11,14 +11,25 @@ import type { SqlStorage } from "@workspace/runtime/worker";
 import type { RpcClient } from "@vibestudio/rpc";
 import type { ChannelEvent } from "@workspace/harness";
 import { participantIsAgentVessel, type BroadcastEnvelope } from "./types.js";
-import type { RpcChannelMessage } from "@workspace/pubsub";
+import type { RpcChannelMessage, RpcSignalMessage } from "@workspace/pubsub";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
+
+export type StructuredDeliveryEnvelope = Extract<
+  RpcChannelMessage,
+  { kind: "log" | "signal" }
+>;
+
+/** Structured envelopes are small control-plane deliveries, never
+ * long-running methods. A wedged recipient must release the channel alarm so
+ * the durable outbox can retry and other participants can continue. */
+export const STRUCTURED_DELIVERY_TIMEOUT_MS = 15_000;
 
 export interface BroadcastDeps {
   sql: SqlStorage;
   rpc: Pick<RpcClient, "call">;
   objectKey: string;
   deliverParticipant(participantId: string, payload: unknown): Promise<void> | void;
+  enqueueDoEnvelope(participantId: string, envelope: StructuredDeliveryEnvelope): void;
 }
 
 /** Delivery chains for ordered DO delivery. Resets on hibernation — safe because
@@ -129,6 +140,7 @@ export function queueDoEnvelope(
     try {
       await deps.rpc.call(participantId, "onChannelEnvelope", [deps.objectKey, envelope], {
         signal: controller.signal,
+        timeoutMs: STRUCTURED_DELIVERY_TIMEOUT_MS,
       });
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -152,7 +164,8 @@ export function broadcast(
   deps: BroadcastDeps,
   event: ChannelEvent,
   envelope: BroadcastEnvelope,
-  senderId: string
+  senderId: string,
+  structuredPublisherId = senderId
 ): void {
   const participants = deps.sql
     .exec(`SELECT id, transport, metadata FROM participants`)
@@ -176,17 +189,18 @@ export function broadcast(
       p["transport"] === "do" &&
       participantReceivesChannelEnvelopes(p["metadata"])
     ) {
-      void queueDoEnvelope(
-        deps,
+      // A structured publisher has already accepted and journaled this event
+      // in its own turn. Calling back into that same Durable Object before the
+      // publish RPC can return creates a causal cycle: the recipient cannot
+      // process its self-delivery until the publication that scheduled it has
+      // completed. Other participants still receive the durable broadcast;
+      // stream transports retain their sender echo for UI acknowledgement.
+      if (pid === structuredPublisherId) continue;
+      deps.enqueueDoEnvelope(
         pid,
         envelope.kind === "log"
           ? { kind: "log", phase: envelope.phase ?? "live", event }
-          : channelEventToRpcSignal(event),
-        // A retired entity is ordinary roster lag and is reconciled elsewhere.
-        // Every other delivery failure is actionable: swallowing EACCES or an
-        // infrastructure error leaves the recipient's durable turn unopened
-        // while the sender believes the message was delivered.
-        (err) => err.code === "DO_NOT_CREATED"
+          : channelEventToRpcSignal(event)
       );
     } else {
       void deps.deliverParticipant(pid, data);
@@ -270,9 +284,10 @@ export function channelEventToRpcLog(
   };
 }
 
-export function channelEventToRpcSignal(event: ChannelEvent, ref?: number): RpcChannelMessage {
+export function channelEventToRpcSignal(event: ChannelEvent, ref?: number): RpcSignalMessage {
   return {
     kind: "signal",
+    messageId: event.messageId,
     type: event.type,
     payload: event.payload,
     senderId: event.senderId,

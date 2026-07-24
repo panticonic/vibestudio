@@ -38,12 +38,12 @@ service declaration; live docs and resolution consume that same declaration.
 
 ## Add or change an executable workspace unit
 
-1. Put gated/critical direct requests and evaluated-code ceilings in that unit's
-   checked-in `package.json#vibestudio.authority`.
+1. Put gated/critical requests performed by the installed unit in its checked-in
+   `package.json#vibestudio.authority.requests`.
 2. Build the exact semantic context. The build seals the manifest and dependency
    closure but never writes or approves it.
 3. Review the exact effective version: source, transitive dependencies, runtime ABI,
-   direct requests, and eval ceilings.
+   and direct requests.
 4. Show added human-readable capabilities first. Keep unchanged capabilities
    collapsed and summarize removals. One version decision covers code plus its full
    authority contract.

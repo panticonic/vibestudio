@@ -5,10 +5,7 @@ import * as crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
 import type { PanelViewLike } from "@vibestudio/shared/panelInterfaces";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
-import {
-  parseUnitAuthorityManifest,
-  type EvalAuthorityCeiling,
-} from "@vibestudio/shared/authorityManifest";
+import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import { parseSha256 } from "@vibestudio/shared/execution/identity";
 import { domainHash } from "@vibestudio/shared/execution/identity";
 import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
@@ -42,7 +39,6 @@ export interface AppAvailableEvent {
   buildKey?: string | null;
   executionDigest?: string | null;
   authorityRequests?: readonly CapabilityScope[];
-  authorityEvalCeilings?: readonly EvalAuthorityCeiling[];
   adoptionPolicy?: "immediate" | "prompt" | "artifact-only";
   selectedForHost?: boolean;
 }
@@ -72,7 +68,6 @@ interface BakedAppManifest {
       executionDigest: string;
     };
     authorityRequests: readonly CapabilityScope[];
-    authorityEvalCeilings: readonly EvalAuthorityCeiling[];
   };
   artifacts: Array<{
     path: string;
@@ -242,7 +237,6 @@ function sealedAppCodeIdentity(event: AppAvailableEvent): {
   effectiveVersion?: string;
   executionDigest: string;
   requested: readonly CapabilityScope[];
-  evalCeilings: readonly EvalAuthorityCeiling[];
 } {
   const source = event.source;
   if (
@@ -264,7 +258,6 @@ function sealedAppCodeIdentity(event: AppAvailableEvent): {
   const authority = parseUnitAuthorityManifest(
     {
       requests: event.authorityRequests,
-      evalCeilings: event.authorityEvalCeilings,
     },
     `Electron app ${event.appId} sealed authority`
   );
@@ -273,7 +266,6 @@ function sealedAppCodeIdentity(event: AppAvailableEvent): {
     ...(event.effectiveVersion ? { effectiveVersion: event.effectiveVersion } : {}),
     executionDigest,
     requested: authority.requests,
-    evalCeilings: authority.evalCeilings,
   };
 }
 
@@ -348,7 +340,6 @@ export function readBakedElectronApp(distDir: string): AppAvailableEvent | null 
   const authority = parseUnitAuthorityManifest(
     {
       requests: manifest.build.authorityRequests,
-      evalCeilings: manifest.build.authorityEvalCeilings,
     },
     `Baked Electron app ${manifest.app.name} sealed authority`
   );
@@ -362,7 +353,6 @@ export function readBakedElectronApp(distDir: string): AppAvailableEvent | null 
     effectiveVersion: manifest.build.effectiveVersion,
     executionDigest,
     authorityRequests: authority.requests,
-    authorityEvalCeilings: authority.evalCeilings,
   };
   sealedAppCodeIdentity(event);
   return event;

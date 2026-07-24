@@ -27,9 +27,14 @@ import {
   type RpcResponse,
   type RpcCausalParent,
   type RpcCallOptions,
-  type DirectAuthorityAttestation,
+  type AgentExecutionTestPolicy,
   type RpcAuthorityEffect,
 } from "@vibestudio/rpc";
+import type {
+  DirectAuthorityAttestation,
+  InternalRpcRequest,
+  InternalRpcStreamRequest,
+} from "@vibestudio/rpc/internal";
 import { createWsServerTransport, type WsServerTransportInternal } from "./wsServerTransport.js";
 import {
   decodeControlFrame,
@@ -64,10 +69,21 @@ import {
 import type { UserSubject } from "@vibestudio/identity/types";
 import type { UserSubjectSource } from "@vibestudio/identity/userSubjectSource";
 import type { EventService } from "@vibestudio/shared/eventsService";
-import { DeferralRegistry } from "./services/deferralRegistry.js";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import { refineExecutionTestPolicy } from "./services/liveExecutionCaller.js";
+
+function refineTestPolicy(
+  first: AgentExecutionTestPolicy | null | undefined,
+  second: AgentExecutionTestPolicy | null | undefined
+): AgentExecutionTestPolicy | null {
+  const refined = refineExecutionTestPolicy(first, second);
+  if (!refined && first && second) {
+    throw createRelayError("Nested invocation test policy conflicts with live execution", "EACCES");
+  }
+  return refined;
+}
 import { callerKindForPrincipalKind } from "@vibestudio/shared/principalKinds";
 import { resolveCodeIdentity } from "./services/principalIdentity.js";
 import { SessionRegistry, type SessionRegistryOptions } from "./rpcServer/sessionRegistry.js";
@@ -83,6 +99,11 @@ import {
 } from "./rpcServer/httpRpcHandler.js";
 import { StreamingRelay } from "./rpcServer/streamingRelay.js";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
+import { lineageClasses } from "@vibestudio/shared/authorization";
+import {
+  receiverAuthorityPolicy,
+  standingAgentScopeEligible,
+} from "@vibestudio/shared/authority/receiverAuthorityPolicy";
 import { attestDirectRpc, attestWorkspaceDoRpc } from "./services/authorityRuntime.js";
 import {
   authorityFailureForDecision,
@@ -218,13 +239,14 @@ type RelayCallerScope = {
   invocationCaller: VerifiedCaller;
 };
 
-type ResolvedExtensionParentCaller = {
-  caller: VerifiedCaller;
-  code: VerifiedCodeIdentity;
-  contextId?: string;
+type ResolvedExtensionParent = {
+  authorizingCaller: VerifiedCaller;
+  chainCaller?: VerifiedCodeIdentity;
 };
 
 type ResolvedExtensionInvocation = Pick<ExtensionInvocation, "caller" | "chainCaller"> & {
+  /** Exact host-retained initiator; never reconstructed from extension input. */
+  authorizingCaller: VerifiedCaller;
   /** Host-retained edge from the verified context that invoked the extension. */
   causalParent: RpcCausalParent | null;
 };
@@ -309,26 +331,6 @@ export class RpcServer {
   private workerdDispatchSecret: string | null = null;
   private resolveWorkerInstanceNameFn: ((targetId: string) => string | null) | null = null;
 
-  /**
-   * Tracks DO/worker-initiated service calls that complete out-of-band. Settled
-   * results wake a still-active caller. Retirement ends that notification
-   * obligation; the caller's journal remains the recovery source.
-   */
-  private readonly deferrals = new DeferralRegistry({
-    deliver: async (callerId, requestId, result, isError) => {
-      if (!this.isActiveDeferredRecipient(callerId)) return;
-      try {
-        await this.callTarget(callerId, "onDeferredResult", [{ requestId, result, isError }]);
-      } catch (error) {
-        // Retirement may race the active check. That is successful disposal,
-        // not a failed delivery and certainly not a reason to recreate/retry
-        // the caller. Preserve real delivery faults for one bounded warning.
-        if (!this.isActiveDeferredRecipient(callerId)) return;
-        throw error;
-      }
-    },
-    logger: console,
-  });
   private connections = new ConnectionRegistry({
     onConnectionsChangedListenerError: (error) => {
       log.warn(`connections-changed listener failed: ${(error as Error).message}`);
@@ -398,6 +400,20 @@ export class RpcServer {
 
   private readonly bootId = randomUUID();
   private readonly uploadPreopenLimits: Required<RpcServerUploadPreopenLimits>;
+  /**
+   * Invocation-scoped policy delegation for nested infrastructure calls.
+   *
+   * Keys are host-minted direct-attestation nonces. A claim is useful only
+   * while the original receiver is executing, and only from that exact runtime.
+   * The wire carries no policy or capability.
+   */
+  private readonly activeAuthorityParents = new Map<
+    string,
+    {
+      receiverRuntimeId: string;
+      testPolicy: AgentExecutionTestPolicy;
+    }
+  >();
 
   private static readonly DISCONNECT_GRACE_MS = 3000;
 
@@ -426,6 +442,14 @@ export class RpcServer {
       >;
       fsService?: Pick<import("@vibestudio/shared/fsService").FsService, "closeHandlesForCaller">;
       entityCache?: EntityCache;
+      /** Live host-created admission for one concrete evaluated run. */
+      executionSessionForRuntime?: (
+        runtimeId: string
+      ) => import("@vibestudio/rpc").AgentExecutionSessionFact | null;
+      /** Canonical unattended-test policy inherited by reviewed runtimes in a test context. */
+      testPolicyForContext?: (
+        contextId: string
+      ) => import("@vibestudio/rpc").AgentExecutionTestPolicy | null;
       /**
        * Optional: resolves the host-verified account `subject` for a caller at
        * auth time (WP0 §5.2/§5.5). Hub-backed in production (reads the shared
@@ -465,6 +489,7 @@ export class RpcServer {
           signal?: AbortSignal
         ): Promise<import("./services/acquisitionCoordinator.js").AcquisitionOutcome>;
         consume(grantId: string): boolean;
+        touch?(grantId: string): boolean;
         invalidate(snapshotDigest: string, ownerRuntimeId: string, callerPrincipal: string): void;
       };
       /** Stable mission fact for the same session identity used by service dispatch. */
@@ -495,6 +520,15 @@ export class RpcServer {
               methodCapability?: string;
               methodTier: "open" | "gated" | "critical";
               principals: readonly import("@vibestudio/rpc").PrincipalKind[];
+              presentation: {
+                domain: import("@vibestudio/shared/authority/capabilityDomains").AuthorityDomainId;
+                verb: import("@vibestudio/shared/authority/capabilityDomains").AuthorityVerb;
+                substanceKind?: import("@vibestudio/shared/approvals").OperationSubstance["kind"];
+              };
+              title: string;
+              action: string;
+              description?: string;
+              declaredBy: string;
             }[]
           >
         | readonly {
@@ -503,6 +537,15 @@ export class RpcServer {
             methodCapability?: string;
             methodTier: "open" | "gated" | "critical";
             principals: readonly import("@vibestudio/rpc").PrincipalKind[];
+            presentation: {
+              domain: import("@vibestudio/shared/authority/capabilityDomains").AuthorityDomainId;
+              verb: import("@vibestudio/shared/authority/capabilityDomains").AuthorityVerb;
+              substanceKind?: import("@vibestudio/shared/approvals").OperationSubstance["kind"];
+            };
+            title: string;
+            action: string;
+            description?: string;
+            declaredBy: string;
           }[];
       /**
        * Live identity gate for persistent WS/WebRTC sessions. Authentication
@@ -585,8 +628,17 @@ export class RpcServer {
       dispatcher: deps.dispatcher,
       egressProxy: deps.egressProxy,
       authenticateHttp: (req) => this.authenticateHttpRequest(req),
-      verifiedCaller: (caller) =>
-        this.verifiedCallerFor(caller.callerId, caller.callerKind, caller.agentBinding),
+      verifiedCaller: (caller, request) =>
+        this.verifiedCallerFor(
+          caller.callerId,
+          caller.callerKind,
+          caller.agentBinding,
+          undefined,
+          this.testPolicyFromAuthorityParent(
+            caller.callerId,
+            (request as InternalRpcRequest | InternalRpcStreamRequest).authorityParentNonce
+          )
+        ),
       authorizeRelay: (callerId, callerKind, targetId, method) =>
         this.checkRelayAuth(callerId, callerKind, targetId, method),
       createHttpContext: (caller, extras) =>
@@ -647,7 +699,8 @@ export class RpcServer {
     callerId: string,
     callerKind: CallerKind,
     agentBinding?: import("@vibestudio/identity/types").AgentBinding,
-    subject?: UserSubject
+    subject?: UserSubject,
+    inheritedTestPolicy?: AgentExecutionTestPolicy | null
   ): VerifiedCaller {
     const activeEntity =
       callerKind === "worker" || callerKind === "do"
@@ -663,22 +716,139 @@ export class RpcServer {
     // An explicitly-passed subject (device/agent credential, §5.1/§5.3) wins;
     // otherwise resolve it from the caller id (§5.2/§5.4).
     const resolvedSubject = subject ?? this.resolveSubject(callerId, callerKind, agentBinding);
-    const sessionOrigin = Boolean(
-      code &&
-      activeEntity?.source.repoPath === "vibestudio/internal" &&
-      activeEntity.className === "EvalDO"
-    );
+    const executionSession = this.deps.executionSessionForRuntime?.(callerId) ?? null;
+    if (
+      executionSession &&
+      (executionSession.eval.runtimeId !== callerId ||
+        executionSession.contextId !== activeEntity?.contextId ||
+        executionSession.agentBinding?.entityId !== resolvedAgentBinding?.entityId ||
+        executionSession.agentBinding?.channelId !== resolvedAgentBinding?.channelId)
+    ) {
+      throw createRelayError(
+        "Evaluated execution admission no longer matches live state",
+        "EACCES"
+      );
+    }
+    const contextTestPolicy = activeEntity?.contextId
+      ? this.deps.testPolicyForContext?.(activeEntity.contextId)
+      : null;
+    const residentTestPolicy = refineTestPolicy(executionSession?.testPolicy, contextTestPolicy);
+    const effectiveTestPolicy = refineTestPolicy(residentTestPolicy, inheritedTestPolicy);
     const verified = createVerifiedCaller(
       callerId,
       callerKind,
       code,
       resolvedAgentBinding,
       resolvedSubject,
-      sessionOrigin
+      executionSession,
+      effectiveTestPolicy
     );
     return code && (this.deps.isCodeApproved?.(code) ?? true)
       ? { ...verified, codeApproved: true }
       : verified;
+  }
+
+  private testPolicyFromAuthorityParent(
+    callerRuntimeId: string,
+    authorityParentNonce: string | undefined
+  ): AgentExecutionTestPolicy | null {
+    if (authorityParentNonce === undefined) return null;
+    if (
+      typeof authorityParentNonce !== "string" ||
+      authorityParentNonce.length < 16 ||
+      authorityParentNonce.length > 256
+    ) {
+      throw createRelayError("Invalid invocation authority parent", "EACCES");
+    }
+    const active = this.activeAuthorityParents.get(authorityParentNonce);
+    if (!active) {
+      throw createRelayError("Invocation authority parent is not active", "EACCES");
+    }
+    if (active.receiverRuntimeId !== callerRuntimeId) {
+      throw createRelayError("Invocation authority parent belongs to another runtime", "EACCES");
+    }
+    return active.testPolicy;
+  }
+
+  private beginAuthorityParent(
+    receiverRuntimeId: string,
+    authorization: DirectAuthorityAttestation
+  ): () => void {
+    const inheritedTestPolicy = authorization.context.testPolicy;
+    if (!inheritedTestPolicy) return () => {};
+    const receiver = this.deps.entityCache?.resolveActive(receiverRuntimeId);
+    const residentTestPolicy = receiver?.contextId
+      ? this.deps.testPolicyForContext?.(receiver.contextId)
+      : null;
+    const testPolicy = refineTestPolicy(residentTestPolicy, inheritedTestPolicy);
+    if (this.activeAuthorityParents.has(authorization.nonce)) {
+      throw createRelayError("Direct invocation authority nonce is already active", "EACCES");
+    }
+    const entry = {
+      receiverRuntimeId,
+      testPolicy: testPolicy ?? inheritedTestPolicy,
+    };
+    this.activeAuthorityParents.set(authorization.nonce, entry);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      if (this.activeAuthorityParents.get(authorization.nonce) === entry) {
+        this.activeAuthorityParents.delete(authorization.nonce);
+      }
+    };
+  }
+
+  async withAuthorityParent<T>(
+    receiverRuntimeId: string,
+    authorization: DirectAuthorityAttestation,
+    invoke: () => Promise<T>
+  ): Promise<T> {
+    const release = this.beginAuthorityParent(receiverRuntimeId, authorization);
+    try {
+      return await invoke();
+    } finally {
+      release();
+    }
+  }
+
+  private responseWithAuthorityParentLifetime(response: Response, release: () => void): Response {
+    if (!response.body) {
+      release();
+      return response;
+    }
+    const reader = response.body.getReader();
+    let released = false;
+    const finish = () => {
+      if (released) return;
+      released = true;
+      release();
+    };
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const next = await reader.read();
+          if (next.done) {
+            finish();
+            controller.close();
+            return;
+          }
+          controller.enqueue(next.value);
+        } catch (error) {
+          finish();
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        finish();
+        await reader.cancel(reason);
+      },
+    });
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
   }
 
   /**
@@ -742,7 +912,8 @@ export class RpcServer {
       ...extras,
     };
     const parent = this.resolveExtensionParentCaller(client, message);
-    if (parent) ctx.chainCaller = parent.code;
+    if (parent) ctx.authorizingCaller = parent.authorizingCaller;
+    if (parent?.chainCaller) ctx.chainCaller = parent.chainCaller;
     return ctx;
   }
 
@@ -817,7 +988,7 @@ export class RpcServer {
   private resolveExtensionParentCaller(
     client: WsClientState,
     message: Pick<RpcRequest | import("@vibestudio/rpc").RpcStreamRequest, "parentRequestId">
-  ): ResolvedExtensionParentCaller | null {
+  ): ResolvedExtensionParent | null {
     if (client.caller.runtime.kind !== "extension" || !message.parentRequestId) {
       return null;
     }
@@ -826,40 +997,18 @@ export class RpcServer {
       message.parentRequestId
     );
     if (invocation?.chainCaller) {
-      const code: VerifiedCodeIdentity = {
+      const chainCaller: VerifiedCodeIdentity = {
         callerId: invocation.chainCaller.callerId,
         callerKind: invocation.chainCaller.callerKind,
         repoPath: invocation.chainCaller.repoPath,
         effectiveVersion: invocation.chainCaller.effectiveVersion,
       };
       return {
-        caller: createVerifiedCaller(code.callerId, code.callerKind, code),
-        code,
-        ...(invocation.chainCaller.contextId
-          ? { contextId: invocation.chainCaller.contextId }
-          : {}),
+        authorizingCaller: invocation.authorizingCaller,
+        chainCaller,
       };
     }
-    const caller = invocation?.caller;
-    if (
-      caller?.callerKind !== "panel" &&
-      caller?.callerKind !== "app" &&
-      caller?.callerKind !== "worker" &&
-      caller?.callerKind !== "do"
-    ) {
-      return null;
-    }
-    const code: VerifiedCodeIdentity = {
-      callerId: caller.callerId,
-      callerKind: caller.callerKind,
-      repoPath: "",
-      effectiveVersion: "",
-    };
-    return {
-      caller: createVerifiedCaller(code.callerId, code.callerKind, code),
-      code,
-      ...(caller.contextId ? { contextId: caller.contextId } : {}),
-    };
+    return invocation ? { authorizingCaller: invocation.authorizingCaller } : null;
   }
 
   private relayCallerScopeForRpcMessage(
@@ -869,7 +1018,7 @@ export class RpcServer {
     const parent = this.resolveExtensionParentCaller(client, message);
     return {
       authenticatedCaller: client.caller,
-      invocationCaller: parent?.caller ?? client.caller,
+      invocationCaller: parent?.authorizingCaller ?? client.caller,
     };
   }
 
@@ -2464,8 +2613,7 @@ export class RpcServer {
 
   /**
    * Dispatch a `request` envelope arriving over HTTP `/rpc`. `target === "main"`
-   * is a direct service-dispatch (with deferral opt-in); any other target is a
-   * relay. Returns the raw result, or a `DeferredResult` sentinel when parked.
+   * is a direct service-dispatch; any other target is a relay.
    */
   private async handleEnvelopeRequest(
     callerId: string,
@@ -2481,7 +2629,16 @@ export class RpcServer {
     const requestId = message.requestId;
     const idempotencyKey = envelope.delivery.idempotencyKey;
     const readOnly = envelope.delivery.readOnly === true;
-    const verifiedCaller = this.verifiedCallerFor(callerId, callerKind, agentBinding);
+    const verifiedCaller = this.verifiedCallerFor(
+      callerId,
+      callerKind,
+      agentBinding,
+      undefined,
+      this.testPolicyFromAuthorityParent(
+        callerId,
+        (message as InternalRpcRequest | InternalRpcStreamRequest).authorityParentNonce
+      )
+    );
     const causalParent = await this.resolveCausalParent(verifiedCaller, message);
     // A causal parent authenticates invocation lineage; it does not change the
     // authorizing origin. Harness-owned tool and closure calls retain their
@@ -2494,29 +2651,11 @@ export class RpcServer {
       const parsed = parseServiceMethod(method);
       if (!parsed) throw new Error(`Invalid method format: "${method}"`);
 
-      // A handler may complete out-of-band only when the caller explicitly opted
-      // in (via callDeferred → `deferrable`), stamped a requestId, and can receive
-      // an inbound onDeferredResult (DO/worker). Plain `call` callers never defer.
-      const canDefer =
-        message.deferrable === true &&
-        !!requestId &&
-        (callerKind === "do" || callerKind === "worker");
-      const deferredRequestId = canDefer ? requestId : undefined;
-      const deferral = deferredRequestId
-        ? this.deferrals.createApi({
-            callerId,
-            requestId: deferredRequestId,
-            ...(idempotencyKey ? { idempotencyKey } : {}),
-            service: parsed.service,
-            method: parsed.method,
-          })
-        : undefined;
       const ctx: ServiceContext = {
         caller: invocationCaller,
         ...(causalParent ? { causalParent } : {}),
         ...(requestId ? { requestId } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
-        ...(deferral ? { deferral } : {}),
         ...(readOnly ? { readOnly: true } : {}),
         signal,
       };
@@ -2638,11 +2777,6 @@ export class RpcServer {
     ) as Promise<T>;
   }
 
-  private isActiveDeferredRecipient(callerId: string): boolean {
-    const cache = this.deps.entityCache;
-    return !cache || cache.resolveActive(callerId) != null;
-  }
-
   async streamCallTarget(targetId: string, method: string, ...args: unknown[]): Promise<Response> {
     const wsClient = this.pickRoutableTarget(targetId);
     if (wsClient?.ws.readyState !== WebSocket.OPEN) {
@@ -2746,6 +2880,8 @@ export class RpcServer {
     /** Response streams cannot be replayed after EACQUIRE; park before dispatch. */
     waitForAuthority?: boolean;
     signal?: AbortSignal;
+    /** Guards the one exact inline retry after a host test preauthorization. */
+    preauthorizedRetry?: boolean;
   }): Promise<DirectAuthorityAttestation> {
     const workspaceId = this.deps.workspaceId;
     if (!workspaceId) {
@@ -2768,6 +2904,13 @@ export class RpcServer {
     const sessionId = input.caller.agentBinding?.channelId ?? input.caller.runtime.id;
     const methodCapability = workspaceAuthority?.methodCapability ?? workspaceAuthority?.capability;
     const methodTier = workspaceAuthority?.methodTier;
+    const policyFor = (capability: string) =>
+      receiverAuthorityPolicy(
+        capability,
+        workspaceAuthority && capability === workspaceAuthority.capability
+          ? workspaceAuthority.presentation
+          : undefined
+      );
     const authorityFacts = {
       caller: input.caller,
       source: input.ref.source,
@@ -2865,6 +3008,34 @@ export class RpcServer {
         }),
         callerPrincipal: result.context.authorizingOrigin.principal,
         sessionId,
+        ...(result.context.session.taskRef ? { taskRef: result.context.session.taskRef } : {}),
+        ...(result.context.executionSession?.agentBinding?.bindingId
+          ? {
+              agentBindingId: result.context.executionSession.agentBinding.bindingId,
+              agentName: result.context.executionSession.agentBinding.entityId,
+            }
+          : {}),
+        lineageClasses: result.context.contextIntegrity
+          ? lineageClasses(result.context.contextIntegrity)
+          : ["none"],
+        irreversible: policyFor(capability).irreversible,
+        agentScopeEligible: standingAgentScopeEligible({
+          capability,
+          tier: workspaceAuthority.methodTier,
+          policy: policyFor(capability),
+          domain: workspaceAuthority.presentation.domain,
+          priorInteractiveApprovals:
+            result.context.executionSession?.agentBinding?.bindingId === undefined
+              ? 0
+              : (this.deps.capabilityGrantStore?.priorInteractiveApprovalCount({
+                  agentBindingId: result.context.executionSession.agentBinding.bindingId,
+                  capability,
+                  resource: { kind: "exact", key: result.resourceKey },
+                }) ?? 0),
+        }),
+        executionMode:
+          result.context.executionSession?.mode ?? (result.context.testPolicy ? "test" : undefined),
+        testPolicyId: result.context.testPolicy?.policyId,
         mission: result.context.session.mission
           ? `mission:${result.context.session.mission.missionId}@${result.context.session.mission.closureDigest}`
           : "-",
@@ -2893,6 +3064,7 @@ export class RpcServer {
           requirement: leaf.requirement,
           resourceKey: result.resourceKey,
           grants: result.grants,
+          locks: result.locks,
           tier: leaf.tier,
           invocationDigest: snapshotDigest,
         }),
@@ -2907,8 +3079,7 @@ export class RpcServer {
         tier: denied.leaf.tier,
       });
       const acquirable =
-        denied.leaf.tier !== "open" &&
-        (denied.decision.code === "missing-grant" || denied.decision.code === "lineage");
+        denied.leaf.tier !== "open" && denied.decision.code === "approval-required";
       if (!acquirable || !this.deps.directAuthorityAcquirer) {
         const error = createRelayError(
           `${input.method}: ${denied.decision.reason} (${denied.decision.code})`,
@@ -2928,6 +3099,47 @@ export class RpcServer {
         renderedAction: (this.deps.describeCapability ?? describeCapability)(denied.leaf.capability)
           .action,
         resource: { kind: "exact", key: result.resourceKey },
+        ...(policyFor(denied.leaf.capability).requiresSubstance
+          ? {
+              substance: {
+                kind: policyFor(denied.leaf.capability).substanceKind ?? "custom",
+                summary: `${
+                  (this.deps.describeCapability ?? describeCapability)(denied.leaf.capability)
+                    .action
+                } ${workspaceAuthority?.title ?? result.resourceKey}`,
+                digest: denied.snapshot.preparedStateDigest,
+              },
+            }
+          : {}),
+        ...(workspaceAuthority && denied.leaf.capability === workspaceAuthority.capability
+          ? {
+              presentation: {
+                title: `Allow ${input.caller.runtime.id} to ${workspaceAuthority.action}?`,
+                description:
+                  workspaceAuthority.description ??
+                  `Use ${workspaceAuthority.title} in this workspace.`,
+                deniedReason: `The ${workspaceAuthority.title} request was not allowed`,
+                resource: {
+                  type: "workspace-service",
+                  label: "Service",
+                  value: workspaceAuthority.title,
+                },
+                operation: {
+                  kind: "unknown" as const,
+                  verb: workspaceAuthority.action,
+                  object: {
+                    type: "workspace-service",
+                    label: "Service",
+                    value: workspaceAuthority.title,
+                  },
+                },
+                authorityVocabulary: {
+                  ...workspaceAuthority.presentation,
+                  declaredBy: workspaceAuthority.declaredBy,
+                },
+              },
+            }
+          : {}),
       } as const;
       this.deps.directAuthorityAcquirer.invalidate(
         denied.snapshotDigest,
@@ -2948,7 +3160,7 @@ export class RpcServer {
               {
                 ...denied.decision,
                 allowed: false,
-                code: "denied",
+                code: "user-denied",
                 reason: "The authority request was denied",
               },
               {
@@ -2972,6 +3184,18 @@ export class RpcServer {
         throw error;
       }
       const acquisition = this.deps.directAuthorityAcquirer.request(acquisitionInput);
+      if (acquisition.preauthorized) {
+        if (input.preauthorizedRetry) {
+          throw createRelayError(
+            `${input.method}: host preauthorization did not admit the exact invocation`,
+            "EACCES"
+          );
+        }
+        return this.directDOAuthorization({
+          ...input,
+          preauthorizedRetry: true,
+        });
+      }
       const error = createRelayError(`${input.method}: authority acquisition required`, "EACQUIRE");
       Object.assign(error, {
         errorKind: "access",
@@ -2984,6 +3208,9 @@ export class RpcServer {
         if (!this.deps.directAuthorityAcquirer?.consume(decision.grantId)) {
           throw createRelayError(`${input.method}: one-time approval was already used`, "EACCES");
         }
+      }
+      if (!decision.consumable && decision.grantId) {
+        this.deps.directAuthorityAcquirer?.touch?.(decision.grantId);
       }
     }
     return result;
@@ -3059,21 +3286,25 @@ export class RpcServer {
         args,
         readOnly: meta?.readOnly,
       });
-      const result = await postToDurableObject(ref, method, args, {
-        workerdUrl,
-        workerdGatewayToken,
-        ...(workerdDispatchSecret ? { workerdDispatchSecret } : {}),
-        callerId,
-        callerKind,
-        ...(callerPanelId ? { callerPanelId } : {}),
-        ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
-        authorization,
-        ...(meta?.requestId ? { requestId: meta.requestId } : {}),
-        ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
-        ...(meta?.readOnly ? { readOnly: true } : {}),
-        ...(meta?.causalParent ? { causalParent: meta.causalParent } : {}),
-      });
-      return result;
+      const releaseAuthorityParent = this.beginAuthorityParent(targetId, authorization);
+      try {
+        return await postToDurableObject(ref, method, args, {
+          workerdUrl,
+          workerdGatewayToken,
+          ...(workerdDispatchSecret ? { workerdDispatchSecret } : {}),
+          callerId,
+          callerKind,
+          ...(callerPanelId ? { callerPanelId } : {}),
+          ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
+          authorization,
+          ...(meta?.requestId ? { requestId: meta.requestId } : {}),
+          ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
+          ...(meta?.readOnly ? { readOnly: true } : {}),
+          ...(meta?.causalParent ? { causalParent: meta.causalParent } : {}),
+        });
+      } finally {
+        releaseAuthorityParent();
+      }
     };
 
     // A relay is one semantic invocation, not a transport-level retry unit.
@@ -3125,30 +3356,37 @@ export class RpcServer {
       waitForAuthority: true,
       signal,
     });
-    return streamFromDurableObject(
-      ref,
-      request.method,
-      request.args,
-      {
-        workerdUrl: this.workerdUrl,
-        workerdGatewayToken: this.workerdGatewayToken,
-        ...(this.workerdDispatchSecret
-          ? { workerdDispatchSecret: this.workerdDispatchSecret }
-          : {}),
-        callerId: caller.runtime.id,
-        callerKind: caller.runtime.kind,
-        ...(callerPanelId ? { callerPanelId } : {}),
-        ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
-        authorization,
-        requestId: request.requestId,
-        ...(envelope.delivery.idempotencyKey
-          ? { idempotencyKey: envelope.delivery.idempotencyKey }
-          : {}),
-        ...(envelope.delivery.readOnly ? { readOnly: true } : {}),
-        ...(causalParent ? { causalParent } : {}),
-      },
-      signal
-    );
+    const releaseAuthorityParent = this.beginAuthorityParent(targetId, authorization);
+    try {
+      const response = await streamFromDurableObject(
+        ref,
+        request.method,
+        request.args,
+        {
+          workerdUrl: this.workerdUrl,
+          workerdGatewayToken: this.workerdGatewayToken,
+          ...(this.workerdDispatchSecret
+            ? { workerdDispatchSecret: this.workerdDispatchSecret }
+            : {}),
+          callerId: caller.runtime.id,
+          callerKind: caller.runtime.kind,
+          ...(callerPanelId ? { callerPanelId } : {}),
+          ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
+          authorization,
+          requestId: request.requestId,
+          ...(envelope.delivery.idempotencyKey
+            ? { idempotencyKey: envelope.delivery.idempotencyKey }
+            : {}),
+          ...(envelope.delivery.readOnly ? { readOnly: true } : {}),
+          ...(causalParent ? { causalParent } : {}),
+        },
+        signal
+      );
+      return this.responseWithAuthorityParentLifetime(response, releaseAuthorityParent);
+    } catch (error) {
+      releaseAuthorityParent();
+      throw error;
+    }
   }
 
   private async relayToWorker(
@@ -4098,8 +4336,6 @@ export class RpcServer {
       pending.reject(new Error("Server shutting down"));
     }
     this.pendingToolCalls.clear();
-
-    this.deferrals.cancelAll();
 
     for (const timer of this.disconnectTimers.values()) {
       clearTimeout(timer);

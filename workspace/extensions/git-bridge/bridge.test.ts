@@ -133,6 +133,13 @@ function status(contextId: string, eventId: string) {
   };
 }
 
+const INTERNAL_LIST_LINEAGE = {
+  authoredChangeId: "change:index",
+  authoredByWorkUnitId: "work:index",
+  contentClass: "internal" as const,
+  externalKeys: [],
+};
+
 function baseHost(root: string) {
   const unreachable = () =>
     vi.fn(async (): Promise<never> => {
@@ -363,6 +370,7 @@ describe("GitBridge semantic snapshot boundary", () => {
           fileId: "file:index",
           path: "index.ts",
           contentHash: sha256Hex(Buffer.from("same\n")),
+          ...INTERNAL_LIST_LINEAGE,
           mode: 0o644,
           contentKind: "text" as const,
           byteLength: 5,
@@ -429,6 +437,7 @@ describe("GitBridge semantic snapshot boundary", () => {
           fileId: "file:index",
           path: "index.ts",
           contentHash: sha256Hex(Buffer.from("same\n")),
+          ...INTERNAL_LIST_LINEAGE,
           mode: 0o644,
           contentKind: "text" as const,
           byteLength: 5,
@@ -517,6 +526,7 @@ describe("GitBridge semantic snapshot boundary", () => {
           fileId: "file:index",
           path: "index.ts",
           contentHash: sha256Hex(Buffer.from("same\n")),
+          ...INTERNAL_LIST_LINEAGE,
           mode: 0o644,
           contentKind: "text" as const,
           byteLength: 5,
@@ -639,6 +649,7 @@ describe("GitBridge semantic snapshot boundary", () => {
           fileId: "file:index",
           path: "index.ts",
           contentHash: sha256Hex(Buffer.from("exported\n")),
+          ...INTERNAL_LIST_LINEAGE,
           mode: 0o755,
           contentKind: "text" as const,
           byteLength: 9,

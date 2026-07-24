@@ -38,7 +38,8 @@ perspective:
     parentId: root.id,
     focus: true,
   });
-  await child.refresh();
+  const observed = await child.observe();
+  if (observed.phase !== "ready") throw new Error(`Unexpected phase: ${observed.phase}`);
   if (child.parentId !== root.id) throw new Error("Panel was not created as a child");
 
   // Close the temporary root when the whole headless workflow is done; closing
@@ -229,13 +230,18 @@ Fully supported. Async operations are automatically tracked and awaited:
 
 ```
 eval({ code: `
-  const response = await fetch("https://api.example.com/data");
+  const response = await credentials.fetch("https://api.example.com/data");
   const data = await response.json();
   console.log(data);
   return data;
 `
 })
 ```
+
+Confined eval intentionally has no ambient raw `fetch`. Use
+`credentials.fetch` for external HTTP so the request keeps its verified eval
+session, passes through the egress proxy, and can pause for exact-origin
+authority. It also works without a stored credential for public endpoints.
 
 A trailing async IIFE is also treated as the eval result and awaited:
 
@@ -973,3 +979,11 @@ recursion settle inside their own sandbox. Function objects retained from an
 earlier unbounded eval and non-cooperative native/built-in calls cannot be
 retroactively instrumented; the host process watchdog remains the final safety
 boundary for those cases.
+
+Host-side code that calls the lower-level `eval.cancel` service must inspect its
+`forcedReset` result. `false` means only the requested run was cancelled and the
+durable scope/user `db` were preserved. `true` means the run or its registered
+cleanup did not settle during the cancellation grace period, so the EvalDO
+cancelled every non-terminal run and reset its shared scope/user `db` to recover
+without hanging. Do not attempt to read cleanup records from that reset scope;
+report the forced recovery and start fresh.

@@ -91,6 +91,12 @@ export const evalRunResultSchema = z
     failureKind: z.enum(["user-code", "infrastructure", "cancelled"]).optional(),
     /** Stable machine-readable diagnostic, independent of displayed copy. */
     failureCode: z.string().optional(),
+    /**
+     * Structured failure details preserved from the sandbox exception.
+     * Consumers use this for typed recovery (for example publication recovery);
+     * it is diagnostic data, not display copy.
+     */
+    errorData: z.unknown().optional(),
     /** Keys currently held in the persistent REPL scope (for the agent's awareness). */
     scopeKeys: z.array(z.string()).optional(),
   })
@@ -251,9 +257,9 @@ export const evalMethods = defineServiceMethods({
   },
   cancel: {
     args: z.tuple([evalCancelArgsSchema]),
-    returns: z.object({ ok: z.boolean() }).strict(),
+    returns: z.object({ ok: z.literal(true), forcedReset: z.boolean() }).strict(),
     description:
-      "Cancel a single in-flight or pending run by runId (CAS to cancelled, then abort its outbound calls so a run wedged on an rpc.call unwinds). Other runs and the persistent scope are untouched. A no-op if the run is already terminal.",
+      "Cancel an in-flight or pending run by runId. Cooperative cancellation preserves other runs and scope and returns forcedReset:false. If the run or its cleanup does not settle within the recovery grace period, the EvalDO cancels all non-terminal runs, resets its shared scope/user db, and returns forcedReset:true. A terminal run is a no-op with forcedReset:false.",
     access: { sensitivity: "write" },
   },
 });

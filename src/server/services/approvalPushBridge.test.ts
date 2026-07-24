@@ -446,7 +446,7 @@ describe("approvalPushBridge", () => {
     await expect(promise).resolves.toEqual({ decision: "deny" });
   });
 
-  it("offers session grants for unit source-change approvals", async () => {
+  it("keeps source-change standing decisions in app", async () => {
     const queue = createQueue();
     const push = createPushMock();
     createApprovalPushBridge({
@@ -468,12 +468,7 @@ describe("approvalPushBridge", () => {
       expect.objectContaining({
         data: expect.objectContaining({
           approvalKind: "unit-batch",
-          actionsJson: JSON.stringify([
-            { id: "once", title: "Approve change" },
-            { id: "session", title: "Session" },
-            { id: "deny", title: "Deny" },
-            { id: "open", title: "Open" },
-          ]),
+          actionsJson: JSON.stringify([{ id: "open", title: "Open" }]),
         }),
       })
     );
@@ -482,7 +477,7 @@ describe("approvalPushBridge", () => {
     await expect(promise).resolves.toBe("session");
   });
 
-  it("does not offer session grants for unit management approvals", async () => {
+  it("keeps unit management decisions in app", async () => {
     const queue = createQueue();
     const push = createPushMock();
     createApprovalPushBridge({
@@ -504,11 +499,7 @@ describe("approvalPushBridge", () => {
       expect.objectContaining({
         data: expect.objectContaining({
           approvalKind: "unit-batch",
-          actionsJson: JSON.stringify([
-            { id: "once", title: "Approve" },
-            { id: "deny", title: "Deny" },
-            { id: "open", title: "Open" },
-          ]),
+          actionsJson: JSON.stringify([{ id: "open", title: "Open" }]),
         }),
       })
     );

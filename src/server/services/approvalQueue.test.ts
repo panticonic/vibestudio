@@ -124,6 +124,41 @@ describe("approvalQueue", () => {
     await expect(promise).resolves.toBe("once");
   });
 
+  it("preserves the host-verified operation substance bound to the prepared state", async () => {
+    const { queue } = createQueue();
+    void queue.request({
+      kind: "capability",
+      callerId: "agent:news",
+      callerKind: "worker",
+      repoPath: "workers/news-agent",
+      effectiveVersion: "hash-1",
+      capability: "notification.post",
+      title: "Send the nightly briefing",
+      resource: {
+        type: "channel",
+        label: "Recipient",
+        value: "Briefings",
+      },
+      operationSubstance: {
+        kind: "send",
+        summary: "Send 1 briefing to Briefings",
+        detail: "Subject: Overnight workspace summary",
+        digest: "prepared:briefing-1",
+      },
+    });
+
+    expect(queue.listPending()[0]).toMatchObject({
+      kind: "capability",
+      operationSubstance: {
+        kind: "send",
+        summary: "Send 1 briefing to Briefings",
+        detail: "Subject: Overnight workspace summary",
+        digest: "prepared:briefing-1",
+      },
+    });
+    await queue.resolve(queue.listPending()[0]!.approvalId, "dismiss");
+  });
+
   it("attaches structured requester identity from the resolver", async () => {
     const { queue } = createQueue({
       resolveRequester: (input) => ({
@@ -207,96 +242,6 @@ describe("approvalQueue", () => {
     queue.resolve(queue.listPending()[0]!.approvalId, "once");
     await expect(first).resolves.toBe("once");
     await expect(second).resolves.toBe("once");
-  });
-
-  it("auto-approves decision prompts without surfacing pending UI", async () => {
-    const emit = vi.fn();
-    const queue = createApprovalQueue({
-      eventService: { emit } as never,
-      autoApprove: true,
-    });
-
-    await expect(
-      queue.request({
-        kind: "capability",
-        callerId: "panel-1",
-        callerKind: "panel",
-        repoPath: "panels/example",
-        effectiveVersion: "hash-1",
-        capability: "external-browser-open",
-        title: "Open external browser",
-      })
-    ).resolves.toBe("once");
-
-    await expect(
-      queue.request({
-        kind: "capability",
-        callerId: "worker-1",
-        callerKind: "worker",
-        repoPath: "workers/example",
-        effectiveVersion: "hash-2",
-        capability: "workspace-service:models",
-        title: "Use AI model settings",
-        allowedDecisions: ["session", "version", "deny"],
-      })
-    ).resolves.toBe("session");
-
-    expect(queue.listPending()).toEqual([]);
-    expect(emit).not.toHaveBeenCalledWith("shell-approval:pending-changed", expect.anything());
-  });
-
-  it("auto-denies field-input prompts that unattended mode cannot fill", async () => {
-    const emit = vi.fn();
-    const queue = createApprovalQueue({
-      eventService: { emit } as never,
-      autoApprove: true,
-    });
-    const principal = {
-      callerId: "worker:alpha",
-      callerKind: "worker" as const,
-      repoPath: "workers/alpha",
-      effectiveVersion: "hash-1",
-    };
-
-    await expect(
-      queue.requestClientConfig({
-        ...principal,
-        kind: "client-config",
-        configId: "example",
-        authorizeUrl: "https://auth.example.test/authorize",
-        tokenUrl: "https://auth.example.test/token",
-        title: "Configure Example OAuth",
-        fields: [{ name: "clientSecret", label: "Client secret", type: "secret", required: true }],
-      })
-    ).resolves.toEqual({ decision: "deny" });
-    await expect(
-      queue.requestCredentialInput({
-        ...principal,
-        kind: "credential-input",
-        title: "Add Example API",
-        credentialLabel: "Example API",
-        audience: [{ url: "https://api.example.test/", match: "origin" }],
-        injection: {
-          type: "header",
-          name: "authorization",
-          valueTemplate: "Bearer {token}",
-        },
-        accountIdentity: { providerUserId: "example" },
-        scopes: [],
-        fields: [{ name: "token", label: "Token", type: "secret", required: true }],
-      })
-    ).resolves.toEqual({ decision: "deny" });
-    await expect(
-      queue.requestSecretInput({
-        ...principal,
-        kind: "secret-input",
-        title: "Enter secret",
-        fields: [{ name: "secret", label: "Secret", type: "secret", required: true }],
-      })
-    ).resolves.toEqual({ decision: "deny" });
-
-    expect(queue.listPending()).toEqual([]);
-    expect(emit).not.toHaveBeenCalledWith("shell-approval:pending-changed", expect.anything());
   });
 
   it("preserves severe capability approval tone in pending state", async () => {
@@ -813,46 +758,6 @@ describe("approvalQueue", () => {
       queue.resolveUserland(pending[0]!.approvalId, "allow");
       await expect(first).resolves.toEqual({ kind: "choice", choice: "allow" });
       await expect(second).resolves.toEqual({ kind: "choice", choice: "allow" });
-    });
-
-    it("auto-approves userland prompts using the primary option without surfacing pending UI", async () => {
-      const emit = vi.fn();
-      const queue = createApprovalQueue({
-        eventService: { emit } as never,
-        autoApprove: true,
-      });
-
-      await expect(queue.requestUserland(userlandRequest)).resolves.toEqual({
-        kind: "choice",
-        choice: "allow",
-      });
-
-      expect(queue.listPending()).toEqual([]);
-      expect(emit).not.toHaveBeenCalledWith("shell-approval:pending-changed", expect.anything());
-    });
-
-    it("auto-approves userland prompts with the first non-danger option when no primary exists", async () => {
-      const emit = vi.fn();
-      const queue = createApprovalQueue({
-        eventService: { emit } as never,
-        autoApprove: true,
-      });
-
-      await expect(
-        queue.requestUserland({
-          ...userlandRequest,
-          options: [
-            { value: "deny", label: "Deny", tone: "danger" },
-            { value: "allow_once", label: "Allow once", tone: "neutral" },
-          ],
-        })
-      ).resolves.toEqual({
-        kind: "choice",
-        choice: "allow_once",
-      });
-
-      expect(queue.listPending()).toEqual([]);
-      expect(emit).not.toHaveBeenCalledWith("shell-approval:pending-changed", expect.anything());
     });
 
     it("keeps different issuers with the same subject separate", () => {

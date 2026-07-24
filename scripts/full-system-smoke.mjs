@@ -310,10 +310,6 @@ async function runMultiUserPhase(options, resultsDir) {
   env.HOME = home;
   env.XDG_CONFIG_HOME = path.join(home, ".config");
   env.NODE_ENV = env.NODE_ENV ?? "development";
-  // This is a disposable unattended product smoke. Exercise the real
-  // acquisition coordinator while resolving its human decisions automatically;
-  // never weaken or bypass the critical receiver requirement.
-  env.VIBESTUDIO_HUB_AUTO_APPROVE = "1";
   delete env.VIBESTUDIO_PROCESS_ROLE;
   delete env.VIBESTUDIO_IDENTITY_DB_PATH;
   delete env.VIBESTUDIO_ADMIN_TOKEN;

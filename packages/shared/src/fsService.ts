@@ -70,13 +70,53 @@ interface ContextIngestionDescriptor {
   derivedClass: "internal" | "external";
 }
 
-function ingestionDescriptorForVcsRead(
-  result: NonNullable<VcsReadFileResult>
-): ContextIngestionDescriptor {
-  return {
-    key: `file:${encodeURIComponent(result.repositoryId)}/${encodeURIComponent(result.fileId)}@${result.authoredChangeId}`,
-    derivedClass: result.contentClass,
-  };
+function retainStrongestIngestionDescriptor(
+  descriptors: Map<string, ContextIngestionDescriptor>,
+  descriptor: ContextIngestionDescriptor
+): void {
+  const existing = descriptors.get(descriptor.key);
+  if (!existing || descriptor.derivedClass === "external") {
+    descriptors.set(descriptor.key, descriptor);
+  }
+}
+
+type VcsFileLineage = Pick<
+  NonNullable<VcsReadFileResult>,
+  "repositoryId" | "fileId" | "authoredChangeId" | "contentClass" | "externalKeys"
+>;
+
+function ingestionDescriptorsForVcsRead(result: VcsFileLineage): ContextIngestionDescriptor[] {
+  if (result.contentClass === "external") {
+    const externalKeys = [...new Set(result.externalKeys)].sort(compareUtf16CodeUnits);
+    if (externalKeys.length === 0) {
+      throw codedError(
+        "EINTEGRITY",
+        `External file ${result.fileId} has no persisted outside-source lineage`
+      );
+    }
+    return externalKeys.map((key) => ({ key, derivedClass: "external" }));
+  }
+  if (result.externalKeys.length > 0) {
+    throw codedError("EINTEGRITY", `Internal file ${result.fileId} carries outside-source lineage`);
+  }
+  return [
+    {
+      key: `file:${encodeURIComponent(result.repositoryId)}/${encodeURIComponent(result.fileId)}@${result.authoredChangeId}`,
+      derivedClass: "internal",
+    },
+  ];
+}
+
+function ingestionDescriptorsForDirectoryListing(
+  files: readonly (ManagedWorkspaceRepository & VcsListFilesResult["files"][number])[]
+): ContextIngestionDescriptor[] {
+  const descriptors = new Map<string, ContextIngestionDescriptor>();
+  for (const file of files) {
+    for (const descriptor of ingestionDescriptorsForVcsRead(file)) {
+      retainStrongestIngestionDescriptor(descriptors, descriptor);
+    }
+  }
+  return [...descriptors.values()];
 }
 
 interface FsCallScope {
@@ -493,6 +533,25 @@ interface ManagedWorkspaceSnapshot {
   repositories: ManagedWorkspaceRepository[];
 }
 
+const SEMANTIC_READ_CONCURRENCY = 8;
+
+async function mapWithBoundedConcurrency<Input, Output>(
+  inputs: readonly Input[],
+  concurrency: number,
+  mapper: (input: Input, index: number) => Promise<Output>
+): Promise<Output[]> {
+  const outputs = new Array<Output>(inputs.length);
+  let nextIndex = 0;
+  const worker = async (): Promise<void> => {
+    while (nextIndex < inputs.length) {
+      const index = nextIndex++;
+      outputs[index] = await mapper(inputs[index]!, index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, inputs.length) }, () => worker()));
+  return outputs;
+}
+
 function sameStateNode(left: VcsStateNodeRef, right: VcsStateNodeRef): boolean {
   return (
     left.kind === right.kind &&
@@ -529,15 +588,22 @@ async function managedWorkspaceSnapshot(
     cursor = page.nextCursor ?? undefined;
   } while (cursor);
 
-  const repositories: ManagedWorkspaceRepository[] = [];
-  for (const ref of repositoryRefs.values()) {
-    const inspected = await bridge.inspect({ node: ref, edgeLimit: 1 });
-    if (inspected.node.kind !== "repository" || inspected.node.value.kind !== "present") continue;
-    repositories.push({
-      repositoryId: ref.repositoryId,
-      repoPath: inspected.node.value.repoPath as RepoPath,
-    });
-  }
+  const repositories = (
+    await mapWithBoundedConcurrency(
+      [...repositoryRefs.values()],
+      SEMANTIC_READ_CONCURRENCY,
+      async (ref): Promise<ManagedWorkspaceRepository | null> => {
+        const inspected = await bridge.inspect({ node: ref, edgeLimit: 1 });
+        if (inspected.node.kind !== "repository" || inspected.node.value.kind !== "present") {
+          return null;
+        }
+        return {
+          repositoryId: ref.repositoryId,
+          repoPath: inspected.node.value.repoPath as RepoPath,
+        };
+      }
+    )
+  ).filter((repository): repository is ManagedWorkspaceRepository => repository !== null);
   repositories.sort((left, right) => left.repoPath.localeCompare(right.repoPath));
   return { state, repositories };
 }
@@ -579,21 +645,93 @@ async function managedWorkspaceFiles(
   bridge: FsVcsBridge,
   snapshot: ManagedWorkspaceSnapshot
 ): Promise<Array<ManagedWorkspaceRepository & VcsListFilesResult["files"][number]>> {
-  const files: Array<ManagedWorkspaceRepository & VcsListFilesResult["files"][number]> = [];
+  const perRepository = await mapWithBoundedConcurrency(
+    snapshot.repositories,
+    SEMANTIC_READ_CONCURRENCY,
+    async (repository) => {
+      const files: Array<ManagedWorkspaceRepository & VcsListFilesResult["files"][number]> = [];
+      let cursor: string | undefined;
+      do {
+        const page = await bridge.listFiles({
+          state: snapshot.state,
+          repositoryId: repository.repositoryId,
+          limit: 500,
+          ...(cursor ? { cursor } : {}),
+        });
+        files.push(...page.files.map((file) => ({ ...repository, ...file })));
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+      return files;
+    }
+  );
+  return perRepository.flat();
+}
+
+/**
+ * Plan exact repo-root reads when every glob names a literal file below a
+ * repository-pattern prefix (for example a two-segment repo plus `SKILL.md`).
+ * reads from enumerating every source file in every repository merely to find
+ * one well-known metadata file.
+ */
+function managedRepoRootFileCandidates(
+  snapshot: ManagedWorkspaceSnapshot,
+  patterns: readonly string[]
+): Array<ManagedWorkspaceRepository & { path: string }> | null {
+  const parsed = patterns.map((pattern) => {
+    if (!pattern.includes("/")) return null;
+    const segments = pattern.split("/");
+    const fileName = segments.at(-1);
+    if (!fileName || /[*?[\]{}]/u.test(fileName)) return null;
+    return { pattern, segments, fileName };
+  });
+  if (parsed.some((entry) => entry === null)) return null;
+
+  const candidates = new Map<string, ManagedWorkspaceRepository & { path: string }>();
   for (const repository of snapshot.repositories) {
-    let cursor: string | undefined;
-    do {
-      const page = await bridge.listFiles({
-        state: snapshot.state,
-        repositoryId: repository.repositoryId,
-        limit: 500,
-        ...(cursor ? { cursor } : {}),
+    const repoSegments = repository.repoPath.split("/");
+    for (const entry of parsed) {
+      if (!entry || entry.segments.length !== repoSegments.length + 1) continue;
+      const workspacePath = `${repository.repoPath}/${entry.fileName}`;
+      if (!matchesGlob(workspacePath, entry.pattern)) continue;
+      candidates.set(`${repository.repositoryId}\u0000${entry.fileName}`, {
+        ...repository,
+        path: entry.fileName,
       });
-      files.push(...page.files.map((file) => ({ ...repository, ...file })));
-      cursor = page.nextCursor ?? undefined;
-    } while (cursor);
+    }
   }
-  return files;
+  return [...candidates.values()];
+}
+
+async function managedWorkspaceFilesMatching(
+  bridge: FsVcsBridge,
+  snapshot: ManagedWorkspaceSnapshot,
+  patterns: readonly string[]
+): Promise<Array<ManagedWorkspaceRepository & VcsListFilesResult["files"][number]>> {
+  const candidates = managedRepoRootFileCandidates(snapshot, patterns);
+  if (!candidates) {
+    return (await managedWorkspaceFiles(bridge, snapshot)).filter((file) => {
+      const workspacePath = `${file.repoPath}/${file.path}`;
+      return patterns.some((pattern) => matchesGlob(workspacePath, pattern));
+    });
+  }
+  const files = await mapWithBoundedConcurrency(
+    candidates,
+    SEMANTIC_READ_CONCURRENCY,
+    async (candidate) => {
+      const file = await managedFile(
+        bridge,
+        snapshot,
+        candidate.repositoryId,
+        candidate.path
+      );
+      return file ? { ...candidate, ...file } : null;
+    }
+  );
+  return files.filter(
+    (
+      file
+    ): file is ManagedWorkspaceRepository & VcsListFilesResult["files"][number] => file !== null
+  );
 }
 
 async function managedWorkspaceFilesForPaths(
@@ -666,6 +804,16 @@ export interface FsServiceOptions {
       classification: "derived";
       derivedClass: "internal" | "external";
     }
+  ) => void | Promise<void>;
+  /** One operation's lineage must become visible to the latch all-or-nothing. */
+  recordContextIngestionBatch?: (
+    ctx: ServiceContext,
+    inputs: readonly {
+      key: string;
+      via: string;
+      classification: "derived";
+      derivedClass: "internal" | "external";
+    }[]
   ) => void | Promise<void>;
 }
 
@@ -1121,6 +1269,7 @@ export class FsService {
   /** Explicit semantic-workspace or scratch-only construction authority. */
   private readonly contextAuthority: FsContextAuthority;
   private readonly recordContextIngestion?: FsServiceOptions["recordContextIngestion"];
+  private readonly recordContextIngestionBatch?: FsServiceOptions["recordContextIngestionBatch"];
 
   /** handleId → TrackedHandle */
   private readonly openHandles = new Map<number, TrackedHandle>();
@@ -1138,11 +1287,83 @@ export class FsService {
       : undefined;
     this.contextAuthority = opts.contextAuthority;
     this.recordContextIngestion = opts.recordContextIngestion;
+    this.recordContextIngestionBatch = opts.recordContextIngestionBatch;
   }
 
   private semanticBridge(scope: FsCallScope): FsVcsBridge | null {
     if (scope.unrestricted || !scope.contextId) return null;
     return this.contextAuthority.kind === "semantic" ? this.contextAuthority.bridge : null;
+  }
+
+  /**
+   * Read a selected managed corpus from one exact semantic snapshot without
+   * projecting the workspace to disk. Discovery, bytes, and lineage are one
+   * operation: callers cannot accidentally enumerate at one working head and
+   * read each result through a succession of later heads.
+   */
+  async readManagedFiles(
+    ctx: ServiceContext,
+    patterns: readonly string[],
+    options: { explicitContextId: string } | undefined = undefined
+  ): Promise<Array<{ path: string; content: string }>> {
+    if (
+      patterns.length === 0 ||
+      patterns.some((pattern) => typeof pattern !== "string" || pattern.length === 0)
+    ) {
+      throw new Error("Managed file reads require non-empty glob patterns");
+    }
+    const scope = await this.resolveContextRoot(
+      ctx,
+      options ? [options.explicitContextId] : []
+    );
+    const bridge = this.semanticBridge(scope);
+    if (!bridge || !scope.contextId) {
+      throw codedError(
+        "ESEMANTICAUTHORITY",
+        "Managed file reads require an exact semantic workspace context"
+      );
+    }
+    const snapshot = await managedWorkspaceSnapshot(bridge, scope.contextId);
+    const files = (await managedWorkspaceFilesMatching(bridge, snapshot, patterns)).sort(
+      (left, right) =>
+        compareUtf16CodeUnits(`${left.repoPath}/${left.path}`, `${right.repoPath}/${right.path}`)
+    );
+
+    const resolved = await mapWithBoundedConcurrency(
+      files,
+      SEMANTIC_READ_CONCURRENCY,
+      async (file) => {
+        const result = await bridge.readFile({
+          state: snapshot.state,
+          repositoryId: file.repositoryId,
+          file: { kind: "id", fileId: file.fileId },
+        });
+        if (!result) {
+          throw codedError(
+            "EINTEGRITY",
+            `Managed file ${JSON.stringify(`${file.repoPath}/${file.path}`)} disappeared during the exact corpus read`
+          );
+        }
+        return {
+          path: `/${file.repoPath}/${file.path}`,
+          content:
+            result.content.kind === "text"
+              ? result.content.text
+              : Buffer.from(result.content.base64, "base64").toString("utf8"),
+          ingestion: ingestionDescriptorsForVcsRead(result),
+        };
+      }
+    );
+
+    const ingestion = new Map<string, ContextIngestionDescriptor>();
+    for (const file of resolved) {
+      for (const descriptor of file.ingestion) {
+        retainStrongestIngestionDescriptor(ingestion, descriptor);
+      }
+    }
+    await this.recordProjectedIngestion(ctx, "fs-managed-corpus-read", [...ingestion.values()]);
+
+    return resolved.map(({ path, content }) => ({ path, content }));
   }
 
   private assertScratchOnlyCall(scope: FsCallScope, method: string, args: unknown[]): void {
@@ -1339,10 +1560,12 @@ export class FsService {
   }
 
   /**
-   * Resolve caller-visible projected paths back to exact semantic file
-   * versions. A filename is content too, so directory paths cover every file
-   * beneath that returned entry. The VCS read supplies authorship/class facts
-   * missing from the deliberately lightweight list-files projection.
+   * Resolve caller-visible projected paths back to exact semantic name
+   * provenance. A filename is content too, so a returned directory covers the
+   * descendant paths that establish it. The semantic listing supplies
+   * authorship/class facts without reading any file body. Internal versions
+   * retain exact file identity; external versions collapse to their persisted
+   * outside sources so one imported tree cannot exhaust the session latch.
    */
   private async ingestionForProjectedPaths(
     bridge: FsVcsBridge | null,
@@ -1383,24 +1606,7 @@ export class FsService {
       })
       .sort((a, b) => compareUtf16CodeUnits(`${a.repoPath}/${a.path}`, `${b.repoPath}/${b.path}`));
 
-    const descriptors = new Map<string, ContextIngestionDescriptor>();
-    for (const file of selected) {
-      const result = await bridge.readFile({
-        state: snapshot.state,
-        repositoryId: file.repositoryId,
-        file: { kind: "id", fileId: file.fileId },
-      });
-      if (!result) {
-        throw codedError(
-          "EINTEGRITY",
-          `Projected file ${JSON.stringify(`${file.repoPath}/${file.path}`)} disappeared from ` +
-            `the exact semantic state while resolving context lineage`
-        );
-      }
-      const descriptor = ingestionDescriptorForVcsRead(result);
-      descriptors.set(descriptor.key, descriptor);
-    }
-    return [...descriptors.values()];
+    return ingestionDescriptorsForDirectoryListing(selected);
   }
 
   private async recordProjectedIngestion(
@@ -1409,14 +1615,24 @@ export class FsService {
     descriptors: readonly ContextIngestionDescriptor[]
   ): Promise<void> {
     if (!this.recordContextIngestion || !ctx.caller.agentBinding) return;
-    for (const descriptor of descriptors) {
-      await this.recordContextIngestion(ctx, {
-        key: descriptor.key,
-        via,
-        classification: "derived",
-        derivedClass: descriptor.derivedClass,
-      });
+    if (descriptors.length === 0) return;
+    const inputs = descriptors.map((descriptor) => ({
+      key: descriptor.key,
+      via,
+      classification: "derived" as const,
+      derivedClass: descriptor.derivedClass,
+    }));
+    if (inputs.length > 1) {
+      if (!this.recordContextIngestionBatch) {
+        throw codedError(
+          "EINTEGRITY",
+          "Filesystem lineage recorder does not support atomic batch ingestion"
+        );
+      }
+      await this.recordContextIngestionBatch(ctx, inputs);
+      return;
     }
+    await this.recordContextIngestion(ctx, inputs[0]!);
   }
 
   // =========================================================================
@@ -1532,13 +1748,11 @@ export class FsService {
         file: { kind: "path", path: routed.repoRelPath },
       });
       if (result && exposeToCaller && this.recordContextIngestion && ctx.caller.agentBinding) {
-        const descriptor = ingestionDescriptorForVcsRead(result);
-        await this.recordContextIngestion(ctx, {
-          key: descriptor.key,
-          via: "fs-read-file",
-          classification: "derived",
-          derivedClass: descriptor.derivedClass,
-        });
+        await this.recordProjectedIngestion(
+          ctx,
+          "fs-read-file",
+          ingestionDescriptorsForVcsRead(result)
+        );
       }
       return result?.content ?? null;
     };

@@ -325,10 +325,7 @@ describe("initRuntime", () => {
     expect(runtime.parentId).toBe("parent-slot");
     expect(runtime.parentEntityId).toBe("panel:parent-entity");
     expect(runtime.getParent()?.id).toBe("parent-slot");
-    await expect(runtime.getParent()?.getInfo()).resolves.toMatchObject({
-      id: "parent-slot",
-      parentId: null,
-    });
+    expect(runtime.getParent()).toMatchObject({ id: "parent-slot", parentId: null });
 
     await runtime.getParent()?.call["ping"]?.();
     await expect(runtime.getParent()?.cdp.getCdpEndpoint()).resolves.toEqual({
@@ -364,6 +361,24 @@ describe("initRuntime", () => {
             const message = envelope.message;
             if (message.type !== "request") return;
             sends.push({ targetId: envelope.target, method: message.method, args: message.args });
+            const navigation =
+              message.method === "panelTree.navigate"
+                ? {
+                    panelId: "parent-slot",
+                    title: "Next",
+                    source: "panels/next",
+                    kind: "workspace",
+                    parentId: null,
+                    contextId: "ctx-next",
+                    requestedRef: "main",
+                    runtimeEntityId: "panel:next-entity",
+                    attemptId: `panel:next-entity@${"b".repeat(64)}`,
+                    effectiveVersion: "e".repeat(64),
+                    buildKey: "b".repeat(64),
+                    phase: "ready",
+                    updatedAt: 1,
+                  }
+                : undefined;
             deliver(
               responseFor(
                 envelope,
@@ -378,6 +393,8 @@ describe("initRuntime", () => {
                         runtimeEntityId: "panel:sibling-entity",
                       },
                     ]
+                  : navigation
+                    ? { ...navigation, observation: navigation }
                   : undefined
               )
             );
@@ -400,7 +417,6 @@ describe("initRuntime", () => {
         method: "panelTree.navigate",
         args: ["parent-slot", "panels/next", { contextId: "ctx-next" }],
       },
-      { targetId: "main", method: "panelTree.metadata", args: ["parent-slot"] },
       {
         targetId: "main",
         method: "panelTree.setStateArgs",

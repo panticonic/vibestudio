@@ -36,7 +36,6 @@ function sleep(ms) {
 
 function parseArgs(argv) {
   const options = {
-    autoApprove: false,
     electronArgs: [],
     ephemeral: false,
     gatewayPort: null,
@@ -54,9 +53,7 @@ function parseArgs(argv) {
     if (arg === "--") {
       continue;
     }
-    if (arg === "--auto-approve") {
-      options.autoApprove = true;
-    } else if (arg === "--electron-arg") {
+    if (arg === "--electron-arg") {
       options.electronArgs.push(requireValue(argv[++i], "--electron-arg"));
     } else if (arg === "--ephemeral") {
       options.ephemeral = true;
@@ -130,7 +127,6 @@ Options:
   --gateway-port <port>    Local server gateway port. Defaults to a free port.
   --ready-file <path>      Server ready-file path. Defaults to an OS temp path.
   --timeout-ms <ms>        Startup timeout. Defaults to 180000.
-  --auto-approve           Forward Vibestudio dev auto-approval to Electron.
   --electron-arg <arg>     Forward one raw arg to scripts/run-electron.mjs.
                            Repeat for multiple args.
   --no-build               Skip the initial node build.mjs step.
@@ -435,7 +431,6 @@ async function main() {
     "scripts/run-electron.mjs",
     "--skip-remote-pairing",
     "--dev-webrtc-remote",
-    ...(options.autoApprove ? ["--auto-approve"] : []),
     deepLink,
     ...options.electronArgs,
   ];

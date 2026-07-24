@@ -7,7 +7,7 @@ import {
 } from "./runtimeSurface.core.js";
 
 const panelTreeDescription =
-  "Runtime property, not workspace.panelTree. Signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle | null; navigate(id, source, opts?): Promise<{ id, title }>. Use list/roots/children/get for existing panels; navigate replaces an existing panel slot; openPanel creates a new panel. PanelHandle.focus({ placement?, anchorPanelId? }) can present an existing panel beside, below, or in place relative to an anchor. self/get are sync; async methods refresh metadata as needed.";
+  "Runtime property, not workspace.panelTree. self/get are synchronous handle factories. navigate/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. Use list/roots/children/get for existing panels and openPanel to create.";
 
 export const workerRuntimeSurface: RuntimeSurface = {
   target: "workerRuntime",
@@ -21,7 +21,7 @@ export const workerRuntimeSurface: RuntimeSurface = {
       "workspace"
     ),
     openPanel: valueEntry(
-      'Open a workspace or browser panel and return a PanelHandle. options.placement accepts disposition "side" (default), "replace", or "split-below", plus preferredWidth/minWidth.'
+      'Open a workspace or browser panel and return a PanelHandle only after the exact attempt is application boot-ready; throws structured PanelOperationError on failure. options.placement accepts disposition "side" (default), "replace", or "split-below", plus preferredWidth/minWidth.'
     ),
     listPanels: valueEntry("Alias for runtime.panelTree.list()."),
     getPanelHandle: valueEntry("Alias for runtime.panelTree.get(id, kind?)."),

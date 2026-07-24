@@ -25,7 +25,6 @@ function makeDoRecord(id: string, repoPath: string, effectiveVersion: string): E
           evidence: "exact",
         },
       ],
-      evalCeilings: [],
     },
   };
 }
@@ -57,7 +56,6 @@ describe("resolveCodeIdentity", () => {
           evidence: "exact",
         },
       ],
-      evalCeilings: [],
     });
   });
 
@@ -108,42 +106,14 @@ describe("resolveCodeIdentity", () => {
     expect(resolveCodeIdentity(cache, record.id)).toBeNull();
   });
 
-  it("projects only the owner's reviewed eval ceiling onto a host-created EvalDO", () => {
+  it("attributes a host-admitted EvalDO to its exact harness without inheriting requests", () => {
     const cache = new EntityCache();
     const owner = makeDoRecord(
       "do:workers/agent-worker:AiChatWorker:owner",
       "workers/agent-worker",
       "owner-ev"
     );
-    owner.activeAuthority = {
-      requests: [],
-      evalCeilings: [
-        {
-          audience: "eval",
-          purpose: "agentic-code-execution",
-          capabilities: [
-            {
-              capability: "rpc:subscribeChannel",
-              resource: { kind: "prefix", prefix: "" },
-              tier: "gated",
-              evidence: "intentional-broad",
-            },
-          ],
-        },
-        {
-          audience: "eval",
-          purpose: "tool-eval",
-          capabilities: [
-            {
-              capability: "service:fs.readFile",
-              resource: { kind: "prefix", prefix: "" },
-              tier: "gated",
-              evidence: "intentional-broad",
-            },
-          ],
-        },
-      ],
-    };
+    owner.activeAuthority = { requests: [] };
     cache._onActivate(owner);
     const evalId = "do:vibestudio/internal:EvalDO:eval-owner";
     cache._onActivate({
@@ -157,7 +127,7 @@ describe("resolveCodeIdentity", () => {
       stateArgs: {
         ownerPrincipalId: owner.id,
         subKey: "system-tests",
-        authorityCeilingPurpose: "agentic-code-execution",
+        agentExecutionAdmission: { v: 1, ownerId: owner.id },
       },
       createdAt: Date.now(),
       status: "active",
@@ -170,43 +140,19 @@ describe("resolveCodeIdentity", () => {
       repoPath: owner.source.repoPath,
       effectiveVersion: owner.source.effectiveVersion,
       executionDigest: owner.activeExecutionDigest,
-      requested: [
-        {
-          capability: "rpc:subscribeChannel",
-          resource: { kind: "prefix", prefix: "" },
-          tier: "gated",
-          evidence: "intentional-broad",
-        },
-      ],
-      evalCeilings: [],
-      evalOrigin: { ownerId: owner.id, purpose: "agentic-code-execution" },
+      requested: [],
+      evalOrigin: { ownerId: owner.id },
     });
   });
 
-  it("does not project eval authority across an unverified owner link or purpose", () => {
+  it("rejects an EvalDO without the exact host admission and owner link", () => {
     const cache = new EntityCache();
     const owner = makeDoRecord(
       "do:workers/agent-worker:AiChatWorker:owner",
       "workers/agent-worker",
       "owner-ev"
     );
-    owner.activeAuthority = {
-      requests: [],
-      evalCeilings: [
-        {
-          audience: "eval",
-          purpose: "agentic-code-execution",
-          capabilities: [
-            {
-              capability: "rpc:subscribeChannel",
-              resource: { kind: "prefix", prefix: "" },
-              tier: "gated",
-              evidence: "intentional-broad",
-            },
-          ],
-        },
-      ],
-    };
+    owner.activeAuthority = { requests: [] };
     cache._onActivate(owner);
     const evalId = "do:vibestudio/internal:EvalDO:forged";
     const evalRecord: EntityRecord = {
@@ -219,7 +165,7 @@ describe("resolveCodeIdentity", () => {
       parentId: "do:workers/agent-worker:AiChatWorker:other",
       stateArgs: {
         ownerPrincipalId: owner.id,
-        authorityCeilingPurpose: "agentic-code-execution",
+        agentExecutionAdmission: { v: 1, ownerId: owner.id },
       },
       createdAt: Date.now(),
       status: "active",
@@ -231,7 +177,7 @@ describe("resolveCodeIdentity", () => {
     evalRecord.parentId = owner.id;
     evalRecord.stateArgs = {
       ownerPrincipalId: owner.id,
-      authorityCeilingPurpose: "not-a-purpose",
+      agentExecutionAdmission: { v: 2, ownerId: owner.id },
     };
     cache._onActivate(evalRecord);
     expect(resolveCodeIdentity(cache, evalId)).toBeNull();

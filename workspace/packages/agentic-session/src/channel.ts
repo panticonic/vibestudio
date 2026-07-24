@@ -11,6 +11,7 @@
 import type { AgentSubscriptionConfig, AgentLaunchRpc } from "@workspace/agentic-core";
 import { launchAgentIntoChannel, retireAgentEntity } from "@workspace/agentic-core";
 import type { ChannelConfig } from "@workspace/pubsub";
+import type { AgentExecutionTestPolicySpec } from "@vibestudio/shared/authority/testPolicy";
 
 /** Recommended channel config for headless sessions: full-auto approval (level 2). */
 export function getRecommendedChannelConfig(): Partial<ChannelConfig> {
@@ -97,8 +98,11 @@ export async function subscribeHeadlessAgent(
  */
 export async function createHeadlessAgentContext(opts: {
   rpcCall: (target: string, method: string, args: unknown[]) => Promise<unknown>;
+  testPolicy?: AgentExecutionTestPolicySpec;
 }): Promise<string> {
-  const value = await opts.rpcCall("main", "runtime.createContext", [{}]);
+  const value = await opts.rpcCall("main", "runtime.createContext", [
+    opts.testPolicy ? { testPolicy: opts.testPolicy } : {},
+  ]);
   const contextId =
     value && typeof value === "object" && typeof (value as { contextId?: unknown }).contextId === "string"
       ? (value as { contextId: string }).contextId

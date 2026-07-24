@@ -2,16 +2,13 @@ import { spawnSync } from "node:child_process";
 import {
   computeHostBuildFingerprint,
   readHostBuildFingerprint,
+  sameHostBuildFingerprint,
 } from "./host-build-fingerprint.mjs";
 
 const expected = computeHostBuildFingerprint();
 const current = readHostBuildFingerprint();
 
-if (
-  current?.version === expected.version &&
-  current.mode === expected.mode &&
-  current.fingerprint === expected.fingerprint
-) {
+if (sameHostBuildFingerprint(current, expected)) {
   console.log(`[host-build] Reusing current ${expected.mode} artifacts.`);
   process.exit(0);
 }

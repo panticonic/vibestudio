@@ -16,7 +16,7 @@ connectivity.
 - `vibestudio remote repair-identity --workspace <name> --yes` rotates only
   that child's reach. Hub control identity rotation is intentionally
   unsupported.
-- `vibestudio remote serve [--signal-url <url>] [--dev --auto-approve]`
+- `vibestudio remote serve [--signal-url <url>] [--dev]`
 - `vibestudio remote pair "https://vibestudio.app/pair#..."`
 - `vibestudio remote invite-user --handle <handle> --workspace <name> [--workspace <name>...]`
 - `vibestudio remote pair-device [--workspace <name>]`

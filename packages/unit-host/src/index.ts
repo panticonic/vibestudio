@@ -16,7 +16,7 @@ export type UnitKind = "extension" | "app";
 export function readUnitAuthorityReview(
   unitPath: string,
   label: string,
-  previous: UnitAuthorityManifest = { requests: [], evalCeilings: [] },
+  previous: UnitAuthorityManifest = { requests: [] },
   presentationFor?: CapabilityPresentationResolver,
   requesterKind?: CapabilityRequesterKind
 ) {
@@ -35,7 +35,7 @@ export function readUnitAuthorityReview(
 export function authorityReviewFromPackageJson(
   packageJsonSource: string,
   label: string,
-  previous: UnitAuthorityManifest = { requests: [], evalCeilings: [] },
+  previous: UnitAuthorityManifest = { requests: [] },
   presentationFor?: CapabilityPresentationResolver,
   requesterKind?: CapabilityRequesterKind
 ) {

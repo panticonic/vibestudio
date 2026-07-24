@@ -45,7 +45,6 @@ function adblockPanelCaller() {
     effectiveVersion: "test-version",
     executionDigest: "a".repeat(64),
     requested: manifest.vibestudio.authority.requests,
-    evalCeilings: [],
   });
 }
 

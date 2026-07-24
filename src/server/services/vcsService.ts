@@ -216,17 +216,26 @@ function ingressFor(ctx: ServiceContext): CausalRequest<never>["ingress"] {
 export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
   const invoke = async <T>(ctx: ServiceContext, method: string, input: unknown): Promise<T> => {
     const ingress = ingressFor(ctx);
-    return method === "vcsPush"
-      ? deps.workspaceVcs.semanticPublishCall<T>(
-          input,
-          ingress.causalParent,
-          ctx.caller,
-          ingress.contextIntegrity
-        )
-      : deps.workspaceVcs.semanticCall<T>(method, {
-          input,
-          ingress,
-        } satisfies CausalRequest<unknown>);
+    if (method === "vcsPush") {
+      return ctx.signal
+        ? deps.workspaceVcs.semanticPublishCall<T>(
+            input,
+            ingress.causalParent,
+            ctx.caller,
+            ingress.contextIntegrity,
+            ctx.signal
+          )
+        : deps.workspaceVcs.semanticPublishCall<T>(
+            input,
+            ingress.causalParent,
+            ctx.caller,
+            ingress.contextIntegrity
+          );
+    }
+    return deps.workspaceVcs.semanticCall<T>(method, {
+      input,
+      ingress,
+    } satisfies CausalRequest<unknown>);
   };
 
   const invokeOperation = async (

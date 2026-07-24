@@ -19,7 +19,7 @@ export function createBrowserEnvironmentService(deps: {
     Object.keys(browserEnvironmentMethods).map((method) => [
       `${BROWSER_ENVIRONMENT_BROKER_AUTHORITY_PREFIX}.${method}`,
       (ctx: Parameters<NonNullable<ServiceDefinition["authorityPreparation"]>[string]>[0]) => {
-        if (!ctx.caller.code && ctx.caller.sessionOrigin !== true) return [];
+        if (!ctx.caller.code && !ctx.caller.executionSession) return [];
         const capability = `service:browserEnvironment.${method}`;
         return [
           {

@@ -45,6 +45,7 @@ import { evalMethods } from "./eval.js";
 import { settingsMethods } from "./settings.js";
 import { shellApprovalMethods } from "./shellApproval.js";
 import { shellPresenceMethods } from "./shellPresence.js";
+import { systemAgentMethods } from "./systemAgent.js";
 import { vcsMethods } from "./vcs.js";
 import { viewMethods } from "./view.js";
 import { webhookIngressMethods } from "./webhookIngress.js";
@@ -117,6 +118,7 @@ const serviceTables: ServiceTable[] = [
   { service: "settings", file: "settings.ts", methods: settingsMethods },
   { service: "shellApproval", file: "shellApproval.ts", methods: shellApprovalMethods },
   { service: "shellPresence", file: "shellPresence.ts", methods: shellPresenceMethods },
+  { service: "systemAgent", file: "systemAgent.ts", methods: systemAgentMethods },
   { service: "vcs", file: "vcs.ts", methods: vcsMethods },
   { service: "view", file: "view.ts", methods: viewMethods },
   { service: "webhookIngress", file: "webhookIngress.ts", methods: webhookIngressMethods },
@@ -140,13 +142,7 @@ const approvedReturnlessMethods = new Set([
   "events.watch",
 ]);
 
-const approvedWeakReturnRoots = new Set([
-  // A DeferredResult is a deliberately non-JSON control sentinel. Its custom
-  // validator calls `isDeferredResult`; the actual credential payload branches
-  // remain fully structural.
-  "credentials.connect",
-  "credentials.resolveCredential",
-]);
+const approvedWeakReturnRoots = new Set<string>();
 
 type TraversableZodDef = z.ZodTypeDef & {
   typeName?: z.ZodFirstPartyTypeKind;
@@ -244,6 +240,39 @@ describe("service schema contracts", () => {
         { key: "large", offset: 0, limit: 128 * 1024 + 1 },
       ]).success
     ).toBe(false);
+  });
+
+  it("preserves structured eval failure data through run and getRun", () => {
+    const result = {
+      success: false,
+      console: "",
+      error: "Project publication failed",
+      failureKind: "user-code" as const,
+      failureCode: "scaffold_publication_failed",
+      errorData: {
+        code: "scaffold_publication_failed",
+        committedEventId: "event:committed",
+        publicationRequest: { commandId: "command:publish" },
+      },
+    };
+
+    expect(evalMethods.run.returns.safeParse(result).success).toBe(true);
+    expect(
+      evalMethods.getRun.returns.safeParse({
+        status: "done",
+        result,
+      }).success
+    ).toBe(true);
+  });
+
+  it("reports whether eval cancellation required a shared-scope reset", () => {
+    expect(evalMethods.cancel.returns.safeParse({ ok: true, forcedReset: false }).success).toBe(
+      true
+    );
+    expect(evalMethods.cancel.returns.safeParse({ ok: true, forcedReset: true }).success).toBe(
+      true
+    );
+    expect(evalMethods.cancel.returns.safeParse({ ok: true }).success).toBe(false);
   });
 
   it("covers every service schema file in this directory", () => {

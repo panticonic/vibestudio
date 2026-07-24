@@ -32,6 +32,7 @@ import {
   getPanelTree,
   hasElectronDisplay,
   launchTestApp,
+  approvePendingStartupUnits,
   removeManagedTestWorkspace,
   type TestApp,
 } from "../../setup/electronSetup";
@@ -235,10 +236,8 @@ test.describe("Multi-column panel layout", () => {
       testApp = await launchTestApp({
         workspace: workspacePath,
         launchTimeout: 240_000,
-        // AUTO_APPROVE also covers the elevated native-code extension install
-        // (browser-data) that app bootstrap now requires.
-        env: { VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "1", VIBESTUDIO_AUTO_APPROVE: "1" },
       });
+      await approvePendingStartupUnits(testApp.app);
       const app = testApp.app;
 
       // The server RPC bridge connects only once the workspace runtime is

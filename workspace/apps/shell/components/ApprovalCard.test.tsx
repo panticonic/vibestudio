@@ -9,6 +9,7 @@ import type {
   PendingUnitBatchApproval,
   PendingUserlandApproval,
 } from "@vibestudio/shared/approvals";
+import { authorityRow } from "@vibestudio/shared/authority/authorityRows";
 import { ApprovalCard } from "./ApprovalCard";
 import { resolveCallerInfo, type ApprovalCardIntent } from "./approvalCardModel";
 import { ApprovalCardSurface } from "../overlay/ApprovalCardSurface";
@@ -50,6 +51,12 @@ function capabilityApproval(
     resource: partial.resource ?? { type: "panel", label: "Panel", value: "Shell" },
     grantResourceKey: partial.grantResourceKey,
     details: partial.details,
+    operation: partial.operation,
+    snapshot: partial.snapshot,
+    cardType: partial.cardType,
+    allowedDecisions: partial.allowedDecisions,
+    authorityRow: partial.authorityRow,
+    operationSubstance: partial.operationSubstance,
     approvalId: partial.approvalId,
   };
 }
@@ -154,6 +161,65 @@ describe("ApprovalCard", () => {
     });
   });
 
+  it("shows the exact prepared effect and the eligible task and agent scope ladder", () => {
+    const row = authorityRow({
+      capability: "push.send",
+      resource: { kind: "exact", key: "channel:briefings" },
+      resourcePhrase: "Briefings",
+      tier: "gated",
+      statement: "prospective",
+      provenance: { source: "receiver" },
+    });
+    const { emit } = renderCard(
+      capabilityApproval({
+        approvalId: "cap-substance",
+        title: "Send the nightly briefing",
+        callerTitle: "News",
+        snapshot: {
+          v: 1,
+          service: "push",
+          method: "send",
+          capability: "push.send",
+          resourceKey: "channel:briefings",
+          argsDigest: "args:briefing-1",
+          preparedStateDigest: "prepared:briefing-1",
+          callerPrincipal: "code:news",
+          sessionId: "session:news",
+          taskRef: "task:nightly-briefing",
+          agentBindingId: "binding:news",
+          agentName: "News",
+          agentScopeEligible: true,
+          mission: "-",
+          snippetDigest: "snippet:news",
+          codeLineage: { class: "internal", chain: ["code:news"] },
+          contextLineage: null,
+          initiatorChain: ["user:alice"],
+          at: 1,
+        },
+        authorityRow: row,
+        allowedDecisions: ["once", "task", "agent", "deny", "lock"],
+        operationSubstance: {
+          kind: "send",
+          summary: "Send 1 briefing to Briefings",
+          detail: "Subject: Overnight workspace summary",
+          digest: "prepared:briefing-1",
+        },
+      })
+    );
+
+    expect(screen.getByText("Publishing & sending")).toBeTruthy();
+    expect(screen.getByText("What exactly")).toBeTruthy();
+    expect(screen.getByText("Send 1 briefing to Briefings")).toBeTruthy();
+    expect(screen.getByText("Subject: Overnight workspace summary")).toBeTruthy();
+    fireEvent.click(screen.getByText("Allow for this task"));
+    expect(emit).toHaveBeenCalledWith({
+      type: "decide",
+      decision: "task",
+      approvalId: "cap-substance",
+    });
+    expect(screen.getByText("Always for News")).toBeTruthy();
+  });
+
   it("recommends the durable version grant and uses it for keyboard confirmation", () => {
     const credential = {
       ...capabilityApproval({ approvalId: "credential", title: "Use model credential" }),
@@ -233,104 +299,52 @@ describe("ApprovalCard", () => {
 
   it("puts added permissions on the unit summary and hides unchanged permissions", () => {
     const approval = unitBatchApproval({ approvalId: "permission-diff" });
+    const notificationsRow = authorityRow({
+      capability: "push.send",
+      resource: { kind: "prefix", prefix: "" },
+      tier: "gated",
+      statement: "declared",
+      provenance: { source: "manifest" },
+    });
+    const profileRow = authorityRow({
+      capability: "account.profile.read",
+      resource: { kind: "prefix", prefix: "" },
+      tier: "gated",
+      statement: "declared",
+      provenance: { source: "manifest" },
+    });
     approval.units[0]!.authority = {
       requests: [
         {
-          capability: "notifications",
+          capability: "push.send",
           resource: { kind: "prefix", prefix: "" },
           tier: "gated",
           evidence: "intentional-broad",
         },
         {
-          capability: "service:account.getProfile",
+          capability: "account.profile.read",
           resource: { kind: "prefix", prefix: "" },
           tier: "gated",
           evidence: "intentional-broad",
         },
       ],
-      evalCeilings: [
-        {
-          audience: "eval",
-          purpose: "tool-eval",
-          capabilities: [
-            {
-              capability: "workspace-service:notes",
-              resource: { kind: "prefix", prefix: "" },
-              tier: "gated",
-              evidence: "intentional-broad",
-            },
-          ],
-        },
-      ],
-      groups: [
-        {
-          id: "notifications",
-          label: "Notifications",
-          description: "Display workspace notifications",
-          requestCount: 1,
-          addedCount: 1,
-          items: [
-            {
-              capability: "notifications",
-              title: "Show notifications",
-              description: "Display workspace notifications",
-              added: true,
-            },
-          ],
-        },
-        {
-          id: "runtime",
-          label: "Agents and workspace runtimes",
-          description: "Use runtime services",
-          requestCount: 1,
-          addedCount: 0,
-          items: [
-            {
-              capability: "service:account.getProfile",
-              title: "Get profile",
-              description: "Read the existing profile",
-              added: false,
-            },
-          ],
-        },
-      ],
-      removedCount: 0,
-      eval: [
-        {
-          purpose: "tool-eval",
-          label: "Code run by this tool",
-          groups: [
-            {
-              id: "runtime",
-              label: "Workspace services",
-              description: "Use services from this workspace",
-              requestCount: 1,
-              addedCount: 1,
-              items: [
-                {
-                  capability: "workspace-service:notes",
-                  title: "Team Notes",
-                  description: "Read and update team notes",
-                  added: true,
-                },
-              ],
-            },
-          ],
-          removedCount: 0,
-        },
-      ],
+      rows: [notificationsRow, profileRow],
+      diff: {
+        added: [{ ...notificationsRow, flags: { newInDiff: true } }],
+        removed: [],
+        unchanged: [profileRow],
+        retiered: [],
+      },
     };
 
     renderCard(approval);
-    expect(screen.getByText("+ Notifications")).toBeTruthy();
-    expect(screen.getByText("+ Code run by this tool")).toBeTruthy();
-    expect(screen.getByText("+ Team Notes")).toBeTruthy();
-    const unchangedItem = screen.getByText("Get profile");
+    expect(screen.getByText("+ Publishing & sending")).toBeTruthy();
+    const unchangedItem = screen.getByText(/view your account profile/);
     const unchangedDetails = unchangedItem.closest("details") as HTMLDetailsElement;
     expect(unchangedDetails.open).toBe(false);
 
     fireEvent.click(screen.getByText("Extension 1 · v0.1.0"));
-    expect(screen.getByText("+ Show notifications")).toBeTruthy();
+    expect(screen.getByText(/^\+ send notifications/)).toBeTruthy();
     expect(unchangedDetails.open).toBe(false);
     fireEvent.click(screen.getByText("Unchanged permissions"));
     expect(unchangedDetails.open).toBe(true);

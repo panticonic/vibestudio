@@ -21,6 +21,7 @@ import {
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
 import {
+  createTestExecutionSession,
   createTestServiceDispatcher,
   testAuthority,
 } from "@vibestudio/shared/serviceDispatcherTestUtils";
@@ -37,7 +38,6 @@ const sealedExecution = {
   buildKey: "b".repeat(64),
   executionDigest: "f".repeat(64),
   authorityRequests: [] as const,
-  authorityEvalCeilings: [] as const,
 };
 
 function approvalQueueMock(
@@ -48,6 +48,10 @@ function approvalQueueMock(
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
+    requestMissionReview: vi.fn(async () => ({
+      decision: "dismiss" as const,
+      decidedBy: "user:test" as const,
+    })),
     presentDeviceCode: vi.fn(() => ({
       approvalId: "device-code-test",
       cancelled: new AbortController().signal,
@@ -55,6 +59,7 @@ function approvalQueueMock(
     })),
     resolve: vi.fn(),
     resolveUserland: vi.fn(),
+    resolveMissionReview: vi.fn(),
     requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
     resolveExternalAgent: vi.fn(),
     settleExternalAgent: vi.fn(() => 0),
@@ -283,7 +288,14 @@ const evalDoCaller = (id = "do:vibestudio/internal:EvalDO:eval") =>
   });
 
 const sessionCaller = (id = "agent:session") =>
-  createVerifiedCaller(id, "agent", null, null, null, true);
+  createVerifiedCaller(
+    id,
+    "agent",
+    null,
+    null,
+    null,
+    createTestExecutionSession({ runtimeId: id })
+  );
 
 const shellCaller = createVerifiedCaller("shell", "shell");
 const serverCaller = createVerifiedCaller("server", "server");
@@ -404,7 +416,6 @@ describe("runtimeService.createEntity (do kind)", () => {
       effectiveVersion: "ev-do",
       executionDigest: "a".repeat(64),
       authorityRequests,
-      authorityEvalCeilings: [],
     }));
     const { service, instance, entityCache } = await buildDeps({ prepareDurableObject });
 
@@ -413,27 +424,23 @@ describe("runtimeService.createEntity (do kind)", () => {
     ])) as {
       id: string;
       authorityRequests: unknown;
-      authorityEvalCeilings: unknown;
     };
 
     expect(handle.authorityRequests).toEqual(authorityRequests);
-    expect(handle.authorityEvalCeilings).toEqual([]);
     expect(instance.entityResolve(handle.id)?.activeAuthority).toEqual({
       requests: authorityRequests,
-      evalCeilings: [],
     });
     expect(entityCache.resolveActive(handle.id)?.activeAuthority).toEqual({
       requests: authorityRequests,
-      evalCeilings: [],
     });
   });
 
-  it("rejects a partial prepared authority envelope before durable activation", async () => {
+  it("rejects a missing prepared authority request list before durable activation", async () => {
     const prepareDurableObject = vi.fn(async () => ({
       targetId: "target:MyDO:k1",
       effectiveVersion: "ev-do",
       executionDigest: "a".repeat(64),
-      authorityRequests: [],
+      authorityRequests: undefined,
     }));
     const { service, instance } = await buildDeps({ prepareDurableObject });
 
@@ -441,7 +448,7 @@ describe("runtimeService.createEntity (do kind)", () => {
       service.handler({ caller: serverCaller }, "createEntity", [
         doCreateSpec({ contextId: "ctx-x" }),
       ])
-    ).rejects.toThrow(/authority.*evalCeilings/);
+    ).rejects.toThrow(/authority.*requests/);
     expect(
       instance.entityResolve(
         canonicalEntityId({

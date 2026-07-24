@@ -136,7 +136,12 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
       },
       alarmSet: async (_ctx, [input]) => {
         assertOwnLifecycleKey(_ctx.caller, input, "set an alarm for");
-        await dispatch<undefined>("alarmSet", [input]);
+        await dispatch<undefined>("alarmSet", [
+          {
+            ...input,
+            ...(_ctx.caller.testPolicy ? { testPolicy: _ctx.caller.testPolicy } : {}),
+          },
+        ]);
         deps.onAlarmChanged?.();
       },
       alarmClear: async (_ctx, [input]) => {

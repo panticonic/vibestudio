@@ -53,19 +53,17 @@ describe("capabilities skill", () => {
     expect(markdown).toContain("it does not approve\n  itself");
     expect(markdown).toContain("activation must not ask the same question again");
     expect(markdown).toContain("Added capabilities are shown first");
-    expect(markdown).toContain(
-      "Direct unit capabilities and evaluated-code ceilings are sections of this same"
-    );
-    expect(markdown).toContain("does not turn an eval ceiling into a grant");
+    expect(markdown).toContain("Direct installed-code capabilities render as shared authority rows");
+    expect(markdown).toContain("Evaluated code is not part of that version's authority");
     expect(markdown).toContain("no session-duration source-change bypass exists");
   });
 
   it("distinguishes agent delegation from installed-code version review", () => {
     const markdown = readFileSync(new URL("./SKILL.md", import.meta.url), "utf8");
     expect(markdown).toContain("An agent-owned eval is a conduit");
-    expect(markdown).toContain("Trust this agent");
-    expect(markdown).toContain("not an installed-code update or version decision at all");
-    expect(markdown).toMatch(/Every eval still receives its\s+own code review/u);
+    expect(markdown).toContain("Always for this agent");
+    expect(markdown).toMatch(/not an\s+installed-code update or version decision/u);
+    expect(markdown).toMatch(/Every eval still receives code review/u);
   });
 
   it("teaches exact mission closure and immutable product seeding", () => {

@@ -5660,6 +5660,47 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
+      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onAuthorityChanged",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
+      "source": "packages/agentic-do",
+      "method": "onAuthorityChanged",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:onAuthorityChanged",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:onAuthorityChanged)",
+      "r3b": {
+        "review": "host-authority-redrive-hint",
+        "change": "Adds a host-only, open runtime-intrinsic wake hint after an authority acquisition settles. Durable effect outbox state remains the continuation and ordinary alarms recover a lost hint."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
       "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onChannelEnvelope",
       "rpcPlane": "workspace-do",
       "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
@@ -5694,47 +5735,6 @@
         "next-dispatch-revocation"
       ],
       "r3aRequirement": "allOf(capability(code,rpc:onChannelEnvelope),workspace-member)",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
-    },
-    {
-      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onDeferredResult",
-      "rpcPlane": "workspace-do",
-      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
-      "source": "packages/agentic-do",
-      "method": "onDeferredResult",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "open",
-      "capability": "rpc:onDeferredResult",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-delegation"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared direct-RPC scenarios retain their current behavior",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "capability(host,rpc:onDeferredResult)",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -8811,8 +8811,8 @@
         "host"
       ],
       "sensitivity": "destructive",
-      "tier": "critical",
-      "capability": "workspace.graph.delete",
+      "tier": "open",
+      "capability": "workspace-service:<live-declaration>",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -9718,6 +9718,8 @@
       "authorityPrincipals": [
         "code",
         "host",
+        "mission",
+        "session",
         "user"
       ],
       "sensitivity": "read",
@@ -9761,6 +9763,8 @@
       "authorityPrincipals": [
         "code",
         "host",
+        "mission",
+        "session",
         "user"
       ],
       "sensitivity": "read",
@@ -9792,6 +9796,51 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
+      "id": "direct:workspace/workers/model-settings/index.ts:inspectModels",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/model-settings/index.ts",
+      "source": "workers/model-settings",
+      "method": "inspectModels",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/model-settings/index.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "mission",
+        "session",
+        "user"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "capability": "workspace-service:<live-declaration>",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "anyOf(capability(host,rpc:inspectModels),allOf(capability(user,rpc:inspectModels),workspace-member),allOf(capability(code,rpc:inspectModels),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
       "id": "direct:workspace/workers/model-settings/index.ts:listCatalog",
       "rpcPlane": "workspace-do",
       "owner": "workspace/workers/model-settings/index.ts",
@@ -9804,6 +9853,8 @@
       "authorityPrincipals": [
         "code",
         "host",
+        "mission",
+        "session",
         "user"
       ],
       "sensitivity": "read",
@@ -15014,7 +15065,7 @@
       "capability": "service:browserEnvironment.cancelDownload"
     },
     {
-      "id": "host:browserEnvironment.cancelDownload#service:browserEnvironment.cancelDownload",
+      "id": "host:browserEnvironment.cancelDownload#capability:service:browserEnvironment.cancelDownload",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
       "method": "cancelDownload",
@@ -15092,7 +15143,7 @@
       "capability": "service:browserEnvironment.cancelImportRead"
     },
     {
-      "id": "host:browserEnvironment.cancelImportRead#service:browserEnvironment.cancelImportRead",
+      "id": "host:browserEnvironment.cancelImportRead#capability:service:browserEnvironment.cancelImportRead",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
       "method": "cancelImportRead",
@@ -15170,7 +15221,7 @@
       "capability": "service:browserEnvironment.flushCookieProjection"
     },
     {
-      "id": "host:browserEnvironment.flushCookieProjection#service:browserEnvironment.flushCookieProjection",
+      "id": "host:browserEnvironment.flushCookieProjection#capability:service:browserEnvironment.flushCookieProjection",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
       "method": "flushCookieProjection",
@@ -15248,7 +15299,7 @@
       "capability": "service:browserEnvironment.getCookieProjectionDiagnostics"
     },
     {
-      "id": "host:browserEnvironment.getCookieProjectionDiagnostics#service:browserEnvironment.getCookieProjectionDiagnostics",
+      "id": "host:browserEnvironment.getCookieProjectionDiagnostics#capability:service:browserEnvironment.getCookieProjectionDiagnostics",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
       "method": "getCookieProjectionDiagnostics",
@@ -15326,7 +15377,7 @@
       "capability": "service:browserEnvironment.getImportHost"
     },
     {
-      "id": "host:browserEnvironment.getImportHost#service:browserEnvironment.getImportHost",
+      "id": "host:browserEnvironment.getImportHost#capability:service:browserEnvironment.getImportHost",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
       "method": "getImportHost",
@@ -15404,7 +15455,7 @@
       "capability": "service:browserEnvironment.listDownloads"
     },
     {
-      "id": "host:browserEnvironment.listDownloads#service:browserEnvironment.listDownloads",
+      "id": "host:browserEnvironment.listDownloads#capability:service:browserEnvironment.listDownloads",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
       "method": "listDownloads",
@@ -15482,7 +15533,7 @@
       "capability": "service:browserEnvironment.listImportOpenTabs"
     },
     {
-      "id": "host:browserEnvironment.listImportOpenTabs#service:browserEnvironment.listImportOpenTabs",
+      "id": "host:browserEnvironment.listImportOpenTabs#capability:service:browserEnvironment.listImportOpenTabs",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
       "method": "listImportOpenTabs",
@@ -15560,7 +15611,7 @@
       "capability": "service:browserEnvironment.listImportSources"
     },
     {
-      "id": "host:browserEnvironment.listImportSources#service:browserEnvironment.listImportSources",
+      "id": "host:browserEnvironment.listImportSources#capability:service:browserEnvironment.listImportSources",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
       "method": "listImportSources",
@@ -15638,7 +15689,7 @@
       "capability": "service:browserEnvironment.nextImportFrame"
     },
     {
-      "id": "host:browserEnvironment.nextImportFrame#service:browserEnvironment.nextImportFrame",
+      "id": "host:browserEnvironment.nextImportFrame#capability:service:browserEnvironment.nextImportFrame",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
       "method": "nextImportFrame",
@@ -15716,7 +15767,7 @@
       "capability": "service:browserEnvironment.openDownload"
     },
     {
-      "id": "host:browserEnvironment.openDownload#service:browserEnvironment.openDownload",
+      "id": "host:browserEnvironment.openDownload#capability:service:browserEnvironment.openDownload",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
       "method": "openDownload",
@@ -15794,7 +15845,7 @@
       "capability": "service:browserEnvironment.pauseDownload"
     },
     {
-      "id": "host:browserEnvironment.pauseDownload#service:browserEnvironment.pauseDownload",
+      "id": "host:browserEnvironment.pauseDownload#capability:service:browserEnvironment.pauseDownload",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
       "method": "pauseDownload",
@@ -15872,7 +15923,7 @@
       "capability": "service:browserEnvironment.previewImportSource"
     },
     {
-      "id": "host:browserEnvironment.previewImportSource#service:browserEnvironment.previewImportSource",
+      "id": "host:browserEnvironment.previewImportSource#capability:service:browserEnvironment.previewImportSource",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
       "method": "previewImportSource",
@@ -15950,7 +16001,7 @@
       "capability": "service:browserEnvironment.resumeDownload"
     },
     {
-      "id": "host:browserEnvironment.resumeDownload#service:browserEnvironment.resumeDownload",
+      "id": "host:browserEnvironment.resumeDownload#capability:service:browserEnvironment.resumeDownload",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
       "method": "resumeDownload",
@@ -16028,7 +16079,7 @@
       "capability": "service:browserEnvironment.revealDownload"
     },
     {
-      "id": "host:browserEnvironment.revealDownload#service:browserEnvironment.revealDownload",
+      "id": "host:browserEnvironment.revealDownload#capability:service:browserEnvironment.revealDownload",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
       "method": "revealDownload",
@@ -16106,7 +16157,7 @@
       "capability": "service:browserEnvironment.startImportRead"
     },
     {
-      "id": "host:browserEnvironment.startImportRead#service:browserEnvironment.startImportRead",
+      "id": "host:browserEnvironment.startImportRead#capability:service:browserEnvironment.startImportRead",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
       "method": "startImportRead",
@@ -17194,7 +17245,7 @@
       "capability": "service:corsApproval.authorize"
     },
     {
-      "id": "host:corsApproval.authorize#network.response.read",
+      "id": "host:corsApproval.authorize#capability:network.response.read",
       "rpcPlane": "host-service",
       "owner": "corsApproval",
       "method": "authorize",
@@ -19044,7 +19095,7 @@
       "capability": "service:externalOpen.openExternal"
     },
     {
-      "id": "host:externalOpen.openExternal#external.open",
+      "id": "host:externalOpen.openExternal#capability:external.open",
       "rpcPlane": "host-service",
       "owner": "externalOpen",
       "method": "openExternal",
@@ -22028,46 +22079,6 @@
       "capability": "service:mirror.targets"
     },
     {
-      "id": "host:mission.approve",
-      "rpcPlane": "host-service",
-      "owner": "mission",
-      "method": "approve",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:mission.approve"
-      },
-      "authorityPrincipals": [
-        "user",
-        "host"
-      ],
-      "sensitivity": "admin",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:mission.approve),allOf(capability(user,service:mission.approve),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
-      "capability": "service:mission.approve"
-    },
-    {
       "id": "host:mission.createDraft",
       "rpcPlane": "host-service",
       "owner": "mission",
@@ -22267,6 +22278,46 @@
       "capability": "service:mission.list"
     },
     {
+      "id": "host:mission.listRuns",
+      "rpcPlane": "host-service",
+      "owner": "mission",
+      "method": "listRuns",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:mission.listRuns"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:mission.listRuns),allOf(capability(user,service:mission.listRuns),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:mission.listRuns"
+    },
+    {
       "id": "host:mission.pause",
       "rpcPlane": "host-service",
       "owner": "mission",
@@ -22305,6 +22356,46 @@
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
       "capability": "service:mission.pause"
+    },
+    {
+      "id": "host:mission.requestReview",
+      "rpcPlane": "host-service",
+      "owner": "mission",
+      "method": "requestReview",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:mission.requestReview"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host"
+      ],
+      "sensitivity": "admin",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:mission.requestReview),allOf(capability(user,service:mission.requestReview),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:mission.requestReview"
     },
     {
       "id": "host:mission.resume",
@@ -23871,7 +23962,7 @@
       "capability": "service:panelCdp.consoleHistory"
     },
     {
-      "id": "host:panelCdp.consoleHistory#context.boundary",
+      "id": "host:panelCdp.consoleHistory#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelCdp",
       "method": "consoleHistory",
@@ -23953,7 +24044,7 @@
       "capability": "service:panelCdp.getCdpEndpoint"
     },
     {
-      "id": "host:panelCdp.getCdpEndpoint#context.boundary",
+      "id": "host:panelCdp.getCdpEndpoint#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelCdp",
       "method": "getCdpEndpoint",
@@ -24035,7 +24126,7 @@
       "capability": "service:panelCdp.goBack"
     },
     {
-      "id": "host:panelCdp.goBack#context.boundary",
+      "id": "host:panelCdp.goBack#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelCdp",
       "method": "goBack",
@@ -24117,7 +24208,7 @@
       "capability": "service:panelCdp.goForward"
     },
     {
-      "id": "host:panelCdp.goForward#context.boundary",
+      "id": "host:panelCdp.goForward#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelCdp",
       "method": "goForward",
@@ -24319,7 +24410,7 @@
       "capability": "service:panelCdp.navigate"
     },
     {
-      "id": "host:panelCdp.navigate#context.boundary",
+      "id": "host:panelCdp.navigate#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelCdp",
       "method": "navigate",
@@ -24401,7 +24492,7 @@
       "capability": "service:panelCdp.reload"
     },
     {
-      "id": "host:panelCdp.reload#context.boundary",
+      "id": "host:panelCdp.reload#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelCdp",
       "method": "reload",
@@ -24483,7 +24574,7 @@
       "capability": "service:panelCdp.screenshot"
     },
     {
-      "id": "host:panelCdp.screenshot#context.boundary",
+      "id": "host:panelCdp.screenshot#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelCdp",
       "method": "screenshot",
@@ -24565,7 +24656,7 @@
       "capability": "service:panelCdp.stop"
     },
     {
-      "id": "host:panelCdp.stop#context.boundary",
+      "id": "host:panelCdp.stop#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelCdp",
       "method": "stop",
@@ -24928,7 +25019,7 @@
       "capability": "service:panelTree.archive"
     },
     {
-      "id": "host:panelTree.archive#context.boundary",
+      "id": "host:panelTree.archive#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelTree",
       "method": "archive",
@@ -25049,7 +25140,7 @@
       "capability": "service:panelTree.callAgent"
     },
     {
-      "id": "host:panelTree.callAgent#context.boundary",
+      "id": "host:panelTree.callAgent#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelTree",
       "method": "callAgent",
@@ -25131,7 +25222,7 @@
       "capability": "service:panelTree.close"
     },
     {
-      "id": "host:panelTree.close#context.boundary",
+      "id": "host:panelTree.close#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelTree",
       "method": "close",
@@ -25213,7 +25304,7 @@
       "capability": "service:panelTree.create"
     },
     {
-      "id": "host:panelTree.create#context.boundary",
+      "id": "host:panelTree.create#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelTree",
       "method": "create",
@@ -25253,6 +25344,47 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census"
     },
     {
+      "id": "host:panelTree.diagnose",
+      "rpcPlane": "host-service",
+      "owner": "panelTree",
+      "method": "diagnose",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:panelTree.diagnose"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:panelTree.diagnose),allOf(capability(user,service:panelTree.diagnose),workspace-member),allOf(capability(code,service:panelTree.diagnose),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:panelTree.diagnose"
+    },
+    {
       "id": "host:panelTree.ensureLoaded",
       "rpcPlane": "host-service",
       "owner": "panelTree",
@@ -25262,8 +25394,6 @@
         "key": "service:panelTree.ensureLoaded"
       },
       "authorityPrincipals": [
-        "code",
-        "user",
         "host"
       ],
       "sensitivity": "write",
@@ -25285,7 +25415,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:panelTree.ensureLoaded),allOf(capability(user,service:panelTree.ensureLoaded),workspace-member),allOf(capability(code,service:panelTree.ensureLoaded),workspace-member))",
+      "r3aRequirement": "capability(host,service:panelTree.ensureLoaded)",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -25336,7 +25466,7 @@
       "capability": "service:panelTree.expandIds"
     },
     {
-      "id": "host:panelTree.expandIds#context.boundary",
+      "id": "host:panelTree.expandIds#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelTree",
       "method": "expandIds",
@@ -25508,8 +25638,6 @@
         "key": "service:panelTree.getRuntimeLease"
       },
       "authorityPrincipals": [
-        "code",
-        "user",
         "host"
       ],
       "sensitivity": "read",
@@ -25531,7 +25659,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:panelTree.getRuntimeLease),allOf(capability(user,service:panelTree.getRuntimeLease),workspace-member),allOf(capability(code,service:panelTree.getRuntimeLease),workspace-member))",
+      "r3aRequirement": "capability(host,service:panelTree.getRuntimeLease)",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -25746,7 +25874,7 @@
       "capability": "service:panelTree.movePanel"
     },
     {
-      "id": "host:panelTree.movePanel#context.boundary",
+      "id": "host:panelTree.movePanel#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelTree",
       "method": "movePanel",
@@ -25828,7 +25956,7 @@
       "capability": "service:panelTree.navigate"
     },
     {
-      "id": "host:panelTree.navigate#context.boundary",
+      "id": "host:panelTree.navigate#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelTree",
       "method": "navigate",
@@ -25951,7 +26079,7 @@
       "capability": "service:panelTree.navigateHistory"
     },
     {
-      "id": "host:panelTree.navigateHistory#context.boundary",
+      "id": "host:panelTree.navigateHistory#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelTree",
       "method": "navigateHistory",
@@ -26032,6 +26160,47 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census"
     },
     {
+      "id": "host:panelTree.observe",
+      "rpcPlane": "host-service",
+      "owner": "panelTree",
+      "method": "observe",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:panelTree.observe"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:panelTree.observe),allOf(capability(user,service:panelTree.observe),workspace-member),allOf(capability(code,service:panelTree.observe),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:panelTree.observe"
+    },
+    {
       "id": "host:panelTree.openDevTools",
       "rpcPlane": "host-service",
       "owner": "panelTree",
@@ -26074,7 +26243,7 @@
       "capability": "service:panelTree.openDevTools"
     },
     {
-      "id": "host:panelTree.openDevTools#context.boundary",
+      "id": "host:panelTree.openDevTools#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelTree",
       "method": "openDevTools",
@@ -26082,88 +26251,6 @@
       "resourceDerivation": {
         "kind": "prepared",
         "resolver": "panelTree.openDevTools.contextBoundary"
-      },
-      "authorityPrincipals": [
-        "code",
-        "host",
-        "session",
-        "user"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "schema-owned-authority-preparation"
-      ],
-      "currentOutcomes": {
-        "allowed": "prepared authority leaf selected and satisfied",
-        "denied": "missing prepared authority leaf fails before handler entry"
-      },
-      "predicates": [
-        "live-session",
-        "exact-prepared-resource",
-        "registered-preparer"
-      ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
-      "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
-      },
-      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census"
-    },
-    {
-      "id": "host:panelTree.rebuildAndReload",
-      "rpcPlane": "host-service",
-      "owner": "panelTree",
-      "method": "rebuildAndReload",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:panelTree.rebuildAndReload"
-      },
-      "authorityPrincipals": [
-        "code",
-        "host",
-        "session",
-        "user"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:panelTree.rebuildAndReload\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:panelTree.rebuildAndReload\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:panelTree.rebuildAndReload\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:panelTree.rebuildAndReload\"}]}",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
-      "capability": "service:panelTree.rebuildAndReload"
-    },
-    {
-      "id": "host:panelTree.rebuildAndReload#context.boundary",
-      "rpcPlane": "host-service",
-      "owner": "panelTree",
-      "method": "rebuildAndReload",
-      "capability": "context.boundary",
-      "resourceDerivation": {
-        "kind": "prepared",
-        "resolver": "panelTree.rebuildAndReload.contextBoundary"
       },
       "authorityPrincipals": [
         "code",
@@ -26238,7 +26325,7 @@
       "capability": "service:panelTree.rebuildPanel"
     },
     {
-      "id": "host:panelTree.rebuildPanel#context.boundary",
+      "id": "host:panelTree.rebuildPanel#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelTree",
       "method": "rebuildPanel",
@@ -26320,7 +26407,7 @@
       "capability": "service:panelTree.reload"
     },
     {
-      "id": "host:panelTree.reload#context.boundary",
+      "id": "host:panelTree.reload#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelTree",
       "method": "reload",
@@ -26443,7 +26530,7 @@
       "capability": "service:panelTree.setCollapsed"
     },
     {
-      "id": "host:panelTree.setCollapsed#context.boundary",
+      "id": "host:panelTree.setCollapsed#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelTree",
       "method": "setCollapsed",
@@ -26525,7 +26612,7 @@
       "capability": "service:panelTree.setStateArgs"
     },
     {
-      "id": "host:panelTree.setStateArgs#context.boundary",
+      "id": "host:panelTree.setStateArgs#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelTree",
       "method": "setStateArgs",
@@ -26648,7 +26735,7 @@
       "capability": "service:panelTree.takeOver"
     },
     {
-      "id": "host:panelTree.takeOver#context.boundary",
+      "id": "host:panelTree.takeOver#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelTree",
       "method": "takeOver",
@@ -26730,7 +26817,7 @@
       "capability": "service:panelTree.unload"
     },
     {
-      "id": "host:panelTree.unload#context.boundary",
+      "id": "host:panelTree.unload#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelTree",
       "method": "unload",
@@ -26812,7 +26899,7 @@
       "capability": "service:panelTree.updatePanelState"
     },
     {
-      "id": "host:panelTree.updatePanelState#context.boundary",
+      "id": "host:panelTree.updatePanelState#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "panelTree",
       "method": "updatePanelState",
@@ -26893,6 +26980,47 @@
       "capability": "service:permissions.list"
     },
     {
+      "id": "host:permissions.listAgentProfiles",
+      "rpcPlane": "host-service",
+      "owner": "permissions",
+      "method": "listAgentProfiles",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:permissions.listAgentProfiles"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:permissions.listAgentProfiles),allOf(capability(user,service:permissions.listAgentProfiles),workspace-member),allOf(capability(code,service:permissions.listAgentProfiles),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:permissions.listAgentProfiles"
+    },
+    {
       "id": "host:permissions.revoke",
       "rpcPlane": "host-service",
       "owner": "permissions",
@@ -26932,6 +27060,47 @@
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
       "capability": "service:permissions.revoke"
+    },
+    {
+      "id": "host:permissions.updateAgentProfile",
+      "rpcPlane": "host-service",
+      "owner": "permissions",
+      "method": "updateAgentProfile",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:permissions.updateAgentProfile"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:permissions.updateAgentProfile),allOf(capability(user,service:permissions.updateAgentProfile),workspace-member),allOf(capability(code,service:permissions.updateAgentProfile),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:permissions.updateAgentProfile"
     },
     {
       "id": "host:phoneProvisioning.devices",
@@ -27656,7 +27825,7 @@
       "capability": "service:runtime.cloneContext"
     },
     {
-      "id": "host:runtime.cloneContext#context.boundary",
+      "id": "host:runtime.cloneContext#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "runtime",
       "method": "cloneContext",
@@ -27738,7 +27907,7 @@
       "capability": "service:runtime.createContext"
     },
     {
-      "id": "host:runtime.createContext#context.boundary",
+      "id": "host:runtime.createContext#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "runtime",
       "method": "createContext",
@@ -27820,7 +27989,7 @@
       "capability": "service:runtime.createEntity"
     },
     {
-      "id": "host:runtime.createEntity#context.boundary",
+      "id": "host:runtime.createEntity#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "runtime",
       "method": "createEntity",
@@ -27902,7 +28071,7 @@
       "capability": "service:runtime.createSubagentContext"
     },
     {
-      "id": "host:runtime.createSubagentContext#context.boundary",
+      "id": "host:runtime.createSubagentContext#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "runtime",
       "method": "createSubagentContext",
@@ -27984,7 +28153,7 @@
       "capability": "service:runtime.destroyContext"
     },
     {
-      "id": "host:runtime.destroyContext#context.boundary",
+      "id": "host:runtime.destroyContext#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "runtime",
       "method": "destroyContext",
@@ -28268,7 +28437,7 @@
       "capability": "service:runtime.retireEntity"
     },
     {
-      "id": "host:runtime.retireEntity#context.boundary",
+      "id": "host:runtime.retireEntity#capability:context.boundary",
       "rpcPlane": "host-service",
       "owner": "runtime",
       "method": "retireEntity",
@@ -28510,47 +28679,6 @@
       "capability": "service:settings.getData"
     },
     {
-      "id": "host:shellApproval.blockCapability",
-      "rpcPlane": "host-service",
-      "owner": "shellApproval",
-      "method": "blockCapability",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:shellApproval.blockCapability"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:shellApproval.blockCapability),allOf(capability(user,service:shellApproval.blockCapability),workspace-member),allOf(capability(code,service:shellApproval.blockCapability),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
-      "capability": "service:shellApproval.blockCapability"
-    },
-    {
       "id": "host:shellApproval.listPending",
       "rpcPlane": "host-service",
       "owner": "shellApproval",
@@ -28754,6 +28882,47 @@
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
       "capability": "service:shellApproval.resolveExternalAgentByRequest"
+    },
+    {
+      "id": "host:shellApproval.resolveMissionReview",
+      "rpcPlane": "host-service",
+      "owner": "shellApproval",
+      "method": "resolveMissionReview",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellApproval.resolveMissionReview"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:shellApproval.resolveMissionReview),allOf(capability(user,service:shellApproval.resolveMissionReview),workspace-member),allOf(capability(code,service:shellApproval.resolveMissionReview),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:shellApproval.resolveMissionReview"
     },
     {
       "id": "host:shellApproval.resolveUserland",
@@ -28961,6 +29130,46 @@
       "capability": "service:shellPresence.heartbeat"
     },
     {
+      "id": "host:systemAgent.resolveConversation",
+      "rpcPlane": "host-service",
+      "owner": "systemAgent",
+      "method": "resolveConversation",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:systemAgent.resolveConversation"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:systemAgent.resolveConversation),workspace-member),allOf(capability(code,service:systemAgent.resolveConversation),workspace-member))",
+      "r3b": {
+        "review": "own-system-agent-conversation-resolution",
+        "change": "Restores the reviewed open-tier census entry for resolving the caller's own product-owned System Agent conversation; workspace membership and the pinned trusted-code roster remain independent receiver checks."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:systemAgent.resolveConversation"
+    },
+    {
       "id": "host:userlandApproval.list",
       "rpcPlane": "host-service",
       "owner": "userlandApproval",
@@ -28970,7 +29179,8 @@
         "key": "service:userlandApproval.list"
       },
       "authorityPrincipals": [
-        "code"
+        "code",
+        "session"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -29009,7 +29219,8 @@
         "key": "service:userlandApproval.request"
       },
       "authorityPrincipals": [
-        "code"
+        "code",
+        "session"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -29126,7 +29337,8 @@
         "key": "service:userlandApproval.requestSecretInput"
       },
       "authorityPrincipals": [
-        "code"
+        "code",
+        "session"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -29204,7 +29416,8 @@
         "key": "service:userlandApproval.revoke"
       },
       "authorityPrincipals": [
-        "code"
+        "code",
+        "session"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -31057,7 +31270,7 @@
       "capability": "service:workerdInspector.getEndpoint"
     },
     {
-      "id": "host:workerdInspector.getEndpoint#runtime.inspect",
+      "id": "host:workerdInspector.getEndpoint#capability:runtime.inspect",
       "rpcPlane": "host-service",
       "owner": "workerdInspector",
       "method": "getEndpoint",
@@ -31300,7 +31513,51 @@
       "capability": "service:workers.resolveDurableObject"
     },
     {
-      "id": "host:workers.resolveDurableObject#service:workers.resolveDurableObject",
+      "id": "host:workers.resolveDurableObject#capability-prefix:workspace-service:",
+      "rpcPlane": "host-service",
+      "owner": "workers",
+      "method": "resolveDurableObject",
+      "capabilitySelector": {
+        "kind": "capability-prefix",
+        "value": "workspace-service:"
+      },
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "workers.resolveDurableObject.target"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "mission",
+        "session",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"host\",\"user\",\"code\",\"session\",\"mission\"]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census"
+    },
+    {
+      "id": "host:workers.resolveDurableObject#capability:service:workers.resolveDurableObject",
       "rpcPlane": "host-service",
       "owner": "workers",
       "method": "resolveDurableObject",
@@ -31330,45 +31587,6 @@
         "registered-preparer"
       ],
       "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"code\"]}",
-      "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
-      },
-      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census"
-    },
-    {
-      "id": "host:workers.resolveDurableObject#workspace-service:*",
-      "rpcPlane": "host-service",
-      "owner": "workers",
-      "method": "resolveDurableObject",
-      "capability": "workspace-service:*",
-      "resourceDerivation": {
-        "kind": "prepared",
-        "resolver": "workers.resolveDurableObject.target"
-      },
-      "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "schema-owned-authority-preparation"
-      ],
-      "currentOutcomes": {
-        "allowed": "prepared authority leaf selected and satisfied",
-        "denied": "missing prepared authority leaf fails before handler entry"
-      },
-      "predicates": [
-        "live-session",
-        "exact-prepared-resource",
-        "registered-preparer"
-      ],
-      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"host\",\"user\",\"code\"]}",
       "r3b": {
         "review": "schema-owned-prepared-leaf",
         "change": null
@@ -31418,11 +31636,14 @@
       "capability": "service:workers.resolveService"
     },
     {
-      "id": "host:workers.resolveService#workspace-service:*",
+      "id": "host:workers.resolveService#capability-prefix:workspace-service:",
       "rpcPlane": "host-service",
       "owner": "workers",
       "method": "resolveService",
-      "capability": "workspace-service:*",
+      "capabilitySelector": {
+        "kind": "capability-prefix",
+        "value": "workspace-service:"
+      },
       "resourceDerivation": {
         "kind": "prepared",
         "resolver": "workers.resolveService.workspace-service"
@@ -31430,6 +31651,8 @@
       "authorityPrincipals": [
         "code",
         "host",
+        "mission",
+        "session",
         "user"
       ],
       "sensitivity": "read",
@@ -31449,7 +31672,7 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"host\",\"user\",\"code\"]}",
+      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"host\",\"user\",\"code\",\"session\",\"mission\"]}",
       "r3b": {
         "review": "schema-owned-prepared-leaf",
         "change": null

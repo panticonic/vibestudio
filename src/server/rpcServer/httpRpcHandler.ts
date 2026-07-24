@@ -9,7 +9,6 @@ import {
 } from "@vibestudio/rpc";
 import type { AgentBinding } from "@vibestudio/identity/types";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
-import { isDeferredResult } from "@vibestudio/shared/serviceDispatcher";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 const DEFAULT_RPC_MAX_BODY_BYTES = 256 * 1024 * 1024;
@@ -172,10 +171,6 @@ export class HttpRpcHandler {
         message,
         abort.signal
       );
-      if (isDeferredResult(result)) {
-        writeJson(res, 200, { deferred: true, requestId: result.requestId });
-        return;
-      }
       writeJson(
         res,
         200,

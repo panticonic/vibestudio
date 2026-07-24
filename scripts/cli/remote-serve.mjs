@@ -10,7 +10,6 @@ try {
     usage: [
       "vibestudio remote serve",
       "vibestudio remote serve --dev",
-      "vibestudio remote serve --dev --auto-approve",
       "vibestudio remote serve --port 3030",
     ],
     startupHint:

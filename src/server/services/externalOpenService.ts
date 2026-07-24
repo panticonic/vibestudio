@@ -50,7 +50,7 @@ export function createExternalOpenService(deps: ExternalOpenServiceDeps): Servic
     methods: externalOpenMethods,
     authorityPreparation: {
       [EXTERNAL_OPEN_AUTHORITY_RESOLVER]: (ctx, [rawUrl, rawOptions]) => {
-        if (!ctx.caller.code && ctx.caller.sessionOrigin !== true) return [];
+        if (!ctx.caller.code && !ctx.caller.executionSession) return [];
         const url = normalizeExternalUrl(String(rawUrl));
         const options = rawOptions as OpenExternalOptions | undefined;
         if (options?.expectedRedirectUri) {

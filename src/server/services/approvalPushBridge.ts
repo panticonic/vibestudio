@@ -58,10 +58,15 @@ function actionsFor(approval: PendingApproval): readonly string[] {
     return NOTIFICATION_ACTION_IDS_BROWSER_PERMISSION;
   }
   if (approval.kind === "unit-batch") {
-    // Source/config change approvals offer a dev-session grant; startup/management do not.
-    return approval.trigger === "meta-change" || approval.trigger === "source-change"
-      ? ["once", "session", "deny", "open"]
-      : ["once", "deny", "open"];
+    return NOTIFICATION_ACTION_IDS_INPUT_REQUIRED;
+  }
+  if (
+    approval.kind === "capability" &&
+    (approval.cardType === "confirm.critical" ||
+      approval.cardType === "permission.outside" ||
+      approval.authorityRow?.flags.irreversible === true)
+  ) {
+    return NOTIFICATION_ACTION_IDS_INPUT_REQUIRED;
   }
   return approval.kind === "credential" || approval.kind === "capability"
     ? NOTIFICATION_ACTION_IDS_STANDARD

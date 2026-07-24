@@ -349,9 +349,6 @@ async function launchSpectroliteTestApp(workspacePath: string): Promise<TestApp>
   return launchTestApp({
     workspace: workspacePath,
     launchTimeout: 180000,
-    env: {
-      VIBESTUDIO_AUTO_APPROVE: "1",
-    },
   });
 }
 

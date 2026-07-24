@@ -19,7 +19,6 @@ export interface RuntimeImageRecord {
   buildKey: string;
   executionDigest: string;
   authorityRequests: UnitAuthorityManifest["requests"];
-  authorityEvalCeilings: UnitAuthorityManifest["evalCeilings"];
   effectiveVersion: string;
   generation: number;
   error?: RuntimeImageRecordError;
@@ -45,7 +44,6 @@ const RUNTIME_IMAGE_RECORD_KEYS = [
   "buildKey",
   "executionDigest",
   "authorityRequests",
-  "authorityEvalCeilings",
   "effectiveVersion",
   "generation",
   "error",
@@ -102,97 +100,46 @@ function runtimeImageRecord(
     }
   }
   const authority = parseUnitAuthorityManifest(
-    {
-      requests: record.authorityRequests,
-      evalCeilings: record.authorityEvalCeilings,
-    },
+    { requests: record.authorityRequests },
     `runtime image ${record.id} authority`
   );
   return {
     ...(record as RuntimeImageRecord),
     authorityRequests: authority.requests,
-    authorityEvalCeilings: authority.evalCeilings,
   };
 }
 
 function decodeRuntimeImageFile(value: unknown): RuntimeImageFile {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("runtime-images v4 is not an object");
+    throw new Error("runtime-images v5 is not an object");
   }
   const file = value as Record<string, unknown>;
   const unknownKeys = Object.keys(file).filter((key) => key !== "version" && key !== "records");
   if (unknownKeys.length > 0) {
     throw new Error(`runtime-images v4 has unknown field(s): ${unknownKeys.join(", ")}`);
   }
-  if (file["version"] !== 4) {
-    throw new Error(`runtime-images v4 has invalid version ${String(file["version"])}`);
+  if (file["version"] !== 5) {
+    throw new Error(`runtime-images v5 has invalid version ${String(file["version"])}`);
   }
   if (!Array.isArray(file["records"])) {
-    throw new Error("runtime-images v4 records must be an array");
+    throw new Error("runtime-images v5 records must be an array");
   }
   const records = file["records"].map((record, index) => runtimeImageRecord(record, index));
   const ids = new Set<string>();
   for (const record of records) {
     if (ids.has(record.id)) {
-      throw new Error(`runtime-images v4 contains duplicate id ${record.id}`);
+      throw new Error(`runtime-images v5 contains duplicate id ${record.id}`);
     }
     ids.add(record.id);
   }
   return { records };
 }
 
-function migrateRuntimeImagesV3(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("runtime-images v3 is not an object");
-  }
-  const file = value as Record<string, unknown>;
-  const unknownFileKeys = Object.keys(file).filter((key) => key !== "version" && key !== "records");
-  if (unknownFileKeys.length > 0 || file["version"] !== 3 || !Array.isArray(file["records"])) {
-    throw new Error("runtime-images v3 has an invalid shape");
-  }
-  const records = file["records"].map((value, index) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      throw new Error(`runtime-images v3 record ${index} is not an object`);
-    }
-    const legacy = value as Record<string, unknown>;
-    const legacyKeys = new Set<string>(
-      RUNTIME_IMAGE_RECORD_KEYS.map((key) =>
-        key === "authorityEvalCeilings" ? "authorityDelegations" : key
-      )
-    );
-    const unknownKeys = Object.keys(legacy).filter((key) => !legacyKeys.has(key));
-    if (unknownKeys.length > 0) {
-      throw new Error(
-        `runtime-images v3 record ${index} has unknown field(s): ${unknownKeys.join(", ")}`
-      );
-    }
-    if (!Object.hasOwn(legacy, "authorityDelegations")) {
-      throw new Error(`runtime-images v3 record ${index} is missing authorityDelegations`);
-    }
-    const { authorityDelegations, ...rest } = legacy;
-    return runtimeImageRecord(
-      {
-        ...rest,
-        authorityEvalCeilings: authorityDelegations,
-      },
-      index,
-      "runtime-images v3 migration"
-    );
-  });
-  return { records };
-}
-
 const RUNTIME_IMAGE_CODEC: VersionedJsonCodec<RuntimeImageFile> = {
   schemaName: "runtime-images",
-  currentVersion: 4,
+  currentVersion: 5,
   versionKey: "version",
-  migrations: [
-    {
-      version: 4,
-      name: "rename-eval-delegations-to-ceilings",
-      migrate: migrateRuntimeImagesV3,
-    },
-  ],
+  migrations: [],
   decodeCurrent: decodeRuntimeImageFile,
   encode: (value) => ({
     records: [...value.records].sort((a, b) => a.id.localeCompare(b.id)),

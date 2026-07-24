@@ -20,6 +20,32 @@ function mockRpc() {
   return { rpc, calls };
 }
 
+describe("createRpcFs transport deadlines", () => {
+  it("aborts and classifies an unresponsive filesystem transport", async () => {
+    const rpc = {
+      call: vi.fn().mockImplementation(() => new Promise(() => {})),
+    };
+    const fs = createRpcFs(rpc as never, { timeoutMs: 10 });
+
+    await expect(fs.stat("stalled")).rejects.toMatchObject({
+      name: "RpcFsTimeoutError",
+      code: "fs_runtime_unresponsive",
+      method: "stat",
+      timeoutMs: 10,
+      errorData: {
+        code: "fs_runtime_unresponsive",
+        method: "stat",
+        timeoutMs: 10,
+      },
+    });
+    expect(rpc.call).toHaveBeenCalledWith("main", "fs.stat", ["stalled"], {
+      signal: expect.any(AbortSignal),
+    });
+    const signal = rpc.call.mock.calls[0]?.[3]?.signal as AbortSignal;
+    expect(signal.aborted).toBe(true);
+  });
+});
+
 describe("createRpcFs binary file writes", () => {
   it("passes existing binary envelopes through without double encoding", async () => {
     const { rpc, calls } = mockRpc();
@@ -53,19 +79,23 @@ describe("createRpcFs binary file writes", () => {
 describe("createRpcFs temporary paths", () => {
   it("composes Node-style mkdtemp from the scoped temp-path and mkdir operations", async () => {
     const rpc = {
-      call: vi
-        .fn()
-        .mockResolvedValueOnce("/.tmp/probe-123")
-        .mockResolvedValueOnce(undefined),
+      call: vi.fn().mockResolvedValueOnce("/.tmp/probe-123").mockResolvedValueOnce(undefined),
     };
     const fs = createRpcFs(rpc as never);
 
     await expect(fs.mkdtemp("probe")).resolves.toBe("/.tmp/probe-123");
-    expect(rpc.call).toHaveBeenNthCalledWith(1, "main", "fs.mktemp", ["probe"]);
-    expect(rpc.call).toHaveBeenNthCalledWith(2, "main", "fs.mkdir", [
-      "/.tmp/probe-123",
-      { recursive: true },
-    ]);
+    expect(rpc.call).toHaveBeenNthCalledWith(1, "main", "fs.mktemp", ["probe"], {
+      signal: expect.any(AbortSignal),
+    });
+    expect(rpc.call).toHaveBeenNthCalledWith(
+      2,
+      "main",
+      "fs.mkdir",
+      ["/.tmp/probe-123", { recursive: true }],
+      {
+        signal: expect.any(AbortSignal),
+      }
+    );
   });
 });
 

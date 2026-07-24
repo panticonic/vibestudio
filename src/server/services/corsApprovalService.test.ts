@@ -15,7 +15,6 @@ function panelCaller() {
         resource: { kind: "origin", origin: "https://api.example.com" },
       },
     ],
-    evalCeilings: [],
   });
 }
 

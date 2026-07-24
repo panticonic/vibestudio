@@ -127,20 +127,32 @@ canonical commit/publication protocol. File-oriented APIs also accept a shorthan
 canonical path; use the full form when composing later paths.
 
 `openPanel` returns a host-mediated `PanelHandle` and is part of the portable
-runtime surface. It works from eval, panels, workers, and DOs. It does not expose
-a build-ref option; use it for main/pushed code, and use `PanelHandle.navigate`
-or another ref-capable host path when you intentionally need a context build:
+runtime surface. It works from eval, panels, workers, and DOs. It returns only
+after the exact runtime attempt is application boot-ready and throws a
+structured `PanelOperationError` on resolve/build/host/boot failure. It accepts
+an explicit `ref`; use plain launch for main/pushed code and pin context-local
+code deliberately:
 
 ```tsx
 import { openPanel } from "@workspace/runtime";
 const myApp = await openPanel("panels/my-app");
+const local = await openPanel("panels/my-app", {
+  contextId: ctx.contextId,
+  ref: `ctx:${ctx.contextId}`,
+});
+const observation = await local.observe();
+const snapshot = await local.snapshot();
+return { observation, snapshot };
 ```
+
+For create/fork/open work, return both the ready observation and snapshot.
+Returning only a panel id proves tree allocation, not a working application.
 
 ## Common Tasks
 
 | Task                        | How                                                                                                                                                                                                                                                                                                                                                |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Create project              | `eval` — `import { createProject } from "@workspace-skills/workspace-dev"` then `createProject({ projectType, name, title })`                                                                                                                                                                                                                      |
+| Create project              | `eval` — `import { createProject } from "@workspace-skills/workspace-dev"` then `return await createProject({ projectType, name, title })`; retain its exact `publication`, or recover the committed event from structured `scaffold_publication_failed` data without rerunning creation                                                           |
 | Fork panel                  | `eval` — `import { forkProject } from "@workspace-skills/workspace-dev"` then `forkProject({ from: "panels/chat", to: "panels/chat-experiment", title })`                                                                                                                                                                                          |
 | Fork worker                 | `eval` — run `forkProject({ from, to, title, dryRun: true })` first; pass `classMap` for multi-class workers                                                                                                                                                                                                                                       |
 | Build app database          | Create a worker Durable Object with `DurableObjectBase` + `this.sql`, declare it as a manifest service with `policy.allowed`, then call it from panels/apps/eval via `workers.resolveService(protocol, objectKey?)` + `rpc.call(...)`. See [WORKERS.md](WORKERS.md#durable-object-backed-app-databases).                                           |
@@ -149,7 +161,7 @@ const myApp = await openPanel("panels/my-app");
 | Launch worker               | `eval` — `rpc.call("main", "runtime.createEntity", [{ kind: "worker", source: "workers/my-worker", key: "my-worker", contextId: ctx.contextId }])`; the owning context is the default code ref. Pass `ref: "main"` only for protected-main code. Retire with `rpc.call("main", "runtime.retireEntity", [{ id }])` using the returned handle's `id` |
 | Read a file                 | `Read({ file_path: "panels/my-app/index.tsx" })`                                                                                                                                                                                                                                                                                                   |
 | Edit a file                 | `Edit({ file_path: "panels/my-app/index.tsx", old_string: "...", new_string: "..." })`                                                                                                                                                                                                                                                             |
-| Check types                 | `eval` — `await extensions.use("@workspace-extensions/typecheck-service").checkPanel("panels/my-app")`                                                                                                                                                                                                                                             |
+| Check compiler/build        | `eval` — invoke installed `@workspace-extensions/typecheck-service.checkPanel` exactly as documented in `TOOLS.md` (it is not indexed by `docs_search`); if unavailable, use `services.build.getBuildReport("panels/my-app", \`ctx:${ctx.contextId}\`)`                                                                                            |
 | Run tests                   | `eval` — `await extensions.invoke("@workspace-extensions/test-runner", "run", [{ target: "packages/my-lib" }])`                                                                                                                                                                                                                                    |
 | Operate workspace VCS       | Read [vibestudio-vcs](../vibestudio-vcs/SKILL.md); retain the exact working head, integrate in local steps, commit the complete chain, then publish                                                                                                                                                                                                |
 | Move/copy managed files     | Use `vcs.move` or `vcs.copy`; runtime `fs.rename`/`fs.copyFile` and agent `move_file`/`copy_file` route through the same identity-aware adapter                                                                                                                                                                                                    |
@@ -171,7 +183,9 @@ shell's stable hub session and are not available from workspace eval.
 
 ## Environment Compatibility
 
-- Panel lifecycle operations (`openPanel`, `listPanels`, `panel.focusPanel`, handle `rebuildAndReload`/reload/close) require **panel context**.
+- Panel lifecycle operations (`openPanel`, `listPanels`, `PanelHandle.observe`,
+  `rebuild`/`reload`/`close`) are portable across panel, worker, DO, and eval
+  contexts; presentation and CDP still require an available host.
 - Project scaffolding (`createProject`), semantic workspace VCS operations,
   typecheck, and test runs work in **headless** sessions via eval + RPC.
 - Unit tests run through `@workspace-extensions/test-runner`, not shell commands.
@@ -193,8 +207,9 @@ If an edit appears absent at runtime, check provenance before changing the fix:
   or was it explicitly pinned to `main`/another immutable ref?
 - For a panel, did launch/navigation pass `ref: \`ctx:${ctx.contextId}\`` when
   unpublished code was intended?
-- Did the already-open panel run `handle.rebuildAndReload()` after the edit, and
-  is that panel already pinned to the intended build ref?
+- Did the already-open panel run `handle.rebuild()` after the edit, and does its
+  returned observation name the intended `requestedRef`, `effectiveVersion`,
+  and `buildKey`?
 - In dogfood mode, did the mirror apply or skip because the host checkout was dirty?
 
 Log the exact event or application state alongside runtime build provenance.
@@ -209,6 +224,6 @@ Do not reconstruct semantic state from filesystem dirtiness or rendered byte
 differences. See [contexts and state](../vibestudio-vcs/references/contexts-and-state.md)
 and [provenance and blame](../vibestudio-vcs/references/provenance-and-blame.md).
 
-Planned hardening: expose a runtime build-provenance API that reports source,
-context id, git SHA/ref, dirty state, build timestamp, and artifact id for a
-panel/worker/skill/package.
+Panel operations already report their exact runtime/build provenance through
+`observe()`, lifecycle return values, structured failures, and snapshots. Use
+those identities rather than filesystem dirtiness or a renderer-presence guess.

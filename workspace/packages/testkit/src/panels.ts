@@ -3,8 +3,7 @@
  * panelTree/PanelHandle APIs, designed for eval one-shots and ported E2E
  * suites.
  *
- * Reads prefer the approval-free snapshot path (handle.snapshot() uses the
- * panel agent API when available and accessibility-tree fallback otherwise);
+ * Reads use the boot-ready, provenance-bearing snapshot path;
  * direct CDP is for input, viewport emulation and layout measurement.
  */
 import { openPanel as runtimeOpenPanel, panelTree } from "@workspace/runtime";
@@ -22,15 +21,6 @@ export interface OpenPanelOptions {
   /** Optional code-build ref; contextId alone never selects code provenance. */
   ref?: string;
   stateArgs?: Record<string, unknown>;
-  /** Wait until the panel's runtime lease reports loaded (default true). */
-  waitLoaded?: boolean;
-  timeoutMs?: number;
-}
-
-interface PanelSnapshot {
-  kind: string;
-  text: string;
-  structure: unknown;
 }
 
 function assertNotSelf(handle: PanelHandle | string): void {
@@ -107,7 +97,7 @@ export async function waitFor<T>(
   }
 }
 
-/** Open a panel, auto-watch it with the active test's supervisor, wait for load. */
+/** Open a panel and auto-watch it. The runtime returns only after application boot-ready. */
 export async function openPanel(source: string, opts: OpenPanelOptions = {}): Promise<PanelHandle> {
   const handle = await runtimeOpenPanel(source, {
     parentId: opts.parentId,
@@ -118,15 +108,6 @@ export async function openPanel(source: string, opts: OpenPanelOptions = {}): Pr
     stateArgs: opts.stateArgs,
   });
   activeTestContext()?.supervisor.watchPanel(handle);
-  if (opts.waitLoaded !== false) {
-    // Creation and renderer assignment are separate server operations. Ask for
-    // a lease explicitly instead of relying on focus side effects.
-    await handle.ensureLoaded();
-    await waitFor(() => handle.isLoaded(), {
-      timeoutMs: opts.timeoutMs ?? 30_000,
-      label: `panel ${source} loaded`,
-    });
-  }
   return handle;
 }
 
@@ -150,8 +131,7 @@ export async function withPanel<T>(
 
 /** Visible text of a panel via the approval-free agentApi snapshot. */
 export async function panelText(handle: PanelHandle): Promise<string> {
-  const snapshot = (await handle.snapshot()) as PanelSnapshot | undefined;
-  return snapshot?.text ?? "";
+  return (await handle.snapshot()).document.text;
 }
 
 /** Wait until the panel's visible text matches. */

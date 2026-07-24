@@ -699,8 +699,10 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
     if (logcat.hasPhase(phase)) return;
     if (Date.now() - lastApprovalTap > 2_000) {
       lastApprovalTap = Date.now();
-      const approved = await tapOptionalButtonByText(device, "Trust and start", 500);
-      if (approved) console.log("[mobile-smoke] Approved mobile workspace app launch gate");
+      const reviewedUnits = await tapOptionalButtonByText(device, "Approve all", 500);
+      if (reviewedUnits) console.log("[mobile-smoke] Approved cold-start workspace units");
+      const approvedLaunch = await tapOptionalButtonByText(device, "Trust and start", 500);
+      if (approvedLaunch) console.log("[mobile-smoke] Approved mobile workspace app launch gate");
     }
     await sleep(250);
   }
@@ -1623,12 +1625,6 @@ async function main() {
       NODE_ENV: process.env.NODE_ENV ?? "development",
       HOME: serverHome,
       XDG_CONFIG_HOME: serverConfig,
-      // Auto-approve startup units so the declared react-native app BUILDS at
-      // server startup instead of waiting for the post-pairing host-target
-      // approval. That makes the launch fast, so the bundle starts streaming
-      // seconds after pairing — on a fresh pipe — rather than ~75s in (by which
-      // point the emulator's relay has degraded). See unitApprovalCoordinator.
-      VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "1",
       // Emulator: force relay-only through the local coturn (a direct NAT'd pipe
       // can't hold ICE consent freshness). The answerer threads this into the
       // pairing link's `ice=relay`, which the client honors.
@@ -1733,11 +1729,8 @@ async function main() {
     }
     await logcat.waitForPhase("embedded-pairing-complete");
     await logcat.waitForPhase("embedded-workspace-selected");
-    // Startup-unit auto-approval pre-approves the host target, so the
-    // approval-required + preparing phases are SKIPPED and the app goes straight to
-    // bundle activation. Fire a best-effort "Trust and start" tap in the background
-    // (for runs WITHOUT auto-approve) but never block on the approval phase — under
-    // auto-approve the button never appears and activation has already begun.
+    // Reviews are real queue entries. Keep a best-effort launch-gate tap active
+    // while the phase driver handles both unit review and host-target trust.
     if (!options.noTap) {
       void tapOptionalButtonByText(options.device, "Trust and start", 12_000)
         .then((approved) => {

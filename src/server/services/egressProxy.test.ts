@@ -35,6 +35,7 @@ import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { createApprovalQueue, type ApprovalQueue } from "./approvalQueue.js";
 import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
 import { authorizeVerifiedCaller } from "./authorityRuntime.js";
+import { createTestExecutionSession } from "@vibestudio/shared/serviceDispatcherTestUtils";
 
 class MemoryCredentialStore {
   constructor(private readonly credentials = new Map<string, Credential>()) {}
@@ -116,11 +117,10 @@ function workerCaller(
     executionDigest: "a".repeat(64),
     requested: [
       {
-        capability: "external-network-fetch",
+        capability: "network.response.read",
         resource: { kind: "prefix", prefix: "" },
       },
     ],
-    evalCeilings: [],
   });
 }
 
@@ -136,12 +136,22 @@ function evalCaller(agentId: string, effectiveVersion = "hash-1") {
       effectiveVersion,
       executionDigest: "a".repeat(64),
       requested: [],
-      evalCeilings: [],
-      evalOrigin: { ownerId: agentId, purpose: "agentic-code-execution" },
+      evalOrigin: { ownerId: agentId },
     },
     { entityId: agentId, contextId: "ctx-agent", channelId: "conversation-1" },
     null,
-    true
+    createTestExecutionSession({
+      runtimeId: callerId,
+      repoPath: "workers/agent-worker",
+      effectiveVersion,
+      harnessPrincipal: `code:workers/agent-worker@${"a".repeat(64)}`,
+      contextId: "ctx-agent",
+      agentBinding: {
+        entityId: agentId,
+        channelId: "conversation-1",
+        bindingId: agentId,
+      },
+    })
   );
 }
 
@@ -234,6 +244,10 @@ function createApprovalQueueMock(
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
+    requestMissionReview: vi.fn(async () => ({
+      decision: "dismiss" as const,
+      decidedBy: "user:test" as const,
+    })),
     presentDeviceCode: vi.fn(() => ({
       approvalId: "device-code-test",
       cancelled: new AbortController().signal,
@@ -241,6 +255,7 @@ function createApprovalQueueMock(
     })),
     resolve: vi.fn(),
     resolveUserland: vi.fn(),
+    resolveMissionReview: vi.fn(),
     requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
     resolveExternalAgent: vi.fn(),
     settleExternalAgent: vi.fn(() => 0),
@@ -1208,7 +1223,7 @@ describe("EgressProxy", () => {
       expect(approvalQueue.request).toHaveBeenCalledWith(
         expect.objectContaining({
           kind: "capability",
-          capability: "external-network-fetch",
+          capability: "network.response.read",
           callerId: "worker:test",
           repoPath: "/repo",
           resource: {
@@ -2071,6 +2086,40 @@ describe("EgressProxy", () => {
         },
       })
     );
+  });
+
+  it("does not enter the credential waiter after a host-authenticated test preapproval", async () => {
+    const credential = createCredential({ grants: [] });
+    const approvalQueue = {
+      request: vi.fn(async () => "once" as const),
+      resolve: vi.fn(),
+      listPending: vi.fn(() => []),
+    };
+    const proxy = createProxy(credential, new MemoryAuditLog(), {
+      approvalQueue: approvalQueue as never,
+      credentialUseGrantStore: new MemoryCredentialUseGrantStore(),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("ok", { status: 200, statusText: "OK" }))
+    );
+    const caller = {
+      ...workerCaller("worker:test"),
+      testPolicy: {
+        policyId: "test:credential-egress-run",
+        kind: "orchestrator" as const,
+      },
+    };
+
+    await proxy.forwardProxyFetch({
+      caller,
+      credentialId: "cred-1",
+      url: "https://api.example.test/v1/items",
+      method: "GET",
+    });
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("retries replay-safe retryable responses and records retry count", async () => {

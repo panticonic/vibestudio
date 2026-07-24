@@ -472,6 +472,74 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     expect(updateMains).not.toHaveBeenCalled();
   });
 
+  it("releases the context lifecycle lock when caller publication is aborted", async () => {
+    const { refs, vcs } = await harness();
+    const heldPublication = new Promise<never>(() => {});
+    const updateMains = vi
+      .spyOn(refs, "updateMains")
+      .mockImplementation(async () => heldPublication);
+    const call = vi.fn(async (method: string, request: unknown) => {
+      if (method !== "vcsSemanticDispatch") throw new Error(`unexpected ${method}`);
+      const semanticMethod = (request as { method: string }).method;
+      if (semanticMethod === "vcsStatus") {
+        return { kind: "complete", result: { recovered: true } };
+      }
+      if (semanticMethod !== "vcsPush") throw new Error(`unexpected ${semanticMethod}`);
+      return {
+        kind: "effects-pending",
+        result: null,
+        effects: [
+          {
+            effectId: "effect:aborted-publication",
+            scopeKind: "context",
+            scopeId: "context:aborted-publication",
+            commandId: "command:aborted-publication",
+            kind: "publish-main",
+            payload: {
+              previousEventId: "event:main",
+              publishedEventId: "event:aborted",
+              repositories: [],
+            },
+            payloadDigest: "effect-digest:aborted-publication",
+            status: "pending",
+          },
+        ],
+      };
+    });
+    await vcs.attachGad({ call: call as never });
+    const controller = new AbortController();
+    const caller = createVerifiedCaller("panel:test", "panel", {
+      callerId: "panel:test",
+      callerKind: "panel",
+      repoPath: "panels/test",
+      effectiveVersion: "test-version",
+    });
+
+    const publication = vcs.semanticPublishCall(
+      { contextId: "context:aborted-publication" },
+      null,
+      caller,
+      { class: "internal", externalKeys: [] },
+      controller.signal
+    );
+    await vi.waitFor(() => expect(updateMains).toHaveBeenCalledOnce());
+    controller.abort(new DOMException("Publication cancelled", "AbortError"));
+
+    await expect(publication).rejects.toMatchObject({
+      name: "AbortError",
+      message: "Publication cancelled",
+    });
+    await expect(
+      vcs.semanticCall("vcsStatus", {
+        input: { contextId: "context:aborted-publication" },
+        ingress: {
+          causalParent: null,
+          contextIntegrity: { class: "internal", externalKeys: [] },
+        },
+      })
+    ).resolves.toEqual({ recovered: true });
+  });
+
   it("retries the exact initial publication only from the trusted lifecycle operation", async () => {
     const { refs, vcs } = await harness();
     const imported = { kind: "event", eventId: "event:initial-import" } as const;

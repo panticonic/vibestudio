@@ -8,8 +8,40 @@ import type {
   ServiceAuthorityPolicy,
 } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
-import { UnitAuthorityRequestSchema, EvalAuthorityCeilingSchema } from "./build.js";
+import { AuthorityResourceScopeSchema, UnitAuthorityRequestSchema } from "./build.js";
 import { contextBoundaryAuthority } from "./authority/contextBoundary.js";
+
+export const AgentExecutionTestPolicySpecSchema = z
+  .object({
+    testId: z.string().min(1),
+    authority: z
+      .array(
+        z
+          .object({
+            ruleId: z.string().min(1),
+            capability: z.string().min(1),
+            resource: AuthorityResourceScopeSchema,
+            tier: z.enum(["gated", "critical"]),
+            decision: z.enum(["once", "deny"]),
+          })
+          .strict()
+      )
+      .readonly(),
+    userland: z
+      .array(
+        z
+          .object({
+            ruleId: z.string().min(1),
+            subjectId: z.string().min(1),
+            decision: z.string().min(1),
+            remember: z.boolean(),
+          })
+          .strict()
+      )
+      .readonly(),
+    unexpectedPrompts: z.literal("fail"),
+  })
+  .strict();
 
 // Access descriptors carry sensitivity metadata; caller-kind authorization
 // belongs exclusively to the service/method `authority`.
@@ -76,10 +108,6 @@ export const RuntimeEntityHandleSchema = z
       .array(UnitAuthorityRequestSchema)
       .optional()
       .describe("Reviewed capability requests embedded in the selected execution artifact."),
-    authorityEvalCeilings: z
-      .array(EvalAuthorityCeilingSchema)
-      .optional()
-      .describe("Reviewed eval evalCeilings embedded in the selected execution artifact."),
     contextId: z.string().describe("Semantic workspace context this entity belongs to."),
     targetId: z
       .string()
@@ -433,6 +461,9 @@ export const runtimeMethods = defineServiceMethods({
           .string()
           .optional()
           .describe("Explicit context id; omit to mint a random UUID."),
+        testPolicy: AgentExecutionTestPolicySpecSchema.optional().describe(
+          "Exact per-case authority policy; accepted only from a host-attested system-test orchestrator."
+        ),
       }),
     ]),
     returns: WorkspaceContextSchema,

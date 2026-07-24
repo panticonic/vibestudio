@@ -13,13 +13,16 @@ What you must NEVER do is patch around the wall to comply with my words: a flag,
 When a task asks to verify, diagnose, or repair Vibestudio through the headless
 agentic system tests, use the running server through the CLI:
 
-1. Run `pnpm cli system-test doctor` and fix failed infrastructure checks first.
-2. Use `pnpm cli system-test list --json` to discover exact test names.
-3. Run the smallest relevant exact test with `pnpm cli system-test run TEST_NAME`.
+1. Run `pnpm cli [--instance ID] system-test doctor` and fix failed
+   infrastructure checks first. Use the instance id printed by the source
+   server whenever multiple developer hubs are running.
+2. Use `pnpm cli [--instance ID] system-test list --json` to discover exact test names.
+3. Run the smallest relevant exact test with
+   `pnpm cli [--instance ID] system-test run TEST_NAME`.
 4. A non-zero test exit is an investigation trigger, not a reporting boundary.
-   Immediately run `pnpm cli system-test inspect RUN_ID --json`, then
-   `pnpm cli system-test trajectory RUN_ID TEST_NAME --full --json` when the
-   bounded packet is insufficient.
+   Immediately run `pnpm cli [--instance ID] system-test inspect RUN_ID --json`,
+   then `pnpm cli [--instance ID] system-test trajectory RUN_ID TEST_NAME
+   --full --json` when the bounded packet is insufficient.
 5. Classify the root cause as infrastructure, documentation, harness, or
    validator. Default to repairing infrastructure; do not route around platform
    bugs by over-specifying prompts.
@@ -27,11 +30,23 @@ agentic system tests, use the running server through the CLI:
    the current source server is sufficient for host-code-only changes. Changes
    under `workspace/` are workspace source: a named `--bootstrap-workspace`
    preserves its semantic state across restarts and does not reread the checkout
-   template. Stop it and start `pnpm server:live --ephemeral` to test a fresh
-   checkout copied from the current template, then rerun the exact agentic test.
+   template. Stop that exact instance and start
+   `pnpm server:live --ephemeral --instance ID` to test a fresh checkout copied
+   from the current template, then address it with `pnpm cli --instance ID ...`.
+   Never stop or reuse another live instance merely because it came from the
+   same checkout.
 7. After it passes, run its category and then smoke coverage. Use
-   `pnpm cli system-test rerun RUN_ID` to rerun every failure or unexpected tool
-   failure from a prior run.
+   `pnpm cli [--instance ID] system-test rerun RUN_ID` to rerun every failure
+   or unexpected tool failure from a prior run.
+
+`pnpm dev` and `pnpm server:live` run under the same developer-instance
+supervisor. Every instance has its own lease, identity, databases, workspace
+state, ports, ready file, CLI credential, and CLI sessions. Provider/model
+configuration and encrypted provider credentials remain profile-scoped and are
+shared safely. `pnpm server:live` uses the persistent `source` instance;
+`--instance NAME` selects another persistent instance; `--ephemeral` creates a
+temporary instance (an explicit name makes parallel logs and CLI commands
+stable). The supervisor prints the exact `pnpm cli --instance NAME` prefix.
 
 Do not stop after merely listing artifact paths or restating validation errors.
 Inspect the captured conversation, invocations, lifecycle/debug events, cleanup

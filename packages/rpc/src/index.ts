@@ -37,8 +37,6 @@ export type {
   EventMap,
   TypedCallProxy,
   RpcConnectionStatus,
-  DeferredCallAck,
-  DeferrableRpcClient,
   StreamingMethodHandler,
   StreamingMethodFrame,
   ParentPortEnvelope,
@@ -58,21 +56,28 @@ export type {
   AuthorityPreflightResult,
   AuthorityRemediationKind,
   AuthorityGrant,
+  AuthorityGrantSubject,
+  AgentGrantPrincipal,
+  AuthorityLock,
   AuthorityGrantConstraints,
   AuthorityRequirement,
   CapabilityScope,
   CodeLineageFact,
   ContextIntegrityFact,
-  DirectAuthorityAttestation,
   EntityPrincipal,
   LiveWorkspaceRelationship,
   Principal,
   PrincipalKind,
   ResourceScope,
   SessionMissionFact,
+  AgentExecutionMode,
+  AgentExecutionTestAuthorityRule,
+  AgentExecutionTestCasePolicy,
+  AgentExecutionTestPolicy,
+  AgentExecutionTestPolicySpec,
+  AgentExecutionTestUserlandRule,
+  AgentExecutionSessionFact,
 } from "./authority.js";
-export { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "./authority.js";
-
 export { isParentPortEnvelope } from "./types.js";
 export { createRpcClient, defineContract, withCausalParent } from "./client.js";
 export { bytesToBase64, base64ToBytes } from "./base64.js";

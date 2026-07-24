@@ -37,4 +37,19 @@ describe("PANEL_BOOTSTRAP_SCRIPT", () => {
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain("The panel bundle could not be loaded.");
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain("Reload panel");
   });
+
+  it("publishes a machine-readable boot handshake instead of using DOM presence as readiness", () => {
+    expect(PANEL_BOOTSTRAP_SCRIPT).toContain('__vibestudioPanelBoot');
+    expect(PANEL_BOOTSTRAP_SCRIPT).toContain('reportBoot("loading")');
+    expect(PANEL_BOOTSTRAP_SCRIPT).toContain('reportBoot("booting")');
+    expect(PANEL_BOOTSTRAP_SCRIPT).toContain('bundle.onload = () => reportBoot("ready")');
+    expect(PANEL_BOOTSTRAP_SCRIPT).toContain('reportBoot("failed"');
+    expect(PANEL_BOOTSTRAP_SCRIPT).toContain('"vibestudio:panel-boot"');
+  });
+
+  it("ties the handshake to runtime and immutable build identity", () => {
+    expect(PANEL_BOOTSTRAP_SCRIPT).toContain("__vibestudioEntityId");
+    expect(PANEL_BOOTSTRAP_SCRIPT).toContain("__vibestudioEffectiveVersion");
+    expect(PANEL_BOOTSTRAP_SCRIPT).toContain("__vibestudioBuildKey");
+  });
 });

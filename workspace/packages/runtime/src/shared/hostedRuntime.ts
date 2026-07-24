@@ -19,6 +19,7 @@
 import type { RpcClient } from "@vibestudio/rpc";
 import { createBrowserDataClient, type BrowserDataClient } from "@vibestudio/browser-data/client";
 import type { OpenExternalOptions, OpenExternalResult } from "@vibestudio/shared/externalOpen";
+import { PanelOperationError } from "@vibestudio/shared/panel/observation";
 import { helpfulNamespace } from "./helpfulNamespace.js";
 import { createGadClient, type GadClient } from "./gad.js";
 import { createBlobstoreClient, type BlobstoreClient } from "./blobstore.js";
@@ -85,6 +86,8 @@ export interface RuntimeHost {
 
 /** The portable runtime surface — identical across panel · worker · eval. */
 export interface WorkspaceRuntime {
+  /** Structured error class thrown by readiness-bearing panel operations. */
+  readonly PanelOperationError: typeof PanelOperationError;
   readonly id: string;
   readonly contextId: string;
   readonly rpc: RpcClient;
@@ -226,6 +229,7 @@ export function createHostedRuntime(host: RuntimeHost): WorkspaceRuntime {
   const parentApi = createParentHandleApi(host.resolveParent);
 
   return {
+    PanelOperationError,
     id: host.id,
     contextId: host.contextId,
     rpc,

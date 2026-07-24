@@ -268,7 +268,12 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     return callerId;
   }
 
-  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async openBridge(opts?: { sessionInfo?: Record<string, unknown> }): Promise<Response> {
     const callerId = this.requireBridgeCaller("openBridge");
     const primaryChannelId = this.primaryChannelId();
@@ -351,7 +356,12 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     });
   }
 
-  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async ackDelivery(opts: { seq: number }): Promise<{ ok: boolean; ackSeq: number }> {
     this.requireBridgeCaller("ackDelivery");
     const seq = Number(opts?.seq);
@@ -613,7 +623,12 @@ export class LinkedAgentWorker extends AgentWorkerBase {
 
   // ── Outbound: say / complete (plan §7.2) ───────────────────────────────────
 
-  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async say(opts: {
     text: string;
     to?: Array<{ kind: "all" | "role" | "participant"; role?: string; participantId?: string }>;
@@ -650,7 +665,12 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     return { ok: true, messageId, channelId };
   }
 
-  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async completeFromBridge(opts: {
     report: string;
     outcome?: "success" | "failed";
@@ -676,7 +696,12 @@ export class LinkedAgentWorker extends AgentWorkerBase {
    * Caller gating is coarse (any extension may call); the worst a forged report
    * can do is settle-as-failed, which is the cancel path's power.
    */
-  @rpc({ principals: ["host", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async reportExternalExit(opts: {
     runId?: string;
     code?: number | null;
@@ -701,7 +726,12 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     return { ok: true, settled: true };
   }
 
-  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async linkedStatus(): Promise<{
     attached: boolean;
     sessionInfo: Record<string, unknown> | null;
@@ -780,7 +810,12 @@ export class LinkedAgentWorker extends AgentWorkerBase {
 
   // ── Observable trajectory and causal recording from hooks (plan §7.4) ─────
 
-  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async ingestHookEvent(opts: {
     sessionId: string;
     seq: number;
@@ -1144,7 +1179,12 @@ export class LinkedAgentWorker extends AgentWorkerBase {
 
   // ── Permission relay (plan §7.3) ───────────────────────────────────────────
 
-  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async requestPermission(opts: {
     requestId: string;
     toolName: string;

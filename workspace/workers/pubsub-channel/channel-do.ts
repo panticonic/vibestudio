@@ -35,9 +35,12 @@ import type {
   ChannelInvite,
   ChannelReplayAfterRequest,
   ParticipantSnapshot,
+  RpcChannelMessage,
 } from "@workspace/pubsub";
 
-const PUBSUB_CHANNEL_SCHEMA_BASELINE = 114;
+const PUBSUB_CHANNEL_SCHEMA_BASELINE = 115;
+const STRUCTURED_DELIVERY_RETRY_MS = 1_000;
+const STRUCTURED_DELIVERY_MAX_RETRY_MS = 30_000;
 import type {
   DeleteChannelInviteInput,
   DeleteChannelMembershipInput,
@@ -74,7 +77,9 @@ import {
   buildChannelEvent,
   channelEventToRpcSignal,
   queueDoEnvelope,
+  STRUCTURED_DELIVERY_TIMEOUT_MS,
   type BroadcastDeps,
+  type StructuredDeliveryEnvelope,
   closeDeliveryChain,
   cleanupDeliveryChain,
   releaseDeliveryChain,
@@ -417,6 +422,25 @@ export class PubSubChannel extends DurableObjectBase {
       )
     `);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_dedup_keys_created ON dedup_keys(created_at)`);
+    // Structured DO callbacks are a durable transport outbox. Invoking a
+    // recipient inline from publish creates a re-entrancy cycle when that
+    // recipient immediately publishes an acknowledgement back to this channel.
+    // The alarm owns delivery after the publication request has committed.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS structured_delivery_outbox (
+        participant_id TEXT NOT NULL,
+        delivery_key TEXT NOT NULL,
+        envelope_json TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (participant_id, delivery_key)
+      )
+    `);
+    this.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_structured_delivery_due
+        ON structured_delivery_outbox(next_attempt_at, created_at)
+    `);
     // Fork-operation journal (single-writer: this parent channel DO). The op's
     // durability lives HERE — the row is written BEFORE any host/DO call, and its
     // `phase` advances after each idempotent step so a crash resumes (or rolls
@@ -497,7 +521,7 @@ export class PubSubChannel extends DurableObjectBase {
   protected override schemaProductionBaseline() {
     return {
       version: PUBSUB_CHANNEL_SCHEMA_BASELINE,
-      name: "pubsub-channel-v114",
+      name: "pubsub-channel-v115",
     } as const;
   }
 
@@ -510,7 +534,111 @@ export class PubSubChannel extends DurableObjectBase {
       objectKey: this.objectKey,
       deliverParticipant: (participantId, payload) =>
         this.deliverParticipantPayload(participantId, payload),
+      enqueueDoEnvelope: (participantId, envelope) =>
+        this.enqueueStructuredDelivery(participantId, envelope),
     };
+  }
+
+  private enqueueStructuredDelivery(
+    participantId: string,
+    envelope: StructuredDeliveryEnvelope
+  ): void {
+    const identity =
+      envelope.kind === "log"
+        ? `${envelope.phase}:${envelope.event.id}:${envelope.event.messageId}`
+        : `signal:${envelope.messageId}`;
+    const now = Date.now();
+    this.sql.exec(
+      `INSERT OR IGNORE INTO structured_delivery_outbox
+         (participant_id, delivery_key, envelope_json, attempts, next_attempt_at, created_at)
+       VALUES (?, ?, ?, 0, ?, ?)`,
+      participantId,
+      identity,
+      JSON.stringify(envelope),
+      now,
+      now
+    );
+  }
+
+  private nextStructuredDeliveryAt(): number | null {
+    const value = this.sql
+      .exec(
+        `SELECT MIN(next_attempt_at) AS due
+           FROM structured_delivery_outbox`
+      )
+      .toArray()[0]?.["due"];
+    return typeof value === "number" ? value : null;
+  }
+
+  private async drainStructuredDeliveryOutbox(): Promise<void> {
+    const now = Date.now();
+    const rows = this.sql
+      .exec(
+        `SELECT participant_id, delivery_key, envelope_json, attempts
+           FROM structured_delivery_outbox
+          WHERE next_attempt_at <= ?
+          ORDER BY created_at, participant_id, delivery_key
+          LIMIT 100`,
+        now
+      )
+      .toArray();
+    for (const row of rows) {
+      const participantId = String(row["participant_id"]);
+      const deliveryKey = String(row["delivery_key"]);
+      const participantPresent =
+        this.sql
+          .exec(`SELECT 1 FROM participants WHERE id = ?`, participantId)
+          .toArray().length > 0;
+      if (!participantPresent) {
+        this.sql.exec(
+          `UPDATE structured_delivery_outbox
+              SET next_attempt_at = ?
+            WHERE participant_id = ? AND delivery_key = ?`,
+          now + STRUCTURED_DELIVERY_RETRY_MS,
+          participantId,
+          deliveryKey
+        );
+        continue;
+      }
+      try {
+        const envelope = JSON.parse(String(row["envelope_json"])) as RpcChannelMessage;
+        await this.rpc.call(participantId, "onChannelEnvelope", [this.objectKey, envelope], {
+          timeoutMs: STRUCTURED_DELIVERY_TIMEOUT_MS,
+        });
+        this.sql.exec(
+          `DELETE FROM structured_delivery_outbox
+            WHERE participant_id = ? AND delivery_key = ?`,
+          participantId,
+          deliveryKey
+        );
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        if (code === "DO_NOT_CREATED") {
+          this.sql.exec(
+            `DELETE FROM structured_delivery_outbox
+              WHERE participant_id = ? AND delivery_key = ?`,
+            participantId,
+            deliveryKey
+          );
+          continue;
+        }
+        const attempts = Number(row["attempts"] ?? 0) + 1;
+        const retryMs = Math.min(
+          STRUCTURED_DELIVERY_RETRY_MS * 2 ** Math.min(attempts - 1, 5),
+          STRUCTURED_DELIVERY_MAX_RETRY_MS
+        );
+        this.sql.exec(
+          `UPDATE structured_delivery_outbox
+              SET attempts = ?, next_attempt_at = ?
+            WHERE participant_id = ? AND delivery_key = ?`,
+          attempts,
+          Date.now() + retryMs,
+          participantId,
+          deliveryKey
+        );
+        console.error(`[Channel] delivery failed for ${participantId}:`, error);
+      }
+    }
   }
 
   private get channelLog(): ChannelLog {
@@ -553,8 +681,14 @@ export class PubSubChannel extends DurableObjectBase {
       log: this.channelLog,
       builders: () => this.policyHost.callBuilders(),
       appendDurable: (input) => this.appendDurable(input),
-      broadcastLive: (event, senderId, ref) =>
-        broadcast(this.broadcastDeps, event, { kind: "log", phase: "live", ref }, senderId),
+      broadcastLive: (event, senderId, ref, structuredPublisherId) =>
+        broadcast(
+          this.broadcastDeps,
+          event,
+          { kind: "log", phase: "live", ref },
+          senderId,
+          structuredPublisherId
+        ),
       emitSignal: (participantId, event) => {
         void this.deliverParticipantPayload(participantId, {
           channelId: this.objectKey,
@@ -1338,6 +1472,10 @@ export class PubSubChannel extends DurableObjectBase {
         this.recordOfflinePresence(participantId, Date.now());
       }
       this.sql.exec(`DELETE FROM participants WHERE id = ?`, participantId);
+      this.sql.exec(
+        `DELETE FROM structured_delivery_outbox WHERE participant_id = ?`,
+        participantId
+      );
     });
     cleanupDeliveryChain(this.objectKey, participantId);
     await this.calls.failPendingCallsTargeting(participantId, leaveReason);
@@ -2633,6 +2771,7 @@ export class PubSubChannel extends DurableObjectBase {
       this.calls.nextCallDeadlineAt(),
       this.nextPendingRedeliveryAt(),
       this.nextForkOpReconcileAt(),
+      this.nextStructuredDeliveryAt(),
     ].filter((value): value is number => typeof value === "number");
     return sources.length === 0 ? null : { wakeAt: Math.max(Math.min(...sources), now + 100) };
   }
@@ -2682,6 +2821,7 @@ export class PubSubChannel extends DurableObjectBase {
       console.warn("[Channel] pending-call redelivery failed:", error);
     }
     await this.reconcileForkOps();
+    await this.drainStructuredDeliveryOutbox();
 
     return this.nextAlarmSchedule();
   }

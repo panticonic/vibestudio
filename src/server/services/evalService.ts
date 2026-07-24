@@ -2,7 +2,11 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { evalMethods, type EvalRunArgs } from "@vibestudio/service-schemas/eval";
-import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
+import {
+  getInternalDOBundle,
+  internalDOExecutionIdentity,
+  INTERNAL_DO_SOURCE,
+} from "../internalDOs/internalDoLoader.js";
 import type { HeldDoDispatcher } from "@vibestudio/shared/doDispatcher";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import { resolveOwningPanelSlot } from "@vibestudio/shared/panel/owningPanelSlot";
@@ -10,6 +14,8 @@ import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createHash, randomUUID } from "node:crypto";
 import type { RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
+import type { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
+import { resolveCodeIdentity } from "./principalIdentity.js";
 
 const DEFAULT_EVAL_WATCHDOG_GRACE_MS = 1_000;
 
@@ -67,8 +73,6 @@ async function watchTimedRun(
 }
 
 const EVAL_DO_CLASS = "EvalDO";
-/** Stable — EvalDO ships in the internal bundle, not build-versioned; keeps entity identity stable. */
-const EVAL_DO_EFFECTIVE_VERSION = "internal";
 
 interface EvalOwner {
   ownerId: string;
@@ -102,6 +106,12 @@ export function createEvalService(deps: {
    */
   entityStore: WorkspaceEntityStore;
   tokenManager: TokenManager;
+  workspaceId: string;
+  executionSessions: AgentExecutionSessionRegistry;
+  missionFactForSession?: (
+    sessionId: string
+  ) => import("@vibestudio/rpc").SessionMissionFact | null;
+  isSystemTestHarness?: (caller: ServiceContext["caller"], runId: string) => boolean;
   /**
    * Host-wide background-work registry (idle-exit monitor). Synchronous calls and explicit
    * host watchdogs report begin/end; ordinary asynchronous runs live inside the EvalDO.
@@ -113,6 +123,7 @@ export function createEvalService(deps: {
   watchdogGraceMs?: number;
 }): ServiceDefinition {
   const store = deps.entityStore;
+  const evalExecutionIdentity = internalDOExecutionIdentity(getInternalDOBundle(), EVAL_DO_CLASS);
 
   const evalDoKey = (ownerId: string, subKey: string): string =>
     createHash("sha256")
@@ -231,7 +242,6 @@ export function createEvalService(deps: {
   ): Promise<{ objectKey: string }> {
     const { ownerId, contextId } = owner;
     const objectKey = evalDoKey(ownerId, subKey);
-    const authorityCeilingPurpose = agentBinding ? "agentic-code-execution" : "tool-eval";
     // Fast path: the EvalDO entity is sticky (idle-eviction aborts the instance
     // but never retires the entity), so once it's active in the cache for the
     // right context there's nothing to do — re-activating every run is a wasted
@@ -249,7 +259,9 @@ export function createEvalService(deps: {
       active.contextId === contextId &&
       JSON.stringify(active.agentBinding ?? null) === JSON.stringify(agentBinding ?? null) &&
       activeStateArgs?.["ownerPrincipalId"] === ownerId &&
-      activeStateArgs["authorityCeilingPurpose"] === authorityCeilingPurpose
+      typeof activeStateArgs["agentExecutionAdmission"] === "object" &&
+      active.activeBuildKey === evalExecutionIdentity.buildKey &&
+      active.activeExecutionDigest === evalExecutionIdentity.executionDigest
     ) {
       return { objectKey };
     }
@@ -257,12 +269,18 @@ export function createEvalService(deps: {
     // own fs/git/vcs calls resolve the owner's workspace. The store pairs the
     // durable upsert with the server hot-cache mirror, so the server can resolve
     // THIS EvalDO's principal when it calls back to `main`. Idempotent.
-    await store.activate({
+    const activation = {
       kind: "do",
-      source: { repoPath: INTERNAL_DO_SOURCE, effectiveVersion: EVAL_DO_EFFECTIVE_VERSION },
+      source: {
+        repoPath: INTERNAL_DO_SOURCE,
+        effectiveVersion: evalExecutionIdentity.effectiveVersion,
+      },
       contextId,
       className: EVAL_DO_CLASS,
       key: objectKey,
+      activeBuildKey: evalExecutionIdentity.buildKey,
+      activeExecutionDigest: evalExecutionIdentity.executionDigest,
+      activeAuthority: { requests: evalExecutionIdentity.authorityRequests },
       // The EvalDO's launch parent IS its owner. An entity spawned FROM an eval (e.g. a headless
       // sub-agent the orchestrator's eval creates via runtime.createEntity) records THIS EvalDO as its
       // parentId — so without this link the lineage dead-ends at the EvalDO and the sub-agent's panels
@@ -274,8 +292,17 @@ export function createEvalService(deps: {
       // bootstrap caller with no subject.
       ownerUserId,
       agentBinding,
-      stateArgs: { ownerPrincipalId: ownerId, subKey, authorityCeilingPurpose },
-    });
+      stateArgs: {
+        ownerPrincipalId: ownerId,
+        subKey,
+        agentExecutionAdmission: { v: 1, ownerId },
+      },
+    } as const;
+    if (active) {
+      await store.advanceExecution(activation);
+    } else {
+      await store.activate(activation);
+    }
     return { objectKey };
   }
 
@@ -335,7 +362,8 @@ export function createEvalService(deps: {
 
   async function prepareRun(
     ctx: ServiceContext,
-    runArgs: EvalRunArgs
+    runArgs: EvalRunArgs,
+    runId: string
   ): Promise<{
     evalDoRef: { source: string; className: string; objectKey: string };
     assembledArgs: Record<string, unknown>;
@@ -343,8 +371,8 @@ export function createEvalService(deps: {
     channelId: string | undefined;
   }> {
     assertRunSource(runArgs);
-    const ownerId = ctx.caller.runtime.id;
     const owner = await resolveOwnerForCaller(ctx, runArgs);
+    const ownerId = owner.ownerId;
     const agentBinding = trustedAgentRelay(ctx);
     if (agentBinding && !ctx.causalParent) {
       throw new ServiceError(
@@ -381,9 +409,71 @@ export function createEvalService(deps: {
     const timeoutMs = runArgs.timeoutMs;
     const chatBinding = isAgentDo ? { channelId: agentBinding.channelId, agentRef: ownerId } : {};
     const parent = (await resolveParentPanel(ownerId)) ?? undefined;
+    const evalRuntimeId = evalDoEntityId(objectKey);
+    const ownerHarness = resolveCodeIdentity(store.cache, ownerId);
+    const harness = ownerHarness
+      ? {
+          repoPath: ownerHarness.repoPath,
+          effectiveVersion: ownerHarness.effectiveVersion,
+          executionDigest: ownerHarness.executionDigest,
+        }
+      : {
+          repoPath: evalExecutionIdentity.source,
+          effectiveVersion: evalExecutionIdentity.effectiveVersion,
+          executionDigest: evalExecutionIdentity.executionDigest,
+        };
+    if (!ctx.caller.subject) {
+      throw new ServiceError(
+        "eval",
+        "run",
+        "Evaluated execution requires an authenticated user",
+        "EACCES",
+        undefined,
+        "access"
+      );
+    }
+    const sessionId = agentBinding?.channelId ?? evalRuntimeId;
+    const mission = deps.missionFactForSession?.(sessionId) ?? null;
+    const inheritedTestPolicy = deps.executionSessions.testPolicyForContext(owner.contextId);
+    const testPolicy =
+      !mission &&
+      (inheritedTestPolicy ??
+        (deps.isSystemTestHarness?.(ctx.caller, runId)
+          ? deps.executionSessions.createTestPolicy(runId)
+          : null));
+    deps.executionSessions.admit({
+      mode: mission ? "mission" : testPolicy ? "test" : "interactive",
+      ownerUser: `user:${ctx.caller.subject.userId}`,
+      workspaceId: deps.workspaceId,
+      contextId: owner.contextId,
+      agentBinding: agentBinding
+        ? {
+            entityId: agentBinding.entityId,
+            channelId: agentBinding.channelId,
+            bindingId: `${agentBinding.entityId}@${agentBinding.contextId}`,
+          }
+        : null,
+      taskRef: agentBinding?.channelId ?? `eval:${ownerId}:${runId}`,
+      harness: {
+        principal: `code:${harness.repoPath}@${harness.executionDigest}`,
+        repoPath: harness.repoPath,
+        effectiveVersion: harness.effectiveVersion,
+      },
+      eval: { runtimeId: evalRuntimeId, runId },
+      causalParent: ctx.causalParent
+        ? {
+            logId: ctx.causalParent.logId,
+            head: ctx.causalParent.head,
+            invocationId: ctx.causalParent.invocationId,
+          }
+        : null,
+      ...(mission ? { mission } : {}),
+      ...(testPolicy ? { testPolicy } : {}),
+    });
     return {
       evalDoRef: { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
       assembledArgs: {
+        runId,
         code: runArgs.code,
         path: runArgs.path,
         sourcePath: runArgs.sourcePath,
@@ -413,12 +503,14 @@ export function createEvalService(deps: {
       run: async (ctx, [runArgs]) => {
         // Held synchronous run for connection-holding callers (panels over WS, CLI). The EvalDO
         // runs in a held handler; the caller holds its own leg. One request, one result.
-        const { evalDoRef, assembledArgs } = await prepareRun(ctx, runArgs);
-        const activityId = `eval:held:${randomUUID()}`;
+        const runId = randomUUID();
+        const { evalDoRef, assembledArgs } = await prepareRun(ctx, runArgs, runId);
+        const activityId = `eval:held:${runId}`;
         deps.activity?.begin(activityId);
         try {
           return await deps.doDispatch.dispatchHeld(evalDoRef, "run", assembledArgs);
         } finally {
+          deps.executionSessions.close(evalDoEntityId(evalDoRef.objectKey), runId);
           deps.activity?.end(activityId);
         }
       },
@@ -427,11 +519,41 @@ export function createEvalService(deps: {
         // immediately. Its terminal row is canonical and its own owner-scoped callback settles the
         // agent. The host keeps no execution request open.
         const runId = runArgs.runId ?? randomUUID();
-        const { evalDoRef, assembledArgs } = await prepareRun(ctx, runArgs);
-        await deps.doDispatch.dispatch(evalDoRef, "startRun", {
+        const { evalDoRef, assembledArgs } = await prepareRun(ctx, runArgs, runId);
+        const startArgs = {
           ...assembledArgs,
           runId,
-        });
+        };
+        const evalRuntimeId = evalDoEntityId(evalDoRef.objectKey);
+        try {
+          await deps.doDispatch.dispatch(evalDoRef, "startRun", startArgs);
+        } catch (error) {
+          // startRun is idempotent on runId. A transport rejection is
+          // ambiguous: the EvalDO may already have durably accepted the run.
+          // Keep its admission live and retry the same start until the durable
+          // owner acknowledges it, then monitor the canonical terminal.
+          void reconcileAmbiguousStart(deps.doDispatch, evalDoRef, runId, startArgs)
+            .catch((reconcileError) => {
+              console.warn(
+                `[eval] admission reconciliation ${runId} stopped:`,
+                reconcileError instanceof Error ? reconcileError.message : reconcileError
+              );
+            })
+            .finally(() => {
+              deps.executionSessions.close(evalRuntimeId, runId);
+            });
+          throw error;
+        }
+        void closeAdmissionWhenRunEnds(deps.doDispatch, evalDoRef, runId)
+          .catch((error) => {
+            console.warn(
+              `[eval] admission monitor ${runId} stopped:`,
+              error instanceof Error ? error.message : error
+            );
+          })
+          .finally(() => {
+            deps.executionSessions.close(evalRuntimeId, runId);
+          });
         const timeoutMs = assembledArgs["timeoutMs"];
         if (typeof timeoutMs === "number" && deps.recoverUnresponsiveSandbox) {
           const activityId = `eval-watchdog:${runId}`;
@@ -478,4 +600,47 @@ export function createEvalService(deps: {
         deps.doDispatch.dispatch(await evalDoRefFor(ctx, cancelArgs), "cancel", cancelArgs.runId),
     }),
   };
+}
+
+async function reconcileAmbiguousStart(
+  dispatch: HeldDoDispatcher,
+  ref: { source: string; className: string; objectKey: string },
+  runId: string,
+  startArgs: Record<string, unknown>
+): Promise<void> {
+  for (;;) {
+    try {
+      await dispatch.dispatch(ref, "startRun", startArgs);
+      return closeAdmissionWhenRunEnds(dispatch, ref, runId);
+    } catch {
+      await admissionRetryDelay();
+    }
+  }
+}
+
+async function closeAdmissionWhenRunEnds(
+  dispatch: HeldDoDispatcher,
+  ref: { source: string; className: string; objectKey: string },
+  runId: string
+): Promise<void> {
+  for (;;) {
+    try {
+      const run = (await dispatch.dispatch(ref, "getRun", runId)) as { status?: unknown };
+      const status = typeof run.status === "string" ? run.status : "unknown";
+      if (status === "done" || status === "cancelled" || status === "unknown") return;
+    } catch {
+      // Admission is a semantic lifetime, not the lifetime of one monitoring
+      // request. A transient workerd/gateway reset must not de-authorize a run
+      // that the EvalDO still owns; only its durable terminal state may close
+      // the execution session.
+    }
+    await admissionRetryDelay();
+  }
+}
+
+function admissionRetryDelay(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, 250);
+    timer.unref?.();
+  });
 }

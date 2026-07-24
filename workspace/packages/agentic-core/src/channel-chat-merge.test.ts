@@ -3,6 +3,7 @@ import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
   CREDENTIAL_CONNECT_PAYLOAD_KIND,
+  agentToolFailureFromUnknown,
   brandId,
   createInitialChannelViewState,
   reduceChannelView,
@@ -17,6 +18,10 @@ import {
   type MessageRole,
   type TurnId,
 } from "@workspace/agentic-protocol";
+
+function toolFailure(operation: string, message: string) {
+  return agentToolFailureFromUnknown({ message }, { operation, stage: "test" });
+}
 import {
   actionBarPayloadFromChannelView,
   chatMessagesFromChannelView,
@@ -368,6 +373,7 @@ describe("chatMessagesFromChannelView", () => {
           ],
         },
         terminalOutcome: "tool_error",
+        failure: toolFailure("grep", "Path not found"),
         terminalReasonCode: "method_failed",
       },
       createdAt: "2026-05-20T12:00:02.000Z",
@@ -1680,6 +1686,7 @@ describe("chatMessagesFromChannelView", () => {
         reason: "exit code 1",
         terminalOutcome: "tool_error",
         terminalReasonCode: "eval_exception",
+        failure: toolFailure("eval", "exit code 1"),
       },
       createdAt: "2026-05-20T12:00:04.000Z",
     };
@@ -2146,6 +2153,7 @@ describe("chatMessagesFromChannelView", () => {
         },
         terminalOutcome: "tool_error",
         terminalReasonCode: "method_failed",
+        failure: toolFailure("write_file", "permission denied"),
       },
       createdAt: "2026-05-20T12:00:04.000Z",
     } as AgenticEvent<"invocation.failed">;

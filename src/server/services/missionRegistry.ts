@@ -6,6 +6,7 @@ import { openCanonicalSqliteDatabase } from "@vibestudio/sqlite";
 import type { ResourceScope, SessionMissionFact } from "@vibestudio/rpc";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { hostCapabilityMethods } from "@vibestudio/shared/authority/hostMethodCapabilities";
+import { receiverAuthorityPolicy } from "@vibestudio/shared/authority/receiverAuthorityPolicy";
 import {
   missionAllowsService,
   missionClosureDigest,
@@ -14,6 +15,7 @@ import {
   type MissionCharter,
   type MissionPermission,
   type MissionRecord,
+  type MissionRunRecord,
   type MissionStandingRestriction,
   type MissionState,
 } from "@vibestudio/shared/authority/mission";
@@ -34,6 +36,7 @@ export interface SeededMissionInput {
 /** Host-owned mission identity, revisions, session bindings, and closure enforcement. */
 export class MissionRegistry {
   private readonly db: DatabaseSync;
+  private stopGrantWithdrawalListener: () => void = () => undefined;
 
   constructor(
     private readonly opts: {
@@ -56,9 +59,13 @@ export class MissionRegistry {
       this.db.close();
       throw error;
     }
+    this.stopGrantWithdrawalListener = opts.grantStore.onAgentGrantWithdrawal((grant, at) => {
+      this.lapseForProfileWithdrawal(grant, at);
+    });
   }
 
   close(): void {
+    this.stopGrantWithdrawalListener();
     this.db.close();
   }
 
@@ -218,6 +225,15 @@ export class MissionRegistry {
           "EMISSIONSCOPE"
         );
       }
+      if (
+        permission.tier !== "critical" &&
+        !receiverAuthorityPolicy(permission.capability).missionGrant
+      ) {
+        throw coded(
+          `Mission permission ${permission.capability} cannot become unattended standing authority`,
+          "EMISSIONSCOPE"
+        );
+      }
     }
     const now = input.now ?? Date.now();
     // The registry and grants intentionally live in separate canonical DBs.
@@ -228,13 +244,16 @@ export class MissionRegistry {
         this.opts.grantStore.revoke(grant.id, now);
       }
     }
-    for (const permission of permissions) {
+    for (const permission of permissions.filter(isStandingMissionPermission)) {
       this.opts.grantStore.issue({
         effect: "allow",
         capability: permission.capability,
         resource: permission.resource,
         subject,
-        constraints: { lineageAtConsent: [] },
+        constraints: {
+          lineageAtConsent: [...current.charter.declaredLineageClasses],
+          missionSubject: subject,
+        },
         issuedBy: input.decidedBy,
         provenance: current.seeded ? "seed" : "acquisition",
         createdAt: now,
@@ -291,6 +310,15 @@ export class MissionRegistry {
       if (!missionAllowsCapability(input.charter, permission.capability)) {
         throw coded(
           `Seeded mission permission ${permission.capability} exceeds tool exposure`,
+          "EMISSIONSCOPE"
+        );
+      }
+      if (
+        permission.tier !== "critical" &&
+        !receiverAuthorityPolicy(permission.capability).missionGrant
+      ) {
+        throw coded(
+          `Seeded mission permission ${permission.capability} cannot become unattended standing authority`,
           "EMISSIONSCOPE"
         );
       }
@@ -378,13 +406,16 @@ export class MissionRegistry {
         this.opts.grantStore.revoke(grant.id, now);
       }
     }
-    for (const permission of permissions) {
+    for (const permission of permissions.filter(isStandingMissionPermission)) {
       this.opts.grantStore.issue({
         effect: "allow",
         capability: permission.capability,
         resource: permission.resource,
         subject,
-        constraints: { lineageAtConsent: [] },
+        constraints: {
+          lineageAtConsent: [...input.charter.declaredLineageClasses],
+          missionSubject: subject,
+        },
         issuedBy: "host:product-seed",
         provenance: "seed",
         createdAt: now,
@@ -555,6 +586,179 @@ export class MissionRegistry {
     });
   }
 
+  listRuns(missionId: string): MissionRunRecord[] {
+    this.require(missionId);
+    const rows = this.db
+      .prepare(
+        `SELECT run_id,mission_id,closure_digest,session_id,started_at,finished_at,outcome
+         FROM mission_runs WHERE mission_id=? ORDER BY started_at DESC,run_id DESC`
+      )
+      .all(missionId) as Array<Record<string, SQLOutputValue>>;
+    return rows.map((row) => ({
+      runId: String(row["run_id"]),
+      missionId: String(row["mission_id"]),
+      closureDigest: String(row["closure_digest"]),
+      sessionId: String(row["session_id"]),
+      startedAt: Number(row["started_at"]),
+      ...(row["finished_at"] == null ? {} : { finishedAt: Number(row["finished_at"]) }),
+      ...(row["outcome"] == null ? {} : { outcome: String(row["outcome"]) }),
+    }));
+  }
+
+  proposePermissionRevision(input: {
+    sessionId: string;
+    service: string;
+    method: string;
+    capability: string;
+    resource: ResourceScope;
+    tier: "gated" | "critical";
+    now?: number;
+  }): MissionRecord {
+    const lifecycle = this.db
+      .prepare(
+        `SELECT s.mission_id,r.run_id
+         FROM mission_sessions s
+         JOIN mission_runs r ON r.session_id=s.session_id AND r.finished_at IS NULL
+         WHERE s.session_id=? AND s.ended_at IS NULL`
+      )
+      .get(input.sessionId) as { mission_id: SQLOutputValue; run_id: SQLOutputValue } | undefined;
+    if (!lifecycle) {
+      throw coded("Out-of-charter proposal requires an active mission run", "ENOENT");
+    }
+    const current = this.require(String(lifecycle.mission_id));
+    if (current.state === "needs-reapproval") return current;
+    if (current.state !== "active") {
+      throw coded("Only an active mission can propose a charter revision", "EACCES");
+    }
+    const qualifiedMethod = `${input.service}.${input.method}`;
+    const services = current.charter.toolExposure.services.includes(qualifiedMethod)
+      ? current.charter.toolExposure.services
+      : [...current.charter.toolExposure.services, qualifiedMethod].sort();
+    const permissionExists = current.permissions.some(
+      (permission) =>
+        permission.capability === input.capability &&
+        canonicalJson(permission.resource) === canonicalJson(input.resource)
+    );
+    const permissions = !permissionExists
+      ? normalizePermissions([
+          ...current.permissions,
+          {
+            capability: input.capability,
+            resource: input.resource,
+            tier: input.tier,
+          },
+        ])
+      : [...current.permissions];
+    const charter: MissionCharter = {
+      ...current.charter,
+      toolExposure: { ...current.charter.toolExposure, services },
+    };
+    const digest = missionClosureDigest(charter, permissions, current.standingRestrictions);
+    const now = input.now ?? Date.now();
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO mission_revisions
+           (mission_id,revision,charter_json,closure_digest,recorded_at,permissions_json,standing_restrictions_json)
+           VALUES (?,?,?,?,?,?,?)`
+        )
+        .run(
+          current.missionId,
+          current.revision,
+          canonicalJson(current.charter),
+          current.closureDigest,
+          now,
+          canonicalJson(current.permissions),
+          canonicalJson(current.standingRestrictions)
+        );
+      this.db
+        .prepare(
+          `UPDATE missions
+           SET revision=?,charter_json=?,permissions_json=?,state='needs-reapproval',
+               closure_digest=?,updated_at=? WHERE mission_id=?`
+        )
+        .run(
+          current.revision + 1,
+          canonicalJson(charter),
+          canonicalJson(permissions),
+          digest,
+          now,
+          current.missionId
+        );
+      this.db
+        .prepare("UPDATE mission_sessions SET ended_at=? WHERE session_id=? AND ended_at IS NULL")
+        .run(now, input.sessionId);
+      this.db
+        .prepare(
+          `UPDATE mission_runs SET finished_at=?,outcome='mission-change-required'
+           WHERE run_id=? AND finished_at IS NULL`
+        )
+        .run(now, String(lifecycle.run_id));
+    });
+    return this.require(current.missionId);
+  }
+
+  declinePermissionRevision(input: {
+    missionId: string;
+    capability: string;
+    resourceKey: string;
+    decidedBy: `user:${string}`;
+    contextIntegrityReady: boolean;
+    now?: number;
+  }): MissionRecord {
+    const current = this.require(input.missionId);
+    const previous = this.previousRevision(input.missionId);
+    if (current.state !== "needs-reapproval" || !previous) {
+      throw coded("Only a pending mission revision can be declined", "EACCES");
+    }
+    const restrictions = normalizeStandingRestrictions([
+      ...previous.standingRestrictions,
+      { capability: input.capability, resourceKey: input.resourceKey },
+    ]);
+    const digest = missionClosureDigest(previous.charter, previous.permissions, restrictions);
+    const now = input.now ?? Date.now();
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO mission_revisions
+           (mission_id,revision,charter_json,closure_digest,recorded_at,permissions_json,standing_restrictions_json)
+           VALUES (?,?,?,?,?,?,?)`
+        )
+        .run(
+          current.missionId,
+          current.revision,
+          canonicalJson(current.charter),
+          current.closureDigest,
+          now,
+          canonicalJson(current.permissions),
+          canonicalJson(current.standingRestrictions)
+        );
+      this.db
+        .prepare(
+          `UPDATE missions SET revision=?,charter_json=?,permissions_json=?,
+           standing_restrictions_json=?,closure_digest=?,state='needs-reapproval',updated_at=?
+           WHERE mission_id=?`
+        )
+        .run(
+          current.revision + 1,
+          canonicalJson(previous.charter),
+          canonicalJson(previous.permissions),
+          canonicalJson(restrictions),
+          digest,
+          now,
+          current.missionId
+        );
+    });
+    return this.approve({
+      missionId: current.missionId,
+      permissions: previous.permissions,
+      standingRestrictions: restrictions,
+      decidedBy: input.decidedBy,
+      contextIntegrityReady: input.contextIntegrityReady,
+      now,
+    });
+  }
+
   factForSession(sessionId: string): SessionMissionFact | null {
     const row = this.db
       .prepare(
@@ -674,6 +878,86 @@ export class MissionRegistry {
     );
   }
 
+  previousRevision(missionId: string): MissionRecord | null {
+    const current = this.require(missionId);
+    const row = this.db
+      .prepare(
+        `SELECT revision,charter_json,permissions_json,standing_restrictions_json,
+                closure_digest,recorded_at
+         FROM mission_revisions WHERE mission_id=? ORDER BY revision DESC LIMIT 1`
+      )
+      .get(missionId) as
+      | {
+          revision: SQLOutputValue;
+          charter_json: SQLOutputValue;
+          permissions_json: SQLOutputValue;
+          standing_restrictions_json: SQLOutputValue;
+          closure_digest: SQLOutputValue;
+          recorded_at: SQLOutputValue;
+        }
+      | undefined;
+    if (!row) return null;
+    return {
+      ...current,
+      revision: Number(row.revision),
+      charter: JSON.parse(String(row.charter_json)) as MissionCharter,
+      permissions: JSON.parse(String(row.permissions_json)) as MissionPermission[],
+      standingRestrictions: JSON.parse(
+        String(row.standing_restrictions_json)
+      ) as MissionStandingRestriction[],
+      closureDigest: String(row.closure_digest),
+      updatedAt: Number(row.recorded_at),
+    };
+  }
+
+  private lapseForProfileWithdrawal(
+    grant: import("@vibestudio/rpc").AuthorityGrant,
+    now: number
+  ): void {
+    if (!grant.subject.startsWith("agent:")) return;
+    const bindingId = grant.subject.slice("agent:".length);
+    const affected = this.list().filter(
+      (mission) =>
+        mission.state === "active" &&
+        mission.charter.agentBindingId === bindingId &&
+        mission.permissions
+          .filter(isStandingMissionPermission)
+          .some(
+            (permission) =>
+              permission.capability === grant.capability &&
+              canonicalJson(permission.resource) === canonicalJson(grant.resource)
+          )
+    );
+    for (const mission of affected) {
+      this.transaction(() => {
+        this.db
+          .prepare("UPDATE missions SET state='needs-reapproval',updated_at=? WHERE mission_id=?")
+          .run(now, mission.missionId);
+        this.db
+          .prepare(
+            `UPDATE mission_sessions SET ended_at=?
+             WHERE mission_id=? AND ended_at IS NULL`
+          )
+          .run(now, mission.missionId);
+        this.db
+          .prepare(
+            `UPDATE mission_runs SET finished_at=?,outcome='permission-revoked'
+             WHERE mission_id=? AND finished_at IS NULL`
+          )
+          .run(now, mission.missionId);
+      });
+      for (const missionGrant of this.opts.grantStore.listAuthorityGrants()) {
+        if (
+          missionGrant.id &&
+          missionGrant.subject.startsWith(`mission:${mission.missionId}@`) &&
+          missionGrant.revokedAt === undefined
+        ) {
+          this.opts.grantStore.revoke(missionGrant.id, now);
+        }
+      }
+    }
+  }
+
   getForUser(missionId: string, userId: string): MissionRecord | null {
     const mission = this.get(missionId);
     return mission && (mission.seeded === true || mission.owner.userId === userId) ? mission : null;
@@ -716,7 +1000,7 @@ export class MissionRegistry {
       )
       .sort();
     const expected = [
-      ...permissions.map((permission) =>
+      ...permissions.filter(isStandingMissionPermission).map((permission) =>
         canonicalJson({
           effect: "allow",
           capability: permission.capability,
@@ -803,12 +1087,16 @@ function missionAllowsCapability(charter: MissionCharter, capability: string): b
   return hostCapabilityMethods(capability).some((method) => missionAllowsService(charter, method));
 }
 
+function isStandingMissionPermission(permission: MissionPermission): boolean {
+  return permission.tier === "gated" && receiverAuthorityPolicy(permission.capability).missionGrant;
+}
+
 function normalizePermissions(input: readonly MissionPermission[]): MissionPermission[] {
   const normalized = input.map((permission) => {
     const capability = permission.capability.trim();
     if (!capability) throw new Error("Mission permission capability is required");
     validateResourceScope(permission.resource);
-    return { capability, resource: permission.resource };
+    return { capability, resource: permission.resource, tier: permission.tier };
   });
   assertNoDuplicateCanonicalRows(normalized, "mission permission");
   return normalized.sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));

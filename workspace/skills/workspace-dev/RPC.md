@@ -115,7 +115,7 @@ child.close(); // Close the panel
 
 ```typescript
 parent.id; // Parent's ID
-await parent.getInfo(); // Metadata: id/title/source/kind/parentId
+await parent.observe(); // Exact attempt, phase, source/context/ref/build provenance
 parent.call.method(args); // Call parent's RPC method
 parent.emit("event", payload); // Emit event to parent
 parent.on("event", handler); // Listen for parent events

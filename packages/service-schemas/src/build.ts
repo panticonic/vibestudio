@@ -32,18 +32,9 @@ export const UnitAuthorityRequestSchema = CapabilityScopeSchema.extend({
   packages: z.array(z.string().min(1)).readonly().optional(),
 }).strict() satisfies z.ZodType<UnitAuthorityRequest>;
 
-export const EvalAuthorityCeilingSchema = z
-  .object({
-    audience: z.literal("eval"),
-    purpose: z.enum(["agentic-code-execution", "tool-eval", "test-eval"]),
-    capabilities: z.array(UnitAuthorityRequestSchema).readonly(),
-  })
-  .strict();
-
 export const UnitAuthorityManifestSchema = z
   .object({
     requests: z.array(UnitAuthorityRequestSchema),
-    evalCeilings: z.array(EvalAuthorityCeilingSchema),
   })
   .strict();
 

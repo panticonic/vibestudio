@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as asyncHooks from "node:async_hooks";
 import * as os from "node:os";
 import * as path from "node:path";
 import vm, { Script } from "node:vm";
@@ -277,6 +278,7 @@ describe("BuildSystemV2 library package subpaths", () => {
     ) => Promise<void>;
     await execute(
       (specifier) => {
+        if (specifier === "node:async_hooks") return asyncHooks as never;
         throw new Error(`unexpected external dependency ${specifier}`);
       },
       module.exports,

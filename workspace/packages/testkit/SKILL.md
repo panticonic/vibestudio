@@ -81,7 +81,7 @@ Key facts:
 
 ## Panel automation
 
-- `openPanel(source, { stateArgs?, waitLoaded? })` / `withPanel(source, fn)` (auto-close)
+- `openPanel(source, { stateArgs? })` / `withPanel(source, fn)` (boot-ready; auto-close)
 - Existing panels: pass a `panelTree.list/roots/children/get` handle; do not
   call `handle.close`, `handle.navigate`, or `handle.reload` unless that is the
   test.

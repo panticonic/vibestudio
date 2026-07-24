@@ -22,20 +22,6 @@ describe("HostTargetLaunchResultSchema", () => {
           evidence: "exact" as const,
         },
       ],
-      authorityEvalCeilings: [
-        {
-          audience: "eval" as const,
-          purpose: "agentic-code-execution" as const,
-          capabilities: [
-            {
-              capability: "runtime:entity.create",
-              resource: { kind: "prefix" as const, prefix: "panels/" },
-              tier: "gated" as const,
-              evidence: "bounded-dynamic" as const,
-            },
-          ],
-        },
-      ],
       adoptionPolicy: "immediate" as const,
     };
 

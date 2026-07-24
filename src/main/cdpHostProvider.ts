@@ -3,6 +3,11 @@ import { WebSocket } from "ws";
 import { webContents } from "electron";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { serverCdpHostWsUrl } from "@vibestudio/shared/connect";
+import {
+  PANEL_PAGE_OBSERVATION_EXPRESSION,
+  parsePanelPageObservation,
+  type PanelBootObservation,
+} from "@vibestudio/shared/panel/observation";
 import type { ViewManager } from "./viewManager.js";
 import type {
   RuntimeDiagnosticRecord,
@@ -235,6 +240,17 @@ export class CdpHostProvider {
     })()`,
       true
     );
+  }
+
+  /**
+   * Read the generated bootstrap state. A registered CDP target is not a
+   * readiness signal: about:blank preparation views and failed bundles both
+   * have a valid WebContents.
+   */
+  async getBootObservation(targetId: string): Promise<PanelBootObservation> {
+    const contents = this.requireTargetContents(targetId);
+    const result = await contents.executeJavaScript(PANEL_PAGE_OBSERVATION_EXPRESSION, true);
+    return parsePanelPageObservation(result).boot;
   }
 
   getConsoleHistory(

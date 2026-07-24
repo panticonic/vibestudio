@@ -84,10 +84,11 @@ export function ensureOutboxSchema(sql: SqlStorage): void {
 export function maxAttempts(kind: EffectKind, mutating = false): number {
   switch (kind) {
     case "prompt_artifacts":
-      // Prompt/tool materialization is a prerequisite, not the user-visible
-      // work itself. A terminal infrastructure failure settles the input with
-      // a diagnostic instead of holding a turn in an invisible retry loop.
-      return 1;
+      // Prompt/tool materialization is read-mostly and its blob writes are
+      // content-addressed. Brief host-RPC transport failures must not discard
+      // a user's message before it reaches the model, but a persistent or
+      // deterministic failure still settles visibly after a bounded retry.
+      return 3;
     case "model_call":
       // A retry-classified provider failure is explicitly non-terminal. Keep
       // the journaled request pending until it succeeds or the owning turn is

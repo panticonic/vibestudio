@@ -102,6 +102,7 @@ export function getApprovalOperationKindLabel(kind: ApprovalOperationDescriptor[
 }
 
 export function getApprovalRiskTone(approval: PendingApproval): ApprovalRiskTone {
+  if (approval.kind === "mission-review") return "caution";
   if (approval.kind === "unit-batch") {
     return approval.units.some((unit) => unit.unitKind === "extension") ? "danger" : "caution";
   }
@@ -115,6 +116,7 @@ export function getApprovalRiskTone(approval: PendingApproval): ApprovalRiskTone
 }
 
 export function getApprovalCategoryLabel(approval: PendingApproval): string {
+  if (approval.kind === "mission-review") return "Mission review";
   if (approval.kind === "browser-permission") {
     return "Website permission";
   }
@@ -186,7 +188,7 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
   if (approval.capability === "workspace-project-import") {
     return HOST_APPROVAL_COPY.categories.projectImport;
   }
-  if (approval.capability === "external-network-fetch") {
+  if (approval.capability === "network.response.read") {
     return HOST_APPROVAL_COPY.categories.networkAccess;
   }
   if (approval.capability === "cors-response-read") {
@@ -354,7 +356,7 @@ function buildStandardActionCopy(
       denyDescription: HOST_APPROVAL_COPY.actions.projectImport.deny,
     };
   }
-  if (approval.capability === "external-network-fetch") {
+  if (approval.capability === "network.response.read") {
     const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
     return {
       once: HOST_APPROVAL_COPY.actions.network.once,
@@ -558,6 +560,18 @@ export function getApprovalCopy(approval: PendingApproval): {
   summary: string;
   warning?: string;
 } {
+  if (approval.kind === "mission-review") {
+    return {
+      title:
+        approval.reviewKind === "out-of-charter"
+          ? `${approval.title} needs a new permission`
+          : `Review ${approval.title}`,
+      summary:
+        approval.reviewKind === "out-of-charter"
+          ? `${approval.title} stopped before doing something outside its approved toolkit.`
+          : `${approval.title} is ready for your review.`,
+    };
+  }
   if (approval.kind === "browser-permission") {
     const capabilities = approval.capabilities.join(" and ");
     return {
@@ -612,7 +626,7 @@ export function getApprovalCopy(approval: PendingApproval): {
       const fallback = HOST_APPROVAL_COPY.headlines.projectImport(destination);
       return { ...fallback, title: approval.title || fallback.title };
     }
-    if (approval.capability === "external-network-fetch") {
+    if (approval.capability === "network.response.read") {
       const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
       const fallback = HOST_APPROVAL_COPY.headlines.networkConnect(destination);
       return { title: fallback.title, summary: approval.description ?? fallback.summary };
@@ -785,7 +799,7 @@ export function getCapabilityPrimaryDestination(approval: PendingCapabilityAppro
 }
 
 export function shouldOpenApprovalDetails(approval: PendingApproval): boolean {
-  return approval.kind === "unit-batch";
+  return approval.kind === "unit-batch" || approval.kind === "mission-review";
 }
 
 function isBrowserOpenApproval(approval: PendingCapabilityApproval): boolean {

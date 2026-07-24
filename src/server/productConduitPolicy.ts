@@ -11,6 +11,7 @@ export const PRODUCT_CONDUIT_UNITS = [
   "workers/news-agent",
   "workers/silent-agent-worker",
   "workers/system-agent",
+  "workers/system-test-runner",
   "workers/terminal-chat",
   "workers/test-agent",
 ] as const;

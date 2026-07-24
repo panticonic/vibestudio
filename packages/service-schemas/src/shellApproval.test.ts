@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { authorityRow } from "@vibestudio/shared/authority/authorityRows";
 
 import { pendingUnitBatchApprovalSchema } from "./shellApproval.js";
 
 describe("shellApproval wire schema", () => {
   it("round-trips reviewed unit authority metadata", () => {
+    const row = authorityRow({
+      capability: "notifications",
+      resource: { kind: "exact", key: "workspace" },
+      tier: "gated",
+      statement: "declared",
+      provenance: { source: "manifest" },
+    });
     const parsed = pendingUnitBatchApprovalSchema.parse({
       approvalId: "approval-1",
       callerId: "system:workspace",
@@ -25,16 +33,14 @@ describe("shellApproval wire schema", () => {
           authority: {
             requests: [
               {
-                capability: "workspace-service:example",
-                resource: { kind: "exact", key: "service:example" },
+                capability: "notifications",
+                resource: { kind: "exact", key: "workspace" },
                 tier: "gated",
                 evidence: "exact",
               },
             ],
-            evalCeilings: [],
-            groups: [],
-            removedCount: 0,
-            eval: [],
+            rows: [row],
+            diff: { added: [row], removed: [], unchanged: [], retiered: [] },
           },
         },
       ],

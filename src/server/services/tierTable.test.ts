@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { METHOD_TIERS } from "@vibestudio/shared/authority/tierTable";
 
-type Matrix = Record<string, { methods: Record<string, unknown> }>;
+type Matrix = Record<string, { methods: Record<string, { tier?: unknown }> }>;
 
 function readMatrix(relative: string): Matrix {
   return JSON.parse(
@@ -19,7 +19,9 @@ describe("reviewed host method tiers", () => {
       readMatrix("../../main/services/__serviceAuthorityMatrix.golden.json"),
     ]) {
       for (const [service, entry] of Object.entries(matrix)) {
-        for (const method of Object.keys(entry.methods)) methods.add(`${service}.${method}`);
+        for (const [method, declaration] of Object.entries(entry.methods)) {
+          if (!declaration.tier) methods.add(`${service}.${method}`);
+        }
       }
     }
     expect(Object.keys(METHOD_TIERS).sort()).toEqual([...methods].sort());

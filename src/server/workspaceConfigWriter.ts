@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
+import { rpcErrorDataOf } from "@vibestudio/rpc";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
@@ -73,6 +74,63 @@ function integrityFor(ctx: ServiceContext): {
   return fact.class === "external"
     ? { class: "external", externalKeys: [...fact.externalKeys] }
     : { class: "internal", externalKeys: [] };
+}
+
+function errorDetail(error: unknown): {
+  message: string;
+  code?: string;
+  errorKind?: string;
+  errorData?: unknown;
+} {
+  const message = error instanceof Error ? error.message : String(error);
+  const code =
+    error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string"
+      ? (error as { code: string }).code
+      : undefined;
+  const errorKind =
+    error &&
+    typeof error === "object" &&
+    typeof (error as { errorKind?: unknown }).errorKind === "string"
+      ? (error as { errorKind: string }).errorKind
+      : undefined;
+  const errorData = rpcErrorDataOf(error);
+  return {
+    message,
+    ...(code ? { code } : {}),
+    ...(errorKind ? { errorKind } : {}),
+    ...(errorData === undefined ? {} : { errorData }),
+  };
+}
+
+function attachCleanupFailure(primary: unknown, cleanup: unknown, contextId: string): Error {
+  const error = primary instanceof Error ? primary : new Error(String(primary));
+  const existing = rpcErrorDataOf(error);
+  const errorData = {
+    ...(existing && typeof existing === "object" && !Array.isArray(existing) ? existing : {}),
+    cleanupFailures: [
+      {
+        stage: "drop-temporary-context",
+        contextId,
+        ...errorDetail(cleanup),
+      },
+    ],
+  };
+  try {
+    Object.defineProperty(error, "errorData", {
+      value: errorData,
+      writable: true,
+      configurable: true,
+    });
+    return error;
+  } catch {
+    const wrapped = new Error(error.message, { cause: error });
+    Object.defineProperty(wrapped, "errorData", {
+      value: errorData,
+      writable: true,
+      configurable: true,
+    });
+    return wrapped;
+  }
 }
 
 export function createWorkspaceConfigMainWriter(deps: {
@@ -173,10 +231,21 @@ export function createWorkspaceConfigMainWriter(deps: {
   const withFreshContext = async <T>(operation: (contextId: string) => Promise<T>): Promise<T> => {
     const contextId = `system:workspace-config:${randomUUID()}`;
     await deps.vcs.ensureContext(contextId);
+    let primaryFailure: unknown;
     try {
       return await operation(contextId);
+    } catch (error) {
+      primaryFailure = error;
+      throw error;
     } finally {
-      await deps.vcs.dropContext(contextId);
+      try {
+        await deps.vcs.dropContext(contextId);
+      } catch (cleanupFailure) {
+        if (primaryFailure !== undefined) {
+          throw attachCleanupFailure(primaryFailure, cleanupFailure, contextId);
+        }
+        throw cleanupFailure;
+      }
     }
   };
 
@@ -240,17 +309,28 @@ export function createWorkspaceConfigMainWriter(deps: {
       if (committed.event.kind !== "event") {
         throw new Error("Workspace config commit did not produce an event");
       }
-      await deps.vcs.semanticPublishCall<VcsPushResult>(
-        {
-          contextId,
-          commandId: `${commandStem}:push`,
-          expectedCommittedEventId: committed.event.eventId,
-          expectedMainEventId: current.status.mainEventId,
-        },
-        causalParent,
-        input.ctx.caller,
-        contextIntegrity
-      );
+      const pushInput = {
+        contextId,
+        commandId: `${commandStem}:push`,
+        expectedCommittedEventId: committed.event.eventId,
+        expectedMainEventId: current.status.mainEventId,
+      };
+      if (input.ctx.signal) {
+        await deps.vcs.semanticPublishCall<VcsPushResult>(
+          pushInput,
+          causalParent,
+          input.ctx.caller,
+          contextIntegrity,
+          input.ctx.signal
+        );
+      } else {
+        await deps.vcs.semanticPublishCall<VcsPushResult>(
+          pushInput,
+          causalParent,
+          input.ctx.caller,
+          contextIntegrity
+        );
+      }
       return { changed: true, nextConfig: rendered.nextConfig };
     });
 

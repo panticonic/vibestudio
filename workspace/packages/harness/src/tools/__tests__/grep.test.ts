@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createGrepTool, shouldWarnRe2Fallback } from "../grep.js";
 import { StubFs } from "./stub-fs.js";
 
@@ -108,6 +108,50 @@ describe("createGrepTool", () => {
     expect(calls).toContainEqual({ target: "main", method: "fs.grep" });
   });
 
+  it("settles a stalled extension call and exposes its host-service fallback", async () => {
+    const rpc = {
+      call: vi.fn().mockImplementation((_target: string, method: string) => {
+        if (method === "extensions.invoke") return new Promise(() => {});
+        if (method === "fs.grep") {
+          return Promise.resolve({
+            matches: [
+              {
+                file: "src/a.ts",
+                lineNumber: 1,
+                line: "open();",
+                before: [],
+                after: [],
+              },
+            ],
+            matchCount: 1,
+            truncated: false,
+          });
+        }
+        return Promise.reject(new Error(`Unexpected method: ${method}`));
+      }),
+    };
+    const onUpdate = vi.fn();
+    const tool = createGrepTool(CWD, new StubFs({ files: {} }), {
+      rpc: rpc as never,
+      optionalExtensionTimeoutMs: 10,
+    });
+
+    const result = await tool.execute("call-1", { pattern: "open(" }, undefined, onUpdate);
+
+    expect((result.content[0] as { text: string }).text).toContain("src/a.ts:1: open();");
+    expect(result.details).toMatchObject({
+      engine: "fs-service",
+      extensionFallback: "file-tools grep timed out after 10ms",
+    });
+    expect(onUpdate).toHaveBeenCalledWith({
+      content: [],
+      details: {
+        type: "console",
+        content: "file-tools grep timed out after 10ms; falling back to the host fs service",
+      },
+    });
+  });
+
   it("returns 'No matches found' when nothing matches", async () => {
     const fs = new StubFs({ files: { [`${CWD}/a.ts`]: "abc" } });
     const tool = createGrepTool(CWD, fs);
@@ -166,11 +210,8 @@ describe("createGrepTool", () => {
     const tool = createGrepTool(CWD, fs);
     const updates: unknown[] = [];
 
-    await tool.execute(
-      "call-1",
-      { pattern: "missing", glob: "**/*.ts" },
-      undefined,
-      (update) => updates.push(update.details),
+    await tool.execute("call-1", { pattern: "missing", glob: "**/*.ts" }, undefined, (update) =>
+      updates.push(update.details)
     );
 
     expect(updates).toContainEqual({
@@ -210,9 +251,7 @@ describe("createGrepTool", () => {
     const tool = createGrepTool(CWD, fs);
     const ac = new AbortController();
     ac.abort();
-    await expect(
-      tool.execute("call-1", { pattern: "x" }, ac.signal),
-    ).rejects.toThrow(/abort/i);
+    await expect(tool.execute("call-1", { pattern: "x" }, ac.signal)).rejects.toThrow(/abort/i);
   });
 
   it("does not warn about missing native RE2 in workerd-like runtimes", () => {
@@ -220,13 +259,13 @@ describe("createGrepTool", () => {
       shouldWarnRe2Fallback({
         process: { versions: { node: "22.0.0" } },
         navigator: { userAgent: "Cloudflare-Workers" },
-      }),
+      })
     ).toBe(false);
     expect(
       shouldWarnRe2Fallback({
         process: { versions: { node: "22.0.0" } },
         WebSocketPair: function WebSocketPair() {},
-      }),
+      })
     ).toBe(false);
   });
 
@@ -235,7 +274,7 @@ describe("createGrepTool", () => {
       shouldWarnRe2Fallback({
         process: { versions: { node: "22.0.0" } },
         navigator: { userAgent: "Node.js/22" },
-      }),
+      })
     ).toBe(true);
   });
 });

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { getProfileDataPath } from "@vibestudio/env-paths";
 import { writeFileAtomicSync } from "../atomicFile.js";
-import { cliConfigRoot } from "./configPaths.js";
 
 export interface StoredSystemTestRun {
   schemaVersion: 1;
@@ -29,7 +29,9 @@ export interface StoredSystemTestRun {
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/;
 
 export function systemTestRunRoot(): string {
-  return path.join(cliConfigRoot(), "system-test-runs");
+  // Evidence outlives disposable dev instances and run ids are globally
+  // unique, so concurrent instances safely share the profile artifact root.
+  return path.join(getProfileDataPath(), "system-test-runs");
 }
 
 export function systemTestRunDir(runId: string): string {

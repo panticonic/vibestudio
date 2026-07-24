@@ -26,6 +26,41 @@ function makeClient(captured: Captured): ChannelClient {
 }
 
 describe("ChannelClient.send tier", () => {
+  it("keeps a structured publish pending until the channel acknowledges durable acceptance", async () => {
+    let acknowledge!: () => void;
+    const accepted = new Promise<void>((resolve) => {
+      acknowledge = resolve;
+    });
+    const rpc = {
+      call: vi.fn(async (_target: string, method: string) => {
+        if (method === "workers.resolveService") {
+          return { kind: "durable-object", targetId: "chan-do" };
+        }
+        if (method === "publish") {
+          await accepted;
+          return { id: 1 };
+        }
+        return undefined;
+      }),
+    };
+    const publish = new ChannelClient(rpc as never, "chan-1").publish(
+      "agent:1",
+      "vibestudio.test",
+      { ok: true },
+      { idempotencyKey: "receipt:1" }
+    );
+    let settled = false;
+    void publish.finally(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    acknowledge();
+    await expect(publish).resolves.toEqual({ id: 1 });
+  });
+
   it("defaults a deliberate agent send (e.g. the say tool) to the primary tier", async () => {
     const captured: Captured = {};
     await makeClient(captured).send("agent:1", "m1", "hello there", {

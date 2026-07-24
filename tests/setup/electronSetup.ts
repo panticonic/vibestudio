@@ -492,6 +492,48 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   return { app, window, workspacePath, getOutput: () => output.join(""), cleanup };
 }
 
+/**
+ * Test-side human driver for cold-start unit reviews. This goes through the
+ * real shell resolver and queue; it deliberately does not grant a process-wide
+ * bypass. Callers remain responsible for non-unit approval kinds.
+ */
+export async function approvePendingStartupUnits(
+  app: ElectronApplication,
+  timeoutMs = 180_000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let sawReview = false;
+  let emptySince = 0;
+  while (Date.now() < deadline) {
+    try {
+      const pending = (await app.evaluate(async () => {
+        const testApi = (globalThis as { __testApi?: Pick<TestApi, "rpcCall"> }).__testApi;
+        if (!testApi) throw new Error("Test API not available");
+        return testApi.rpcCall("shellApproval", "listPending", []);
+      })) as Array<{ approvalId: string; kind: string }>;
+      const reviews = pending.filter((approval) => approval.kind === "unit-batch");
+      for (const review of reviews) {
+        sawReview = true;
+        await app.evaluate(async (_electron, approvalId) => {
+          const testApi = (globalThis as { __testApi?: Pick<TestApi, "rpcCall"> }).__testApi;
+          if (!testApi) throw new Error("Test API not available");
+          await testApi.rpcCall("shellApproval", "resolve", [approvalId, "once"]);
+        }, review.approvalId);
+      }
+      if (sawReview && reviews.length === 0) {
+        emptySince ||= Date.now();
+        if (Date.now() - emptySince >= 750) return;
+      } else {
+        emptySince = 0;
+      }
+    } catch (error) {
+      if (!isAutomationContextReplacement(error)) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error("Timed out waiting for the cold-start unit review to settle");
+}
+
 function readLogTail(logFile: string, maxCharacters = 20_000): string {
   try {
     const content = fs.readFileSync(logFile, "utf8");

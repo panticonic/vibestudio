@@ -111,6 +111,41 @@ describe("createRpcClient", () => {
     ]);
   });
 
+  it("lets a durable effect override a waiting client and journal EACQUIRE itself", async () => {
+    const network = createInProcessNetwork();
+    const caller = createRpcClient({
+      selfId: "code:worker",
+      callerKind: "worker",
+      transport: inProcessTransport("code:worker", network),
+      authorityAcquisition: "wait",
+    });
+    const server = createRpcClient({
+      selfId: "main",
+      callerKind: "server",
+      transport: inProcessTransport("main", network),
+    });
+    const wait = vi.fn();
+    server.expose("protected.run", async () => {
+      throw new RpcBoundaryError("approval required", "access", "EACQUIRE", undefined, {
+        acquisition: { acquisitionId: "acq:durable", ownerRuntimeId: "code:worker" },
+      });
+    });
+    server.expose("authority.awaitDecision", wait);
+
+    await expect(
+      caller.call("main", "protected.run", ["exact"], { authorityAcquisition: "return" })
+    ).rejects.toMatchObject({
+      code: "EACQUIRE",
+      errorData: {
+        acquisition: {
+          acquisitionId: "acq:durable",
+          ownerRuntimeId: "code:worker",
+        },
+      },
+    });
+    expect(wait).not.toHaveBeenCalled();
+  });
+
   it("does not attach an operation timeout to the human authority wait", async () => {
     const network = createInProcessNetwork();
     const caller = createRpcClient({
@@ -240,6 +275,73 @@ describe("createRpcClient", () => {
 
     await expect(rpc.call("self", "add", [2, 5])).resolves.toBe(7);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("removes host attestations from handler identity and forwarded provenance", async () => {
+    const sent: RpcEnvelope[] = [];
+    let receive!: (envelope: RpcEnvelope) => void;
+    const rpc = createRpcClient({
+      selfId: "worker:receiver",
+      callerKind: "worker",
+      transport: {
+        send: async (envelope) => {
+          sent.push(envelope);
+        },
+        onMessage: (handler) => {
+          receive = handler;
+          return () => {};
+        },
+      },
+    });
+    let seenCaller: unknown;
+    let seenOrigin: unknown;
+    rpc.expose("inspect", (request) => {
+      seenCaller = request.caller;
+      seenOrigin = request.origin;
+      request.rpc.emit("worker:next", "observed", null);
+      return "ok";
+    });
+
+    const attested = {
+      callerId: "do:source:Example:key",
+      callerKind: "do" as const,
+      userId: "user:1",
+      authorization: {
+        nonce: "must-not-reach-user-code",
+        context: { authorizingOrigin: { kind: "session" } },
+      },
+    };
+    receive({
+      from: attested.callerId,
+      target: "worker:receiver",
+      delivery: { caller: attested },
+      provenance: [attested],
+      message: {
+        type: "request",
+        requestId: "request:attested",
+        fromId: attested.callerId,
+        method: "inspect",
+        args: [],
+      },
+    } as RpcEnvelope);
+    await flushMicrotasks();
+
+    expect(seenCaller).toEqual({
+      callerId: attested.callerId,
+      callerKind: "do",
+      userId: "user:1",
+    });
+    expect(seenOrigin).toEqual(seenCaller);
+    const forwarded = sent.find((envelope) => envelope.target === "worker:next");
+    expect(forwarded?.provenance).toEqual([
+      {
+        callerId: attested.callerId,
+        callerKind: "do",
+        userId: "user:1",
+      },
+      { callerId: "worker:receiver", callerKind: "worker" },
+    ]);
+    expect(JSON.stringify(forwarded)).not.toContain("must-not-reach-user-code");
   });
 
   it("propagates unary call cancellation to the callee request signal", async () => {

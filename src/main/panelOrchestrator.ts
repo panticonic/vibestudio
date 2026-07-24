@@ -45,6 +45,12 @@ import {
 } from "@vibestudio/shared/panel/accessors";
 import { assertPresent } from "../lintHelpers";
 import { PanelRuntimeLeaseController } from "./panelRuntimeLeaseController.js";
+import type {
+  PanelBootObservation,
+  PanelFailureCode,
+  PanelFailureStage,
+  PanelHostObservation,
+} from "@vibestudio/shared/panel/observation";
 
 const log = createDevLogger("PanelOrchestrator");
 type PanelTreeCall = (method: string, args: unknown[]) => Promise<unknown>;
@@ -489,16 +495,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
 
   async rebuildPanel(panelId: string): Promise<PanelLifecycleResult> {
     return this.rebuildUnloadedPanel(panelId, { force: true });
-  }
-
-  async rebuildAndReloadPanel(panelId: string): Promise<PanelLifecycleResult> {
-    const rebuild = await this.rebuildPanel(panelId);
-    const reload = await this.reloadPanel(panelId);
-    return this.lifecycleResult(panelId, "rebuildAndReload", "rebuilt_and_reloaded", {
-      loaded: reload.loaded,
-      rebuilt: rebuild.rebuilt,
-      reloaded: reload.reloaded,
-    });
   }
 
   applyBuildComplete(source: string, error?: string): void {
@@ -1146,6 +1142,72 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
 
   hasPanelView(panelId: string): boolean {
     return this.getPanelView()?.hasView(panelId) ?? false;
+  }
+
+  /**
+   * The host's exact presentation observation for the current slot. This is
+   * consumed by the server's canonical panel observation; the shell UI and
+   * agent therefore diagnose the same failure instead of maintaining separate
+   * notions of readiness.
+   */
+  getPanelHostObservation(
+    panelId: string,
+    boot: PanelBootObservation = { phase: "unavailable" }
+  ): PanelHostObservation {
+    const panel = this.registry.getPanel(panelId);
+    const contents = this.getPanelView()?.getWebContents(panelId) as
+      | {
+          isDestroyed(): boolean;
+          getURL(): string;
+          isLoading(): boolean;
+        }
+      | null
+      | undefined;
+    const viewExists = Boolean(contents && !contents.isDestroyed());
+    const lease = this.registry.getRuntimeLease(panelId);
+    const error = panel?.artifacts.error;
+    let failure:
+      | {
+          code: PanelFailureCode;
+          stage: PanelFailureStage;
+          message: string;
+          details?: Record<string, unknown>;
+        }
+      | undefined;
+    if (error) {
+      const unitMissing = /unknown (?:runtime )?build unit|unknown build unit/iu.test(error);
+      const navigation = /navigation|load|connection_refused|not found/iu.test(error);
+      failure = {
+        code: unitMissing ? "unit_not_found" : navigation ? "navigation_failed" : "compile_failed",
+        stage: unitMissing ? "resolve" : navigation ? "load" : "build",
+        message: error,
+        details: {
+          buildState: panel?.artifacts.buildState ?? null,
+          buildProgress: panel?.artifacts.buildProgress ?? null,
+        },
+      };
+    } else if (boot.phase === "failed") {
+      failure = {
+        code: "entry_threw",
+        stage: "boot",
+        message: boot.message ?? "Panel entry failed",
+        details: {
+          errorName: boot.errorName ?? null,
+          stack: boot.stack ?? null,
+        },
+      };
+    }
+    return {
+      ...(lease?.holderLabel ? { holderLabel: lease.holderLabel } : {}),
+      ...(lease?.platform ? { platform: lease.platform } : {}),
+      ...(lease ? { supportsInspection: lease.supportsCdp } : {}),
+      view: {
+        exists: viewExists,
+        ...(viewExists ? { url: contents!.getURL(), loading: contents!.isLoading() } : {}),
+      },
+      boot,
+      ...(failure ? { failure } : {}),
+    };
   }
 
   private getPanelUrlForId(panelId: string): string | null {

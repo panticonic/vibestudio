@@ -41,11 +41,7 @@ vi.mock("@workspace/runtime", () => ({
   vcs: mocks.vcs,
 }));
 
-import {
-  SYSTEM_TEST_AGENT_MODEL,
-  SYSTEM_TEST_FALLBACK_MODEL,
-  SYSTEM_TEST_FALLBACK_THINKING_LEVEL,
-} from "./config.js";
+import { SYSTEM_TEST_AGENT_MODEL } from "./config.js";
 import { HeadlessRunner, SYSTEM_TEST_AGENT_PROMPT } from "./runner.js";
 import { CONTENT_WORKSPACE_REPO_FIXTURE, CREATED_PANEL_WORKSPACE_REPO_FIXTURE } from "./types.js";
 
@@ -82,7 +78,7 @@ describe("HeadlessRunner", () => {
     expect(config.extraConfig).not.toHaveProperty("maxModelCallsPerTurn");
   });
 
-  it("uses Luna at minimal effort only after Spark reports its terminal usage limit", async () => {
+  it("keeps GPT-5.4 mini pinned without a usage-limit fallback", async () => {
     const runner = new HeadlessRunner("ctx-test");
 
     await runner.forTest("first").spawn();
@@ -91,11 +87,8 @@ describe("HeadlessRunner", () => {
     };
     expect(first.extraConfig).toMatchObject({
       model: SYSTEM_TEST_AGENT_MODEL,
-      fallbackModel: SYSTEM_TEST_FALLBACK_MODEL,
-      fallbackThinkingLevel: SYSTEM_TEST_FALLBACK_THINKING_LEVEL,
-      fallbackOn: ["usage_limit_terminal"],
-      fallbackScope: "all-turns",
     });
+    expect(first.extraConfig).not.toHaveProperty("fallbackModel");
 
     mocks.messageListeners[0]?.({
       diagnostic: { code: "message_failed", failureCode: "usage_limit_terminal" },
@@ -105,64 +98,18 @@ describe("HeadlessRunner", () => {
       extraConfig: Record<string, unknown>;
     };
     expect(second.extraConfig).toMatchObject({
-      model: SYSTEM_TEST_FALLBACK_MODEL,
-      thinkingLevel: SYSTEM_TEST_FALLBACK_THINKING_LEVEL,
+      model: SYSTEM_TEST_AGENT_MODEL,
     });
     expect(second.extraConfig).not.toHaveProperty("fallbackModel");
     expect(runner.modelPolicySnapshot()).toMatchObject({
       primaryModel: SYSTEM_TEST_AGENT_MODEL,
-      activeModel: SYSTEM_TEST_FALLBACK_MODEL,
-      activations: [
-        {
-          testName: "first",
-          fromModel: SYSTEM_TEST_AGENT_MODEL,
-          toModel: SYSTEM_TEST_FALLBACK_MODEL,
-          failureCode: "usage_limit_terminal",
-        },
-      ],
-    });
-  });
-
-  it("keeps concurrent sessions on their own model route when one activates fallback", async () => {
-    const runner = new HeadlessRunner("ctx-test");
-    const firstRunner = runner.forTest("first");
-    const secondRunner = runner.forTest("second");
-    const firstSession = await firstRunner.spawn();
-    const secondSession = await secondRunner.spawn();
-
-    mocks.messageListeners[0]?.({
-      diagnostic: { code: "message_failed", failureCode: "usage_limit_terminal" },
-    });
-
-    expect(firstRunner.modelPolicySnapshot(firstSession)).toMatchObject({
-      primaryModel: SYSTEM_TEST_AGENT_MODEL,
-      activeModel: SYSTEM_TEST_FALLBACK_MODEL,
-    });
-    expect(secondRunner.modelPolicySnapshot(secondSession)).toMatchObject({
-      primaryModel: SYSTEM_TEST_AGENT_MODEL,
       activeModel: SYSTEM_TEST_AGENT_MODEL,
+      fallbackModel: null,
       activations: [],
     });
-    expect(runner.modelPolicySnapshot()).toMatchObject({
-      activeModel: SYSTEM_TEST_FALLBACK_MODEL,
-    });
   });
 
-  it("runs an explicit Luna override at minimal effort", async () => {
-    const runner = new HeadlessRunner("ctx-test", { model: SYSTEM_TEST_FALLBACK_MODEL });
-
-    await runner.spawn();
-
-    const config = mocks.createWithAgent.mock.calls[0]![0] as {
-      extraConfig: Record<string, unknown>;
-    };
-    expect(config.extraConfig).toMatchObject({
-      model: SYSTEM_TEST_FALLBACK_MODEL,
-      thinkingLevel: SYSTEM_TEST_FALLBACK_THINKING_LEVEL,
-    });
-  });
-
-  it("does not attach a fallback route to an explicit Spark override", async () => {
+  it("does not attach a fallback route to an explicit model override", async () => {
     const runner = new HeadlessRunner("ctx-test", { model: SYSTEM_TEST_AGENT_MODEL });
 
     await runner.spawn();
@@ -341,7 +288,64 @@ describe("HeadlessRunner", () => {
       `the exact disposable repository ${JSON.stringify(`projects/${repoName}`)} is already present`
     );
     expect(config.extraConfig["systemPrompt"]).not.toContain("if the task creates");
-    expect(mocks.rpc.call).toHaveBeenNthCalledWith(1, "main", "runtime.createContext", [{}]);
+    expect(mocks.rpc.call).toHaveBeenNthCalledWith(1, "main", "runtime.createContext", [
+      {
+        testPolicy: {
+          testId: "docs-workspace-loop",
+          authority: [
+            {
+              ruleId: "model-credential",
+              capability: "credential.use",
+              resource: { kind: "exact", key: "credential.use" },
+              tier: "gated",
+              decision: "once",
+            },
+            {
+              ruleId: "headless-channel",
+              capability: "workspace-service:channel",
+              resource: {
+                kind: "prefix",
+                prefix: "do:workers/pubsub-channel:PubSubChannel:headless-",
+              },
+              tier: "gated",
+              decision: "once",
+            },
+            {
+              ruleId: "semantic-workspace",
+              capability: "workspace-service:gad.workspace",
+              resource: {
+                kind: "exact",
+                key: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+              },
+              tier: "gated",
+              decision: "once",
+            },
+            {
+              ruleId: "model-settings",
+              capability: "workspace-service:models",
+              resource: {
+                kind: "exact",
+                key: "do:workers/model-settings:ModelSettingsDO:workspace-model-settings",
+              },
+              tier: "gated",
+              decision: "once",
+            },
+            {
+              ruleId: "fixture-publication",
+              capability: "workspace-main-advance",
+              resource: {
+                kind: "exact",
+                key: `workspace-source-change:projects/${repoName}:main`,
+              },
+              tier: "gated",
+              decision: "once",
+            },
+          ],
+          userland: [],
+          unexpectedPrompts: "fail",
+        },
+      },
+    ]);
     expect(mocks.rpc.call).toHaveBeenNthCalledWith(2, "main", "runtime.destroyContext", [
       { contextId: "ctx-fixture", recursive: true },
     ]);
@@ -395,6 +399,25 @@ describe("HeadlessRunner", () => {
       'owns exactly one repository that it creates under "panels/"'
     );
     expect(config.extraConfig["systemPrompt"]).not.toContain("system-test-panel-create-");
+    expect(mocks.rpc.call).toHaveBeenNthCalledWith(1, "main", "runtime.createContext", [
+      {
+        testPolicy: expect.objectContaining({
+          authority: expect.arrayContaining([
+            {
+              ruleId: "fixture-publication",
+              capability: "workspace-main-advance",
+              resource: {
+                kind: "prefix",
+                prefix: "workspace-source-change:panels/",
+              },
+              tier: "gated",
+              decision: "once",
+            },
+          ]),
+          unexpectedPrompts: "fail",
+        }),
+      },
+    ]);
 
     await expect(runner.cleanupWorkspaceRepoFixture(state)).rejects.toThrow(
       "expected exactly one task-created repository in panels/, found 0"

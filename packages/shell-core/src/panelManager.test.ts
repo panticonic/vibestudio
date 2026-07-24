@@ -53,7 +53,7 @@ function createWorkspaceMemory() {
     key: string;
     activeBuildKey: string;
     activeExecutionDigest: string;
-    activeAuthority: { requests: []; evalCeilings: [] };
+    activeAuthority: { requests: [] };
     displayTitle?: string | null;
   }
 
@@ -273,7 +273,7 @@ function createWorkspaceMemory() {
           key,
           activeBuildKey: "b".repeat(64),
           activeExecutionDigest: "a".repeat(64),
-          activeAuthority: { requests: [], evalCeilings: [] },
+          activeAuthority: { requests: [] },
         });
       }
       created.push(id);
@@ -286,7 +286,6 @@ function createWorkspaceMemory() {
         buildKey: "b".repeat(64),
         executionDigest: "a".repeat(64),
         authorityRequests: [],
-        authorityEvalCeilings: [],
       };
     },
     async reservePanelEntity(spec) {
@@ -301,7 +300,7 @@ function createWorkspaceMemory() {
         key,
         activeBuildKey: "",
         activeExecutionDigest: "",
-        activeAuthority: { requests: [], evalCeilings: [] },
+        activeAuthority: { requests: [] },
       });
       created.push(id);
       return {
@@ -331,7 +330,6 @@ function createWorkspaceMemory() {
         buildKey: entity.activeBuildKey,
         executionDigest: entity.activeExecutionDigest,
         authorityRequests: [],
-        authorityEvalCeilings: [],
       };
     },
     async retireEntity(id) {

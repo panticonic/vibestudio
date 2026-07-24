@@ -21,7 +21,6 @@ describe("internalDOExecutionIdentity", () => {
       buildKey: bundle().buildKey,
       effectiveVersion: expect.stringMatching(/^[0-9a-f]{64}$/),
       executionDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
-      authorityEvalCeilings: [],
     });
     expect(gad.authorityRequests).toEqual([]);
     expect(workspace.executionDigest).not.toBe(gad.executionDigest);

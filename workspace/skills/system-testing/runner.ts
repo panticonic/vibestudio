@@ -1,13 +1,7 @@
 import { HeadlessSession, type SessionSnapshot } from "@workspace/agentic-session";
 import type { ConnectionConfig } from "@workspace/agentic-core";
 import { blobstore, gad, rpc, vcs } from "@workspace/runtime";
-import {
-  SYSTEM_TEST_AGENT_MODEL,
-  SYSTEM_TEST_FALLBACK_FAILURE_CODE,
-  SYSTEM_TEST_FALLBACK_MODEL,
-  SYSTEM_TEST_FALLBACK_THINKING_LEVEL,
-  systemTestModelRoute,
-} from "./config.js";
+import { SYSTEM_TEST_AGENT_MODEL, systemTestModelRoute } from "./config.js";
 import { systemTestFailure } from "./structured-error.js";
 import {
   WorkspaceRepoFixtureLifecycle,
@@ -15,6 +9,7 @@ import {
   type WorkspaceRepoFixtureSpec,
   type WorkspaceRepoFixtureState,
 } from "./workspace-repo-fixture.js";
+import type { AgentExecutionTestPolicySpec } from "@vibestudio/shared/authority/testPolicy";
 
 // This runner is eval'd server-side (in the orchestrating agent's EvalDO), so it
 // uses the portable client surface — NOT panel-only `getStateArgs`/`slotId`.
@@ -48,16 +43,41 @@ interface ModelPolicyActivation {
   testName: string | null;
   fromModel: string;
   toModel: string;
-  failureCode: typeof SYSTEM_TEST_FALLBACK_FAILURE_CODE;
+  failureCode: string;
 }
 
 interface ModelPolicyState {
   primaryModel: string;
   activeModel: string;
-  fallbackModel: string | null;
-  fallbackThinkingLevel: typeof SYSTEM_TEST_FALLBACK_THINKING_LEVEL | null;
-  fallbackOn: typeof SYSTEM_TEST_FALLBACK_FAILURE_CODE | null;
+  fallbackModel: null;
+  fallbackThinkingLevel: null;
+  fallbackOn: null;
   activations: ModelPolicyActivation[];
+}
+
+function fixturePublicationAuthority(
+  fixture: (WorkspaceRepoFixtureSpec & { repoName: string | null }) | null
+): AgentExecutionTestPolicySpec["authority"] {
+  if (!fixture) return [];
+  const resource =
+    fixture.kind === "created-repository" || fixture.kind === "buildable-panel-with-derived"
+      ? {
+          kind: "prefix" as const,
+          prefix: `workspace-source-change:${fixture.section}/`,
+        }
+      : {
+          kind: "exact" as const,
+          key: `workspace-source-change:${fixture.section}/${fixture.repoName}:main`,
+        };
+  return [
+    {
+      ruleId: "fixture-publication",
+      capability: "workspace-main-advance",
+      resource,
+      tier: "gated",
+      decision: "once",
+    },
+  ];
 }
 
 export class HeadlessRunner {
@@ -73,6 +93,7 @@ export class HeadlessRunner {
     | (WorkspaceRepoFixtureSpec & { repoName: string | null })
     | null;
   private readonly workspaceRepoFixtureLifecycle: WorkspaceRepoFixtureLifecycle | null;
+  private readonly testAuthorityPolicy: AgentExecutionTestPolicySpec | null;
 
   /**
    * Model is per-agent, so each spawned headless agent is created with the
@@ -89,17 +110,12 @@ export class HeadlessRunner {
       sessionPolicies: Map<HeadlessSession, ModelPolicyState>;
     },
     testName: string | null = null,
-    workspaceRepoFixture: HeadlessRunner["workspaceRepoFixture"] = null
+    workspaceRepoFixture: HeadlessRunner["workspaceRepoFixture"] = null,
+    testAuthorityPolicy: AgentExecutionTestPolicySpec | null = null
   ) {
     this.contextId = contextId;
     const primaryModel = opts?.model ?? SYSTEM_TEST_AGENT_MODEL;
-    const modelRoute = systemTestModelRoute(primaryModel, {
-      // The default unattended policy may fall back on a journaled terminal
-      // usage limit. Any explicit override is a model-specific run, including
-      // an explicit request for the same model as the default, and must never
-      // silently execute a different model.
-      allowUsageLimitFallback: opts?.model === undefined,
-    });
+    const modelRoute = systemTestModelRoute(primaryModel);
     this.shared = shared ?? {
       sessions: new Set(),
       testNames: new Map(),
@@ -111,6 +127,7 @@ export class HeadlessRunner {
       },
     };
     this.testName = testName;
+    this.testAuthorityPolicy = testAuthorityPolicy;
     this.workspaceRepoFixture = workspaceRepoFixture;
     this.workspaceRepoFixtureLifecycle = workspaceRepoFixture
       ? new WorkspaceRepoFixtureLifecycle(
@@ -118,7 +135,9 @@ export class HeadlessRunner {
             vcs,
             blobstore,
             createContext: () =>
-              rpc.call<{ contextId: string }>("main", "runtime.createContext", [{}]),
+              rpc.call<{ contextId: string }>("main", "runtime.createContext", [
+                testAuthorityPolicy ? { testPolicy: testAuthorityPolicy } : {},
+              ]),
             destroyContext: (contextId) =>
               rpc.call<void>("main", "runtime.destroyContext", [{ contextId, recursive: true }]),
           },
@@ -151,7 +170,10 @@ export class HeadlessRunner {
   /** A concurrency-safe runner view that associates every spawned session with one test. */
   forTest(
     testName: string,
-    opts?: { workspaceRepoFixture?: WorkspaceRepoFixtureSpec }
+    opts?: {
+      workspaceRepoFixture?: WorkspaceRepoFixtureSpec;
+      authorityPolicy?: Omit<AgentExecutionTestPolicySpec, "testId" | "unexpectedPrompts">;
+    }
   ): HeadlessRunner {
     const repoNameStem = `system-test-${slugifyTestName(testName)}-`;
     const workspaceRepoFixture = opts?.workspaceRepoFixture
@@ -168,7 +190,53 @@ export class HeadlessRunner {
       { model: this.shared.modelPolicy.primaryModel },
       this.shared,
       testName,
-      workspaceRepoFixture
+      workspaceRepoFixture,
+      {
+        testId: testName,
+        authority: [
+          {
+            ruleId: "model-credential",
+            capability: "credential.use",
+            resource: { kind: "exact", key: "credential.use" },
+            tier: "gated",
+            decision: "once",
+          },
+          {
+            ruleId: "headless-channel",
+            capability: "workspace-service:channel",
+            resource: {
+              kind: "prefix",
+              prefix: "do:workers/pubsub-channel:PubSubChannel:headless-",
+            },
+            tier: "gated",
+            decision: "once",
+          },
+          {
+            ruleId: "semantic-workspace",
+            capability: "workspace-service:gad.workspace",
+            resource: {
+              kind: "exact",
+              key: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+            },
+            tier: "gated",
+            decision: "once",
+          },
+          {
+            ruleId: "model-settings",
+            capability: "workspace-service:models",
+            resource: {
+              kind: "exact",
+              key: "do:workers/model-settings:ModelSettingsDO:workspace-model-settings",
+            },
+            tier: "gated",
+            decision: "once",
+          },
+          ...fixturePublicationAuthority(workspaceRepoFixture),
+          ...(opts?.authorityPolicy?.authority ?? []),
+        ],
+        userland: [...(opts?.authorityPolicy?.userland ?? [])],
+        unexpectedPrompts: "fail",
+      }
     );
   }
 
@@ -228,7 +296,6 @@ export class HeadlessRunner {
   }): Promise<HeadlessSession> {
     const policy = this.shared.modelPolicy;
     const model = policy.activeModel;
-    const usingFallbackModel = model === SYSTEM_TEST_FALLBACK_MODEL;
     const contextMode = opts?.context ?? (this.workspaceRepoFixture ? "task" : "isolated");
     const taskContextId = this.workspaceRepoFixtureLifecycle?.taskContextId ?? null;
     if (contextMode === "task" && !taskContextId) {
@@ -267,6 +334,9 @@ export class HeadlessRunner {
       source: opts?.source ?? "workers/agent-worker",
       className: opts?.className ?? "AiChatWorker",
       ...(agentContextId ? { contextId: agentContextId } : {}),
+      ...(!agentContextId && this.testAuthorityPolicy
+        ? { testPolicy: this.testAuthorityPolicy }
+        : {}),
       includeSyntheticPanelUiMethods: opts?.syntheticPanelUiTools === true,
       includeValidationRetryProbeMethod: opts?.validationRetryProbeTool === true,
       // The model rides the spawned agent's CREATION config (per-agent, seeded
@@ -279,15 +349,6 @@ export class HeadlessRunner {
         systemPrompt: `${SYSTEM_TEST_AGENT_PROMPT}${fixturePrompt}`,
         systemPromptMode: "append",
         model,
-        ...(usingFallbackModel ? { thinkingLevel: SYSTEM_TEST_FALLBACK_THINKING_LEVEL } : {}),
-        ...(!usingFallbackModel && policy.fallbackModel && policy.fallbackThinkingLevel
-          ? {
-              fallbackModel: policy.fallbackModel,
-              fallbackThinkingLevel: policy.fallbackThinkingLevel,
-              fallbackOn: [SYSTEM_TEST_FALLBACK_FAILURE_CODE],
-              fallbackScope: "all-turns",
-            }
-          : {}),
       },
     });
     this.shared.sessions.add(session);
@@ -295,47 +356,12 @@ export class HeadlessRunner {
     const sessionPolicy: ModelPolicyState = {
       primaryModel: model,
       activeModel: model,
-      fallbackModel: usingFallbackModel ? null : policy.fallbackModel,
-      fallbackThinkingLevel: usingFallbackModel ? null : policy.fallbackThinkingLevel,
-      fallbackOn: usingFallbackModel ? null : policy.fallbackOn,
+      fallbackModel: null,
+      fallbackThinkingLevel: null,
+      fallbackOn: null,
       activations: [],
     };
     this.shared.sessionPolicies.set(session, sessionPolicy);
-    session.onMessage((message) => {
-      const current = this.shared.sessionPolicies.get(session);
-      if (!current) return;
-      const continuedNotice = message.diagnostic?.code === "model.fallback_continued";
-      const terminalUsageLimit =
-        message.diagnostic?.code === "message_failed" &&
-        message.diagnostic?.failureCode === SYSTEM_TEST_FALLBACK_FAILURE_CODE;
-      if (
-        (!continuedNotice && !terminalUsageLimit) ||
-        current.fallbackOn !== SYSTEM_TEST_FALLBACK_FAILURE_CODE ||
-        !current.fallbackModel ||
-        current.activeModel === current.fallbackModel
-      ) {
-        return;
-      }
-      const fromModel = current.activeModel;
-      current.activeModel = current.fallbackModel;
-      const activation: ModelPolicyActivation = {
-        at: new Date().toISOString(),
-        testName: this.testName,
-        fromModel,
-        toModel: current.fallbackModel,
-        failureCode: SYSTEM_TEST_FALLBACK_FAILURE_CODE,
-      };
-      current.activations.push(activation);
-
-      // The shared policy only selects the model for sessions spawned in the
-      // future. Existing sessions retain their own immutable route until their
-      // own diagnostic activates it.
-      const future = this.shared.modelPolicy;
-      if (future.activeModel === fromModel && future.fallbackModel === current.activeModel) {
-        future.activeModel = current.activeModel;
-        future.activations.push({ ...activation });
-      }
-    });
     return session;
   }
 

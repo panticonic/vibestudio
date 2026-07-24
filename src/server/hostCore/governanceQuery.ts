@@ -8,6 +8,7 @@ const APPROVAL_KINDS = [
   "secret-input",
   "userland",
   "unit-batch",
+  "mission-review",
   "device-code",
   "external-agent",
   "browser-permission",

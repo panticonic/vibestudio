@@ -17,7 +17,6 @@
 
 import { describe, expect, it } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import type { DeferrableRpcClient } from "@vibestudio/rpc";
 import { GadWorkspaceDO } from "../../semantic-control-plane/src/index.js";
 import { PubSubChannel } from "../../../workers/pubsub-channel/channel-do.js";
 import { activate as activateLocalModels } from "../../../extensions/local-models/index.js";

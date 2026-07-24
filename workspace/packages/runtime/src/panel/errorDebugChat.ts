@@ -59,11 +59,8 @@ export async function openPanelErrorDiagnosticChat(
   options: { slotId: string; contextId?: string | null }
 ): Promise<PanelErrorDiagnosticChatResult> {
   const self = panelTree.self();
-  const [info, stateArgs, consoleHistory] = await Promise.all([
-    capture("panel metadata", async () => {
-      await self.refresh();
-      return self.getInfo();
-    }),
+  const [diagnostics, stateArgs] = await Promise.all([
+    capture("panel diagnostics", () => self.diagnose()),
     capture("panel stateArgs", async () => {
       try {
         return await self.stateArgs.get<Record<string, unknown>>();
@@ -71,16 +68,21 @@ export async function openPanelErrorDiagnosticChat(
         return getStateArgs<Record<string, unknown>>();
       }
     }),
-    capture("panel console history", () => self.cdp.consoleHistory({ limit: 80, errorLimit: 80 })),
   ]);
 
   const prompt = buildPanelRenderErrorPrompt({
     request,
-    panel: info,
+    panel: diagnostics.ok
+      ? { ok: true, value: diagnostics.value.observation }
+      : diagnostics,
     stateArgs,
-    consoleHistory,
+    consoleHistory: diagnostics.ok
+      ? { ok: true, value: diagnostics.value.consoleHistory }
+      : diagnostics,
   });
-  const panelContextId = info.ok ? info.value.contextId : options.contextId;
+  const panelContextId = diagnostics.ok
+    ? diagnostics.value.observation.contextId
+    : options.contextId;
   const debugChat = await openPanel("panels/chat", {
     parentId: options.slotId,
     focus: true,

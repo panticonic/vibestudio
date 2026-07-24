@@ -94,10 +94,13 @@ const EXTENSION_UNIT_DESCRIPTOR: UnitDescriptor<"extension"> = {
  * to the extension process; its causal parent is deliberately retained here
  * so its existing host-issued request identity can reconnect nested calls to
  * the already verified trajectory edge without trusting extension-supplied
- * provenance.
+ * provenance. The exact authorizing caller is retained alongside it so nested
+ * host calls keep the verified account subject while the extension remains the
+ * authority-bearing code caller.
  */
 type ActiveExtensionInvocation = {
   invocation: ExtensionInvocation;
+  authorizingCaller: VerifiedCaller;
   causalParent: NonNullable<ServiceContext["causalParent"]> | null;
 };
 
@@ -165,7 +168,6 @@ interface ExtensionBuildMetadataLike {
   execution?: { executionDigest: string };
   authority?: {
     requests: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
-    evalCeilings: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityCeiling[];
   };
   details?:
     | {
@@ -233,7 +235,9 @@ interface ApprovalQueueLike {
           units: PendingUnitBatchApproval["units"];
           configWrite?: PendingUnitBatchApproval["configWrite"];
         }
-  ): Promise<"once" | "session" | "version" | "deny" | "dismiss">;
+  ): Promise<
+    "once" | "task" | "agent" | "lock" | "session" | "version" | "deny" | "dismiss"
+  >;
 }
 
 interface NotificationServiceLike {
@@ -410,9 +414,16 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
       },
       approvalEntry: (node, decl) => this.buildBatchEntry(node, decl.ref),
       requestApproval: (entries, trigger) =>
-        requestUnitBatchApproval({
+        requestUnitBatchApproval<
+          "extension",
+          UnitBatchEntry,
+          NonNullable<PendingUnitBatchApproval["configWrite"]>
+        >({
           descriptor: EXTENSION_UNIT_DESCRIPTOR,
-          approvalQueue: this.deps.approvalQueue,
+          approvalQueue: {
+            request: async (request) =>
+              requireUnitApprovalDecision(await this.deps.approvalQueue.request(request)),
+          },
           entries,
           trigger,
         }),
@@ -651,9 +662,8 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
       const previousAuthority = active?.activeBundleKey
         ? (this.deps.buildSystem.getBuildByKey?.(active.activeBundleKey)?.metadata.authority ?? {
             requests: [],
-            evalCeilings: [],
           })
-        : { requests: [], evalCeilings: [] };
+        : { requests: [] };
       units.push({
         ...createUnitBatchEntryBase({
           unitKind: "extension",
@@ -1027,6 +1037,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
     requestId: string
   ):
     | (ExtensionInvocation & {
+        authorizingCaller: VerifiedCaller;
         chainCaller?: ExtensionUserlandCaller;
         causalParent: NonNullable<ServiceContext["causalParent"]> | null;
       })
@@ -1035,6 +1046,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
     return active
       ? {
           ...active.invocation,
+          authorizingCaller: active.authorizingCaller,
           causalParent: active.causalParent,
         }
       : null;
@@ -1054,7 +1066,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
       effectiveVersion: entry.activeEv,
       executionDigest,
       requested: authority.requests,
-      evalCeilings: authority.evalCeilings,
     };
   }
 
@@ -1073,6 +1084,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
     );
     this.activeInvocations.set(this.invocationKey(extensionName, invocation.requestId), {
       invocation,
+      authorizingCaller: ctx.authorizingCaller ?? ctx.caller,
       causalParent: ctx.causalParent ?? null,
     });
     return invocation;
@@ -1611,9 +1623,8 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
     const previousAuthority = active?.activeBundleKey
       ? (this.deps.buildSystem.getBuildByKey?.(active.activeBundleKey)?.metadata.authority ?? {
           requests: [],
-          evalCeilings: [],
         })
-      : { requests: [], evalCeilings: [] };
+      : { requests: [] };
     return {
       ...createUnitBatchEntryBase({
         unitKind: "extension",
@@ -2070,6 +2081,14 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
     if (decision === "deny" || decision === "dismiss") {
       throw new ServiceError("extensions", "reload", "Extension reload approval denied", "EACCES");
     }
+    if (decision !== "once" && decision !== "session" && decision !== "version") {
+      throw new ServiceError(
+        "extensions",
+        "reload",
+        `Invalid ${decision} decision for an extension reload`,
+        "EACCES"
+      );
+    }
   }
 
   private recordUnitLog(record: UnitLogRecord): void {
@@ -2114,6 +2133,21 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
     }
     this.extensionErrorHistory.set(name, items);
   }
+}
+
+function requireUnitApprovalDecision(
+  decision: Awaited<ReturnType<ApprovalQueueLike["request"]>>
+): import("@vibestudio/unit-host").UnitApprovalDecision {
+  if (
+    decision === "once" ||
+    decision === "session" ||
+    decision === "version" ||
+    decision === "deny" ||
+    decision === "dismiss"
+  ) {
+    return decision;
+  }
+  throw new Error(`Invalid ${decision} decision for a workspace-unit approval`);
 }
 
 interface ExtensionErrorHistoryItem {

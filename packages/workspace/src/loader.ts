@@ -2,15 +2,22 @@
  * Configuration loading for Vibestudio.
  *
  * Two configuration sources:
- * 1. Central config (~/.config/vibestudio/): Models, secrets, env vars (shared)
- * 2. Workspace (~/.config/vibestudio/workspaces/{name}/): vibestudio.yml, panels, etc.
+ * 1. User profile config (~/.config/vibestudio/): models, secrets, env vars
+ *    shared by independent local instances.
+ * 2. Instance workspace (<instance-root>/workspaces/{name}/): vibestudio.yml,
+ *    panels, state, and runtime data.
  *
  * Workspace resolution: CLI --workspace=name → VIBESTUDIO_WORKSPACE env → null (show init UI)
  */
 
 import fs from "node:fs";
 import * as path from "path";
-import { getCentralDataPath, getWorkspacesDir, getWorkspaceDir } from "@vibestudio/env-paths";
+import {
+  getCentralDataPath,
+  getProfileDataPath,
+  getWorkspacesDir,
+  getWorkspaceDir,
+} from "@vibestudio/env-paths";
 import YAML from "yaml";
 import dotenv from "dotenv";
 import { z } from "zod";
@@ -25,27 +32,6 @@ export {
 } from "./configParser.js";
 
 const log = createDevLogger("Workspace");
-const DESKTOP_AUTO_APPROVE_ONCE_FILE = "desktop-auto-approve-once";
-
-/** Carry a trusted in-app create action across the desktop relaunch. */
-export function markDesktopAutoApproveOnce(wsDir: string): void {
-  const stateDir = path.join(wsDir, "state");
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.writeFileSync(path.join(stateDir, DESKTOP_AUTO_APPROVE_ONCE_FILE), "created-in-app\n", "utf8");
-}
-
-/** Consume the one-shot create marker. A missing marker is the normal path. */
-export function consumeDesktopAutoApproveOnce(wsDir: string): boolean {
-  const marker = path.join(wsDir, "state", DESKTOP_AUTO_APPROVE_ONCE_FILE);
-  try {
-    fs.unlinkSync(marker);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    console.warn(`[Workspace] Could not consume ${marker}:`, error);
-    return false;
-  }
-}
 import type {
   Workspace,
   WorkspaceConfig,
@@ -122,13 +108,13 @@ export const CentralConfigSchema = z
 // =============================================================================
 
 /**
- * Get the central config directory path (shared across all workspaces).
+ * Get the user profile config directory path (shared across all instances).
  * - Linux: ~/.config/vibestudio
  * - macOS: ~/Library/Application Support/vibestudio
  * - Windows: %APPDATA%/vibestudio
  */
 export function getCentralConfigDir(): string {
-  return getCentralDataPath();
+  return getProfileDataPath();
 }
 
 // Central-config dir management lives in `centralAuth.ts` because it is a

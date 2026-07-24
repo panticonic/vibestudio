@@ -105,7 +105,7 @@ const unavailableContextFiles = {
   readFile: async (): Promise<string> => {
     throw new Error("context files are outside this test");
   },
-  glob: async (): Promise<string[]> => {
+  readManagedFiles: async (): Promise<Array<{ path: string; content: string }>> => {
     throw new Error("context files are outside this test");
   },
 };
@@ -550,11 +550,11 @@ describe("workspace service agent resources", () => {
       contextFiles: {
         readFile: async (_ctx, filePath) =>
           readFileSync(path.join(wsPath, filePath.replace(/^\/+/, "")), "utf8"),
-        glob: async (_ctx, pattern) =>
-          skillPaths().filter((skillPath) => {
-            const depth = skillPath.replace(/^\/+/, "").split("/").length;
-            return pattern === "*/SKILL.md" ? depth === 2 : depth === 3;
-          }),
+        readManagedFiles: async () =>
+          skillPaths().map((skillPath) => ({
+            path: skillPath,
+            content: readFileSync(path.join(wsPath, skillPath.replace(/^\/+/, "")), "utf8"),
+          })),
       },
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
@@ -593,6 +593,38 @@ describe("workspace service agent resources", () => {
   // ─── listSkills ────────────────────────────────────────────────────────────
 
   describe("listSkills", () => {
+    it("requires contextless host callers to name a context and forbids ambient-context overrides", async () => {
+      const readManagedFiles = vi.fn(async () => []);
+      const readFile = vi.fn(async () => "# skill");
+      const service = createWorkspaceService({
+        workspace: makeWorkspace(),
+        contextFiles: { readFile, readManagedFiles },
+        getConfig: () => makeConfig(),
+        setConfigField: vi.fn(),
+      });
+
+      await expect(service.handler(shellCtx, "listSkills", [])).rejects.toThrow(
+        "shell callers must provide an explicit contextId"
+      );
+      await expect(
+        service.handler(shellCtx, "listSkills", [{ contextId: "ctx-shell" }])
+      ).resolves.toEqual([]);
+      expect(readManagedFiles).toHaveBeenCalledWith(
+        shellCtx,
+        ["*/SKILL.md", "*/*/SKILL.md"],
+        "ctx-shell"
+      );
+
+      await expect(
+        service.handler(panelCtx, "listSkills", [{ contextId: "ctx-other" }])
+      ).rejects.toThrow("panel callers cannot override their verified ambient context");
+
+      await expect(
+        service.handler(shellCtx, "readSkill", ["skills/alpha", { contextId: "ctx-shell" }])
+      ).resolves.toBe("# skill");
+      expect(readFile).toHaveBeenCalledWith(shellCtx, "/skills/alpha/SKILL.md", "ctx-shell");
+    });
+
     it("walks repo taxonomy and parses top-level SKILL.md frontmatter", async () => {
       const wsPath = mkdtempSync(path.join(tmpRoot, "ws-"));
       mkdirSync(path.join(wsPath, "meta"), { recursive: true });

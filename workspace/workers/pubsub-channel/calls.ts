@@ -128,7 +128,12 @@ export interface CallTransportDeps {
     idempotency?: AppendIdempotency;
     attachments?: StoredAttachment[];
   }): Promise<ChannelEvent>;
-  broadcastLive(event: ChannelEvent, senderId: string, ref?: number): void;
+  broadcastLive(
+    event: ChannelEvent,
+    senderId: string,
+    ref?: number,
+    structuredPublisherId?: string
+  ): void;
   emitSignal(participantId: string, event: ChannelEvent): void;
   participantRef(participantId: string): ParticipantRef;
   getSenderMetadata(participantId: string): Record<string, unknown> | undefined;
@@ -340,7 +345,12 @@ export class CallTransport {
         `[Channel] callMethod re-drive for settled call ${transportCallId}: ` +
           `re-broadcasting durable terminal (seq ${existingTerminal.id})`
       );
-      this.deps.broadcastLive(existingTerminal, existingTerminal.senderId ?? callerPid);
+      this.deps.broadcastLive(
+        existingTerminal,
+        existingTerminal.senderId ?? callerPid,
+        undefined,
+        targetPid
+      );
       return null;
     }
 
@@ -385,7 +395,12 @@ export class CallTransport {
     );
     if (terminalAfterStart) {
       this.deleteRow(pendingRow.transportCallId);
-      this.deps.broadcastLive(terminalAfterStart, terminalAfterStart.senderId ?? callerPid);
+      this.deps.broadcastLive(
+        terminalAfterStart,
+        terminalAfterStart.senderId ?? callerPid,
+        undefined,
+        pendingRow.targetId
+      );
       return null;
     }
 
@@ -525,6 +540,7 @@ export class CallTransport {
             caller: this.deps.participantRef(pending.callerId),
             invocationId: pending.invocationId,
             transportCallId: pending.transportCallId,
+            method: pending.method,
             ...(pending.turnId ? { turnId: pending.turnId } : {}),
           },
           result,
@@ -550,7 +566,7 @@ export class CallTransport {
     const callerPresent =
       opts?.senderId != null || this.deps.participantTransport(pending.callerId) !== null;
     if (callerPresent) {
-      this.deps.broadcastLive(event, sender);
+      this.deps.broadcastLive(event, sender, undefined, pending.targetId);
     }
     return event.id;
   }
@@ -617,6 +633,7 @@ export class CallTransport {
           caller: this.deps.participantRef(synthetic.callerId),
           invocationId: synthetic.invocationId,
           transportCallId: synthetic.transportCallId,
+          method: synthetic.method,
           ...(synthetic.turnId ? { turnId: synthetic.turnId } : {}),
         },
         result,
@@ -638,7 +655,7 @@ export class CallTransport {
     // 3. There is no cache row to consume. Record head, schedule, and FORCE the
     //    broadcast — the caller is a subscriber matching by invocationId.
     this.recordObservedHead(event.id);
-    this.deps.broadcastLive(event, synthetic.callerId);
+    this.deps.broadcastLive(event, synthetic.callerId, undefined, synthetic.targetId);
     return event.id;
   }
 
@@ -722,6 +739,7 @@ export class CallTransport {
         caller: this.deps.participantRef(pending.callerId),
         invocationId: pending.invocationId,
         transportCallId: pending.transportCallId,
+        method: pending.method,
         ...(pending.turnId ? { turnId: pending.turnId } : {}),
       },
       output: content,
@@ -734,7 +752,7 @@ export class CallTransport {
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
     });
     this.recordObservedHead(event.id);
-    this.deps.broadcastLive(event, pending.callerId);
+    this.deps.broadcastLive(event, pending.callerId, undefined, pending.targetId);
   }
 
   // ── cancel / timeout / abandon ────────────────────────────────────────────
@@ -774,6 +792,7 @@ export class CallTransport {
         caller: this.deps.participantRef(pending.callerId),
         invocationId: pending.invocationId,
         transportCallId: pending.transportCallId,
+        method: pending.method,
         ...(pending.turnId ? { turnId: pending.turnId } : {}),
       },
       actor: this.deps.participantRef("system"),

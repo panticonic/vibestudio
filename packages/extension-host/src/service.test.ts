@@ -120,7 +120,7 @@ function makeHost(
             ? { contributes: { buildTargets: overrides.buildTargets } }
             : {}),
         },
-        authority: { requests: [], evalCeilings: [] },
+        authority: { requests: [] },
       },
     })
   );
@@ -168,13 +168,12 @@ function makeHost(
         authority: {
           requests: [
             {
-              capability: "service:extensions.ready",
+              capability: "notifications",
               resource: { kind: "prefix" as const, prefix: "" },
               tier: "gated" as const,
               evidence: "intentional-broad" as const,
             },
           ],
-          evalCeilings: [],
         },
         details: {
           kind: "extension",
@@ -203,13 +202,12 @@ function makeHost(
                     authority: {
                       requests: [
                         {
-                          capability: "service:extensions.ready",
+                          capability: "notifications",
                           resource: { kind: "prefix" as const, prefix: "" },
                           tier: "gated" as const,
                           evidence: "intentional-broad" as const,
                         },
                       ],
-                      evalCeilings: [],
                     },
                   }),
               details: {
@@ -311,13 +309,12 @@ describe("ExtensionHost invocation attribution", () => {
       executionDigest: "a".repeat(64),
       requested: [
         {
-          capability: "service:extensions.ready",
+          capability: "notifications",
           resource: { kind: "prefix", prefix: "" },
           tier: "gated",
           evidence: "intentional-broad",
         },
       ],
-      evalCeilings: [],
     });
   });
 
@@ -1070,6 +1067,9 @@ describe("ExtensionHost activation", () => {
             expect.objectContaining({
               extensionName: name,
               method: "blame",
+              authorizingCaller: expect.objectContaining({
+                runtime: { id: "panel-1", kind: "panel" },
+              }),
               causalParent: null,
             })
           );

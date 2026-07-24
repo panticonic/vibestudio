@@ -18,7 +18,7 @@ describe("reviewed internal Durable Object targets", () => {
       objectKey: "workspace-semantic-control-plane",
       authority: {
         capability: "workspace-service:gad.workspace",
-        principals: ["host", "user", "code"],
+        principals: ["host", "user", "code", "session", "mission"],
       },
     });
   });

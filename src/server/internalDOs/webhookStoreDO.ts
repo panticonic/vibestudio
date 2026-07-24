@@ -4,7 +4,6 @@ import {
   type DurableObjectContext,
   type DurableObjectSchemaMigration,
 } from "@vibestudio/durable";
-import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import type { WebhookIngressSubscription } from "../../../packages/shared/src/webhooks/ingress.js";
 
 interface WebhookIngressSubscriptionRow {
@@ -34,19 +33,6 @@ export class WebhookStoreDO extends DurableObjectBase {
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
     this.ensureReady();
-  }
-
-  /** Keep verifier secrets and dispatch targets behind the server service. */
-  protected override assertInboundAllowed(
-    caller: AuthenticatedCaller | null,
-    kind: "call" | "event"
-  ): void {
-    if (kind === "event") return;
-    if (caller?.callerKind !== "server") {
-      throw new Error(
-        `webhook-ingress: WebhookStoreDO is server-only; refusing caller kind ${caller?.callerKind ?? "unknown"}`
-      );
-    }
   }
 
   protected createTables(): void {

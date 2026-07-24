@@ -259,7 +259,6 @@ export const panel = {
   saveBrowserPagePdf: (panelId: string) => panelClient.saveBrowserPagePdf(panelId),
   stopBrowserMedia: (panelId: string) => panelClient.stopBrowserMedia(panelId),
   rebuildPanel: (panelId: string) => panelTreeClient.rebuildPanel(panelId),
-  rebuildAndReload: (panelId: string) => panelTreeClient.rebuildAndReload(panelId),
   navigateHistory: (panelId: string, delta: -1 | 1) =>
     panelTreeClient.navigateHistory(panelId, delta),
   unload: (panelId: string) => panelTreeClient.unload(panelId),
@@ -870,9 +869,14 @@ import { assertPresent } from "../utils/assertPresent";
 export const shellApproval = {
   resolve: (approvalId: string, decision: ApprovalDecision) =>
     shellApprovalClient.resolve(approvalId, decision),
-  blockCapability: (approvalId: string) => shellApprovalClient.blockCapability(approvalId),
   resolveBootstrap: (approvalId: string, decision: Extract<ApprovalDecision, "once" | "deny">) =>
     shellApprovalClient.resolveBootstrap(approvalId, decision),
+  resolveMissionReview: (
+    approvalId: string,
+    resolution:
+      | { decision: "approve"; selectedAuthorityKeys: string[] }
+      | { decision: "dismiss" }
+  ) => shellApprovalClient.resolveMissionReview(approvalId, resolution),
   resolveUserland: (approvalId: string, choice: string | "dismiss") =>
     shellApprovalClient.resolveUserland(approvalId, choice),
   resolveExternalAgent: (approvalId: string, behavior: "allow" | "deny") =>

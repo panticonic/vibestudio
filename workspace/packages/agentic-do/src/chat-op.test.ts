@@ -13,7 +13,7 @@ import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import type { LifecyclePrepareInput, LifecycleResumeInput } from "@workspace/runtime/worker";
 import { ids } from "@workspace/agent-loop";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
-import type { DeferrableRpcClient, RpcClient } from "@vibestudio/rpc";
+import type { RpcClient } from "@vibestudio/rpc";
 import { AGENTIC_EVENT_PAYLOAD_KIND, type AgenticEvent } from "@workspace/agentic-protocol";
 import { sha256HexSyncText } from "@vibestudio/content-addressing";
 import type { ChannelEvent, ParticipantDescriptor } from "@workspace/harness";
@@ -101,7 +101,7 @@ class TestVessel extends AgentVesselBase {
   /** Context-integrity ingestion is a mandatory host boundary, not an HTTP
    * concern of these channel-behavior tests. Keep every other RPC on the real
    * client so tests that exercise transport behavior retain coverage. */
-  protected override get rpc(): DeferrableRpcClient {
+  protected override get rpc(): RpcClient {
     const base = super.rpc;
     return new Proxy(base, {
       get(target, property, receiver) {
@@ -144,6 +144,10 @@ class TestVessel extends AgentVesselBase {
         .exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'effect_outbox'`)
         .toArray().length > 0
     );
+  }
+
+  driverForTest(): AgentLoopDriver {
+    return this.driver;
   }
 
   private makeChannelStub(channelId: string) {
@@ -282,11 +286,24 @@ class TestVessel extends AgentVesselBase {
     return this.subscriptions.listChannelIds();
   }
 
+  queuedEnvelopeCountForTest(channelId = CHANNEL): number {
+    return Number(
+      this.sql
+        .exec(
+          `SELECT COUNT(*) AS count FROM channel_envelope_inbox WHERE channel_id = ?`,
+          channelId
+        )
+        .toArray()[0]?.["count"] ?? 0
+    );
+  }
+
   installLifecycleDriverForTest() {
     const driver = {
       releaseActivation: vi.fn(async () => 1),
       handleIncoming: vi.fn(async () => {}),
+      abortChannel: vi.fn(async () => {}),
       dropLoop: vi.fn(),
+      activateChannel: vi.fn(),
       wake: vi.fn(async () => {}),
     };
     (this as unknown as { _driver: unknown })._driver = driver;
@@ -309,6 +326,7 @@ class PromptEventProbe extends TestVessel {
 
   protected override get driver(): AgentLoopDriver {
     return {
+      activateChannel: vi.fn(),
       handleIncoming: this.handleIncomingSpy,
     } as unknown as AgentLoopDriver;
   }
@@ -325,6 +343,7 @@ class ReadyWakeProbe extends TestVessel {
 
   protected override get driver(): AgentLoopDriver {
     return {
+      activateChannel: vi.fn(),
       wake: this.wakeSpy,
     } as unknown as AgentLoopDriver;
   }
@@ -340,6 +359,7 @@ class LazyPromptProbe extends TestVessel {
 
   protected override get driver(): AgentLoopDriver {
     return {
+      activateChannel: vi.fn(),
       wake: this.wakeSpy,
     } as unknown as AgentLoopDriver;
   }
@@ -416,6 +436,7 @@ describe("AgentVesselBase channel ready wake policy", () => {
       type: "ready",
       ready: { totalCount: 0, envelopeCount: 0 },
     });
+    await instance.alarm();
 
     expect(instance.wakeSpy).toHaveBeenCalledWith(CHANNEL);
   });
@@ -431,6 +452,7 @@ describe("AgentVesselBase channel ready wake policy", () => {
       type: "ready",
       ready: { totalCount: 0, envelopeCount: 0 },
     });
+    await instance.alarm();
 
     expect(instance.wakeSpy).not.toHaveBeenCalled();
   });
@@ -479,10 +501,58 @@ describe("AgentVesselBase lifecycle release", () => {
     });
     expect(instance.subscriptionIdsForTest()).toEqual([]);
     expect(instance.lifecycleClears).toBe(1);
-    expect(driver.handleIncoming).toHaveBeenCalledWith(
-      CHANNEL,
-      expect.objectContaining({ command: { kind: "abort", reason: "channel_unsubscribe" } })
-    );
+    expect(driver.abortChannel).toHaveBeenCalledWith(CHANNEL, "channel_unsubscribe");
+  });
+
+  it("discards queued and late channel deliveries when membership ends", async () => {
+    const { instance } = await createTestDO(LifecycleReleaseProbe, TEST_AGENT_ENV);
+    instance.installLifecycleDriverForTest();
+    await instance.registerSubscriptionForTest();
+    instance.callerKindForTest = "do";
+    instance.callerIdForTest = "do:workers/pubsub-channel:PubSubChannel:chan-1";
+
+    await instance.onChannelEnvelope(CHANNEL, {
+      kind: "control",
+      type: "ready",
+      ready: { totalCount: 0, envelopeCount: 0 },
+    });
+    expect(instance.queuedEnvelopeCountForTest()).toBe(1);
+
+    await instance.unsubscribeChannel(CHANNEL);
+    expect(instance.queuedEnvelopeCountForTest()).toBe(0);
+
+    await instance.onChannelEnvelope(CHANNEL, {
+      kind: "control",
+      type: "ready",
+      ready: { totalCount: 0, envelopeCount: 0 },
+    });
+    expect(instance.queuedEnvelopeCountForTest()).toBe(0);
+  });
+
+  it("removes durable membership before channel close can deliver participant-left", async () => {
+    const { instance } = await createTestDO(LifecycleReleaseProbe, TEST_AGENT_ENV);
+    instance.installLifecycleDriverForTest();
+    await instance.registerSubscriptionForTest();
+    instance.callerKindForTest = "do";
+    instance.callerIdForTest = "do:workers/pubsub-channel:PubSubChannel:chan-1";
+    const subscriptions = (instance as unknown as {
+      subscriptions: {
+        unsubscribeFromChannel(channelId: string): Promise<void>;
+        getParticipantId(channelId: string): string | null;
+      };
+    }).subscriptions;
+    vi.spyOn(subscriptions, "unsubscribeFromChannel").mockImplementation(async () => {
+      expect(subscriptions.getParticipantId(CHANNEL)).toBeNull();
+      await instance.onChannelEnvelope(CHANNEL, {
+        kind: "control",
+        type: "ready",
+        ready: { totalCount: 0, envelopeCount: 0 },
+      });
+    });
+
+    await instance.unsubscribeChannel(CHANNEL);
+
+    expect(instance.queuedEnvelopeCountForTest()).toBe(0);
   });
 });
 
@@ -889,12 +959,21 @@ describe("AgentVesselBase.onEvalComplete (deferred-eval resume)", () => {
     expect(wakeSpy).not.toHaveBeenCalled();
   });
 
-  it("onDeferredResult refuses a non-server caller", async () => {
+  it("onAuthorityChanged refuses a non-server caller", async () => {
     const vessel = await makeVessel();
     vessel.callerKindForTest = "panel";
-    await expect(vessel.onDeferredResult({ requestId: "req-1", result: "x" })).rejects.toThrow(
-      /server-only/
-    );
+    await expect(vessel.onAuthorityChanged("acq-1")).rejects.toThrow(/server-only/);
+  });
+
+  it("onAuthorityChanged nudges durable authority redrive for the host-owned vessel", async () => {
+    const vessel = await makeVessel();
+    vessel.callerKindForTest = "server";
+    const nudge = vi
+      .spyOn(vessel.driverForTest(), "nudgeAuthorityRedrive")
+      .mockImplementation(() => undefined);
+
+    await expect(vessel.onAuthorityChanged("acq-1")).resolves.toBeUndefined();
+    expect(nudge).toHaveBeenCalledOnce();
   });
 });
 
@@ -908,7 +987,7 @@ class EvalGateProbe extends TestVessel {
   startRunError: Error | null = null;
   /** When set, `eval.cancel` REJECTS with this error. */
   cancelError: Error | null = null;
-  protected override get rpc(): DeferrableRpcClient {
+  protected override get rpc(): RpcClient {
     return {
       call: async (_target: string, method: string, args: unknown[]) => {
         this.rpcCalls.push({ method, args });
@@ -923,7 +1002,7 @@ class EvalGateProbe extends TestVessel {
         }
         return { runId: (args[0] as { runId: string }).runId, status: "pending" };
       },
-    } as unknown as DeferrableRpcClient;
+    } as unknown as RpcClient;
   }
   callGate(channelId: string, invocationId: string, args: unknown) {
     return this.runDeferredEval(channelId, invocationId, args, this.rpc as unknown as RpcClient);
@@ -958,6 +1037,7 @@ class SubagentSpawnProbe extends TestVessel {
   protected override async ensurePromptArtifacts(): Promise<void> {}
   protected override get driver(): AgentLoopDriver {
     return {
+      activateChannel: vi.fn(),
       wake: vi.fn(async () => {}),
       deliverEffectOutcome: vi.fn(async () => true),
       handleIncoming: this.handleIncomingSpy,
@@ -965,7 +1045,7 @@ class SubagentSpawnProbe extends TestVessel {
       foldCache: { delete: vi.fn() },
     } as unknown as AgentLoopDriver;
   }
-  protected override get rpc(): DeferrableRpcClient {
+  protected override get rpc(): RpcClient {
     return {
       call: async (target: string, method: string, args: unknown[]) => {
         this.rpcCalls.push({ target, method, args });
@@ -1043,7 +1123,7 @@ class SubagentSpawnProbe extends TestVessel {
         }
         return { ok: true, participantId: "participant-child" };
       },
-    } as unknown as DeferrableRpcClient;
+    } as unknown as RpcClient;
   }
   async spawnForTest(channelId: string, invocationId: string, args: unknown) {
     return this.runDeferredSpawn(channelId, invocationId, args);

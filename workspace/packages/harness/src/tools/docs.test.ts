@@ -89,6 +89,31 @@ describe("renderEntry (readable docs_open text)", () => {
     expect(text).toContain('await rpc.call("main", "workers.listSources", [])');
     expect(text).toContain("services.<name>");
     expect(text).toContain("ergonomic runtime client");
+    expect(text).toContain("authority, and session-admission checks still apply");
+    expect(text).not.toContain("always reachable");
+  });
+
+  it("warns eval callers when a service method requires durable code identity", () => {
+    const entry: CatalogEntry = {
+      id: "service:userlandApproval.requestAs",
+      surface: "service",
+      qualifiedName: "userlandApproval.requestAs",
+      title: "userlandApproval.requestAs",
+      access: {
+        sensitivity: "write",
+        principals: ["code"],
+        sessionAdmission: "codeOnly",
+      },
+      argsSchema: {
+        type: "array",
+        items: [{ type: "object" }, { type: "object" }],
+      },
+    };
+
+    const text = renderEntry(entry);
+    expect(text).toContain("Caller identity: durable code only");
+    expect(text).toContain("cannot be called from eval/session code");
+    expect(text).toContain("cannot manufacture a durable identity");
   });
 
   it("shows the public runtime import form for projected namespace methods", () => {

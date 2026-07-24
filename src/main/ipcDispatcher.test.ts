@@ -576,7 +576,6 @@ describe("IpcDispatcher", () => {
             resource: { kind: "exact", key: "service:electron-test.getInfo" },
           },
         ],
-        evalCeilings: [],
       }),
       configureDispatcher: (dispatcher) => {
         dispatcher.registerService({

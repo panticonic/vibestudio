@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { getCentralDataPath } from "@vibestudio/env-paths";
+import { getProfileDataPath } from "@vibestudio/env-paths";
 import {
   assertValidStoreIdentifier,
   EncryptedJsonStore,
@@ -117,5 +117,5 @@ export class ClientConfigStore extends EncryptedJsonStore<ClientConfigRecord> {
 }
 
 export function getDefaultClientConfigStorePath(): string {
-  return path.join(getCentralDataPath(), "client-config");
+  return path.join(getProfileDataPath(), "client-config");
 }

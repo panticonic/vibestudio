@@ -22,6 +22,7 @@ import type {
   ApprovalDetailFormat,
   ApprovalDecision,
   PendingApproval,
+  PendingMissionReviewApproval,
   PendingBrowserPermissionApproval,
   PendingCapabilityApproval,
   PendingClientConfigApproval,
@@ -36,6 +37,8 @@ import type {
   UserlandApprovalOption,
   ApprovalRequesterKind,
 } from "@vibestudio/shared/approvals";
+import { AUTHORITY_DOMAINS } from "@vibestudio/shared/authority/capabilityDomains";
+import { authorityRowKey } from "@vibestudio/shared/authority/authorityRowDiff";
 import {
   parseApprovalMarkdown,
   type ApprovalMarkdownInline,
@@ -180,7 +183,6 @@ function resolveCallerInfo(approval: PendingApproval): CallerInfo {
 export interface ApprovalSheetProps {
   approvals: PendingApproval[];
   onResolve: (approvalId: string, decision: ApprovalDecision) => Promise<void> | void;
-  onBlockCapability: (approvalId: string) => Promise<void> | void;
   onSubmitClientConfig: (
     approvalId: string,
     values: Record<string, string>
@@ -192,6 +194,12 @@ export interface ApprovalSheetProps {
   onSubmitSecretInput: (approvalId: string, values: Record<string, string>) => Promise<void> | void;
   onResolveUserland: (approvalId: string, choice: string | "dismiss") => Promise<void> | void;
   onResolveExternalAgent: (approvalId: string, behavior: "allow" | "deny") => Promise<void> | void;
+  onResolveMissionReview: (
+    approvalId: string,
+    resolution:
+      | { decision: "approve"; selectedAuthorityKeys: string[] }
+      | { decision: "dismiss" }
+  ) => Promise<void> | void;
   /**
    * Optional. When supplied and the current approval comes from a panel,
    * the caller chip becomes touchable and invokes this with the panel id.
@@ -202,12 +210,13 @@ export interface ApprovalSheetProps {
 
 type PendingAction =
   | ApprovalDecision
-  | "block-capability"
   | "submit-client-config"
   | "submit-credential-input"
   | "submit-secret-input"
   | `userland:${string}`
-  | `external-agent:${"allow" | "deny"}`;
+  | `external-agent:${"allow" | "deny"}`
+  | "mission-review-approve"
+  | "mission-review-dismiss";
 
 type ButtonVariant = "primary" | "surface" | "danger" | "dangerPrimary" | "outline";
 
@@ -216,12 +225,12 @@ const SECONDARY_GRANT_DECISIONS = ["session"] as const;
 export function ApprovalSheet({
   approvals,
   onResolve,
-  onBlockCapability,
   onSubmitClientConfig,
   onSubmitCredentialInput,
   onSubmitSecretInput,
   onResolveUserland,
   onResolveExternalAgent,
+  onResolveMissionReview,
   onNavigateToPanel,
 }: ApprovalSheetProps) {
   const colors = useAtomValue(themeColorsAtom);
@@ -239,6 +248,9 @@ export function ApprovalSheet({
   const canPrev = queueLength > 1 && browseIndex > 0;
   const canNext = queueLength > 1 && browseIndex < queueLength - 1;
   const [values, setValues] = useState<Record<string, string>>({});
+  const [selectedMissionAuthorityKeys, setSelectedMissionAuthorityKeys] = useState<Set<string>>(
+    new Set()
+  );
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -264,6 +276,15 @@ export function ApprovalSheet({
   useEffect(() => {
     if (!current) return;
     setValues({});
+    setSelectedMissionAuthorityKeys(
+      new Set(
+        current.kind === "mission-review"
+          ? current.authority.diff.added
+              .filter((row) => row.tier === "gated")
+              .map(authorityRowKey)
+          : []
+      )
+    );
     setError(null);
     setPendingAction(null);
     setMinimized(false);
@@ -446,6 +467,21 @@ export function ApprovalSheet({
                   onPrev={() => setBrowseIndex((idx) => Math.max(0, idx - 1))}
                   onNext={() => setBrowseIndex((idx) => Math.min(queueLength - 1, idx + 1))}
                 />
+                {current.kind === "capability" && current.authorityRow ? (
+                  <View
+                    style={[
+                      styles.domainChip,
+                      { backgroundColor: colors.surfaceSunken, borderColor: colors.borderSubtle },
+                    ]}
+                  >
+                    <Text style={[styles.domainChipText, { color: colors.textSecondary }]}>
+                      {AUTHORITY_DOMAINS[current.authorityRow.domain].label}
+                      {current.authorityRow.provenance.surface
+                        ? ` · ${current.authorityRow.provenance.surface}`
+                        : ""}
+                    </Text>
+                  </View>
+                ) : null}
                 <Text style={[styles.title, { color: colors.text }]}>{copy.title}</Text>
                 <CallerRow
                   caller={callerInfo}
@@ -458,6 +494,35 @@ export function ApprovalSheet({
                 {current.kind === "device-code" ? <DeviceCodePanel approval={current} /> : null}
                 {current.kind === "external-agent" ? (
                   <ExternalAgentPanel approval={current} />
+                ) : null}
+                {current.kind === "mission-review" ? (
+                  <MissionReviewPanel
+                    approval={current}
+                    selected={selectedMissionAuthorityKeys}
+                    onToggle={(key, checked) =>
+                      setSelectedMissionAuthorityKeys((currentSelection) => {
+                        const next = new Set(currentSelection);
+                        if (checked) next.add(key);
+                        else next.delete(key);
+                        return next;
+                      })
+                    }
+                  />
+                ) : null}
+                {current.kind === "capability" && current.operationSubstance ? (
+                  <View style={styles.detailCard}>
+                    <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>
+                      What exactly
+                    </Text>
+                    <Text style={[styles.detailValue, { color: colors.text }]}>
+                      {current.operationSubstance.summary}
+                    </Text>
+                    {current.operationSubstance.detail ? (
+                      <Text style={[styles.detailValue, { color: colors.textSecondary }]}>
+                        {current.operationSubstance.detail}
+                      </Text>
+                    ) : null}
+                  </View>
                 ) : null}
                 {error ? <InlineError message={error} /> : null}
                 {current.kind === "client-config" ||
@@ -565,6 +630,25 @@ export function ApprovalSheet({
                       runAction(decision, () => onResolve(current.approvalId, decision))
                     }
                   />
+                ) : current.kind === "mission-review" ? (
+                  <MissionReviewActions
+                    approval={current}
+                    busy={isBusy}
+                    pendingAction={pendingAction}
+                    onApprove={() =>
+                      runAction("mission-review-approve", () =>
+                        onResolveMissionReview(current.approvalId, {
+                          decision: "approve",
+                          selectedAuthorityKeys: [...selectedMissionAuthorityKeys],
+                        })
+                      )
+                    }
+                    onDismiss={() =>
+                      runAction("mission-review-dismiss", () =>
+                        onResolveMissionReview(current.approvalId, { decision: "dismiss" })
+                      )
+                    }
+                  />
                 ) : current.kind === "browser-permission" ? (
                   <BrowserPermissionActions
                     busy={isBusy}
@@ -580,9 +664,6 @@ export function ApprovalSheet({
                     pendingAction={pendingAction}
                     onChoose={(decision) =>
                       runAction(decision, () => onResolve(current.approvalId, decision))
-                    }
-                    onBlock={() =>
-                      runAction("block-capability", () => onBlockCapability(current.approvalId))
                     }
                   />
                 )}
@@ -1072,7 +1153,7 @@ function ApprovalDetails({
             <UnitBatchDetails approval={approval} />
           ) : approval.kind === "browser-permission" ? (
             <BrowserPermissionDetails approval={approval} />
-          ) : (
+          ) : approval.kind === "mission-review" ? null : (
             <CapabilityDetails approval={approval} />
           )}
         </View>
@@ -1306,21 +1387,13 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
 function UnitBatchEntryDetails({ entry }: { entry: UnitBatchEntry }) {
   const colors = useAtomValue(themeColorsAtom);
   const [open, setOpen] = useState(false);
-  const addedGroups = entry.authority?.groups.filter((group) => group.addedCount > 0) ?? [];
-  const addedEval =
-    entry.authority?.eval.filter((review) => review.groups.some((group) => group.addedCount > 0)) ??
-    [];
-  const addedCount =
-    addedGroups.reduce((count, group) => count + group.addedCount, 0) +
-    addedEval.reduce(
-      (count, review) => count + review.groups.reduce((sum, group) => sum + group.addedCount, 0),
-      0
-    );
+  const addedRows = entry.authority?.diff.added ?? [];
+  const retieredRows = entry.authority?.diff.retiered ?? [];
+  const addedCount = addedRows.length + retieredRows.length;
   const changeSummary =
-    addedGroups.length > 0 || addedEval.length > 0
+    addedRows.length > 0
       ? `New: ${[
-          ...addedGroups.map((group) => group.label),
-          ...addedEval.map((review) => review.label),
+          ...new Set(addedRows.map((row) => AUTHORITY_DOMAINS[row.domain].label)),
         ].join(", ")}`
       : entry.authority
         ? HOST_APPROVAL_COPY.chrome.noNewPermissions
@@ -1395,53 +1468,32 @@ function UnitAuthorityDetails({
 }) {
   const colors = useAtomValue(themeColorsAtom);
   const [unchangedOpen, setUnchangedOpen] = useState(false);
-  const addedGroups = authority.groups.filter((group) => group.addedCount > 0);
-  const addedEval = authority.eval.filter((review) =>
-    review.groups.some((group) => group.addedCount > 0)
-  );
-  const unchanged = [
-    ...authority.groups.flatMap((group) =>
-      group.items.filter((item) => !item.added).map((item) => ({ label: group.label, item }))
-    ),
-    ...authority.eval.flatMap((review) =>
-      review.groups.flatMap((group) =>
-        group.items.filter((item) => !item.added).map((item) => ({ label: review.label, item }))
-      )
-    ),
-  ];
-  const removedCount =
-    authority.removedCount +
-    authority.eval.reduce((count, review) => count + review.removedCount, 0);
+  const addedRows = authority.diff.added;
+  const unchanged = authority.diff.unchanged;
+  const removedCount = authority.diff.removed.length;
   return (
     <>
-      {addedGroups.length === 0 && addedEval.length === 0 ? (
+      {addedRows.length === 0 && authority.diff.retiered.length === 0 ? (
         <DetailRow
           icon={Lock}
           label="Permission changes"
           value={HOST_APPROVAL_COPY.chrome.noNewPermissions}
         />
       ) : null}
-      {addedGroups.map((group) => (
+      {addedRows.map((row) => (
         <DetailRow
-          key={`authority:${group.id}`}
+          key={`authority:${row.capability}:${row.resource}`}
           icon={Lock}
-          label={`+ ${group.label}`}
-          value={`${group.items
-            .filter((item) => item.added)
-            .map((item) => item.title)
-            .join(", ")}. ${group.description}`}
+          label={`+ ${AUTHORITY_DOMAINS[row.domain].label}`}
+          value={`${row.action} — ${row.resource}`}
         />
       ))}
-      {addedEval.map((review) => (
+      {authority.diff.retiered.map(({ before, after }) => (
         <DetailRow
-          key={`authority-eval:${review.purpose}`}
+          key={`authority-tier:${after.capability}:${after.resource}`}
           icon={Lock}
-          label={`+ ${review.label}`}
-          value={`${review.groups
-            .flatMap((group) => group.items)
-            .filter((item) => item.added)
-            .map((item) => item.title)
-            .join(", ")}. ${HOST_APPROVAL_COPY.unitReview.evaluatedCodeExplanation}`}
+          label="Permission level changed"
+          value={`${after.action} — ${after.resource}: ${before.tier} → ${after.tier}`}
         />
       ))}
       {removedCount > 0 ? (
@@ -1466,12 +1518,12 @@ function UnitAuthorityDetails({
           </Pressable>
           {unchangedOpen ? (
             <View style={styles.detailRows}>
-              {unchanged.map(({ label, item }) => (
+              {unchanged.map((row) => (
                 <DetailRow
-                  key={`${label}:${item.capability}`}
+                  key={`${row.capability}:${row.resource}`}
                   icon={Lock}
-                  label={label}
-                  value={item.title}
+                  label={AUTHORITY_DOMAINS[row.domain].label}
+                  value={`${row.action} — ${row.resource}`}
                 />
               ))}
             </View>
@@ -1722,13 +1774,11 @@ function StandardActions({
   busy,
   pendingAction,
   onChoose,
-  onBlock,
 }: {
   approval: PendingCredentialApproval | PendingCapabilityApproval;
   busy: boolean;
   pendingAction: PendingAction | null;
   onChoose: (decision: ApprovalDecision) => void;
-  onBlock: () => void;
 }) {
   const copy = getStandardActionCopy(approval);
   const recommendedDecision = getRecommendedStandardDecision(approval);
@@ -1737,13 +1787,18 @@ function StandardActions({
     approval.allowedDecisions === undefined ||
     approval.allowedDecisions.includes(decision);
   const isSevereCapability = approval.kind === "capability" && approval.severity === "severe";
+  const critical = approval.kind === "capability" && approval.cardType === "confirm.critical";
+  const agentName =
+    approval.kind === "capability"
+      ? (approval.snapshot?.agentName ?? "this agent")
+      : "this agent";
   return (
     <View style={styles.actionGroups}>
       <View style={styles.actionRow}>
         {permits("once") ? (
           <DecisionButton
-            label={copy.once.label}
-            description={copy.once.description}
+            label={critical ? "Confirm" : "Allow once"}
+            description={critical ? "Do this exact action now" : "Allow only this exact request"}
             variant={recommendedDecision === "once" ? "primary" : "surface"}
             disabled={busy}
             loading={pendingAction === "once"}
@@ -1771,7 +1826,7 @@ function StandardActions({
         )}
         {permits("deny") ? (
           <DecisionButton
-            label={HOST_APPROVAL_COPY.chrome.deny}
+            label={critical ? "Cancel" : "Don't allow"}
             description={copy.denyDescription}
             variant="danger"
             disabled={busy}
@@ -1799,17 +1854,40 @@ function StandardActions({
             />
           );
         })}
+        {!critical && permits("task") ? (
+          <DecisionButton
+            label="Allow for this task"
+            description="Allow while the agent works on this task"
+            variant="outline"
+            disabled={busy}
+            loading={pendingAction === "task"}
+            onPress={() => onChoose("task")}
+            testID="approval-action-task"
+          />
+        ) : null}
+        {!critical && permits("agent") ? (
+          <DecisionButton
+            label={`Always for ${agentName}`}
+            description="Save this exact access for this agent until you remove it"
+            variant="outline"
+            disabled={busy}
+            loading={pendingAction === "agent"}
+            onPress={() => onChoose("agent")}
+            testID="approval-action-agent"
+          />
+        ) : null}
         {approval.kind === "capability" &&
         approval.snapshot &&
-        approval.cardType !== "confirm.critical" ? (
+        approval.cardType !== "confirm.critical" &&
+        permits("lock") ? (
           <DecisionButton
-            label={HOST_APPROVAL_COPY.chrome.block}
-            description={HOST_APPROVAL_COPY.chrome.blockDescription}
+            label="Don't allow and don't ask again"
+            description="Keep this agent from asking again. Change it in Permissions."
             variant="danger"
             disabled={busy}
-            loading={pendingAction === "block-capability"}
+            loading={pendingAction === "lock"}
             icon={XCircle}
-            onPress={onBlock}
+            onPress={() => onChoose("lock")}
             testID="approval-action-block"
           />
         ) : null}
@@ -1879,6 +1957,142 @@ function BrowserPermissionActions({
           loading={pendingAction === "dismiss"}
           onPress={() => onChoose("dismiss")}
           testID="approval-action-dismiss"
+        />
+      </View>
+    </View>
+  );
+}
+
+function MissionReviewPanel({
+  approval,
+  selected,
+  onToggle,
+}: {
+  approval: PendingMissionReviewApproval;
+  selected: ReadonlySet<string>;
+  onToggle: (key: string, checked: boolean) => void;
+}) {
+  const colors = useAtomValue(themeColorsAtom);
+  return (
+    <View style={styles.detailsBlock}>
+      <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>Task description</Text>
+      <Text style={[styles.detailValue, { color: colors.text }]}>{approval.taskSummary}</Text>
+      <Text style={[styles.detailValue, { color: colors.text }]}>
+        Runs: {approval.triggerSummary}
+      </Text>
+      <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>
+        What it can do
+      </Text>
+      {approval.authority.rows.map((row) => {
+        const key = authorityRowKey(row);
+        const isNew = approval.authority.diff.added.some(
+          (candidate) => authorityRowKey(candidate) === key
+        );
+        const interactiveOnly = row.tier === "critical";
+        const selectable = isNew && !interactiveOnly;
+        const retiered = approval.authority.diff.retiered.some(
+          ({ after }) => authorityRowKey(after) === key
+        );
+        return (
+          <Pressable
+            key={key}
+            accessibilityRole={selectable ? "checkbox" : undefined}
+            accessibilityState={selectable ? { checked: selected.has(key) } : undefined}
+            disabled={!selectable}
+            onPress={() => onToggle(key, !selected.has(key))}
+            style={styles.detailRow}
+            testID={selectable ? `mission-authority-${row.capability}` : undefined}
+          >
+            <Text style={[styles.detailLabel, { color: colors.text }]}>
+              {selectable ? (selected.has(key) ? "☑" : "☐") : "🔒"}{" "}
+              {AUTHORITY_DOMAINS[row.domain].label}
+            </Text>
+            <Text style={[styles.detailValue, { color: colors.textSecondary }]}>
+              {row.action} — {row.resource} ·{" "}
+              {interactiveOnly
+                ? "asks every time"
+                : isNew
+                  ? "new"
+                  : retiered
+                    ? "permission changed"
+                    : "already allowed"}
+            </Text>
+          </Pressable>
+        );
+      })}
+      <Text style={[styles.detailValue, { color: colors.textSecondary }]}>
+        If it needs a new permission within its toolkit, it pauses and asks you.
+      </Text>
+      <Text style={[styles.detailValue, { color: colors.textSecondary }]}>
+        To do anything beyond its toolkit, it stops and proposes an update for your review.
+      </Text>
+      <Text style={[styles.detailValue, { color: colors.textSecondary }]}>
+        Actions that can’t be undone always wait for you.
+      </Text>
+      <Text style={[styles.detailValue, { color: colors.text }]}>
+        Uses:{" "}
+        {approval.toolkitDomains
+          .map((domain) => AUTHORITY_DOMAINS[domain].label.toLowerCase())
+          .join(" · ") || "no standing toolkit"}
+      </Text>
+      <Text style={[styles.detailValue, { color: colors.text }]}>
+        Can reach: {approval.networkSummary}
+      </Text>
+      <Text style={[styles.detailValue, { color: colors.text }]}>
+        Works with content from: {approval.lineageSummary}
+      </Text>
+      {approval.charterChanges.map((change) => (
+        <Text
+          key={change.field}
+          style={[styles.detailValue, { color: change.widening ? colors.danger : colors.text }]}
+        >
+          {change.field}: {change.before ?? "not set"} → {change.after}
+        </Text>
+      ))}
+      <Text style={[styles.detailValue, { color: colors.textSecondary }]}>
+        Like all agents, it can’t change your safety controls.
+      </Text>
+    </View>
+  );
+}
+
+function MissionReviewActions({
+  approval,
+  busy,
+  pendingAction,
+  onApprove,
+  onDismiss,
+}: {
+  approval: PendingMissionReviewApproval;
+  busy: boolean;
+  pendingAction: PendingAction | null;
+  onApprove: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <View style={styles.actionGroups}>
+      <View style={styles.actionRow}>
+        <DecisionButton
+          label={
+            approval.reviewKind === "out-of-charter"
+              ? "Allow and update mission"
+              : "Approve mission"
+          }
+          description="Approve this exact reviewed mission closure."
+          variant="primary"
+          disabled={busy}
+          loading={pendingAction === "mission-review-approve"}
+          onPress={onApprove}
+          testID="approval-action-mission-approve"
+        />
+        <DecisionButton
+          label={approval.reviewKind === "out-of-charter" ? "Don’t add" : "Not now"}
+          description="Leave this mission unapproved."
+          variant="surface"
+          disabled={busy}
+          loading={pendingAction === "mission-review-dismiss"}
+          onPress={onDismiss}
+          testID="approval-action-mission-dismiss"
         />
       </View>
     </View>
@@ -2299,6 +2513,24 @@ const styles = StyleSheet.create({
   title: {
     ...typeRamp.title,
     marginTop: spacing.lg,
+  },
+  domainChip: {
+    alignSelf: "flex-start",
+    borderRadius: radius.pill,
+    borderWidth: hairline,
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  domainChipText: {
+    ...typeRamp.caption,
+  },
+  detailCard: {
+    borderRadius: radius.md,
+    borderWidth: hairline,
+    gap: spacing.xs,
+    marginTop: spacing.md,
+    padding: spacing.md,
   },
   callerRow: {
     alignItems: "center",

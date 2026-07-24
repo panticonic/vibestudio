@@ -34,7 +34,6 @@ export interface InternalDOExecutionIdentity {
   effectiveVersion: string;
   executionDigest: string;
   authorityRequests: UnitAuthorityManifest["requests"];
-  authorityEvalCeilings: UnitAuthorityManifest["evalCeilings"];
 }
 
 declare const globalThis: { __VIBESTUDIO_INTERNAL_DO_BUNDLE__?: string };
@@ -97,7 +96,6 @@ export function internalDOExecutionIdentity(
     effectiveVersion,
     executionDigest,
     authorityRequests: authority.requests,
-    authorityEvalCeilings: authority.evalCeilings,
   });
 }
 

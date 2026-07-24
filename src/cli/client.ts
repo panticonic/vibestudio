@@ -591,7 +591,7 @@ const remoteCommands: CliCommand[] = [
     }
   ),
   scriptCommand("remote", "serve", "remote-serve.mjs", "Start a QR/deep-link pairing server", {
-    usage: "vibestudio remote serve [--port 3030] [--dev --auto-approve]",
+    usage: "vibestudio remote serve [--port 3030] [--dev]",
     // The pair server's own help documents the resolved server entry.
     passthroughHelp: true,
   }),

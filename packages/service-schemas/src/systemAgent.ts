@@ -23,12 +23,6 @@ export const systemAgentMethods = defineServiceMethods({
     authority: TRUSTED_CHROME,
     access: { sensitivity: "write" },
     capability: "system-agent.conversation",
-    tier: {
-      tier: "open",
-      session: "family",
-      rationale:
-        "Resolving the caller's own product-owned conversation is chrome lifecycle setup; exact user membership and the pinned code roster remain independently enforced.",
-    },
   },
 });
 

@@ -1,5 +1,13 @@
 import type { RpcClient } from "@vibestudio/rpc";
 import type { PanelLifecycleResult, PanelPlacementHint } from "@vibestudio/shared/types";
+import {
+  panelFailure,
+  PanelOperationError,
+  rethrowPanelOperationError,
+  type PanelDiagnosticPacket,
+  type PanelObservation,
+  type PanelSnapshotObservation,
+} from "@vibestudio/shared/panel/observation";
 import type { PanelFocusOptions, PanelHandle, PanelNavigateOptions } from "../core/index.js";
 import { createCdpAutomation, type CdpAutomation } from "../panel/cdpAutomation.js";
 import {
@@ -18,6 +26,7 @@ export interface PanelRuntimeListItem {
   contextId: string;
   runtimeEntityId?: string | null;
   effectiveVersion?: string | null;
+  buildKey?: string | null;
   ref?: string | null;
   children?: PanelRuntimeListItem[];
 }
@@ -31,7 +40,9 @@ interface PanelRuntimeMetadataResult {
   runtimeEntityId?: string | null;
   contextId?: string | null;
   effectiveVersion?: string | null;
+  buildKey?: string | null;
   ref?: string | null;
+  observation: PanelObservation;
 }
 
 export interface OpenPanelOptions {
@@ -56,7 +67,7 @@ export interface PanelRuntimeTree {
     id: string,
     source: string,
     options?: PanelNavigateOptions
-  ): Promise<{ id: string; title: string }>;
+  ): Promise<PanelObservation>;
 }
 
 export interface PanelRuntimeApi {
@@ -88,8 +99,13 @@ export interface CreatePanelRuntimeOptions {
 
 export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRuntimeApi {
   const metadataCache = new Map<string, PanelHandleMetadata>();
-  const callPanel = <T>(method: string, args: unknown[]): Promise<T> =>
-    options.rpc.call<T>("main", `panelTree.${method}`, args);
+  const callPanel = async <T>(method: string, args: unknown[]): Promise<T> => {
+    try {
+      return await options.rpc.call<T>("main", `panelTree.${method}`, args);
+    } catch (error) {
+      rethrowPanelOperationError(error);
+    }
+  };
 
   const defaultOpenParentId = (): string | null => {
     const value = options.defaultOpenParentId;
@@ -134,6 +150,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       contextId: item.contextId,
       rpcTargetId: item.runtimeEntityId ?? null,
       effectiveVersion: item.effectiveVersion ?? null,
+      buildKey: item.buildKey ?? null,
       ref: item.ref ?? null,
     });
 
@@ -149,6 +166,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     contextId: meta.contextId ?? null,
     rpcTargetId: meta.runtimeEntityId ?? null,
     effectiveVersion: meta.effectiveVersion ?? null,
+    buildKey: meta.buildKey ?? null,
     ref: meta.ref ?? null,
   });
 
@@ -169,22 +187,15 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       const meta = await callPanel<PanelRuntimeMetadataResult | null>("metadata", [id]);
       return meta ? rememberMetadata(metadataFromResult(id, meta)) : metadataForId(id);
     },
+    observe: (id) => callPanel<PanelObservation>("observe", [id]),
+    diagnose: (id) => callPanel<PanelDiagnosticPacket>("diagnose", [id]),
     children: (id) => panelTree.children(id),
     parent: (id, parentId) => {
       const resolvedParentId = parentId ?? metadataCache.get(id)?.parentId ?? null;
       return resolvedParentId ? panelTree.get(resolvedParentId) : null;
     },
-    ensureLoaded: (id) => callPanel("ensureLoaded", [id]),
-    isLoaded: async (id) => {
-      try {
-        const lease = await callPanel<Record<string, unknown> | null>("getRuntimeLease", [id]);
-        return lease !== null;
-      } catch {
-        return false;
-      }
-    },
     reload: async (id) => {
-      const result = await callPanel<PanelLifecycleResult>("reload", [id]);
+      const result = await callPanel<PanelObservation>("reload", [id]);
       options.onReload?.(id);
       return result;
     },
@@ -198,15 +209,23 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       options.onClose?.(id);
     },
     unload: (id) => callPanel<PanelLifecycleResult>("unload", [id]),
-    navigate: (id, source, navigateOptions) =>
-      callPanel<{ id: string; title: string }>("navigate", [id, source, navigateOptions]),
+    navigate: async (id, source, navigateOptions) => {
+      const result = await callPanel<PanelRuntimeMetadataResult>("navigate", [
+        id,
+        source,
+        navigateOptions,
+      ]);
+      if (!result.observation) {
+        throw new Error(`panelTree.navigate returned no canonical observation for ${id}`);
+      }
+      return result.observation;
+    },
     movePanel: (id, newParentId, targetPosition) =>
       callPanel("movePanel", [{ panelId: id, newParentId, targetPosition }]),
     takeOver: (id) => callPanel("takeOver", [id]),
     openDevTools: (id, mode) => callPanel("openDevTools", [id, mode]),
-    rebuildPanel: (id) => callPanel<PanelLifecycleResult>("rebuildPanel", [id]),
-    rebuildAndReload: async (id) => {
-      const result = await callPanel<PanelLifecycleResult>("rebuildAndReload", [id]);
+    rebuild: async (id) => {
+      const result = await callPanel<PanelObservation>("rebuildPanel", [id]);
       options.onReload?.(id);
       return result;
     },
@@ -228,7 +247,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
         return next;
       },
     },
-    snapshot: (id) => callPanel("snapshot", [id]),
+    snapshot: (id) => callPanel<PanelSnapshotObservation>("snapshot", [id]),
     callAgent: (id, method, args) => callPanel("callAgent", [id, method, args]),
   };
 
@@ -300,7 +319,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       return parentId ? panelTree.get(parentId) : null;
     },
     navigate(id, source, navigateOptions) {
-      return callPanel("navigate", [id, source, navigateOptions]);
+      return ops.navigate!(id, source, navigateOptions);
     },
   };
 
@@ -318,6 +337,8 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       contextId?: string;
       runtimeEntityId?: string | null;
       effectiveVersion?: string | null;
+      buildKey?: string | null;
+      observation: PanelObservation;
     }>("create", [source, { ...openOptions, parentId }]);
     const handle = hydrate({
       panelId: result.id,
@@ -328,8 +349,38 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       contextId: result.contextId ?? openOptions?.contextId ?? "",
       runtimeEntityId: result.runtimeEntityId ?? null,
       effectiveVersion: result.effectiveVersion ?? null,
+      buildKey: result.buildKey ?? null,
     });
     options.onOpen?.({ source, id: handle.id, kind: handle.kind });
+    let observation = result.observation;
+    const deadline = Date.now() + 90_000;
+    while (observation.phase !== "ready") {
+      if (observation.phase === "failed" && observation.failure) {
+        throw new PanelOperationError(observation.failure);
+      }
+      if (Date.now() >= deadline) {
+        throw new PanelOperationError(
+          panelFailure({
+            code: "runtime_handshake_timeout",
+            stage: "boot",
+            message: "Panel did not become ready within 90000ms",
+            provenance: {
+              panelId: observation.panelId,
+              runtimeEntityId: observation.runtimeEntityId,
+              attemptId: observation.attemptId,
+              source: observation.source,
+              contextId: observation.contextId,
+              requestedRef: observation.requestedRef,
+              effectiveVersion: observation.effectiveVersion,
+              buildKey: observation.buildKey,
+            },
+            details: { lastPhase: observation.phase, host: observation.host ?? null },
+          })
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      observation = await handle.observe();
+    }
     return handle;
   };
 

@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
-import { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER, rpc } from "@vibestudio/rpc";
+import { rpc } from "@vibestudio/rpc";
+import { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "@vibestudio/rpc/internal";
 import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import type { DoAlarmDispatchResult, DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
 import initSqlJs from "sql.js";

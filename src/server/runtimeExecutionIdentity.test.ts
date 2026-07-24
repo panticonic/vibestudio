@@ -23,7 +23,6 @@ const PREPARED_SERVICE = {
       evidence: "exact" as const,
     },
   ],
-  authorityEvalCeilings: [],
 };
 
 describe("requireActiveExecutionIdentity", () => {
@@ -39,7 +38,6 @@ describe("requireActiveExecutionIdentity", () => {
             evidence: "exact",
           },
         ],
-        authorityEvalCeilings: [],
       })
     ).toEqual({
       activeExecutionDigest: "a".repeat(64),
@@ -52,16 +50,14 @@ describe("requireActiveExecutionIdentity", () => {
             evidence: "exact",
           },
         ],
-        evalCeilings: [],
       },
     });
   });
 
   it.each([
-    { executionDigest: undefined, authorityRequests: [], authorityEvalCeilings: [] },
-    { executionDigest: "effective-version", authorityRequests: [], authorityEvalCeilings: [] },
-    { executionDigest: "a".repeat(64), authorityRequests: undefined, authorityEvalCeilings: [] },
-    { executionDigest: "a".repeat(64), authorityRequests: [], authorityEvalCeilings: undefined },
+    { executionDigest: undefined, authorityRequests: [] },
+    { executionDigest: "effective-version", authorityRequests: [] },
+    { executionDigest: "a".repeat(64), authorityRequests: undefined },
   ])("fails closed for an incomplete identity: %o", (prepared) => {
     expect(() => requireActiveExecutionIdentity(prepared)).toThrow();
   });
@@ -82,7 +78,6 @@ describe("declaredWorkspaceServiceActivationInput", () => {
       activeExecutionDigest: "a".repeat(64),
       activeAuthority: {
         requests: PREPARED_SERVICE.authorityRequests,
-        evalCeilings: [],
       },
       className: "ModelSettingsDO",
       key: "workspace-model-settings",

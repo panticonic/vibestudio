@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  AGENTIC_EVENT_PAYLOAD_KIND,
-  AGENTIC_PROTOCOL_VERSION,
-} from "@workspace/agentic-protocol";
+import { AGENTIC_EVENT_PAYLOAD_KIND, AGENTIC_PROTOCOL_VERSION } from "@workspace/agentic-protocol";
 import {
   conversationV1Policy,
   resolveChannelPolicies,
@@ -146,9 +143,7 @@ describe("agentic.conversation.v1", () => {
     // explicit caller-computed hops win
     const explicit = completedEnvelope(3, "agent:a", "agent", undefined, { agentHops: 7 })
       .payload as Record<string, unknown>;
-    expect(
-      policy.annotate(state, { ...draft, payload: explicit })
-    ).toEqual({ agentHops: 7 });
+    expect(policy.annotate(state, { ...draft, payload: explicit })).toEqual({ agentHops: 7 });
 
     // user-authored drafts are not annotated
     expect(
@@ -171,7 +166,11 @@ describe("agentic.conversation.v1", () => {
   it("builds call-transport events purely from injected timestamps", () => {
     const builders = conversationV1Policy.callEventPayload!;
     const caller = { kind: "panel" as const, id: "panel:caller", participantId: "panel:caller" };
-    const target = { kind: "panel" as const, id: "panel:provider", participantId: "panel:provider" };
+    const target = {
+      kind: "panel" as const,
+      id: "panel:provider",
+      participantId: "panel:provider",
+    };
     const createdAt = "2026-05-20T12:00:00.000Z";
 
     const started = builders.started({
@@ -216,9 +215,7 @@ describe("agentic.conversation.v1", () => {
       turnId: "turn-1",
       method: "eval",
     };
-    expect(
-      builders.terminal({ descriptor, result: 2, isError: false, createdAt })
-    ).toMatchObject({
+    expect(builders.terminal({ descriptor, result: 2, isError: false, createdAt })).toMatchObject({
       kind: "invocation.completed",
       payload: { result: 2, terminalOutcome: "success" },
       createdAt,
@@ -262,9 +259,7 @@ describe("agentic.conversation.v1", () => {
       kind: "invocation.abandoned",
       payload: { terminalOutcome: "abandoned", reason: "target left" },
     });
-    expect(
-      builders.output({ descriptor, output: { pct: 50 }, createdAt })
-    ).toMatchObject({
+    expect(builders.output({ descriptor, output: { pct: 50 }, createdAt })).toMatchObject({
       kind: "invocation.output",
       payload: { output: { pct: 50 } },
     });

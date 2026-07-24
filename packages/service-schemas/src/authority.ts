@@ -15,13 +15,13 @@ const leafSchema = z
     failure: z
       .object({
         reasonCode: z.enum([
-          "missing-principal",
-          "denied",
-          "missing-grant",
-          "not-requested",
-          "relationship",
-          "session",
-          "lineage",
+          "approval-required",
+          "mission-change-required",
+          "user-denied",
+          "receiver-rejected",
+          "fixed-code-not-requested",
+          "invalid-session",
+          "invalid-attestation",
           "receiver-undeclared",
           "attestation-required",
           "attestation-invalid",
@@ -34,7 +34,8 @@ const leafSchema = z
           .object({
             kind: z.enum([
               "request-user-approval",
-              "update-authority-manifest",
+              "request-mission-change",
+              "update-installed-code-manifest",
               "declare-rpc-receiver",
               "use-admitted-principal",
               "satisfy-relationship",

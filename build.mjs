@@ -9,6 +9,8 @@ import { generateConnectGrammar } from "./scripts/generate-connect-grammar.mjs";
 import { buildWorkerdPrograms } from "./scripts/build-workerd-programs.mjs";
 import {
   computeHostBuildFingerprint,
+  HOST_BUILD_FINGERPRINT_PATH,
+  sameHostBuildFingerprint,
   writeHostBuildFingerprint,
 } from "./scripts/host-build-fingerprint.mjs";
 
@@ -428,10 +430,15 @@ async function buildDependencyWorkers() {
 async function build() {
   try {
     fs.mkdirSync("dist", { recursive: true });
+    // A build in progress is never a reusable build. In particular, retain no
+    // prior success marker if a source mutation or compilation failure leaves
+    // only a partial set of replacement artifacts.
+    fs.rmSync(HOST_BUILD_FINGERPRINT_PATH, { force: true });
 
     // Raw-node support scripts import this generated, dependency-free artifact.
     // Rebuild it from the canonical TypeScript grammar before packaging.
     await generateConnectGrammar();
+    const inputSnapshot = computeHostBuildFingerprint();
 
     // ========================================================================
     // STEP 0.75: Build @vibestudio/* infrastructure packages
@@ -512,9 +519,17 @@ async function build() {
 
     await checkBuildArtifacts();
 
-    // Smoke suites reuse a build only when every conservative host-build input
-    // (including the build mode) still has the same content.
-    writeHostBuildFingerprint(computeHostBuildFingerprint());
+    // Esbuild reads the graph over time. If source changes during that window,
+    // one output can otherwise contain modules from different revisions and
+    // still be stamped with the final tree's fingerprint. Refuse to publish a
+    // freshness marker unless the exact input snapshot remained stable.
+    const completedSnapshot = computeHostBuildFingerprint();
+    if (!sameHostBuildFingerprint(inputSnapshot, completedSnapshot)) {
+      throw new Error(
+        "Host build inputs changed while artifacts were being produced; rerun the build from a stable source tree"
+      );
+    }
+    writeHostBuildFingerprint(completedSnapshot);
 
     console.log("Build successful!");
   } catch (error) {
@@ -536,6 +551,7 @@ async function buildInternalDoOnly() {
 
 async function buildSourceServerPrerequisites() {
   try {
+    const inputSnapshot = computeHostBuildFingerprint();
     // Source-mode servers import infrastructure packages through their public
     // dist exports, and auto-spawn the compiled headless host. Rebuilding only
     // the internal DO bundle can therefore combine live server source with
@@ -550,6 +566,19 @@ async function buildSourceServerPrerequisites() {
     await esbuild.build(browserTransportConfig);
     await esbuild.build(internalDoBundleConfig);
     await buildWorkerdPrograms({ minify: !isDev, logOverride });
+
+    // Authority startup identifies the installed host by the exact source
+    // snapshot that produced its runtime artifacts. Source-server builds are a
+    // complete host mode in their own right, so publish the same freshness
+    // contract as the packaged build. Never stamp artifacts assembled while
+    // their inputs were changing.
+    const completedSnapshot = computeHostBuildFingerprint();
+    if (!sameHostBuildFingerprint(inputSnapshot, completedSnapshot)) {
+      throw new Error(
+        "Host build inputs changed while source-server prerequisites were being produced; rerun the build from a stable source tree"
+      );
+    }
+    writeHostBuildFingerprint(completedSnapshot);
     console.log("Source server prerequisites built successfully!");
   } catch (error) {
     console.error("Source server prerequisite build failed:", error);

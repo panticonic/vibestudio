@@ -5,8 +5,9 @@ description: Search the open web and read pages with the web_search, web_fetch, 
 
 # Web Research
 
-You have three tools for reaching the open web. They are read-only and
-auto-approve at approval level 1 (the default for most workspaces).
+You have three tools for reaching the open web. They are read-only. Authority
+is evaluated dynamically for the concrete operation and resource; do not infer
+approval from a workspace-wide mode.
 
 ## Tools
 
@@ -109,7 +110,7 @@ than general web search. All of these work with no API key.
 
 ```
 eval({ code: `
-  const r = await fetch("https://api.github.com/search/code?q=" +
+  const r = await credentials.fetch("https://api.github.com/search/code?q=" +
     encodeURIComponent("queryName:foo language:typescript"));
   const data = await r.json();
   return data.items.slice(0, 5).map(i => ({
@@ -129,7 +130,7 @@ public `/search/repositories` or `/search/code` endpoints. Tighter queries
 
 ```
 eval({ code: `
-  const r = await fetch(
+  const r = await credentials.fetch(
     "https://api.stackexchange.com/2.3/search/advanced?" +
     new URLSearchParams({
       order: "desc", sort: "votes", site: "stackoverflow",
@@ -146,7 +147,7 @@ eval({ code: `
 
 ```
 eval({ code: `
-  const r = await fetch("https://registry.npmjs.org/-/v1/search?" +
+  const r = await credentials.fetch("https://registry.npmjs.org/-/v1/search?" +
     new URLSearchParams({ text: "fastify auth", size: "5" }));
   const data = await r.json();
   return data.objects.map(o => ({

@@ -8,14 +8,35 @@ import {
 import {
   HOST_CAPABILITY_PRESENTATIONS,
   HOST_SEMANTIC_CAPABILITY_PRESENTATIONS,
+  hostCapabilityPresentation,
 } from "./authority/hostCapabilityPresentations.js";
+import {
+  CAPABILITY_DOMAINS,
+  capabilityDomain,
+} from "./authority/capabilityDomains.js";
 import { HOST_SEMANTIC_CAPABILITY_COPY } from "./hostApprovalCopy.js";
 
 describe("authority request presentation", () => {
-  it("groups exact requests and highlights only scopes added by the new version", () => {
+  it("has reviewed copy for every capability in the static authority census", () => {
+    expect(
+      Object.keys(CAPABILITY_DOMAINS).filter(
+        (capability) => hostCapabilityPresentation(capability) === null
+      )
+    ).toEqual([]);
+  });
+
+  it("has a reviewed category for every static semantic host capability", () => {
+    expect(
+      HOST_SEMANTIC_CAPABILITY_COPY.filter(({ prefix }) => !prefix.endsWith(":"))
+        .filter(({ prefix }) => capabilityDomain(prefix) === null)
+        .map(({ prefix }) => prefix)
+    ).toEqual([]);
+  });
+
+  it("projects exact requests and highlights only rows added by the new version", () => {
     const previous = [
       {
-        capability: "notifications",
+        capability: "push.send",
         resource: { kind: "prefix" as const, prefix: "" },
         tier: "gated" as const,
         evidence: "intentional-broad" as const,
@@ -40,27 +61,35 @@ describe("authority request presentation", () => {
       requests,
       previous,
       createCapabilityPresentationResolver(() => [
-        { name: "notes", title: "Team Notes", description: "Shares notes with the team" },
+        {
+          name: "notes",
+          title: "Team Notes",
+          action: "share team notes",
+          description: "Shares notes with the team",
+          presentation: { domain: "sharing", verb: "act" },
+          source: "services/notes",
+        },
       ])
     );
-    expect(result.groups).toEqual([
-      expect.objectContaining({ id: "network", addedCount: 1 }),
-      expect.objectContaining({ id: "notifications", addedCount: 0 }),
+    expect(result.rows).toEqual([
+      expect.objectContaining({ capability: "push.send", domain: "sharing" }),
+      expect.objectContaining({ capability: "open-external", domain: "sharing" }),
       expect.objectContaining({
-        id: "runtime",
-        addedCount: 1,
-        items: [
-          expect.objectContaining({
-            title: "Team Notes",
-            description: "Shares notes with the team",
-          }),
-        ],
+        capability: "workspace-service:notes",
+        domain: "sharing",
+        action: "share team notes",
+        provenance: expect.objectContaining({ surface: "declared by services/notes" }),
       }),
     ]);
+    expect(result.diff.added.map(({ capability }) => capability)).toEqual([
+      "open-external",
+      "workspace-service:notes",
+    ]);
+    expect(result.diff.unchanged.map(({ capability }) => capability)).toEqual(["push.send"]);
     expect(result.requests).toEqual(requests);
   });
 
-  it("treats a tier or evidence change as a new reviewed request", () => {
+  it("presents a tier change distinctly without inventing added or removed authority", () => {
     const resource = { kind: "exact" as const, key: "notes:one" };
     const previous = [
       {
@@ -79,13 +108,27 @@ describe("authority request presentation", () => {
           evidence: "bounded-dynamic",
         },
       ],
-      previous
+      previous,
+      createCapabilityPresentationResolver(() => [
+        {
+          name: "notes",
+          action: "use team notes",
+          presentation: { domain: "files", verb: "act" },
+          source: "services/notes",
+        },
+      ])
     );
-    expect(result.groups).toEqual([expect.objectContaining({ id: "runtime", addedCount: 1 })]);
-    expect(result.removedCount).toBe(1);
+    expect(result.diff.retiered).toEqual([
+      expect.objectContaining({
+        before: expect.objectContaining({ tier: "gated" }),
+        after: expect.objectContaining({ tier: "critical" }),
+      }),
+    ]);
+    expect(result.diff.added).toEqual([]);
+    expect(result.diff.removed).toEqual([]);
   });
 
-  it("reviews eval ceilings separately and surfaces both additions and removals", () => {
+  it("reviews the single installed-code authority vocabulary", () => {
     const scope = (capability: string) => ({
       capability,
       resource: { kind: "prefix" as const, prefix: "" },
@@ -94,34 +137,18 @@ describe("authority request presentation", () => {
     });
     const result = summarizeAuthorityManifest(
       {
-        requests: [],
-        evalCeilings: [
-          {
-            audience: "eval",
-            purpose: "tool-eval",
-            capabilities: [scope("notifications")],
-          },
-        ],
+        requests: [scope("push.send")],
       },
       {
-        requests: [],
-        evalCeilings: [
-          {
-            audience: "eval",
-            purpose: "tool-eval",
-            capabilities: [scope("workspace-service:notes")],
-          },
-        ],
+        requests: [scope("open-external")],
       }
     );
 
-    expect(result.eval).toEqual([
-      expect.objectContaining({
-        purpose: "tool-eval",
-        label: "Code run by this tool",
-        removedCount: 1,
-        groups: [expect.objectContaining({ id: "notifications", addedCount: 1 })],
-      }),
+    expect(result.diff.removed).toEqual([
+      expect.objectContaining({ capability: "open-external" }),
+    ]);
+    expect(result.diff.added).toEqual([
+      expect.objectContaining({ capability: "push.send", domain: "sharing" }),
     ]);
   });
 

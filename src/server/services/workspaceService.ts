@@ -72,8 +72,12 @@ export interface WorkspaceServiceDeps {
    * exact VCS lineage is latched before any name or byte reaches the caller.
    */
   contextFiles: {
-    readFile: (ctx: ServiceContext, filePath: string) => Promise<string>;
-    glob: (ctx: ServiceContext, pattern: string, options?: { path?: string }) => Promise<string[]>;
+    readFile: (ctx: ServiceContext, filePath: string, contextId?: string) => Promise<string>;
+    readManagedFiles: (
+      ctx: ServiceContext,
+      patterns: readonly string[],
+      contextId?: string
+    ) => Promise<Array<{ path: string; content: string }>>;
   };
   /** Durably advance a model session's content latch before read bytes are returned. */
   recordContextIngestion?: ContextIngestionRecorder;
@@ -476,6 +480,31 @@ async function requireWorkspaceApproval(
 
 export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefinition {
   const activeWorkspaceName = () => deps.activeWorkspaceName ?? deps.getConfig().id;
+  const resourceContext = (
+    ctx: ServiceContext,
+    options: { contextId: string } | undefined,
+    method: "listSkills" | "readSkill"
+  ): string | undefined => {
+    const kind = ctx.caller.runtime.kind;
+    const contextlessHost = kind === "server" || kind === "shell";
+    if (contextlessHost && !options?.contextId) {
+      throw new ServiceError(
+        "workspace",
+        method,
+        `${kind} callers must provide an explicit contextId for semantic workspace resources`,
+        "EINVAL"
+      );
+    }
+    if (!contextlessHost && options?.contextId) {
+      throw new ServiceError(
+        "workspace",
+        method,
+        `${kind} callers cannot override their verified ambient context`,
+        "EINVAL"
+      );
+    }
+    return options?.contextId;
+  };
   const stampExternalUnitLogs = async (
     ctx: ServiceContext,
     name: string,
@@ -563,13 +592,14 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
         }
       },
 
-      listSkills: async (ctx) => {
-        const paths = [
-          ...(await deps.contextFiles.glob(ctx, "*/SKILL.md", { path: "/" })),
-          ...(await deps.contextFiles.glob(ctx, "*/*/SKILL.md", { path: "/" })),
-        ];
+      listSkills: async (ctx, [options]) => {
+        const files = await deps.contextFiles.readManagedFiles(
+          ctx,
+          ["*/SKILL.md", "*/*/SKILL.md"],
+          resourceContext(ctx, options, "listSkills")
+        );
         const entries = await Promise.all(
-          [...new Set(paths)].map(async (skillPath) => {
+          files.map(async ({ path: skillPath, content }) => {
             const relative = skillPath.replace(/^\/+/, "");
             const split = splitRepoPath(relative);
             if (!split || split.repoRelPath !== "SKILL.md") return null;
@@ -578,7 +608,6 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
             } catch {
               return null;
             }
-            const content = await deps.contextFiles.readFile(ctx, `/${relative}`);
             const frontmatter = parseSkillFrontmatter(content);
             return {
               name: frontmatter.name ?? path.posix.basename(split.repoPath),
@@ -593,8 +622,12 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
           .sort((left, right) => compareUtf16CodeUnits(left.dirPath, right.dirPath));
       },
 
-      readSkill: async (ctx, [nameOrPath]) => {
-        return deps.contextFiles.readFile(ctx, resolveSkillMdPath(nameOrPath));
+      readSkill: async (ctx, [nameOrPath, options]) => {
+        return deps.contextFiles.readFile(
+          ctx,
+          resolveSkillMdPath(nameOrPath),
+          resourceContext(ctx, options, "readSkill")
+        );
       },
 
       sourceTree: () => {

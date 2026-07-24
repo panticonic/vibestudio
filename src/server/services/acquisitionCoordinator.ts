@@ -2,6 +2,7 @@ import type { AcquisitionInfo, InvocationSnapshot, ResourceScope } from "@vibest
 import { canonicalKey } from "@vibestudio/shared/canonicalKey";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { AuthorityChallengePresentation } from "@vibestudio/shared/serviceDispatcher";
+import type { OperationSubstance } from "@vibestudio/shared/approvals";
 import type { AuthorityPromptCardType } from "@vibestudio/shared/authority/promptRegistry";
 import type { ApprovalQueue, GrantedDecision } from "./approvalQueue.js";
 import {
@@ -9,8 +10,10 @@ import {
   type CapabilityGrantStore,
 } from "./capabilityGrantStore.js";
 import { createHash } from "node:crypto";
+import { authorityRow } from "@vibestudio/shared/authority/authorityRows";
+import { testPolicyAuthorityDecision } from "./authorityRuntime.js";
 
-type AuthorityAcquisitionDecision = Exclude<GrantedDecision, "always" | "block">;
+type AuthorityAcquisitionDecision = "once" | "task" | "agent" | "lock" | "version" | "deny";
 
 export interface AcquisitionRequestInput {
   snapshot: InvocationSnapshot;
@@ -20,6 +23,7 @@ export interface AcquisitionRequestInput {
   renderedAction: string;
   resource: ResourceScope;
   presentation?: AuthorityChallengePresentation;
+  substance?: OperationSubstance;
 }
 
 export interface AcquisitionOutcome {
@@ -60,7 +64,11 @@ export class AcquisitionCoordinator {
   private readonly cooldowns = new Map<string, { until: number; dismissals: number }>();
 
   constructor(
-    private readonly deps: { approvalQueue: ApprovalQueue; grantStore: CapabilityGrantStore }
+    private readonly deps: {
+      approvalQueue: ApprovalQueue;
+      grantStore: CapabilityGrantStore;
+      notifyOwner?: (ownerRuntimeId: string, acquisitionId: string) => Promise<void> | void;
+    }
   ) {}
 
   request(input: AcquisitionRequestInput, signal?: AbortSignal): AcquisitionInfo {
@@ -74,12 +82,100 @@ export class AcquisitionCoordinator {
     if (existing) {
       return { ...existing.info, pending: true };
     }
+    const acquisitionId = acquisitionIdFor(requestKey);
+    const completed = this.completedById.get(acquisitionId);
+    if (completed?.ownerRuntimeId === input.caller.runtime.id) {
+      return { ...completed.info };
+    }
+
+    const testPolicy = input.caller.testPolicy ?? input.caller.executionSession?.testPolicy ?? null;
+    if (input.snapshot.executionMode === "test") {
+      if (!testPolicy) {
+        throw testPolicyIntegrityError(
+          "ETESTPOLICYMISSING",
+          "Test-mode authority acquisition has no host-resident test policy",
+          input
+        );
+      }
+      if (input.snapshot.testPolicyId !== testPolicy.policyId) {
+        throw testPolicyIntegrityError(
+          "ETESTPOLICYMISMATCH",
+          `Test-mode authority snapshot policy ${input.snapshot.testPolicyId ?? "<missing>"} ` +
+            `does not match resident policy ${testPolicy.policyId}`,
+          input
+        );
+      }
+      const rule = testPolicyAuthorityDecision(input.caller, undefined, {
+        capability: input.snapshot.capability,
+        resourceKey: input.snapshot.resourceKey,
+        tier: input.tier,
+        irreversible: input.snapshot.irreversible,
+      });
+      if (!rule && testPolicy.kind === "case" && testPolicy.case.unexpectedPrompts === "fail") {
+        throw Object.assign(
+          new Error(
+            `Unexpected authority prompt in system test ${testPolicy.case.testId}: ` +
+              `${input.snapshot.capability} on ${input.snapshot.resourceKey} (${input.tier})`
+          ),
+          {
+            code: "EUNEXPECTEDTESTPROMPT",
+            testId: testPolicy.case.testId,
+            capability: input.snapshot.capability,
+            resourceKey: input.snapshot.resourceKey,
+            tier: input.tier,
+          }
+        );
+      }
+      if (!rule) {
+        // Orchestrator policies intentionally cannot ratify critical or
+        // irreversible work; those requests continue through the real queue.
+      } else {
+        this.deps.grantStore.issue({
+          effect: rule.decision === "deny" ? "deny" : "allow",
+          capability: input.snapshot.capability,
+          resource: input.resource,
+          // Test policy may be inherited by reviewed infrastructure code without
+          // changing its authorizing origin into a session. Mint the invocation
+          // grant to the exact principal the immutable snapshot evaluated; keep
+          // the execution/session identity as a constraint, never as a substitute
+          // principal.
+          subject: input.snapshot.callerPrincipal,
+          constraints: {
+            sessionId: input.snapshot.sessionId,
+            ...(input.snapshot.agentBindingId
+              ? { agentBindingId: input.snapshot.agentBindingId }
+              : {}),
+            invocationDigest: input.snapshotDigest,
+            lineageAtConsent: [...(input.snapshot.lineageClasses ?? ["none"])],
+          },
+          issuedBy: `host:${input.snapshot.testPolicyId}:${rule.ruleId}`,
+          provenance:
+            input.tier === "critical" && rule.decision === "once"
+              ? "critical-confirmation"
+              : "preauthorization",
+          scope: "once",
+        });
+        const info: AcquisitionInfo = {
+          acquisitionId,
+          ownerRuntimeId: input.caller.runtime.id,
+          snapshotDigest: input.snapshotDigest,
+          capability: input.snapshot.capability,
+          resourceKey: input.snapshot.resourceKey,
+          tier: input.tier,
+          cardType: cardTypeFor(input),
+          renderedAction: input.renderedAction,
+          pending: false,
+          preauthorized: true,
+        };
+        return { ...info };
+      }
+    }
 
     const ruleKey = acquisitionRuleKey(input);
     const cooldown = this.cooldowns.get(ruleKey);
     if (cooldown && cooldown.until > now) {
       return {
-        acquisitionId: acquisitionIdFor(requestKey),
+        acquisitionId,
         ownerRuntimeId: input.caller.runtime.id,
         snapshotDigest: input.snapshotDigest,
         capability: input.snapshot.capability,
@@ -94,7 +190,6 @@ export class AcquisitionCoordinator {
     if (cooldown) this.cooldowns.delete(ruleKey);
 
     const cardType = cardTypeFor(input);
-    const acquisitionId = acquisitionIdFor(requestKey);
     let settle!: (outcome: AcquisitionOutcome) => void;
     const outcome = new Promise<AcquisitionOutcome>((resolve) => {
       settle = resolve;
@@ -133,6 +228,14 @@ export class AcquisitionCoordinator {
   ): Promise<AcquisitionOutcome> {
     const info = this.request(input, signal);
     if (info.cooldownUntil) return { state: "closed", info };
+    // Host preauthorization is completed synchronously by request(). It mints
+    // a fresh single-use grant for this invocation and has no presentation
+    // waiter to rendezvous with. Keeping it in the terminal race buffer would
+    // let a later identical invocation reuse the outcome after that grant was
+    // consumed.
+    if (info.preauthorized) {
+      return { state: "decided", decision: "once", info };
+    }
     const outcome = await this.awaitDecision({
       acquisitionId: info.acquisitionId,
       ownerRuntimeId: input.caller.runtime.id,
@@ -191,6 +294,10 @@ export class AcquisitionCoordinator {
     return this.deps.grantStore.consume(grantId);
   }
 
+  touch(grantId: string): boolean {
+    return this.deps.grantStore.touch(grantId);
+  }
+
   /** Forget a raced terminal observation before beginning a fresh acquisition cycle. */
   invalidate(snapshotDigest: string, ownerRuntimeId: string, callerPrincipal: string): void {
     const requestKey = acquisitionRequestKey({
@@ -212,49 +319,93 @@ export class AcquisitionCoordinator {
       decisionsForOrigin(input),
       input.presentation?.allowedDecisions
     );
-    const decision = await this.deps.approvalQueue.request({
-      kind: "capability",
+    const requestBase = {
       callerId: input.caller.runtime.id,
       callerKind: approvalCallerKind(input.caller.runtime.kind),
       repoPath: input.caller.code?.repoPath ?? "vibestudio/session",
       effectiveVersion: input.caller.code?.effectiveVersion ?? input.snapshot.snippetDigest,
       ...(input.caller.subject ? { requestedByUserId: input.caller.subject.userId } : {}),
       requesterCategory: input.caller.agentBinding
-        ? "agent"
+        ? ("agent" as const)
         : input.snapshot.snippetDigest === "-"
-          ? "unknown"
-          : "eval",
-      capability: input.snapshot.capability,
-      dedupKey: presentation?.dedupKey ?? entry.info.acquisitionId,
-      severity: presentation?.severity ?? (input.tier === "critical" ? "severe" : "standard"),
-      title: presentation?.title ?? authorityActionTitle(input.renderedAction),
-      description:
-        presentation?.description ??
-        (input.tier === "critical"
-          ? "This action can't be undone. Check the details before confirming."
-          : `Requests permission to ${input.renderedAction}.`),
-      resource: presentation?.resource ?? {
-        type: "authority-resource",
-        label: "Where",
-        value: input.snapshot.resourceKey,
-      },
-      grantResourceKey: input.snapshot.resourceKey,
-      resourceScope: approvalScopeForAuthorityResource(input.resource),
-      operation: presentation?.operation ?? {
-        kind: "unknown",
-        verb: input.renderedAction,
-        groupKey:
-          input.tier === "critical"
-            ? `confirm:${input.snapshotDigest}`
-            : `acquire:${input.snapshot.sessionId}`,
-      },
-      ...(presentation?.details ? { details: [...presentation.details] } : {}),
+          ? ("unknown" as const)
+          : ("eval" as const),
+      ...(presentation?.operation ? { operation: presentation.operation } : {}),
       ...(presentation?.diffReview ? { diffReview: [...presentation.diffReview] } : {}),
       ...(signal ? { signal } : {}),
-      snapshot: input.snapshot,
-      cardType: entry.info.cardType,
-      allowedDecisions: [...allowedDecisions],
-    });
+    };
+    const decision = presentation?.unitBatch
+      ? await this.deps.approvalQueue.request({
+          ...requestBase,
+          kind: "unit-batch",
+          dedupKey: presentation.dedupKey ?? entry.info.acquisitionId,
+          trigger: presentation.unitBatch.trigger,
+          title: presentation.title,
+          description:
+            presentation.description ?? `Requests permission to ${input.renderedAction}.`,
+          units: [...presentation.unitBatch.units],
+          configWrite: presentation.unitBatch.configWrite ?? null,
+        })
+      : await this.deps.approvalQueue.request({
+          ...requestBase,
+          kind: "capability",
+          capability: input.snapshot.capability,
+          dedupKey: presentation?.dedupKey ?? entry.info.acquisitionId,
+          severity: presentation?.severity ?? (input.tier === "critical" ? "severe" : "standard"),
+          title: presentation?.title ?? authorityActionTitle(input.renderedAction),
+          description:
+            presentation?.description ??
+            (input.tier === "critical"
+              ? "This action can't be undone. Check the details before confirming."
+              : `Requests permission to ${input.renderedAction}.`),
+          resource: presentation?.resource ?? {
+            type: "authority-resource",
+            label: "Where",
+            value: input.snapshot.resourceKey,
+          },
+          grantResourceKey: input.snapshot.resourceKey,
+          resourceScope: approvalScopeForAuthorityResource(input.resource),
+          operation: presentation?.operation ?? {
+            kind: "unknown",
+            verb: input.renderedAction,
+            groupKey:
+              input.tier === "critical"
+                ? `confirm:${input.snapshotDigest}`
+                : `acquire:${input.snapshot.sessionId}`,
+          },
+          ...(presentation?.details ? { details: [...presentation.details] } : {}),
+          snapshot: input.snapshot,
+          cardType: entry.info.cardType,
+          allowedDecisions: [...allowedDecisions],
+          authorityRow: authorityRow({
+            capability: input.snapshot.capability,
+            resource: input.resource,
+            resourcePhrase: presentation?.resource.value,
+            tier: input.tier,
+            statement: "prospective",
+            provenance: {
+              source: "receiver",
+              ...(presentation?.authorityVocabulary
+                ? { surface: `declared by ${presentation.authorityVocabulary.declaredBy}` }
+                : {}),
+            },
+            flags: {
+              lineageTainted:
+                input.snapshot.lineageClasses?.some((lineage) => lineage !== "none") ?? false,
+              irreversible: input.snapshot.irreversible === true,
+            },
+            ...(presentation?.authorityVocabulary
+              ? {
+                  category: {
+                    domain: presentation.authorityVocabulary.domain,
+                    verb: presentation.authorityVocabulary.verb,
+                  },
+                  reviewedAction: input.renderedAction,
+                }
+              : {}),
+          }),
+          ...(input.substance ? { operationSubstance: input.substance } : {}),
+        });
 
     if (this.byId.get(entry.info.acquisitionId) !== entry) return;
     // ApprovalQueue resolves an aborted waiter as deny so callers are never
@@ -302,6 +453,14 @@ export class AcquisitionCoordinator {
     this.completedById.set(entry.info.acquisitionId, completed);
     this.trimOldest(this.completedById, AcquisitionCoordinator.MAX_COMPLETIONS);
     entry.settle(outcome);
+    void Promise.resolve(
+      this.deps.notifyOwner?.(entry.info.ownerRuntimeId, entry.info.acquisitionId)
+    ).catch((error) => {
+      console.warn(
+        `[AuthorityAcquisition] wake hint failed for ${entry.info.ownerRuntimeId}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    });
   }
 
   private setCooldown(ruleKey: string, value: { until: number; dismissals: number }): void {
@@ -351,9 +510,7 @@ export class AcquisitionCoordinator {
     if (input.tier === "critical" && decision !== "once") {
       throw new Error("Critical confirmation can only be granted once");
     }
-    const contextLineage = input.snapshot.contextLineage;
-    const lineageAtConsent =
-      contextLineage?.class === "external" ? [...contextLineage.externalKeys] : [];
+    const lineageAtConsent = [...(input.snapshot.lineageClasses ?? ["none"])];
     const sessionSubject = `session:${input.snapshot.sessionId}` as const;
     if (decision === "once") {
       this.deps.grantStore.issue({
@@ -364,6 +521,9 @@ export class AcquisitionCoordinator {
         constraints: {
           sessionId: input.snapshot.sessionId,
           invocationDigest: input.snapshotDigest,
+          ...(input.snapshot.agentBindingId
+            ? { agentBindingId: input.snapshot.agentBindingId }
+            : {}),
           ...(input.snapshot.mission === "-" ? {} : { missionSubject: input.snapshot.mission }),
           lineageAtConsent,
         },
@@ -372,7 +532,10 @@ export class AcquisitionCoordinator {
       });
       return;
     }
-    if (decision === "session") {
+    if (decision === "task") {
+      if (!input.snapshot.taskRef) {
+        throw new Error("Task approval requires an attested task reference");
+      }
       this.deps.grantStore.issue({
         effect: "allow",
         capability: input.snapshot.capability,
@@ -380,11 +543,56 @@ export class AcquisitionCoordinator {
         subject: sessionSubject,
         constraints: {
           sessionId: input.snapshot.sessionId,
+          taskRef: input.snapshot.taskRef,
+          ...(input.snapshot.agentBindingId
+            ? { agentBindingId: input.snapshot.agentBindingId }
+            : {}),
           ...(input.snapshot.mission === "-" ? {} : { missionSubject: input.snapshot.mission }),
           lineageAtConsent,
         },
         issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
         provenance: "acquisition",
+        scope: "task",
+      });
+      return;
+    }
+    if (decision === "agent") {
+      if (
+        !input.snapshot.agentBindingId ||
+        input.snapshot.agentScopeEligible !== true ||
+        input.snapshot.irreversible
+      ) {
+        throw new Error("Standing agent authority is not eligible for this invocation");
+      }
+      this.deps.grantStore.issue({
+        effect: "allow",
+        capability: input.snapshot.capability,
+        resource: input.resource,
+        subject: `agent:${input.snapshot.agentBindingId}`,
+        constraints: {
+          lineageAtConsent,
+          agentBindingId: input.snapshot.agentBindingId,
+        },
+        issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
+        provenance: "acquisition",
+        scope: "agent",
+        lastUsedAt: Date.now(),
+        decidedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
+        decisionSurface: "card",
+      });
+      return;
+    }
+    if (decision === "lock") {
+      if (!input.snapshot.agentBindingId) {
+        throw new Error("A standing lock requires an attested agent binding");
+      }
+      this.deps.grantStore.createLock({
+        agentBindingId: input.snapshot.agentBindingId,
+        level: "resource",
+        capability: input.snapshot.capability,
+        resource: input.resource,
+        decidedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
+        surface: "card",
       });
       return;
     }
@@ -401,6 +609,24 @@ export class AcquisitionCoordinator {
       provenance: "acquisition",
     });
   }
+}
+
+function testPolicyIntegrityError(
+  code: "ETESTPOLICYMISSING" | "ETESTPOLICYMISMATCH",
+  message: string,
+  input: AcquisitionRequestInput
+): Error {
+  return Object.assign(new Error(message), {
+    code,
+    capability: input.snapshot.capability,
+    resourceKey: input.snapshot.resourceKey,
+    tier: input.tier,
+    snapshotPolicyId: input.snapshot.testPolicyId ?? null,
+    residentPolicyId:
+      input.caller.testPolicy?.policyId ??
+      input.caller.executionSession?.testPolicy?.policyId ??
+      null,
+  });
 }
 
 function combineAbortSignals(
@@ -474,7 +700,14 @@ function decisionsForOrigin(
 ): readonly AuthorityAcquisitionDecision[] {
   if (input.tier === "critical") return ["once", "deny"];
   if (input.snapshot.callerPrincipal.startsWith("session:")) {
-    return ["once", "session", "deny"];
+    return [
+      "once",
+      "task",
+      ...(input.snapshot.agentBindingId && input.snapshot.agentScopeEligible
+        ? (["agent", "lock"] as const)
+        : []),
+      "deny",
+    ];
   }
   if (input.snapshot.callerPrincipal.startsWith("code:")) return ["version", "deny"];
   // Gated interactive acquisition is defined for session and installed-code
@@ -504,6 +737,11 @@ function isAuthorityAcquisitionDecision(
   decision: GrantedDecision | "dismiss"
 ): decision is AuthorityAcquisitionDecision {
   return (
-    decision === "once" || decision === "session" || decision === "version" || decision === "deny"
+    decision === "once" ||
+    decision === "task" ||
+    decision === "agent" ||
+    decision === "lock" ||
+    decision === "version" ||
+    decision === "deny"
   );
 }

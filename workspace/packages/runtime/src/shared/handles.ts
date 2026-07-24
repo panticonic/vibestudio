@@ -1,5 +1,11 @@
 import type { RpcClient, RpcEventContext } from "@vibestudio/rpc";
 import type { PanelLifecycleResult } from "@vibestudio/shared/types";
+import {
+  rethrowPanelOperationError,
+  type PanelDiagnosticPacket,
+  type PanelObservation,
+  type PanelSnapshotObservation,
+} from "@vibestudio/shared/panel/observation";
 import type {
   CdpAutomation,
   PanelContract,
@@ -21,36 +27,36 @@ export interface PanelHandleMetadata {
   contextId?: string | null;
   rpcTargetId?: string | null;
   effectiveVersion?: string | null;
+  buildKey?: string | null;
   ref?: string | null;
 }
 
 export interface PanelHandleHostOps {
   refresh?(id: string): Promise<PanelHandleMetadata>;
+  observe?(id: string): Promise<PanelObservation>;
+  diagnose?(id: string): Promise<PanelDiagnosticPacket>;
   children?(id: string): Promise<PanelHandle[]>;
   parent?(id: string, parentId: string | null): PanelHandle | null;
-  ensureLoaded?(id: string): Promise<unknown>;
-  isLoaded?(id: string): Promise<boolean>;
   navigate?(
     id: string,
     source: string,
     options?: PanelNavigateOptions
-  ): Promise<{ id: string; title: string }>;
-  reload?(id: string): Promise<PanelLifecycleResult>;
+  ): Promise<PanelObservation>;
+  reload?(id: string): Promise<PanelObservation>;
   close?(id: string): Promise<PanelLifecycleResult>;
   archive?(id: string): Promise<void>;
   unload?(id: string): Promise<PanelLifecycleResult>;
   movePanel?(id: string, newParentId: string | null, targetPosition: number): Promise<void>;
   takeOver?(id: string): Promise<void>;
   openDevTools?(id: string, mode?: "detach" | "right" | "bottom"): Promise<void>;
-  rebuildPanel?(id: string): Promise<PanelLifecycleResult>;
-  rebuildAndReload?(id: string): Promise<PanelLifecycleResult>;
+  rebuild?(id: string): Promise<PanelObservation>;
   updatePanelState?(id: string, state: Record<string, unknown>): Promise<void>;
-  focus?(id: string, options?: PanelFocusOptions): Promise<unknown>;
+  focus?(id: string, options?: PanelFocusOptions): Promise<PanelObservation>;
   stateArgs?: {
     get<T = Record<string, unknown>>(id: string): Promise<T>;
     set(id: string, updates: Record<string, unknown>): Promise<Record<string, unknown>>;
   };
-  snapshot?(id: string): Promise<unknown>;
+  snapshot?(id: string): Promise<PanelSnapshotObservation>;
   callAgent?(id: string, method: string, args: unknown[]): Promise<unknown>;
 }
 
@@ -108,6 +114,31 @@ export function createPanelHandle<
     return rpcTargetResolvePromise;
   };
   const call = createCallProxy<T>(rpc, resolveRpcTargetId);
+  const rememberObservation = (observation: PanelObservation): PanelObservation => {
+    metadata = normalizeMetadata({
+      ...metadata,
+      id: observation.panelId,
+      title: observation.title,
+      source: observation.source,
+      kind: observation.kind,
+      parentId: observation.parentId,
+      contextId: observation.contextId,
+      rpcTargetId: observation.runtimeEntityId,
+      effectiveVersion: observation.effectiveVersion,
+      buildKey: observation.buildKey,
+      ref: observation.requestedRef,
+    });
+    rpcEventTargetId = metadata.rpcTargetId ?? metadata.id;
+    rpcTargetResolvePromise = null;
+    return observation;
+  };
+  const lifecycle = async (operation: () => Promise<PanelObservation>) => {
+    try {
+      return rememberObservation(await operation());
+    } catch (error) {
+      rethrowPanelOperationError(error);
+    }
+  };
 
   const handle: PanelHandle<T, E, EmitE> = {
     get id() {
@@ -125,28 +156,23 @@ export function createPanelHandle<
     get parentId() {
       return metadata.parentId;
     },
-    getInfo: async () => ({
-      id: metadata.id,
-      title: metadata.title,
-      source: metadata.source,
-      kind: metadata.kind,
-      parentId: metadata.parentId,
-      contextId: metadata.contextId,
-      runtimeEntityId: metadata.rpcTargetId,
-      effectiveVersion: metadata.effectiveVersion,
-      ref: metadata.ref ?? undefined,
-      build: {
-        effectiveVersion: metadata.effectiveVersion,
-        ref: metadata.ref ?? undefined,
-      },
-    }),
+    observe: async () => {
+      if (!ops?.observe) throw new Error("observe is not available for this handle");
+      return lifecycle(() => ops.observe!(metadata.id));
+    },
     call,
     cdp,
     click: (selector: string) => cdp.click(selector),
-    diagnostics: async (options) => ({
-      info: await handle.getInfo(),
-      consoleHistory: await cdp.consoleHistory(options),
-    }),
+    diagnose: async () => {
+      if (!ops?.diagnose) throw new Error("diagnose is not available for this handle");
+      try {
+        const packet = await ops.diagnose(metadata.id);
+        rememberObservation(packet.observation);
+        return packet;
+      } catch (error) {
+        rethrowPanelOperationError(error);
+      }
+    },
     stateArgs: {
       get: async <TState = Record<string, unknown>>() => {
         if (!ops?.stateArgs?.get) return {} as TState;
@@ -177,29 +203,15 @@ export function createPanelHandle<
     ): PanelHandleFromContract<C, Role> {
       return handle as unknown as PanelHandleFromContract<C, Role>;
     },
-    async refresh() {
-      await refreshMetadata();
-      return handle;
-    },
     children: () => ops?.children?.(metadata.id) ?? Promise.resolve([]),
     parent: () => ops?.parent?.(metadata.id, metadata.parentId) ?? null,
-    ensureLoaded: async () => {
-      const result = await (ops?.ensureLoaded?.(metadata.id) ?? Promise.resolve({ loaded: false }));
-      if (ops?.refresh) await refreshMetadata();
-      return result;
-    },
-    isLoaded: () => ops?.isLoaded?.(metadata.id) ?? Promise.resolve(false),
     navigate: async (source: string, options?: PanelNavigateOptions) => {
       if (!ops?.navigate) throw new Error("navigate is not available for this handle");
-      const result = await ops.navigate(metadata.id, source, options);
-      if (ops?.refresh) {
-        await refreshMetadata().catch(() => undefined);
-      }
-      return result;
+      return lifecycle(() => ops.navigate!(metadata.id, source, options));
     },
     reload: async () => {
       if (!ops?.reload) throw new Error("reload is not available for this handle");
-      return ops.reload(metadata.id);
+      return lifecycle(() => ops.reload!(metadata.id));
     },
     close: async () => {
       if (!ops?.close) throw new Error("close is not available for this handle");
@@ -225,15 +237,9 @@ export function createPanelHandle<
       if (!ops?.openDevTools) throw new Error("openDevTools is not available for this handle");
       await ops.openDevTools(metadata.id, mode);
     },
-    rebuildPanel: async () => {
-      if (!ops?.rebuildPanel) throw new Error("rebuildPanel is not available for this handle");
-      return ops.rebuildPanel(metadata.id);
-    },
-    rebuildAndReload: async () => {
-      if (!ops?.rebuildAndReload) {
-        throw new Error("rebuildAndReload is not available for this handle");
-      }
-      return ops.rebuildAndReload(metadata.id);
+    rebuild: async () => {
+      if (!ops?.rebuild) throw new Error("rebuild is not available for this handle");
+      return lifecycle(() => ops.rebuild!(metadata.id));
     },
     updatePanelState: async (state: Record<string, unknown>) => {
       if (!ops?.updatePanelState) {
@@ -241,9 +247,18 @@ export function createPanelHandle<
       }
       await ops.updatePanelState(metadata.id, state);
     },
-    focus: (focusOptions?: PanelFocusOptions) =>
-      ops?.focus?.(metadata.id, focusOptions) ?? Promise.resolve(undefined),
-    snapshot: () => ops?.snapshot?.(metadata.id) ?? Promise.resolve(undefined),
+    focus: (focusOptions?: PanelFocusOptions) => {
+      if (!ops?.focus) throw new Error("focus is not available for this handle");
+      return lifecycle(() => ops.focus!(metadata.id, focusOptions));
+    },
+    snapshot: async () => {
+      if (!ops?.snapshot) throw new Error("snapshot is not available for this handle");
+      try {
+        return await ops.snapshot(metadata.id);
+      } catch (error) {
+        rethrowPanelOperationError(error);
+      }
+    },
     tree: () => ops?.callAgent?.(metadata.id, "_agent.tree", []) ?? Promise.resolve(undefined),
     state: () => ops?.callAgent?.(metadata.id, "_agent.state", []) ?? Promise.resolve(undefined),
     routes: () => ops?.callAgent?.(metadata.id, "_agent.routes", []) ?? Promise.resolve(undefined),
@@ -278,24 +293,13 @@ export function createNoPanelHandle(): PanelHandle {
     source: "",
     kind: "workspace",
     parentId: null,
-    getInfo: () =>
-      Promise.resolve({
-        id: "",
-        title: "",
-        source: "",
-        kind: "workspace",
-        parentId: null,
-        contextId: null,
-        runtimeEntityId: null,
-        effectiveVersion: null,
-        build: { effectiveVersion: null },
-      }),
+    observe: noParent,
     call: new Proxy({} as PanelHandle["call"], {
       get: () => noParent,
     }),
     cdp: unavailableCdp("parent"),
     click: noParent,
-    diagnostics: noParent,
+    diagnose: noParent,
     stateArgs: {
       get: <TState = Record<string, unknown>>() => Promise.resolve({} as TState),
       set: noParent,
@@ -303,11 +307,8 @@ export function createNoPanelHandle(): PanelHandle {
     emit: noParent,
     on: () => () => {},
     withContract: () => handle as never,
-    refresh: () => Promise.resolve(handle),
     children: () => Promise.resolve([]),
     parent: () => null,
-    ensureLoaded: () => Promise.resolve({ loaded: false }),
-    isLoaded: () => Promise.resolve(false),
     navigate: noParent,
     reload: noParent,
     close: noParent,
@@ -316,11 +317,10 @@ export function createNoPanelHandle(): PanelHandle {
     movePanel: noParent,
     takeOver: noParent,
     openDevTools: noParent,
-    rebuildPanel: noParent,
-    rebuildAndReload: noParent,
+    rebuild: noParent,
     updatePanelState: noParent,
-    focus: () => Promise.resolve(undefined),
-    snapshot: () => Promise.resolve(undefined),
+    focus: noParent,
+    snapshot: noParent,
     tree: () => Promise.resolve(undefined),
     state: () => Promise.resolve(undefined),
     routes: () => Promise.resolve(undefined),
@@ -396,24 +396,13 @@ export function createNonPanelRuntimeHandle(options: {
     source: options.source ?? options.id,
     kind: "workspace",
     parentId: options.parentId ?? null,
-    getInfo: () =>
-      Promise.resolve({
-        id: options.id,
-        title: options.title ?? options.id,
-        source: options.source ?? options.id,
-        kind: "workspace",
-        parentId: options.parentId ?? null,
-        contextId: null,
-        runtimeEntityId: options.id,
-        effectiveVersion: null,
-        build: { effectiveVersion: null },
-      }),
+    observe: unavailable,
     call: new Proxy({} as PanelHandle["call"], {
       get: () => unavailable,
     }),
     cdp: unavailableCdp(options.id),
     click: unavailable,
-    diagnostics: unavailable,
+    diagnose: unavailable,
     stateArgs: {
       get: <TState = Record<string, unknown>>() => Promise.resolve({} as TState),
       set: unavailable,
@@ -421,11 +410,8 @@ export function createNonPanelRuntimeHandle(options: {
     emit: unavailable,
     on: () => () => {},
     withContract: () => handle as never,
-    refresh: () => Promise.resolve(handle),
     children: () => Promise.resolve([]),
     parent: () => options.parent?.() ?? null,
-    ensureLoaded: () => Promise.resolve({ loaded: false }),
-    isLoaded: () => Promise.resolve(false),
     navigate: unavailable,
     reload: unavailable,
     close: unavailable,
@@ -434,11 +420,10 @@ export function createNonPanelRuntimeHandle(options: {
     movePanel: unavailable,
     takeOver: unavailable,
     openDevTools: unavailable,
-    rebuildPanel: unavailable,
-    rebuildAndReload: unavailable,
+    rebuild: unavailable,
     updatePanelState: unavailable,
-    focus: () => Promise.resolve(undefined),
-    snapshot: () => Promise.resolve(undefined),
+    focus: unavailable,
+    snapshot: unavailable,
     tree: () => Promise.resolve(undefined),
     state: () => Promise.resolve(undefined),
     routes: () => Promise.resolve(undefined),
@@ -459,6 +444,7 @@ function normalizeMetadata(metadata: PanelHandleMetadata): Required<PanelHandleM
     contextId: metadata.contextId ?? null,
     rpcTargetId: metadata.rpcTargetId ?? null,
     effectiveVersion: metadata.effectiveVersion ?? null,
+    buildKey: metadata.buildKey ?? null,
     ref: metadata.ref ?? null,
   };
 }

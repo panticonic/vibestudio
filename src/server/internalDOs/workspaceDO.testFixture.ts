@@ -149,6 +149,15 @@ export class WorkspaceDOTestable extends WorkspaceDO {
       )
     `);
     sql.exec(`
+      CREATE TABLE IF NOT EXISTS do_alarm_test_policies (
+        source TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        object_key TEXT NOT NULL,
+        test_policy_json TEXT NOT NULL,
+        PRIMARY KEY (source, class_name, object_key)
+      )
+    `);
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS recurring_jobs (
         name TEXT PRIMARY KEY,
         source TEXT NOT NULL,

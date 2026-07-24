@@ -94,7 +94,6 @@ export function parsePairArgs(argv, config) {
     ),
     appRoot: null,
     dev: process.env[config.devEnv] === "1",
-    autoApprove: false,
     help: false,
     signalUrl: undefined,
     signalSource: "default",
@@ -129,8 +128,6 @@ export function parsePairArgs(argv, config) {
       options.signalSource = "flag";
     } else if (arg === "--dev") {
       options.dev = true;
-    } else if (arg === "--auto-approve") {
-      options.autoApprove = true;
     } else if (arg === "--no-init") {
       throw new Error(
         "--no-init is no longer supported; choose or create a workspace after pairing"
@@ -143,9 +140,6 @@ export function parsePairArgs(argv, config) {
   }
 
   if (!options.help) {
-    if (options.autoApprove && !options.dev) {
-      throw new Error("--auto-approve is development-only; pass --dev as well");
-    }
     const resolved = resolveSignalingEndpoint(options.signalUrl, signalEnv, config);
     options.signalUrl = resolved.url;
     options.signalSource = resolved.source;
@@ -179,11 +173,6 @@ Options:
   --dev
       Use a disposable dev workspace copied fresh from the template and deleted
       when the server exits.
-  --auto-approve
-      In --dev mode, use the host's existing approval-queue auto-approver. This
-      covers tool, credential-use, userland, and startup decisions and is
-      intended for unattended system tests only. Prompts that require a human
-      to supply a secret or client-config value are denied immediately.
   --help
       Show this help message.
 
@@ -268,7 +257,6 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
           VIBESTUDIO_DISABLE_DEV_TEMPLATE_MIRROR: "1",
         }
       : {}),
-    ...(options.autoApprove ? { VIBESTUDIO_AUTO_APPROVE: "1" } : {}),
   };
   const env = hooks.buildEnv ? hooks.buildEnv(baseEnv, { options, serverArgs }) : baseEnv;
 

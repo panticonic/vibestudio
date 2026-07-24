@@ -66,6 +66,15 @@
           "evidence": "intentional-broad"
         },
         {
+          "capability": "network.response.read",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
           "capability": "git.publish",
           "resource": {
             "kind": "prefix",
@@ -137,8 +146,7 @@
           "tier": "gated",
           "evidence": "intentional-broad"
         }
-      ],
-      "evalCeilings": []
+      ]
     }
   },
   "dependencies": {

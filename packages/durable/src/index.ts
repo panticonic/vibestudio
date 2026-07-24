@@ -1,19 +1,23 @@
 import {
-  DIRECT_AUTHORITY_ACCEPTED_AT_HEADER,
   collectExposableMethods,
-  createConnectionlessRpcClient,
   envelopeFromMessage,
   rpcExposedMethodNames,
   rpcErrorDataOf,
   rpcErrorKindOf,
   rpcMethodAuthority,
   type AuthenticatedCaller,
+  type AuthorizationContext,
   type ConnectionlessRpcClient,
-  type DeferrableRpcClient,
+  type RpcClient,
   type RpcEnvelope,
   type RpcEvent,
   type RpcRequest,
 } from "@vibestudio/rpc";
+import {
+  DIRECT_AUTHORITY_ACCEPTED_AT_HEADER,
+  createInternalConnectionlessRpcClient,
+  type AttestedCaller,
+} from "@vibestudio/rpc/internal";
 import {
   DurableDirectRpcNonceLedger,
   directRpcInvalidAttestationFailure,
@@ -28,6 +32,7 @@ import {
   type DurableObjectSchemaBaseline,
   type DurableObjectSchemaMigration,
 } from "./schema.js";
+import { InvocationContext } from "./invocation-context.js";
 
 // Re-export the `@rpc` exposure decorator so DO authors import it alongside the base.
 export { rpc } from "@vibestudio/rpc";
@@ -67,6 +72,7 @@ export type {
   DurableObjectSchemaMigration,
   SchemaSqlStorage,
 } from "./schema.js";
+export { InvocationContext } from "./invocation-context.js";
 
 export interface LifecyclePrepareInput {
   epoch: string;
@@ -75,6 +81,15 @@ export interface LifecyclePrepareInput {
   reason: string;
   /** Remaining preparation budget; zero means the caller imposes no deadline. */
   deadlineMs: number;
+}
+
+interface RpcInvocationContext {
+  verifiedCaller: AttestedCaller | null;
+  callerId: string | null;
+  callerKind: string | null;
+  callerPanelId: string | null;
+  requestId: string | null;
+  idempotencyKey: string | null;
 }
 
 export interface LifecyclePrepareResult {
@@ -107,13 +122,8 @@ export abstract class DurableObjectBase {
 
   private schemaReady = false;
   private connectionless: ConnectionlessRpcClient | null = null;
-  private currentVerifiedCaller: AuthenticatedCaller | null = null;
-  private currentRpcCallerId: string | null = null;
-  private currentRpcCallerKind: string | null = null;
-  private currentRpcCallerPanelId: string | null = null;
-  private currentRpcRequestId: string | null = null;
-  private currentRpcIdempotencyKey: string | null = null;
   private currentObjectKey: string | null = null;
+  private readonly invocationContext = new InvocationContext<RpcInvocationContext>();
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     this.ctx = ctx;
@@ -182,10 +192,10 @@ export abstract class DurableObjectBase {
     this.sql.exec(`DELETE FROM state WHERE key = ?`, key);
   }
 
-  protected parseRequestBody(body: string): {
+  private parseRequestBody(body: string): {
     args: unknown[];
     error?: string;
-    caller?: AuthenticatedCaller | null;
+    caller?: AttestedCaller | null;
   } {
     const parsed = JSON.parse(body);
     if (Array.isArray(parsed)) return { args: parsed };
@@ -210,7 +220,7 @@ export abstract class DurableObjectBase {
               ...(typeof record["userId"] === "string" ? { userId: record["userId"] } : {}),
               ...(record["authorization"] && typeof record["authorization"] === "object"
                 ? {
-                    authorization: record["authorization"] as AuthenticatedCaller["authorization"],
+                    authorization: record["authorization"] as AttestedCaller["authorization"],
                   }
                 : {}),
             },
@@ -248,11 +258,11 @@ export abstract class DurableObjectBase {
   /**
    * The unified connectionless RPC client — the same `createRpcClient` core
    * every target runs, behind the envelope-native `httpClientTransport`, plus
-   * the `callDeferred` extension. The DO's own public methods are `exposeAll`'d
+   * the shared connectionless transport. The DO's own public methods are `exposeAll`'d
    * onto it so inbound envelopes dispatched via `handleEnvelope` reach the class
    * method (`respond`/`deliver` are wired in `fetch`).
    */
-  protected get rpc(): DeferrableRpcClient {
+  protected get rpc(): RpcClient {
     return this.connectionlessClient().client;
   }
 
@@ -274,11 +284,18 @@ export abstract class DurableObjectBase {
       if (typeof gatewayUrl !== "string" || gatewayUrl.length === 0) {
         throw new Error("RPC not available: GATEWAY_URL not configured");
       }
-      const connectionless = createConnectionlessRpcClient({
+      const connectionless = createInternalConnectionlessRpcClient({
         selfId: this.rpcSelfId,
         serverUrl: gatewayUrl,
         authToken: token,
         callerKind: "do",
+        // Continue only the currently executing host-attested invocation.
+        // The callback is evaluated when an outbound envelope is created, so
+        // alarms and later requests cannot retain a completed parent's nonce.
+        authorityParentNonce: () => {
+          const authorization = this.invocationContext.current()?.verifiedCaller?.authorization;
+          return authorization?.context.testPolicy ? authorization.nonce : undefined;
+        },
         ...(this.respondTimeoutMs !== undefined ? { respondTimeoutMs: this.respondTimeoutMs } : {}),
       });
       // Expose ONLY this DO's `@rpc`-marked methods (opt-in / default-deny). Private/protected helpers
@@ -293,27 +310,39 @@ export abstract class DurableObjectBase {
   }
 
   protected get caller(): AuthenticatedCaller | null {
-    return this.currentVerifiedCaller;
+    const caller = this.invocationContext.current()?.verifiedCaller;
+    if (!caller) return null;
+    return {
+      callerId: caller.callerId,
+      callerKind: caller.callerKind,
+      ...(caller.callerPanelId ? { callerPanelId: caller.callerPanelId } : {}),
+      ...(caller.userId ? { userId: caller.userId } : {}),
+    };
+  }
+
+  /** Host-attested authority facts without replay-sensitive transport proof. */
+  protected get authorization(): AuthorizationContext | null {
+    return this.invocationContext.current()?.verifiedCaller?.authorization?.context ?? null;
   }
 
   protected get rpcCallerId(): string | null {
-    return this.currentRpcCallerId;
+    return this.invocationContext.current()?.callerId ?? null;
   }
 
   protected get rpcCallerKind(): string | null {
-    return this.currentRpcCallerKind;
+    return this.invocationContext.current()?.callerKind ?? null;
   }
 
   protected get rpcCallerPanelId(): string | null {
-    return this.currentRpcCallerPanelId;
+    return this.invocationContext.current()?.callerPanelId ?? null;
   }
 
   protected get rpcRequestId(): string | null {
-    return this.currentRpcRequestId;
+    return this.invocationContext.current()?.requestId ?? null;
   }
 
   protected get rpcIdempotencyKey(): string | null {
-    return this.currentRpcIdempotencyKey;
+    return this.invocationContext.current()?.idempotencyKey ?? null;
   }
 
   protected get objectKey(): string {
@@ -557,7 +586,7 @@ export abstract class DurableObjectBase {
   }
 
   private hostControlDenial(method: string, authorityAcceptedAt: number): HostControlDenial | null {
-    const attestation = this.caller?.authorization ?? null;
+    const attestation = this.invocationContext.current()?.verifiedCaller?.authorization ?? null;
     const denial = hostControlDenial({
       method,
       attestation,
@@ -579,29 +608,6 @@ export abstract class DurableObjectBase {
     return null;
   }
 
-  /**
-   * Gate inbound RPC by caller. Default: allow all (the generic relay is open,
-   * `rpcServer.checkRelayAuth`). Sensitive recipients that run privileged code
-   * (e.g. a server-only internal DO) OVERRIDE this to reject non-trusted callers
-   * — a blanket guard, since `exposeAll` reflects every public method (including
-   * TS-private helpers, which are runtime-public). Throwing here surfaces a 500
-   * error response and the method never runs.
-   *
-   * `kind` distinguishes a privileged inbound METHOD CALL ("call") from an event
-   * DELIVERY ("event"). Event deliveries are opt-in — the DO subscribed to a
-   * topic/channel and the publisher (server event-push, a channel DO, …) pushes
-   * to it — so a server-only DO should still ACCEPT them while refusing "call".
-   *
-   * This receiver hook remains an independent fail-closed boundary. `@rpc`
-   * authority metadata does not supersede it: privileged internal DOs must keep
-   * overriding this method until the shared inbound authority evaluator is the
-   * sole enforced receiver boundary.
-   */
-  protected assertInboundAllowed(
-    _caller: AuthenticatedCaller | null,
-    _kind: "call" | "event"
-  ): void {}
-
   /** Handle an `RpcEnvelope` POSTed to `__rpc`; returns a response envelope (or `{}` for events). */
   private async handleInboundEnvelope(
     request: Request,
@@ -610,7 +616,7 @@ export abstract class DurableObjectBase {
     const envelope = (await request.json()) as RpcEnvelope;
     const message = envelope.message;
     if (message?.type === "event") {
-      const caller = envelope.delivery.caller ?? null;
+      const caller = (envelope.delivery.caller as AttestedCaller | undefined) ?? null;
       const event = message as RpcEvent;
       const method = `__event:${event.event}`;
       const audience = this.rpcSelfId;
@@ -655,8 +661,6 @@ export abstract class DurableObjectBase {
           403
         );
       }
-      // Retained until the checked-in parity worksheet proves shared enforcement.
-      this.assertInboundAllowed(caller, "event");
       this.connectionlessClient().deliver(envelope);
       return jsonResponse({});
     }
@@ -709,7 +713,7 @@ export abstract class DurableObjectBase {
     // it as a null caller context (matching the pre-convergence behavior) rather
     // than a forgeable `"unknown"` — methods that gate on `this.caller` rely on it.
     const rawCaller = envelope.delivery.caller;
-    const caller = rawCaller && rawCaller.callerId !== "" ? rawCaller : null;
+    const caller = rawCaller && rawCaller.callerId !== "" ? (rawCaller as AttestedCaller) : null;
     const message = envelope.message as RpcRequest;
     const method = message?.method;
     const audience = this.rpcSelfId;
@@ -763,33 +767,7 @@ export abstract class DurableObjectBase {
         },
       } as RpcEnvelope;
     }
-    // Legacy receiver guards remain until the generated parity suite proves
-    // shared enforcement is at least as restrictive for every call and event.
-    this.assertInboundAllowed(caller, "call");
-    const prev = {
-      verifiedCaller: this.currentVerifiedCaller,
-      callerId: this.currentRpcCallerId,
-      callerKind: this.currentRpcCallerKind,
-      callerPanelId: this.currentRpcCallerPanelId,
-      requestId: this.currentRpcRequestId,
-      idempotencyKey: this.currentRpcIdempotencyKey,
-    };
-    this.currentVerifiedCaller = caller;
-    this.currentRpcCallerId = caller?.callerId ?? null;
-    this.currentRpcCallerKind = caller?.callerKind ?? null;
-    this.currentRpcCallerPanelId = caller?.callerPanelId ?? null;
-    this.currentRpcRequestId = message?.requestId ?? null;
-    this.currentRpcIdempotencyKey = envelope.delivery.idempotencyKey ?? null;
-    try {
-      return await connectionless.respond(envelope);
-    } finally {
-      this.currentVerifiedCaller = prev.verifiedCaller;
-      this.currentRpcCallerId = prev.callerId;
-      this.currentRpcCallerKind = prev.callerKind;
-      this.currentRpcCallerPanelId = prev.callerPanelId;
-      this.currentRpcRequestId = prev.requestId;
-      this.currentRpcIdempotencyKey = prev.idempotencyKey;
-    }
+    return this.withRpcCaller(caller, message, envelope, () => connectionless.respond(envelope));
   }
 
   protected handleWebSocketUpgrade(_request: Request): Response {
@@ -823,16 +801,39 @@ export abstract class DurableObjectBase {
   }
 
   private async withCaller(
-    caller: AuthenticatedCaller | null,
+    caller: AttestedCaller | null,
     callback: () => Promise<Response>
   ): Promise<Response> {
-    const previous = this.currentVerifiedCaller;
-    this.currentVerifiedCaller = caller;
-    try {
-      return await callback();
-    } finally {
-      this.currentVerifiedCaller = previous;
-    }
+    return this.invocationContext.run(
+      {
+        verifiedCaller: caller,
+        callerId: caller?.callerId ?? null,
+        callerKind: caller?.callerKind ?? null,
+        callerPanelId: caller?.callerPanelId ?? null,
+        requestId: null,
+        idempotencyKey: null,
+      },
+      callback
+    );
+  }
+
+  private async withRpcCaller<T>(
+    caller: AttestedCaller | null,
+    message: RpcRequest,
+    envelope: RpcEnvelope,
+    callback: () => Promise<T>
+  ): Promise<T> {
+    return this.invocationContext.run(
+      {
+        verifiedCaller: caller,
+        callerId: caller?.callerId ?? null,
+        callerKind: caller?.callerKind ?? null,
+        callerPanelId: caller?.callerPanelId ?? null,
+        requestId: message?.requestId ?? null,
+        idempotencyKey: envelope.delivery.idempotencyKey ?? null,
+      },
+      callback
+    );
   }
 }
 

@@ -22,8 +22,5 @@ describe("stateLayout", () => {
     expect(currentContextProjectionsPath(root)).toBe(layout.contextProjections.current);
     expect(layout.gitCheckoutsDir).toBe(gitCheckoutsPath(root));
     expect(layout.databases.workerdDoDir).toBe(path.join(root, ".databases", "workerd-do"));
-    expect(layout.units.metaApprovalGrantsFile).toBe(
-      path.join(root, "units", "meta-approval-grants.json")
-    );
   });
 });

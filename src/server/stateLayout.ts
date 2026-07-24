@@ -16,7 +16,6 @@ import { gitCheckoutsPath } from "@vibestudio/workspace/gitCheckouts";
 export function stateLayout(statePath: string) {
   const databases = path.join(statePath, ".databases");
   const contextProjectionsBase = contextProjectionsBasePath(statePath);
-  const units = path.join(statePath, "units");
   const authority = path.join(statePath, "authority");
   return {
     root: statePath,
@@ -38,10 +37,6 @@ export function stateLayout(statePath: string) {
     buildSourcesDir: path.join(statePath, "build-sources"),
     hostTargetSelectionsFile: path.join(statePath, "host-targets", "selections.json"),
     ownerPanelSeedsDir: path.join(statePath, "panel-tree", "seeded-owners"),
-    units: {
-      root: units,
-      metaApprovalGrantsFile: path.join(units, "meta-approval-grants.json"),
-    },
     authority: {
       root: authority,
       grantsDb: path.join(authority, "grants.db"),

@@ -38,6 +38,20 @@ declare global {
   var __vibestudioSourceRepo: string | undefined;
   /** Exact effective version for the source currently running. */
   var __vibestudioEffectiveVersion: string | null | undefined;
+  var __vibestudioBuildKey: string | null | undefined;
+  var __vibestudioPanelBoot:
+    | {
+        phase: "loading" | "booting" | "ready" | "failed";
+        startedAt: number;
+        updatedAt: number;
+        runtimeEntityId?: string | null;
+        source?: string | null;
+        contextId?: string | null;
+        effectiveVersion?: string | null;
+        buildKey?: string | null;
+        error?: { name: string; message: string; stack?: string };
+      }
+    | undefined;
   /** Environment variables */
   var __vibestudioEnv: Record<string, string> | undefined;
 }
@@ -68,6 +82,7 @@ const g = globalThis as unknown as {
   __vibestudioGatewayConfig?: GatewayConfig;
   __vibestudioSourceRepo?: string;
   __vibestudioEffectiveVersion?: string | null;
+  __vibestudioBuildKey?: string | null;
   __vibestudioEnv?: Record<string, string>;
 };
 

@@ -9,15 +9,13 @@ import {
   type HostAuthorityEffect,
   type ServiceContext,
 } from "@vibestudio/shared/serviceDispatcher";
-import { unitChangeSessionGrantKey, type UnitChangeApprovalProvider } from "@vibestudio/unit-host";
+import type { UnitChangeApprovalProvider } from "@vibestudio/unit-host";
 import { EMPTY_STATE_HASH } from "@vibestudio/content-addressing";
-import type { ApprovalQueue } from "./approvalQueue.js";
 import { mirrorWorktreeTree, putBytes } from "./blobstoreService.js";
 import {
   createMainAdvanceApprovalGate,
   createMainRefAdvanceGate,
   type MainAdvanceApprovalCandidate,
-  type MetaApprovalGrantStore,
   type RefAdvanceGateContext,
   type RepoDeletionApprovalCandidate,
   type SemanticAdvanceApprovalCandidate,
@@ -33,19 +31,6 @@ function tempStatePath(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-main-advance-"));
   roots.push(root);
   return root;
-}
-
-class MemoryGrantStore implements MetaApprovalGrantStore {
-  readonly grants = new Map<string, number>();
-
-  hasActive(key: string): boolean {
-    const expiresAt = this.grants.get(key);
-    return expiresAt !== undefined && expiresAt > Date.now();
-  }
-
-  grant(key: string, ttlMs: number): void {
-    this.grants.set(key, Date.now() + ttlMs);
-  }
 }
 
 const unit: UnitBatchEntry = {
@@ -80,24 +65,13 @@ function panelCaller() {
   });
 }
 
-function approvalQueue(decision: "once" | "session" | "version" | "deny") {
-  return {
-    request: vi.fn(async () => decision),
-  } as unknown as ApprovalQueue & { request: ReturnType<typeof vi.fn> };
-}
-
 function gateDeps(opts: { decision?: "once" | "session" | "version" | "deny" } = {}) {
-  const queue = approvalQueue(opts.decision ?? "once");
-  const grantStore = new MemoryGrantStore();
   const authorizeEffect = vi.fn(async (_ctx: ServiceContext, effect: HostAuthorityEffect) => {
     if ((opts.decision ?? "once") === "deny") {
       throw new Error(effect.challenge?.deniedReason ?? "Authority denied");
     }
   });
   return {
-    approvalQueue: queue,
-    grantStore,
-    grantTtlMs: 1000,
     authorizeEffect,
     getProviders: () => [] as UnitChangeApprovalProvider<UnitBatchEntry>[],
   };
@@ -121,28 +95,27 @@ describe("createMainAdvanceApprovalGate", () => {
     await gate.approve(candidate());
 
     expect(provider.unitChangeApprovalForCommit).toHaveBeenCalledWith("state:next");
-    expect(deps.approvalQueue.request).toHaveBeenCalledWith(
+    expect(deps.authorizeEffect).toHaveBeenCalledWith(
+      expect.objectContaining({ authorityAcquisition: "wait" }),
       expect.objectContaining({
-        kind: "unit-batch",
-        callerId: "panel-1",
-        callerKind: "panel",
-        repoPath: "panels/test",
-        effectiveVersion: "ev-panel",
-        trigger: "meta-change",
-        configWrite: {
-          repoPath: "meta",
-          summary: "meta/vibestudio.yml changed",
-        },
-        units: [unit],
+        capability: "workspace-main-advance",
+        resourceKey: "workspace-source-change:meta:main",
+        challenge: expect.objectContaining({
+          unitBatch: {
+            trigger: "meta-change",
+            configWrite: {
+              repoPath: "meta",
+              summary: "meta/vibestudio.yml changed",
+            },
+            units: [unit],
+          },
+        }),
       })
     );
-    expect(
-      deps.grantStore.hasActive(unitChangeSessionGrantKey("panel-1", "meta", "meta", "main"))
-    ).toBe(true);
     expect(provider.acceptPreapprovedTrust).toHaveBeenCalledWith(["identity:unit"]);
   });
 
-  it("does not re-prompt for the same preapproved meta identity on retry", async () => {
+  it("routes retries through canonical authority so its grant store decides reuse", async () => {
     const deps = gateDeps({ decision: "once" });
     const provider: UnitChangeApprovalProvider<UnitBatchEntry> = {
       unitChangeApprovalForCommit: vi.fn(async () => ({
@@ -160,7 +133,7 @@ describe("createMainAdvanceApprovalGate", () => {
     await gate.approve(cand);
     await gate.approve(cand);
 
-    expect(deps.approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(deps.authorizeEffect).toHaveBeenCalledTimes(2);
     expect(provider.acceptPreapprovedTrust).toHaveBeenCalledTimes(2);
   });
 
@@ -176,17 +149,18 @@ describe("createMainAdvanceApprovalGate", () => {
       candidate({ repoPath: "apps/shell", changedPaths: ["apps/shell/index.tsx"] })
     );
 
-    expect(deps.approvalQueue.request).toHaveBeenCalledWith(
+    expect(deps.authorizeEffect).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({
-        kind: "unit-batch",
-        callerId: "panel-1",
-        callerKind: "panel",
-        repoPath: "panels/test",
-        effectiveVersion: "ev-panel",
-        trigger: "source-change",
-        title: "Workspace extensions changed",
-        units: [unit],
-        configWrite: null,
+        resourceKey: "workspace-source-change:apps/shell:main",
+        challenge: expect.objectContaining({
+          title: "Workspace extensions changed",
+          unitBatch: {
+            trigger: "source-change",
+            units: [unit],
+            configWrite: null,
+          },
+        }),
       })
     );
     expect(provider.unitChangeApprovalForCommit).toHaveBeenCalledWith("state:next");
@@ -241,7 +215,6 @@ describe("createMainAdvanceApprovalGate", () => {
       })
     );
 
-    expect(deps.approvalQueue.request).not.toHaveBeenCalled();
     expect(deps.authorizeEffect).not.toHaveBeenCalled();
   });
 
@@ -253,7 +226,6 @@ describe("createMainAdvanceApprovalGate", () => {
     // meta paths only (the unreachable mixed-path summary branch was
     // deleted in P5b).
     const deps = gateDeps({ decision: "once" });
-    deps.grantStore.grant(unitChangeSessionGrantKey("panel-1", "meta", "meta", "main"), 1000);
     const gate = createMainAdvanceApprovalGate({
       ...deps,
       getProviders: () => [
@@ -268,13 +240,17 @@ describe("createMainAdvanceApprovalGate", () => {
       candidate({ changedPaths: ["meta/vibestudio.yml", "apps/shell/index.tsx"] })
     );
 
-    expect(deps.approvalQueue.request).toHaveBeenCalledWith(
+    expect(deps.authorizeEffect).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({
-        kind: "unit-batch",
-        configWrite: {
-          repoPath: "meta",
-          summary: "meta/vibestudio.yml changed",
-        },
+        challenge: expect.objectContaining({
+          unitBatch: expect.objectContaining({
+            configWrite: {
+              repoPath: "meta",
+              summary: "meta/vibestudio.yml changed",
+            },
+          }),
+        }),
       })
     );
   });
@@ -299,13 +275,13 @@ describe("createMainAdvanceApprovalGate", () => {
       })
     );
 
-    expect(deps.approvalQueue.request).not.toHaveBeenCalled();
     expect(deps.authorizeEffect).not.toHaveBeenCalled();
   });
 
   it("forwards the diff-review payload onto the workspace-main-advance prompt", async () => {
     const deps = gateDeps({ decision: "once" });
     const gate = createMainAdvanceApprovalGate(deps);
+    const signal = new AbortController().signal;
     const diffReview = [
       {
         repoPath: "apps/shell",
@@ -319,12 +295,24 @@ describe("createMainAdvanceApprovalGate", () => {
     ];
 
     await gate.approve(
-      candidate({ repoPath: "apps/shell", changedPaths: ["apps/shell/index.tsx"], diffReview })
+      candidate({
+        repoPath: "apps/shell",
+        changedPaths: ["apps/shell/index.tsx"],
+        diffReview,
+        signal,
+      })
     );
 
     expect(deps.authorizeEffect).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ challenge: expect.objectContaining({ diffReview }) })
+      expect.objectContaining({ authorityAcquisition: "wait", signal }),
+      expect.objectContaining({
+        resourceKey: "workspace-source-change:apps/shell:main",
+        challenge: expect.objectContaining({
+          dedupKey: "workspace-source-change:apps/shell:main:state:next",
+          resource: expect.objectContaining({ value: "apps/shell main" }),
+          diffReview,
+        }),
+      })
     );
   });
 
@@ -339,7 +327,7 @@ describe("createMainAdvanceApprovalGate", () => {
       ],
     });
 
-    await expect(gate.approve(candidate())).rejects.toThrow("Workspace config push denied");
+    await expect(gate.approve(candidate())).rejects.toThrow("Workspace main update denied");
   });
 
   it("rejects denied non-meta main advances", async () => {

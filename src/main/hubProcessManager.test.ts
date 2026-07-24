@@ -36,6 +36,7 @@ const CHILD_SERVER_ID = `srv_${"C".repeat(24)}`;
 const CHILD_SERVER_BOOT_ID = `boot_${"C".repeat(24)}`;
 const ISSUED_DEVICE_ID = `dev_${"D".repeat(24)}`;
 const ISSUED_REFRESH_TOKEN = "R".repeat(43);
+const BUILD_ID = "a".repeat(64);
 const RECORD = {
   gatewayPort: 5000,
   pid: 99_999_999,
@@ -43,6 +44,7 @@ const RECORD = {
   serverBootId: SERVER_BOOT_ID,
   startedAt: 1000,
   version: "1.2.3",
+  buildId: BUILD_ID,
 };
 const LEASE = {
   ownerBootId: RECORD.serverBootId,
@@ -98,6 +100,7 @@ function manager(
     ephemeralLifecycle: ephemeral ? (options.ephemeralLifecycle ?? "replace") : null,
     appRoot: "/tmp/app",
     appVersion: "1.2.3",
+    buildId: BUILD_ID,
     centralData: centralData as never,
     onCrash: vi.fn(),
   });
@@ -184,6 +187,7 @@ describe("HubProcessManager", () => {
       gatewayPort: 5000,
       pid: 42,
       version: "1.2.3",
+      buildId: BUILD_ID,
       workspaces: [],
     };
     expect(parseHubReadyFile(canonical)).toEqual(canonical);
@@ -227,6 +231,7 @@ describe("HubProcessManager", () => {
           gatewayPort: RECORD.gatewayPort,
           pid: RECORD.pid,
           version: RECORD.version,
+          buildId: RECORD.buildId,
         });
       }
       if (url.endsWith("/_r/s/auth/refresh-shell")) {
@@ -270,6 +275,52 @@ describe("HubProcessManager", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it("replaces a live hub built from a different server artifact", async () => {
+    let incumbentAlive = true;
+    vi.spyOn(process, "kill").mockImplementation(((pid, signal) => {
+      if (pid === RECORD.pid) {
+        if (signal === 0) {
+          if (incumbentAlive) return true;
+          throw Object.assign(new Error("not found"), { code: "ESRCH" });
+        }
+        if (signal === "SIGTERM") {
+          incumbentAlive = false;
+          return true;
+        }
+      }
+      throw new Error(`Unexpected signal ${String(signal)} for PID ${pid}`);
+    }) as typeof process.kill);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          ok: true,
+          mode: "hub",
+          serverId: RECORD.serverId,
+          serverBootId: RECORD.serverBootId,
+          gatewayPort: RECORD.gatewayPort,
+          pid: RECORD.pid,
+          version: RECORD.version,
+          buildId: "b".repeat(64),
+        })
+      )
+    );
+    const replacement = new EventEmitter() as EventEmitter & { pid: number; unref(): void };
+    replacement.pid = 42;
+    replacement.unref = () => undefined;
+    spawnMock.mockImplementation(() => {
+      setTimeout(() => replacement.emit("exit", 1), 0);
+      return replacement;
+    });
+
+    await expect(manager(makeCentralData()).attachOrSpawn()).rejects.toThrow(
+      "Local hub exited during startup"
+    );
+
+    expect(incumbentAlive).toBe(false);
+    expect(spawnMock).toHaveBeenCalledOnce();
+  });
+
   it("resumes the same ephemeral lifecycle during an internal Electron relaunch", async () => {
     credentialStore.loadDeviceCredentialByServerId.mockReturnValue({
       serverId: RECORD.serverId,
@@ -292,6 +343,7 @@ describe("HubProcessManager", () => {
             gatewayPort: RECORD.gatewayPort,
             pid: RECORD.pid,
             version: RECORD.version,
+            buildId: RECORD.buildId,
           });
         }
         if (url.endsWith("/_r/s/auth/refresh-shell")) {
@@ -350,6 +402,7 @@ describe("HubProcessManager", () => {
             gatewayPort: RECORD.gatewayPort,
             pid: RECORD.pid,
             version: RECORD.version,
+            buildId: RECORD.buildId,
           });
         }
         if (url.endsWith("/_r/s/auth/refresh-shell")) {
@@ -434,6 +487,7 @@ describe("HubProcessManager", () => {
           gatewayPort: RECORD.gatewayPort,
           pid: RECORD.pid,
           version: RECORD.version,
+          buildId: RECORD.buildId,
         })
       )
     );
@@ -456,6 +510,7 @@ describe("HubProcessManager", () => {
           gatewayPort: RECORD.gatewayPort,
           pid: RECORD.pid + 1,
           version: RECORD.version,
+          buildId: RECORD.buildId,
         })
       )
     );

@@ -32,7 +32,7 @@ function makePanelRecord(id: string): EntityRecord {
     source: { repoPath: "", effectiveVersion: "" },
     activeBuildKey: `build:${id}`,
     activeExecutionDigest: "a".repeat(64),
-    activeAuthority: { requests: [], evalCeilings: [] },
+    activeAuthority: { requests: [] },
     contextId: "",
     key: id,
     createdAt: Date.now(),
@@ -531,7 +531,7 @@ describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () =
           "mintAgentCredential",
           [{ entityId: "session:owned" }]
         )
-      ).rejects.toThrow(/no authority branch admits|missing-grant/i);
+      ).rejects.toThrow(/no authority branch admits|approval-required|missing-grant/i);
     }
     await expect(
       dispatcher.dispatch(

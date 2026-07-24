@@ -4,26 +4,22 @@ import { parseUnitAuthorityManifest } from "./authorityManifest.js";
 
 describe("unit authority manifest", () => {
   it("does not charge runtime-intrinsic extension lifecycle calls to authors", () => {
-    const authority = parseUnitAuthorityManifest({ requests: [], evalCeilings: [] });
+    const authority = parseUnitAuthorityManifest({ requests: [] });
     expect(authority.requests).toEqual([]);
   });
 
-  it("defaults omitted orthogonal sections to an empty, fail-closed envelope", () => {
+  it("requires the one canonical installed-code request section", () => {
     expect(parseUnitAuthorityManifest({ requests: [] })).toEqual({
       requests: [],
-      evalCeilings: [],
     });
-    expect(parseUnitAuthorityManifest({ evalCeilings: [] })).toEqual({
-      requests: [],
-      evalCeilings: [],
-    });
-    expect(() => parseUnitAuthorityManifest({})).toThrow(/requests or evalCeilings/);
+    expect(() => parseUnitAuthorityManifest({})).toThrow(/requests/);
+    expect(() => parseUnitAuthorityManifest({ evalCeilings: [] })).toThrow(/unknown field/);
     expect(() =>
       parseUnitAuthorityManifest({ requests: [], futureAuthority: [] })
     ).toThrow(/unknown field.*futureAuthority/);
   });
 
-  it("allows dynamic wildcard ceilings but requires exact installed requests", () => {
+  it("requires exact installed-code requests and rejects dynamic wildcard authority", () => {
     expect(() =>
       parseUnitAuthorityManifest({
         requests: [
@@ -34,29 +30,15 @@ describe("unit authority manifest", () => {
             evidence: "intentional-broad",
           },
         ],
-        evalCeilings: [],
       })
     ).toThrow(/Invalid capability pattern/);
 
-    expect(
+    expect(() =>
       parseUnitAuthorityManifest({
         requests: [],
-        evalCeilings: [
-          {
-            audience: "eval",
-            purpose: "agentic-code-execution",
-            capabilities: [
-              {
-                capability: "workspace-service:*",
-                resource: { kind: "prefix", prefix: "" },
-                tier: "gated",
-                evidence: "intentional-broad",
-              },
-            ],
-          },
-        ],
-      }).evalCeilings[0]?.capabilities[0]?.capability
-    ).toBe("workspace-service:*");
+        evalCeilings: [{ audience: "eval", capabilities: [] }],
+      })
+    ).toThrow(/unknown field/);
   });
 
   it("reports the exact malformed manifest field", () => {
@@ -70,7 +52,6 @@ describe("unit authority manifest", () => {
             evidence: "bounded-dynamic",
           },
         ],
-        evalCeilings: [],
       })
     ).toThrow(
       'vibestudio.authority.requests[0].tier must be "gated" or "critical"; RPC receiver tier "open" is not a manifest request tier'

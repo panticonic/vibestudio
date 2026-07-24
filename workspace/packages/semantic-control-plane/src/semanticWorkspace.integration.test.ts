@@ -5,6 +5,7 @@ import {
   vcsInspectResultSchema,
   vcsNeighborsResultSchema,
   type VcsProvenanceEdge,
+  type VcsStateNodeRef,
 } from "@vibestudio/service-schemas/vcs";
 import { createSemanticVcsSchema } from "./semanticVcsSchema.js";
 import {
@@ -30,6 +31,48 @@ function pending<T>(dispatch: SemanticDispatchResult): T {
   return dispatch.result as T;
 }
 
+async function expectListReadLineageParity(
+  semantic: SemanticWorkspace,
+  state: VcsStateNodeRef,
+  repositoryId: string
+): Promise<void> {
+  const listed = await semantic.dispatch("listFiles", {
+    ingress,
+    input: { state, repositoryId, limit: 500 },
+  });
+  if (listed.kind !== "complete") throw new Error("listFiles did not complete");
+  const files = (
+    listed.result as {
+      files: Array<{
+        fileId: string;
+        authoredChangeId: string;
+        authoredByWorkUnitId: string;
+        contentClass: "internal" | "external";
+        externalKeys: string[];
+      }>;
+    }
+  ).files;
+  expect(files.length).toBeGreaterThan(0);
+  for (const file of files) {
+    const read = await semantic.dispatch("readFile", {
+      ingress,
+      input: {
+        state,
+        repositoryId,
+        file: { kind: "id", fileId: file.fileId },
+      },
+    });
+    if (read.kind !== "host-read") throw new Error("readFile did not request an exact host read");
+    expect(read.request).toMatchObject({
+      fileId: file.fileId,
+      authoredChangeId: file.authoredChangeId,
+      authoredByWorkUnitId: file.authoredByWorkUnitId,
+      contentClass: file.contentClass,
+      externalKeys: file.externalKeys,
+    });
+  }
+}
+
 describe("SemanticWorkspace derived integration prerequisites", () => {
   it("derives ordered blockers once and enforces them through compare, integrate, commit, and push", async () => {
     const sql = await createInMemorySql();
@@ -52,25 +95,27 @@ describe("SemanticWorkspace derived integration prerequisites", () => {
     );
     const store = new SemanticVcsStore(sql, () => timestamp);
     let transactionOrdinal = 0;
-    const semantic = new SemanticWorkspace({
-      workspaceId: "workspace:test",
-      sql,
-      store,
-      now: () => timestamp,
-      transaction: <T>(fn: () => T): T => {
-        const savepoint = `integration_test_${transactionOrdinal++}`;
-        sql.exec(`SAVEPOINT ${savepoint}`);
-        try {
-          const result = fn();
-          sql.exec(`RELEASE ${savepoint}`);
-          return result;
-        } catch (error) {
-          sql.exec(`ROLLBACK TO ${savepoint}`);
-          sql.exec(`RELEASE ${savepoint}`);
-          throw error;
-        }
-      },
-    });
+    const createSemantic = () =>
+      new SemanticWorkspace({
+        workspaceId: "workspace:test",
+        sql,
+        store,
+        now: () => timestamp,
+        transaction: <T>(fn: () => T): T => {
+          const savepoint = `integration_test_${transactionOrdinal++}`;
+          sql.exec(`SAVEPOINT ${savepoint}`);
+          try {
+            const result = fn();
+            sql.exec(`RELEASE ${savepoint}`);
+            return result;
+          } catch (error) {
+            sql.exec(`ROLLBACK TO ${savepoint}`);
+            sql.exec(`RELEASE ${savepoint}`);
+            throw error;
+          }
+        },
+      });
+    const semantic = createSemantic();
     const acknowledge = (dispatch: SemanticDispatchResult): void => {
       if (dispatch.kind !== "effects-pending") throw new Error("mutation has no effect");
       for (const effect of dispatch.effects) {
@@ -192,6 +237,11 @@ describe("SemanticWorkspace derived integration prerequisites", () => {
     if (repository?.presence !== "present") throw new Error("fixture repository is absent");
     const fileId = store.facts.pageManifest(repository.fileManifestId, { limit: 1 }).values[0]!
       .fileId;
+    await expectListReadLineageParity(
+      semantic,
+      { kind: "event", eventId: imported.eventId },
+      repositoryId
+    );
 
     const firstDispatch = await semantic.dispatch("edit", {
       ingress,
@@ -286,6 +336,7 @@ describe("SemanticWorkspace derived integration prerequisites", () => {
       changeIds: string[];
     }>(sourceMoveDispatch);
     acknowledge(sourceMoveDispatch);
+    await expectListReadLineageParity(semantic, sourceMove.workingHead, repositoryId);
     const sourceCommitDispatch = await semantic.dispatch("commit", {
       ingress,
       input: {
@@ -676,6 +727,7 @@ describe("SemanticWorkspace derived integration prerequisites", () => {
       presence: "present",
       repoPath: "packages/fixture-renamed",
     });
+    await expectListReadLineageParity(semantic, adoptRepositoryMove.workingHead, repositoryId);
     const resolvedCompare = await semantic.dispatch("compare", {
       ingress,
       input: {
@@ -748,5 +800,7 @@ describe("SemanticWorkspace derived integration prerequisites", () => {
         .filter((candidate) => unchangedRepositoryIds.includes(candidate.repositoryId))
         .every((candidate) => candidate.source.kind === "snapshot")
     ).toBe(true);
+    const restarted = createSemantic();
+    await expectListReadLineageParity(restarted, integrationCommit.event, repositoryId);
   });
 });

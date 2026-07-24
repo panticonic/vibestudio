@@ -8,11 +8,7 @@ import type {
 } from "@vibestudio/credential-client/types";
 import type { ApprovalDecisionId } from "./approvalContract.js";
 import type { InvocationSnapshot } from "@vibestudio/rpc";
-import type {
-  EvalAuthorityCeiling,
-  EvalCeilingPurpose,
-  UnitAuthorityRequest,
-} from "./authorityManifest.js";
+import type { UnitAuthorityRequest } from "./authorityManifest.js";
 
 export type ApprovalDecision = ApprovalDecisionId;
 export type ApprovalConfigFieldType = "text" | "secret";
@@ -130,6 +126,47 @@ export const userlandApprovalRequestSchema = z
     }
   });
 
+export const userlandApprovalChoiceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("choice"), choice: z.string() }).strict(),
+  z.object({ kind: z.literal("dismissed") }).strict(),
+  z
+    .object({
+      kind: z.literal("uncallable"),
+      reason: z.literal("no-user-context"),
+    })
+    .strict(),
+]);
+
+export const userlandApprovalGrantSchema = z
+  .object({
+    principal: z
+      .object({
+        callerId: z.string(),
+        callerKind: z.enum(["panel", "app", "worker", "do", "extension"]),
+        repoPath: z.string().optional(),
+        effectiveVersion: z.string().optional(),
+      })
+      .strict(),
+    issuer: z
+      .object({
+        kind: z.enum(["panel", "app", "worker", "do", "extension"]),
+        id: z.string(),
+        label: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    subject: z
+      .object({
+        id: z.string(),
+        label: z.string().optional(),
+      })
+      .strict(),
+    choice: z.string(),
+    grantedAt: z.number(),
+    scope: z.enum(["caller", "session", "version"]).optional(),
+  })
+  .strict();
+
 export type ApprovalRequesterKind = "panel" | "app" | "worker" | "do" | "extension" | "system";
 
 export type ApprovalRequesterCategory =
@@ -207,6 +244,15 @@ export interface ApprovalOperationDescriptor {
   };
   /** Lets related low-level prompts collapse around one user-recognizable operation. */
   groupKey?: string;
+}
+
+/** Host-verified description of the exact prepared effect a decision covers. */
+export interface OperationSubstance {
+  kind: "change-set" | "send" | "deletion" | "custom";
+  summary: string;
+  detail?: string;
+  /** Must equal the prepared-state digest sealed into the invocation snapshot. */
+  digest: string;
 }
 
 export type ApprovalResourceScope =
@@ -496,6 +542,10 @@ export interface PendingCapabilityApproval extends PendingApprovalBase {
   cardType?: "permission.gated" | "permission.outside" | "confirm.critical";
   /** Host-derived decisions this exact authority request can meaningfully mint. */
   allowedDecisions?: ApprovalDecision[];
+  /** Canonical server-side projection used by every authority surface. */
+  authorityRow?: import("./authority/authorityRows.js").AuthorityRow;
+  /** Exact receiver-prepared effect shown separately from the authority row. */
+  operationSubstance?: OperationSubstance;
 }
 
 export type BrowserSitePermissionCapability =
@@ -559,41 +609,8 @@ export interface UnitBatchEntry {
   /** Exact, version-bound manifest review plus human-oriented change groups. */
   authority?: {
     requests: readonly UnitAuthorityRequest[];
-    evalCeilings: readonly EvalAuthorityCeiling[];
-    groups: Array<{
-      id: string;
-      label: string;
-      description: string;
-      requestCount: number;
-      addedCount: number;
-      items: Array<{
-        capability: string;
-        title: string;
-        description: string;
-        added: boolean;
-      }>;
-    }>;
-    removedCount: number;
-    /** Authority this version may expose to evaluated code. It is reviewed in
-     * the same decision, but remains a ceiling rather than a grant. */
-    eval: Array<{
-      purpose: EvalCeilingPurpose;
-      label: string;
-      groups: Array<{
-        id: string;
-        label: string;
-        description: string;
-        requestCount: number;
-        addedCount: number;
-        items: Array<{
-          capability: string;
-          title: string;
-          description: string;
-          added: boolean;
-        }>;
-      }>;
-      removedCount: number;
-    }>;
+    rows: import("./authority/authorityRows.js").AuthorityRow[];
+    diff: import("./authority/authorityRowDiff.js").AuthorityRowDiff;
   };
   dependencyEvs?: Record<string, string>;
   externalDeps?: Record<string, string>;
@@ -624,6 +641,38 @@ export interface PendingUnitBatchApproval extends PendingApprovalBase {
   units: UnitBatchEntry[];
   /** Present on `meta-change`: the workspace-config write this state advance performs. */
   configWrite?: { repoPath: string; summary: string } | null;
+}
+
+/**
+ * Review of one content-addressed unattended mission closure. The permission
+ * section is the same AuthorityRow/AuthorityRowDiff projection used by unit
+ * review, JIT approval, and Permissions; charter mechanics stay typed side
+ * sections rather than becoming a second permission language.
+ */
+export interface PendingMissionReviewApproval extends PendingApprovalBase {
+  kind: "mission-review";
+  missionId: string;
+  revision: number;
+  closureDigest: string;
+  reviewKind: "draft" | "revision" | "out-of-charter";
+  title: string;
+  taskSummary: string;
+  triggerSummary: string;
+  authority: {
+    rows: import("./authority/authorityRows.js").AuthorityRow[];
+    diff: import("./authority/authorityRowDiff.js").AuthorityRowDiff;
+  };
+  toolkitDomains: import("./authority/capabilityDomains.js").AuthorityDomainId[];
+  networkSummary: string;
+  lineageSummary: string;
+  charter: import("./authority/mission.js").MissionCharter;
+  charterChanges: Array<{
+    field: "task" | "schedule" | "toolkit" | "network" | "data-flow" | "model";
+    before?: string;
+    after: string;
+    widening: boolean;
+  }>;
+  blockedAt?: number;
 }
 
 export interface PendingClientConfigField {
@@ -815,6 +864,7 @@ export type PendingApproval =
   | PendingCredentialApproval
   | PendingCapabilityApproval
   | PendingUnitBatchApproval
+  | PendingMissionReviewApproval
   | PendingClientConfigApproval
   | PendingCredentialInputApproval
   | PendingSecretInputApproval

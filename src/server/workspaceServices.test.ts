@@ -6,6 +6,11 @@ import {
 import { GAD_WORKSPACE_SERVICE_PROTOCOL } from "@vibestudio/shared/workspaceServiceRpc";
 import { resolveWorkspaceService } from "./workspaceServices.js";
 
+const TEST_WORKSPACE_SERVICE_PRESENTATION = {
+  action: "use the test service",
+  presentation: { domain: "automation" as const, verb: "act" as const },
+};
+
 function makeDecls(opts: { withSingleton?: boolean }): WorkspaceDeclarations {
   const singletons = new SingletonRegistry(
     opts.withSingleton
@@ -18,6 +23,7 @@ function makeDecls(opts: { withSingleton?: boolean }): WorkspaceDeclarations {
       {
         source: "workers/example-store",
         name: "channel",
+        ...TEST_WORKSPACE_SERVICE_PRESENTATION,
         protocols: ["example.store.v1"],
         authority: { principals: ["code", "user", "host"] },
         durableObject: { className: "ExampleStoreDO" },
@@ -94,9 +100,10 @@ describe("sealed semantic control-plane services", () => {
       title: "Workspace history",
       description: "Read or update your workspace's collaboration and version history.",
       action: "read or update your workspace's collaboration history",
+      presentation: { domain: "files", verb: "manage" },
       protocols: [GAD_WORKSPACE_SERVICE_PROTOCOL],
       source: "vibestudio/internal",
-      authority: { principals: ["host", "user", "code"] },
+      authority: { principals: ["host", "user", "code", "session", "mission"] },
       className: "GadWorkspaceDO",
       objectKey: "workspace-semantic-control-plane",
       targetId: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",

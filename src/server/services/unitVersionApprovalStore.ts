@@ -91,11 +91,7 @@ export class UnitVersionApprovalStore {
 
 function authorityDigest(authority: UnitAuthorityManifest): string {
   // The complete reviewed contract is load-bearing. In particular, approving
-  // direct requests must never silently approve a later/unreviewed eval ceiling.
-  return sha256Canonical({
-    requests: authority.requests,
-    evalCeilings: authority.evalCeilings,
-  });
+  return sha256Canonical({ requests: authority.requests });
 }
 
 function identityKey(

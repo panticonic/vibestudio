@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { createTypedServiceClient, defineServiceMethods } from "./typedServiceClient.js";
+import {
+  createTypedServiceClient,
+  defineServiceMethods,
+  preparedAuthoritySelectorKey,
+} from "./typedServiceClient.js";
 
 const methods = defineServiceMethods({
   ping: { args: z.tuple([]), returns: z.literal("pong") },
@@ -66,5 +70,29 @@ describe("createTypedServiceClient", () => {
       units: { args: z.tuple([]) },
     });
     expect(() => createTypedServiceClient("demo", colliding, async () => null)).toThrow(/collides/);
+  });
+});
+
+describe("preparedAuthoritySelectorKey", () => {
+  it("accepts exact capabilities and colon-terminated namespaces", () => {
+    expect(preparedAuthoritySelectorKey({ capability: "workspace.read" })).toBe(
+      "capability:workspace.read"
+    );
+    expect(preparedAuthoritySelectorKey({ capabilityPrefix: "workspace-service:" })).toBe(
+      "prefix:workspace-service:"
+    );
+  });
+
+  it("rejects empty, broad, and ambiguous selectors", () => {
+    expect(() => preparedAuthoritySelectorKey({ capability: "" })).toThrow(/must not be empty/);
+    expect(() => preparedAuthoritySelectorKey({ capabilityPrefix: "workspace-service" })).toThrow(
+      /end with ':'/
+    );
+    expect(() =>
+      preparedAuthoritySelectorKey({
+        capability: "workspace.read",
+        capabilityPrefix: "workspace:",
+      } as never)
+    ).toThrow(/exactly one/);
   });
 });

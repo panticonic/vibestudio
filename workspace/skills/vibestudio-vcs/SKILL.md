@@ -103,7 +103,14 @@ its expected working head, use a new command ID.
 
 Branch on typed error codes. On `RevisionChanged`, call `status`, re-read the
 affected facts, and re-plan from the returned working head. Never parse a
-message string to choose recovery.
+message string to choose recovery. A workspace-dev scaffold wrapper reports a
+post-commit push refusal as `scaffold_publication_failed`; inspect its nested
+typed VCS code and exact retry policy, and do not rerun repository creation.
+`fixed-code-not-requested` names the installed caller whose own manifest lacks
+the publication request. Do not add that capability to the repository being
+published: a target panel/package manifest cannot authorize the agent or worker
+performing the push. Use a caller that declares `workspace-main-advance`, or
+stop and repair that caller's manifest before retrying.
 
 ## Discover exact call shapes
 

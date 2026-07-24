@@ -164,7 +164,6 @@ interface AppAvailablePayload {
   effectiveVersion: string | null;
   executionDigest: string | null;
   authorityRequests: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
-  authorityEvalCeilings: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityCeiling[];
   previousBuildKey: string | null;
   previousEffectiveVersion: string | null;
   canRollback: boolean;
@@ -296,7 +295,7 @@ interface ApprovalQueueLike {
     description: string;
     units: PendingUnitBatchApproval["units"];
     configWrite?: PendingUnitBatchApproval["configWrite"];
-  }): Promise<"once" | "session" | "version" | "deny" | "dismiss">;
+  }): Promise<"once" | "task" | "agent" | "lock" | "session" | "version" | "deny" | "dismiss">;
   listPending(): PendingApproval[];
 }
 
@@ -428,9 +427,16 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
         this.emitStatus(node.name, "error", message),
       approvalEntry: (node, decl) => this.buildBatchEntry(node, decl),
       requestApproval: (entries, trigger) =>
-        requestUnitBatchApproval({
+        requestUnitBatchApproval<
+          "app",
+          UnitBatchEntry,
+          NonNullable<PendingUnitBatchApproval["configWrite"]>
+        >({
           descriptor: APP_UNIT_DESCRIPTOR,
-          approvalQueue: this.deps.approvalQueue,
+          approvalQueue: {
+            request: async (request) =>
+              requireUnitApprovalDecision(await this.deps.approvalQueue.request(request)),
+          },
           entries,
           trigger,
         }),
@@ -625,9 +631,8 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
       const previousAuthority = active?.activeBundleKey
         ? (this.deps.buildSystem.getBuildByKey?.(active.activeBundleKey)?.metadata.authority ?? {
             requests: [],
-            evalCeilings: [],
           })
-        : { requests: [], evalCeilings: [] };
+        : { requests: [] };
       units.push({
         ...createUnitBatchEntryBase({
           unitKind: "app",
@@ -1526,7 +1531,6 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
       effectiveVersion: entry.activeEv,
       executionDigest: build?.metadata.execution?.executionDigest ?? null,
       authorityRequests: build?.metadata.authority?.requests ?? [],
-      authorityEvalCeilings: build?.metadata.authority?.evalCeilings ?? [],
       previousBuildKey: opts.previousBuildKey ?? null,
       previousEffectiveVersion: opts.previousEffectiveVersion ?? null,
       canRollback: entry.previousVersions.length > 0,
@@ -1963,7 +1967,6 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
       {
         executionDigest: build.metadata.execution?.executionDigest,
         authorityRequests: build.metadata.authority?.requests,
-        authorityEvalCeilings: build.metadata.authority?.evalCeilings,
       },
       `app ${entry.name} build ${entry.activeBundleKey}`
     );
@@ -2008,9 +2011,8 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
     const previousAuthority = active?.activeBundleKey
       ? (this.deps.buildSystem.getBuildByKey?.(active.activeBundleKey)?.metadata.authority ?? {
           requests: [],
-          evalCeilings: [],
         })
-      : { requests: [], evalCeilings: [] };
+      : { requests: [] };
     return {
       ...createUnitBatchEntryBase({
         unitKind: "app",
@@ -2387,6 +2389,21 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
   }
 }
 
+function requireUnitApprovalDecision(
+  decision: Awaited<ReturnType<ApprovalQueueLike["request"]>>
+): import("@vibestudio/unit-host").UnitApprovalDecision {
+  if (
+    decision === "once" ||
+    decision === "session" ||
+    decision === "version" ||
+    decision === "deny" ||
+    decision === "dismiss"
+  ) {
+    return decision;
+  }
+  throw new Error(`Invalid ${decision} decision for a workspace-unit approval`);
+}
+
 function buildProviderIdentityValue(provider: AppBuildProviderDetails): string {
   return [provider.activeEv ?? "", provider.activeBuildKey ?? "", provider.contractVersion].join(
     ":"
@@ -2403,7 +2420,6 @@ function launchReadyResult(
     | "effectiveVersion"
     | "executionDigest"
     | "authorityRequests"
-    | "authorityEvalCeilings"
     | "adoptionPolicy"
   >
 ): HostTargetLaunchResult {
@@ -2424,7 +2440,6 @@ function launchReadyResult(
     effectiveVersion: available.effectiveVersion,
     executionDigest: available.executionDigest,
     authorityRequests: available.authorityRequests,
-    authorityEvalCeilings: available.authorityEvalCeilings,
     adoptionPolicy: available.adoptionPolicy,
   };
 }

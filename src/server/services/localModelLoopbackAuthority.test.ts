@@ -69,7 +69,6 @@ describe("LocalModelLoopbackAuthority", () => {
             resource: { kind: "exact" as const, key: "local-models" },
           },
         ],
-        evalCeilings: [],
       }),
       codeApproved: true as const,
     };
@@ -144,7 +143,6 @@ function agentCaller() {
           resource: { kind: "exact", key: "local-models" },
         },
       ],
-      evalCeilings: [],
     }),
     codeApproved: true as const,
   };

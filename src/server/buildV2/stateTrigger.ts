@@ -287,7 +287,7 @@ export class StateTransitionTrigger extends EventEmitter {
       stateHash: event.workspaceStateHash,
     });
 
-    await this.buildChanged(
+    this.prewarmChanged(
       [...changeset.changed, ...changeset.added],
       this.graph,
       result.evMap,
@@ -329,13 +329,36 @@ export class StateTransitionTrigger extends EventEmitter {
       stateHash: event.workspaceStateHash,
     });
 
-    await this.buildChanged(
+    this.prewarmChanged(
       [...changeset.changed, ...changeset.added],
       newGraph,
       result.evMap,
       event,
       sourceUnitName ?? null
     );
+  }
+
+  /**
+   * Cache warming is downstream work, not state-transition settlement.
+   *
+   * Graph/EV publication must become observable immediately after its exact
+   * immutable state is indexed. Callers such as resolveBuildUnit can then
+   * request the one unit they need; waiting for every speculative changed-unit
+   * build here creates a head-of-line block where a single slow build makes a
+   * newly published unit appear unresolved forever. buildUnit is
+   * content-addressed and coalesced, so an on-demand request safely joins the
+   * same background build.
+   */
+  private prewarmChanged(
+    names: string[],
+    graph: PackageGraph,
+    evMap: EffectiveVersionMap,
+    trigger: ProtectedPublicationEvent,
+    sourceUnitName: string | null
+  ): void {
+    void this.buildChanged(names, graph, evMap, trigger, sourceUnitName).catch((error) => {
+      console.error("[StateTrigger] Unexpected cache-warming failure:", error);
+    });
   }
 
   private async buildChanged(

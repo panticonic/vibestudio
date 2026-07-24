@@ -20,6 +20,7 @@ import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/service-schemas/g
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { createHostCaller } from "@vibestudio/shared/serviceDispatcher";
+import { parseDoTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 import { isCallerKind } from "@vibestudio/shared/principalKinds";
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
@@ -432,7 +433,7 @@ async function main() {
   const workspacePath = workspace.path;
   const workspaceConfig = workspace.config;
   const statePath = workspace.statePath;
-  const { createCapabilityPresentationResolver } =
+  const { createCapabilityPresentationResolver, summarizeAuthorityRequests } =
     await import("@vibestudio/shared/authorityPresentation");
   const { PRODUCT_WORKSPACE_SERVICES } =
     await import("@vibestudio/shared/productWorkspaceServices.mjs");
@@ -553,14 +554,8 @@ async function main() {
       return env;
     }
     if (className === "BrowserDataDO") {
-      const broker = workspaceProviderExtensionPackageName(workspaceConfig, "browserData");
       const declared = workspaceConfig.providers?.browserData?.extension;
-      return broker && declared
-        ? {
-            BROWSER_DATA_BROKER_ID: broker,
-            BROWSER_DATA_BROKER_SOURCE: workspaceExtensionRepoPath(declared),
-          }
-        : {};
+      return declared ? { BROWSER_DATA_BROKER_SOURCE: workspaceExtensionRepoPath(declared) } : {};
     }
     return {};
   };
@@ -712,10 +707,18 @@ async function main() {
   const credentialUseGrantStore = new CredentialUseGrantStore({ statePath });
   const { CapabilityGrantStore } = await import("./services/capabilityGrantStore.js");
   const capabilityGrantStore = new CapabilityGrantStore({ statePath });
-  const { ContextIntegrityStore, createContextIngestionRecorder, recordContextIngestionForCaller } =
-    await import("./services/contextIntegrityStore.js");
+  const { AgentExecutionSessionRegistry } =
+    await import("./services/agentExecutionSessionRegistry.js");
+  const agentExecutionSessions = new AgentExecutionSessionRegistry();
+  const {
+    ContextIntegrityStore,
+    createContextIngestionBatchRecorder,
+    createContextIngestionRecorder,
+    recordContextIngestionForCaller,
+  } = await import("./services/contextIntegrityStore.js");
   const contextIntegrityStore = new ContextIntegrityStore({ statePath });
   const recordContextIngestion = createContextIngestionRecorder(contextIntegrityStore);
+  const recordContextIngestionBatch = createContextIngestionBatchRecorder(contextIntegrityStore);
   const { ConduitBlessingStore } = await import("./services/conduitBlessingStore.js");
   const conduitBlessingStore = new ConduitBlessingStore({ statePath });
   const { MissionRegistry } = await import("./services/missionRegistry.js");
@@ -760,13 +763,17 @@ async function main() {
     },
     resolveTitle: (entityId) => resolveApprovalCallerTitle(approvalRequesterDeps, entityId),
     resolveRequester: (input) => resolveApprovalRequester(approvalRequesterDeps, input),
-    autoApprove:
-      process.env["NODE_ENV"] === "development" && process.env["VIBESTUDIO_AUTO_APPROVE"] === "1",
   });
   const { AcquisitionCoordinator } = await import("./services/acquisitionCoordinator.js");
   const acquisitionCoordinator = new AcquisitionCoordinator({
     approvalQueue,
     grantStore: capabilityGrantStore,
+    notifyOwner: async (ownerRuntimeId, acquisitionId) => {
+      const ref = parseDoTargetId(ownerRuntimeId);
+      const doDispatch = resolvedDoDispatchForTitles;
+      if (!ref || !doDispatch) return;
+      await doDispatch.dispatch(ref, "onAuthorityChanged", acquisitionId);
+    },
   });
   const { UnitVersionApprovalStore } = await import("./services/unitVersionApprovalStore.js");
   const unitVersionApprovalStore = new UnitVersionApprovalStore({ statePath });
@@ -775,7 +782,6 @@ async function main() {
     approvalQueue,
     delayMs: 250,
     autoPublishStartup: false,
-    autoApproveStartupUnits: process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] === "1",
   });
   const requireMobileReady =
     args.requireMobileReady || process.env["VIBESTUDIO_REQUIRE_MOBILE_READY"] === "1";
@@ -868,10 +874,11 @@ async function main() {
       },
     });
   };
-  // In pnpm dev mode, the app runs from a throwaway workspace copied from
-  // `<appRoot>/workspace`. Mirror committed workspace changes back to that
-  // template so edits made in the generated workspace persist into the source
-  // checkout.
+  // The supervisor designates exactly one source-coupled developer instance.
+  // Its committed workspace changes are mirrored back to `<appRoot>/workspace`
+  // so interactive source development persists. Named and ephemeral peers are
+  // isolated test/runtime instances: their publications must never mutate the
+  // checkout template or leak into another hub's next bootstrap.
   const templateDir = path.join(appRoot, "workspace");
   const isPnpmDevMode = process.env["NODE_ENV"] === "development";
   const hasDevTemplate = fs.existsSync(path.join(templateDir, "meta", "vibestudio.yml"));
@@ -881,6 +888,7 @@ async function main() {
   // template source checkout. Hooked onto publication effects below.
   const devTemplateMirrorDir =
     isPnpmDevMode &&
+    process.env["VIBESTUDIO_SOURCE_INSTANCE"] === "1" &&
     process.env["VIBESTUDIO_DISABLE_DEV_TEMPLATE_MIRROR"] !== "1" &&
     workspaceIsEphemeral &&
     hasDevTemplate &&
@@ -1337,8 +1345,49 @@ async function main() {
     request: (input) => acquisitionCoordinator.request(input),
     acquire: (input, signal) => acquisitionCoordinator.requestAndWait(input, signal),
     consume: (grantId) => acquisitionCoordinator.consume(grantId),
+    touch: (grantId) => acquisitionCoordinator.touch(grantId),
+    priorInteractiveApprovalCount: (input) =>
+      capabilityGrantStore.priorInteractiveApprovalCount(input),
     invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
       acquisitionCoordinator.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
+    proposeMissionRevision: ({ snapshot, tier, resource }) => {
+      if (snapshot.mission === "-") {
+        throw new Error("Mission revision proposal requires a mission-bound invocation");
+      }
+      const mission = missionRegistry.proposePermissionRevision({
+        sessionId: snapshot.sessionId,
+        service: snapshot.service,
+        method: snapshot.method,
+        capability: snapshot.capability,
+        resource,
+        tier,
+      });
+      void import("./services/missionService.js")
+        .then(({ reviewMission }) =>
+          reviewMission(
+            {
+              registry: missionRegistry,
+              approvalQueue,
+              capabilityGrants: capabilityGrantStore,
+              describeCapability,
+              contextIntegrityReady: () => contextIntegrityStore.isCutoverComplete(),
+            },
+            mission,
+            mission.owner.userId,
+            {
+              reviewKind: "out-of-charter",
+              blockedAt: Date.now(),
+              declinedRestriction: {
+                capability: snapshot.capability,
+                resourceKey: snapshot.resourceKey,
+              },
+            }
+          )
+        )
+        .catch((error) => {
+          console.error("[Mission] Could not publish revision review:", error);
+        });
+    },
   });
   const container = new ServiceContainer(dispatcher);
   const getEntityStore = (): import("./workspaceEntityStore.js").WorkspaceEntityStore =>
@@ -1637,12 +1686,9 @@ async function main() {
   });
   {
     const { createVcsService } = await import("./services/vcsService.js");
-    const { createMainAdvanceApprovalGate, createMainRefAdvanceGate, FileMetaApprovalGrantStore } =
+    const { createMainAdvanceApprovalGate, createMainRefAdvanceGate } =
       await import("./services/mainAdvanceApproval.js");
     const mainAdvanceGate = createMainAdvanceApprovalGate({
-      approvalQueue,
-      grantStore: new FileMetaApprovalGrantStore({ statePath }),
-      grantTtlMs: 4 * 60 * 60 * 1000,
       authorizeEffect: (ctx, effect) => dispatcher.authorizeHostEffect(ctx, effect),
       hasAppCapability: (callerId, capability) =>
         appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
@@ -1819,7 +1865,6 @@ async function main() {
     createShellApprovalService({
       approvalQueue,
       deviceLabelFor: (deviceId) => identityDb.getDevice(deviceId)?.label,
-      capabilityGrantStore,
     })
   );
   const { BrowserPermissionGrantStore, createBrowserPermissionsService } =
@@ -1953,6 +1998,9 @@ async function main() {
     container.registerRpc(
       createMissionService({
         registry: missionRegistry,
+        approvalQueue,
+        capabilityGrants: capabilityGrantStore,
+        describeCapability,
         contextIntegrityReady: () => contextIntegrityStore.isCutoverComplete(),
       })
     );
@@ -2023,6 +2071,14 @@ async function main() {
           doDispatch,
           entityStore: ensureEntityStore(doDispatch),
           tokenManager,
+          workspaceId,
+          executionSessions: agentExecutionSessions,
+          missionFactForSession: (sessionId) => missionRegistry.factForSession(sessionId),
+          isSystemTestHarness: (caller, runId) =>
+            runId.startsWith("system-test-runner:") &&
+            caller.code?.repoPath === "workers/system-test-runner" &&
+            Boolean(caller.code.executionDigest) &&
+            conduitBlessingStore.isBlessed(caller.code),
           activity: activityRegistry,
           recoverUnresponsiveSandbox: ({ runId, timeoutMs }) =>
             workerdManager.recoverUnresponsiveSandbox(
@@ -2171,12 +2227,17 @@ async function main() {
             buildKey: build.buildKey,
             executionDigest,
             authorityRequests: authority.requests,
-            authorityEvalCeilings: authority.evalCeilings,
           };
         };
         runtimeResult = createRuntimeService({
           entityStore: ensureEntityStore(doDispatch),
           contextFolders: contextFolderManager,
+          onContextCreated: ({ contextId, ownerContextId, testPolicy }) => {
+            agentExecutionSessions.inheritTestContext(contextId, ownerContextId);
+            if (testPolicy) {
+              agentExecutionSessions.attachCasePolicy(contextId, ownerContextId, testPolicy);
+            }
+          },
           // GAD-owned semantic context lifecycle for runtime entities.
           semanticContexts: {
             ensureContext: async (contextId) => {
@@ -2225,7 +2286,6 @@ async function main() {
                   buildKey,
                   executionDigest,
                   authorityRequests: authority.requests,
-                  authorityEvalCeilings: authority.evalCeilings,
                 };
               }
               const binding = await buildSystem.bindRuntimeImage(source, ref);
@@ -2234,7 +2294,6 @@ async function main() {
                 buildKey: binding.buildKey,
                 executionDigest: binding.executionDigest,
                 authorityRequests: binding.authorityRequests,
-                authorityEvalCeilings: binding.authorityEvalCeilings,
               };
             },
             resolveAppExecution: ({ source, ref }) => resolveBuildExecution(source, ref),
@@ -2519,6 +2578,7 @@ async function main() {
           request: (input) => acquisitionCoordinator.request(input),
           acquire: (input, signal) => acquisitionCoordinator.requestAndWait(input, signal),
           consume: (grantId) => acquisitionCoordinator.consume(grantId),
+          touch: (grantId) => acquisitionCoordinator.touch(grantId),
           invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
             acquisitionCoordinator.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
         },
@@ -2526,6 +2586,8 @@ async function main() {
         egressProxy,
         fsService,
         entityCache,
+        executionSessionForRuntime: (runtimeId) => agentExecutionSessions.resolve(runtimeId),
+        testPolicyForContext: (contextId) => agentExecutionSessions.testPolicyForContext(contextId),
         connectionGrants,
         // Resolves each authenticated caller's account subject (WP0 §5.2/§5.5).
         userSubjectSource,
@@ -2536,7 +2598,7 @@ async function main() {
         describeCapability,
         missionFactForSession: (sessionId) => missionRegistry.factForSession(sessionId),
         contextIntegrityFactForSession: (sessionId, caller) =>
-          caller.sessionOrigin === true
+          caller.executionSession !== undefined
             ? contextIntegrityStore.effectiveFact({
                 sessionId,
                 attested: contextIntegrityStore.fact(sessionId),
@@ -2595,6 +2657,11 @@ async function main() {
               principals: service.authority.principals,
               ...(methodCapability ? { methodCapability } : {}),
               methodTier,
+              presentation: service.presentation,
+              title: service.title ?? service.name,
+              action: service.action,
+              description: service.description,
+              declaredBy: service.source,
             }));
           };
 
@@ -3300,12 +3367,16 @@ async function main() {
         return new FsService(contextFolderManager, entityCache, {
           contextAuthority: { kind: "semantic", bridge: vcsBridge },
           recordContextIngestion,
+          recordContextIngestionBatch,
         });
       },
     });
   }
 
   const { wireWorkerdCore } = await import("./bootstrap/workerd.js");
+  const { resolveLiveExecutionCaller } = await import(
+    "./services/liveExecutionCaller.js"
+  );
   wireWorkerdCore({
     container,
     tokenManager,
@@ -3325,6 +3396,17 @@ async function main() {
     getInternalDoEnv: internalDoProviderEnv,
     runtimeDiagnostics,
     eventService,
+    resolveEgressCaller: (registered) => {
+      const activeEntity = entityCache.resolveActive(registered.runtime.id);
+      return resolveLiveExecutionCaller({
+        registered,
+        activeEntity,
+        executionSession: agentExecutionSessions.resolve(registered.runtime.id),
+        contextTestPolicy: activeEntity
+          ? agentExecutionSessions.testPolicyForContext(activeEntity.contextId)
+          : null,
+      });
+    },
     onManagerStarted: (manager) => {
       workerdManagerForGateway = manager;
     },
@@ -3343,7 +3425,6 @@ async function main() {
       buildKey,
       executionDigest,
       authorityRequests,
-      authorityEvalCeilings,
     }) => {
       entityCache.registerControlPlane({
         id: targetId,
@@ -3352,7 +3433,6 @@ async function main() {
         activeExecutionDigest: executionDigest,
         activeAuthority: {
           requests: authorityRequests,
-          evalCeilings: authorityEvalCeilings,
         },
         contextId: `control-plane:${workspaceId}`,
         className,
@@ -3535,10 +3615,21 @@ async function main() {
     resolveCallerContext: (callerId: string) => getEntityStore().resolveContext(callerId),
     listWorkspaceUnits: () => {
       const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
+      const graphNodes = buildSystem?.getGraph().allNodes() ?? [];
+      const authorityRowsFor = (node: (typeof graphNodes)[number] | undefined) =>
+        summarizeAuthorityRequests(node?.manifest.authority?.requests ?? [], [], describeCapability)
+          .rows;
       type WorkspaceUnitStatus = import("./services/workspaceService.js").WorkspaceUnitStatus;
-      const trustedRows: WorkspaceUnitStatus[] = trustedUnitHosts().flatMap(
-        (host) => host.listWorkspaceUnits() as WorkspaceUnitStatus[]
-      );
+      const trustedRows: WorkspaceUnitStatus[] = trustedUnitHosts()
+        .flatMap((host) => host.listWorkspaceUnits() as WorkspaceUnitStatus[])
+        .map((row) => {
+          const node = graphNodes.find((candidate) => candidate.relativePath === row.source);
+          return {
+            ...row,
+            isAgent: Boolean(node?.manifest.agent),
+            authorityRows: authorityRowsFor(node),
+          };
+        });
       const trustedRowsBySource = new Map<string, WorkspaceUnitStatus>(
         trustedRows.map((row) => [row.source, row])
       );
@@ -3549,13 +3640,14 @@ async function main() {
       const rows: import("./services/workspaceService.js").WorkspaceUnitStatus[] = [
         ...trustedRows.filter((row) => row.kind === "app"),
       ];
-      for (const node of buildSystem?.getGraph().allNodes() ?? []) {
+      for (const node of graphNodes) {
         if (node.kind !== "panel" && node.kind !== "worker" && node.kind !== "extension") continue;
         if (node.kind === "extension") {
           rows.push(
             trustedRowsBySource.get(node.relativePath) ?? {
               name: node.name,
               kind: "extension",
+              isAgent: false,
               source: node.relativePath,
               displayName: node.manifest.displayName ?? node.name,
               status: "stopped",
@@ -3566,6 +3658,7 @@ async function main() {
               hasFetch: false,
               respawn: null,
               inspectorUrl: null,
+              authorityRows: authorityRowsFor(node),
             }
           );
           continue;
@@ -3579,6 +3672,7 @@ async function main() {
         rows.push({
           name: node.name,
           kind: node.kind,
+          isAgent: Boolean(node.manifest.agent),
           source: node.relativePath,
           displayName: node.manifest.displayName ?? node.manifest.title ?? node.name,
           status: workerInstance
@@ -3600,6 +3694,7 @@ async function main() {
           lastBuiltAt: null,
           pendingApproval: null,
           availableUpdate: null,
+          authorityRows: authorityRowsFor(node),
         });
       }
       return rows;
@@ -4415,37 +4510,54 @@ async function main() {
   dispatcher.setAuthorityResolver(
     ({ ctx, caller, service, method, capability, resourceKey, tier }) => {
       const sessionId = caller.agentBinding?.channelId ?? caller.runtime.id;
-      const sessionOrigin = caller.sessionOrigin === true;
-      missionRegistry.assertServiceExposure(sessionId, `${service}.${method}`);
+      const sessionOrigin = caller.executionSession !== undefined;
       const mission = missionRegistry.factForSession(sessionId);
+      let missionChangeRequired = false;
+      try {
+        missionRegistry.assertServiceExposure(sessionId, `${service}.${method}`);
+      } catch (error) {
+        if (
+          mission &&
+          error instanceof Error &&
+          (error as NodeJS.ErrnoException).code === "EMISSIONSCOPE"
+        ) {
+          missionChangeRequired = true;
+        } else {
+          throw error;
+        }
+      }
       const conduitBlessed = Boolean(
         caller.code?.executionDigest &&
         conduitBlessingStore.isBlessed(caller.code) &&
-        (mission
-          ? callerMatchesMissionHarness(caller, mission)
-          : caller.code.evalOrigin?.purpose === "agentic-code-execution")
+        caller.executionSession &&
+        caller.executionSession.harness.principal ===
+          `code:${caller.code.repoPath}@${caller.code.executionDigest}` &&
+        (!mission || callerMatchesMissionHarness(caller, mission))
       );
-      return authorizeVerifiedCaller(caller, {
-        workspaceId,
-        workspaceMember: caller.hostOriginated === true || membershipEntryGate(caller.subject),
-        workspaceRole: workspaceRoleResolver(caller.subject),
-        sessionId,
-        audience: `service:${service}`,
-        capability,
-        resourceKey,
-        tier,
-        mission,
-        contextIntegrity:
-          sessionOrigin && caller.agentBinding
-            ? contextIntegrityStore.effectiveFact({
-                sessionId,
-                attested: ctx.authorization?.contextIntegrity,
-                conduitBlessed,
-              })
-            : { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
-        grantCode: caller.codeApproved === true,
-        grantStore: capabilityGrantStore,
-      });
+      return {
+        ...authorizeVerifiedCaller(caller, {
+          workspaceId,
+          workspaceMember: caller.hostOriginated === true || membershipEntryGate(caller.subject),
+          workspaceRole: workspaceRoleResolver(caller.subject),
+          sessionId,
+          audience: `service:${service}`,
+          capability,
+          resourceKey,
+          tier,
+          mission,
+          contextIntegrity:
+            sessionOrigin && caller.agentBinding
+              ? contextIntegrityStore.effectiveFact({
+                  sessionId,
+                  attested: ctx.authorization?.contextIntegrity,
+                  conduitBlessed,
+                })
+              : { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
+          grantCode: caller.codeApproved === true,
+          grantStore: capabilityGrantStore,
+        }),
+        ...(missionChangeRequired ? { missionChangeRequired: true } : {}),
+      };
     }
   );
   dispatcher.markInitialized();

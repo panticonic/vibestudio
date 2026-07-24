@@ -4,8 +4,20 @@ export interface ProductDurableObjectWorkspaceService {
   readonly kind: "durable-object";
   readonly name: string;
   readonly title: string;
-  readonly action?: string;
+  readonly action: string;
   readonly description: string;
+  readonly presentation: {
+    readonly domain:
+      | "files"
+      | "sharing"
+      | "accounts"
+      | "web"
+      | "automation"
+      | "people"
+      | "computer";
+    readonly verb: "see" | "act" | "manage";
+    readonly substanceKind?: "change-set" | "send" | "deletion" | "custom";
+  };
   readonly protocols: readonly string[];
   readonly source: string;
   readonly authority: {

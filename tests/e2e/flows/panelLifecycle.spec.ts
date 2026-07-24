@@ -15,6 +15,7 @@ import {
   getPanelTree,
   hasElectronDisplay,
   launchTestApp,
+  approvePendingStartupUnits,
   createManagedTestWorkspace,
   removeManagedTestWorkspace,
 } from "../../setup/electronSetup";
@@ -71,8 +72,8 @@ test.describe("Panel Persistence", () => {
       testApp = await launchTestApp({
         workspace: workspacePath,
         launchTimeout: 180_000,
-        env: { VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "1" },
       });
+      await approvePendingStartupUnits(testApp.app);
 
       await ensureHostedShellReady(testApp.app, { panelSource: "panels/chat" });
       const seededTree = await waitForRestorablePanelTree(testApp.app);
@@ -102,8 +103,8 @@ test.describe("Panel Persistence", () => {
       testApp = await launchTestApp({
         workspace: workspacePath,
         launchTimeout: 180_000,
-        env: { VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "1" },
       });
+      await approvePendingStartupUnits(testApp.app);
 
       await ensureHostedShellReady(testApp.app, { panelSource: "panels/chat" });
       const restoredTree = await waitForRestorablePanelTree(testApp.app);

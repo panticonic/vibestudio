@@ -1,8 +1,4 @@
-import type {
-  AgenticEvent,
-  InvocationOutcome,
-  ParticipantRef,
-} from "@workspace/agentic-protocol";
+import type { AgenticEvent, InvocationOutcome, ParticipantRef } from "@workspace/agentic-protocol";
 import { conversationV1Policy } from "./conversation-v1.js";
 
 /** Minimal durable-envelope view a policy folds over. Pure data. */
@@ -90,10 +86,9 @@ export interface ChannelPolicy<S = unknown> {
 export { conversationV1Policy } from "./conversation-v1.js";
 export type { ConversationStateV1 } from "./conversation-v1.js";
 
-export const CHANNEL_POLICIES: ReadonlyMap<string, ChannelPolicy> = new Map<
-  string,
-  ChannelPolicy
->([[conversationV1Policy.name, conversationV1Policy as ChannelPolicy]]);
+export const CHANNEL_POLICIES: ReadonlyMap<string, ChannelPolicy> = new Map<string, ChannelPolicy>([
+  [conversationV1Policy.name, conversationV1Policy as ChannelPolicy],
+]);
 
 export function getChannelPolicy(name: string): ChannelPolicy {
   const policy = CHANNEL_POLICIES.get(name);

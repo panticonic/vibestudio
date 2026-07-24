@@ -18,8 +18,9 @@ export interface WorkspaceServiceResolution {
   origin: "product" | "workspace";
   name: string;
   title?: string;
-  action?: string;
+  action: string;
   description?: string;
+  presentation: WorkspaceServiceDecl["presentation"];
   /**
    * The protocol that matched this resolution request. Absent when the caller
    * resolved by service name rather than by one of the declared protocols.
@@ -107,8 +108,9 @@ function resolveProductWorkspaceService(
     origin: "product",
     name: service.name,
     title: service.title,
-    action: (service as { action?: string }).action,
+    action: service.action,
     description: service.description,
+    presentation: service.presentation,
     ...(service.protocols.includes(query) ? { protocol: query } : {}),
     protocols: [...service.protocols],
     source: service.source,
@@ -146,6 +148,7 @@ function buildResolution(
       title: service.title,
       action: service.action,
       description: service.description,
+      presentation: service.presentation,
       protocols,
       source,
       authority,
@@ -175,6 +178,7 @@ function buildResolution(
     title: service.title,
     action: service.action,
     description: service.description,
+    presentation: service.presentation,
     protocols,
     source,
     authority,

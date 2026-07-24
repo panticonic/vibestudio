@@ -7,6 +7,10 @@
  */
 import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import { PanelManager } from "@vibestudio/shell-core/panelManager";
+import {
+  createRuntimeClient,
+  createWorkspaceStateClient,
+} from "@vibestudio/shell-core/createShellCore";
 import type { CreatePanelResult, NavigatePanelOptions } from "@vibestudio/shell-core/panelManager";
 import { asPanelSlotId, type PanelSlotId } from "@vibestudio/shared/panel/ids";
 import { buildPanelUrl } from "@vibestudio/shared/panelFactory";
@@ -15,19 +19,6 @@ import {
   createPanelRuntimeLeaseRequest,
   formatPanelRuntimeLeaseDeniedMessage,
 } from "@vibestudio/shared/panel/panelLease";
-import type {
-  RuntimeClient,
-  SlotCommitPreparedNavigationResult,
-  SlotCreateInput,
-  SlotHistoryRow,
-  SlotRow,
-  WorkspaceStateClient,
-} from "@vibestudio/shell-core/workspaceStateClient";
-import type {
-  EntityRecord,
-  RuntimeEntityCreateSpec,
-  RuntimeEntityHandle,
-} from "@vibestudio/shared/runtime/entitySpec";
 import type { RpcClient } from "@vibestudio/rpc";
 
 export interface PanelLoadInfo {
@@ -49,38 +40,10 @@ export class PanelInitClient {
   ) {
     const call = <T>(method: string, args: unknown[]) =>
       rpc.call<T>("main", method, args) as Promise<T>;
-    const callVoid = (method: string, args: unknown[]) =>
-      call<unknown>(method, args).then(() => undefined);
-
-    const workspaceState: WorkspaceStateClient = {
-      listSlots: () => call<SlotRow[]>("workspace-state.slot.list", []),
-      getSlot: (slotId) => call<SlotRow | null>("workspace-state.slot.get", [slotId]),
-      getSlotHistory: (slotId) => call<SlotHistoryRow[]>("workspace-state.slot.history", [slotId]),
-      resolveActiveEntity: (id) =>
-        call<EntityRecord | null>("workspace-state.entity.resolveActive", [id]),
-      resolveSlotByEntity: (entityId) =>
-        call<string | null>("workspace-state.slot.resolveByEntity", [entityId]),
-      createSlot: (input: SlotCreateInput) => callVoid("workspace-state.slot.create", [input]),
-      commitPreparedNavigation: (input) =>
-        call<SlotCommitPreparedNavigationResult>("workspace-state.slot.commitPreparedNavigation", [
-          input,
-        ]),
-      updateCurrentStateArgs: (slotId, stateArgs) =>
-        callVoid("workspace-state.slot.updateCurrentStateArgs", [slotId, stateArgs]),
-      setSlotParent: (slotId, parentSlotId) =>
-        callVoid("workspace-state.slot.setParent", [slotId, parentSlotId]),
-      setSlotPosition: (slotId, positionId) =>
-        callVoid("workspace-state.slot.setPosition", [slotId, positionId]),
-      moveSlot: (slotId, parentSlotId, positionId) =>
-        callVoid("workspace-state.slot.move", [slotId, parentSlotId, positionId]),
-      closeSlot: (slotId) => callVoid("workspace-state.slot.close", [slotId]),
-    };
-
-    const runtime: RuntimeClient = {
-      createEntity: (spec: RuntimeEntityCreateSpec) =>
-        call<RuntimeEntityHandle>("runtime.createEntity", [spec]),
-      retireEntity: (id) => callVoid("runtime.retireEntity", [{ id }]),
-    };
+    const callService = (service: string, method: string, args: unknown[]) =>
+      call<unknown>(`${service}.${method}`, args);
+    const workspaceState = createWorkspaceStateClient(callService);
+    const runtime = createRuntimeClient(callService);
 
     this.panelManager = new PanelManager({
       registry: new PanelRegistry({}),

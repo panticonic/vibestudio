@@ -172,6 +172,10 @@ function makeProjectedReadBridge(root: string): FsVcsBridge {
                 fileId: `file:${repoPath}/${filePath}`,
                 path: filePath,
                 contentHash: `blob:${repoPath}/${filePath}`,
+                authoredChangeId: `change:${filePath}`,
+                authoredByWorkUnitId: `work:${filePath}`,
+                contentClass: "internal" as const,
+                externalKeys: [],
                 mode: 0o644,
                 contentKind: "text",
                 byteLength: statSync(absolute).size,
@@ -187,7 +191,13 @@ function makeProjectedReadBridge(root: string): FsVcsBridge {
   };
 }
 
-function makeCanonicalSemanticBridge(repositoryPaths: string[]) {
+function makeCanonicalSemanticBridge(
+  repositoryPaths: string[],
+  lineage: { contentClass: "internal" | "external"; externalKeys: string[] } = {
+    contentClass: "internal",
+    externalKeys: [],
+  }
+) {
   const files = new Map<string, FsVcsContent>();
   const applyCalls: Array<{ repoPath: string; edits: FsVcsEditOp[] }> = [];
   const moveCalls: import("@vibestudio/service-schemas/vcs").VcsMoveInput[] = [];
@@ -304,6 +314,10 @@ function makeCanonicalSemanticBridge(repositoryPaths: string[]) {
               fileId: `file:${repoPath}/${filePath}`,
               path: filePath,
               contentHash: `blob:${repoPath}/${filePath}`,
+              authoredChangeId: `change:${repoPath}/${filePath}`,
+              authoredByWorkUnitId: `work:${repoPath}/${filePath}`,
+              contentClass: lineage.contentClass,
+              externalKeys: lineage.externalKeys,
               mode: 0o644,
               contentKind: content.kind,
               byteLength,
@@ -331,8 +345,8 @@ function makeCanonicalSemanticBridge(repositoryPaths: string[]) {
         contentHash: `blob:${repoPath}/${filePath}`,
         authoredChangeId: `change:${repoPath}/${filePath}`,
         authoredByWorkUnitId: `work:${repoPath}/${filePath}`,
-        contentClass: "internal" as const,
-        externalKeys: [],
+        contentClass: lineage.contentClass,
+        externalKeys: lineage.externalKeys,
         mode: 0o644,
         content,
       };
@@ -1231,6 +1245,9 @@ describe("FsService", () => {
         recordContextIngestion: async (_ctx, input) => {
           observed.push(input);
         },
+        recordContextIngestionBatch: async (_ctx, inputs) => {
+          observed.push(...inputs);
+        },
       });
       const ctx = makeAgentCtx("semantic-ingestion", "ctx-semantic-ingestion");
       registerContext(ctx.caller.runtime.id, "do", "ctx-semantic-ingestion");
@@ -1253,6 +1270,150 @@ describe("FsService", () => {
       ]);
     });
 
+    it("retains one upstream lineage source when many external files enter context", async () => {
+      const sourceKey = "repo:https://example.test/acme/project@commit-1";
+      const { bridge, files } = makeCanonicalSemanticBridge(["packages/lib"], {
+        contentClass: "external",
+        externalKeys: [sourceKey],
+      });
+      const observed: Array<{
+        key: string;
+        via: string;
+        classification: "derived";
+        derivedClass: "internal" | "external";
+      }> = [];
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+        recordContextIngestion: async (_ctx, input) => {
+          observed.push(input);
+        },
+        recordContextIngestionBatch: async (_ctx, inputs) => {
+          observed.push(...inputs);
+        },
+      });
+      const contextId = "ctx-external-lineage";
+      const agent = makeAgentCtx("external-lineage", contextId);
+      registerContext(agent.caller.runtime.id, "do", contextId);
+      files.set(`${contextId}/packages/lib/a.txt`, { kind: "text", text: "a" });
+      files.set(`${contextId}/packages/lib/b.txt`, { kind: "text", text: "b" });
+      const projectedRoot = path.join(tmpRoot, contextId, "packages", "lib");
+      mkdirSync(projectedRoot, { recursive: true });
+      writeFileSync(path.join(projectedRoot, "a.txt"), "a");
+      writeFileSync(path.join(projectedRoot, "b.txt"), "b");
+
+      await expect(svc.handleCall(agent, "readdir", ["/packages/lib"])).resolves.toEqual([
+        "a.txt",
+        "b.txt",
+      ]);
+      expect(observed).toEqual([
+        {
+          key: sourceKey,
+          via: "fs-readdir",
+          classification: "derived",
+          derivedClass: "external",
+        },
+      ]);
+
+      observed.length = 0;
+      await expect(
+        svc.handleCall(agent, "readFile", ["/packages/lib/a.txt", "utf8"])
+      ).resolves.toBe("a");
+      expect(observed).toEqual([
+        {
+          key: sourceKey,
+          via: "fs-read-file",
+          classification: "derived",
+          derivedClass: "external",
+        },
+      ]);
+    });
+
+    it("bounds semantic receiver fan-out while reading a multi-repository corpus", async () => {
+      const repositoryPaths = Array.from({ length: 20 }, (_, index) => `skills/skill-${index}`);
+      const { bridge, files } = makeCanonicalSemanticBridge(repositoryPaths);
+      const contextId = "ctx-bounded-semantic-read";
+      for (const repoPath of repositoryPaths) {
+        files.set(`${contextId}/${repoPath}/SKILL.md`, {
+          kind: "text",
+          text: `---\nname: ${repoPath}\n---\n`,
+        });
+      }
+      let activeCalls = 0;
+      let maxActiveCalls = 0;
+      const track = async <T>(operation: () => Promise<T>): Promise<T> => {
+        activeCalls += 1;
+        maxActiveCalls = Math.max(maxActiveCalls, activeCalls);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        try {
+          return await operation();
+        } finally {
+          activeCalls -= 1;
+        }
+      };
+      const inspect = bridge.inspect.bind(bridge);
+      bridge.inspect = (input) => track(() => inspect(input));
+      const listFiles = bridge.listFiles.bind(bridge);
+      const listedPrefixes: Array<string | undefined> = [];
+      bridge.listFiles = (input) => {
+        listedPrefixes.push(input.prefix);
+        return track(() => listFiles(input));
+      };
+      const readFile = bridge.readFile.bind(bridge);
+      bridge.readFile = (input) => track(() => readFile(input));
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
+      const agent = makeAgentCtx("bounded-semantic-read", contextId);
+      registerContext(agent.caller.runtime.id, "do", contextId);
+
+      const corpus = await svc.readManagedFiles(agent, ["*/*/SKILL.md"]);
+
+      expect(corpus).toHaveLength(repositoryPaths.length);
+      expect(maxActiveCalls).toBeGreaterThan(1);
+      expect(maxActiveCalls).toBeLessThanOrEqual(8);
+      expect(listedPrefixes).toHaveLength(repositoryPaths.length);
+      expect(listedPrefixes.every((prefix) => prefix === "SKILL.md")).toBe(true);
+    });
+
+    it("discovers managed metadata from semantic state without materializing the workspace", async () => {
+      const { bridge } = makeMockBridge();
+      const ensureMaterialized = vi.spyOn(bridge, "ensureMaterialized");
+      const observed: Array<{
+        key: string;
+        via: string;
+        classification: "derived";
+        derivedClass: "internal" | "external";
+      }> = [];
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+        recordContextIngestion: async (_ctx, input) => {
+          observed.push(input);
+        },
+      });
+      const contextId = "ctx-semantic-discovery";
+      const agent = makeAgentCtx("semantic-discovery", contextId);
+      const writer = makeWorkerCtx("do:semantic-discovery-writer");
+      registerContext(writer.caller.runtime.id, "do", contextId);
+      await svc.handleCall(writer, "writeFile", ["/skills/x/SKILL.md", "---\nname: x\n---\n"]);
+      await svc.handleCall(writer, "writeFile", ["/packages/lib/index.ts", "export {};\n"]);
+
+      await expect(svc.readManagedFiles(agent, ["*/SKILL.md", "*/*/SKILL.md"])).resolves.toEqual([
+        {
+          path: "/skills/x/SKILL.md",
+          content: "---\nname: x\n---\n",
+        },
+      ]);
+      expect(ensureMaterialized).not.toHaveBeenCalled();
+      expect(observed).toEqual([
+        expect.objectContaining({
+          key: expect.stringContaining("SKILL.md@"),
+          via: "fs-managed-corpus-read",
+          classification: "derived",
+          derivedClass: "internal",
+        }),
+      ]);
+    });
+
     it("records exact semantic lineage for names and search results before returning them", async () => {
       const { bridge } = makeMockBridge();
       const observed: Array<{
@@ -1265,6 +1426,9 @@ describe("FsService", () => {
         contextAuthority: { kind: "semantic", bridge },
         recordContextIngestion: async (_ctx, input) => {
           observed.push(input);
+        },
+        recordContextIngestionBatch: async (_ctx, inputs) => {
+          observed.push(...inputs);
         },
       });
       const contextId = "ctx-semantic-search-ingestion";
@@ -1311,6 +1475,117 @@ describe("FsService", () => {
       expect(observed.filter((entry) => entry.via === "fs-glob")).toEqual([
         expect.objectContaining({ key: expect.stringContaining("match.txt@") }),
       ]);
+    });
+
+    it("attributes directory names to bounded outside sources without reading file bodies", async () => {
+      const { bridge, readCalls } = makeMockBridge();
+      const listFiles = bridge.listFiles.bind(bridge);
+      bridge.listFiles = async (input) => {
+        const listed = await listFiles(input);
+        return {
+          ...listed,
+          files: listed.files.map((file, index) => ({
+            ...file,
+            contentClass: "external" as const,
+            externalKeys: [`repo:github.com/acme/source-${index}@abc123`],
+          })),
+        };
+      };
+      const recordContextIngestion = vi.fn();
+      const recordContextIngestionBatch = vi.fn();
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+        recordContextIngestion,
+        recordContextIngestionBatch,
+      });
+      const contextId = "ctx-semantic-listing-sources";
+      const agent = makeAgentCtx("semantic-listing-sources", contextId);
+      const writer = makeWorkerCtx("do:semantic-listing-sources-writer");
+      registerContext(writer.caller.runtime.id, "do", contextId);
+      await svc.handleCall(writer, "writeFile", ["/packages/lib/a.txt", "a"]);
+      await svc.handleCall(writer, "writeFile", ["/packages/lib/b.txt", "b"]);
+      const projectedRoot = path.join(tmpRoot, contextId, "packages", "lib");
+      mkdirSync(projectedRoot, { recursive: true });
+      writeFileSync(path.join(projectedRoot, "a.txt"), "a");
+      writeFileSync(path.join(projectedRoot, "b.txt"), "b");
+
+      await expect(svc.handleCall(agent, "readdir", ["/packages/lib"])).resolves.toEqual([
+        "a.txt",
+        "b.txt",
+      ]);
+
+      expect(readCalls).toEqual([]);
+      expect(recordContextIngestion).not.toHaveBeenCalled();
+      expect(recordContextIngestionBatch).toHaveBeenCalledOnce();
+      expect(recordContextIngestionBatch).toHaveBeenCalledWith(agent, [
+        {
+          key: "repo:github.com/acme/source-0@abc123",
+          via: "fs-readdir",
+          classification: "derived",
+          derivedClass: "external",
+        },
+        {
+          key: "repo:github.com/acme/source-1@abc123",
+          via: "fs-readdir",
+          classification: "derived",
+          derivedClass: "external",
+        },
+      ]);
+    });
+
+    it("does not downgrade a colliding outside-source key while de-duplicating a listing", async () => {
+      const { bridge } = makeMockBridge();
+      const recordContextIngestion = vi.fn();
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+        recordContextIngestion,
+        recordContextIngestionBatch: vi.fn(),
+      });
+      const contextId = "ctx-semantic-listing-collision";
+      const agent = makeAgentCtx("semantic-listing-collision", contextId);
+      const writer = makeWorkerCtx("do:semantic-listing-collision-writer");
+      registerContext(writer.caller.runtime.id, "do", contextId);
+      await svc.handleCall(writer, "writeFile", ["/packages/lib/a.txt", "a"]);
+      await svc.handleCall(writer, "writeFile", ["/packages/lib/b.txt", "b"]);
+      const projectedRoot = path.join(tmpRoot, contextId, "packages", "lib");
+      mkdirSync(projectedRoot, { recursive: true });
+      writeFileSync(path.join(projectedRoot, "a.txt"), "a");
+      writeFileSync(path.join(projectedRoot, "b.txt"), "b");
+      const listFiles = bridge.listFiles.bind(bridge);
+      bridge.listFiles = async (input) => {
+        const listed = await listFiles(input);
+        const internalFile = listed.files[1]!;
+        const sharedKey =
+          `file:${encodeURIComponent(listed.repositoryId)}/` +
+          `${encodeURIComponent(internalFile.fileId)}@${internalFile.authoredChangeId}`;
+        return {
+          ...listed,
+          files: listed.files.map((file, index) =>
+            index === 0
+              ? {
+                  ...file,
+                  contentClass: "external" as const,
+                  externalKeys: [sharedKey],
+                }
+              : file
+          ),
+        };
+      };
+
+      await expect(svc.handleCall(agent, "readdir", ["/packages/lib"])).resolves.toEqual([
+        "a.txt",
+        "b.txt",
+      ]);
+
+      expect(recordContextIngestion).toHaveBeenCalledOnce();
+      expect(recordContextIngestion).toHaveBeenCalledWith(
+        agent,
+        expect.objectContaining({
+          via: "fs-readdir",
+          classification: "derived",
+          derivedClass: "external",
+        })
+      );
     });
 
     it("records a managed handle's exact semantic lineage on its first byte read", async () => {

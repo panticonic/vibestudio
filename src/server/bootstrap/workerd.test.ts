@@ -65,12 +65,13 @@ describe("workerd bootstrap policy", () => {
       getInternalDoEnv: () => ({}),
       runtimeDiagnostics: inert as WorkerdBootstrapDeps["runtimeDiagnostics"],
       eventService: inert as WorkerdBootstrapDeps["eventService"],
+      resolveEgressCaller: (caller) => caller,
       onManagerStarted: vi.fn(),
     });
 
     expect(services.map(({ name, dependencies }) => ({ name, dependencies }))).toEqual([
       { name: "workerdManager", dependencies: ["fsService", "rpcServer"] },
-      { name: "doDispatch", dependencies: ["workerdManager"] },
+      { name: "doDispatch", dependencies: ["workerdManager", "rpcServer"] },
       { name: "workerdWorkspace", dependencies: ["workerdManager", "buildSystem"] },
     ]);
   });
@@ -127,6 +128,7 @@ describe("workerd bootstrap policy", () => {
       getInternalDoEnv: () => ({}),
       runtimeDiagnostics: inert as WorkerdBootstrapDeps["runtimeDiagnostics"],
       eventService: inert as WorkerdBootstrapDeps["eventService"],
+      resolveEgressCaller: (caller) => caller,
       onManagerStarted: vi.fn(),
     });
     const workspaceService = services.find(({ name }) => name === "workerdWorkspace");

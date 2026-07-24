@@ -38,9 +38,9 @@ export function browserEnvironmentIdentity(
 
 export function browserEnvironmentIdentityFromContext(
   workspaceId: string,
-  ctx: Pick<ServiceContext, "caller">
+  ctx: Pick<ServiceContext, "caller" | "authorizingCaller">
 ): BrowserEnvironmentIdentity {
-  return browserEnvironmentIdentity(workspaceId, ctx.caller);
+  return browserEnvironmentIdentity(workspaceId, ctx.authorizingCaller ?? ctx.caller);
 }
 
 export function isBrowserDataDurableObject(source: string, className: string): boolean {

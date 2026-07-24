@@ -47,7 +47,6 @@ describe("wireVcsDurability", () => {
         buildKey: "c".repeat(64),
         executionDigest: "b".repeat(64),
         authorityRequests: [],
-        authorityEvalCeilings: [],
       })),
     } as unknown as WorkerdManager;
     let gadClient:
@@ -91,7 +90,6 @@ describe("wireVcsDurability", () => {
       buildKey: "c".repeat(64),
       executionDigest: "b".repeat(64),
       authorityRequests: [],
-      authorityEvalCeilings: [],
     });
     expect(workspaceVcs.attachGad).toHaveBeenCalledOnce();
 

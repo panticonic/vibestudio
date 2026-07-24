@@ -11,16 +11,30 @@ export interface ServiceAuthorityPolicy {
 export type MethodSensitivity = "read" | "write" | "admin" | "destructive";
 
 /**
- * Reviewed authority tier carried by the method contract itself. Runtime-only
- * and workspace-discovered services cannot depend on a checkout-wide census;
- * static host services may continue to use the reviewed host table as a
- * fallback while they migrate to colocated declarations.
+ * Reviewed authority tier. Receiver-specific host methods use the checked-in
+ * host census; reusable and runtime-discovered method contracts carry their
+ * own decision. A mounted method must have exactly one source.
  */
 export interface MethodTierPolicy {
   tier: "open" | "gated" | "critical";
   session: "family" | "codeOnly";
   rationale: string;
   scopeSplit?: string;
+}
+
+export function resolveMethodTierPolicy(
+  method: string,
+  declared: MethodTierPolicy | undefined,
+  censused: MethodTierPolicy | null
+): MethodTierPolicy {
+  if (declared && censused) {
+    throw new Error(`Service method ${method} declares a tier already owned by the host census`);
+  }
+  const resolved = declared ?? censused;
+  if (!resolved) {
+    throw new Error(`Service method ${method} has no reviewed tier decision`);
+  }
+  return resolved;
 }
 
 /** Human-facing explanation of a conditional principal narrowing. */

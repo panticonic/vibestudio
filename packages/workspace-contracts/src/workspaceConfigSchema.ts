@@ -43,6 +43,30 @@ const WorkspaceSourceRefSchema = z
   .strict();
 
 const WorkspaceServicePrincipalSchema = z.enum(["host", "user", "code", "session", "mission"]);
+const WorkspaceServicePresentationSchema = z
+  .object({
+    domain: z.enum([
+      "files",
+      "sharing",
+      "accounts",
+      "web",
+      "automation",
+      "people",
+      "computer",
+    ]),
+    verb: z.enum(["see", "act", "manage"]),
+    substanceKind: z.enum(["change-set", "send", "deletion", "custom"]).optional(),
+  })
+  .strict()
+  .superRefine((presentation, ctx) => {
+    if (presentation.domain === "sharing" && !presentation.substanceKind) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["substanceKind"],
+        message: "Publishing & sending services must declare how exact operation substance is shown",
+      });
+    }
+  });
 
 const WorkspaceServiceSchema = z.union([
   z
@@ -50,8 +74,9 @@ const WorkspaceServiceSchema = z.union([
       source: z.string(),
       name: z.string(),
       title: z.string().optional(),
-      action: z.string().optional(),
+      action: z.string().min(1),
       description: z.string().optional(),
+      presentation: WorkspaceServicePresentationSchema,
       protocols: z.array(z.string()).optional(),
       authority: z
         .object({
@@ -66,8 +91,9 @@ const WorkspaceServiceSchema = z.union([
       source: z.string(),
       name: z.string(),
       title: z.string().optional(),
-      action: z.string().optional(),
+      action: z.string().min(1),
       description: z.string().optional(),
+      presentation: WorkspaceServicePresentationSchema,
       protocols: z.array(z.string()).optional(),
       authority: z
         .object({

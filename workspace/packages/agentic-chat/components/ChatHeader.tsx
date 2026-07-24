@@ -2,7 +2,7 @@ import React, { useRef, useState } from "react";
 import { Badge, Card, DropdownMenu, Flex, IconButton, Text } from "@radix-ui/themes";
 import { DotsHorizontalIcon } from "@radix-ui/react-icons";
 import type { ChannelPresenceStatus, Participant } from "@workspace/pubsub";
-import { APPROVAL_LEVELS, type ToolApprovalProps } from "@workspace/tool-ui";
+import type { ToolApprovalProps } from "@workspace/tool-ui";
 import { isAgentParticipantType } from "@workspace/agentic-core";
 import { useChatContext } from "../context/ChatContext";
 import type { ChatParticipantMetadata, PendingAgent } from "../types";
@@ -14,7 +14,6 @@ import {
 import { ParticipantBadgeMenu } from "./ParticipantBadgeMenu";
 import { PendingAgentBadge } from "./PendingAgentBadge";
 import { ToolPermissionsDropdown } from "./ToolPermissionsDropdown";
-import { AgentLauncher } from "./AgentLauncher";
 import { LazyAgentDialog } from "./LazyAgentDialog";
 import { ForkSwitcher } from "./ForkSwitcher";
 import { ChannelPeopleMenu } from "./ChannelPeopleMenu";
@@ -63,7 +62,6 @@ export function ChatHeader() {
     channelTitle,
     connected,
     status,
-    sessionEnabled,
     messages,
     participants,
     pendingAgents,
@@ -146,7 +144,6 @@ export function ChatHeader() {
       title={channelTitle ?? "Agentic Chat"}
       connected={connected}
       status={status}
-      sessionEnabled={sessionEnabled}
       participants={participants}
       participantActiveStatus={participantActiveStatus}
       participantPresenceStatus={participantPresenceStatus}
@@ -167,7 +164,6 @@ interface ChatHeaderInnerProps {
   title: string;
   connected: boolean;
   status: string;
-  sessionEnabled?: boolean;
   participants: Record<string, Participant<ChatParticipantMetadata>>;
   participantActiveStatus: Map<string, boolean>;
   participantPresenceStatus: Map<string, ChannelPresenceStatus>;
@@ -189,7 +185,6 @@ function chatHeaderInnerPropsEqual(
     prev.title === next.title &&
     prev.connected === next.connected &&
     prev.status === next.status &&
-    prev.sessionEnabled === next.sessionEnabled &&
     prev.participants === next.participants &&
     prev.accountProfiles === next.accountProfiles &&
     prev.pendingAgents === next.pendingAgents &&
@@ -207,7 +202,6 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
   title,
   connected,
   status,
-  sessionEnabled,
   participants,
   participantActiveStatus,
   participantPresenceStatus,
@@ -247,26 +241,9 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
           <Text size="5" weight="bold" style={{ minWidth: 0 }}>
             {title}
           </Text>
-          <Badge
-            color={sessionEnabled ? "blue" : "orange"}
-            title={
-              (sessionEnabled
-                ? "Session persistence enabled - messages are saved and can be replayed"
-                : "Ephemeral session - messages are not persisted") +
-              (channelId ? ` — channel ${channelId}` : "")
-            }
-          >
-            {sessionEnabled ? "Session" : "Ephemeral"}
-          </Badge>
         </Flex>
         <Flex gap="2" align="center" wrap="wrap" style={{ minWidth: 0 }}>
-          <Badge color={connected ? "green" : "gray"}>
-            {connected ? "Connected" : friendlyConnectionStatus(status)}
-          </Badge>
-          {/* Fork switcher — current branch + siblings/children, next to roster.
-              Self-subscribes to ChatContext.forkState (renders null when absent). */}
-          <ForkSwitcher />
-          <ChannelPeopleMenu />
+          {!connected && <Badge color="gray">{friendlyConnectionStatus(status)}</Badge>}
           {Object.values(participants).map((p) => {
             const hasActive = participantActiveStatus.get(p.id) ?? false;
 
@@ -294,17 +271,19 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
               onOpenDebugConsole={onDebugConsoleChange ?? undefined}
             />
           ))}
-          <AgentLauncher />
-          {toolApproval && (
-            <ToolPermissionsDropdown
-              settings={toolApproval.settings}
-              onSetFloor={toolApproval.onSetFloor}
-            />
-          )}
+          <ChatHeaderOverflowMenu
+            channelId={channelId}
+            participants={participants}
+            accountProfiles={accountProfiles}
+            participantPresenceStatus={participantPresenceStatus}
+            toolApproval={toolApproval}
+            onRemoveAgent={onRemoveAgent}
+            onDebugConsoleChange={onDebugConsoleChange}
+          />
         </Flex>
       </Flex>
 
-      {/* Narrow layout — title + connection dot + one overflow menu */}
+      {/* Narrow layout — title + connection problem + one overflow menu */}
       <Flex
         className="chat-narrow-only"
         justify="between"
@@ -316,22 +295,13 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
           <Text size="4" weight="bold" truncate style={{ minWidth: 0 }}>
             {title}
           </Text>
-          <span
-            className="chat-connection-dot"
-            style={{ background: connected ? "var(--green-9)" : "var(--gray-8)" }}
-            title={connected ? "Connected" : friendlyConnectionStatus(status)}
-            aria-label={connected ? "Connected" : friendlyConnectionStatus(status)}
-          />
-          <ForkSwitcher />
-          <ChannelPeopleMenu compact />
+          {!connected && <Badge color="gray">{friendlyConnectionStatus(status)}</Badge>}
         </Flex>
         <ChatHeaderOverflowMenu
           channelId={channelId}
-          sessionEnabled={sessionEnabled}
           participants={participants}
           accountProfiles={accountProfiles}
           participantPresenceStatus={participantPresenceStatus}
-          pendingCount={visiblePendingAgents.length}
           toolApproval={toolApproval}
           onRemoveAgent={onRemoveAgent}
           onDebugConsoleChange={onDebugConsoleChange}
@@ -342,38 +312,37 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
 }, chatHeaderInnerPropsEqual);
 
 /**
- * Single overflow menu for narrow containers: session info, participant
- * management, Add agent, and approval mode all live here so the compact
- * header stays minimal.
+ * Single overflow menu for secondary chat actions at every container width.
  */
 function ChatHeaderOverflowMenu({
   channelId,
-  sessionEnabled,
   participants,
   accountProfiles,
   participantPresenceStatus,
-  pendingCount,
   toolApproval,
   onRemoveAgent,
   onDebugConsoleChange,
 }: {
   channelId: string | null;
-  sessionEnabled?: boolean;
   participants: Record<string, Participant<ChatParticipantMetadata>>;
   accountProfiles: Map<string, AccountProfile>;
   participantPresenceStatus: Map<string, ChannelPresenceStatus>;
-  pendingCount: number;
   toolApproval?: ToolApprovalProps;
   onRemoveAgent?: (handle: string) => void;
   onDebugConsoleChange?: (agentHandle: string | null) => void;
 }) {
   const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [settingsParticipantId, setSettingsParticipantId] = useState<string | null>(null);
-  const { onOpenClaudeCode } = useChatContext();
+  const { onAddAgent, onReplaceAgent, onOpenClaudeCode, messages, deferredAgent } =
+    useChatContext();
 
   const participantList = Object.values(participants);
-  const agentCount =
-    participantList.filter((p) => isAgentParticipantType(p.metadata.type)).length + pendingCount;
+  const agentCount = participantList.filter((participant) =>
+    isAgentParticipantType(participant.metadata.type)
+  ).length;
+  const canChangeAgent = (!!onAddAgent || !!onReplaceAgent) && !deferredAgent?.active;
+  const agentActionLabel =
+    messages.length === 0 && agentCount === 1 && onReplaceAgent ? "Switch agent" : "Add agent";
 
   return (
     <>
@@ -386,21 +355,12 @@ function ChatHeaderOverflowMenu({
             aria-label="Chat menu"
             style={{ minWidth: 40, minHeight: 40 }}
           >
-            <Flex align="center" gap="1">
-              {agentCount > 0 && (
-                <Text size="1" weight="medium">
-                  {agentCount} {agentCount === 1 ? "agent" : "agents"}
-                </Text>
-              )}
-              <DotsHorizontalIcon />
-            </Flex>
+            <DotsHorizontalIcon />
           </IconButton>
         </DropdownMenu.Trigger>
         <DropdownMenu.Content align="end">
-          <DropdownMenu.Label>
-            {sessionEnabled ? "Session" : "Ephemeral"}
-            {channelId ? ` — ${channelId}` : ""}
-          </DropdownMenu.Label>
+          <ForkSwitcher variant="submenu" />
+          <ChannelPeopleMenu variant="submenu" />
           {participantList.length > 0 && <DropdownMenu.Separator />}
           {participantList.map((p) => {
             // Humans render their live account handle (WP6 §6); agents keep
@@ -464,37 +424,22 @@ function ChatHeaderOverflowMenu({
             );
           })}
           <DropdownMenu.Separator />
-          <DropdownMenu.Item onSelect={() => setAddAgentOpen(true)}>Add agent</DropdownMenu.Item>
+          {canChangeAgent && (
+            <DropdownMenu.Item onSelect={() => setAddAgentOpen(true)}>
+              {agentActionLabel}
+            </DropdownMenu.Item>
+          )}
           {onOpenClaudeCode && channelId && (
             <DropdownMenu.Item onSelect={() => void onOpenClaudeCode(channelId)}>
               Open Claude Code
             </DropdownMenu.Item>
           )}
           {toolApproval && (
-            <DropdownMenu.Sub>
-              <DropdownMenu.SubTrigger>
-                Approvals:{" "}
-                {
-                  APPROVAL_LEVELS[toolApproval.settings.globalFloor as keyof typeof APPROVAL_LEVELS]
-                    ?.label
-                }
-              </DropdownMenu.SubTrigger>
-              <DropdownMenu.SubContent>
-                {([0, 1, 2] as const).map((level) => (
-                  <DropdownMenu.CheckboxItem
-                    key={level}
-                    checked={toolApproval.settings.globalFloor === level}
-                    onCheckedChange={() => {
-                      void toolApproval.onSetFloor(level).catch((error: unknown) => {
-                        console.error("[ChatHeader] Failed to update permission level:", error);
-                      });
-                    }}
-                  >
-                    {APPROVAL_LEVELS[level].label}
-                  </DropdownMenu.CheckboxItem>
-                ))}
-              </DropdownMenu.SubContent>
-            </DropdownMenu.Sub>
+            <ToolPermissionsDropdown
+              variant="submenu"
+              settings={toolApproval.settings}
+              onSetFloor={toolApproval.onSetFloor}
+            />
           )}
         </DropdownMenu.Content>
       </DropdownMenu.Root>

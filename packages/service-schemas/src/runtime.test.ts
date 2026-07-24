@@ -16,20 +16,6 @@ describe("RuntimeEntityHandleSchema", () => {
           evidence: "intentional-broad" as const,
         },
       ],
-      authorityEvalCeilings: [
-        {
-          audience: "eval" as const,
-          purpose: "agentic-code-execution" as const,
-          capabilities: [
-            {
-              capability: "service:docs.listServices",
-              resource: { kind: "prefix" as const, prefix: "" },
-              tier: "gated" as const,
-              evidence: "intentional-broad" as const,
-            },
-          ],
-        },
-      ],
       contextId: "ctx-panel",
       targetId: "panel:history-entry",
     };

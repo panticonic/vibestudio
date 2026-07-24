@@ -42,15 +42,6 @@ export interface RpcRequest {
   parentRequestId?: string;
   /** Exact non-authorizing provenance edge for a tool-caused call. */
   causalParent?: RpcCausalParent;
-  /**
-   * Explicit opt-in (set ONLY by `callDeferred`) that this call may complete
-   * out-of-band: a human-gated server method (approval, credential use) may
-   * park the call, ack immediately with `{deferred, requestId}`, and deliver
-   * the result later via an inbound `onDeferredResult` call that revives a
-   * hibernated DO. Plain `call()` never sets this, so the server holds it
-   * inline. See `DeferrableRpcClient.callDeferred`.
-   */
-  deferrable?: boolean;
 }
 
 /**
@@ -258,12 +249,6 @@ export interface AuthenticatedCaller {
    * enumerated pre-identity bootstrap principals and `"unknown"` delivery paths.
    */
   userId?: string;
-  /**
-   * Fresh, exact-target authority facts stamped by the host relay. Receivers
-   * never accept this field from an originating client envelope; the relay
-   * replaces it after authenticating the transport caller.
-   */
-  authorization?: import("./authority.js").DirectAuthorityAttestation;
 }
 
 export type CallerKind =
@@ -325,6 +310,13 @@ export interface RpcCallOptions {
    * the authenticated presenter's binding. It grants no permissions.
    */
   causalParent?: RpcCausalParent;
+  /**
+   * Override the client's authority-acquisition behavior for this invocation.
+   * Durable effect owners use `return` so an EACQUIRE result parks their own
+   * journaled outbox row instead of holding a transport request across a human
+   * decision.
+   */
+  authorityAcquisition?: "wait" | "return";
 }
 
 export interface RpcStreamOptions {
@@ -535,35 +527,8 @@ export interface RpcClientConfig {
    * structured EACQUIRE response the client waits on authority.awaitDecision
    * without a deadline, then retries the exact original invocation.
    */
-  authorityAcquisition?: "wait";
+  authorityAcquisition?: "wait" | "return";
 }
-
-/**
- * Outcome of a `callDeferred`. `completed` carries the inline result (fast
- * path); `deferred` means the result will arrive later via an inbound
- * `onDeferredResult(requestId, …)` call — the caller MUST persist whatever it
- * needs to resume, keyed by `requestId`, before relying on this ack.
- */
-export type DeferredCallAck =
-  | { status: "deferred"; requestId: string }
-  | { status: "completed"; result: unknown };
-
-/**
- * `RpcClient` plus the one connectionless extension the convergence keeps:
- * `callDeferred`. A DO calling a human-gated method hibernates before the
- * reply, so it cannot hold an inbound request open; `callDeferred` surfaces the
- * `{deferred, requestId}` ack so the DO can persist its continuation. The base
- * client runs the shared core; this is layered over the connectionless
- * transport. Socket clients never need it (the socket stays open).
- */
-export type DeferrableRpcClient = RpcClient & {
-  callDeferred(
-    targetId: string,
-    method: string,
-    args: unknown[],
-    options?: { requestId?: string; idempotencyKey?: string }
-  ): Promise<DeferredCallAck>;
-};
 
 export interface RpcClient {
   readonly selfId: string;

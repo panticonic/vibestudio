@@ -90,6 +90,7 @@ export interface ChannelSubscription {
 
 export class ChannelClient {
   private targetPromise: Promise<string> | null = null;
+  private resolvedTarget: string | null = null;
   constructor(
     private rpc: RpcCaller,
     private channelId: string,
@@ -102,6 +103,7 @@ export class ChannelClient {
         if (service.kind !== "durable-object" || !service.targetId) {
           throw new Error("Channel service must resolve to a Durable Object service");
         }
+        this.resolvedTarget = service.targetId;
         return service.targetId;
       });
     return this.targetPromise;
@@ -176,6 +178,14 @@ export class ChannelClient {
     }
   ): Promise<{ id?: number }> {
     return this.call("publish", participantId, AGENTIC_EVENT_PAYLOAD_KIND, event, opts);
+  }
+  async publish(
+    participantId: string,
+    payloadKind: string,
+    payload: unknown,
+    opts?: { idempotencyKey?: string }
+  ): Promise<{ id?: number }> {
+    return this.call("publish", participantId, payloadKind, payload, opts);
   }
   async update(
     participantId: string,

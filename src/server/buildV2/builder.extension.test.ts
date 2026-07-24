@@ -98,7 +98,6 @@ describe("buildUnit extension builds", () => {
       },
       authority: {
         requests: [],
-        evalCeilings: [],
       },
     });
     expect(fs.readFileSync(path.join(result.dir, "package.json"), "utf8")).toBe(

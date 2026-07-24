@@ -361,6 +361,27 @@ describe("SemanticWorkspace snapshot import", () => {
         externalKeys: ["repo:https://example.test/project.git@commit:head"],
       },
     });
+    const listed = await restarted.dispatch("listFiles", {
+      ingress,
+      input: {
+        state,
+        repositoryId,
+        limit: 500,
+      },
+    });
+    expect(listed).toMatchObject({
+      kind: "complete",
+      result: {
+        files: [
+          {
+            fileId: file.fileId,
+            authoredByWorkUnitId: imported.workUnitId,
+            contentClass: "external",
+            externalKeys: ["repo:https://example.test/project.git@commit:head"],
+          },
+        ],
+      },
+    });
     const authoredChangeIds = inspectedWork.authoredChangeIds;
     const inspectedChanges = await Promise.all(
       authoredChangeIds.map(async (changeId) => {

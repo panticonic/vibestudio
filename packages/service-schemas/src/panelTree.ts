@@ -11,10 +11,13 @@ import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import {
   MovePanelRequestSchema,
+  PanelDiagnosticPacketSchema,
+  PanelObservationSchema,
   PanelFocusResultSchema,
   PanelLifecycleResultSchema,
   PanelNavigationStateSchema,
   PanelRuntimeLeaseSchema,
+  PanelSnapshotObservationSchema,
   PanelTreeSnapshotSchema,
 } from "@vibestudio/shared/panelContracts";
 import { JsonObjectSchema, JsonValueSchema } from "@vibestudio/shared/wireValues";
@@ -96,6 +99,8 @@ const PanelListItemSchema = z.object({
   contextId: z.string(),
   runtimeEntityId: z.string().nullable().optional(),
   effectiveVersion: z.string().nullable().optional(),
+  buildKey: z.string().nullable().optional(),
+  ref: z.string().nullable().optional(),
   owner: z.string().nullable().optional(),
 });
 const PanelMetadataSchema = z.object({
@@ -107,6 +112,7 @@ const PanelMetadataSchema = z.object({
   contextId: z.string(),
   runtimeEntityId: z.string().nullable().optional(),
   effectiveVersion: z.string().nullable().optional(),
+  buildKey: z.string().nullable().optional(),
   ref: z.string().nullable().optional(),
   privileged: z.boolean().optional(),
 });
@@ -133,6 +139,14 @@ const CreateResultSchema = z.object({
     .nullable()
     .optional()
     .describe("Resolved code version serving the panel, or null when unversioned."),
+  buildKey: z
+    .string()
+    .nullable()
+    .optional()
+    .describe("Exact immutable BuildV2 artifact selected for the panel."),
+  observation: PanelObservationSchema.describe(
+    "Canonical boot-ready observation established before create returns."
+  ),
 });
 
 export const PanelTreeCreateOptionsSchema = z
@@ -225,26 +239,42 @@ export const panelTreeMethods = defineServiceMethods({
   },
   ensureLoaded: {
     description:
-      "Ensure the panel's runtime is loaded (building/restoring it if needed) without changing focus.",
+      "Internal host assignment primitive; application callers use readiness-bearing handle operations.",
     args: z.tuple([PanelIdSchema]),
     returns: PanelFocusResultSchema,
     access: WRITE_ACCESS,
+    authority: { principals: ["host"] },
   },
   focus: {
     description:
-      "Focus a panel, loading its runtime first if needed, with an optional client-local visual placement request.",
+      "Focus a panel and return only after its current attempt is boot-ready; throws the canonical structured failure otherwise.",
     args: z.union([
       z.tuple([PanelIdSchema]),
       z.tuple([PanelIdSchema, PanelTreeFocusOptionsSchema]),
     ]),
-    returns: PanelFocusResultSchema,
+    returns: PanelObservationSchema,
     access: WRITE_ACCESS,
   },
   getRuntimeLease: {
     description:
-      "Return the current runtime lease held on a panel (which host/connection owns it), or null if unleased.",
+      "Internal host lease read. Application readiness is reported only by observe().",
     args: z.tuple([PanelIdSchema]),
     returns: PanelRuntimeLeaseSchema.nullable(),
+    access: READ_ACCESS,
+    authority: { principals: ["host"] },
+  },
+  observe: {
+    description:
+      "Return the canonical current panel attempt, including exact provenance, host/boot state, and structured failure.",
+    args: z.tuple([PanelIdSchema]),
+    returns: PanelObservationSchema,
+    access: READ_ACCESS,
+  },
+  diagnose: {
+    description:
+      "Return one bounded diagnostic packet with the canonical observation, host lifecycle/console history, and a document capture when ready.",
+    args: z.tuple([PanelIdSchema]),
+    returns: PanelDiagnosticPacketSchema,
     access: READ_ACCESS,
   },
   getStateArgs: {
@@ -262,9 +292,10 @@ export const panelTreeMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   reload: {
-    description: "Reload a panel's view in place, keeping its current snapshot.",
+    description:
+      "Reload a panel's view and return only after that exact attempt is boot-ready; throws the canonical structured failure otherwise.",
     args: z.tuple([PanelIdSchema]),
-    returns: PanelLifecycleResultSchema,
+    returns: PanelObservationSchema,
     authority: panelBoundaryAuthority("reload"),
     access: WRITE_ACCESS,
   },
@@ -310,7 +341,7 @@ export const panelTreeMethods = defineServiceMethods({
   },
   navigate: {
     description:
-      "Navigate an existing panel to a new source path (optionally changing ref/context), returning the new panel descriptor or null.",
+      "Transactionally navigate to a prepared runtime and return only after the new attempt is boot-ready.",
     args: z.tuple([PanelIdSchema, z.string(), PanelTreeNavigateOptionsSchema]),
     returns: CreateResultSchema.nullable(),
     access: WRITE_ACCESS,
@@ -342,17 +373,11 @@ export const panelTreeMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   rebuildPanel: {
-    description: "Rebuild a panel's runtime artifacts from source without reloading its view.",
+    description:
+      "Transactionally replace the current runtime from source and return only after the new attempt is boot-ready.",
     args: z.tuple([PanelIdSchema]),
-    returns: PanelLifecycleResultSchema,
+    returns: PanelObservationSchema,
     authority: panelBoundaryAuthority("rebuildPanel"),
-    access: WRITE_ACCESS,
-  },
-  rebuildAndReload: {
-    description: "Rebuild a panel's runtime artifacts from source and then reload its view.",
-    args: z.tuple([PanelIdSchema]),
-    returns: PanelLifecycleResultSchema,
-    authority: panelBoundaryAuthority("rebuildAndReload"),
     access: WRITE_ACCESS,
   },
   updatePanelState: {
@@ -365,9 +390,9 @@ export const panelTreeMethods = defineServiceMethods({
   },
   snapshot: {
     description:
-      "Return a readable snapshot of one loaded panel, using its agent snapshot when available and accessibility-tree fallback otherwise.",
+      "Wait for the current panel attempt to become boot-ready, then capture a provenance-bearing readable document; throws the canonical structured failure otherwise.",
     args: z.tuple([PanelIdSchema]),
-    returns: JsonValueSchema,
+    returns: PanelSnapshotObservationSchema,
     access: READ_ACCESS,
   },
   callAgent: {

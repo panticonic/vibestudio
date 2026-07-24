@@ -35,6 +35,7 @@ export class TestRunner {
     private opts?: {
       onTestStart?: (test: TestCase) => void;
       onTestEnd?: (test: TestCase, result: TestResult, execution: TestExecutionResult) => void;
+      onTestPhase?: (test: TestCase, phase: string) => void;
       onTestResult?: (
         entry: TestSuiteResultEntry,
         aggregate: TestSuiteResult
@@ -214,6 +215,7 @@ export class TestRunner {
       typeof this.runner.forTest === "function"
         ? this.runner.forTest(test.name, {
             workspaceRepoFixture: test.workspaceRepoFixture,
+            authorityPolicy: test.authorityPolicy,
           })
         : this.runner;
     let session: HeadlessSession | undefined;
@@ -222,11 +224,16 @@ export class TestRunner {
       | Awaited<ReturnType<HeadlessRunner["prepareWorkspaceRepoFixture"]>>
       | undefined;
     let failurePhase = test.workspaceRepoFixture ? "workspace-fixture-setup" : "session-setup";
+    const enterPhase = (phase: string): void => {
+      failurePhase = phase;
+      this.opts?.onTestPhase?.(test, phase);
+    };
     try {
       if (test.workspaceRepoFixture) {
+        enterPhase("workspace-fixture-setup");
         workspaceRepoFixtureState = await testRunner.prepareWorkspaceRepoFixture();
       }
-      failurePhase = test.orchestrate ? "orchestration" : "session-setup";
+      enterPhase(test.orchestrate ? "orchestration" : "session-setup");
       const remainingTimeMs = (): number | undefined =>
         testDeadline === undefined ? undefined : Math.max(0, testDeadline - Date.now());
       const sendAndCapture = async (
@@ -287,7 +294,7 @@ export class TestRunner {
           })
         : await (async (): Promise<TestExecutionResult> => {
             session = await testRunner.spawn();
-            failurePhase = "agent-turn";
+            enterPhase("agent-turn");
             const modelExecutionEvidence = await sendAndCapture(session, test.prompt);
 
             const messages = [...session.messages] as ChatMessage[];
@@ -307,7 +314,7 @@ export class TestRunner {
         collectToolFailures(execution),
         test.expectedToolFailures
       );
-      failurePhase = "validation";
+      enterPhase("validation");
       const result = test.validate(execution);
       outcome = { result, execution };
     } catch (err) {
@@ -366,7 +373,10 @@ export class TestRunner {
           // can still own channel delivery, eval, model, and runtime resources;
           // releasing the fixture/lock before their acknowledged teardown makes
           // later tests race work from an earlier trajectory.
-          await session.close();
+          enterPhase("session-cleanup");
+          await session.close({
+            onPhase: (cleanup) => enterPhase(`session-cleanup:${cleanup.phase}`),
+          });
           if (outcome) {
             outcome.execution.diagnostics = {
               ...(outcome.execution.diagnostics ?? {}),
@@ -424,6 +434,7 @@ export class TestRunner {
         }
       }
       if (workspaceRepoFixtureState) {
+        enterPhase("workspace-fixture-cleanup");
         try {
           const fixtureCleanup =
             await testRunner.cleanupWorkspaceRepoFixture(workspaceRepoFixtureState);

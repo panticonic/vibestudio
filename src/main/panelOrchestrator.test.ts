@@ -18,7 +18,6 @@ function makePanel(id: string, children: Panel[] = [], overrides?: Partial<Panel
     buildKey: "b".repeat(64),
     executionDigest: "e".repeat(64),
     authorityRequests: [],
-    authorityEvalCeilings: [],
     children,
     snapshot,
     artifacts: {},
@@ -1042,47 +1041,6 @@ describe("PanelOrchestrator.rebuildPanel", () => {
       status: "rebuild_requested",
       rebuilt: true,
       reloaded: false,
-    });
-  });
-
-  it("rebuilds and reloads only the named panel", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
-    const parent = makePanel("panel:tree/parent", [], {
-      snapshot: {
-        source: "panels/parent",
-        contextId: "ctx-panel:tree/parent",
-        options: {},
-      },
-      artifacts: { buildState: "ready", buildRevision: 3 },
-    });
-    const child = makePanel("panel:tree/child", [], {
-      snapshot: {
-        source: "panels/child",
-        contextId: "ctx-panel:tree/child",
-        options: {},
-      },
-      artifacts: { buildState: "ready", buildRevision: 7 },
-    });
-    registry.addPanel(parent, null, { addAsRoot: true });
-    registry.addPanel(child, parent.id);
-
-    const { orchestrator, panelView, panelHttpServer } = createOrchestrator(registry);
-    panelView.hasView.mockImplementation((panelId: string) => panelId === parent.id);
-
-    const result = await orchestrator.rebuildAndReloadPanel(parent.id);
-
-    expect(panelHttpServer.invalidateBuild).toHaveBeenCalledWith("panels/parent");
-    expect(panelHttpServer.invalidateBuild).not.toHaveBeenCalledWith("panels/child");
-    expect(panelView.reloadView).toHaveBeenCalledWith(parent.id);
-    expect(panelView.reloadView).not.toHaveBeenCalledWith(child.id);
-    expect(panelView.destroyView).not.toHaveBeenCalledWith(child.id);
-    expect(result).toMatchObject({
-      panelId: parent.id,
-      operation: "rebuildAndReload",
-      status: "rebuilt_and_reloaded",
-      loaded: true,
-      rebuilt: true,
-      reloaded: true,
     });
   });
 });

@@ -3,6 +3,7 @@ import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-sessio
 import type { HeadlessRunner } from "./runner.js";
 import type { SystemTestFailure } from "./structured-error.js";
 import type { WorkspaceRepoFixtureSpec } from "./workspace-repo-fixture.js";
+import type { AgentExecutionTestPolicySpec } from "@vibestudio/shared/authority/testPolicy";
 
 export type {
   StructuredSystemTestError,
@@ -76,6 +77,11 @@ export interface TestCase {
   category: string;
   /** Natural language task prompt sent to the test agent */
   prompt: string;
+  /**
+   * Scenario-specific prompt decisions. The runner adds only its exact model
+   * credential baseline; every other promptable request must be listed here.
+   */
+  authorityPolicy?: Omit<AgentExecutionTestPolicySpec, "testId" | "unexpectedPrompts">;
   /** Tool errors deliberately induced by this test, not infrastructure defects. */
   expectedToolFailures?: ExpectedToolFailure[];
   /**
@@ -92,6 +98,9 @@ export interface TestCase {
    * section, or seeds a buildable panel and expects exactly one derived panel.
    * Cleanup derives identities only from the task's exact first-parent work and
    * touches protected main only when a task event is reachable from it.
+   * The runner derives a repository-qualified `workspace-main-advance`
+   * authority rule from this same scope; unexpected publication outside the
+   * fixture remains an immediate test-policy failure.
    * This keeps fixture mechanics out of the user-like prompt.
    */
   workspaceRepoFixture?: WorkspaceRepoFixtureSpec;

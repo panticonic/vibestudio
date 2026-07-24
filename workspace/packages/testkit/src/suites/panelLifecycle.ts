@@ -36,7 +36,7 @@ export const panelLifecycle = suite("panel-lifecycle", { timeoutMs: 60_000 })
   .test("opened panel reports loaded and yields a readable snapshot", async (t) => {
     const handle = await openPanel(TARGET_PANEL_SOURCE);
     t.defer(() => handle.close().then(() => undefined));
-    expect(await handle.isLoaded(), "isLoaded").toBe(true);
+    expect((await handle.observe()).phase, "panel phase").toBe("ready");
     const text = await waitFor(async () => (await panelText(handle)) || undefined, {
       label: "panel renders visible text",
     });

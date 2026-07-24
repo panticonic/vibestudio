@@ -135,30 +135,6 @@ describe("ServerUnitApprovalCoordinator", () => {
     expect(denyApp).toHaveBeenCalledOnce();
   });
 
-  it("auto-approves startup unit batches when explicitly enabled", async () => {
-    const approvalQueue = {
-      request: vi.fn(async () => "deny" as const),
-    };
-    const coordinator = new ServerUnitApprovalCoordinator({
-      approvalQueue,
-      delayMs: 1,
-      autoApproveStartupUnits: true,
-    });
-    const applyApp = vi.fn(async () => undefined);
-    const denyApp = vi.fn();
-
-    await coordinator.enqueue({
-      trigger: "startup",
-      entries: [unit("app", "shell")],
-      applyApproved: applyApp,
-      applyDenied: denyApp,
-    });
-
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(applyApp).toHaveBeenCalledOnce();
-    expect(denyApp).not.toHaveBeenCalled();
-  });
-
   it("can publish a queued batch before the timer fires", async () => {
     let resolveDecision!: (decision: "once") => void;
     const approvalQueue = {
@@ -231,14 +207,10 @@ describe("ServerUnitApprovalCoordinator", () => {
     }
   });
 
-  it("exposes auto-approved activation settlement to startup readiness", async () => {
-    const approvalQueue = {
-      request: vi.fn(async () => "deny" as const),
-    };
+  it("exposes approved activation settlement to startup readiness", async () => {
     const coordinator = new ServerUnitApprovalCoordinator({
-      approvalQueue,
+      approvalQueue: { request: vi.fn(async () => "once" as const) },
       delayMs: 10_000,
-      autoApproveStartupUnits: true,
     });
     let releaseApply!: () => void;
     const applyReleased = new Promise<void>((resolve) => {
@@ -275,7 +247,6 @@ describe("ServerUnitApprovalCoordinator", () => {
     const coordinator = new ServerUnitApprovalCoordinator({
       approvalQueue,
       delayMs: 10_000,
-      autoApproveStartupUnits: true,
     });
     let releaseUnrelatedApp!: () => void;
     const unrelatedAppReleased = new Promise<void>((resolve) => {
@@ -316,7 +287,6 @@ describe("ServerUnitApprovalCoordinator", () => {
     const coordinator = new ServerUnitApprovalCoordinator({
       approvalQueue: { request: vi.fn(async () => "once" as const) },
       delayMs: 10_000,
-      autoApproveStartupUnits: true,
     });
     const enqueued = coordinator.enqueue({
       trigger: "startup",

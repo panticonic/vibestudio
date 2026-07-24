@@ -365,7 +365,6 @@ export class PanelManager {
       buildKey: handle.buildKey ?? null,
       executionDigest: handle.executionDigest ?? null,
       authorityRequests: handle.authorityRequests,
-      authorityEvalCeilings: handle.authorityEvalCeilings,
       ...(opts?.ownerUserId ? { owner: opts.ownerUserId } : {}),
       children: [],
       positionId,
@@ -433,7 +432,6 @@ export class PanelManager {
           livePanel.buildKey = activeHandle.buildKey ?? null;
           livePanel.executionDigest = activeHandle.executionDigest ?? null;
           livePanel.authorityRequests = activeHandle.authorityRequests;
-          livePanel.authorityEvalCeilings = activeHandle.authorityEvalCeilings;
           this.registry.updateArtifacts(slotId, {
             ...livePanel.artifacts,
             buildState: "building",
@@ -792,7 +790,6 @@ export class PanelManager {
       livePanel.buildKey = handle.buildKey ?? null;
       livePanel.executionDigest = handle.executionDigest ?? null;
       livePanel.authorityRequests = handle.authorityRequests;
-      livePanel.authorityEvalCeilings = handle.authorityEvalCeilings;
       this.registry.replaceCurrentSnapshot(slotId, nextSnapshot, nextHistory);
     }
 
@@ -894,7 +891,6 @@ export class PanelManager {
       livePanel.buildKey = handle.buildKey ?? null;
       livePanel.executionDigest = handle.executionDigest ?? null;
       livePanel.authorityRequests = handle.authorityRequests;
-      livePanel.authorityEvalCeilings = handle.authorityEvalCeilings;
       this.registry.replaceCurrentSnapshot(slotId, targetSnapshot, nextHistoryState);
     }
     if (transition.previousEntityId !== entityId) {
@@ -1422,7 +1418,6 @@ export class PanelManager {
       livePanel.buildKey = handle.buildKey ?? null;
       livePanel.executionDigest = handle.executionDigest ?? null;
       livePanel.authorityRequests = handle.authorityRequests;
-      livePanel.authorityEvalCeilings = handle.authorityEvalCeilings;
       const history = panel.history ?? { entries: [getCurrentSnapshot(panel)], index: 0 };
       const entries = history.entries.slice();
       entries[history.index] = nextSnapshot;

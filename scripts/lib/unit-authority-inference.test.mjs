@@ -40,7 +40,7 @@ describe("inferDirectRpcCapabilities", () => {
     const inferred = inferDirectRpcCapabilities(
       `
         rpc.call(target, "publish", [message]);
-        rpc.callDeferred(target, "subscribeChannel", [config]);
+        rpc.call(target, "subscribeChannel", [config]);
         rpc.stream(target, "subscribe", [clientId, metadata]);
         rpc.streamReadable(target, "subscribe", [clientId, metadata]);
       `,
@@ -203,7 +203,7 @@ describe("declared host-method capability dependencies", () => {
                   requirement: { kind: "selected", principals: ["code", "host"] },
                 },
                 {
-                  capability: "workspace-service:*",
+                  capabilityPrefix: "workspace-service:",
                   requirement: { kind: "selected", principals: ["code"] },
                 },
               ],

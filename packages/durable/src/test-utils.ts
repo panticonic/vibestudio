@@ -1,9 +1,6 @@
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
-import type {
-  AuthenticatedCaller,
-  AuthorizationContext,
-  DirectAuthorityAttestation,
-} from "@vibestudio/rpc";
+import type { AuthenticatedCaller, AuthorizationContext } from "@vibestudio/rpc";
+import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import { rpcMethodAuthority } from "@vibestudio/rpc";
 
 type BindParams = Parameters<Database["run"]>[1];
@@ -154,6 +151,8 @@ export function createTestDirectAuthority(input: {
     initiatorChain: [principal],
     ownerChain: isHost ? [] : ["user:test"],
     agentBinding: null,
+    executionSession: null,
+    testPolicy: null,
     workspace: { workspaceId: "test", member: true, role: "member", revision: "test" },
     session: { id: "test", audience, version: "1", expiresAt: now + 60_000 },
     contextIntegrity: { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
@@ -163,9 +162,7 @@ export function createTestDirectAuthority(input: {
     method: input.method,
     effect:
       input.effect ??
-      (input.capability
-        ? { kind: "semantic", capability }
-        : { kind: "runtime-intrinsic" }),
+      (input.capability ? { kind: "semantic", capability } : { kind: "runtime-intrinsic" }),
     capability,
     resourceKey: audience,
     issuedAt: now,
@@ -267,11 +264,8 @@ export async function createTestDO<T>(
     const request = new Request(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // Attribute as the server (the trusted relay): `assertInboundAllowed`
-      // overrides (e.g. WebhookStoreDO/WorkspaceDO/EvalDO server-only,
-      // BrowserDataDO shell+server) refuse an unattributed caller. The
-      // instance-token gates whether `__caller` is trusted (the test token "token"
-      // resolves to this callerId; see assertInboundAllowed.test).
+      // Attribute the request as the trusted server relay. The instance token
+      // gates whether this caller and its direct-authority attestation are accepted.
       body: JSON.stringify({
         args,
         __instanceToken: "token",

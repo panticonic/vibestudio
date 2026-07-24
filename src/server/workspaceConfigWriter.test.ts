@@ -208,6 +208,64 @@ describe("workspaceConfigWriter", () => {
     expect(vcs.dropContext).toHaveBeenCalledOnce();
   });
 
+  it("keeps an operation failure primary when temporary-context cleanup also fails", async () => {
+    const operationFailure = Object.assign(new Error("protected publication failed"), {
+      code: "EPUBLISH",
+      errorKind: "application",
+      errorData: { stage: "push" },
+    });
+    const cleanupFailure = Object.assign(new Error("context cleanup failed"), {
+      code: "EACCES",
+      errorKind: "access",
+      errorData: { authorityFailure: { reasonCode: "missing-grant" } },
+    });
+    const semanticCausalCall = configReader(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`);
+    const vcs = {
+      ensureContext: vi.fn(async () => mainState),
+      dropContext: vi.fn(async () => {
+        throw cleanupFailure;
+      }),
+      semanticCausalCall,
+      semanticPublishCall: vi.fn(async () => {
+        throw operationFailure;
+      }),
+    } as unknown as WorkspaceVcs;
+    const writer = createWorkspaceConfigMainWriter({ workspaceId: WORKSPACE_ID, vcs });
+    const ctx = {
+      caller: createVerifiedCaller("shell:dev", "shell"),
+      requestId: "request:config-failure",
+      authorization: INTERNAL_AUTHORIZATION,
+    } satisfies ServiceContext;
+
+    const rejected = await writer
+      .applyMutation({
+        ctx,
+        mutate: (config) => ({ ...config, defaultRepo: "panels/new" }),
+        summary: "change default repo",
+      })
+      .catch((error: unknown) => error);
+
+    expect(rejected).toBe(operationFailure);
+    expect(rejected).toMatchObject({
+      message: "protected publication failed",
+      code: "EPUBLISH",
+      errorKind: "application",
+      errorData: {
+        stage: "push",
+        cleanupFailures: [
+          {
+            stage: "drop-temporary-context",
+            contextId: expect.stringMatching(/^system:workspace-config:/),
+            message: "context cleanup failed",
+            code: "EACCES",
+            errorKind: "access",
+            errorData: { authorityFailure: { reasonCode: "missing-grant" } },
+          },
+        ],
+      },
+    });
+  });
+
   it("keeps the hub identity out of persisted manifest content", () => {
     const rendered = renderWorkspaceConfigYaml(
       `id: stale-checkout-name\nsystemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`,

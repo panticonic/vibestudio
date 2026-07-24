@@ -16,10 +16,6 @@ import { isBootstrapUnitApproval } from "@vibestudio/shared/bootstrapApprovals";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { ResolvedVia } from "@vibestudio/shared/governance/types";
 import type { ApprovalQueue, ApprovalResolver } from "./approvalQueue.js";
-import {
-  authorityResourceForApprovalScope,
-  type CapabilityGrantStore,
-} from "./capabilityGrantStore.js";
 import { pushMetrics, type PushMetrics } from "./pushMetrics.js";
 
 /**
@@ -65,7 +61,6 @@ export function createShellApprovalService(deps: {
   approvalQueue: ApprovalQueue;
   metrics?: PushMetrics;
   deviceLabelFor?: (deviceId: string) => string | undefined;
-  capabilityGrantStore?: CapabilityGrantStore;
 }): ServiceDefinition {
   const { approvalQueue } = deps;
   const metrics = deps.metrics ?? pushMetrics;
@@ -90,65 +85,32 @@ export function createShellApprovalService(deps: {
         await approvalQueue.resolve(approvalId, decision, resolverFrom(ctx, deviceLabelFor));
         metrics.recordApprovalResolved({ decision, source: ctx.caller.runtime.kind });
       },
-      blockCapability: async (ctx, [approvalId]) => {
+      resolveMissionReview: async (ctx, [approvalId, resolution]) => {
         const pending = approvalQueue
           .listPending()
           .find((approval) => approval.approvalId === approvalId);
-        if (!pending || pending.kind !== "capability") {
+        if (!pending || pending.kind !== "mission-review") {
           throw new ServiceError(
             serviceName,
-            "blockCapability",
-            "No pending capability approval found",
+            "resolveMissionReview",
+            "No pending mission review found",
             "ENOENT"
           );
         }
-        if (!deps.capabilityGrantStore) {
+        const resolver = resolverFrom(ctx, deviceLabelFor);
+        if (!resolver) {
           throw new ServiceError(
             serviceName,
-            "blockCapability",
-            "Capability grant store unavailable",
-            "ENOSYS"
+            "resolveMissionReview",
+            "Mission review requires an authenticated human",
+            "EACCES"
           );
         }
-        const snapshot = pending.snapshot;
-        if (
-          !snapshot ||
-          snapshot.capability !== pending.capability ||
-          snapshot.resourceKey !== pending.grantResourceKey ||
-          !pending.resourceScope
-        ) {
-          throw new ServiceError(
-            serviceName,
-            "blockCapability",
-            "Capability approval has no canonical invocation snapshot",
-            "EINVAL"
-          );
-        }
-        if (pending.cardType === "confirm.critical") {
-          throw new ServiceError(
-            serviceName,
-            "blockCapability",
-            "Critical confirmations cannot create standing decisions",
-            "EINVAL"
-          );
-        }
-        deps.capabilityGrantStore.issue({
-          effect: "deny",
-          capability: snapshot.capability,
-          resource: authorityResourceForApprovalScope(pending.resourceScope),
-          subject: snapshot.callerPrincipal,
-          constraints: snapshot.callerPrincipal.startsWith("session:")
-            ? {
-                sessionId: snapshot.sessionId,
-                ...(snapshot.mission === "-" ? {} : { missionSubject: snapshot.mission }),
-                lineageAtConsent: [],
-              }
-            : { lineageAtConsent: [] },
-          issuedBy: ctx.caller.subject ? `user:${ctx.caller.subject.userId}` : "user:system",
-          provenance: "acquisition",
+        await approvalQueue.resolveMissionReview(approvalId, resolution, resolver);
+        metrics.recordApprovalResolved({
+          decision: resolution.decision,
+          source: ctx.caller.runtime.kind,
         });
-        await approvalQueue.resolve(approvalId, "deny", resolverFrom(ctx, deviceLabelFor));
-        metrics.recordApprovalResolved({ decision: "deny", source: ctx.caller.runtime.kind });
       },
       resolveBootstrap: async (ctx, [approvalId, decision]) => {
         const pending = approvalQueue

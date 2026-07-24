@@ -3357,12 +3357,35 @@ export class SemanticWorkspace {
     ) {
       return { kind: "complete", result: null };
     }
-    const provenance = this.latestAppliedChangeForFile(asState(input.state), point.state.fileId);
+    const lineage = this.fileLineageAt(asState(input.state), point.state.fileId);
+    return {
+      kind: "host-read",
+      request: {
+        kind: "read-semantic-blob",
+        state: input.state,
+        repositoryId: input.repositoryId,
+        fileId: point.state.fileId,
+        repoPath: point.repository.repoPath,
+        path: point.state.path,
+        contentHash: point.state.contentHash,
+        ...lineage,
+        mode: point.state.mode,
+      },
+    };
+  }
+
+  private fileLineageAt(
+    state: StateNodeRef,
+    fileId: string
+  ): {
+    authoredChangeId: string;
+    authoredByWorkUnitId: string;
+    contentClass: "internal" | "external";
+    externalKeys: string[];
+  } {
+    const provenance = this.latestAppliedChangeForFile(state, fileId);
     if (!provenance) {
-      throw new SemanticVcsError(
-        "IntegrityFailure",
-        `File ${point.state.fileId} has no authoring work unit`
-      );
+      throw new SemanticVcsError("IntegrityFailure", `File ${fileId} has no authoring work unit`);
     }
     const workUnit = this.deps.sql
       .exec(
@@ -3376,32 +3399,21 @@ export class SemanticWorkspace {
     ) {
       throw new SemanticVcsError(
         "IntegrityFailure",
-        `File ${point.state.fileId} has no valid persisted content class`
+        `File ${fileId} has no valid persisted content class`
       );
     }
     const externalKeys = JSON.parse(String(workUnit["external_lineage_json"]));
     if (!Array.isArray(externalKeys) || !externalKeys.every((key) => typeof key === "string")) {
       throw new SemanticVcsError(
         "IntegrityFailure",
-        `File ${point.state.fileId} has invalid persisted external lineage`
+        `File ${fileId} has invalid persisted external lineage`
       );
     }
     return {
-      kind: "host-read",
-      request: {
-        kind: "read-semantic-blob",
-        state: input.state,
-        repositoryId: input.repositoryId,
-        fileId: point.state.fileId,
-        repoPath: point.repository.repoPath,
-        path: point.state.path,
-        contentHash: point.state.contentHash,
-        authoredChangeId: provenance.changeId,
-        authoredByWorkUnitId: provenance.workUnitId,
-        contentClass: workUnit["content_class"],
-        externalKeys,
-        mode: point.state.mode,
-      },
+      authoredChangeId: provenance.changeId,
+      authoredByWorkUnitId: provenance.workUnitId,
+      contentClass: workUnit["content_class"] as "internal" | "external",
+      externalKeys: externalKeys as string[],
     };
   }
 
@@ -3430,6 +3442,7 @@ export class SemanticWorkspace {
         fileId: state.fileId,
         path: state.path,
         contentHash: state.contentHash,
+        ...this.fileLineageAt(asState(input.state), state.fileId),
         mode: state.mode,
         contentKind: state.contentKind,
         byteLength: state.byteLength,

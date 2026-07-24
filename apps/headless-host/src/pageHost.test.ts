@@ -214,3 +214,42 @@ describe("PageHost.domSnapshot", () => {
     expect(expression).not.toContain("innerText");
   });
 });
+
+describe("PageHost.panelPageObservation", () => {
+  it("reads and validates the canonical boot and document readiness state", async () => {
+    const value = {
+      view: { url: "http://127.0.0.1/panel", loading: false },
+      boot: {
+        phase: "ready",
+        runtimeEntityId: "panel:nav-a",
+        source: "panels/example",
+        contextId: "ctx-a",
+        effectiveVersion: "state-a",
+        buildKey: "build-a",
+      },
+    };
+    const send = vi.fn(async () => ({ result: { value } }));
+    const cdp = { onEvent: vi.fn(), send };
+    const host = new PageHost(cdp as never, new ConsoleHistoryStore());
+    const pages = (host as unknown as { pages: Map<string, unknown> }).pages;
+    pages.set("panel-1", {
+      slotId: "panel-1",
+      contextId: "context-1",
+      targetId: "target-1",
+      mgmtSessionId: "mgmt-1",
+      relaySessionId: null,
+      panelUrl: "http://127.0.0.1/panel",
+      lastUsedAt: 0,
+    });
+
+    await expect(host.panelPageObservation("panel-1")).resolves.toEqual(value);
+    expect(send).toHaveBeenCalledWith(
+      "Runtime.evaluate",
+      expect.objectContaining({
+        expression: expect.stringContaining("__vibestudioPanelBoot"),
+        returnByValue: true,
+      }),
+      "mgmt-1"
+    );
+  });
+});

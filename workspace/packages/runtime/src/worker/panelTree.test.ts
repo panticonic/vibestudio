@@ -42,6 +42,25 @@ function respond(init: RequestInit | undefined, result: unknown) {
   );
 }
 
+function readyObservation(panelId: string, source = "panels/a") {
+  const browser = source.startsWith("browser:");
+  return {
+    panelId,
+    title: "Panel A",
+    source,
+    kind: browser ? "browser" : "workspace",
+    parentId: null,
+    contextId: "ctx",
+    requestedRef: "main",
+    runtimeEntityId: `panel:${panelId}-current-entity`,
+    attemptId: `panel:${panelId}-current-entity@build-a`,
+    effectiveVersion: "ev-a",
+    buildKey: "build-a",
+    phase: "ready",
+    updatedAt: 1,
+  };
+}
+
 describe("worker panelTree handles", () => {
   const originalFetch = globalThis.fetch;
 
@@ -126,12 +145,11 @@ describe("worker panelTree handles", () => {
     });
 
     const handle = runtime.panelTree.get("slot-a");
-    await handle.refresh();
+    await handle.call["ping"]?.();
     expect(handle.title).toBe("Panel A");
     expect(handle.source).toBe("panels/a");
     expect(handle.kind).toBe("workspace");
     expect(handle.parentId).toBe("root");
-    await handle.call["ping"]?.();
     await handle.emit("ready", { ok: true });
     runtime.destroy();
 
@@ -157,26 +175,15 @@ describe("worker panelTree handles", () => {
     ]);
   });
 
-  it("resolves isLoaded from the server runtime lease", async () => {
+  it("reads canonical boot readiness from observe", async () => {
     const calls: Array<{ targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = parseReq(init);
       delete (body as Record<string, unknown>)["requestId"];
       delete (body as Record<string, unknown>)["idempotencyKey"];
       calls.push(body);
-      if (body.method === "panelTree.getRuntimeLease") {
-        return respond(init, {
-          slotId: "slot-a",
-          runtimeEntityId: "panel:slot-a-current-entity",
-          clientSessionId: "desktop",
-          hostConnectionId: "desktop",
-          connectionId: "desktop",
-          holderLabel: "Desktop",
-          platform: "desktop",
-          supportsCdp: true,
-          loadOnLeaseAssignment: true,
-          acquiredAt: 1,
-        });
+      if (body.method === "panelTree.observe") {
+        return respond(init, readyObservation("slot-a"));
       }
       return respond(init, null);
     }) as typeof fetch;
@@ -190,20 +197,22 @@ describe("worker panelTree handles", () => {
       GATEWAY_URL: "http://server.test",
     });
 
-    await expect(runtime.panelTree.get("slot-a").isLoaded()).resolves.toBe(true);
+    await expect(runtime.panelTree.get("slot-a").observe()).resolves.toMatchObject({
+      phase: "ready",
+    });
     runtime.destroy();
 
     expect(calls).toEqual([
       {
         type: "call",
         targetId: "main",
-        method: "panelTree.getRuntimeLease",
+        method: "panelTree.observe",
         args: ["slot-a"],
       },
     ]);
   });
 
-  it("refreshes arbitrary handles after ensureLoaded before target RPC", async () => {
+  it("binds arbitrary handles to the runtime entity reported by observe", async () => {
     const calls: Array<{ type?: string; targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = parseReq(init);
@@ -213,14 +222,21 @@ describe("worker panelTree handles", () => {
         method: body.method,
         args: body.args,
       });
-      if (body.method === "panelTree.metadata") {
+      if (body.method === "panelTree.observe") {
         return respond(init, {
-          id: "slot-a",
+          panelId: "slot-a",
           title: "Panel A",
           source: "panels/a",
           kind: "workspace",
           parentId: "root",
+          contextId: "ctx",
+          requestedRef: "main",
           runtimeEntityId: "panel:slot-a-current-entity",
+          attemptId: "panel:slot-a-current-entity@build-a",
+          effectiveVersion: "ev-a",
+          buildKey: "build-a",
+          phase: "ready",
+          updatedAt: 1,
         });
       }
       return respond(init, { loaded: true });
@@ -236,7 +252,7 @@ describe("worker panelTree handles", () => {
     });
 
     const handle = runtime.panelTree.get("slot-a");
-    await handle.ensureLoaded();
+    await handle.observe();
     await handle.call["ping"]?.();
     runtime.destroy();
 
@@ -244,13 +260,7 @@ describe("worker panelTree handles", () => {
       {
         type: "call",
         targetId: "main",
-        method: "panelTree.ensureLoaded",
-        args: ["slot-a"],
-      },
-      {
-        type: "call",
-        targetId: "main",
-        method: "panelTree.metadata",
+        method: "panelTree.observe",
         args: ["slot-a"],
       },
       {
@@ -312,7 +322,11 @@ describe("worker panelTree handles", () => {
           title: "Created",
           kind: "workspace",
           runtimeEntityId: "panel:created-entity",
+          observation: readyObservation("created-slot", "panels/direct"),
         });
+      }
+      if (body.method === "panelTree.focus") {
+        return respond(init, readyObservation("browser-slot", "browser:https://example.com"));
       }
       return respond(init, "ok");
     }) as typeof fetch;
@@ -376,7 +390,11 @@ describe("worker panelTree handles", () => {
           title: "Created",
           kind: "workspace",
           runtimeEntityId: "panel:created-entity",
+          observation: readyObservation("created-slot", "panels/direct"),
         });
+      }
+      if (body.method === "panelTree.focus") {
+        return respond(init, readyObservation("browser-slot", "browser:https://example.com"));
       }
       return respond(init, null);
     }) as typeof fetch;
@@ -404,7 +422,7 @@ describe("worker panelTree handles", () => {
     expect(direct.id).toBe("created-slot");
     expect(listed).toEqual([]);
     expect(browser.kind).toBe("browser");
-    expect(browser.source).toBe("browser-slot");
+    expect(browser.source).toBe("https://example.com");
     expect(calls).toEqual([
       {
         type: "call",
@@ -447,7 +465,13 @@ describe("worker panelTree handles", () => {
       delete (body as Record<string, unknown>)["requestId"];
       delete (body as Record<string, unknown>)["idempotencyKey"];
       calls.push(body);
-      return respond(init, { wsEndpoint: "ws://cdp.test" });
+      if (body.method === "panelCdp.getCdpEndpoint") {
+        return respond(init, { wsEndpoint: "ws://cdp.test" });
+      }
+      if (body.method === "panelTree.reload" || body.method === "panelTree.rebuildPanel") {
+        return respond(init, readyObservation("parent-slot", "panels/parent"));
+      }
+      return respond(init, undefined);
     }) as typeof fetch;
 
     const { createWorkerRuntime } = await import("./index.js");
@@ -466,16 +490,13 @@ describe("worker panelTree handles", () => {
     expect(runtime.parent.id).toBe("parent-slot");
     expect(parent?.id).toBe("parent-slot");
     expect(runtime.getParentWithContract({ source: "panels/child" })?.id).toBe("parent-slot");
-    await expect(parent?.getInfo()).resolves.toMatchObject({
-      id: "parent-slot",
-      parentId: null,
-    });
+    expect(parent).toMatchObject({ id: "parent-slot", parentId: null });
     await parent?.call["ping"]?.();
     await expect(parent?.cdp.getCdpEndpoint()).resolves.toEqual({
       wsEndpoint: "ws://cdp.test",
     });
     await parent?.reload();
-    await parent?.rebuildAndReload();
+    await parent?.rebuild();
     runtime.destroy();
 
     expect(calls).toEqual([
@@ -500,7 +521,7 @@ describe("worker panelTree handles", () => {
       {
         type: "call",
         targetId: "main",
-        method: "panelTree.rebuildAndReload",
+        method: "panelTree.rebuildPanel",
         args: ["parent-slot"],
       },
     ]);

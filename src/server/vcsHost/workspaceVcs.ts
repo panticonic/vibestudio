@@ -141,9 +141,47 @@ function semanticRequestContextId(request: unknown): string | null {
   return typeof contextId === "string" && contextId.length > 0 ? contextId : null;
 }
 
+function semanticCallAbortError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  const error = new Error(
+    typeof signal.reason === "string" ? signal.reason : "Semantic VCS call aborted"
+  );
+  error.name = "AbortError";
+  return error;
+}
+
+/**
+ * Caller-driven publication includes review, authority acquisition, protected
+ * ref mutation, and semantic acknowledgement. Cancellation owns that complete
+ * operation, not only the final authority wait. Racing at the per-context lock
+ * boundary releases later status/recovery calls immediately; any detached
+ * publication continuation still carries the already-aborted gate signal, so
+ * it cannot newly acquire authority. If protected refs were already applied,
+ * their durable publication receipt makes the caller's exact retry safe.
+ */
+function abortableSemanticCall<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(semanticCallAbortError(signal));
+  const pending = operation();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(semanticCallAbortError(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    pending.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      }
+    );
+  });
+}
+
 export type CallerPublicationGateContext = {
   kind: "caller";
   caller: VerifiedCaller;
+  signal?: AbortSignal;
   via?: string;
 };
 
@@ -289,8 +327,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       });
       return this.drainSemanticResult<T>(next, publicationGateContext);
     };
+    const operation = (): Promise<T> => {
+      const signal =
+        publicationGateContext?.kind === "caller" ? publicationGateContext.signal : undefined;
+      return signal ? abortableSemanticCall(dispatch, signal) : dispatch();
+    };
     const contextId = semanticRequestContextId(request);
-    return contextId ? this.locked(`context-lifecycle:${contextId}`, dispatch) : dispatch();
+    return contextId ? this.locked(`context-lifecycle:${contextId}`, operation) : operation();
   }
 
   semanticDirectCall<T>(method: string, input: unknown): Promise<T> {
@@ -330,7 +373,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     input: unknown,
     causalParent: RpcCausalParent | null,
     caller: VerifiedCaller,
-    contextIntegrity: SemanticRequest["ingress"]["contextIntegrity"]
+    contextIntegrity: SemanticRequest["ingress"]["contextIntegrity"],
+    signal?: AbortSignal
   ): Promise<T> {
     return this.semanticCall<T>(
       "vcsPush",
@@ -338,7 +382,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         input,
         ingress: { causalParent, contextIntegrity },
       } satisfies SemanticRequest,
-      { kind: "caller", caller }
+      { kind: "caller", caller, ...(signal ? { signal } : {}) }
     );
   }
 

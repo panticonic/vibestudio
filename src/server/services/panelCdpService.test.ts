@@ -8,7 +8,10 @@ import {
   type ServiceContext,
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
-import { testAuthority } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import {
+  createTestExecutionSession,
+  testAuthority,
+} from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
 import { CONTEXT_BOUNDARY_CAPABILITY, contextBoundaryResourceKey } from "./contextBoundary.js";
@@ -32,6 +35,10 @@ function approvalQueueMock(
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
+    requestMissionReview: vi.fn(async () => ({
+      decision: "dismiss" as const,
+      decidedBy: "user:test" as const,
+    })),
     presentDeviceCode: vi.fn(() => ({
       approvalId: "device-code-test",
       cancelled: new AbortController().signal,
@@ -39,6 +46,7 @@ function approvalQueueMock(
     })),
     resolve: vi.fn(),
     resolveUserland: vi.fn(),
+    resolveMissionReview: vi.fn(),
     requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
     resolveExternalAgent: vi.fn(),
     settleExternalAgent: vi.fn(() => 0),
@@ -347,7 +355,15 @@ describe("panelCdpService", () => {
       null,
       { entityId: "privileged", contextId: "ctx-caller", channelId: "chan" },
       null,
-      true
+      createTestExecutionSession({
+        runtimeId: "agent:privileged",
+        contextId: "ctx-caller",
+        agentBinding: {
+          entityId: "privileged",
+          channelId: "chan",
+          bindingId: "privileged",
+        },
+      })
     );
     await dispatchCdp(service, { caller }, "getCdpEndpoint", ["shell"]);
 
@@ -613,7 +629,7 @@ describe("panelCdpService", () => {
   });
 
   it("lets a session-bound agent acquire cross-context panel access without anchor substitution", async () => {
-    const approvalQueue = approvalQueueMock("session");
+    const approvalQueue = approvalQueueMock("once");
     const screenshot = vi.fn(async () => ({
       data: "aGk=",
       mimeType: "image/png" as const,
@@ -649,7 +665,15 @@ describe("panelCdpService", () => {
         agentId: "agt_1",
       },
       null,
-      true
+      createTestExecutionSession({
+        runtimeId: "agent:ent-1",
+        contextId: "ctx-agent",
+        agentBinding: {
+          entityId: "ent-1",
+          channelId: "chan-1",
+          bindingId: "agt_1",
+        },
+      })
     );
 
     await expect(

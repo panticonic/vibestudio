@@ -40,6 +40,8 @@ let compiledInternalDOBundle: InternalDOBundle;
 const PUBSUB_WORKSPACE_SERVICE = {
   source: "workers/pubsub-channel",
   name: "pubsub.channel.v1",
+  action: "send and receive conversation messages",
+  presentation: { domain: "sharing", verb: "act" },
   authority: { principals: ["host", "user", "code", "session"] },
   durableObject: { className: "PubSubChannel" },
 } satisfies WorkspaceServiceDecl;
@@ -122,7 +124,6 @@ async function createWorkerdHarness(
         buildKey,
         executionDigest: "a".repeat(64),
         authorityRequests: [],
-        authorityEvalCeilings: [],
       };
     },
     getBuildByKey: (key: string) => builds.get(key) ?? null,
@@ -303,7 +304,7 @@ function buildResult(
       ev,
       sourceStateHash: "state:test",
       sourcemap: false,
-      authority: { requests: [], evalCeilings: [] },
+      authority: { requests: [] },
       workspaceRpcCatalog,
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",

@@ -19,7 +19,6 @@ function panelCtx(): ServiceContext {
           resource: { kind: "prefix", prefix: "caller:" },
         },
       ],
-      evalCeilings: [],
     }),
   };
 }

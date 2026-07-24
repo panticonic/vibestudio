@@ -92,8 +92,13 @@ They are infrastructure defects even if the capability marker was present.
 
 Capture session state before close, then inspect the normalized execution-level
 cleanup errors. The snapshot retains the same raw session cleanup events as
-evidence; diagnostic summaries do not count them a second time. A later test that encounters leaked state is
-secondary evidence; repair the original lifecycle leak.
+evidence; diagnostic summaries do not count them a second time. `snapshot.cleanup`
+is the live/terminal teardown state and names the exact acknowledged phase:
+`unsubscribing-agent`, `capturing-model-evidence`, `disconnecting-client`,
+`destroying-agent-context`, `retiring-agent`, or `complete`. Its
+`phaseStartedAt` distinguishes a slow active boundary from an old transcript;
+`completedAt` exists only for terminal cleanup. A later test that encounters
+leaked state is secondary evidence; repair the original lifecycle leak.
 
 ## Artifact handling
 

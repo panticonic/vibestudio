@@ -18,14 +18,39 @@ pnpm cli remote serve --port 3030
 pnpm cli mobile install --launch
 ```
 
-`pnpm cli ...` runs `src/cli/client.ts` through `tsx`, so CLI source changes are
-picked up without rebuilding or relinking. It also sets
+`pnpm cli ...` runs the live TypeScript CLI through `tsx`, so CLI source changes
+are picked up without rebuilding or relinking. It also sets
 `VIBESTUDIO_SERVER_ENTRY=live`, so pairing and mobile-dev commands start the
 standalone server from `src/server/index.ts`.
 
 ```sh
 pnpm server:live --help
+pnpm server:live --ephemeral --instance test-a
+pnpm cli --instance test-a system-test doctor
 ```
+
+`pnpm dev` and `pnpm server:live` use the same instance supervisor. A developer
+instance owns one isolated hub state root: lease, server/device identity,
+databases, workspaces, caches, ports, ready file, CLI credential, and CLI
+sessions. User profile configuration, encrypted provider credentials, and their
+encryption key remain shared, so a fresh test instance can use configured models
+without copying secrets.
+
+`pnpm dev` and `pnpm server:live` both default to the persistent `source`
+instance. It is the checkout's one source-coupled development identity:
+protected workspace publications are mirrored back into `workspace/`, so
+interactive edits survive a restart. The checkout-scoped instance lock prevents
+the desktop and standalone launchers from accidentally owning that identity at
+the same time.
+
+`--instance NAME` selects another persistent state root. `--ephemeral` creates a
+temporary root deleted after ordered shutdown; combine it with a name for
+parallel testing. Every non-`source` instance is fully isolated: its protected
+workspace publications remain in its own copied workspace and are never
+mirrored into the checkout. The supervisor prints
+`pnpm cli --instance NAME <command>`. The instance registry is checkout-scoped,
+so identical names in different worktrees do not collide. Starting or stopping
+one instance never signals another.
 
 Electron local mode spawns the bundled `dist/server-electron.cjs` as one
 **detached machine hub** (`process.execPath` with `ELECTRON_RUN_AS_NODE=1`, see
@@ -197,9 +222,15 @@ vibestudio agent attach [NAME]
 vibestudio agent status [NAME]
 vibestudio agent call SERVICE.METHOD '[]'
 vibestudio agent services [NAME]
+vibestudio agent skills [NAME_OR_REPO_PATH] [--session NAME]
 vibestudio agent logs UNIT
 vibestudio agent diag UNIT
 ```
+
+Workspace resources are semantic reads, so `agent skills` uses the selected
+durable agent session's exact context (`default` unless `--session` is given).
+It fails with the corresponding `agent attach` command when that session does
+not exist; it never guesses a checkout or reads the host filesystem directly.
 
 ### Headless agentic system tests
 
@@ -228,6 +259,10 @@ mode-`0600` artifacts default to
 `${XDG_CONFIG_HOME:-~/.config}/vibestudio/system-test-runs/<run-id>/`; pass
 `--out-dir` to choose another artifact root; each run gets its own subdirectory.
 Exact test names are used to avoid accidental substring expansion.
+
+The default system-test model is `openai-codex:gpt-5.4-mini` with no implicit
+usage-limit fallback. `doctor` checks that exact model, and run metadata records
+the same route.
 Each test has one five-minute agent-turn budget by default, shared by all phases
 of an orchestrated test. Pass `--test-timeout-ms N` to replace that budget in
 milliseconds; a timeout produces a terminal errored test result with captured

@@ -84,7 +84,6 @@ const workerCtx: ServiceContext = {
         resource: { kind: "exact", key: "approvals.read" },
       },
     ],
-    evalCeilings: [],
   }),
 };
 const doCtx: ServiceContext = {
@@ -100,7 +99,6 @@ const doCtx: ServiceContext = {
         resource: { kind: "exact", key: "approvals.read" },
       },
     ],
-    evalCeilings: [],
   }),
 };
 const extensionCtx: ServiceContext = {
@@ -145,6 +143,85 @@ describe("userlandApprovalService", () => {
         []
       )
     ).rejects.toBeInstanceOf(ServiceAccessError);
+  });
+
+  it("applies only an exact host-attested test choice and records its provenance", async () => {
+    const { service, queued, record } = createDeps();
+    const subjectId = "system-test:harmless-resource";
+    const ctx: ServiceContext = {
+      caller: {
+        ...workerCtx.caller,
+        testPolicy: {
+          policyId: "test:run:case:approval",
+          kind: "case",
+          orchestratorPolicyId: "test:run",
+          case: {
+            testId: "approval",
+            authority: [],
+            userland: [
+              {
+                ruleId: "approve-harmless",
+                subjectId,
+                decision: "allow",
+                remember: true,
+              },
+            ],
+            unexpectedPrompts: "fail",
+          },
+        },
+      },
+    };
+    const request = {
+      subject: { id: subjectId, label: "Harmless resource" },
+      title: "Allow harmless resource?",
+      summary: "System-test approval lifecycle.",
+    };
+
+    await expect(service.handler(ctx, "request", [request])).resolves.toEqual({
+      kind: "choice",
+      choice: "allow",
+    });
+    expect(queued).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledWith(
+      expect.anything(),
+      request.subject,
+      "allow",
+      expect.any(Number),
+      undefined,
+      "version",
+      {
+        provenance: "preauthorization",
+        decidedBy: expect.stringContaining(":approve-harmless"),
+      }
+    );
+    await expect(
+      service.handler(ctx, "request", [
+        {
+          ...request,
+          promptOptions: "choices",
+          options: [
+            { value: "allow", label: "Allow" },
+            { value: "deny", label: "Deny" },
+          ],
+        },
+      ])
+    ).resolves.toEqual({ kind: "choice", choice: "allow" });
+    expect(record).toHaveBeenLastCalledWith(
+      expect.anything(),
+      request.subject,
+      "allow",
+      expect.any(Number),
+      undefined,
+      "caller",
+      expect.objectContaining({
+        provenance: "preauthorization",
+      })
+    );
+    await expect(
+      service.handler(ctx, "request", [
+        { ...request, subject: { id: "system-test:unexpected", label: "Unexpected" } },
+      ])
+    ).rejects.toMatchObject({ code: "EUNEXPECTEDTESTPROMPT" });
   });
 
   it("rejects unknown caller identities", async () => {

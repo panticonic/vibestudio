@@ -1620,7 +1620,6 @@ function withRequestedSourceState(build: BuildResult, sourceStateHash: string): 
 
 const EMPTY_UNIT_AUTHORITY: UnitAuthorityManifest = Object.freeze({
   requests: Object.freeze([]),
-  evalCeilings: Object.freeze([]),
 });
 
 /**
@@ -1678,7 +1677,9 @@ async function doBuild(
         workspaceRoot,
         extracted.sourceRoot,
         stateRef,
-        options.externals ?? [],
+        options.libraryTarget === "worker"
+          ? [...new Set([...(options.externals ?? []), "node:async_hooks"])]
+          : (options.externals ?? []),
         options.libraryEntrySubpath ?? ".",
         conditionsForLibraryTarget(options.libraryTarget),
         authority
@@ -2260,8 +2261,6 @@ const WORKERD_UNAVAILABLE_NODE_MODULES: ReadonlySet<string> = new Set([
   "os",
   "node:diagnostics_channel",
   "diagnostics_channel",
-  "node:async_hooks",
-  "async_hooks",
 ]);
 
 /**
@@ -2522,6 +2521,7 @@ async function extractYogaWasm(resolveDir: string): Promise<Buffer> {
  */
 const WORKER_NODE_BUILTIN_EXTERNALS: readonly string[] = [
   "node:assert",
+  "node:async_hooks",
   "node:console",
   "node:crypto",
   "node:events",
@@ -2547,6 +2547,7 @@ const WORKER_NODE_BUILTIN_EXTERNALS: readonly string[] = [
   // CommonJS dependencies such as isomorphic-git use require("crypto"), and
   // workerd rejects dynamic require at module startup.
   "assert",
+  "async_hooks",
   "console",
   "events",
   "fs",

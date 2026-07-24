@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import type { RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
 import { EVAL_RESULT_RETURN_PREVIEW_CHARS, evalMethods } from "@vibestudio/service-schemas/eval";
+import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "./commandTable.js";
 import {
   CliError,
@@ -54,6 +56,19 @@ function evalClientFor(scope: SessionScope) {
 }
 
 const SYSTEM_TEST_SESSION = "system-tests";
+const SYSTEM_TEST_RUNNER_SOURCE = "workers/system-test-runner";
+const SYSTEM_TEST_RUNNER_CLASS = "SystemTestRunnerDO";
+
+async function systemTestRunnerFor(scope: SessionScope): Promise<RuntimeEntityHandle> {
+  const runtime = typedClient("runtime", runtimeMethods, scope.client);
+  return runtime.createEntity({
+    kind: "do",
+    source: SYSTEM_TEST_RUNNER_SOURCE,
+    className: SYSTEM_TEST_RUNNER_CLASS,
+    key: `cli-${scope.session.scopeKey}`,
+    contextId: scope.contextId,
+  });
+}
 
 async function resolveSystemTestScope(
   inv: ParsedInvocation,
@@ -358,17 +373,10 @@ async function list(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const scope = await resolveSystemTestScope(inv);
-    const result = await evalClientFor(scope).run({
-      ...routing(scope),
-      code: `
-        import { listSystemTests } from "@workspace-skills/system-testing/cli";
-        const category = ${JSON.stringify(typeof inv.flags["category"] === "string" ? inv.flags["category"] : null)};
-        return listSystemTests().filter((test) => !category || test.category === category);
-      `,
-      syntax: "typescript",
-    });
-    if (!result.success) throw new CliError(result.error ?? "could not list system tests");
-    const tests = result.returnValue;
+    const runner = await systemTestRunnerFor(scope);
+    const tests = await scope.client.callTarget(runner.targetId, "listSystemTests", [
+      typeof inv.flags["category"] === "string" ? inv.flags["category"] : undefined,
+    ]);
     printResult(tests, {
       json,
       human: () => {
@@ -501,14 +509,19 @@ function withElapsedProgress(value: unknown): unknown {
       : NaN;
   const now = Number.isFinite(terminalAt) ? terminalAt : Date.now();
   const startedAt = typeof progress["startedAt"] === "string" ? progress["startedAt"] : null;
-  const running = Array.isArray(progress["running"])
+      const running = Array.isArray(progress["running"])
     ? progress["running"].map((raw) => {
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
         const test = raw as Record<string, unknown>;
         const testStartedAt = typeof test["startedAt"] === "string" ? test["startedAt"] : null;
+        const phaseStartedAt =
+          typeof test["phaseStartedAt"] === "string" ? test["phaseStartedAt"] : null;
         return {
           ...test,
           ...(testStartedAt ? { elapsedMs: Math.max(0, now - Date.parse(testStartedAt)) } : {}),
+          ...(phaseStartedAt
+            ? { phaseElapsedMs: Math.max(0, now - Date.parse(phaseStartedAt)) }
+            : {}),
         };
       })
     : [];
@@ -928,16 +941,10 @@ async function doctor(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const scope = await resolveSystemTestScope(inv);
-    const result = await evalClientFor(scope).run({
-      ...routing(scope),
-      code: `
-        import { systemTestDoctor } from "@workspace-skills/system-testing/cli";
-        return await systemTestDoctor(${JSON.stringify(typeof inv.flags["model"] === "string" ? inv.flags["model"] : undefined)});
-      `,
-      syntax: "typescript",
-    });
-    if (!result.success) throw new CliError(result.error ?? "system-test doctor failed");
-    const value = result.returnValue as {
+    const runner = await systemTestRunnerFor(scope);
+    const value = (await scope.client.callTarget(runner.targetId, "doctor", [
+      typeof inv.flags["model"] === "string" ? inv.flags["model"] : undefined,
+    ])) as {
       ok?: boolean;
       checks?: Array<{ name: string; ok: boolean; detail: string; data?: unknown }>;
     };

@@ -29,6 +29,21 @@ export type { BuildPanelLinkOptions } from "../core/panelLinks.js";
 export { createGatewayFetch } from "./gatewayFetch.js";
 export type { GatewayFetch, GatewayFetchConfig } from "./gatewayFetch.js";
 
+// Canonical panel lifecycle contract and the structured error thrown by
+// readiness-bearing panel operations.
+export { PanelOperationError } from "@vibestudio/shared/panel/observation";
+export type {
+  PanelDiagnosticPacket,
+  PanelFailureCode,
+  PanelFailureProvenance,
+  PanelFailureStage,
+  PanelHostObservation,
+  PanelObservation,
+  PanelRuntimeFailure,
+  PanelRuntimePhase,
+  PanelSnapshotObservation,
+} from "@vibestudio/shared/panel/observation";
+
 // Pure panel-operation journaling (target-independent) under the `journal`
 // namespace — available identically on panel · worker · eval via the barrels.
 export type { PanelJournalEntry } from "./journal.js";

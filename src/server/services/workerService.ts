@@ -29,7 +29,9 @@ type ServiceListRow =
       origin: "product" | "workspace";
       name: string;
       title?: string;
+      action?: string;
       description?: string;
+      presentation: { domain: string; verb: string };
       protocols: string[];
       source: string;
       docsId?: string;
@@ -41,7 +43,9 @@ type ServiceListRow =
       origin: "workspace";
       name: string;
       title?: string;
+      action?: string;
       description?: string;
+      presentation: { domain: string; verb: string };
       protocols: string[];
       source: string;
       docsId: string;
@@ -113,11 +117,11 @@ export function createWorkerService(deps: {
     return browserEnvironmentIdentityFromContext(deps.workspaceId, ctx).environmentKey;
   };
   const dynamicWorkspaceServiceLeaf = {
-    capability: "workspace-service:*",
+    capabilityPrefix: "workspace-service:",
     tier: "gated" as const,
     requirement: {
       kind: "selected" as const,
-      principals: ["host", "user", "code"] as const,
+      principals: ["host", "user", "code", "session", "mission"] as const,
     },
   };
   const reviewedInternalTargetLeaf = {
@@ -218,9 +222,13 @@ export function createWorkerService(deps: {
               resource: { type: "workspace-service", label: "Service", value: serviceTitle },
               operation: {
                 kind: "runtime",
-                verb: `use ${serviceTitle}`,
+                verb: service.action,
                 object: { type: "workspace-service", label: "Service", value: serviceTitle },
                 groupKey: `workspace-service:${service.name}`,
+              },
+              authorityVocabulary: {
+                ...service.presentation,
+                declaredBy: service.source,
               },
               details: [
                 { label: "Provided by", value: service.source },
@@ -496,7 +504,9 @@ function listServiceRows(decls: WorkspaceDeclarations): ServiceListRow[] {
       origin: "workspace" as const,
       name: service.name,
       title: service.title,
+      action: service.action,
       description: service.description,
+      presentation: service.presentation,
       protocols: service.protocols ?? [],
       source: service.source,
       docsId: `workspace:${service.name}`,
@@ -523,7 +533,9 @@ function listProductServiceRows(): ServiceListRow[] {
     origin: "product" as const,
     name: service.name,
     title: service.title,
+    action: service.action,
     description: service.description,
+    presentation: service.presentation,
     protocols: [...service.protocols],
     source: service.source,
     kind: "durable-object" as const,

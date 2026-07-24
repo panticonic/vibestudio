@@ -731,13 +731,6 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     group: "network",
   },
   {
-    prefix: "external-network-fetch",
-    title: "Connect to an external service",
-    action: "send a request to an approved external service",
-    description: "Send a network request to the approved destination",
-    group: "network",
-  },
-  {
     prefix: "internal-model-runtime.use",
     title: "Use local AI models",
     action: "send prompts to the local AI model running on this device",

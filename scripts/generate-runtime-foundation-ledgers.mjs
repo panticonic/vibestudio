@@ -159,12 +159,25 @@ for (const [service, entry] of Object.entries(serviceAuthority).sort(([a], [b]) 
       });
     }
     for (const leaf of declaration.prepared?.leaves ?? []) {
+      const selector =
+        leaf.capability !== undefined
+          ? { kind: "capability", value: leaf.capability }
+          : { kind: "capability-prefix", value: leaf.capabilityPrefix };
+      if (
+        typeof selector.value !== "string" ||
+        selector.value.length === 0 ||
+        (selector.kind === "capability-prefix" && !selector.value.endsWith(":"))
+      ) {
+        throw new Error(`${service}.${method} has an invalid prepared authority selector`);
+      }
       authorityRows.push({
-        id: `host:${service}.${method}#${leaf.capability}`,
+        id: `host:${service}.${method}#${selector.kind}:${selector.value}`,
         rpcPlane: "host-service",
         owner: service,
         method,
-        capability: leaf.capability,
+        ...(selector.kind === "capability"
+          ? { capability: selector.value }
+          : { capabilitySelector: selector }),
         resourceDerivation: {
           kind: "prepared",
           resolver: declaration.prepared.resolver,
@@ -476,6 +489,7 @@ const reviewProjection = authorityRows.map((row) => ({
   sensitivity: row.sensitivity,
   ...(row.tier ? { tier: row.tier } : {}),
   ...(row.capability ? { capability: row.capability } : {}),
+  ...(row.capabilitySelector ? { capabilitySelector: row.capabilitySelector } : {}),
   r3aRequirement: row.r3aRequirement,
 }));
 const censusDigest = `sha256:${createHash("sha256")
@@ -612,15 +626,17 @@ const workspaceServiceEvalRows = workspaceServices.map((service) => ({
   authorityPrincipals: service.principals,
 }));
 const invocationSubjects = [
-  ...authorityRows.map((row) =>
-    Object.assign(row, {
-      capability:
-        row.capability ??
-        (row.rpcPlane === "host-service"
-          ? `service:${row.owner}.${row.method}`
-          : `rpc:${row.method}`),
-    })
-  ),
+  ...authorityRows
+    .filter((row) => !row.capabilitySelector)
+    .map((row) =>
+      Object.assign(row, {
+        capability:
+          row.capability ??
+          (row.rpcPlane === "host-service"
+            ? `service:${row.owner}.${row.method}`
+            : `rpc:${row.method}`),
+      })
+    ),
   ...workspaceServiceEvalRows,
 ];
 

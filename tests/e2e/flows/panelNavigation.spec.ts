@@ -13,6 +13,7 @@ import {
   hasElectronDisplay,
   isPanelReady,
   launchTestApp,
+  approvePendingStartupUnits,
   removeManagedTestWorkspace,
   type TestApp,
 } from "../../setup/electronSetup";
@@ -104,8 +105,8 @@ test.describe("Panel navigation convergence", () => {
       testApp = await launchTestApp({
         workspace: workspacePath,
         launchTimeout: 180_000,
-        env: { VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "1" },
       });
+      await approvePendingStartupUnits(testApp.app);
       const initialReadiness = await ensureHostedShellReady(testApp.app, {
         panelSource: "about/new",
       });

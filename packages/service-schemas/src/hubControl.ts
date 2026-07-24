@@ -103,6 +103,7 @@ export const HubReadyPayloadSchema = z
     gatewayPort: z.number().int().min(1).max(65_535),
     pid: z.number().int().positive(),
     version: z.string().min(1),
+    buildId: z.string().regex(/^[a-f0-9]{64}$/),
     workspaces: z.array(HubWorkspaceEntrySchema),
   })
   .strict()

@@ -8,10 +8,12 @@ const CWD = "/work/ctx";
 describe("createReadTool", () => {
   it("reads a small text file", async () => {
     const fs = new StubFs({ files: { [`${CWD}/hello.txt`]: "hello\nworld" } });
+    const readFile = vi.spyOn(fs, "readFile");
     const tool = createReadTool(CWD, fs);
     const result = await tool.execute("call-1", { path: "hello.txt" });
     expect(result.content[0]).toMatchObject({ type: "text", text: "hello\nworld" });
     expect(result.details.path).toBe("hello.txt");
+    expect(readFile).toHaveBeenCalledWith(`${CWD}/hello.txt`, "utf8");
   });
 
   it("returns a bounded directory listing instead of failing the turn", async () => {
@@ -144,16 +146,10 @@ describe("createReadTool", () => {
     expect(result.details).toMatchObject({ path: "small.txt", engine: "runtime-fs" });
   });
 
-  it("delegates text reads to the file extension when context rpc is available", async () => {
-    const fs = new StubFs();
+  it("reads text through the scoped runtime filesystem even when context rpc is available", async () => {
+    const fs = new StubFs({ files: { [`${CWD}/big.txt`]: "line 1\nline 2\nline 3\nline 4" } });
     const rpc = {
-      call: vi.fn().mockImplementation((_target: string, method: string) => {
-        if (method === "extensions.streamingMethods") return Promise.resolve([]);
-        return Promise.resolve({
-          content: [{ type: "text", text: "line 3\nline 4" }],
-          details: { path: "big.txt", engine: "node-file" },
-        });
-      }),
+      call: vi.fn().mockResolvedValue([]),
       stream: vi.fn(async () => new Response()),
     };
     const tool = createReadTool(CWD, fs, { rpc });
@@ -165,129 +161,54 @@ describe("createReadTool", () => {
     });
 
     expect((result.content[0] as { text: string }).text).toBe("line 3\nline 4");
-    expect(rpc.call).toHaveBeenCalledWith(
+    expect(result.details).toMatchObject({ path: "big.txt", engine: "runtime-fs" });
+    expect(rpc.call).not.toHaveBeenCalledWith(
       "main",
       "extensions.invoke",
-      [
-        "@workspace-extensions/file-tools",
-        "read",
-        [{ path: "big.txt", cwd: CWD, offset: 3, limit: 2 }],
-      ],
-      {
-        signal: expect.any(AbortSignal),
-      }
+      expect.arrayContaining(["@workspace-extensions/file-tools"])
     );
   });
 
-  it("does not impose a default deadline on a slow file extension read", async () => {
-    vi.useFakeTimers();
-    try {
-      const fs = new StubFs();
-      const rpc = {
-        call: vi.fn().mockImplementation((_target: string, method: string) => {
-          if (method !== "extensions.invoke") return Promise.resolve([]);
-          return new Promise((resolve) => {
-            setTimeout(
-              () =>
-                resolve({
-                  content: [{ type: "text", text: "eventually available" }],
-                  details: { path: "slow.txt", engine: "node-file" },
-                }),
-              100_000
-            );
-          });
-        }),
-        stream: vi.fn(async () => new Response()),
-      };
-      const tool = createReadTool(CWD, fs, { rpc });
-
-      const resultPromise = tool.execute("call-1", { path: "slow.txt" });
-      await vi.advanceTimersByTimeAsync(100_000);
-
-      await expect(resultPromise).resolves.toMatchObject({
-        content: [{ type: "text", text: "eventually available" }],
-        details: { path: "slow.txt", engine: "node-file" },
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("falls back to runtime fs when the file extension read stalls", async () => {
-    const fs = new StubFs({ files: { [`${CWD}/hello.txt`]: "hello\nworld" } });
-    const rpc = {
-      call: vi.fn().mockImplementation((_target: string, method: string) => {
-        if (method === "extensions.invoke") return new Promise(() => {});
-        return Promise.resolve([]);
-      }),
-      stream: vi.fn(async () => new Response()),
-    };
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const onUpdate = vi.fn();
-    const tool = createReadTool(CWD, fs, { rpc, fileToolsReadTimeoutMs: 10 });
-
-    const result = await tool.execute("call-1", { path: "hello.txt" }, undefined, onUpdate);
-
-    expect((result.content[0] as { text: string }).text).toBe("hello\nworld");
-    expect(result.details).toMatchObject({
-      path: "hello.txt",
-      engine: "runtime-fs",
-      extensionFallback: "file-tools read timed out after 10ms",
-    });
-    expect(warn).toHaveBeenCalledWith(
-      "[read] file-tools read timed out after 10ms; falling back to RuntimeFs"
-    );
-    expect(onUpdate).toHaveBeenCalledWith({
-      content: [],
-      details: {
-        type: "console",
-        content: "file-tools read timed out after 10ms; falling back to RuntimeFs read",
-      },
-    });
-    warn.mockRestore();
-  });
-
-  it("records a readiness fallback without treating it as a stalled extension", async () => {
-    const fs = new StubFs({ files: { [`${CWD}/hello.txt`]: "hello\nworld" } });
-    const notReady = Object.assign(new Error("Context folder is materializing"), {
-      code: "ENOTREADY",
+  it("reads known text files without requiring the optional image extension", async () => {
+    const fs = new StubFs({ files: { [`${CWD}/guide.md`]: "approval guide" } });
+    const unavailable = Object.assign(new Error("Extension is not installed"), {
+      code: "ENOEXT",
     });
     const rpc = {
       call: vi.fn().mockImplementation((_target: string, method: string, args: unknown[]) => {
-        if (method === "extensions.invoke") {
-          const [extensionName, extensionMethod] = args;
-          if (extensionName === "@workspace-extensions/file-tools") return Promise.reject(notReady);
-          if (
-            extensionName === "@workspace-extensions/image-service" &&
-            extensionMethod === "detectMimeType"
-          ) {
-            return Promise.resolve(null);
-          }
+        if (
+          method === "extensions.invoke" &&
+          (args as unknown[])[0] === "@workspace-extensions/file-tools"
+        ) {
+          return Promise.reject(unavailable);
+        }
+        if (
+          method === "extensions.invoke" &&
+          (args as unknown[])[0] === "@workspace-extensions/image-service"
+        ) {
+          return Promise.reject(unavailable);
         }
         return Promise.resolve([]);
       }),
       stream: vi.fn(async () => new Response()),
     };
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const onUpdate = vi.fn();
-    const tool = createReadTool(CWD, fs, { rpc, fileToolsReadTimeoutMs: 10 });
+    const tool = createReadTool(CWD, fs, { rpc });
 
-    const result = await tool.execute("call-1", { path: "hello.txt" }, undefined, onUpdate);
-
-    expect((result.content[0] as { text: string }).text).toBe("hello\nworld");
-    expect(result.details).toMatchObject({
-      path: "hello.txt",
-      engine: "runtime-fs",
-      extensionFallback: "file-tools extension or context not ready",
+    await expect(tool.execute("call-1", { path: "guide.md" })).resolves.toMatchObject({
+      content: [{ type: "text", text: "approval guide" }],
+      details: { path: "guide.md", engine: "runtime-fs" },
     });
-    expect(warn).not.toHaveBeenCalled();
-    expect(onUpdate).not.toHaveBeenCalled();
-    warn.mockRestore();
+    expect(rpc.call).not.toHaveBeenCalledWith(
+      "main",
+      "extensions.invoke",
+      expect.arrayContaining(["@workspace-extensions/image-service"])
+    );
   });
 
   it("keeps image reads on the image-service path", async () => {
     const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const fs = new StubFs({ files: { [`${CWD}/pic.png`]: pngBytes } });
+    const readFile = vi.spyOn(fs, "readFile");
     const rpc = {
       call: vi.fn().mockImplementation((_target: string, method: string, args: unknown[]) => {
         if (method === "extensions.streamingMethods") return Promise.resolve([]);
@@ -317,6 +238,7 @@ describe("createReadTool", () => {
     const last = result.content[result.content.length - 1] as { type: string; mimeType: string };
     expect(last.type).toBe("image");
     expect(last.mimeType).toBe("image/png");
+    expect(readFile).toHaveBeenCalledWith(`${CWD}/pic.png`, undefined);
     expect(rpc.call).not.toHaveBeenCalledWith(
       "main",
       "extensions.invoke",

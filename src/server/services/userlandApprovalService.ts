@@ -19,6 +19,8 @@ import {
   externalAgentApprovalRequestSchema,
   externalAgentSettleSchema,
   secretInputRequestSchema,
+  userlandApprovalChoiceSchema,
+  userlandApprovalGrantSchema,
   userlandApprovalRequestSchema,
   userlandApprovalSubjectIdSchema,
 } from "@vibestudio/shared/approvals";
@@ -28,6 +30,7 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { EntityRecord, RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
+import { testPolicyUserlandDecision } from "./authorityRuntime.js";
 
 const SERVICE_NAME = "userlandApproval";
 /**
@@ -355,6 +358,46 @@ export function createUserlandApprovalService(deps: {
       await deps.grantStore.revokeUserland(principal, decoratedReq.subject.id, issuer);
     }
 
+    const testDecision = testPolicyUserlandDecision(
+      ctx.caller,
+      ctx.authorization,
+      decoratedReq.subject.id
+    );
+    if (testDecision) {
+      const resolved = resolveTestPromptChoice(
+        promptOptions,
+        options,
+        testDecision.decision,
+        testDecision.remember
+      );
+      if (!resolved.record) return { kind: "choice", choice: resolved.choice };
+      await deps.grantStore.recordUserland(
+        principal,
+        decoratedReq.subject,
+        resolved.choice,
+        Date.now(),
+        issuer,
+        resolved.scope,
+        {
+          provenance: "preauthorization",
+          decidedBy: `host:${testDecision.policyId}:${testDecision.ruleId}`,
+        }
+      );
+      return { kind: "choice", choice: resolved.choice };
+    }
+    const testPolicy =
+      ctx.authorization?.testPolicy ??
+      ctx.caller.testPolicy ??
+      ctx.caller.executionSession?.testPolicy;
+    if (testPolicy?.kind === "case" && testPolicy.case.unexpectedPrompts === "fail") {
+      throw new ServiceError(
+        SERVICE_NAME,
+        "request",
+        `Unexpected userland approval prompt in system test ${testPolicy.case.testId}: ${decoratedReq.subject.id}`,
+        "EUNEXPECTEDTESTPROMPT"
+      );
+    }
+
     const result = await deps.approvalQueue.requestUserland({
       principal,
       issuer,
@@ -479,7 +522,11 @@ export function createUserlandApprovalService(deps: {
 
   const methods = {
     request: {
+      description:
+        "Ask for consent to one provider-defined custom resource. Returns only the user's choice. " +
+        'To forget the saved choice later, call userlandApproval.revoke("the-subject-id") with request.subject.id as a plain string, not the subject object.',
       args: z.tuple([userlandApprovalRequestSchema]),
+      returns: userlandApprovalChoiceSchema,
       access: { sensitivity: "write" as const },
     },
     requestSecretInput: {
@@ -487,7 +534,12 @@ export function createUserlandApprovalService(deps: {
       access: { sensitivity: "write" as const },
     },
     requestAs: {
+      description:
+        "Ask for custom-resource consent as an already verified durable code principal. " +
+        "Workers and Durable Objects use this attributed form; eval/session code must use userlandApproval.request and cannot supply its own identity. " +
+        'Returns only the user\'s choice; revoke later with userlandApproval.revoke("the-subject-id"), passing request.subject.id as a plain string.',
       args: z.tuple([approvalPrincipalSchema, userlandApprovalRequestSchema]),
+      returns: userlandApprovalChoiceSchema,
       authority: { principals: ["code"] },
       access: { sensitivity: "write" as const },
     },
@@ -508,16 +560,26 @@ export function createUserlandApprovalService(deps: {
       access: { sensitivity: "write" as const },
     },
     revoke: {
+      description:
+        "Forget this caller's saved custom-resource choice by the original subject.id. This does not revoke built-in workspace permissions.",
       args: z.tuple([userlandApprovalSubjectIdSchema]),
+      returns: z.boolean(),
       access: { sensitivity: "destructive" as const },
     },
-    list: { args: z.tuple([]), access: { sensitivity: "read" as const } },
+    list: {
+      description:
+        "List only this caller's saved provider-defined custom-resource choices. For the workspace's complete capability, credential, browser-site, and custom-choice permission inventory, call permissions.list instead.",
+      args: z.tuple([]),
+      returns: z.array(userlandApprovalGrantSchema),
+      access: { sensitivity: "read" as const },
+    },
   } satisfies ServiceDefinition["methods"];
 
   return {
     name: SERVICE_NAME,
-    description: "Userland-managed consent approvals",
-    authority: { principals: ["code"] },
+    description:
+      "Provider-defined custom-resource consent choices; not the workspace permission inventory",
+    authority: { principals: ["code", "session"] },
     methods,
     handler: defineServiceHandler(SERVICE_NAME, methods, {
       request: (ctx, [requestArg]) => request(ctx, requestArg),
@@ -580,4 +642,28 @@ function resolvePromptChoice(
   if (choice === "session") return { choice: "allow", record: true, scope: "session" };
   if (choice === "version") return { choice: "allow", record: true, scope: "version" };
   return { choice: "deny", record: false };
+}
+
+function resolveTestPromptChoice(
+  promptOptions: UserlandApprovalRequest["promptOptions"] | undefined,
+  options: UserlandApprovalOption[],
+  choice: string,
+  remember: boolean
+):
+  | { choice: string; record: false }
+  | { choice: string; record: true; scope: UserlandApprovalGrantScope } {
+  const scoped = (promptOptions ?? "scoped") === "scoped";
+  const valid = scoped
+    ? choice === "allow" || choice === "deny"
+    : options.some((option) => option.value === choice);
+  if (!valid) {
+    throw new ServiceError(
+      SERVICE_NAME,
+      "request",
+      `Invalid test approval choice: ${choice}`,
+      "EINVAL"
+    );
+  }
+  if (!remember || choice === "deny") return { choice, record: false };
+  return { choice, record: true, scope: scoped ? "version" : "caller" };
 }

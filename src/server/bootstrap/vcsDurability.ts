@@ -21,7 +21,6 @@ export interface VcsDurabilityBootstrapDeps {
     buildKey: string;
     executionDigest: string;
     authorityRequests: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
-    authorityEvalCeilings: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityCeiling[];
   }): void;
   activateSemanticWorkspace(workspaceVcs: WorkspaceVcs): Promise<void>;
 }

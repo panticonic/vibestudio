@@ -1,16 +1,60 @@
 # Panel API
 
-Import panel APIs from `@workspace/runtime`.
+Import panel APIs from `@workspace/runtime`. The same portable surface works in
+panels, workers, Durable Objects, and server-side eval.
 
-Panel handles are server-mediated APIs. Panels, workers, and Durable Objects can
-list, inspect, open, and mutate UI panels through `panelTree`; CDP is served by
-the active CDP-capable host (desktop Electron or the fallback headless host)
-that currently holds the target panel's runtime lease.
-In panel code, import `panelTree` as a top-level runtime export. Do not use
-`workspace.panelTree`; `workspace` is the workspace catalog/source/unit
-namespace. Use top-level `openPanel` to create panels.
+## The completion contract
 
-`panelTree` return signatures:
+Panel operations have one meaning:
+
+- `await openPanel(...)`, `focus()`, `navigate()`, `reload()`, and `rebuild()`
+  return only after the exact selected runtime attempt is application
+  **boot-ready**.
+- They never treat a lease, a registered WebContents/CDP target, `about:blank`,
+  or a successfully generated HTML shell as application success.
+- A resolve, build, host, navigation, bundle, or entry failure rejects with
+  `PanelOperationError`. Do not infer success from a panel id or an empty
+  snapshot.
+- `snapshot()` first enforces the same readiness contract and then returns a
+  capture tied to the attempt it read.
+
+Internally, creation has two deliberate boundaries. The durable tree slot is
+committed and becomes observable immediately; build preparation, host
+assignment, navigation, and application boot then advance that slot through the
+canonical phases. This prevents a slow or broken initial panel from blocking
+tree discovery, owner seeding, or creation of unrelated panels. The public
+`openPanel(...)` promise still waits for its own attempt to reach `ready` and
+has a finite 90-second readiness deadline. A terminal failure or deadline
+rejects with the last phase, host evidence, diagnostic id, and full attempt
+provenance—never with an apparently successful blank handle.
+
+This is intentionally stricter than browser “load” state. The generated panel
+bootstrap reports `loading → booting → ready` and reports entry errors,
+unhandled rejections, missing assets, and incomplete runtime configuration as
+failures.
+
+```ts
+import { openPanel, PanelOperationError } from "@workspace/runtime";
+
+try {
+  const panel = await openPanel("panels/my-app", {
+    focus: true,
+    contextId: ctx.contextId,
+    ref: `ctx:${ctx.contextId}`,
+  });
+  const observation = await panel.observe();
+  const capture = await panel.snapshot();
+  console.log(observation.buildKey, capture.document.text);
+} catch (error) {
+  if (error instanceof PanelOperationError) {
+    console.error(error.failure.code, error.failure.stage);
+    console.error(error.failure.message, error.failure.provenance);
+  }
+  throw error;
+}
+```
+
+## Discovery and creation
 
 ```ts
 panelTree.self(): PanelHandle
@@ -19,60 +63,204 @@ panelTree.list(): Promise<PanelHandle[]>
 panelTree.roots(): Promise<PanelHandle[]>
 panelTree.children(id): Promise<PanelHandle[]>
 panelTree.parent(id): PanelHandle | null
-panelTree.navigate(id, source, opts?): Promise<{ id: string; title: string }>
+panelTree.navigate(id, source, opts?): Promise<PanelObservation>
 openPanel(source, opts?): Promise<PanelHandle>
 ```
 
-`self()` and `get()` are synchronous handle factories. Do not call `.catch()` on
-them; catch errors on async handle methods such as `await handle.refresh()` or
-`await handle.getInfo()`.
+`self()` and `get()` are synchronous handle factories; they do no I/O.
+`list()`, `roots()`, and `children()` return handles hydrated from a fresh tree
+read. The scalar fields `id`, `title`, `source`, `kind`, and `parentId` are the
+handle’s last observed descriptor. Use `observe()` whenever correctness depends
+on live runtime state.
 
-## Handles
+`openPanel(source)` uses main/pushed code. To run unpublished context code, pass
+both the intended storage context and explicit code ref:
 
 ```ts
-import { openPanel, listPanels } from "@workspace/runtime";
-
-const handle = await openPanel("panels/my-app", { stateArgs: { mode: "fixture" } });
-const lifecycle = await handle.rebuildAndReload();
-console.log(lifecycle.status, lifecycle.effectiveVersion);
-await handle.stateArgs.set({ mode: "live" });
-const snapshot = await handle.snapshot();
-await handle.close(); // close temporary panels opened for diagnostics/tests
+const panel = await openPanel("panels/my-app", {
+  contextId: ctx.contextId,
+  ref: `ctx:${ctx.contextId}`,
+});
 ```
 
-`openPanel(source)` opens a new panel for the main/pushed build. Pass
-`openPanel(source, { ref })`, `handle.navigate(source, { ref })`, or
-`panelTree.navigate(id, source, { ref })` when you intentionally want code from
-a specific ref such as `ctx:${contextId}`. `contextId` without `ref` only changes
-filesystem/storage state.
+`contextId` alone selects storage/filesystem isolation; it never selects code
+provenance.
 
-Inside the current panel, use `panel.reopen({ source?, contextId?, stateArgs? })`
-for self-replacement of source/state args/context. `panel.reopen({ contextId })`
-does not select code provenance. Use `handle.navigate(source, opts)` or
-`panelTree.navigate(id, source, opts)` when intentionally replacing a known panel
-slot from another runtime.
+When parentage is implicit, the server resolves the caller's runtime lineage to
+an open tree slot under a finite five-second deadline. A stalled lineage read
+fails as `parent_resolution_timeout` with recovery guidance. Pass
+`parentId: null` for an owned root or an explicit open slot id when that is the
+intended topology.
 
-`PanelHandle` fields:
+## One observation model
 
-| Member                                          | Description                                                                                                         |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `id`                                            | Host panel id                                                                                                       |
-| `getInfo()`                                     | Copyable metadata `{ id, title, source, kind, parentId, contextId, runtimeEntityId, effectiveVersion, ref, build }` |
-| `source`                                        | Workspace source or URL                                                                                             |
-| `kind`                                          | `"workspace"` or `"browser"`                                                                                        |
-| `children()`                                    | Fresh direct child handles                                                                                          |
-| `navigate(source, opts?)`                       | Replace this panel slot with another source/context/stateArgs                                                       |
-| `rebuildPanel()`                                | Invalidate/rebuild this workspace panel's bundle; target-only and not recursive                                     |
-| `reload()`                                      | Browser-style reload of this panel's current renderer; does not rebuild code                                        |
-| `rebuildAndReload()`                            | Rebuild this panel's bundle and reload this panel's renderer; target-only and not recursive                         |
-| `close()`                                       | Close this panel                                                                                                    |
-| `stateArgs.get()` / `stateArgs.set(updates)`    | Host-owned state args                                                                                               |
-| `snapshot()`                                    | Agent-readable AX/synthetic snapshot                                                                                |
-| `tree()` / `state()` / `routes()` / `setMode()` | Workspace `_agent` methods                                                                                          |
-| `cdp`                                           | Approval-gated CDP automation namespace for panel-tree targets                                                      |
-| `click(selector)`                               | Convenience wrapper for `cdp.click(selector)`                                                                       |
+`await handle.observe()` is the cheap canonical status read:
 
-## State Args
+```ts
+interface PanelObservation {
+  panelId: string;
+  title: string;
+  source: string;
+  kind: "workspace" | "browser";
+  parentId: string | null;
+  contextId: string;
+  requestedRef: string;
+  runtimeEntityId: string | null;
+  attemptId: string;          // runtimeEntityId@buildKey
+  effectiveVersion: string | null;
+  buildKey: string | null;
+  phase:
+    | "resolving"
+    | "building"
+    | "assigning-host"
+    | "loading"
+    | "booting"
+    | "ready"
+    | "failed"
+    | "stopped";
+  failure?: PanelRuntimeFailure;
+  host?: {
+    holderLabel?: string;
+    platform?: "desktop" | "headless" | "mobile";
+    supportsInspection?: boolean;
+    view: { exists: boolean; url?: string; loading?: boolean };
+    boot: {
+      phase: "unavailable" | "loading" | "booting" | "ready" | "failed";
+      runtimeEntityId?: string | null;
+      source?: string | null;
+      contextId?: string | null;
+      effectiveVersion?: string | null;
+      buildKey?: string | null;
+      message?: string;
+      errorName?: string;
+      stack?: string;
+    };
+  };
+  updatedAt: number;
+}
+```
+
+A host boot state counts only when its runtime entity, source, context, and
+build key match the server attempt. This prevents an old ready renderer from
+acknowledging a newer rebuild while the host is still switching views.
+
+Every inspecting renderer host must implement the canonical
+`panelObservation` host command. Desktop and headless execute the same bounded
+page probe for `document.readyState`, the current URL, and
+`globalThis.__vibestudioPanelBoot`, then parse the result through the same
+shared contract. Target registration, successful navigation, an empty DOM, or
+the existence of a browser view is never a readiness substitute. A missing
+command or malformed observation is a `host_unavailable` platform failure and
+must be repaired in the host; callers must not infer success or fall back to a
+different readiness surface.
+
+There are no separate `refresh()`, `getInfo()`, `ensureLoaded()`, or
+`isLoaded()` handle concepts. They previously exposed different partial truths
+and could report success for a broken panel. Use `observe()`; `phase ===
+"ready"` is the sole positive readiness answer.
+
+## Failures
+
+Read `error.failure`, not string fragments:
+
+```ts
+interface PanelRuntimeFailure {
+  code:
+    | "unit_not_found"
+    | "ref_not_found"
+    | "manifest_invalid"
+    | "dependency_resolution_failed"
+    | "compile_failed"
+    | "build_identity_invalid"
+    | "host_unavailable"
+    | "lease_conflict"
+    | "navigation_failed"
+    | "asset_unavailable"
+    | "entry_threw"
+    | "runtime_handshake_timeout"
+    | "render_crashed"
+    | "panel_not_found"
+    | "unknown_failure";
+  stage: "resolve" | "build" | "host" | "load" | "boot" | "runtime";
+  message: string;
+  diagnosticId: string;
+  occurredAt: number;
+  provenance: {
+    panelId?: string;
+    runtimeEntityId?: string | null;
+    attemptId?: string;
+    source: string;
+    contextId: string;
+    requestedRef: string;
+    effectiveVersion?: string | null;
+    buildKey?: string | null;
+  };
+  details?: Record<string, unknown>;
+}
+```
+
+The failure and the shell error display come from the same host/server
+observation. If an operation rejects, do not immediately retry or open another
+panel. Inspect its failure first; retries cannot fix a missing unit, wrong ref,
+compile error, or throwing entry module.
+
+## Handle operations
+
+| Member | Contract |
+| --- | --- |
+| `observe()` | Current exact attempt, phase, host state, provenance, and structured failure |
+| `diagnose()` | One bounded packet containing `observation`, historical console/lifecycle records, and a document when ready |
+| `snapshot()` | Boot-ready document capture with `panelId`, `attemptId`, `runtimeEntityId`, `buildKey`, and `capturedAt` |
+| `navigate(source, opts?)` | Transactionally prepare a new source/ref/context attempt, activate it, and wait for ready |
+| `rebuild()` | Transactionally prepare a new immutable attempt for the current source/ref without adding a history entry, then wait for ready |
+| `reload()` | Reload the current view and wait for its boot handshake |
+| `focus(opts?)` | Assign/present the panel and wait for ready |
+| `children()` / `parent()` | Tree relationships |
+| `stateArgs.get()` / `stateArgs.set()` | Validated host-owned application state args |
+| `close()` / `archive()` / `unload()` | Explicit lifecycle/resource operations |
+| `tree()` / `state()` / `routes()` / `setMode()` | Optional workspace `_agent` application inspection |
+| `cdp` / `click(selector)` | Approval-gated CDP automation |
+
+`rebuild()` is an atomic replacement: the new runtime and build are prepared
+before the current history entry is replaced. A preparation failure does not
+pretend that the old attempt was rebuilt.
+
+## Snapshot provenance
+
+```ts
+const capture = await panel.snapshot();
+// {
+//   panelId,
+//   attemptId,
+//   runtimeEntityId,
+//   buildKey,
+//   capturedAt,
+//   document: { kind: "synth", text, structure }
+// }
+```
+
+Always inspect `capture.document`, not the top level. The identities prevent a
+capture from being mistaken for a later rebuild or navigation.
+
+## Diagnostics
+
+Use one diagnostic call when something is wrong:
+
+```ts
+const packet = await panel.diagnose();
+console.log(packet.observation);
+if (packet.consoleHistory.available) console.log(packet.consoleHistory.errors);
+else console.log(packet.consoleHistory.error);
+console.log(packet.document?.document.text);
+```
+
+`diagnose()` is safe for a failed attempt: it returns the canonical failure and
+whatever bounded host evidence exists instead of requiring a successful
+snapshot first. Use `workspace.units.diagnostics(source)` for source/typecheck
+state and server logs only when this packet shows the failure is below the
+panel lifecycle boundary.
+
+## State and agent inspection
 
 Inside a panel:
 
@@ -83,138 +271,26 @@ const initial = panel.stateArgs.get();
 await panel.stateArgs.set({ theme: "dark" });
 ```
 
-`panel.stateArgs.set()` persists through the host and immediately applies the
-returned, validated snapshot to the caller panel. The `useStateArgs()` hook
-(from `@workspace/react`) re-renders from that local snapshot and from later host-published
-`runtime:stateArgsChanged` events for updates made elsewhere.
-
-From an agent-held handle:
+From a handle:
 
 ```ts
 await handle.stateArgs.set({ theme: "dark" });
 const next = await handle.stateArgs.get();
 ```
 
-Parent handles are regular `PanelHandle`s:
+`handle.state()` is empty unless the application registers state providers via
+`useAgentState` or `agentApi.registerStateProvider`.
 
-```ts
-import { panelTree } from "@workspace/runtime";
+## CDP
 
-const parent = panelTree.self().parent();
-if (parent) {
-  await parent.refresh(); // hydrate exact source/runtime metadata from the host
-  const info = await parent.getInfo();
-  const args = await parent.stateArgs.get();
-  console.log(info.id, info.source, info.effectiveVersion, args);
-}
-```
+`handle.cdp.lightweightPage()` is the sole Playwright-style automation surface.
+Do not install Playwright. For historical diagnostics use `diagnose()`; use
+`handle.cdp.consoleHistory()` only when you specifically need a filtered console
+read. CDP access is served by the active desktop/headless host and rejects when
+a non-CDP mobile host owns the target.
 
-`effectiveVersion` is the exact immutable source version currently associated
-with the active panel runtime entity. For git-backed workspace units this is the
-commit/effective-version hash used for approvals and runtime identity. Use
-`refresh()` before comparing metadata around rebuilds, navigation, or reloads.
+## Ownership
 
-Lifecycle calls return:
-
-```ts
-type PanelLifecycleResult = {
-  panelId: string;
-  operation: "reload" | "rebuild" | "rebuildAndReload" | "unload" | "close";
-  status: string;
-  loaded: boolean;
-  rebuilt: boolean;
-  reloaded: boolean;
-  buildRevision?: number;
-  effectiveVersion?: string | null;
-};
-```
-
-Use `rebuildAndReload()` after committed code changes, or after context-local
-changes only when the panel is already pinned to the intended build `ref`. Use
-`rebuildPanel()` only when you want to invalidate/prebuild the target bundle
-without touching the current renderer. Use `reload()` only when the bundle is
-already correct and the target renderer should do a browser-style reload.
-
-## Agent Inspection
-
-Every runtime panel registers `_agent.snapshot`, `_agent.tree`, `_agent.state`, `_agent.routes`, and `_agent.setMode`. Agents should call these through a handle, not directly.
-
-`handle.state()` is empty by default — React component state is not otherwise
-reachable from outside the renderer. A panel publishes introspectable state by
-registering providers:
-
-```tsx
-import { useAgentState } from "@workspace/react";
-
-function Editor() {
-  const [doc, setDoc] = useState(initialDoc);
-  const [dirty, setDirty] = useState(false);
-  useAgentState("editor", { path: doc.path, dirty, length: doc.text.length });
-  // A debugging agent: await parent.state()
-  // => { editor: { path: "Welcome.mdx", dirty: true, length: 1280 } }
-}
-```
-
-Outside React, use `agentApi.registerStateProvider(key, () => value)` from
-`@workspace/runtime` (returns an unregister function). The latest value is
-reported on each `state()` call, so keep providers cheap and side-effect free.
-
-Mobile hosts implement these methods through the WebView bridge. CDP access is
-served by the active desktop or headless CDP host through
-`handle.cdp.lightweightPage()` and the direct `handle.cdp` helpers. CDP
-automation works for **any**
-panel target — workspace panels and browser panels alike, including the panel
-you are running in (`panelTree.self()`). Panels held by non-CDP hosts reject CDP
-access instead of being silently taken over. CDP access is still approval-gated
-through the `panelCdp` service.
-`handle.cdp.lightweightPage()` returns a Playwright-style page driven by our own
-lightweight, workerd-native CDP client (`@workspace/cdp-client`). It is the
-single browser-automation surface — there is no separate "full Playwright" tier,
-and you do not import or install any `playwright*` package. The page exposes
-locators (`page.locator`, `page.getByRole`, `page.getByText`, …), auto-waiting
-actions (`click`, `fill`, `check`, `selectOption`, …), reads (`innerText`,
-`count`, `isVisible`, …), and page-level methods (`goto`, `screenshot`,
-`waitForSelector`, `evaluate`, …). For protocol-level work, `import
-{ CdpConnection } from "@workspace/cdp-client"` and connect via
-`handle.cdp.getCdpEndpoint()`. There is no generic `handle.cdp.page()` alias.
-Because the client is workerd-native, `handle.cdp.*` automation works wherever
-you hold a panel handle, including server-side eval.
-
-For diagnostics that must work for hidden or unslotted panels, use the
-host-mediated operations on the handle:
-
-```ts
-const shot = await handle.cdp.screenshot({ format: "png" });
-const history = await handle.cdp.consoleHistory({ limit: 200, errorLimit: 50 });
-```
-
-`screenshot()` returns `{ data, mimeType, width, height }`, where `data`
-is base64. `consoleHistory()` returns host-captured messages from before and
-after the automation client connected. A lightweight page's
-`page.screenshot({ type: "jpeg", quality: 80 })` instead returns raw bytes.
-
-Approval-gated panel operations wait for a visible shell approval decision. If
-no decision arrives before the approval deadline, the request fails with an
-approval-timeout error. That timeout means the consent prompt was not resolved;
-it is not a model prompt timeout.
-
-Agents must close panels they open for temporary diagnostics, setup, scraping,
-or tests. Use `try/finally` around `openPanel()` and call `await handle.close()`
-when done. The normal exceptions are an explicit user request to leave the
-panel open, a primary workspace panel the user asked to build or inspect, or a
-workflow that explicitly needs the panel across follow-up calls. Duplicate,
-child, URL, and diagnostic panels should not be left open without such a reason.
-
-## Runtime Provenance
-
-Panel handles identify the live panel (`id`, `source`, `kind`). To inspect the
-build artifact serving a workspace source, call the host provenance RPC:
-
-```ts
-import { rpc } from "@workspace/runtime";
-
-const provenance = await rpc.call("main", "build.inspectBuildProvenance", [handle.source]);
-// { source, contextId, gitSha, ref, dirty, builtAt, artifactId }
-```
-
-This should be an early check when a panel appears stale after a fix.
+Close temporary panels in `finally`. Reuse an existing handle rather than
+opening duplicates. Leave a panel open only when the user asked to keep it or it
+is the primary deliverable being inspected.

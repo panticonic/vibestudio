@@ -304,12 +304,12 @@ export function pickFallbackModel(catalog: ModelCatalog): {
 export class ModelSettingsDO extends DurableObjectBase {
   protected createTables(): void {}
 
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code", "session", "mission"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   async listCatalog(): Promise<ModelCatalog> {
     return this.assembleCatalog();
   }
 
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code", "session", "mission"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   async getSettings(): Promise<ModelSettingsSnapshot> {
     const [catalog, config] = await Promise.all([
       this.assembleCatalog(),
@@ -318,9 +318,31 @@ export class ModelSettingsDO extends DurableObjectBase {
     return this.resolveSettings(catalog, config);
   }
 
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code", "session", "mission"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
   async getDefaultModel(): Promise<ModelSettingsSnapshot> {
     return this.getSettings();
+  }
+
+  @rpc({ principals: ["host", "user", "code", "session", "mission"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  async inspectModels(refs: string[]): Promise<{
+    defaultModel: string;
+    models: Array<{ ref: string; availability: ModelAvailability }>;
+  }> {
+    const uniqueRefs = [...new Set(refs)];
+    const settings = await this.getSettings();
+    return {
+      defaultModel: settings.defaultModel,
+      models: uniqueRefs.map((ref) => {
+        const model = settings.catalog.models.find((entry) => entry.ref === ref);
+        return {
+          ref,
+          availability: model?.availability ?? {
+            state: "error",
+            message: "Unknown model ref",
+          },
+        };
+      }),
+    };
   }
 
   @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
@@ -498,7 +520,7 @@ function parseDefaultAgentConfig(
 export default {
   async fetch() {
     return new Response(
-      "Model Settings service.\nMethods: listCatalog, getSettings, getDefaultModel, setDefaultAgentConfig.\n",
+      "Model Settings service.\nMethods: listCatalog, getSettings, getDefaultModel, inspectModels, setDefaultAgentConfig.\n",
       { headers: { "Content-Type": "text/plain" } }
     );
   },

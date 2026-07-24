@@ -18,6 +18,7 @@ import {
   invocationStarted,
 } from "../hooks/transcriptTestHarness.js";
 import {
+  agentToolFailureFromUnknown,
   brandId,
   invocationFailedPayload,
   type AgenticEvent,
@@ -138,6 +139,10 @@ describe("transcript UX smoke", () => {
           details: { input: { path: "src" } },
         },
         terminalReasonCode: "method_failed",
+        failure: agentToolFailureFromUnknown(
+          { message: "permission denied" },
+          { operation: "mcp__workspace__ListDirectory", stage: "test" }
+        ),
       }),
       createdAt: new Date().toISOString(),
     };

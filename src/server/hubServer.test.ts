@@ -460,7 +460,6 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     workspaceChildToken: "workspace-child-identity",
     workspaceId: "ws_base",
     ephemeral: false,
-    autoApproveStartupUnits: false,
   };
 
   it("shares the hub identity DB read-only and gives every child its OWN DTLS identity", () => {
@@ -514,7 +513,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     expect(env["PATH"]).toBe("/usr/bin");
   });
 
-  it("propagates an explicitly enabled unattended startup policy to the child", () => {
+  it("strips obsolete unattended startup policy from the child", () => {
     const env = buildWorkspaceChildEnv({
       ...base,
       baseEnv: {
@@ -522,10 +521,9 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
         VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "1",
       },
       childWorkspaceName: "alpha",
-      autoApproveStartupUnits: false,
     });
 
-    expect(env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"]).toBe("1");
+    expect(env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"]).toBeUndefined();
   });
 
   it("does not inherit an unrecognized startup approval value", () => {
@@ -536,7 +534,6 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
         VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "true",
       },
       childWorkspaceName: "alpha",
-      autoApproveStartupUnits: false,
     });
 
     expect(env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"]).toBeUndefined();
@@ -723,6 +720,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
       adminToken: "hub-admin",
       tokenSource: "generated",
       version: "test",
+      buildId: "a".repeat(64),
       gatewayPort: 9,
       protocol: "http",
       externalHost: "127.0.0.1",
@@ -786,6 +784,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
         "gatewayPort",
         "pid",
         "version",
+        "buildId",
         "workspaces",
       ].sort()
     );
@@ -795,6 +794,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
       rootInvite: invite,
       pid: 4242,
       version: "test",
+      buildId: "a".repeat(64),
     });
     expect(payload).not.toHaveProperty("adminToken");
     expect(payload).not.toHaveProperty("publicUrl");

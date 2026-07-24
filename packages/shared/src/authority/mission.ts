@@ -15,6 +15,7 @@ export type MissionEventFilter =
     };
 
 export interface MissionCharter {
+  agentBindingId: string;
   taskSpec: string;
   harness: { unit: string; ev: string };
   skills: readonly { path: string; contentHash: string }[];
@@ -31,6 +32,13 @@ export interface MissionCharter {
     declaredOrigins: readonly string[];
   };
   model: { modelId: string; params: Record<string, unknown> };
+  declaredLineageClasses: readonly (
+    | "none"
+    | "web"
+    | "email"
+    | "channel-external"
+    | "external"
+  )[];
   trigger:
     | { kind: "manual" }
     | { kind: "cron"; cron: string }
@@ -55,6 +63,7 @@ export interface MissionRecord {
 export interface MissionPermission {
   capability: string;
   resource: ResourceScope;
+  tier: "gated" | "critical";
 }
 
 export interface MissionStandingRestriction {
@@ -62,11 +71,26 @@ export interface MissionStandingRestriction {
   resourceKey: string;
 }
 
+export interface MissionRunRecord {
+  runId: string;
+  missionId: string;
+  closureDigest: string;
+  sessionId: string;
+  startedAt: number;
+  finishedAt?: number;
+  outcome?: string;
+}
+
 const HEX64 = /^[0-9a-f]{64}$/;
 
 export function validateMissionCharter(charter: MissionCharter): void {
-  if (!charter.taskSpec || !charter.harness.unit || !HEX64.test(charter.harness.ev)) {
-    throw new Error("Mission charter requires task text and an exact harness EV");
+  if (
+    !charter.agentBindingId ||
+    !charter.taskSpec ||
+    !charter.harness.unit ||
+    !HEX64.test(charter.harness.ev)
+  ) {
+    throw new Error("Mission charter requires an agent, task text, and an exact harness EV");
   }
   try {
     normalizeWorkspaceRepoPath(charter.harness.unit);
@@ -118,6 +142,12 @@ export function validateMissionCharter(charter: MissionCharter): void {
     if (parsed.origin !== origin)
       throw new Error(`Mission network origin is not canonical: ${origin}`);
   }
+  if (
+    charter.declaredLineageClasses.length === 0 ||
+    new Set(charter.declaredLineageClasses).size !== charter.declaredLineageClasses.length
+  ) {
+    throw new Error("Mission charter requires distinct declared data-flow classes");
+  }
   if (charter.trigger.kind === "event") {
     if (!/^[a-z][a-z0-9.-]{0,127}$/u.test(charter.trigger.event.source)) {
       throw new Error("Mission event source is not canonical");
@@ -151,7 +181,9 @@ export function missionClosureDigest(
   validateMissionCharter(charter);
   const hash = createHash("sha256");
   const part = (value: string) => hash.update(value, "utf8").update("\0", "utf8");
-  part("mission-closure-v1");
+  part("mission-closure-v2");
+  part("agent");
+  part(charter.agentBindingId);
   part(sha256(canonicalJson(charter.taskSpec)));
   part("harness");
   part(charter.harness.unit);
@@ -163,6 +195,7 @@ export function missionClosureDigest(
   }
   part(sha256(canonicalJson(charter.toolExposure)));
   part(sha256(canonicalJson(charter.model)));
+  part(sha256(canonicalJson(charter.declaredLineageClasses)));
   part(sha256(canonicalJson(charter.trigger)));
   part("authority");
   part(sha256(canonicalJson(permissions)));

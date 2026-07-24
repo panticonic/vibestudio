@@ -16,8 +16,14 @@ import {
 } from "../approvals.js";
 
 export interface ApprovalsApi {
+  /** Ask for a provider-defined custom-resource choice. The result is the choice, not a grant id. */
   request(req: UserlandApprovalRequest): Promise<UserlandApprovalChoice>;
+  /** Forget a saved custom-resource choice using the same subject id passed to request(). */
   revoke(subjectId: string): Promise<boolean>;
+  /**
+   * List this caller's saved custom-resource choices only. To inspect all active
+   * workspace permission grants, call the host `permissions.list` service.
+   */
   list(): Promise<UserlandApprovalGrant[]>;
 }
 

@@ -2,6 +2,7 @@ import * as path from "path";
 import * as os from "os";
 
 let _userDataPath: string | null = null;
+const INSTANCE_ROOT_ENV = "VIBESTUDIO_INSTANCE_ROOT";
 
 /** Explicitly set the user-data directory (for headless/test use). */
 export function setUserDataPath(p: string): void {
@@ -28,11 +29,25 @@ export function getUserDataPath(): string {
 }
 
 /**
- * Get the central Vibestudio config directory (shared across all workspaces).
- * Always returns ~/.config/vibestudio/ (or platform equivalent).
- * Never returns Electron's app.getPath('userData') — that may point to a workspace.
+ * Get the mutable state root for this Vibestudio instance.
+ *
+ * Developer/test supervisors set VIBESTUDIO_INSTANCE_ROOT so independent hubs
+ * never share leases, identities, workspaces, databases, or runtime caches.
+ * Ordinary installed launches retain the platform profile root as their one
+ * persistent instance.
  */
 export function getCentralDataPath(): string {
+  const instanceRoot = process.env[INSTANCE_ROOT_ENV]?.trim();
+  return instanceRoot ? path.resolve(instanceRoot) : getProfileDataPath();
+}
+
+/**
+ * Get the user profile root shared by independent Vibestudio instances.
+ *
+ * Only user-owned configuration and provider credentials belong here.
+ * Runtime state must use getCentralDataPath() instead.
+ */
+export function getProfileDataPath(): string {
   return platformDefault();
 }
 

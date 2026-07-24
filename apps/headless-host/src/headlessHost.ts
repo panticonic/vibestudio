@@ -13,6 +13,7 @@ import type {
   RuntimeLeaseSnapshot,
 } from "@vibestudio/shared/panel/panelLease";
 import { createPanelHostRegistration } from "@vibestudio/shared/panel/panelLease";
+import type { PanelHostObservation } from "@vibestudio/shared/panel/observation";
 import { LeaseTracker, type LeaseIntent } from "@vibestudio/shared/panel/leaseTracker";
 import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import {
@@ -274,6 +275,22 @@ export class HeadlessHost implements PanelHost {
   ): Promise<unknown> {
     const panelSlotId = asPanelSlotId(slotId);
     switch (action) {
+      case "panelObservation": {
+        if (!this.tracker.heldLease(panelSlotId)) {
+          throw new Error(`no lease held for panel ${slotId}`);
+        }
+        const observation = await this.pages!.panelPageObservation(slotId);
+        return {
+          holderLabel: this.registration.label,
+          platform: this.registration.platform,
+          supportsInspection: this.registration.supportsCdp,
+          view: {
+            exists: true,
+            ...observation.view,
+          },
+          boot: observation.boot,
+        } satisfies PanelHostObservation;
+      }
       case "accessibilityTree":
         return this.pages!.accessibilityTree(slotId);
       case "domSnapshot":
@@ -288,8 +305,7 @@ export class HeadlessHost implements PanelHost {
           slotId,
           (args[0] ?? {}) as Parameters<PageHost["captureScreenshot"]>[1]
         );
-      case "rebuildPanel":
-      case "rebuildAndReload": {
+      case "rebuildPanel": {
         const lease = this.tracker.heldLease(panelSlotId);
         if (!lease) throw new Error(`no lease held for panel ${slotId}`);
         const info = await this.panelInit!.getPanelLoadInfo(panelSlotId, lease.connectionId);

@@ -21,26 +21,18 @@ export type ShellServiceCall = (
 ) => Promise<unknown>;
 
 /**
- * Platform-neutral shell core. Electron and mobile supply only their transport,
- * registry and local persistence adapters; panel/runtime/state wiring lives
- * here once.
+ * Complete shell adapters for the workspace-state/runtime service contracts.
+ * Every host uses these factories so adding a required PanelManager operation
+ * cannot silently leave one platform with a partial structural lookalike.
  */
-export function createShellCore(deps: {
-  registry: PanelRegistry;
-  call: ShellServiceCall;
-  viewState: LocalPanelViewStateStore;
-  serverInfo: PanelManagerServerInfo;
-  workspacePath: string;
-  workspaceConfig?: WorkspaceConfig;
-  allowMissingManifests?: boolean;
-}): { panelManager: PanelManager } {
+export function createWorkspaceStateClient(callService: ShellServiceCall): WorkspaceStateClient {
   const call = <T>(service: string, method: string, args: unknown[]) =>
-    deps.call(service, method, args) as Promise<T>;
-
-  const workspaceState: WorkspaceStateClient = {
+    callService(service, method, args) as Promise<T>;
+  return {
     listSlots: () => call<SlotRow[]>("workspace-state", "slot.list", []),
     getSlot: (slotId) => call<SlotRow | null>("workspace-state", "slot.get", [slotId]),
-    getSlotHistory: (slotId) => call<SlotHistoryRow[]>("workspace-state", "slot.history", [slotId]),
+    getSlotHistory: (slotId) =>
+      call<SlotHistoryRow[]>("workspace-state", "slot.history", [slotId]),
     resolveActiveEntity: (id) =>
       call<EntityRecord | null>("workspace-state", "entity.resolveActive", [id]),
     resolveEntity: (id) => call<EntityRecord | null>("workspace-state", "entity.resolve", [id]),
@@ -59,8 +51,12 @@ export function createShellCore(deps: {
       call<void>("workspace-state", "slot.move", [slotId, parentSlotId, positionId]),
     closeSlot: (slotId) => call<void>("workspace-state", "slot.close", [slotId]),
   };
+}
 
-  const runtime: RuntimeClient = {
+export function createRuntimeClient(callService: ShellServiceCall): RuntimeClient {
+  const call = <T>(service: string, method: string, args: unknown[]) =>
+    callService(service, method, args) as Promise<T>;
+  return {
     createEntity: (spec) => call<RuntimeEntityHandle>("runtime", "createEntity", [spec]),
     reservePanelEntity: (spec) =>
       call<RuntimeEntityHandle>("runtime", "reservePanelEntity", [spec]),
@@ -68,6 +64,27 @@ export function createShellCore(deps: {
       call<RuntimeEntityHandle>("runtime", "activatePanelEntity", [spec]),
     retireEntity: (id) => call<void>("runtime", "retireEntity", [{ id }]),
   };
+}
+
+/**
+ * Platform-neutral shell core. Electron and mobile supply only their transport,
+ * registry and local persistence adapters; panel/runtime/state wiring lives
+ * here once.
+ */
+export function createShellCore(deps: {
+  registry: PanelRegistry;
+  call: ShellServiceCall;
+  viewState: LocalPanelViewStateStore;
+  serverInfo: PanelManagerServerInfo;
+  workspacePath: string;
+  workspaceConfig?: WorkspaceConfig;
+  allowMissingManifests?: boolean;
+}): { panelManager: PanelManager } {
+  const call = <T>(service: string, method: string, args: unknown[]) =>
+    deps.call(service, method, args) as Promise<T>;
+
+  const workspaceState = createWorkspaceStateClient(deps.call);
+  const runtime = createRuntimeClient(deps.call);
 
   const searchIndex: PanelSearchIndex = {
     indexPanel: (panel) => call<void>("workspace-state", "panel.index", [panel]),

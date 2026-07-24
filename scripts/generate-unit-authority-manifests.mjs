@@ -83,9 +83,10 @@ for (const [method, capability] of methodCapabilities) {
 for (const [serviceName, service] of Object.entries(matrix)) {
   for (const [methodName, method] of Object.entries(service.methods)) {
     for (const leaf of method.authority?.prepared?.leaves ?? []) {
+      if (leaf.capability === undefined) continue;
       if (typeof leaf.capability !== "string" || leaf.capability.length === 0) {
         throw new Error(
-          `${serviceName}.${methodName} has a prepared authority leaf without a semantic capability`
+          `${serviceName}.${methodName} has an invalid exact prepared semantic capability`
         );
       }
       recordCapabilityTier(
@@ -108,7 +109,7 @@ const REVIEWED_INTRINSIC_CAPABILITIES = new Map([
   ["context.boundary", "critical"],
   ["clipboard", "gated"],
   ["external-browser-open", "gated"],
-  ["external-network-fetch", "gated"],
+  ["network.response.read", "gated"],
   ["incoming-pair-links", "gated"],
   ["internal-model-runtime.use", "gated"],
   ["keychain", "gated"],
@@ -179,23 +180,6 @@ for (const row of authorityLedger.rows.filter(
   }
   directCapabilityMap.set(transport, row.capability);
 }
-const evalCeilingCapabilities = [
-  ...new Set([
-    // This is the vocabulary of statically reviewed host capabilities, not an
-    // authority source. Requests and grants still come only from explicit
-    // manifests and human decisions. Reusing the reviewed tier table avoids a
-    // second, narrower census that silently rejects intrinsic capabilities.
-    ...capabilityTiers.keys(),
-    // Agentic eval is intentionally able to encounter services authored after
-    // this checkout was built. This is a reachability ceiling, never a grant:
-    // the live declaration, exact provider EV, session/mission envelope, and
-    // acquisition decision are still checked for every resolved service.
-    // Enumerating today's workspace services here would turn a dynamic
-    // semantic-context feature into a static source-census dependency.
-    "workspace-service:*",
-  ]),
-].sort();
-
 /**
  * Read the reviewed TypeScript tier table as data without executing repository
  * source. The table remains the authority input; this checker merely consumes
@@ -655,12 +639,11 @@ for (const pkg of [...packages.values()].sort((a, b) => a.file.localeCompare(b.f
   const authority = pkg.manifest.vibestudio?.authority;
   if (
     !authority ||
-    Object.keys(authority).sort().join(",") !== "evalCeilings,requests" ||
-    !Array.isArray(authority.requests) ||
-    !Array.isArray(authority.evalCeilings)
+    Object.keys(authority).join(",") !== "requests" ||
+    !Array.isArray(authority.requests)
   ) {
     console.error(
-      `${path.relative(root, pkg.file)} must explicitly contain exactly authority.requests and authority.evalCeilings`
+      `${path.relative(root, pkg.file)} must explicitly contain exactly authority.requests`
     );
     invalid = true;
     continue;
@@ -675,14 +658,6 @@ for (const pkg of [...packages.values()].sort((a, b) => a.file.localeCompare(b.f
     ]
       .map(normalizeManifestEntry)
       .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
-    authority.evalCeilings = authority.evalCeilings.map((ceiling) => ({
-      ...ceiling,
-      capabilities: Array.isArray(ceiling.capabilities)
-        ? ceiling.capabilities
-            .map(normalizeManifestEntry)
-            .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
-        : ceiling.capabilities,
-    }));
     fs.writeFileSync(pkg.file, `${JSON.stringify(pkg.manifest, null, 2)}\n`);
   }
   for (const [index, request] of authority.requests.entries()) {
@@ -714,48 +689,6 @@ for (const pkg of [...packages.values()].sort((a, b) => a.file.localeCompare(b.f
   if (missing.length) {
     console.error(`${path.relative(root, pkg.file)} authority request mismatch`);
     for (const capability of missing) console.error(`  missing explicit request: ${capability}`);
-    invalid = true;
-  }
-  const ceilingCapabilities = authority.evalCeilings.flatMap((ceiling) =>
-    Array.isArray(ceiling?.capabilities)
-      ? ceiling.capabilities.map((entry) => entry?.capability)
-      : [undefined]
-  );
-  for (const [ceilingIndex, ceiling] of authority.evalCeilings.entries()) {
-    for (const [capabilityIndex, capability] of (ceiling?.capabilities ?? []).entries()) {
-      let normalized;
-      try {
-        normalized = normalizeManifestEntry(capability);
-      } catch (error) {
-        console.error(
-          `${path.relative(root, pkg.file)} eval ceiling ${ceilingIndex} capability ${capabilityIndex}: ${error.message}`
-        );
-        invalid = true;
-        continue;
-      }
-      if (JSON.stringify(capability) !== JSON.stringify(normalized)) {
-        console.error(
-          `${path.relative(root, pkg.file)} eval ceiling ${ceilingIndex} capability ${capabilityIndex} has stale tier/evidence metadata`
-        );
-        invalid = true;
-      }
-    }
-  }
-  const unknownCeilings = ceilingCapabilities.filter(
-    (capability) =>
-      typeof capability !== "string" ||
-      !requiresManifestRequest(capability) ||
-      !evalCeilingCapabilities.some((allowed) =>
-        allowed.endsWith("*") ? capability.startsWith(allowed.slice(0, -1)) : allowed === capability
-      )
-  );
-  if (
-    (pkg.manifest.vibestudio?.agent && ceilingCapabilities.length === 0) ||
-    unknownCeilings.length
-  ) {
-    console.error(`${path.relative(root, pkg.file)} has an invalid explicit eval ceiling`);
-    for (const capability of unknownCeilings)
-      console.error(`  unknown ceiling capability: ${String(capability)}`);
     invalid = true;
   }
 }

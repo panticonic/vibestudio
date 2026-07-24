@@ -15,6 +15,7 @@ const definition = (): MissionSeedDefinition => ({
   missionId: "msn_seeded",
   name: "Seeded",
   charter: {
+    agentBindingId: "agent-seeded",
     taskSpec: "Inspect the workspace",
     harness: { unit: "workers/system-agent", ev: "@seed" },
     skills: [],
@@ -26,6 +27,7 @@ const definition = (): MissionSeedDefinition => ({
       declaredOrigins: [],
     },
     model: { modelId: "openai-codex:gpt-5.3-codex-spark", params: {} },
+    declaredLineageClasses: ["none"],
     trigger: { kind: "event", event: { source: "test", filter: { kind: "all" } } },
   },
   permissions: [],

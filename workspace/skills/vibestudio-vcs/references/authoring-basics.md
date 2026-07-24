@@ -7,13 +7,16 @@ repository path at that state with `vcs.resolveRepository`; a `null` result
 means the repository is absent there. Then use `vcs.listFiles` with the returned
 stable `repositoryId`. Do not scan all state neighbors merely to turn one known
 path into its identity. A file listing supplies stable `repositoryId`, `fileId`,
-path, content digest, mode, `contentKind`, `byteLength`, and
-`coordinateExtent`.
+path, content digest, authoring change/work-unit IDs, persisted `contentClass`
+and `externalKeys`, mode, `contentKind`, `byteLength`, and `coordinateExtent`.
 
 Read a managed file with `vcs.readFile` at the same state. Prefer a stable file
 ID after discovery; use a path only to resolve the initial identity. A `null`
 result means the file is absent at that exact state. This method is
 semantic-only: always pass `state`, `repositoryId`, and a typed file selector.
+For the same state and file ID, `listFiles` and `readFile` must return identical
+`authoredChangeId`, `authoredByWorkUnitId`, `contentClass`, and `externalKeys`;
+stop with an integrity failure if they disagree.
 Use `fs` to read a host or materialized path. Do not look for a raw VCS variant
 or expect VCS to fall back to disk.
 

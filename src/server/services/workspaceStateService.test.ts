@@ -95,6 +95,28 @@ describe("workspaceStateService — title mirror hooks", () => {
     expect(calls).toEqual([{ method: "alarmSet", args: [{ ...own, wakeAt: 123 }] }]);
   });
 
+  it("attaches the host-verified test policy to the durable alarm record", async () => {
+    const { svc, calls } = makeService({});
+    const own = { source: "workers/agent", className: "AiChatWorker", objectKey: "ch-1" };
+    const testPolicy = {
+      policyId: "system-test:permissions-list",
+      kind: "orchestrator" as const,
+    };
+    const ctx = makeDoCtx(own) as MockHandlerCtx & {
+      caller: MockHandlerCtx["caller"] & { testPolicy: typeof testPolicy };
+    };
+    ctx.caller.testPolicy = testPolicy;
+
+    await svc.handler(ctx as never, "alarmSet", [{ ...own, wakeAt: 123 }]);
+
+    expect(calls).toEqual([
+      {
+        method: "alarmSet",
+        args: [{ ...own, wakeAt: 123, testPolicy }],
+      },
+    ]);
+  });
+
   it("allows verified host infrastructure to manage any alarm key", async () => {
     const { svc, calls } = makeService({});
     const key = { source: "workers/agent", className: "AiChatWorker", objectKey: "ch-1" };

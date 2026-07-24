@@ -1,36 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import type { DurableObjectContext, SqlResult } from "@vibestudio/durable";
-import type { AuthenticatedCaller } from "@vibestudio/rpc";
-import { BrowserDataDO, isBrowserDataDirectCaller } from "./browserDataDO.js";
-
-const caller = (callerKind: string, callerId = "x"): AuthenticatedCaller =>
-  ({ callerId, callerKind }) as AuthenticatedCaller;
-const BROKER = "@workspace-extensions/browser-data";
-
-describe("BrowserDataDO direct authority", () => {
-  it("keeps shell and server access independent of a declared broker", () => {
-    expect(isBrowserDataDirectCaller(caller("shell", "shell"), BROKER)).toBe(true);
-    expect(isBrowserDataDirectCaller(caller("server", "main"), BROKER)).toBe(true);
-    expect(isBrowserDataDirectCaller(caller("shell", "shell"), null)).toBe(true);
-    expect(isBrowserDataDirectCaller(caller("server", "main"), null)).toBe(true);
-  });
-
-  it("allows only the exact declared broker extension", () => {
-    expect(isBrowserDataDirectCaller(caller("extension", BROKER), BROKER)).toBe(true);
-    expect(
-      isBrowserDataDirectCaller(caller("extension", "@workspace-extensions/evil"), BROKER)
-    ).toBe(false);
-    expect(isBrowserDataDirectCaller(caller("extension", BROKER), null)).toBe(false);
-  });
-
-  it("refuses panel, durable-object, worker, and unattributed callers", () => {
-    expect(isBrowserDataDirectCaller(caller("panel", "panel:1"), BROKER)).toBe(false);
-    expect(isBrowserDataDirectCaller(caller("do", "do:agent"), BROKER)).toBe(false);
-    expect(isBrowserDataDirectCaller(caller("worker", "worker:1"), BROKER)).toBe(false);
-    expect(isBrowserDataDirectCaller(null, BROKER)).toBe(false);
-  });
-});
+import { BrowserDataDO } from "./browserDataDO.js";
 
 describe("BrowserDataDO schema migrations", () => {
   it("cuts pre-release profile data over to the canonical v7 environment schema", () => {

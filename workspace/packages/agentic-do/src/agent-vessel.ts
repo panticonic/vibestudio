@@ -73,11 +73,13 @@ import {
 } from "@workspace/agentic-core";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import type { DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
+import { executeLocalToolWithDeadline } from "./local-tool-execution.js";
 import {
   AGENT_INSPECTION_METHODS,
   isAgentInspectionMethod,
   type AgentInspectionMethod,
 } from "@vibestudio/shared/agentInspection";
+
 import type {
   VcsCompareResult,
   VcsIntegrateResult,
@@ -148,6 +150,28 @@ import {
   type MaterializedModel,
 } from "./model-spec.js";
 
+function authorityAcquisitionRequired(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as {
+    code?: unknown;
+    errorData?: { acquisition?: { ownerRuntimeId?: unknown } };
+  };
+  return (
+    candidate.code === "EACQUIRE" &&
+    typeof candidate.errorData?.acquisition?.ownerRuntimeId === "string"
+  );
+}
+
+function authorityDecisionDenied(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const failure = (
+    error as {
+      errorData?: { authorityFailure?: { reasonCode?: unknown } };
+    }
+  ).errorData?.authorityFailure;
+  return failure?.reasonCode === "user-denied";
+}
+
 const DELTA_BATCH_MS = 100;
 const CHANNEL_STATE_CACHE_MS = 5_000;
 const BLOB_TEXT_CACHE_MAX_BYTES = 8 * 1024 * 1024;
@@ -162,6 +186,8 @@ const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
 const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 10;
 const PARTICIPANT_HANDLE_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 const SUBAGENT_INTEGRATION_PROTOCOL = "vibestudio.subagent-integration.v2";
+const CHANNEL_ENVELOPE_RETRY_MS = 250;
+const CHANNEL_ENVELOPE_MAX_RETRY_MS = 30_000;
 
 function subagentVcsCommandId(
   phase: "integrate",
@@ -418,6 +444,8 @@ export interface AgentInitiatedTurnOptions extends AgentTurnMetadata {
 }
 
 export abstract class AgentVesselBase extends DurableObjectBase {
+  static override schemaVersion = 2;
+
   protected readonly identity: DOIdentity;
   protected readonly subscriptions: SubscriptionManager;
   protected readonly feedback: FeedbackIngest;
@@ -481,6 +509,22 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       }
     );
     this.subscriptions.createTables();
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS channel_envelope_inbox (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel_id TEXT NOT NULL,
+        delivery_key TEXT NOT NULL,
+        envelope_json TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        UNIQUE(channel_id, delivery_key)
+      )
+    `);
+    this.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_channel_envelope_inbox_due
+        ON channel_envelope_inbox(next_attempt_at, seq)
+    `);
     this.subagentRuns = new SubagentRunStore(this.sql);
     this.subagentRuns.createTables();
     this.feedback = new FeedbackIngest(this.sql);
@@ -496,15 +540,16 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       nextWakeAt: () => this._driver?.nextWakeAt() ?? this.driverNextWakeAtFromSql(),
       fire: async () => {
         const { completion } = await this.driver.beginAlarmDispatch();
-        // Durable Objects remain active while I/O is pending; ctx.waitUntil is
-        // explicitly a no-op for DO lifetime. The alarm RPC returns after the
-        // rows are durably leased, while this activation-owned continuation
-        // either settles them or leaves them for lease-expiry recovery.
-        void completion
-          .finally(() => this.persistAlarmSchedule(this.nextAgentAlarmSchedule()))
-          .catch((error) => {
-            console.error("[AgentVessel] alarm effect dispatch failed:", error);
-          });
+        // The host alarm transport intentionally has no response deadline.
+        // Keep the request as the owner of every post-I/O continuation; a
+        // detached promise can be frozen once its event returns in Workerd.
+        // Lifecycle release remains able to fence active executors at their
+        // I/O awaits through AgentLoopDriver.releaseActivation().
+        try {
+          await completion;
+        } finally {
+          await this.persistAlarmSchedule(this.nextAgentAlarmSchedule());
+        }
       },
     });
     this.registerAgentAlarmSource({
@@ -512,6 +557,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       nextWakeAt: () => this.subagentRuns.nextProgressWakeAt(),
       fire: async (now) => {
         await this.drainSubagentProgress(now);
+      },
+    });
+    this.registerAgentAlarmSource({
+      id: "channel-envelope-inbox",
+      nextWakeAt: () => this.nextChannelEnvelopeAt(),
+      fire: async (now) => {
+        await this.drainChannelEnvelopeInbox(now);
       },
     });
   }
@@ -990,12 +1042,15 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           );
         },
         publish: async (input) => {
-          await this.rpc.call(await this.channelTarget(input.channelId), "publish", [
+          // The agent outbox owns this effect until the channel acknowledges
+          // durable acceptance. The channel's idempotency key makes a retry
+          // after an ambiguous transport failure safe.
+          await this.createChannelClient(input.channelId).publish(
             this.participantId(),
             input.payloadKind,
             input.payload,
-            input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : undefined,
-          ]);
+            input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : undefined
+          );
         },
         sendSignalEvent: async (channelId, event) => {
           await this.createChannelClient(channelId).sendSignalEvent(
@@ -1036,16 +1091,15 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           const resolveRequest = modelBaseUrl ? { url: modelBaseUrl } : { providerId };
           try {
             if (requestId) {
-              const ack = await this.rpc.callDeferred(
+              summary = await this.rpc.call<ModelCredentialSummary | null>(
                 "main",
                 "credentials.resolveCredential",
                 [resolveRequest],
-                { requestId, idempotencyKey: idempotencyKey ?? requestId }
+                {
+                  idempotencyKey: idempotencyKey ?? requestId,
+                  authorityAcquisition: "return",
+                }
               );
-              if (ack.status === "deferred") {
-                throw new CredentialApprovalDeferredError(providerId, modelBaseUrl);
-              }
-              summary = ack.result as ModelCredentialSummary | null;
             } else {
               summary = await this.rpc.call<ModelCredentialSummary | null>(
                 "main",
@@ -1055,21 +1109,17 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             }
             if (!summary) throw new CredentialPendingError(providerId, modelBaseUrl);
           } catch (err) {
-            if (
-              !(
-                err instanceof CredentialPendingError ||
-                err instanceof CredentialApprovalDeferredError
-              )
-            ) {
+            if (authorityAcquisitionRequired(err)) {
+              throw new CredentialApprovalDeferredError(providerId, modelBaseUrl);
+            }
+            if (authorityDecisionDenied(err)) throw err;
+            if (!(err instanceof CredentialPendingError)) {
               console.warn(
                 `[AgentVessel] resolveCredential(${modelBaseUrl ?? providerId}) failed:`,
                 err instanceof Error ? err.message : err
               );
             }
-            if (
-              err instanceof CredentialPendingError ||
-              err instanceof CredentialApprovalDeferredError
-            ) {
+            if (err instanceof CredentialPendingError) {
               throw err;
             }
             throw new CredentialPendingError(providerId, modelBaseUrl);
@@ -1137,12 +1187,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
               };
             }
             const params = prepareAgentToolArguments(agentTool, args);
-            const result = await agentTool.execute(
+            const result = await executeLocalToolWithDeadline(agentTool, {
               invocationId,
-              params as never,
-              signal,
-              (update) => onProgress?.(update)
-            );
+              params,
+              parentSignal: signal,
+              onProgress,
+            });
             return {
               result: { protocolContent: result.content, details: result.details },
               isError: false,
@@ -1175,21 +1225,21 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       http: {
         post: async (input) => {
           if (!input.target) throw new Error("http_call requires a target service/method");
-          // Deferral opt-in (CAP-5): capability-gated server methods (egress
-          // domain approval, permission prompts) PARK server-side instead of
-          // holding this RPC open across a human approval — the outbox row is
-          // the durable continuation, keyed by branch-scoped outbox id, and the result
-          // arrives via onDeferredResult → deliverEffectOutcome. Non-gated
-          // methods complete inline exactly as before (deferIfNeeded only
-          // parks when an approval is actually pending).
-          const ack = await this.rpc.callDeferred(
-            "main",
-            `${input.target.service}.${input.target.method}`,
-            [input.request],
-            { requestId: input.effectId, idempotencyKey: input.idempotencyKey }
-          );
-          if (ack.status === "deferred") return { deferred: true };
-          return { deferred: false, result: ack.result, isError: false };
+          try {
+            const result = await this.rpc.call(
+              "main",
+              `${input.target.service}.${input.target.method}`,
+              [input.request],
+              {
+                idempotencyKey: input.idempotencyKey,
+                authorityAcquisition: "return",
+              }
+            );
+            return { deferred: false, result, isError: false };
+          } catch (error) {
+            if (authorityAcquisitionRequired(error)) return { deferred: true };
+            throw error;
+          }
         },
       },
       callbackAddress: {
@@ -1395,9 +1445,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   private loopConfig(channelId: string): AgentLoopConfig {
     const settings = this.getAgentSettings();
-    // Tool approval is a channel-wide consent control. The chat header writes
-    // this value to channel config, so it must override the legacy per-agent
-    // setting used as the fallback for channels that have not selected a level.
+    // Tool-call review is a channel-wide interaction preference. The chat
+    // header writes it to channel config; the agent setting supplies the
+    // initial value until the channel makes an explicit selection. Host
+    // authority is evaluated separately for each concrete operation.
     const channelConfig =
       (this.subscriptions.getConfig(channelId) as Record<string, unknown> | null) ??
       this.channelConfigCache.get(channelId)?.value;
@@ -1767,6 +1818,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     replay?: boolean;
   }): Promise<{ ok: boolean; participantId: string }> {
     this.ensureIdentity();
+    this.driver.activateChannel(opts.channelId);
     const firstSubscription = this.subscriptions.count() === 0;
     if (firstSubscription) {
       await this.registerLifecycleRelease({ kind: "channel-subscriptions" });
@@ -1873,13 +1925,20 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   })
   async unsubscribeChannel(channelId: string): Promise<{ ok: boolean }> {
     try {
-      await this.driver.handleIncoming(channelId, {
-        type: "command",
-        command: { kind: "abort", reason: "channel_unsubscribe" },
-      });
+      await this.driver.abortChannel(channelId, "channel_unsubscribe");
+      // End durable membership before closing the response resource. Closing
+      // publishes participant-left; onChannelEnvelope consults this row
+      // synchronously, so the terminal delivery becomes a no-op.
+      this.subscriptions.deleteSubscription(channelId);
+      this.sql.exec(`DELETE FROM channel_envelope_inbox WHERE channel_id = ?`, channelId);
       await this.subscriptions.unsubscribeFromChannel(channelId);
     } finally {
       this.subscriptions.deleteSubscription(channelId);
+      // Structured channel delivery is queued durably so a transient handler
+      // failure cannot lose an envelope. Once membership ends, however, those
+      // envelopes have no valid consumer: replaying them can rehydrate a
+      // dropped loop and start a new turn after teardown.
+      this.sql.exec(`DELETE FROM channel_envelope_inbox WHERE channel_id = ?`, channelId);
       this.driver.dropLoop(channelId);
       if (this.subscriptions.count() === 0) await this.clearLifecycleRelease();
     }
@@ -1896,6 +1955,83 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   })
   async onChannelEnvelope(channelId: string, envelope: RpcChannelMessage): Promise<void> {
     this.assertChannelDeliveryCaller("onChannelEnvelope");
+    // A channel can have a delivery already in flight when unsubscribe closes
+    // its response resource. Treat that terminal race as a no-op; accepting it
+    // would recreate durable work for a channel this vessel no longer owns.
+    if (!this.subscriptions.getParticipantId(channelId)) return;
+    const deliveryKey = this.channelEnvelopeDeliveryKey(envelope);
+    const now = Date.now();
+    this.sql.exec(
+      `INSERT OR IGNORE INTO channel_envelope_inbox
+         (channel_id, delivery_key, envelope_json, attempts, next_attempt_at, created_at)
+       VALUES (?, ?, ?, 0, ?, ?)`,
+      channelId,
+      deliveryKey,
+      JSON.stringify(envelope),
+      now,
+      now
+    );
+    this.scheduleAgentAlarm("channel-envelope-inbox", now + 1);
+  }
+
+  private channelEnvelopeDeliveryKey(envelope: RpcChannelMessage): string {
+    if (envelope.kind === "log") {
+      return `log:${envelope.phase}:${envelope.event.id}:${envelope.event.messageId}`;
+    }
+    if (envelope.kind === "signal") {
+      return `signal:${envelope.type}:${stableSha256Hex(envelope)}`;
+    }
+    return `control:${envelope.type}:${stableSha256Hex(envelope)}`;
+  }
+
+  private nextChannelEnvelopeAt(): number | null {
+    const due = this.sql
+      .exec(`SELECT MIN(next_attempt_at) AS due FROM channel_envelope_inbox`)
+      .toArray()[0]?.["due"];
+    return typeof due === "number" ? due : null;
+  }
+
+  private async drainChannelEnvelopeInbox(now: number): Promise<void> {
+    const rows = this.sql
+      .exec(
+        `SELECT seq, channel_id, envelope_json, attempts
+           FROM channel_envelope_inbox
+          WHERE next_attempt_at <= ?
+          ORDER BY seq
+          LIMIT 100`,
+        now
+      )
+      .toArray();
+    for (const row of rows) {
+      const seq = Number(row["seq"]);
+      try {
+        const envelope = JSON.parse(String(row["envelope_json"])) as RpcChannelMessage;
+        await this.processQueuedChannelEnvelope(String(row["channel_id"]), envelope);
+        this.sql.exec(`DELETE FROM channel_envelope_inbox WHERE seq = ?`, seq);
+      } catch (error) {
+        const attempts = Number(row["attempts"] ?? 0) + 1;
+        const retryMs = Math.min(
+          CHANNEL_ENVELOPE_RETRY_MS * 2 ** Math.min(attempts - 1, 7),
+          CHANNEL_ENVELOPE_MAX_RETRY_MS
+        );
+        this.sql.exec(
+          `UPDATE channel_envelope_inbox
+              SET attempts = ?, next_attempt_at = ?
+            WHERE seq = ?`,
+          attempts,
+          Date.now() + retryMs,
+          seq
+        );
+        console.error("[AgentVessel] queued channel envelope processing failed:", error);
+        break;
+      }
+    }
+  }
+
+  private async processQueuedChannelEnvelope(
+    channelId: string,
+    envelope: RpcChannelMessage
+  ): Promise<void> {
     if (envelope.kind === "control") {
       if (envelope.type === "ready") {
         const wakePolicy = this.subscriptions.getConfig(channelId)?.wakePolicy ?? "every-envelope";
@@ -1911,7 +2047,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (envelope.kind === "signal" && envelope.type) {
       await this.onChannelEvent(channelId, {
         id: 0,
-        messageId: "",
+        messageId: envelope.messageId,
         type: envelope.type,
         payload: envelope.payload,
         senderId: envelope.senderId ?? "system",
@@ -2935,10 +3071,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     }
   }
 
-  /** Server-stamped settlement (`onEvalComplete`, `onDeferredResult`): the
+  /** Server-stamped settlement (`onEvalComplete`, authority wake hints): the
    *  server dispatches these via doDispatch / callTarget as callerKind
    *  "server". The DO relay is open, so without this any authenticated caller
-   *  could forge an eval/deferred completion and drive the agent loop. */
+   *  could forge a completion or wake and drive the agent loop. */
   private assertServerCaller(method: string): void {
     if (this.rpcCallerKind !== "server") {
       throw new Error(
@@ -3206,28 +3342,20 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     await this.driver.deliverEffectOutcome(effectId, outcome, address);
   }
 
-  /** Inbound completion of a server-deferred RPC (CAP-5). The requestId is the
-   *  branch-scoped outbox id set by the http port's callDeferred, so duplicate
-   *  delivery no-ops once the row is gone. Eviction between defer and delivery
-   *  is healed by lease-expiry redrive: the retried call re-attaches via its
-   *  idempotencyKey / already-granted capability. */
+  /** Best-effort host wake hint. Durable outbox state, not this notification,
+   * owns continuation; a lost hint is recovered by the ordinary redrive alarm. */
   @rpc({
     principals: ["host"],
     effect: { kind: "runtime-intrinsic" },
     tier: "open",
     sensitivity: "write",
   })
-  async onDeferredResult(payload: {
-    requestId: string;
-    result?: unknown;
-    isError?: boolean;
-  }): Promise<void> {
-    this.assertServerCaller("onDeferredResult");
-    await this.driver.deliverDeferredResult(
-      payload.requestId,
-      payload.result ?? null,
-      payload.isError === true
-    );
+  async onAuthorityChanged(_acquisitionId: string): Promise<void> {
+    this.assertServerCaller("onAuthorityChanged");
+    // Authority acquisition and credential availability are independent
+    // continuations. Only authority-deferred HTTP calls are eligible here;
+    // credential waits resume exclusively through credentialConnected.
+    this.driver.nudgeAuthorityRedrive();
   }
 
   /**
@@ -5439,6 +5567,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           pendingInvocations: Object.keys(loop.state.pendingInvocations),
           pendingApprovals: Object.keys(loop.state.pendingApprovals),
           pendingCredentialWaits: Object.keys(loop.state.pendingCredentialWaits),
+          activeToolNames: loop.state.config.activeToolNames,
           settings: this.inspectAgentSettings(),
         };
       } else {

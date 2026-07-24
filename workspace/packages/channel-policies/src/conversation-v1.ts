@@ -85,9 +85,7 @@ const callEventPayload: ChannelCallEventBuilders = {
       ...(descriptor.turnId ? { turnId: descriptor.turnId as TurnId } : {}),
       causality: {
         invocationId: descriptor.invocationId as InvocationId,
-        ...(descriptor.transportCallId
-          ? { transportCallId: descriptor.transportCallId }
-          : {}),
+        ...(descriptor.transportCallId ? { transportCallId: descriptor.transportCallId } : {}),
       },
       createdAt: input.createdAt,
     };
@@ -139,9 +137,7 @@ const callEventPayload: ChannelCallEventBuilders = {
       ...(descriptor.turnId ? { turnId: descriptor.turnId as TurnId } : {}),
       causality: {
         invocationId: descriptor.invocationId as InvocationId,
-        ...(descriptor.transportCallId
-          ? { transportCallId: descriptor.transportCallId }
-          : {}),
+        ...(descriptor.transportCallId ? { transportCallId: descriptor.transportCallId } : {}),
       },
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
@@ -159,9 +155,7 @@ const callEventPayload: ChannelCallEventBuilders = {
       ...(descriptor.turnId ? { turnId: descriptor.turnId as TurnId } : {}),
       causality: {
         invocationId: descriptor.invocationId as InvocationId,
-        ...(descriptor.transportCallId
-          ? { transportCallId: descriptor.transportCallId }
-          : {}),
+        ...(descriptor.transportCallId ? { transportCallId: descriptor.transportCallId } : {}),
       },
       payload: invocationCancelledPayload("cancelled", input.reason, {
         terminalReasonCode: "cancelled",
@@ -229,9 +223,7 @@ export const conversationV1Policy: ChannelPolicy<ConversationStateV1> = {
     return {
       agentHops:
         explicit ??
-        (draft.senderId === state.lastCompletedSender
-          ? state.agentStreak
-          : state.agentStreak + 1),
+        (draft.senderId === state.lastCompletedSender ? state.agentStreak : state.agentStreak + 1),
     };
   },
 

@@ -1,6 +1,6 @@
 ---
 name: capabilities
-description: Design, declare, discover, and debug Vibestudio capabilities and dynamic intra-workspace services without confusing manifests, grants, approvals, or generated audit catalogs.
+description: Inspect active workspace permission grants and design, declare, discover, or debug Vibestudio capabilities and dynamic intra-workspace services without confusing manifests, grants, approvals, or generated audit catalogs.
 ---
 
 # Capabilities and workspace services
@@ -31,6 +31,46 @@ observed invocation into a grant. Generated authority ledgers are review/audit e
 only; editing or regenerating one is not capability approval. Workspace code admission
 comes from a human decision over the exact sealed version and manifest, not a generated
 product catalog.
+
+## Inspecting and changing live decisions
+
+Use the host permission inventory when someone asks what access is active across the
+workspace:
+
+```ts
+const inventory = await rpc.call("main", "permissions.list", []);
+```
+
+Use the portable `approvals` API only for a custom shared-resource decision owned by
+the current panel, worker, DO, extension, or admitted agent eval. The ordinary
+request/verify/forget lifecycle is one eval:
+
+```ts
+import { approvals } from "@workspace/runtime";
+
+const subject = {
+  id: "example-service:harmless-resource",
+  label: "Example service harmless resource",
+};
+const before = await approvals.list();
+const decision = await approvals.request({
+  subject,
+  title: "Allow access to this custom resource?",
+  summary: "The example service wants to use its own shared resource.",
+});
+const afterApprove = await approvals.list();
+const removed = await approvals.revoke(subject.id);
+const afterRevoke = await approvals.list();
+return { subjectId: subject.id, before, decision, afterApprove, removed, afterRevoke };
+```
+
+`approvals.list()` contains only saved custom-resource choices for the verified
+caller. It is not the workspace permission inventory. `approvals.revoke(...)` takes
+the original `subject.id` string, not the whole subject object. A remembered allow
+or deny appears after `request`; revoking it removes that saved decision so the next
+identical request can ask again. Stable subject ids are provider-owned identifiers;
+they may contain letters, numbers, `. _ : / -`, but may not start with `shell:`,
+`server:`, `system:`, or `@`.
 
 ## Dynamic workspace capabilities
 
@@ -108,12 +148,12 @@ documentation only: it neither requests nor grants authority, and the receiver's
 provider documentation defect to fix, not a reason to guess from source.
 
 An installed unit that knows a service contract requests the exact
-`workspace-service:<name>` capability in its reviewed manifest. Agent eval is different:
-its reviewed `workspace-service:*` ceiling only says that a task may encounter a service
-which did not exist when the harness was built. The wildcard is not a grant. The live
-declaration chooses the exact service capability and provider EV, and the session grant,
-mission closure, context-integrity latch, and any fresh approval still intersect at the
-call. Never replace that live selection with a generated list of today's service names.
+`workspace-service:<name>` capability in its reviewed manifest. Admitted agent eval is
+different: the live declaration chooses the exact service capability and provider EV,
+then the ordinary session grant or acquisition, mission closure, context-integrity
+latch, and receiver policy intersect at the call. Evaluated code has no manifest
+ceiling and receives no authority from the harness package. Never replace live
+selection with a generated list of today's service names.
 
 The shortest authoring loop is:
 
@@ -185,9 +225,9 @@ Manifest request tiers are only `"gated"` and `"critical"`. Do not copy the
 provider method's `@rpc` tier `"open"` into the manifest: receiver policy and
 requested authority are intentionally different layers.
 
-`requests` and `evalCeilings` are independent. The examples show both for a
-fully explicit reviewed manifest, but an omitted section normalizes to an empty
-fail-closed list. Unknown fields and malformed entries are always rejected.
+`requests` describes only effects performed by this installed code. Evaluated child
+code is governed by its host-admitted task or mission session, not this manifest.
+Unknown fields and malformed entries are always rejected.
 
 ```json
 {
@@ -200,8 +240,7 @@ fail-closed list. Unknown fields and malformed entries are always rejected.
           "tier": "gated",
           "evidence": "bounded-dynamic"
         }
-      ],
-      "evalCeilings": []
+      ]
     }
   }
 }
@@ -289,8 +328,7 @@ For a panel, worker, app, extension, or package that performs gated or critical 
 1. Prefer typed runtime APIs. Use live docs to find the operation and its resource
    shape; do not guess a transport method string.
 2. Add the narrow request to that unit's checked-in
-   `package.json#vibestudio.authority.requests`. Keep `evalCeilings` separate: a
-   ceiling only limits evaluated child code and grants nothing.
+   `package.json#vibestudio.authority.requests`.
    Add requests only for gated or critical effects. Open methods and host-owned
    runtime lifecycle plumbing are deliberately absent; putting either in a manifest
    is an error because neither is discretionary unit authority.
@@ -309,20 +347,18 @@ For a panel, worker, app, extension, or package that performs gated or critical 
 Changing code invalidates version-bound grants because authority follows the exact
 execution digest. Critical authority is never persistent.
 
-An agent-owned eval is a conduit, not a separately trusted app. A durable delegated
-choice is **Trust this agent** and remains keyed to that exact agent identity. This is
-not an installed-code update or version decision at all. Every eval still receives its
-own code review before it can run, and its effects still intersect the owning agent
-worker's sealed execution identity, manifest ceiling, mission, and context.
+An agent-owned eval is a conduit, not a separately trusted app. A durable choice is
+**Always for this agent** and remains keyed to that exact agent binding. This is not an
+installed-code update or version decision. Every eval still receives code review before
+it can run, and its effects intersect the binding, admitted task or approved mission,
+current grants, receiver policy, and context lineage.
 
 ## Review and activation lifecycle
 
 Executable workspace units are reviewed as exact build identities, not by package
 name alone. The identity includes the unit's source effective version, transitive
 workspace dependency versions, relevant external dependency versions, runtime ABI,
-and its complete sealed authority contract: direct `requests` plus every
-purpose-specific `evalCeilings` entry. Eval ceilings are reviewed limits on code
-the unit may evaluate; they are not grants to perform those effects.
+and its complete sealed authority contract for direct installed-code `requests`.
 
 - On a fresh workspace, every executable version already present—apps, native
   extensions, panels, workers, and userland Durable Objects owned by those workers—is
@@ -341,12 +377,10 @@ the unit may evaluate; they are not grants to perform those effects.
   stay collapsed under details; removals are summarized. A code-only change therefore
   says that no new permissions are requested without hiding that the exact code version
   is changing.
-- Direct unit capabilities and evaluated-code ceilings are sections of this same
-  exact-version review, never separate prompts. Each section says which panel, worker,
-  app, extension, or package it describes. Added evaluated-code powers are shown first;
-  unchanged ceilings remain collapsed. Approval admits the complete version contract,
-  but does not turn an eval ceiling into a grant: evaluated code must still pass its
-  session envelope and ordinary grant or fresh-approval path.
+- Direct installed-code capabilities render as shared authority rows in the
+  exact-version review. Evaluated code is not part of that version's authority:
+  it enters only through a host-admitted task or approved mission and uses ordinary
+  grants or fresh approval.
 - A manifest request remains only a maximum. Version review admits the exact installed
   unit to use that maximum at gated tier; action-scoped resources, credentials,
   outside-content trust, and critical operations can still require their own just-in-time
@@ -362,8 +396,8 @@ existing unit in a newly created workspace), enqueue it in the shared startup ba
 An exact `workspace-service:<name>` request is allowed even when that provider is not
 present in the checkout being built. This is an intentional dynamic bound, not an
 unused request: the live semantic context supplies the declaration and exact provider
-EV later. Installed units may not request `workspace-service:*`; that wildcard exists
-only in a reviewed eval ceiling.
+EV later. Installed units may not request `workspace-service:*`; evaluated sessions
+select exact live services and cannot turn a wildcard into authority.
 
 ## Userland-owned approval
 
@@ -430,7 +464,7 @@ session is allowed only while that exact closure is active.
 - Use `workspaceServiceDiscovery: "live-declarations"` only for a reviewed mission
   whose purpose genuinely spans services created after approval. It admits live
   declaration selection into the closure; it grants no service capability. The exact
-  provider EV, manifest eval ceiling, session grant/acquisition, receiver policy, and
+  provider EV, session grant/acquisition, receiver policy, and
   context integrity still intersect at each call.
 - Keep event triggers inside the closed filter grammar. Do not evaluate workspace
   expressions as trigger policy.
@@ -478,11 +512,12 @@ receiver enforcement and review its inclusion in the mission closure.
   when its context requests `authorityAcquisition: "wait"`; an installed-code call
   receives `EACQUIRE` plus `errorData.acquisition` so its owning UI can present the
   same user decision. Retry only after that exact acquisition resolves.
-- Treat `not-requested` with
-  `remediation.kind: "update-authority-manifest"` as an immutable ceiling failure,
+- Treat `fixed-code-not-requested` with
+  `remediation.kind: "update-installed-code-manifest"` as an immutable installed-code failure,
   not as a promptable permission. For installed panels/workers, add the returned
   exact `remediation.request` to the owning unit manifest and submit the new sealed
-  version for review. For eval, update the owning agent's reviewed eval ceiling.
+  version for review. An admitted eval never repairs a package manifest: it requests
+  ordinary interactive authority or, when unattended, proposes a mission revision.
 - Treat `receiver-undeclared` with
   `remediation.kind: "declare-rpc-receiver"` as a provider defect. Add the
   appropriate reviewed `@rpc` contract to the receiver or route the operation
@@ -491,6 +526,10 @@ receiver enforcement and review its inclusion in the mission closure.
 - Treat relationship, principal, session, denial, and attestation reason codes as
   terminal for that invocation and follow their explicit remediation. Never turn a
   relationship or transport failure into a permission prompt.
+- Direct authority attestations are runtime transport internals. Workspace code must
+  not import `@vibestudio/rpc/internal`, inspect or forward nonces, or copy a caller
+  envelope. Durable Object receivers use the sanitized `this.caller` identity and
+  `this.authorization` facts; ordinary calls go through the runtime RPC client.
 - Inspect the unit's sealed build metadata and execution digest, not only its mutable
   `package.json`.
 - Keep the original caller/session across closure legs. Never replace it with a host

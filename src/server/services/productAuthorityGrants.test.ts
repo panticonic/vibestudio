@@ -32,7 +32,6 @@ describe("product bootstrap authority", () => {
       effectiveVersion: "ev-test",
       executionDigest: digest,
       requested: [{ capability, resource: { kind: "exact", key: capability } }],
-      evalCeilings: [],
     });
     const base = {
       caller,
@@ -57,7 +56,6 @@ describe("product bootstrap authority", () => {
       effectiveVersion: "ev-test",
       executionDigest: digest,
       requested: [{ capability, resource: { kind: "prefix", prefix: "" } }],
-      evalCeilings: [],
     });
 
     expect(
@@ -88,7 +86,6 @@ describe("product bootstrap authority", () => {
       effectiveVersion: "ev-test",
       executionDigest: digest,
       requested: [],
-      evalCeilings: [],
     });
     expect(
       productAuthorityGrants({

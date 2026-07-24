@@ -4,6 +4,7 @@ import {
   type AlarmDoDispatcher,
   type DORef,
 } from "@vibestudio/shared/doDispatcher";
+import type { AgentExecutionTestPolicy } from "@vibestudio/rpc";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import type { LifecycleKey } from "../internalDOs/workspaceDO.js";
 
@@ -164,12 +165,11 @@ export class AlarmDriver {
   /** Returns true only when every due outcome was durably acknowledged. */
   private async fireOnce(): Promise<boolean> {
     if (this.stopped) return false;
-    let due: Array<LifecycleKey & { wakeAt: number }> = [];
+    let due: Array<LifecycleKey & { wakeAt: number; testPolicy?: AgentExecutionTestPolicy }> = [];
     try {
-      due = await this.dispatchWorkspace<Array<LifecycleKey & { wakeAt: number }>>(
-        "alarmListDue",
-        Date.now()
-      );
+      due = await this.dispatchWorkspace<
+        Array<LifecycleKey & { wakeAt: number; testPolicy?: AgentExecutionTestPolicy }>
+      >("alarmListDue", Date.now());
     } catch (err) {
       log.warn("alarmListDue failed:", err);
       // Listing never acknowledges consumption. Keep the row and retry it
@@ -190,7 +190,11 @@ export class AlarmDriver {
         const controller = new AbortController();
         this.activeDispatches.add(controller);
         try {
-          result = await this.deps.doDispatch.dispatchAlarm(ref, controller.signal);
+          result = await this.deps.doDispatch.dispatchAlarm(
+            ref,
+            controller.signal,
+            target.testPolicy
+          );
           if (!isDoAlarmDispatchResult(result)) {
             throw new Error(
               `Invalid alarm dispatch result for ${target.source}:${target.className}`

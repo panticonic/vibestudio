@@ -136,7 +136,10 @@ export interface RuntimeServiceInternal {
   createEntity(caller: VerifiedCaller, spec: RuntimeEntityCreateSpec): Promise<RuntimeEntityHandle>;
   createContext(
     ctx: Pick<ServiceContext, "caller" | "chainCaller">,
-    args: { contextId?: string }
+    args: {
+      contextId?: string;
+      testPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicySpec;
+    }
   ): Promise<WorkspaceContext>;
   resolveContext(id: string): Promise<string | null>;
 }
@@ -151,7 +154,6 @@ export interface PreparedRuntimeExecution {
   buildKey?: string;
   executionDigest?: string;
   authorityRequests?: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
-  authorityEvalCeilings?: readonly import("@vibestudio/shared/authorityManifest").EvalAuthorityCeiling[];
 }
 
 /** Disposable host projection directories for semantic contexts. */
@@ -186,6 +188,11 @@ export interface RuntimeServiceDeps {
   contextFolders: RuntimeContextFolders;
   /** Required semantic-context lifecycle owned by the semantic workspace. */
   semanticContexts: RuntimeSemanticContexts;
+  onContextCreated?: (input: {
+    contextId: string;
+    ownerContextId: string | null;
+    testPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicySpec;
+  }) => void | Promise<void>;
   /**
    * Server-controlled display-title registry. Workers (and DOs / panels)
    * call `runtime.setTitle(title)` to populate the title that approval UIs
@@ -412,7 +419,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     ...(record.activeAuthority
       ? {
           authorityRequests: record.activeAuthority.requests,
-          authorityEvalCeilings: record.activeAuthority.evalCeilings,
         }
       : {}),
     contextId: record.contextId,
@@ -712,7 +718,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       ...(record.activeAuthority
         ? {
             authorityRequests: record.activeAuthority.requests,
-            authorityEvalCeilings: record.activeAuthority.evalCeilings,
           }
         : {}),
       contextId: record.contextId,
@@ -727,7 +732,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
    */
   async function createContext(
     ctx: Pick<ServiceContext, "caller" | "chainCaller">,
-    args: { contextId?: string }
+    args: {
+      contextId?: string;
+      testPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicySpec;
+    }
   ): Promise<WorkspaceContext> {
     const caller = ctx.caller;
     const delegatedOwnerContextId =
@@ -754,6 +762,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         ownerEntityId: caller.runtime.id,
       });
     }
+    await deps.onContextCreated?.({
+      contextId,
+      ownerContextId: ownerContextId ?? null,
+      ...(args.testPolicy ? { testPolicy: args.testPolicy } : {}),
+    });
     return context;
   }
 
@@ -1357,7 +1370,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       },
       listEntities: (_ctx, [input]) => listEntities(input?.kind),
       resolveContext: (_ctx, [id]) => resolveContext(id),
-      createContext: (ctx, [{ contextId }]) => createContext(ctx, { contextId }),
+      createContext: (ctx, [{ contextId, testPolicy }]) =>
+        createContext(ctx, { contextId, testPolicy }),
       cloneContext: (ctx, [cloneArgs]) => cloneContext(ctx.caller, cloneArgs),
       destroyContext: async (ctx, [{ contextId, recursive }]) => {
         await destroyContext({ contextId, recursive });

@@ -38,10 +38,7 @@ import {
   normalizeCredentialInjection,
   normalizeUrlAudiences,
 } from "@vibestudio/credential-client/urlAudience";
-import type {
-  DeferredResult,
-  ServiceContext,
-} from "../../../packages/shared/src/serviceDispatcher.js";
+import type { ServiceContext } from "../../../packages/shared/src/serviceDispatcher.js";
 import type { AppCapability } from "../../../packages/shared/src/unitManifest.js";
 import type { ServiceDefinition } from "../../../packages/shared/src/serviceDefinition.js";
 import { defineServiceHandler } from "../../../packages/shared/src/serviceHandlers.js";
@@ -70,6 +67,7 @@ import {
 } from "./credentialSessionGrants.js";
 import type { CredentialUseGrantStoreLike } from "./credentialUseGrantStore.js";
 import { assertPresent } from "../../lintHelpers";
+import { testPolicyAllowsGatedInvocation } from "./authorityRuntime.js";
 import { serializeGitHttpResponse } from "./gitHttpRpc.js";
 import type { DisposableGitRemoteManager } from "./disposableGitRemoteManager.js";
 import { throwIfAborted } from "./credentialMechanisms/async.js";
@@ -746,7 +744,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   async function resolveCredential(
     ctx: ServiceContext,
     params: ResolveCredentialParams
-  ): Promise<StoredCredentialSummary | null | DeferredResult> {
+  ): Promise<StoredCredentialSummary | null> {
     const request = params as ResolveUrlBoundCredentialRequest;
     const use = request.use ?? "fetch";
     let credential: Credential;
@@ -785,17 +783,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       return summarizeUrlBoundCredential(credential);
     }
 
-    // Approval needed. A hibernatable DO caller defers so it need not hold its
-    // inbound request open across the (human) approval wait — the summary is
-    // delivered out-of-band via onDeferredResult once the user decides.
-    const produce = async (signal?: AbortSignal): Promise<StoredCredentialSummary> => {
-      await authorizeCredentialUse(ctx, credential, usage, signal);
-      return summarizeUrlBoundCredential(credential);
-    };
-    if (ctx.deferral?.canDefer) {
-      return ctx.deferral.run(produce);
-    }
-    return produce();
+    await authorizeCredentialUse(ctx, credential, usage, ctx.signal);
+    return summarizeUrlBoundCredential(credential);
   }
 
   async function proxyFetch(
@@ -930,7 +919,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     const identity = ctx.caller.code;
     const entity = identity ? null : resolveRuntimeEntityForApproval(ctx.caller.runtime.id);
     const agentId =
-      ctx.caller.sessionOrigin === true
+      ctx.caller.executionSession !== undefined
         ? (identity?.evalOrigin?.ownerId ?? ctx.caller.agentBinding?.entityId)
         : undefined;
     return {
@@ -1199,15 +1188,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     }
     const now = Date.now();
     if (decision === "once") {
-      if (!ctx.deferral?.canDefer) {
-        return;
-      }
-      // A deferrable caller cannot consume a one-shot grant inline: it parks,
-      // returns to the runner, then resolves credentials again during resume.
-      // Treat that deferred one-shot approval as a session grant for the same
-      // caller/resource so the approved turn can actually continue.
-      grantSessionCredentialUse(credentialId, identity, usage.sessionResource);
-      resolvePendingCredentialUseGrants(credentialId, identity, "session", usage);
       return;
     }
     if (decision === "session") {
@@ -1229,6 +1209,14 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     usage: CredentialUseContext
   ): boolean {
     if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) {
+      return true;
+    }
+    if (
+      testPolicyAllowsGatedInvocation(ctx.caller, ctx.authorization, {
+        capability: "credential.use",
+        resourceKey: "credential.use",
+      })
+    ) {
       return true;
     }
     return (

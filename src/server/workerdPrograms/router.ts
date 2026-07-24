@@ -1,4 +1,4 @@
-import { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "@vibestudio/rpc";
+import { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "@vibestudio/rpc/internal";
 
 type RouterBinding = string | Fetcher | DurableObjectNamespace | Readonly<Record<string, string>>;
 

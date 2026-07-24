@@ -40,6 +40,11 @@ const PI_REPLAY_METADATA_KEY = "pi";
 const MAX_PROVIDER_SESSION_ID_LENGTH = 64;
 const LOCAL_MODEL_SIGNAL_CONTENT_TYPE = "vibestudio-ext-working";
 const LOCAL_MODEL_PREFILL_POLL_MS = 1000;
+// A Codex request with no response headers or stream frames is not a long
+// generation; it is a dead transport. Keep the lease renewable by real
+// provider activity, but never let an absent provider response pin the agent
+// turn and its authority session forever.
+const DEFAULT_CODEX_TRANSPORT_IDLE_TIMEOUT_MS = 60_000;
 
 type PiReplayMetadata = {
   textSignature?: string;
@@ -578,6 +583,82 @@ function deterministicTestModeModelOutcome(
       };
     }
   }
+
+  const turnOpenedAt = state.openTurn?.openedAtSeq ?? 0;
+  const userEntry = [...state.entries]
+    .reverse()
+    .find(
+      (entry): entry is Extract<(typeof state.entries)[number], { kind: "user" }> =>
+        entry.kind === "user" && entry.seq <= descriptor.request.contextThroughSeq
+    );
+  const userRequest = userEntry
+    ? extractUserContent(userEntry.content)
+        .map((block) => block.text)
+        .join("\n")
+    : undefined;
+  const requestedWebUrl =
+    typeof userRequest === "string"
+      ? /\bhttps?:\/\/[^\s<>"')\]]+/iu.exec(userRequest)?.[0]?.replace(/[.,;:!?]+$/u, "")
+      : undefined;
+  const requestsSandboxExecution =
+    typeof userRequest === "string" && /\b(?:eval|sandbox)\b/iu.test(userRequest);
+  if (
+    requestedWebUrl &&
+    requestsSandboxExecution &&
+    descriptor.request.activeToolNames.includes("eval")
+  ) {
+    const evalCompleted = state.entries.some(
+      (entry) =>
+        entry.kind === "tool-result" && entry.seq >= turnOpenedAt && entry.name === "eval"
+    );
+    if (!evalCompleted) {
+      const urlLiteral = JSON.stringify(requestedWebUrl);
+      return {
+        kind: "model",
+        blocks: [
+          {
+            type: "toolCall",
+            id: `${descriptor.messageId}:test-eval-fetch`,
+            name: "eval",
+            arguments: {
+              syntax: "javascript",
+              code:
+                `const response = await credentials.fetch(${urlLiteral});\n` +
+                "const body = await response.text();\n" +
+                "return { url: response.url, status: response.status, head: body.slice(0, 512) };",
+            },
+          },
+        ],
+        stopReason: "completed",
+        outcome: "tool_calls_only",
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    }
+  } else if (requestedWebUrl && descriptor.request.activeToolNames.includes("web_fetch")) {
+    const webFetchCompleted = state.entries.some(
+      (entry) =>
+        entry.kind === "tool-result" &&
+        entry.seq >= turnOpenedAt &&
+        entry.name === "web_fetch"
+    );
+    if (!webFetchCompleted) {
+      return {
+        kind: "model",
+        blocks: [
+          {
+            type: "toolCall",
+            id: `${descriptor.messageId}:test-web-fetch`,
+            name: "web_fetch",
+            arguments: { url: requestedWebUrl },
+          },
+        ],
+        stopReason: "completed",
+        outcome: "tool_calls_only",
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    }
+  }
+
   return {
     kind: "model",
     blocks: [
@@ -736,6 +817,10 @@ async function executeModelCall(
   progress: ModelCallProgress
 ): Promise<EffectOutcome | { deferred: true }> {
   const request = descriptor.request;
+  const throwIfAborted = () => {
+    if (!signal.aborted) return;
+    throw signal.reason instanceof Error ? signal.reason : new Error("model call aborted");
+  };
   const trace = (stage: string, extra?: Record<string, unknown>) => {
     progress.stage = stage;
     progress.stageChangedAt = Date.now();
@@ -744,6 +829,7 @@ async function executeModelCall(
     traceModelCallStage(stage, descriptor, extra, deps.env);
   };
   trace("start");
+  throwIfAborted();
 
   // Journal-materialized model resolution (design §6.2): the request carries
   // the exact pi-ai Model literal the vessel resolved at the impure edge.
@@ -840,10 +926,12 @@ async function executeModelCall(
         requestId: descriptor.effectId,
         idempotencyKey: descriptor.idempotencyKey,
       });
+      throwIfAborted();
       trace("credential.resolve.completed", {
         hasHeaders: !!credentials.headers,
       });
     } catch (err) {
+      throwIfAborted();
       if (err instanceof CredentialApprovalDeferredError) {
         return { deferred: true };
       }
@@ -866,6 +954,7 @@ async function executeModelCall(
   }
 
   const [systemPromptRaw, toolsJson] = await Promise.all([systemPromptPromise, toolsJsonPromise]);
+  throwIfAborted();
   trace("context.blobs.loaded", {
     hasSystemPrompt: systemPromptRaw !== null,
     hasTools: toolsJson !== null,
@@ -884,6 +973,7 @@ async function executeModelCall(
     modelContextForPolicy(state, request.contextThroughSeq, request.turnMetadata?.contextPolicy),
     { getText: (digest) => deps.blobstore.getText(digest) }
   )) as ModelMessage[];
+  throwIfAborted();
   const immediatePrompt = request.immediatePrompt?.trim();
   const unboundedMessages = immediatePrompt
     ? [...hydratedMessages, { role: "user" as const, content: immediatePrompt }]
@@ -969,13 +1059,27 @@ async function executeModelCall(
   };
   let eventStream: ReturnType<typeof stream>;
   try {
+    // Some provider adapters begin transport setup even when handed an already
+    // aborted signal. Never let retired channel work reach network or
+    // credential authority after crossing the driver cancellation fence.
+    throwIfAborted();
+    const codexTransportIdleTimeoutMs =
+      effectiveSpec.api === "openai-codex-responses"
+        ? (modelSpec.streamIdleTimeoutMs ?? DEFAULT_CODEX_TRANSPORT_IDLE_TIMEOUT_MS)
+        : undefined;
     eventStream = stream(effectiveSpec as never, context, {
       apiKey: credentials.apiKey,
       ...(credentials.headers ? { headers: credentials.headers } : {}),
       signal: streamAbort.signal,
       sessionId: providerSessionId,
-      ...(modelSpec.streamIdleTimeoutMs !== undefined
-        ? { streamIdleTimeoutMs: modelSpec.streamIdleTimeoutMs }
+      ...(codexTransportIdleTimeoutMs !== undefined
+        ? {
+            // pi-ai applies timeoutMs only while waiting for SSE response
+            // headers and streamIdleTimeoutMs as a renewable lease after the
+            // stream starts (including WebSocket frames).
+            timeoutMs: codexTransportIdleTimeoutMs,
+            streamIdleTimeoutMs: codexTransportIdleTimeoutMs,
+          }
         : {}),
       ...buildRawThinkingOptions(modelSpec as unknown as RawThinkingModel, request.thinkingLevel),
     } as never);

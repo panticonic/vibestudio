@@ -2,13 +2,13 @@ import { describe, it, expect, vi } from "vitest";
 import { z } from "zod";
 import {
   createVerifiedCaller,
-  isDeferredResult,
   ServiceDispatcher,
   type CallerKind,
   type ServiceContext,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import {
+  createTestExecutionSession,
   createTestServiceDispatcher,
   testAuthority,
 } from "@vibestudio/shared/serviceDispatcherTestUtils";
@@ -168,7 +168,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
           status: "acquirable",
           tier: "gated",
           failure: {
-            reasonCode: "missing-grant",
+            reasonCode: "approval-required",
             reason:
               "code:tests/service-dispatch@0000000000000000000000000000000000000000000000000000000000000000 lacks test:dry.write on test:dry.write",
             capability: "test:dry.write",
@@ -216,7 +216,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
               resolver: "discovery.resolve.dynamic",
               leaves: [
                 {
-                  capability: "workspace-service:*",
+                  capabilityPrefix: "workspace-service:",
                   requirement: { kind: "selected", principals: ["code"] },
                   tier: "gated",
                 },
@@ -256,7 +256,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
           status: "acquirable",
           tier: "gated",
           failure: {
-            reasonCode: "missing-grant",
+            reasonCode: "approval-required",
             reason:
               "code:tests/service-dispatch@0000000000000000000000000000000000000000000000000000000000000000 lacks workspace-service:local on do:workers/local:LocalDO:main",
             capability: "workspace-service:local",
@@ -296,7 +296,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
         acquiredResources.push(resource.key);
         grantedResources.add(resource.key);
         if (resource.key === "workspace:target-a") selectedTarget = "target-b";
-        return { state: "decided" as const, decision: "session" as const };
+        return { state: "decided" as const, decision: "once" as const };
       }),
       consume: vi.fn(),
       invalidate: vi.fn(),
@@ -315,7 +315,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
               resolver: "dynamic.resolve.target",
               leaves: [
                 {
-                  capability: "workspace-service:*",
+                  capabilityPrefix: "workspace-service:",
                   requirement: { kind: "selected", principals: ["code"] },
                   tier: "gated",
                 },
@@ -387,7 +387,14 @@ describe("dispatcher: access descriptor + JIT errors", () => {
     expect(acquire).not.toHaveBeenCalled();
 
     const sessionCtx: ServiceContext = {
-      caller: createVerifiedCaller("t", "agent", null, null, null, true),
+      caller: createVerifiedCaller(
+        "t",
+        "agent",
+        null,
+        null,
+        null,
+        createTestExecutionSession({ runtimeId: "t" })
+      ),
     };
     await expect(d.dispatch(sessionCtx, "acquisition", "act", [])).rejects.toMatchObject({
       code: "EACQUIRE",
@@ -408,13 +415,23 @@ describe("dispatcher: access descriptor + JIT errors", () => {
     expect(acquire).toHaveBeenCalledTimes(2);
   });
 
-  it("defers the complete authority acquisition and handler continuation exactly once", async () => {
+  it("re-evaluates an exact host-preauthorized invocation without surfacing a waiter", async () => {
     let granted = false;
-    let parkedWork: ((signal: AbortSignal) => Promise<unknown>) | undefined;
-    const handler = vi.fn(async (handlerCtx: ServiceContext) => {
-      expect(handlerCtx.deferral).toBeUndefined();
-      expect(handlerCtx.authorityAcquisition).toBe("wait");
-      return "effect";
+    const handler = vi.fn(async () => "effect");
+    const request = vi.fn((input) => {
+      granted = true;
+      return {
+        acquisitionId: `acq:${input.snapshotDigest}`,
+        ownerRuntimeId: input.caller.runtime.id,
+        snapshotDigest: input.snapshotDigest,
+        capability: input.snapshot.capability,
+        resourceKey: input.snapshot.resourceKey,
+        tier: input.tier,
+        cardType: "permission.gated" as const,
+        renderedAction: input.renderedAction,
+        pending: false,
+        preauthorized: true as const,
+      };
     });
     const d = new ServiceDispatcher({
       tierLookup: () => ({ tier: "gated", session: "family", rationale: "test" }),
@@ -425,40 +442,22 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       return granted ? resolved : { ...resolved, grants: [] };
     });
     d.setAuthorityAcquirer({
-      request: vi.fn(),
-      acquire: vi.fn(async () => {
-        granted = true;
-        return { state: "decided" as const, decision: "session" as const };
-      }),
+      request,
+      acquire: vi.fn(),
       consume: vi.fn(),
       invalidate: vi.fn(),
     });
     d.registerService({
-      name: "deferred-acquisition",
+      name: "preauthorized",
       authority: { principals: ["code"] },
       methods: { act: { args: z.tuple([]), access: { sensitivity: "write" } } },
       handler,
     });
     d.markInitialized();
-    const installedCodeCtx: ServiceContext = {
-      caller: createVerifiedCaller("t", "do"),
-      deferral: {
-        canDefer: true,
-        run: vi.fn((work) => {
-          parkedWork = work;
-          return {
-            [Symbol.for("vibestudio.rpc.deferredResult")]: true,
-            requestId: "request-1",
-          } as never;
-        }),
-      },
-    };
 
-    const acknowledged = await d.dispatch(installedCodeCtx, "deferred-acquisition", "act", []);
-    expect(isDeferredResult(acknowledged)).toBe(true);
-    expect(handler).not.toHaveBeenCalled();
-    expect(parkedWork).toBeTypeOf("function");
-    await expect(parkedWork!(new AbortController().signal)).resolves.toBe("effect");
+    await expect(d.dispatch(ctx("worker"), "preauthorized", "act", [])).resolves.toBe("effect");
+    expect(request).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledTimes(1);
   });
+
 });

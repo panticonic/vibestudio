@@ -75,6 +75,44 @@ interface ActiveEffectDispatch {
   progress: { phase: string; startedAt: number };
 }
 
+/**
+ * Make cancellation terminate the activation-owned dispatch boundary even
+ * when an external executor ignores AbortSignal. The executor promise keeps
+ * its rejection handler through `then`, so a late failure cannot become
+ * unhandled; its value is simply fenced out of the agent loop.
+ */
+function awaitEffectBoundary<T>(
+  execution: Promise<T>,
+  signal: AbortSignal,
+  abortedValue?: T
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const finish = (settle: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      settle();
+    };
+    const onAbort = () =>
+      finish(() => {
+        if (abortedValue !== undefined) {
+          resolve(abortedValue);
+          return;
+        }
+        reject(
+          signal.reason instanceof Error ? signal.reason : new Error("effect execution aborted")
+        );
+      });
+    signal.addEventListener("abort", onAbort, { once: true });
+    execution.then(
+      (value) => finish(() => resolve(value)),
+      (error) => finish(() => reject(error))
+    );
+    if (signal.aborted) onAbort();
+  });
+}
+
 function compareLocalToolOrder(left: OutboxRow, right: OutboxRow): number {
   const leftDescriptor = left.descriptor;
   const rightDescriptor = right.descriptor;
@@ -365,15 +403,6 @@ function recordPayload(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function deferredErrorMessage(result: unknown): string {
-  if (result instanceof Error) return result.message;
-  if (result && typeof result === "object") {
-    const message = (result as Record<string, unknown>)["message"];
-    if (typeof message === "string" && message.trim()) return message;
-  }
-  return typeof result === "string" && result.trim() ? result : "Deferred call failed";
-}
-
 /** Append failures that mean "our in-memory fold is behind the log" —
  *  classified by the store's typed error contract, never by prose. */
 function isStaleStateAppendError(err: Error): boolean {
@@ -387,6 +416,7 @@ export class AgentLoopDriver {
   private readonly currentDispatchByRow = new Map<string, ActiveEffectDispatch>();
   private readonly activeDispatches = new Set<ActiveEffectDispatch>();
   private readonly closedEffectAdmission = new Map<string, number>();
+  private readonly retiredChannels = new Set<string>();
   /**
    * Effect I/O may run in parallel, but one channel has one ordered semantic
    * log. Commit complete outcomes through a single per-channel writer so a
@@ -643,8 +673,14 @@ export class AgentLoopDriver {
     this.loops.delete(channelId);
   }
 
+  /** Reopen the lifecycle boundary only through an explicit new subscription. */
+  activateChannel(channelId: string): void {
+    this.retiredChannels.delete(channelId);
+  }
+
   /** Wake protocol: validate fold, run the wake command, reconcile, dispatch. */
   async wake(channelId: string): Promise<void> {
+    if (this.retiredChannels.has(channelId)) return;
     this.loops.delete(channelId); // force re-validation against the remote head
     const loop = await this.loop(channelId);
     if (this.inFlightModelCallIsQueuedOrRunningHere(loop)) {
@@ -681,6 +717,12 @@ export class AgentLoopDriver {
    * eviction or a hung stream becomes due again exactly at lease expiry.
    */
   async handleIncoming(channelId: string, incoming: Incoming): Promise<void> {
+    if (
+      this.retiredChannels.has(channelId) &&
+      !(incoming.type === "command" && incoming.command.kind === "abort")
+    ) {
+      return;
+    }
     const loop = await this.loop(channelId);
     await this.runStep(loop, incoming, APPEND_RETRIES);
     await this.settle(channelId);
@@ -988,25 +1030,6 @@ export class AgentLoopDriver {
     this.foldCache.write(loop.state);
     this.kill("after-fold-cache");
     for (const effect of output.effects) {
-      // Fire-and-forget receipts (read/received acks) must NOT wait in the
-      // effect pump behind a long-running model_call dispatch — otherwise a
-      // steer's read-ack only publishes when the model FINISHES (its dispatchRow
-      // shares the pump's dispatch cycle), so the message lingers in the queue
-      // for the whole turn. Publish them eagerly here, at step time (the channel
-      // is idle before the model dispatches). The outbox insert below stays as a
-      // crash-recovery backstop; the channel idempotency key dedupes the redrive.
-      if (effect.kind === "publish_envelope") {
-        const deps = this.executorDeps(loop.channelId);
-        void executorFor(effect)
-          .execute({
-            descriptor: effect,
-            state: loop.state,
-            signal: new AbortController().signal,
-            deps,
-            onEphemeral: () => {},
-          })
-          .catch((err) => console.warn("[agent-loop-driver] eager publish_envelope failed:", err));
-      }
       this.outbox.insert(loop.logId, effect, this.initialDeadline(effect));
     }
     this.kill("after-outbox-insert");
@@ -1159,13 +1182,21 @@ export class AgentLoopDriver {
     return this.outbox.forBranch(logIdForChannel(channelId)).length > 0;
   }
 
-  private startDueDispatches(): Array<Promise<void>> {
+  private startDueDispatches(
+    selection: "all" | "prelude" | "long" = "all"
+  ): Array<Promise<void>> {
     const now = this.deps.now();
     const work: Array<Promise<void>> = [];
     const unresolved = this.outbox.all();
     for (const row of this.outbox
       .due(now)
-      .filter((candidate) => localToolDispatchIsOrdered(candidate, unresolved))) {
+      .filter((candidate) => localToolDispatchIsOrdered(candidate, unresolved))
+      .filter((candidate) => {
+        if (selection === "all") return true;
+        const prelude =
+          candidate.kind === "prompt_artifacts" || candidate.kind === "publish_envelope";
+        return selection === "prelude" ? prelude : !prelude;
+      })) {
       // A credential wait past its own expiresAt is a failure, not a
       // dispatch. (Before expiry, a due row is just the periodic redrive —
       // the executor idempotently re-publishes the card + interest.)
@@ -1189,6 +1220,16 @@ export class AgentLoopDriver {
     return work;
   }
 
+  private hasDuePrelude(): boolean {
+    const now = this.deps.now();
+    const unresolved = this.outbox.all();
+    return this.outbox.due(now).some(
+      (candidate) =>
+        (candidate.kind === "prompt_artifacts" || candidate.kind === "publish_envelope") &&
+        localToolDispatchIsOrdered(candidate, unresolved)
+    );
+  }
+
   async dispatchDue(): Promise<void> {
     const work = this.startDueDispatches();
     await Promise.all(work);
@@ -1196,6 +1237,7 @@ export class AgentLoopDriver {
 
   private async dispatchRow(row: OutboxRow): Promise<void> {
     if (this.activationReleased) return;
+    if (this.retiredChannels.has(row.channelId)) return;
     // Interrupt closes admission before it journals the marker. A concurrently
     // delivered alarm may already have leased this row, but it must not start a
     // new host effect inside that semantic interruption boundary; reconcile
@@ -1236,6 +1278,9 @@ export class AgentLoopDriver {
         phase: dispatchProgress.phase,
         totalMs: Date.now() - dispatchProgress.startedAt,
         kind: row.kind,
+        ...(row.descriptor.kind === "local_tool"
+          ? { operation: `tool.${row.descriptor.tool}` }
+          : {}),
         effectId: row.effectId,
         channelId: row.channelId,
       });
@@ -1284,17 +1329,28 @@ export class AgentLoopDriver {
     dispatchProgress.phase = "execute";
     let outcome: EffectOutcome | { deferred: true };
     try {
-      outcome = await executor.execute({
+      const execution = executor.execute({
         descriptor,
         state: loop.state,
         signal: controller.signal,
         deps: this.executorDeps(loop.channelId),
-        onEphemeral: (emit) => this.emitEphemeral(loop, emit),
-        onExecutionProgress: (stage) => {
-          dispatchProgress.phase = `${row.kind}:${stage}`;
+        onEphemeral: (emit) => {
+          if (!controller.signal.aborted) this.emitEphemeral(loop, emit);
         },
-        onModelExecutionAttempt: (event) => this.recordModelExecutionAttempt(event),
+        onExecutionProgress: (stage) => {
+          if (!controller.signal.aborted) dispatchProgress.phase = `${row.kind}:${stage}`;
+        },
+        onModelExecutionAttempt: (event) => {
+          if (!controller.signal.aborted) this.recordModelExecutionAttempt(event);
+        },
       });
+      outcome = await awaitEffectBoundary(
+        execution,
+        controller.signal,
+        row.kind === "model_call"
+          ? ({ kind: "model", blocks: [], stopReason: "aborted" } satisfies EffectOutcome)
+          : undefined
+      );
     } catch (err) {
       // Lifecycle suspension deliberately leaves the durable outbox row as-is.
       // Recording the abort as a model/tool outcome would turn process
@@ -1769,41 +1825,39 @@ export class AgentLoopDriver {
     return true;
   }
 
-  async deliverDeferredResult(
-    requestId: string,
-    result: unknown,
-    isError: boolean,
-    address: OutcomeAddress = {}
-  ): Promise<void> {
-    const row = this.outcomeRow(requestId, address);
-    if (!row) return;
-    if (row.kind === "model_call") {
-      if (isError) {
-        await this.failEffect(row, { message: deferredErrorMessage(result) });
-        return;
-      }
-      this.nudgeRedrive(row);
-      return;
-    }
-    if (row.kind === "credential_wait") {
-      if (isError) {
-        await this.failEffect(row, { message: deferredErrorMessage(result) });
-        return;
-      }
-      await this.applyOutcome(row, { kind: "credential", resolved: true });
-      return;
-    }
-    await this.applyOutcome(row, {
-      kind: "tool",
-      result,
-      isError,
-      ...(isError ? { reason: deferredErrorMessage(result) } : {}),
-    });
+  /**
+   * A host wake hint says at least one authority acquisition owned by this
+   * vessel changed state. The outbox remains the continuation: make parked
+   * HTTP effects immediately eligible for exact redrive, while ordinary lease
+   * and reconciliation rules still prevent duplicate execution.
+   */
+  nudgeAuthorityRedrive(): void {
+    const now = this.deps.now();
+    this.deps.sql.exec(
+      `UPDATE effect_outbox
+       SET next_attempt_at = ?
+       WHERE kind = 'http_call'
+         AND lease_expires_at IS NULL
+         AND (next_attempt_at IS NULL OR next_attempt_at > ?)`,
+      now,
+      now
+    );
+    this.requestPump();
+    this.scheduleEarliest();
   }
 
   async failEffect(row: OutboxRow, error: { message: string }): Promise<void> {
     const loop = await this.loopForBranch(row.branchId, row.channelId);
     if (!loop) return;
+    console.warn(
+      `[agent-loop-driver] terminal effect failure: ${JSON.stringify({
+        kind: row.kind,
+        effectId: row.effectId,
+        channelId: row.channelId,
+        attempts: row.attempts,
+        message: error.message,
+      })}`
+    );
     await this.handleIncoming(loop.channelId, {
       type: "effect-failed",
       effectId: row.effectId,
@@ -1816,8 +1870,10 @@ export class AgentLoopDriver {
 
   /**
    * Journal one interruption while effect admission is closed, then resolve
-   * only after every previously admitted executor has left the dispatch
-   * boundary. This is the terminal lifecycle operation used by agent pause.
+   * after every previously admitted executor has left our dispatch boundary.
+   * External transports receive AbortSignal but are not trusted to cooperate:
+   * the abort boundary above fences late values and ephemerals immediately.
+   * This is the terminal lifecycle operation used by agent pause.
    */
   async interruptChannel(channelId: string, flushDeferred = false): Promise<void> {
     const loop = await this.loop(channelId);
@@ -1832,18 +1888,16 @@ export class AgentLoopDriver {
       }
     }
 
-    this.closedEffectAdmission.set(channelId, (this.closedEffectAdmission.get(channelId) ?? 0) + 1);
-    const active = [...this.activeDispatches].filter((entry) => entry.channelId === channelId);
-    const pendingModel = loop.state.inFlightModelCall
-      ? this.outbox.get(loop.logId, ids.modelEffect(loop.state.inFlightModelCall.messageId))
-      : null;
-    const modelWasAdmitted =
-      pendingModel !== null &&
-      active.some(
-        (entry) =>
-          entry.branchId === pendingModel.branchId && entry.effectId === pendingModel.effectId
-      );
-    try {
+    await this.withEffectAdmissionClosed(channelId, async (active) => {
+      const pendingModel = loop.state.inFlightModelCall
+        ? this.outbox.get(loop.logId, ids.modelEffect(loop.state.inFlightModelCall.messageId))
+        : null;
+      const modelWasAdmitted =
+        pendingModel !== null &&
+        active.some(
+          (entry) =>
+            entry.branchId === pendingModel.branchId && entry.effectId === pendingModel.effectId
+        );
       // Intent is durable before its effect: the folded marker deterministically
       // decides whether the later aborted terminal closes the turn or, for a
       // soft flush, continues it with queued steering.
@@ -1861,6 +1915,55 @@ export class AgentLoopDriver {
           });
         }
       }
+    });
+  }
+
+  /**
+   * Retire a channel semantically and wait until every executor admitted
+   * before retirement has crossed the local cancellation fence.
+   */
+  async abortChannel(channelId: string, reason: string): Promise<void> {
+    // This is a durable lifecycle boundary, not a momentary cancellation
+    // window. Alarm callbacks and already-queued channel work may arrive after
+    // unsubscribe returns; keep them fenced until a new subscription
+    // explicitly activates this channel again.
+    this.retiredChannels.add(channelId);
+    this.closedEffectAdmission.set(channelId, (this.closedEffectAdmission.get(channelId) ?? 0) + 1);
+    const active = [...this.activeDispatches].filter((entry) => entry.channelId === channelId);
+    try {
+      // Retirement is stronger than a user interrupt: once requested, no
+      // admitted transport may continue while we wait to journal the marker.
+      // Serialize the marker with outcome commits so either a result that was
+      // already committing lands first and is then retired, or retirement
+      // lands first and the queued result observes its outbox row gone.
+      for (const entry of active) entry.controller.abort();
+      await serializeByKey(this.outcomeCommitChains, channelId, async () => {
+        await this.handleIncoming(channelId, {
+          type: "command",
+          command: { kind: "abort", reason },
+        });
+      });
+      await Promise.all(active.map((entry) => entry.settled));
+    } finally {
+      for (const entry of active) entry.controller.abort();
+      try {
+        await Promise.all(active.map((entry) => entry.settled));
+      } finally {
+        const remaining = (this.closedEffectAdmission.get(channelId) ?? 1) - 1;
+        if (remaining === 0) this.closedEffectAdmission.delete(channelId);
+        else this.closedEffectAdmission.set(channelId, remaining);
+      }
+    }
+  }
+
+  private async withEffectAdmissionClosed<T>(
+    channelId: string,
+    operation: (active: ActiveEffectDispatch[]) => Promise<T>
+  ): Promise<T> {
+    this.closedEffectAdmission.set(channelId, (this.closedEffectAdmission.get(channelId) ?? 0) + 1);
+    const active = [...this.activeDispatches].filter((entry) => entry.channelId === channelId);
+    try {
+      return await operation(active);
     } finally {
       for (const entry of active) entry.controller.abort();
       try {
@@ -1912,18 +2015,30 @@ export class AgentLoopDriver {
     for (const loop of this.loops.values()) {
       await this.reconcile(loop);
     }
-    const initialWork = this.startDueDispatches();
+    // Own the bounded prelude inside the alarm request. Detached continuations
+    // are appropriate for model/tool latency, but not for the short durable
+    // steps that expose those effects: Workerd may freeze a continuation once
+    // its event returns. Drain preparation and receipt initiation first.
+    for (;;) {
+      const prelude = this.startDueDispatches("prelude");
+      if (prelude.length === 0) break;
+      await Promise.all(prelude);
+    }
+    const initialWork = this.startDueDispatches("long");
     this.scheduleEarliest();
     const completion = (async () => {
       let work = initialWork;
       while (work.length > 0) {
         await Promise.all(work);
         if (this.activationReleased) return;
+        if (this.hasDuePrelude()) return;
         // Outcomes can journal the next deterministic effect in the same
         // durable chain (prompt artifacts → model, model → tool, tool →
         // continuation). Drain those newly due rows without waiting for an
         // arbitrary second alarm tick; leased/deferred rows are excluded.
-        work = this.startDueDispatches();
+        // Short follow-up work gets a fresh alarm owner; do not start it from
+        // this detached long-effect continuation.
+        work = this.startDueDispatches("long");
       }
     })().finally(() => this.scheduleEarliest());
     return { completion };
@@ -2026,7 +2141,7 @@ export class AgentLoopDriver {
    * when `getLogHead` reports no log — so the only way this throws is a TRANSIENT
    * store-load error (the gad RPC itself failed). Swallowing that as `null` would
    * silently DROP an arriving outcome (deliverEffectOutcome / onEvalComplete /
-   * onDeferredResult → applyOutcome): the outbox row is never deleted on a load
+   * host wake/redrive → applyOutcome): the outbox row is never deleted on a load
    * failure, so the result is lost while the parked row waits forever. Instead we
    * let the error PROPAGATE so the caller's redrive / alarm retries — the row
    * stays parked and the next pump re-attempts delivery. (A genuinely-gone channel

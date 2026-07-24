@@ -2,6 +2,7 @@ import React from "react";
 import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import { ApprovalSheet } from "./ApprovalSheet";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
+import { authorityRow } from "@vibestudio/shared/authority/authorityRows";
 
 const base = {
   approvalId: "approval-1",
@@ -21,6 +22,29 @@ const capability: PendingApproval = {
   details: [{ label: "URL", value: "https://github.com/foo/bar" }],
 };
 
+const consequentialCapability: PendingApproval = {
+  ...base,
+  kind: "capability",
+  capability: "push.send",
+  title: "Send the nightly briefing",
+  resource: { type: "channel", label: "Recipient", value: "Briefings" },
+  allowedDecisions: ["once", "task", "agent", "deny"],
+  authorityRow: authorityRow({
+    capability: "push.send",
+    resource: { kind: "exact", key: "channel:briefings" },
+    resourcePhrase: "Briefings",
+    tier: "gated",
+    statement: "prospective",
+    provenance: { source: "receiver" },
+  }),
+  operationSubstance: {
+    kind: "send",
+    summary: "Send 1 briefing to Briefings",
+    detail: "Subject: Overnight workspace summary",
+    digest: "prepared:briefing-1",
+  },
+};
+
 const credential: PendingApproval = {
   ...base,
   kind: "credential",
@@ -34,6 +58,21 @@ const credential: PendingApproval = {
   oauthTokenOrigin: "https://oauth2.googleapis.com",
   oauthAudienceDomainMismatch: true,
 };
+
+const notificationsRow = authorityRow({
+  capability: "push.send",
+  resource: { kind: "prefix", prefix: "" },
+  tier: "gated",
+  statement: "declared",
+  provenance: { source: "manifest" },
+});
+const accountProfileRow = authorityRow({
+  capability: "account.profile.read",
+  resource: { kind: "prefix", prefix: "" },
+  tier: "gated",
+  statement: "declared",
+  provenance: { source: "manifest" },
+});
 
 const clientConfig: PendingApproval = {
   ...base,
@@ -131,53 +170,25 @@ const unitBatch: PendingApproval = {
       authority: {
         requests: [
           {
-            capability: "notifications",
+            capability: "push.send",
             resource: { kind: "prefix", prefix: "" },
             tier: "gated",
             evidence: "intentional-broad",
           },
           {
-            capability: "service:account.getProfile",
+            capability: "account.profile.read",
             resource: { kind: "prefix", prefix: "" },
             tier: "gated",
             evidence: "intentional-broad",
           },
         ],
-        evalCeilings: [],
-        groups: [
-          {
-            id: "notifications",
-            label: "Notifications",
-            description: "Display workspace notifications",
-            requestCount: 1,
-            addedCount: 1,
-            items: [
-              {
-                capability: "notifications",
-                title: "Show notifications",
-                description: "Display workspace notifications",
-                added: true,
-              },
-            ],
-          },
-          {
-            id: "runtime",
-            label: "Agents and workspace runtimes",
-            description: "Use runtime services",
-            requestCount: 1,
-            addedCount: 0,
-            items: [
-              {
-                capability: "service:account.getProfile",
-                title: "Get profile",
-                description: "Read the existing profile",
-                added: false,
-              },
-            ],
-          },
-        ],
-        removedCount: 0,
-        eval: [],
+        rows: [notificationsRow, accountProfileRow],
+        diff: {
+          added: [{ ...notificationsRow, flags: { newInDiff: true } }],
+          removed: [],
+          unchanged: [accountProfileRow],
+          retiered: [],
+        },
       },
     },
     {
@@ -220,12 +231,12 @@ function renderSheet(
   const props = {
     approvals: Array.isArray(approval) ? approval : [approval],
     onResolve: jest.fn(async () => undefined),
-    onBlockCapability: jest.fn(async () => undefined),
     onSubmitClientConfig: jest.fn(async () => undefined),
     onSubmitCredentialInput: jest.fn(async () => undefined),
     onSubmitSecretInput: jest.fn(async () => undefined),
     onResolveUserland: jest.fn(async () => undefined),
     onResolveExternalAgent: jest.fn(async () => undefined),
+    onResolveMissionReview: jest.fn(async () => undefined),
     ...overrides,
   };
   const view = render(<ApprovalSheet {...props} />);
@@ -250,15 +261,16 @@ describe("ApprovalSheet", () => {
 
   it("shows added unit permissions before unchanged permission details", () => {
     const { getByText, getByTestId, queryByText } = renderSheet(unitBatch);
-    expect(getByText("New: Notifications (1)")).toBeTruthy();
-    expect(queryByText("+ Notifications")).toBeNull();
+    expect(getByText("New: Publishing & sending (1)")).toBeTruthy();
+    expect(queryByText("+ Publishing & sending")).toBeNull();
 
     fireEvent.press(getByTestId("unit-review-app-mobile"));
-    expect(getByText("+ Notifications")).toBeTruthy();
-    expect(queryByText("Get profile")).toBeNull();
+    expect(getByText("+ Publishing & sending")).toBeTruthy();
+    expect(getByText("send notifications — anything in this workspace")).toBeTruthy();
+    expect(queryByText("view your account profile — anything in this workspace")).toBeNull();
 
     fireEvent.press(getByText("1 unchanged permission"));
-    expect(getByText("Get profile")).toBeTruthy();
+    expect(getByText("view your account profile — anything in this workspace")).toBeTruthy();
   });
 
   it.each(["once", "session", "version", "deny"] as const)(
@@ -272,6 +284,17 @@ describe("ApprovalSheet", () => {
       await waitFor(() => expect(onResolve).toHaveBeenCalledWith("approval-1", decision));
     }
   );
+
+  it("shows the exact prepared effect and eligible agent scope on mobile", async () => {
+    const onResolve = jest.fn(async () => undefined);
+    const { getByText, getByTestId } = renderSheet(consequentialCapability, { onResolve });
+    expect(getByText("Publishing & sending")).toBeTruthy();
+    expect(getByText("What exactly")).toBeTruthy();
+    expect(getByText("Send 1 briefing to Briefings")).toBeTruthy();
+    expect(getByText("Subject: Overnight workspace summary")).toBeTruthy();
+    fireEvent.press(getByTestId("approval-action-agent"));
+    await waitFor(() => expect(onResolve).toHaveBeenCalledWith("approval-1", "agent"));
+  });
 
   it.each(["once", "session", "always", "block", "dismiss"] as const)(
     "resolves browser permission decision %s",
@@ -354,12 +377,12 @@ describe("ApprovalSheet", () => {
       <ApprovalSheet
         approvals={[{ ...credential, oauthAudienceDomainMismatch: false }]}
         onResolve={jest.fn()}
-        onBlockCapability={jest.fn()}
         onSubmitClientConfig={jest.fn()}
         onSubmitCredentialInput={jest.fn()}
         onSubmitSecretInput={jest.fn()}
         onResolveUserland={jest.fn()}
         onResolveExternalAgent={jest.fn()}
+        onResolveMissionReview={jest.fn()}
       />
     );
     expect(queryByText("The sign-in domain differs from the service domain.")).toBeNull();
@@ -547,12 +570,12 @@ describe("ApprovalSheet", () => {
       <ApprovalSheet
         approvals={[{ ...credentialInput, approvalId: "approval-2" }]}
         onResolve={jest.fn()}
-        onBlockCapability={jest.fn()}
         onSubmitClientConfig={jest.fn()}
         onSubmitCredentialInput={jest.fn()}
         onSubmitSecretInput={jest.fn()}
         onResolveUserland={jest.fn()}
         onResolveExternalAgent={jest.fn()}
+        onResolveMissionReview={jest.fn()}
       />
     );
     expect(getByText("Add Acme API")).toBeTruthy();

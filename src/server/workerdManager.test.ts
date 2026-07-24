@@ -20,7 +20,7 @@ import {
   buildWorkerdPrograms,
   type WorkerdProgramSources,
 } from "../../scripts/build-workerd-programs.mjs";
-import { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "@vibestudio/rpc";
+import { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "@vibestudio/rpc/internal";
 
 // Mock child_process to prevent actual workerd spawning
 vi.mock("child_process", () => ({
@@ -94,7 +94,7 @@ function mockWorkerBuild(
         executionDigest: "a".repeat(64) as never,
       },
       sourcemap: false,
-      authority: { requests: [], evalCeilings: [] },
+      authority: { requests: [] },
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
     },
@@ -141,7 +141,6 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
       buildKey: `build:${unitPath}:${ref ?? "main"}`,
       executionDigest: "a".repeat(64),
       authorityRequests: [],
-      authorityEvalCeilings: [],
     })),
     getBuildByKey: vi.fn(() => build),
     getManifestRoutes: () => [],
@@ -491,7 +490,6 @@ describe("WorkerdManager", () => {
           activeExecutionDigest: prepared.executionDigest,
           activeAuthority: {
             requests: prepared.authorityRequests,
-            evalCeilings: prepared.authorityEvalCeilings,
           },
           contextId: "ctx-agent",
           className: "NewDO",
@@ -523,7 +521,6 @@ describe("WorkerdManager", () => {
         buildKey: `build:${unitPath}:changed`,
         executionDigest: "e".repeat(64),
         authorityRequests: [],
-        authorityEvalCeilings: [],
       }));
       vi.mocked(deps.bindRuntimeImage).mockClear();
       const restored = new WorkerdManager(deps);
@@ -539,7 +536,6 @@ describe("WorkerdManager", () => {
         activeExecutionDigest: prepared.executionDigest,
         activeAuthority: {
           requests: prepared.authorityRequests,
-          evalCeilings: prepared.authorityEvalCeilings,
         },
         contextId: "ctx-agent",
         className: "NewDO",
@@ -569,7 +565,6 @@ describe("WorkerdManager", () => {
             repoPath: "workers/agent-worker",
             executionDigest: "a".repeat(64),
             requested: [],
-            evalCeilings: [],
           }),
         })
       );
@@ -696,7 +691,6 @@ describe("WorkerdManager", () => {
         buildKey: expect.stringMatching(/^[0-9a-f]{64}$/),
         executionDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
         authorityRequests: [],
-        authorityEvalCeilings: [],
       });
       expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
     });

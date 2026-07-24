@@ -8,8 +8,6 @@ export interface UnitAuthorityManifest {
    * A trailing `*` is the only supported capability wildcard.
    */
   requests: readonly UnitAuthorityRequest[];
-  /** Maximum authority this exact artifact may expose to evaluated code. Never a request or grant. */
-  evalCeilings: readonly EvalAuthorityCeiling[];
 }
 
 export type AuthorityRequestTier = "gated" | "critical";
@@ -20,14 +18,6 @@ export interface UnitAuthorityRequest extends CapabilityScope {
   evidence: AuthorityEvidenceClass;
   /** Dependency packages initially routed this endowment; absent means first-party code only. */
   packages?: readonly string[];
-}
-
-export type EvalCeilingPurpose = "agentic-code-execution" | "tool-eval" | "test-eval";
-
-export interface EvalAuthorityCeiling {
-  audience: "eval";
-  purpose: EvalCeilingPurpose;
-  capabilities: readonly UnitAuthorityRequest[];
 }
 
 export const NO_AUTHORITY_REQUESTS: readonly UnitAuthorityRequest[] = Object.freeze([]);
@@ -113,51 +103,6 @@ export function parseAuthorityRequests(
   );
 }
 
-export function parseAuthorityEvalCeilings(
-  value: unknown,
-  label = "vibestudio.authority"
-): readonly EvalAuthorityCeiling[] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} must be an object with a evalCeilings array`);
-  }
-  const raw = (value as Record<string, unknown>)["evalCeilings"];
-  if (!Array.isArray(raw)) throw new Error(`${label} must contain a evalCeilings array`);
-  const seen = new Set<string>();
-  const evalCeilings = raw.map((entry, index) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      throw new Error(`${label}.evalCeilings[${index}] must be an eval ceiling`);
-    }
-    const record = entry as Record<string, unknown>;
-    if (
-      Object.keys(record).some(
-        (key) => key !== "audience" && key !== "purpose" && key !== "capabilities"
-      ) ||
-      record["audience"] !== "eval" ||
-      !["agentic-code-execution", "tool-eval", "test-eval"].includes(String(record["purpose"])) ||
-      !Array.isArray(record["capabilities"])
-    ) {
-      throw new Error(`${label}.evalCeilings[${index}] has an invalid shape`);
-    }
-    const capabilities = parseAuthorityRequests(
-      { requests: record["capabilities"] },
-      `${label}.evalCeilings[${index}].capabilities`,
-      { allowCapabilityWildcards: true }
-    );
-    const ceiling = {
-      audience: "eval",
-      purpose: record["purpose"] as EvalCeilingPurpose,
-      capabilities,
-    } satisfies EvalAuthorityCeiling;
-    const key = JSON.stringify(ceiling);
-    if (seen.has(key)) throw new Error(`${label}.evalCeilings contains a duplicate declaration`);
-    seen.add(key);
-    return ceiling;
-  });
-  return Object.freeze(
-    evalCeilings.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
-  );
-}
-
 export function parseUnitAuthorityManifest(
   value: unknown,
   label = "vibestudio.authority"
@@ -167,22 +112,15 @@ export function parseUnitAuthorityManifest(
   }
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record).sort();
-  const unknownKeys = keys.filter((key) => key !== "requests" && key !== "evalCeilings");
+  const unknownKeys = keys.filter((key) => key !== "requests");
   if (unknownKeys.length > 0) {
     throw new Error(`${label} has unknown field(s): ${unknownKeys.join(", ")}`);
   }
   if (keys.length === 0) {
-    throw new Error(`${label} must contain a requests or evalCeilings array`);
+    throw new Error(`${label} must contain a requests array`);
   }
   return Object.freeze({
-    requests:
-      record["requests"] === undefined
-        ? NO_AUTHORITY_REQUESTS
-        : parseAuthorityRequests(value, label),
-    evalCeilings:
-      record["evalCeilings"] === undefined
-        ? Object.freeze([])
-        : parseAuthorityEvalCeilings(value, label),
+    requests: parseAuthorityRequests(value, label),
   });
 }
 
@@ -196,17 +134,6 @@ export function authorityRequestsFromManifest(
   return parseUnitAuthorityManifest(manifest.authority, `${label} vibestudio.authority`).requests;
 }
 
-export function authorityEvalCeilingsFromManifest(
-  manifest: { authority?: unknown },
-  label: string
-): readonly EvalAuthorityCeiling[] {
-  if (manifest.authority === undefined) {
-    throw new Error(`${label} must declare vibestudio.authority.evalCeilings`);
-  }
-  return parseUnitAuthorityManifest(manifest.authority, `${label} vibestudio.authority`)
-    .evalCeilings;
-}
-
 export function authorityRequestsFromRecipe(recipe: BuildRecipe): readonly UnitAuthorityRequest[] {
   const raw = recipe.options["authorityRequests"];
   if (!Array.isArray(raw)) {
@@ -215,19 +142,6 @@ export function authorityRequestsFromRecipe(recipe: BuildRecipe): readonly UnitA
   return parseAuthorityRequests(
     { requests: raw },
     `execution recipe ${recipe.target} authorityRequests`
-  );
-}
-
-export function authorityEvalCeilingsFromRecipe(
-  recipe: BuildRecipe
-): readonly EvalAuthorityCeiling[] {
-  const raw = recipe.options["authorityEvalCeilings"];
-  if (!Array.isArray(raw)) {
-    throw new Error("Execution recipe is missing immutable authority evalCeilings");
-  }
-  return parseAuthorityEvalCeilings(
-    { evalCeilings: raw },
-    `execution recipe ${recipe.target} authorityEvalCeilings`
   );
 }
 
@@ -272,16 +186,6 @@ function parsePackages(value: unknown, label: string): readonly string[] | undef
   const packages = [...new Set(value)].sort();
   if (packages.length !== value.length) throw new Error(`${label}.packages contains duplicates`);
   return Object.freeze(packages);
-}
-
-export function authorityEvalCeilingsAsBuildValue(
-  evalCeilings: readonly EvalAuthorityCeiling[]
-): readonly CanonicalBuildValue[] {
-  return evalCeilings.map((ceiling) => ({
-    audience: ceiling.audience,
-    purpose: ceiling.purpose,
-    capabilities: authorityRequestsAsBuildValue(ceiling.capabilities),
-  }));
 }
 
 export function capabilityPatternCovers(pattern: string, capability: string): boolean {

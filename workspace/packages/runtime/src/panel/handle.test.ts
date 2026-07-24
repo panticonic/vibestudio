@@ -1,5 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+function readyObservation(panelId: string, source = "panels/example") {
+  const runtimeEntityId =
+    panelId === "panel-self"
+      ? "panel:self-entity"
+      : panelId === "panel-parent"
+        ? "panel:parent-entity"
+        : `panel:${panelId}-entity`;
+  return {
+    panelId,
+    title: panelId.includes("parent") ? "Parent" : "Panel",
+    source,
+    kind: "workspace" as const,
+    parentId: panelId.includes("parent") ? null : "panel-parent",
+    contextId: "ctx-meta",
+    requestedRef: "main",
+    runtimeEntityId,
+    attemptId: `${runtimeEntityId}@build-${panelId}`,
+    effectiveVersion: `ev-${panelId}`,
+    buildKey: `build-${panelId}`,
+    phase: "ready" as const,
+    updatedAt: 1,
+  };
+}
+
 function createRpcCall() {
   return vi.fn(async (_target: string, method: string, args: unknown[]) => {
     switch (method) {
@@ -9,6 +33,10 @@ function createRpcCall() {
           id: source.startsWith("http") ? "browser-1" : "panel-1",
           title: "Created",
           kind: source.startsWith("http") ? "browser" : "workspace",
+          observation: readyObservation(
+            source.startsWith("http") ? "browser-1" : "panel-1",
+            source
+          ),
         };
       }
       case "panelTree.list": {
@@ -63,6 +91,18 @@ function createRpcCall() {
           runtimeEntityId: `panel:${String(args[0])}-entity`,
           effectiveVersion: `ev-${String(args[0])}`,
         };
+      case "panelTree.observe":
+        return readyObservation(String(args[0]));
+      case "panelTree.diagnose":
+        return {
+          observation: readyObservation(String(args[0])),
+          consoleHistory: {
+            entries: [{ message: "loaded" }],
+            errors: [],
+            dropped: { entries: 0, errors: 0 },
+            capacity: { entries: 1000, errors: 500 },
+          },
+        };
       case "panelCdp.getCdpEndpoint":
         return { wsEndpoint: "ws://localhost", token: "t" };
       case "panelCdp.consoleHistory":
@@ -82,36 +122,14 @@ function createRpcCall() {
           capacity: { entries: 1000, errors: 500 },
         };
       case "panelTree.reload":
-        return {
-          panelId: args[0],
-          operation: "reload",
-          status: "reloaded",
-          loaded: true,
-          rebuilt: false,
-          reloaded: true,
-        };
+        return readyObservation(String(args[0]));
       case "panelTree.rebuildPanel":
-        return {
-          panelId: args[0],
-          operation: "rebuild",
-          status: "rebuild_requested",
-          loaded: true,
-          rebuilt: true,
-          reloaded: false,
-        };
-      case "panelTree.rebuildAndReload":
-        return {
-          panelId: args[0],
-          operation: "rebuildAndReload",
-          status: "rebuilt_and_reloaded",
-          loaded: true,
-          rebuilt: true,
-          reloaded: true,
-        };
+        return readyObservation(String(args[0]));
       case "panelTree.navigate":
         return {
           id: args[0],
           title: "Navigated",
+          observation: readyObservation(String(args[0]), String(args[1])),
         };
       case "panelTree.setStateArgs":
         return { mode: (args[1] as Record<string, unknown>)?.["mode"], preserved: true };
@@ -275,22 +293,21 @@ describe("PanelHandle", () => {
 
     expect(roots).toHaveLength(1);
     expect(roots[0]?.id).toBe("root-1");
-    await expect(roots[0]?.getInfo()).resolves.toMatchObject({
-      runtimeEntityId: "panel:root-entity",
-      effectiveVersion: "ev-root",
+    await expect(roots[0]?.observe()).resolves.toMatchObject({
+      phase: "ready",
     });
     expect(all.map((handle) => handle.id)).toEqual(["browser-1"]);
     expect(panelTree.get("arbitrary").id).toBe("arbitrary");
     expect(self.id).toBe("panel-self");
-    await expect(self.getInfo()).resolves.toMatchObject({
-      id: "panel-self",
+    await expect(self.observe()).resolves.toMatchObject({
+      panelId: "panel-self",
       parentId: "panel-parent",
     });
     await (self.call as Record<string, () => Promise<unknown>>)["ping"]!();
     expect(rpcCall).toHaveBeenCalledWith("panel:self-entity", "ping", []);
     expect(parent?.id).toBe("panel-parent");
-    await expect(parent?.getInfo()).resolves.toMatchObject({
-      id: "panel-parent",
+    await expect(parent?.observe()).resolves.toMatchObject({
+      panelId: "panel-parent",
       parentId: null,
     });
     await (parent!.call as Record<string, () => Promise<unknown>>)["ping"]!();
@@ -385,25 +402,20 @@ describe("PanelHandle", () => {
     });
 
     const parent = panelTree.self().parent();
-    await expect(parent?.rebuildPanel()).resolves.toMatchObject({
+    await expect(parent?.rebuild()).resolves.toMatchObject({
       panelId: "panel-parent",
-      operation: "rebuild",
+      phase: "ready",
     });
     await expect(parent?.reload()).resolves.toMatchObject({
       panelId: "panel-parent",
-      operation: "reload",
-    });
-    await expect(parent?.rebuildAndReload()).resolves.toMatchObject({
-      panelId: "panel-parent",
-      operation: "rebuildAndReload",
+      phase: "ready",
     });
     await expect(
       parent?.navigate("panels/next", { contextId: "ctx-next", stateArgs: { mode: "live" } })
-    ).resolves.toEqual({ id: "panel-parent", title: "Navigated" });
+    ).resolves.toMatchObject({ panelId: "panel-parent", phase: "ready" });
 
     expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.rebuildPanel", ["panel-parent"]);
     expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.reload", ["panel-parent"]);
-    expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.rebuildAndReload", ["panel-parent"]);
     expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.navigate", [
       "panel-parent",
       "panels/next",
@@ -411,7 +423,6 @@ describe("PanelHandle", () => {
     ]);
     expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.rebuildPanel", ["panel-self"]);
     expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.reload", ["panel-self"]);
-    expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.rebuildAndReload", ["panel-self"]);
     expect(rpcCall).not.toHaveBeenCalledWith(
       "main",
       "panelTree.navigate",
@@ -445,10 +456,7 @@ describe("PanelHandle", () => {
 
     expect(handle.id).toBe("worker:agent");
     expect(handle.parent()?.id).toBe("panel-parent");
-    await expect(handle.getInfo()).resolves.toMatchObject({
-      id: "worker:agent",
-      parentId: "panel-parent",
-    });
+    await expect(handle.observe()).rejects.toThrow("worker:agent is not a panel target");
     await expect(handle.cdp.getCdpEndpoint()).rejects.toThrow(
       "CDP is not available for panel worker:agent"
     );
@@ -516,17 +524,14 @@ describe("PanelHandle", () => {
     const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
     _initPanelHandleBridge({ call: rpcCall, on: vi.fn() } as never);
 
-    await expect(getPanelHandle("panel-1").diagnostics({ errorLimit: 25 })).resolves.toMatchObject({
-      info: { id: "panel-1" },
+    await expect(getPanelHandle("panel-1").diagnose()).resolves.toMatchObject({
+      observation: { panelId: "panel-1", phase: "ready" },
       consoleHistory: {
         entries: [expect.objectContaining({ message: "loaded" })],
       },
     });
 
-    expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.consoleHistory", [
-      "panel-1",
-      { errorLimit: 25 },
-    ]);
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.diagnose", ["panel-1"]);
   });
 
   it("supports handle.click as a CDP automation convenience", async () => {

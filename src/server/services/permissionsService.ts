@@ -5,8 +5,16 @@ import {
   permissionsMethods,
   type SavedPermissionGrant,
 } from "@vibestudio/service-schemas/permissions";
-import type { AuthorityGrant, Principal, ResourceScope } from "@vibestudio/rpc";
+import type { AuthorityGrant, AuthorityGrantSubject, ResourceScope } from "@vibestudio/rpc";
 import { describeCapability } from "@vibestudio/shared/authorityPresentation";
+import {
+  AUTHORITY_DOMAINS,
+  AUTHORITY_VERBS,
+  capabilityDomain,
+  type AuthorityDomainId,
+  type AuthorityVerb,
+} from "@vibestudio/shared/authority/capabilityDomains";
+import { resourcePhrase } from "@vibestudio/shared/authority/authorityRows";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
   credentialUseGrantId,
@@ -111,8 +119,134 @@ export function createPermissionsService(deps: {
         if (!removed)
           throw new ServiceError(SERVICE, "revoke", "Permission grant not found", "ENOENT");
       },
+      listAgentProfiles: async () => {
+        deps.capabilityGrants.suspendIdleAgentGrants();
+        return agentProfiles(deps.capabilityGrants);
+      },
+      updateAgentProfile: async (_ctx, [request]) => {
+        let changed = false;
+        if (request.action === "revoke-grant") {
+          changed = deps.capabilityGrants.revoke(request.id);
+        } else if (request.action === "restore-grant") {
+          changed = deps.capabilityGrants.restore(request.id);
+        } else if (request.action === "unlock") {
+          changed = deps.capabilityGrants.revokeLock(request.id);
+        } else {
+          const result = deps.capabilityGrants.resetAgentAuthority(request.bindingId, {
+            keepLocks: request.keepLocks,
+          });
+          changed = result.grants > 0 || result.locks > 0;
+        }
+        if (!changed) {
+          throw new ServiceError(
+            SERVICE,
+            "updateAgentProfile",
+            "Agent permission setting not found",
+            "ENOENT"
+          );
+        }
+      },
     }),
   };
+}
+
+type AgentAuthorityProfile =
+  import("@vibestudio/service-schemas/permissions").AgentAuthorityProfile;
+
+function agentProfiles(store: CapabilityGrantStore): AgentAuthorityProfile[] {
+  const grants = store.listAgentAuthorityGrants();
+  const locks = store.listLocks().filter((lock) => lock.revokedAt === undefined);
+  const bindingIds = new Set<string>();
+  for (const grant of grants) bindingIds.add(grant.subject.slice("agent:".length));
+  for (const lock of locks) bindingIds.add(lock.agentBindingId);
+  return [...bindingIds].sort().map((bindingId) => agentProfile(bindingId, grants, locks));
+}
+
+function agentProfile(
+  bindingId: string,
+  allGrants: readonly AuthorityGrant[],
+  allLocks: readonly import("@vibestudio/rpc").AuthorityLock[]
+): AgentAuthorityProfile {
+  const grants = allGrants.filter((grant) => grant.subject === `agent:${bindingId}`);
+  const locks = allLocks.filter((lock) => lock.agentBindingId === bindingId);
+  const cells: AgentAuthorityProfile["cells"] = [];
+  for (const domain of Object.keys(AUTHORITY_DOMAINS) as AuthorityDomainId[]) {
+    for (const verb of Object.keys(AUTHORITY_VERBS) as AuthorityVerb[]) {
+      const cellGrants = grants.filter((grant) => {
+        const category = capabilityDomain(grant.capability);
+        return category?.domain === domain && category.verb === verb;
+      });
+      const cellLocks = locks.filter((lock) => {
+        if (lock.level === "cell") return lock.domain === domain && lock.verb === verb;
+        const category = lock.capability ? capabilityDomain(lock.capability) : null;
+        return category?.domain === domain && category.verb === verb;
+      });
+      const items: AgentAuthorityProfile["cells"][number]["items"] = [
+        ...cellGrants.map((grant) => {
+          if (!grant.id) throw new Error("Persisted authority grant has no identity");
+          return {
+            id: grant.id,
+            kind: "grant" as const,
+            capability: grant.capability,
+            action: describeCapability(grant.capability).action,
+            resource: resourcePhrase(grant.resource),
+            domain,
+            verb,
+            state: grant.suspendedAt ? ("suspended" as const) : ("active" as const),
+            decidedAt: grant.createdAt,
+            ...(grant.lastUsedAt ? { lastUsedAt: grant.lastUsedAt } : {}),
+          };
+        }),
+        ...cellLocks.map((lock) => ({
+          id: lock.id,
+          kind: "lock" as const,
+          ...(lock.capability ? { capability: lock.capability } : {}),
+          action: lock.capability
+            ? describeCapability(lock.capability).action
+            : `${AUTHORITY_VERBS[verb].label.toLowerCase()} ${AUTHORITY_DOMAINS[domain].label.toLowerCase()}`,
+          ...(lock.resource ? { resource: resourcePhrase(lock.resource) } : {}),
+          domain,
+          verb,
+          state: "locked" as const,
+          decidedAt: lock.createdAt,
+          attemptCount: lock.attemptCount,
+          ...(lock.lastAttemptAt ? { lastAttemptAt: lock.lastAttemptAt } : {}),
+        })),
+      ];
+      const activeCount = cellGrants.filter((grant) => !grant.suspendedAt).length;
+      cells.push({
+        domain,
+        verb,
+        state:
+          domain === "safety"
+            ? "not-available"
+            : cellLocks.some((lock) => lock.level === "cell")
+              ? "never"
+              : activeCount > 0
+                ? "allowed"
+                : "asks-first",
+        allowanceCount: activeCount,
+        items,
+      });
+    }
+  }
+  const allowedDomains = new Set(
+    cells.filter((cell) => cell.state === "allowed").map((cell) => cell.domain)
+  );
+  const name = agentBindingLabel(bindingId);
+  const summary =
+    allowedDomains.size === 0
+      ? `${name} asks before using protected parts of your workspace. It can never change your safety controls.`
+      : `${name} has saved access to ${[...allowedDomains]
+          .map((domain) => AUTHORITY_DOMAINS[domain].label.toLowerCase())
+          .join(", ")}. It can never change your safety controls.`;
+  return { bindingId, name, summary, cells };
+}
+
+function agentBindingLabel(bindingId: string): string {
+  const entity = bindingId.split("@", 1)[0] ?? bindingId;
+  const tail = entity.split(":").at(-1) ?? entity;
+  return tail.replace(/[-_]+/g, " ").replace(/\b\w/g, (value) => value.toUpperCase());
 }
 
 function savedAuthorityGrant(grant: AuthorityGrant): SavedPermissionGrant {
@@ -138,7 +272,9 @@ function savedAuthorityGrant(grant: AuthorityGrant): SavedPermissionGrant {
   };
 }
 
-function codeSubject(subject: Principal): { repoPath: string; executionDigest: string } | null {
+function codeSubject(
+  subject: AuthorityGrantSubject
+): { repoPath: string; executionDigest: string } | null {
   if (!subject.startsWith("code:")) return null;
   const code = subject.slice("code:".length);
   const separator = code.lastIndexOf("@");
@@ -146,11 +282,12 @@ function codeSubject(subject: Principal): { repoPath: string; executionDigest: s
   return { repoPath: code.slice(0, separator), executionDigest: code.slice(separator + 1) };
 }
 
-function authoritySubjectLabel(subject: Principal): string {
+function authoritySubjectLabel(subject: AuthorityGrantSubject): string {
   const code = codeSubject(subject);
   if (code) return code.repoPath;
   if (subject.startsWith("session:")) return "This session";
   if (subject.startsWith("mission:")) return "This agent mission";
+  if (subject.startsWith("agent:")) return "This agent";
   if (subject.startsWith("user:")) return "Your account";
   return "Vibestudio";
 }

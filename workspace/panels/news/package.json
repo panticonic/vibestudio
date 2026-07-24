@@ -143,8 +143,7 @@
           "tier": "gated",
           "evidence": "intentional-broad"
         }
-      ],
-      "evalCeilings": []
+      ]
     }
   },
   "dependencies": {

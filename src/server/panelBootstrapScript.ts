@@ -8,6 +8,43 @@
  */
 
 export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
+  const bootStartedAt = Date.now();
+  const reportBoot = (phase, error) => {
+    const previous = globalThis.__vibestudioPanelBoot;
+    const next = {
+      phase,
+      startedAt: previous?.startedAt ?? bootStartedAt,
+      updatedAt: Date.now(),
+      runtimeEntityId: globalThis.__vibestudioEntityId ?? previous?.runtimeEntityId ?? null,
+      source: globalThis.__vibestudioSourceRepo ?? previous?.source ?? null,
+      contextId: globalThis.__vibestudioContextId ?? previous?.contextId ?? null,
+      effectiveVersion:
+        globalThis.__vibestudioEffectiveVersion ?? previous?.effectiveVersion ?? null,
+      buildKey: globalThis.__vibestudioBuildKey ?? previous?.buildKey ?? null,
+      ...(error
+        ? {
+            error: {
+              name: String(error?.name || "Error"),
+              message: String(error?.message || error),
+              stack: typeof error?.stack === "string" ? error.stack.slice(0, 12000) : undefined,
+            },
+          }
+        : {}),
+    };
+    globalThis.__vibestudioPanelBoot = next;
+    globalThis.dispatchEvent(
+      new CustomEvent("vibestudio:panel-boot", { detail: next })
+    );
+    return next;
+  };
+  reportBoot("loading");
+  globalThis.addEventListener("error", (event) => {
+    reportBoot("failed", event.error || new Error(event.message || "Panel entry failed"));
+  });
+  globalThis.addEventListener("unhandledrejection", (event) => {
+    reportBoot("failed", event.reason || new Error("Unhandled panel rejection"));
+  });
+
   // Capture the loader <script> element synchronously: document.currentScript
   // is null after the first await below, so read its data-bundle-src (the
   // content-hashed entry bundle name) up front.
@@ -79,6 +116,7 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
       cfg = await shell.getPanelInit();
       persistPanelInit(cfg);
     } catch (err) {
+      reportBoot("failed", err);
       const root = document.getElementById("root");
       if (root) root.textContent = "Failed to load panel init: " + (err.message || err);
       return;
@@ -96,6 +134,7 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
   const connectionId = typeof cfg?.connectionId === "string" ? cfg.connectionId : undefined;
 
   if (!cfg || !entityId || !cfg.gatewayConfig || !cfg.gatewayConfig.serverUrl || !cfg.gatewayConfig.token) {
+    reportBoot("failed", new Error("Panel bootstrap configuration is incomplete"));
     const root = document.getElementById("root");
     if (root) root.innerHTML = "<p>Open this panel from Vibestudio.</p>";
     return;
@@ -122,12 +161,14 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
     __vibestudioGatewayConfig: gatewayConfig,
     __vibestudioSourceRepo: cfg.sourceRepo,
     __vibestudioEffectiveVersion: cfg.effectiveVersion ?? cfg.env?.__VIBESTUDIO_EFFECTIVE_VERSION ?? null,
+    __vibestudioBuildKey: cfg.buildKey ?? cfg.env?.__VIBESTUDIO_BUILD_KEY ?? null,
     __vibestudioEnv: cfg.env,
     __vibestudioStateArgs: effectiveStateArgs,
     __vibestudioConnectionId: connectionId,
     __vibestudioClientLabel: cfg.clientLabel,
     process: { env: cfg.env },
   });
+  reportBoot("booting");
 
   await new Promise((resolve, reject) => {
     const s = document.createElement("script");
@@ -142,7 +183,9 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
   const bundle = document.createElement("script");
   bundle.type = "module";
   bundle.src = configuredBundleSrc || "./bundle.js";
+  bundle.onload = () => reportBoot("ready");
   bundle.onerror = () => {
+    reportBoot("failed", new Error("The panel bundle could not be loaded"));
     const root = document.getElementById("root");
     if (!root || root.childElementCount > 0) return;
     root.innerHTML =

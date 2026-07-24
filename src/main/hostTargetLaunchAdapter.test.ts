@@ -11,20 +11,6 @@ describe("readyElectronLaunchEvent", () => {
         evidence: "exact" as const,
       },
     ];
-    const authorityEvalCeilings = [
-      {
-        audience: "eval" as const,
-        purpose: "agentic-code-execution" as const,
-        capabilities: [
-          {
-            capability: "runtime:entity.create",
-            resource: { kind: "prefix" as const, prefix: "panels/" },
-            tier: "gated" as const,
-            evidence: "bounded-dynamic" as const,
-          },
-        ],
-      },
-    ];
     const warn = vi.fn();
 
     const event = readyElectronLaunchEvent(
@@ -40,7 +26,6 @@ describe("readyElectronLaunchEvent", () => {
         effectiveVersion: "ev-1",
         executionDigest: "a".repeat(64),
         authorityRequests,
-        authorityEvalCeilings,
         adoptionPolicy: "prompt",
       },
       {
@@ -56,10 +41,8 @@ describe("readyElectronLaunchEvent", () => {
       url: "http://gateway.test/_a/shell/index.html",
       executionDigest: "a".repeat(64),
       authorityRequests,
-      authorityEvalCeilings,
     });
     expect(event?.authorityRequests).toEqual(authorityRequests);
-    expect(event?.authorityEvalCeilings).toEqual(authorityEvalCeilings);
     expect(warn).not.toHaveBeenCalled();
   });
 

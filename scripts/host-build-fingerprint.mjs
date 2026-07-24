@@ -25,7 +25,9 @@ const INPUT_FILES = [
   "scripts/build-artifact-contracts.mjs",
   "scripts/build-workerd-programs.mjs",
   "scripts/collectWorkers.mjs",
+  "scripts/ensure-host-build.mjs",
   "scripts/generate-connect-grammar.mjs",
+  "scripts/host-build-fingerprint.mjs",
   "tsconfig.json",
   "tsconfig.workers.json",
   "workspace/package.json",
@@ -49,6 +51,10 @@ function collectFiles(rootPath, files) {
   }
   const stat = fs.lstatSync(rootPath);
   if (stat.isSymbolicLink() || stat.isFile()) {
+    // TypeScript's incremental state is a derived build cache. Package builds
+    // may update it even when source is byte-for-byte unchanged, so including
+    // it would make a successful host build invalidate its own fingerprint.
+    if (rootPath.endsWith(".tsbuildinfo")) return;
     files.push(rootPath);
     return;
   }
@@ -101,6 +107,16 @@ export function readHostBuildFingerprint(cwd = process.cwd()) {
   } catch {
     return null;
   }
+}
+
+export function sameHostBuildFingerprint(left, right) {
+  return Boolean(
+    left &&
+    right &&
+    left.version === right.version &&
+    left.mode === right.mode &&
+    left.fingerprint === right.fingerprint
+  );
 }
 
 export function writeHostBuildFingerprint(fingerprint, cwd = process.cwd()) {

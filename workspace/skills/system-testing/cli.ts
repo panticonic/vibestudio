@@ -40,7 +40,13 @@ export interface SystemTestRunProgress {
   updatedAt: string;
   total: number;
   queued: string[];
-  running: Array<{ name: string; category: string; startedAt: string }>;
+  running: Array<{
+    name: string;
+    category: string;
+    startedAt: string;
+    phase: string;
+    phaseStartedAt: string;
+  }>;
   completed: Array<{
     name: string;
     category: string;
@@ -131,7 +137,16 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
       : normalizePositiveInt(options.testTimeoutMs, options.testTimeoutMs);
   const provenance: SystemTestRunRecord["provenance"] = {};
   const queued = new Set(selected.map((test) => test.name));
-  const running = new Map<string, { name: string; category: string; startedAt: string }>();
+  const running = new Map<
+    string,
+    {
+      name: string;
+      category: string;
+      startedAt: string;
+      phase: string;
+      phaseStartedAt: string;
+    }
+  >();
   const completed: SystemTestRunProgress["completed"] = [];
   const completedEntries: TestSuiteResultEntry[] = [];
   const publishProgress = async (status: SystemTestRunProgress["status"]): Promise<void> => {
@@ -178,11 +193,24 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
   const tester = new TestRunner(runner, {
     ...(testTimeoutMs !== undefined ? { testTimeoutMs } : {}),
     onTestStart: (test) => {
+      const now = new Date().toISOString();
       queued.delete(test.name);
       running.set(test.name, {
         name: test.name,
         category: test.category,
-        startedAt: new Date().toISOString(),
+        startedAt: now,
+        phase: "starting",
+        phaseStartedAt: now,
+      });
+      publishInBackground("progress", publishProgress("running"));
+    },
+    onTestPhase: (test, phase) => {
+      const active = running.get(test.name);
+      if (!active || active.phase === phase) return;
+      running.set(test.name, {
+        ...active,
+        phase,
+        phaseStartedAt: new Date().toISOString(),
       });
       publishInBackground("progress", publishProgress("running"));
     },
@@ -440,25 +468,24 @@ export async function systemTestDoctor(
   await capture(
     "model",
     async () => {
-      const modelRoute = systemTestModelRoute(primaryModel, {
-        allowUsageLimitFallback: expectedModel === undefined,
-      });
+      const modelRoute = systemTestModelRoute(primaryModel);
       const service = await workers.resolveService("vibestudio.models.v1", null);
       if (service.kind !== "durable-object" || !service.targetId) {
         throw new Error("vibestudio.models.v1 did not resolve to a Durable Object");
       }
-      const settings = (await rpc.call(service.targetId, "getDefaultModel", [])) as {
-        defaultModel?: string;
-        catalog?: { models?: Array<{ ref?: string; availability?: { state?: string } }> };
-      };
       const required = [
         modelRoute.primaryModel,
         ...(modelRoute.fallbackModel ? [modelRoute.fallbackModel] : []),
       ];
-      const availability = required.map((modelRef) => {
-        const selected = settings.catalog?.models?.find((model) => model.ref === modelRef);
-        return { model: modelRef, availability: selected?.availability?.state ?? "unknown" };
-      });
+      const inspected = (await rpc.call(service.targetId, "inspectModels", [required])) as {
+        models?: Array<{ ref?: string; availability?: { state?: string } }>;
+      };
+      const availability = required.map((modelRef) => ({
+        model: modelRef,
+        availability:
+          inspected.models?.find((model) => model.ref === modelRef)?.availability?.state ??
+          "unknown",
+      }));
       const unusable = availability.find(
         (entry) => entry.availability !== "ready" && entry.availability !== "startable"
       );

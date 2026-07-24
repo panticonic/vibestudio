@@ -469,15 +469,6 @@ export function MainScreen() {
     },
     [refreshPendingApprovals, removeResolvedApproval, shellClient]
   );
-  const blockCapability = useCallback(
-    async (approvalId: string) => {
-      if (!shellClient) throw new Error("Shell client not available");
-      await shellClient.shellApproval.blockCapability(approvalId);
-      removeResolvedApproval(approvalId);
-      void refreshPendingApprovals().catch(() => {});
-    },
-    [refreshPendingApprovals, removeResolvedApproval, shellClient]
-  );
   const submitClientConfig = useCallback(
     async (approvalId: string, values: Record<string, string>) => {
       if (!shellClient) throw new Error("Shell client not available");
@@ -506,6 +497,19 @@ export function MainScreen() {
     async (approvalId: string, choice: string | "dismiss") => {
       if (!shellClient) throw new Error("Shell client not available");
       await shellClient.shellApproval.resolveUserland(approvalId, choice);
+      removeResolvedApproval(approvalId);
+    },
+    [removeResolvedApproval, shellClient]
+  );
+  const resolveMissionReview = useCallback(
+    async (
+      approvalId: string,
+      resolution:
+        | { decision: "approve"; selectedAuthorityKeys: string[] }
+        | { decision: "dismiss" }
+    ) => {
+      if (!shellClient) throw new Error("Shell client not available");
+      await shellClient.shellApproval.resolveMissionReview(approvalId, resolution);
       removeResolvedApproval(approvalId);
     },
     [removeResolvedApproval, shellClient]
@@ -1830,11 +1834,11 @@ export function MainScreen() {
       <ApprovalSheet
         approvals={visibleApprovals}
         onResolve={resolveApproval}
-        onBlockCapability={blockCapability}
         onSubmitClientConfig={submitClientConfig}
         onSubmitCredentialInput={submitCredentialInput}
         onSubmitSecretInput={submitSecretInput}
         onResolveUserland={resolveUserland}
+        onResolveMissionReview={resolveMissionReview}
         onResolveExternalAgent={resolveExternalAgent}
         onNavigateToPanel={activatePanel}
       />

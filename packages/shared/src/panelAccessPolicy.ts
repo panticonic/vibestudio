@@ -22,7 +22,6 @@ export type PanelAccessOperation =
   | "takeOver"
   | "openDevTools"
   | "rebuildPanel"
-  | "rebuildAndReload"
   | "updatePanelState"
   | "stateArgs.set";
 

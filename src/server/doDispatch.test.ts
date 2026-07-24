@@ -151,6 +151,57 @@ describe("DODispatch", () => {
       expect(fetchMock).toHaveBeenCalledOnce();
     });
 
+    it("keeps test-scoped alarm authority active for the complete durable invocation", async () => {
+      const tokenManager = new TokenManager();
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ nextAlarm: null }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      );
+      const authorization = {
+        nonce: "alarm-parent-nonce",
+        context: {},
+      } as never;
+      const policy = {
+        policyId: "system-test:permissions-list",
+        kind: "orchestrator" as const,
+      };
+      const scopeCalls: Array<{
+        receiverRuntimeId: string;
+        authorization: unknown;
+      }> = [];
+
+      vi.stubGlobal("fetch", fetchMock);
+      dispatch.setTokenManager(tokenManager);
+      dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
+      dispatch.setGetDispatchSecret(() => "dispatch-secret");
+      dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      dispatch.setAuthorityAttester(() => authorization);
+      dispatch.setAuthorityParentRunner(async (receiverRuntimeId, scopedAuthorization, invoke) => {
+        scopeCalls.push({ receiverRuntimeId, authorization: scopedAuthorization });
+        return await invoke();
+      });
+
+      await expect(dispatch.dispatchAlarm(makeRef(), undefined, policy)).resolves.toEqual({
+        nextAlarm: null,
+      });
+
+      expect(scopeCalls).toEqual([
+        {
+          receiverRuntimeId: "do:workers/agent-worker:AiChatWorker:ch-123",
+          authorization: expect.objectContaining({
+            nonce: "alarm-parent-nonce",
+            context: { testPolicy: policy },
+          }),
+        },
+      ]);
+      const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)) as {
+        __caller: { authorization: unknown };
+      };
+      expect(body.__caller.authorization).toEqual(scopeCalls[0]!.authorization);
+    });
+
     it("does not replay a semantic call after connection refusal", async () => {
       const tokenManager = new TokenManager();
       const getWorkerdUrl = vi.fn().mockReturnValue("http://127.0.0.1:10001");
@@ -166,7 +217,12 @@ describe("DODispatch", () => {
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
 
       const ref = makeRef();
-      await expect(dispatch.dispatch(ref, "ping", "arg")).rejects.toBe(fetchFailure);
+      const failure = dispatch.dispatch(ref, "ping", "arg");
+      await expect(failure).rejects.toThrow(
+        `DO dispatch fetch to http://127.0.0.1:10001${userlandUrl(ref, "ping")} failed: ` +
+          "fetch failed (cause: Error: connect ECONNREFUSED 127.0.0.1:10001)"
+      );
+      await expect(failure).rejects.toMatchObject({ cause: fetchFailure });
 
       expect(getWorkerdUrl).toHaveBeenCalledTimes(1);
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -188,7 +244,12 @@ describe("DODispatch", () => {
       dispatch.setGetDispatchSecret(() => "dispatch-secret");
       dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
 
-      await expect(dispatch.dispatch(makeRef(), "getRun")).rejects.toBe(fetchFailure);
+      const ref = makeRef();
+      const failure = dispatch.dispatch(ref, "getRun");
+      await expect(failure).rejects.toThrow(
+        `DO dispatch fetch to http://127.0.0.1:10001${userlandUrl(ref, "getRun")} failed: fetch failed`
+      );
+      await expect(failure).rejects.toMatchObject({ cause: fetchFailure });
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 

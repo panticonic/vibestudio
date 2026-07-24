@@ -2,14 +2,12 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { openCanonicalSqliteDatabase } from "@vibestudio/sqlite";
-import { missionClosureDigest, type MissionCharter } from "@vibestudio/shared/authority/mission";
+import type { MissionCharter } from "@vibestudio/shared/authority/mission";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { MissionRegistry } from "./missionRegistry.js";
-import { MISSION_MIGRATION_PLAN } from "./missionSchema.js";
 
 const charter = (): MissionCharter => ({
+  agentBindingId: "agent-summary",
   taskSpec: "Post a nightly summary",
   harness: { unit: "workers/system-agent", ev: "a".repeat(64) },
   skills: [],
@@ -21,45 +19,48 @@ const charter = (): MissionCharter => ({
     declaredOrigins: [],
   },
   model: { modelId: "openai-codex:gpt-5.3-codex-spark", params: {} },
+  declaredLineageClasses: ["none"],
   trigger: { kind: "cron", cron: "0 2 * * *" },
 });
 
 describe("MissionRegistry", () => {
-  it("migrates authority into the closure and fails active legacy rows closed", () => {
-    const migration = MISSION_MIGRATION_PLAN.migrations?.[0];
-    if (!migration) throw new Error("Expected the v1 mission migration");
-    const db = new DatabaseSync(":memory:");
-    for (const object of migration.from.objects) db.exec(object.sql);
-    db.exec(`PRAGMA user_version = ${migration.from.version}`);
-    const legacyCharter = charter();
-    db.prepare(
-      `INSERT INTO missions
-       (mission_id,name,revision,charter_json,owner_user_id,owner_device_id,state,
-        closure_digest,standing_restrictions_json,seeded,created_at,updated_at)
-       VALUES ('msn_preserved','Preserved',1,?,'u','d','active',?,'[]',0,1,1)`
-    ).run(JSON.stringify(legacyCharter), missionClosureDigest(legacyCharter, [], []));
+  it("keeps critical toolkit operations interactive instead of minting standing authority", () => {
+    const statePath = mkdtempSync(join(tmpdir(), "missions-critical-"));
+    const grants = new CapabilityGrantStore({ statePath });
+    const registry = new MissionRegistry({
+      statePath,
+      grantStore: grants,
+      isConduitBlessed: () => true,
+    });
+    const draft = registry.createDraft({
+      name: "Interactive critical mission",
+      charter: charter(),
+      owner: { userId: "u", deviceId: "d" },
+      permissions: [
+        {
+          capability: "service:notification.post",
+          resource: { kind: "exact", key: "service:notification.post" },
+          tier: "critical",
+        },
+      ],
+    });
 
-    expect(
-      openCanonicalSqliteDatabase(db, MISSION_MIGRATION_PLAN, {
-        description: "test mission registry",
-      })
-    ).toEqual({
-      kind: "migrated",
-      fromVersion: 1,
-      version: 3,
-      migrations: ["bind-seeded-missions-to-product-snapshot", "bind-mission-authority-to-closure"],
+    const approved = registry.approve({
+      missionId: draft.missionId,
+      permissions: draft.permissions,
+      decidedBy: "user:u",
+      contextIntegrityReady: true,
     });
+
+    expect(approved.state).toBe("active");
+    expect(approved.permissions).toEqual(draft.permissions);
     expect(
-      db
-        .prepare("SELECT mission_id, seed_snapshot_state, permissions_json, state FROM missions")
-        .get()
-    ).toEqual({
-      mission_id: "msn_preserved",
-      seed_snapshot_state: null,
-      permissions_json: "[]",
-      state: "needs-reapproval",
-    });
-    db.close();
+      grants
+        .listActiveAuthorityGrants()
+        .filter((grant) => grant.subject.startsWith(`mission:${draft.missionId}@`))
+    ).toEqual([]);
+    registry.close();
+    grants.close();
   });
 
   it("never lets an ordinary approved unit become a mission conduit", () => {
@@ -114,6 +115,7 @@ describe("MissionRegistry", () => {
         {
           capability: "service:notification.post",
           resource: { kind: "exact", key: "service:notification.post" },
+          tier: "gated",
         },
       ],
       decidedBy: "user:u",
@@ -195,6 +197,7 @@ describe("MissionRegistry", () => {
           {
             capability: "service:notification.post",
             resource: { kind: "exact", key: "service:notification.post" },
+            tier: "gated",
           },
         ],
         standingRestrictions: [
@@ -249,6 +252,7 @@ describe("MissionRegistry", () => {
           {
             capability: "service:notification.post",
             resource: { kind: "exact", key: "service:notification.post" },
+            tier: "gated",
           },
         ],
         standingRestrictions: [
@@ -278,6 +282,7 @@ describe("MissionRegistry", () => {
           {
             capability: "service:notification.post",
             resource: { kind: "exact", key: "service:notification.post" },
+            tier: "gated",
           },
         ],
         standingRestrictions: [
@@ -341,6 +346,84 @@ describe("MissionRegistry", () => {
       `mission:${approved.missionId}@${approved.closureDigest}`
     );
 
+    registry.close();
+    grants.close();
+  });
+
+  it("declining an out-of-charter revision restores the old charter and records the refusal", () => {
+    const statePath = mkdtempSync(join(tmpdir(), "missions-decline-revision-"));
+    const grants = new CapabilityGrantStore({ statePath });
+    const registry = new MissionRegistry({
+      statePath,
+      grantStore: grants,
+      isConduitBlessed: () => true,
+    });
+    const draft = registry.createDraft({
+      name: "Nightly",
+      charter: charter(),
+      owner: { userId: "u", deviceId: "d" },
+      now: 10,
+    });
+    const approved = registry.approve({
+      missionId: draft.missionId,
+      permissions: [],
+      decidedBy: "user:u",
+      contextIntegrityReady: true,
+      now: 20,
+    });
+    registry.startSession({
+      missionId: draft.missionId,
+      sessionId: "decline-run-session",
+      taskRef: "task:decline",
+      runId: "run:decline",
+      now: 30,
+    });
+    const proposed = registry.proposePermissionRevision({
+      sessionId: "decline-run-session",
+      service: "external-open",
+      method: "open",
+      capability: "service:notification.post",
+      resource: { kind: "exact", key: "channel:outside-charter" },
+      tier: "gated",
+      now: 40,
+    });
+    expect(proposed.state).toBe("needs-reapproval");
+    expect(proposed.charter.toolExposure.services).toContain("external-open.open");
+
+    const resumed = registry.declinePermissionRevision({
+      missionId: draft.missionId,
+      capability: "service:notification.post",
+      resourceKey: "channel:outside-charter",
+      decidedBy: "user:u",
+      contextIntegrityReady: true,
+      now: 50,
+    });
+    expect(resumed).toMatchObject({
+      state: "active",
+      charter: approved.charter,
+      permissions: approved.permissions,
+      standingRestrictions: [
+        {
+          capability: "service:notification.post",
+          resourceKey: "channel:outside-charter",
+        },
+      ],
+    });
+    expect(resumed.charter.toolExposure.services).not.toContain("external-open.open");
+    expect(
+      grants
+        .listAuthorityGrants()
+        .find(
+          (grant) =>
+            grant.revokedAt === undefined &&
+            grant.effect === "deny" &&
+            grant.subject === `mission:${resumed.missionId}@${resumed.closureDigest}`
+        )
+    ).toMatchObject({
+      capability: "service:notification.post",
+      resource: { kind: "exact", key: "channel:outside-charter" },
+      issuedBy: "user:u",
+    });
     registry.close();
     grants.close();
   });
@@ -415,7 +498,11 @@ describe("MissionRegistry", () => {
       registry.approve({
         missionId: draft.missionId,
         permissions: [
-          { capability: "service:credential.delete", resource: { kind: "exact", key: "x" } },
+          {
+            capability: "service:credential.delete",
+            resource: { kind: "exact", key: "x" },
+            tier: "gated",
+          },
         ],
         decidedBy: "user:u",
         contextIntegrityReady: true,
@@ -459,6 +546,7 @@ describe("MissionRegistry", () => {
         {
           capability: "workspace-service:notes",
           resource: { kind: "prefix", prefix: "do:workers/notes:" },
+          tier: "gated",
         },
       ],
       decidedBy: "user:u",

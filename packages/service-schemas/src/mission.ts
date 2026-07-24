@@ -24,6 +24,7 @@ const missionEventFilterSchema = z.discriminatedUnion("kind", [
 
 export const missionCharterSchema = z
   .object({
+    agentBindingId: z.string().min(1),
     taskSpec: z.string().min(1),
     harness: z.object({ unit: z.string().min(1), ev: hex64 }).strict(),
     skills: z.array(z.object({ path: z.string().min(1), contentHash: hex64 }).strict()),
@@ -46,6 +47,9 @@ export const missionCharterSchema = z
       })
       .strict(),
     model: z.object({ modelId: z.string().min(1), params: z.record(z.unknown()) }).strict(),
+    declaredLineageClasses: z
+      .array(z.enum(["none", "web", "email", "channel-external", "external"]))
+      .min(1),
     trigger: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("manual") }).strict(),
       z.object({ kind: z.literal("cron"), cron: z.string().min(1) }).strict(),
@@ -65,7 +69,11 @@ export const missionCharterSchema = z
   .strict();
 
 export const missionPermissionSchema = z
-  .object({ capability: z.string().min(1), resource: AuthorityResourceScopeSchema })
+  .object({
+    capability: z.string().min(1),
+    resource: AuthorityResourceScopeSchema,
+    tier: z.enum(["gated", "critical"]),
+  })
   .strict();
 
 export const missionStandingRestrictionSchema = z
@@ -89,6 +97,18 @@ export const missionRecordSchema = z
   })
   .strict();
 
+export const missionRunRecordSchema = z
+  .object({
+    runId: z.string().min(1),
+    missionId: z.string().min(1),
+    closureDigest: hex64,
+    sessionId: z.string().min(1),
+    startedAt: z.number().int().nonnegative(),
+    finishedAt: z.number().int().nonnegative().optional(),
+    outcome: z.string().optional(),
+  })
+  .strict();
+
 const USER_HOST: ServiceAuthorityPolicy = { principals: ["user", "host"] };
 const HOST: ServiceAuthorityPolicy = { principals: ["host"] };
 
@@ -107,9 +127,25 @@ export const missionMethods = defineServiceMethods({
     authority: USER_HOST,
     access: { sensitivity: "read" },
   },
+  listRuns: {
+    description: "List the durable run timeline for one visible mission.",
+    args: z.tuple([z.string()]),
+    returns: z.array(missionRunRecordSchema),
+    authority: USER_HOST,
+    access: { sensitivity: "read" },
+  },
   createDraft: {
     description: "Create an inert mission draft; this grants and schedules nothing.",
-    args: z.tuple([z.object({ name: z.string().min(1), charter: missionCharterSchema }).strict()]),
+    args: z.tuple([
+      z
+        .object({
+          name: z.string().min(1),
+          charter: missionCharterSchema,
+          permissions: z.array(missionPermissionSchema),
+          standingRestrictions: z.array(missionStandingRestrictionSchema).optional(),
+        })
+        .strict(),
+    ]),
     returns: missionRecordSchema,
     authority: USER_HOST,
     access: { sensitivity: "write" },
@@ -119,20 +155,21 @@ export const missionMethods = defineServiceMethods({
     args: z.tuple([
       z.string(),
       z
-        .object({ name: z.string().min(1).optional(), charter: missionCharterSchema.optional() })
+        .object({
+          name: z.string().min(1).optional(),
+          charter: missionCharterSchema.optional(),
+          permissions: z.array(missionPermissionSchema).optional(),
+          standingRestrictions: z.array(missionStandingRestrictionSchema).optional(),
+        })
         .strict(),
     ]),
     returns: missionRecordSchema,
     authority: USER_HOST,
     access: { sensitivity: "write" },
   },
-  approve: {
-    description: "Approve the exact current mission closure and its exposed permission rows.",
-    args: z.tuple([
-      z.string(),
-      z.array(missionPermissionSchema),
-      z.array(missionStandingRestrictionSchema).optional(),
-    ]),
+  requestReview: {
+    description: "Open the canonical approval-queue review for an inert mission closure.",
+    args: z.tuple([z.string()]),
     returns: missionRecordSchema,
     authority: USER_HOST,
     access: { sensitivity: "admin" },

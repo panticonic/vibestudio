@@ -44,7 +44,12 @@ export interface ApprovalQueueInfo {
  */
 export type ApprovalCardIntentBody =
   | { type: "decide"; decision: ApprovalDecision }
-  | { type: "block-capability" }
+  | {
+      type: "resolve-mission-review";
+      resolution:
+        | { decision: "approve"; selectedAuthorityKeys: string[] }
+        | { decision: "dismiss" };
+    }
   | { type: "submit-client-config"; values: Record<string, string> }
   | { type: "submit-credential-input"; values: Record<string, string> }
   | { type: "submit-secret-input"; values: Record<string, string> }

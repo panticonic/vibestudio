@@ -2,9 +2,9 @@
  * Sealed authority conduit for the headless system-test harness.
  *
  * System-test source is intentionally evaluated in the normal EvalDO runtime,
- * where its portable APIs actually live. This installed unit contributes only
- * an explicit, review-visible `tool-eval` ceiling; the EvalDO gets
- * no authority that this exact build did not name.
+ * where its portable APIs actually live. EvalDO recognizes this exact sealed
+ * runner build and issues the explicit test policy for its nested runs. No
+ * session, shell, or arbitrary eval can impersonate that execution identity.
  */
 import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
 import { anyOf, methodCapability, relationship } from "@vibestudio/shared/authorization";
@@ -30,6 +30,11 @@ interface EvalRunResult {
   success: boolean;
   returnValue?: unknown;
   error?: string;
+}
+
+interface EvalCancelResult {
+  ok: true;
+  forcedReset: boolean;
 }
 
 interface StoredSystemTestRecord {
@@ -144,7 +149,88 @@ export class SystemTestRunnerDO extends DurableObjectBase {
     // activation-local and its runtime entity is retired after every CLI run.
   }
 
-  @rpc({ requires: SYSTEM_TEST_OPERATOR, effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  private async runHarnessUtility(kind: "doctor" | "list", code: string): Promise<unknown> {
+    const runId = `system-test-runner:${kind}:${crypto.randomUUID()}`;
+    const subKey = `system-test-${kind}`;
+    const scopeKey = `$systemTestUtility:${kind}`;
+    await this.rpc.call("main", "eval.startRun", [
+      {
+        runId,
+        subKey,
+        code: `
+          ${code}
+          const serialized = JSON.stringify(utilityValue);
+          scope[${JSON.stringify(scopeKey)}] = serialized;
+          return {
+            kind: "system-test-record-v1",
+            scopeKey: ${JSON.stringify(scopeKey)},
+            length: serialized.length,
+          };
+        `,
+        syntax: "typescript",
+      },
+    ]);
+    for (;;) {
+      const status = await this.rpc.call<EvalRunStatus>("main", "eval.getRun", [{ runId, subKey }]);
+      if (status.status === "done") {
+        if (!status.result?.success) {
+          throw new Error(status.result?.error ?? `system-test ${kind} eval failed`);
+        }
+        const stored = parseStoredSystemTestRecord(status.result.returnValue);
+        try {
+          return await this.readStoredSystemTestRecord(subKey, stored);
+        } finally {
+          await this.rpc.call("main", "eval.deleteScopeValue", [{ subKey, key: stored.scopeKey }]);
+        }
+      }
+      if (status.status === "cancelled" || status.status === "unknown") {
+        throw new Error(`system-test ${kind} eval ended with status ${status.status}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
+  @rpc({
+    requires: SYSTEM_TEST_OPERATOR,
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
+  async doctor(model?: string): Promise<unknown> {
+    return this.runHarnessUtility(
+      "doctor",
+      `
+        import { systemTestDoctor } from "@workspace-skills/system-testing/cli";
+        const utilityValue = await systemTestDoctor(${JSON.stringify(model)});
+      `
+    );
+  }
+
+  @rpc({
+    requires: SYSTEM_TEST_OPERATOR,
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
+  async listSystemTests(category?: string): Promise<unknown> {
+    return this.runHarnessUtility(
+      "list",
+      `
+        import { listSystemTests } from "@workspace-skills/system-testing/cli";
+        const category = ${JSON.stringify(category)};
+        const utilityValue = listSystemTests().filter(
+          (test) => !category || test.category === category
+        );
+      `
+    );
+  }
+
+  @rpc({
+    requires: SYSTEM_TEST_OPERATOR,
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async runSystemTests(options: SystemTestRunConfig): Promise<unknown> {
     if (this.runs.has(options.runId)) {
       throw new Error(`System-test run ${options.runId} is already active in this runner`);
@@ -227,24 +313,43 @@ export class SystemTestRunnerDO extends DurableObjectBase {
     }
   }
 
-  @rpc({ requires: SYSTEM_TEST_OPERATOR, effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    requires: SYSTEM_TEST_OPERATOR,
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async getSystemTestRunSnapshot(runId: string): Promise<SystemTestRunnerSnapshot | null> {
     const active = this.runs.get(runId);
     return active ? { progress: structuredClone(active.progress) } : null;
   }
 
-  @rpc({ requires: SYSTEM_TEST_OPERATOR, effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    requires: SYSTEM_TEST_OPERATOR,
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async cancelSystemTestRun(runId: string): Promise<unknown | null> {
     const active = this.runs.get(runId);
     if (!active) return null;
+    let cancellation: EvalCancelResult;
     try {
-      await this.rpc.call("main", "eval.cancel", [{ runId: active.evalRunId, subKey: runId }]);
+      cancellation = await this.rpc.call<EvalCancelResult>("main", "eval.cancel", [
+        { runId: active.evalRunId, subKey: runId },
+      ]);
     } catch (error) {
       throw new Error(
         `System-test run ${runId} could not settle its inner eval cancellation: ${
           error instanceof Error ? error.message : String(error)
         }`,
         { cause: error }
+      );
+    }
+    if (cancellation.forcedReset) {
+      throw new Error(
+        `System-test run ${runId} required a forced EvalDO scope reset after non-cooperative cancellation; ` +
+          "its terminal cleanup record is unavailable. Restart from a fresh exact run."
       );
     }
     // The inner eval's registered cleanup owns the complete terminal record

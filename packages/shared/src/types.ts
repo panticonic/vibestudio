@@ -2,7 +2,7 @@
 
 import type { CreateChildOptions, PanelPlacementHint } from "@vibestudio/types";
 import type { CapabilityScope } from "@vibestudio/rpc";
-import type { EvalAuthorityCeiling, UnitAuthorityManifest } from "./authorityManifest.js";
+import type { UnitAuthorityManifest } from "./authorityManifest.js";
 import type { StateArgsSchema, StateArgsValue } from "./stateArgs.js";
 
 // Re-export types for consumers of this module
@@ -165,7 +165,6 @@ export interface PanelInfo {
   buildKey?: string | null;
   executionDigest?: string | null;
   authorityRequests?: readonly CapabilityScope[];
-  authorityEvalCeilings?: readonly EvalAuthorityCeiling[];
   ref?: string;
   build?: {
     effectiveVersion?: string | null;
@@ -223,7 +222,6 @@ export interface PanelRuntimeStatus {
 export type PanelLifecycleOperation =
   | "reload"
   | "rebuild"
-  | "rebuildAndReload"
   | "unload"
   | "close";
 
@@ -366,7 +364,6 @@ export interface Panel {
   buildKey?: string | null;
   executionDigest?: string | null;
   authorityRequests?: readonly CapabilityScope[];
-  authorityEvalCeilings?: readonly EvalAuthorityCeiling[];
   /**
    * Owning-user id (WP3): the user whose tree this panel's root belongs to.
    * Attribution/provenance only — NOT an inter-user security token (plan §0.0).

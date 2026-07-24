@@ -3,18 +3,16 @@
  * `dist/core/tools/find.js`.
  *
  * Upstream uses `fd` via `child_process.spawnSync`, plus the `glob` package
- * for nested .gitignore discovery. workerd has neither, so active agent runs
- * delegate to the Node-side `@workspace-extensions/file-tools` extension, which
- * uses ripgrep's file listing. If the extension is unavailable, this file
- * falls back to walking the tree with `RuntimeFs` and applying our own
- * glob → regex helper.
+ * for nested .gitignore discovery. workerd has neither. Active agent runs use
+ * the context-scoped host `fs.glob` service, which performs the traversal once
+ * at the filesystem boundary. Embeddings without RPC retain a small in-memory
+ * `RuntimeFs` walker.
  */
 
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import type { RpcCaller } from "@vibestudio/rpc";
-import { createExtensionProxy } from "@vibestudio/extension";
 import path from "node:path";
 import type { RuntimeFs, Dirent } from "./runtime-fs.js";
 import { resolveToCwd } from "./path-utils.js";
@@ -36,24 +34,13 @@ const findSchema = Type.Object({
 export type FindToolInput = Static<typeof findSchema>;
 
 export interface FindToolDetails {
+  type?: "console";
+  content?: string;
   truncation?: TruncationResult;
   resultLimitReached?: number;
   engine?: "ripgrep" | "runtime-fs";
   missingSearchPath?: string;
-}
-
-interface FindToolResult {
-  content: (TextContent | ImageContent)[];
-  details: FindToolDetails | undefined;
-}
-
-interface FileToolsApi {
-  find(request: {
-    pattern: string;
-    path?: string;
-    cwd: string;
-    limit?: number;
-  }): Promise<FindToolResult>;
+  extensionFallback?: string;
 }
 
 export interface FindToolDeps {
@@ -61,7 +48,6 @@ export interface FindToolDeps {
 }
 
 const DEFAULT_LIMIT = 1000;
-const FILE_TOOLS_EXTENSION = "@workspace-extensions/file-tools";
 
 const SKIP_DIRS = new Set([
   ".git",
@@ -79,16 +65,13 @@ export function createFindTool(
   fs: RuntimeFs,
   deps?: FindToolDeps
 ): AgentTool<typeof findSchema, FindToolDetails | undefined> {
-  const fileTools = deps?.rpc
-    ? createExtensionProxy<FileToolsApi>(deps.rpc, FILE_TOOLS_EXTENSION, () => false)
-    : null;
   return {
     name: "find",
     label: "find",
     executionMode: "parallel",
     description: `Search for files by glob pattern. Returns matching file paths relative to the search directory. Output is truncated to ${DEFAULT_LIMIT} results or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
     parameters: findSchema,
-    execute: async (_toolCallId, input, signal) => {
+    execute: async (_toolCallId, input, signal, _onUpdate) => {
       const { pattern, path: searchDir, limit } = input;
       if (typeof pattern !== "string") {
         return {
@@ -103,14 +86,6 @@ export function createFindTool(
       }
       if (signal?.aborted) {
         throw new Error("Operation aborted");
-      }
-
-      if (fileTools) {
-        try {
-          return (await fileTools.find({ pattern, path: searchDir, cwd, limit })) as FindToolResult;
-        } catch (err) {
-          if (!isFileToolsExtensionFallback(err)) throw err;
-        }
       }
 
       const searchPath = resolveToCwd(searchDir || ".", cwd);
@@ -128,8 +103,25 @@ export function createFindTool(
               text: `No files found matching pattern (search path does not exist: ${displayPath})`,
             },
           ],
-          details: { engine: "runtime-fs", missingSearchPath: displayPath },
+          details: {
+            engine: "runtime-fs",
+            missingSearchPath: displayPath,
+          },
         };
+      }
+
+      if (deps?.rpc) {
+        const found = await deps.rpc.call<string[]>(
+          "main",
+          "fs.glob",
+          [pattern, { path: searchPath }],
+          signal ? { signal } : undefined
+        );
+        const resultLimitReached = found.length > effectiveLimit;
+        const matches = found
+          .slice(0, effectiveLimit)
+          .map((file) => path.relative(searchPath, file).replace(/\\/g, "/"));
+        return renderMatches(matches, effectiveLimit, resultLimitReached);
       }
 
       const regex = globToRegex(pattern);
@@ -187,49 +179,48 @@ export function createFindTool(
 
       await walk(searchPath);
 
-      if (matches.length === 0) {
-        return {
-          content: [{ type: "text", text: "No files found matching pattern" }],
-          details: undefined,
-        } as { content: (TextContent | ImageContent)[]; details: undefined };
-      }
-
-      const rawOutput = matches.join("\n");
-      const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-      let resultOutput = truncation.content;
-      const details: FindToolDetails = { engine: "runtime-fs" };
-      const notices: string[] = [];
-
-      if (resultLimitReached) {
-        notices.push(
-          `${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more, or refine pattern`
-        );
-        details.resultLimitReached = effectiveLimit;
-      }
-      if (truncation.truncated) {
-        notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
-        details.truncation = truncation;
-      }
-      if (notices.length > 0) {
-        resultOutput += `\n\n[${notices.join(". ")}]`;
-      }
-
-      return {
-        content: [{ type: "text", text: resultOutput }],
-        details: Object.keys(details).length > 0 ? details : undefined,
-      };
+      return renderMatches(matches, effectiveLimit, resultLimitReached);
     },
   };
 }
 
-function isFileToolsExtensionFallback(err: unknown): boolean {
-  const code =
-    typeof err === "object" && err !== null ? (err as { code?: unknown }).code : undefined;
-  // ENOEXT = not installed/enabled; ENOTREADY = declared but not yet running.
-  // Both mean the extension can't serve this call, so fall back to runtime-fs.
-  if (code === "ENOEXT" || code === "ENOTREADY") return true;
-  const message = err instanceof Error ? err.message : String(err);
-  return /Extension @workspace-extensions\/file-tools(?:\.\w+)? invocation failed: Extension is not installed|Extension is not running|\b(?:ENOENT|path not found|no such file)\b/i.test(
-    message
-  );
+function renderMatches(
+  matches: string[],
+  effectiveLimit: number,
+  resultLimitReached: boolean
+): {
+  content: (TextContent | ImageContent)[];
+  details: FindToolDetails | undefined;
+} {
+  if (matches.length === 0) {
+    return {
+      content: [{ type: "text", text: "No files found matching pattern" }],
+      details: undefined,
+    };
+  }
+
+  const rawOutput = matches.join("\n");
+  const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
+  let resultOutput = truncation.content;
+  const details: FindToolDetails = { engine: "runtime-fs" };
+  const notices: string[] = [];
+
+  if (resultLimitReached) {
+    notices.push(
+      `${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more, or refine pattern`
+    );
+    details.resultLimitReached = effectiveLimit;
+  }
+  if (truncation.truncated) {
+    notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
+    details.truncation = truncation;
+  }
+  if (notices.length > 0) {
+    resultOutput += `\n\n[${notices.join(". ")}]`;
+  }
+
+  return {
+    content: [{ type: "text", text: resultOutput }],
+    details,
+  };
 }

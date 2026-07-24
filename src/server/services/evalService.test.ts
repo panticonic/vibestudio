@@ -7,8 +7,13 @@ import {
 } from "@vibestudio/shared/serviceDispatcher";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { DODispatch } from "../doDispatch.js";
-import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
+import {
+  getInternalDOBundle,
+  internalDOExecutionIdentity,
+  INTERNAL_DO_SOURCE,
+} from "../internalDOs/internalDoLoader.js";
 import { createEvalService } from "./evalService.js";
+import { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
 import { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
@@ -18,9 +23,22 @@ const WORKSPACE_REF = {
   className: "WorkspaceDO",
   objectKey: "ws_1",
 };
+const EVAL_EXECUTION_IDENTITY = internalDOExecutionIdentity(getInternalDOBundle(), "EvalDO");
 
 function evalKey(ownerId: string, subKey: string): string {
   return createHash("sha256").update(`${ownerId}\0${subKey}`).digest("hex").slice(0, 40);
+}
+
+function authenticatedCaller(
+  callerId: string,
+  callerKind: Parameters<typeof createVerifiedCaller>[1],
+  code?: Parameters<typeof createVerifiedCaller>[2],
+  agentBinding?: Parameters<typeof createVerifiedCaller>[3]
+): VerifiedCaller {
+  return createVerifiedCaller(callerId, callerKind, code, agentBinding, {
+    userId: "usr_test",
+    handle: "test",
+  });
 }
 
 function activeInvocationContext(
@@ -40,8 +58,18 @@ function activeInvocationContext(
   };
 }
 
-function createHarness(contexts: Record<string, string | null>) {
+function createHarness(
+  contexts: Record<string, string | null>,
+  options: {
+    rejectFirstStartRun?: boolean;
+    retryStartGate?: Promise<void>;
+    rejectFirstGetRun?: boolean;
+    retryGetRunGate?: Promise<void>;
+  } = {}
+) {
   const calls: Array<{ ref: unknown; method: string; args: unknown[] }> = [];
+  let rejectedStartRun = false;
+  let rejectedGetRun = false;
   const doDispatch = {
     async dispatchHeld(
       this: { dispatch: (ref: unknown, method: string, ...args: unknown[]) => Promise<unknown> },
@@ -77,12 +105,22 @@ function createHarness(contexts: Record<string, string | null>) {
         return { ok: true };
       }
       if (method === "startRun") {
+        if (options.rejectFirstStartRun && !rejectedStartRun) {
+          rejectedStartRun = true;
+          throw new Error("simulated lost startRun acknowledgement");
+        }
+        if (rejectedStartRun && options.retryStartGate) await options.retryStartGate;
         return { runId: (args[0] as { runId: string }).runId, status: "pending" };
       }
       if (method === "executeRun") {
         return { success: true, console: "ok", scopeKeys: [] };
       }
       if (method === "getRun") {
+        if (options.rejectFirstGetRun && !rejectedGetRun) {
+          rejectedGetRun = true;
+          throw new Error("simulated transient getRun transport failure");
+        }
+        if (rejectedGetRun && options.retryGetRunGate) await options.retryGetRunGate;
         return { status: "done", result: { success: true, console: "", scopeKeys: [] } };
       }
       if (method === "readScopeTextPage") {
@@ -130,21 +168,24 @@ function createHarness(contexts: Record<string, string | null>) {
     _onRetire() {},
   } as unknown as EntityCache;
   const entityStore = new WorkspaceEntityStore({ doDispatch, workspaceId: "ws_1", entityCache });
+  const executionSessions = new AgentExecutionSessionRegistry();
   const service = createEvalService({
     doDispatch,
     entityStore,
     tokenManager: {
       ensureToken: (callerId: string) => `tok:${callerId}`,
     } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
+    workspaceId: "ws_1",
+    executionSessions,
   });
-  return { service, calls };
+  return { service, calls, executionSessions };
 }
 
 describe("createEvalService", () => {
   it("runs CLI eval as the selected session owner and context", async () => {
     const { service, calls } = createHarness({ "session:default": "ctx_1" });
 
-    await service.handler({ caller: createVerifiedCaller("shell:dev_cli", "shell") }, "run", [
+    await service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "run", [
       {
         ownerId: "session:default",
         contextId: "ctx_1",
@@ -160,11 +201,17 @@ describe("createEvalService", () => {
       args: [
         {
           kind: "do",
-          source: { repoPath: INTERNAL_DO_SOURCE, effectiveVersion: "internal" },
+          source: {
+            repoPath: INTERNAL_DO_SOURCE,
+            effectiveVersion: EVAL_EXECUTION_IDENTITY.effectiveVersion,
+          },
           contextId: "ctx_1",
           className: "EvalDO",
           key: objectKey,
-          ownerUserId: undefined,
+          activeBuildKey: EVAL_EXECUTION_IDENTITY.buildKey,
+          activeExecutionDigest: EVAL_EXECUTION_IDENTITY.executionDigest,
+          activeAuthority: { requests: EVAL_EXECUTION_IDENTITY.authorityRequests },
+          ownerUserId: "usr_test",
           agentBinding: undefined,
           // The EvalDO's launch parent IS its owner — bridges the lineage so entities spawned FROM an
           // eval (e.g. headless sub-agents) resolve up through the owner to the owner's panel.
@@ -172,7 +219,7 @@ describe("createEvalService", () => {
           stateArgs: {
             ownerPrincipalId: "session:default",
             subKey: "default",
-            authorityCeilingPurpose: "tool-eval",
+            agentExecutionAdmission: { v: 1, ownerId: "session:default" },
           },
         },
       ],
@@ -182,6 +229,7 @@ describe("createEvalService", () => {
       method: "run",
       args: [
         expect.objectContaining({
+          runId: expect.any(String),
           code: "return 1;",
           contextId: "ctx_1",
         }),
@@ -196,7 +244,7 @@ describe("createEvalService", () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
     const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
 
-    await service.handler(activeInvocationContext(createVerifiedCaller(ownerId, "do")), "run", [
+    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "run", [
       { subKey: "chan_1", code: "return 1;" },
     ]);
 
@@ -210,7 +258,7 @@ describe("createEvalService", () => {
           stateArgs: {
             ownerPrincipalId: ownerId,
             subKey: "chan_1",
-            authorityCeilingPurpose: "agentic-code-execution",
+            agentExecutionAdmission: { v: 1, ownerId },
           },
         }),
       ],
@@ -233,7 +281,7 @@ describe("createEvalService", () => {
     const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
 
     await expect(
-      service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "run", [
+      service.handler({ caller: authenticatedCaller(ownerId, "do") }, "run", [
         { subKey: "chan_1", code: "return 1;" },
       ])
     ).rejects.toMatchObject({ code: "EACCES", errorKind: "access" });
@@ -303,10 +351,12 @@ describe("createEvalService", () => {
       tokenManager: {
         ensureToken: (id: string) => `tok:${id}`,
       } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
+      workspaceId: "ws",
+      executionSessions: new AgentExecutionSessionRegistry(),
     });
 
     await service.handler(
-      activeInvocationContext(createVerifiedCaller("do:src:Agent:k", "do"), "c"),
+      activeInvocationContext(authenticatedCaller("do:src:Agent:k", "do"), "c"),
       "run",
       [{ code: "return 1;" }]
     );
@@ -328,7 +378,7 @@ describe("createEvalService", () => {
     });
 
     await expect(
-      service.handler({ caller: createVerifiedCaller("panel:one", "panel") }, "run", [
+      service.handler({ caller: authenticatedCaller("panel:one", "panel") }, "run", [
         {
           ownerId: "session:default",
           contextId: "ctx_1",
@@ -341,7 +391,7 @@ describe("createEvalService", () => {
 
   it("rejects missing or ambiguous run sources even when handler is called directly", async () => {
     const { service } = createHarness({ "session:default": "ctx_1" });
-    const ctx = { caller: createVerifiedCaller("shell:dev_cli", "shell") };
+    const ctx = { caller: authenticatedCaller("shell:dev_cli", "shell") };
 
     await expect(
       service.handler(ctx, "run", [
@@ -369,7 +419,7 @@ describe("createEvalService", () => {
     const agentInvocationId = "invocation:parent:42";
 
     const ret = await service.handler(
-      activeInvocationContext(createVerifiedCaller(ownerId, "do"), "chan_1", agentInvocationId),
+      activeInvocationContext(authenticatedCaller(ownerId, "do"), "chan_1", agentInvocationId),
       "startRun",
       [{ subKey: "chan_1", code: "return 1;", runId }]
     );
@@ -399,12 +449,75 @@ describe("createEvalService", () => {
     expect(calls.some((c) => c.method === "onEvalComplete")).toBe(false);
   });
 
+  it("retains admission and retries the same run after an ambiguous start acknowledgement", async () => {
+    const ownerId = "do:workers/agent-worker:AiChatWorker:ambiguous";
+    let acceptRetry!: () => void;
+    const retryStartGate = new Promise<void>((resolve) => {
+      acceptRetry = resolve;
+    });
+    const { service, calls, executionSessions } = createHarness(
+      { [ownerId]: "ctx_agent" },
+      { rejectFirstStartRun: true, retryStartGate }
+    );
+    const runId = "effect:eval:ambiguous";
+
+    await expect(
+      service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "startRun", [
+        { subKey: "chan_1", code: "return 1;", runId },
+      ])
+    ).rejects.toThrow(/lost startRun acknowledgement/);
+    const objectKey = (
+      calls.find((call) => call.method === "startRun")?.ref as { objectKey: string }
+    ).objectKey;
+    const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`;
+    expect(executionSessions.resolve(runtimeId)?.eval.runId).toBe(runId);
+
+    acceptRetry();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls.filter((call) => call.method === "startRun")).toHaveLength(2);
+    expect(calls.filter((call) => call.method === "startRun").map((call) => call.args[0])).toEqual([
+      expect.objectContaining({ runId }),
+      expect.objectContaining({ runId }),
+    ]);
+    expect(executionSessions.resolve(runtimeId)).toBeNull();
+  });
+
+  it("retains admission across a transient terminal-monitor transport failure", async () => {
+    const ownerId = "do:workers/agent-worker:AiChatWorker:monitor-retry";
+    let acceptRetry!: () => void;
+    const retryGetRunGate = new Promise<void>((resolve) => {
+      acceptRetry = resolve;
+    });
+    const { service, calls, executionSessions } = createHarness(
+      { [ownerId]: "ctx_agent" },
+      { rejectFirstGetRun: true, retryGetRunGate }
+    );
+    const runId = "effect:eval:monitor-retry";
+
+    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "startRun", [
+      { subKey: "chan_1", code: "return 1;", runId },
+    ]);
+
+    const objectKey = (
+      calls.find((call) => call.method === "startRun")?.ref as { objectKey: string }
+    ).objectKey;
+    const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`;
+    await expect
+      .poll(() => calls.filter((call) => call.method === "getRun").length)
+      .toBeGreaterThanOrEqual(1);
+    expect(executionSessions.resolve(runtimeId)?.eval.runId).toBe(runId);
+
+    acceptRetry();
+    await expect.poll(() => executionSessions.resolve(runtimeId)).toBeNull();
+    expect(calls.filter((call) => call.method === "getRun")).toHaveLength(2);
+  });
+
   it("startRun without a caller runId mints a server uuid (and uses it for the run)", async () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
     const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
 
     const ret = (await service.handler(
-      activeInvocationContext(createVerifiedCaller(ownerId, "do")),
+      activeInvocationContext(authenticatedCaller(ownerId, "do")),
       "startRun",
       [{ subKey: "chan_1", code: "return 1;" }]
     )) as { runId: string };
@@ -418,11 +531,9 @@ describe("createEvalService", () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
     const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
 
-    await service.handler(
-      activeInvocationContext(createVerifiedCaller(ownerId, "do")),
-      "startRun",
-      [{ subKey: "chan_1", code: "return 1;", timeoutMs: 12_345 }]
-    );
+    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "startRun", [
+      { subKey: "chan_1", code: "return 1;", timeoutMs: 12_345 },
+    ]);
 
     expect(calls.find((c) => c.method === "startRun")?.args[0]).toMatchObject({
       timeoutMs: 12_345,
@@ -433,7 +544,7 @@ describe("createEvalService", () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
     const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
 
-    await service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "getRun", [
+    await service.handler({ caller: authenticatedCaller(ownerId, "do") }, "getRun", [
       { subKey: "chan_1", runId: "inv-42" },
     ]);
 
@@ -447,7 +558,7 @@ describe("createEvalService", () => {
   it("large-result scope paging stays owner-scoped and forwards only bounded page fields", async () => {
     const ownerId = "session:default";
     const { service, calls } = createHarness({ [ownerId]: "ctx_1" });
-    const caller = { caller: createVerifiedCaller("shell:dev_cli", "shell") };
+    const caller = { caller: authenticatedCaller("shell:dev_cli", "shell") };
 
     const page = await service.handler(caller, "readScopeTextPage", [
       {
@@ -491,7 +602,7 @@ describe("createEvalService", () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
     const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
 
-    const ret = await service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "cancel", [
+    const ret = await service.handler({ caller: authenticatedCaller(ownerId, "do") }, "cancel", [
       { subKey: "chan_1", runId: "inv-42" },
     ]);
     expect(ret).toEqual({ ok: true });
@@ -587,6 +698,8 @@ function createHeldFailHarness(opts: {
     tokenManager: {
       ensureToken: (id: string) => `tok:${id}`,
     } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
+    workspaceId: "ws_1",
+    executionSessions: new AgentExecutionSessionRegistry(),
     recoverUnresponsiveSandbox,
     watchdogGraceMs: 1,
   });
@@ -601,11 +714,9 @@ describe("createEvalService — explicit timeout process watchdog", () => {
       heldMode: "cooperative-timeout",
     });
 
-    await service.handler(
-      activeInvocationContext(createVerifiedCaller(ownerId, "do")),
-      "startRun",
-      [{ subKey: "chan_1", code: "while (true) {}", runId: "inv-cooperative", timeoutMs: 5 }]
-    );
+    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "startRun", [
+      { subKey: "chan_1", code: "while (true) {}", runId: "inv-cooperative", timeoutMs: 5 },
+    ]);
     await new Promise((resolve) => setTimeout(resolve, 15));
 
     expect(recoverUnresponsiveSandbox).not.toHaveBeenCalled();
@@ -626,18 +737,18 @@ describe("createEvalService — explicit timeout process watchdog", () => {
       recoveryDelayMs: 5,
     });
 
-    await service.handler(
-      activeInvocationContext(createVerifiedCaller(ownerId, "do")),
-      "startRun",
-      [{ subKey: "chan_1", code: "while (true) {}", runId: "inv-watchdog", timeoutMs: 5 }]
-    );
+    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "startRun", [
+      { subKey: "chan_1", code: "while (true) {}", runId: "inv-watchdog", timeoutMs: 5 },
+    ]);
     await new Promise((resolve) => setTimeout(resolve, 25));
 
     expect(recoverUnresponsiveSandbox).toHaveBeenCalledOnce();
     expect(recoverUnresponsiveSandbox).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "inv-watchdog", timeoutMs: 5 })
     );
-    expect(calls.some((call) => call.method === "getRun")).toBe(false);
+    // The live admission monitor reads the durable terminal so the exact
+    // execution-session fact closes when this async run ends.
+    expect(calls.some((call) => call.method === "getRun")).toBe(true);
     expect(calls.some((call) => call.method === "onEvalComplete")).toBe(false);
   });
 
@@ -648,15 +759,13 @@ describe("createEvalService — explicit timeout process watchdog", () => {
       heldMode: "hang",
     });
 
-    await service.handler(
-      activeInvocationContext(createVerifiedCaller(ownerId, "do")),
-      "startRun",
-      [{ subKey: "chan_1", code: "while(true){}", runId: "inv-h3" }]
-    );
+    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "startRun", [
+      { subKey: "chan_1", code: "while(true){}", runId: "inv-h3" },
+    ]);
     await new Promise((r) => setTimeout(r, 10));
 
     expect(recoverUnresponsiveSandbox).not.toHaveBeenCalled();
-    expect(calls.some((c) => c.method === "getRun")).toBe(false);
+    expect(calls.some((c) => c.method === "getRun")).toBe(true);
     expect(calls.some((c) => c.method === "onEvalComplete")).toBe(false);
   });
 
@@ -674,7 +783,7 @@ describe("createEvalService — explicit timeout process watchdog", () => {
 
     await service.handler(
       activeInvocationContext(
-        createVerifiedCaller("agent:ent_agent", "agent", null, binding),
+        authenticatedCaller("agent:ent_agent", "agent", null, binding),
         binding.channelId,
         "invocation:bound-agent"
       ),
@@ -704,7 +813,7 @@ describe("createEvalService — explicit timeout process watchdog", () => {
 
     await expect(
       service.handler(
-        { caller: createVerifiedCaller("agent:ent_agent", "agent", null, binding) },
+        { caller: authenticatedCaller("agent:ent_agent", "agent", null, binding) },
         "run",
         [{ ownerId: "someone_else", contextId: "ctx_bound", code: "return 1;" }]
       )

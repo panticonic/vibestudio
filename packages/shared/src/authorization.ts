@@ -3,6 +3,8 @@ import type {
   AuthorizationDecision,
   AuthorityFailureInfo,
   AuthorityGrant,
+  AuthorityGrantSubject,
+  AuthorityLock,
   AuthorityRequirement,
   Principal,
   PrincipalKind,
@@ -17,7 +19,7 @@ export type {
   AuthorityRequirement,
   CapabilityScope,
   ContextIntegrityFact,
-  DirectAuthorityAttestation,
+  AgentExecutionSessionFact,
   LiveWorkspaceRelationship,
   Principal,
   PrincipalKind,
@@ -29,6 +31,7 @@ export interface AuthorityEvaluationInput {
   requirement: AuthorityRequirement;
   resourceKey: string;
   grants: readonly AuthorityGrant[];
+  locks?: readonly AuthorityLock[];
   now?: number;
   /** Critical confirmation checks bind to the concrete invocation. */
   invocationDigest?: string;
@@ -62,25 +65,29 @@ export function authorityFailureForDecision(
     resourceKey: input.resourceKey,
   } as const;
   switch (decision.code) {
-    case "missing-grant":
-    case "lineage":
+    case "approval-required":
       return {
         ...common,
         remediation: {
           kind: "request-user-approval",
-          message:
-            decision.code === "lineage"
-              ? "Request fresh user approval for the current outside-content lineage."
-              : "Request user approval, then retry the exact invocation.",
+          message: "Request user approval, then retry the exact invocation.",
         },
       };
-    case "not-requested":
+    case "mission-change-required":
       return {
         ...common,
         remediation: {
-          kind: "update-authority-manifest",
+          kind: "request-mission-change",
+          message: "End this run and propose a reviewed mission-charter change.",
+        },
+      };
+    case "fixed-code-not-requested":
+      return {
+        ...common,
+        remediation: {
+          kind: "update-installed-code-manifest",
           message:
-            "Add this authority request to the installed unit manifest or owning agent eval ceiling, then submit the new exact version for user review.",
+            "Add this authority request to the installed unit manifest, then submit the new exact version for user review.",
           request: {
             capability: input.capability,
             resource: { kind: "exact", key: input.resourceKey },
@@ -88,7 +95,7 @@ export function authorityFailureForDecision(
           },
         },
       };
-    case "missing-principal":
+    case "receiver-rejected":
       return {
         ...common,
         remediation: {
@@ -96,15 +103,7 @@ export function authorityFailureForDecision(
           message: "Invoke this method through a principal admitted by its receiver contract.",
         },
       };
-    case "relationship":
-      return {
-        ...common,
-        remediation: {
-          kind: "satisfy-relationship",
-          message: "Use the canonical route that establishes the receiver's required relationship.",
-        },
-      };
-    case "session":
+    case "invalid-session":
       return {
         ...common,
         remediation: {
@@ -112,13 +111,20 @@ export function authorityFailureForDecision(
           message: "Refresh the authenticated authority session and retry.",
         },
       };
-    case "denied":
+    case "invalid-attestation":
+      return {
+        ...common,
+        remediation: {
+          kind: "retry-through-host",
+          message: "Retry through the host route that creates a fresh authority attestation.",
+        },
+      };
+    case "user-denied":
       return {
         ...common,
         remediation: {
           kind: "respect-denial",
-          message:
-            "The user or policy explicitly denied this authority; do not retry automatically.",
+          message: "The user denied or locked this action; do not retry automatically.",
         },
       };
   }
@@ -278,7 +284,7 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
       if (matching.length === 0) {
         return {
           allowed: false,
-          code: "missing-principal",
+          code: "receiver-rejected",
           reason: `no authority branch admits the ${input.context.authorizingOrigin.kind} origin`,
           requirement,
         };
@@ -288,13 +294,15 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
       if (allowed) return { ...allowed, requirement };
       return {
         allowed: false,
-        code: decisions.some((decision) => decision.code === "denied")
-          ? "denied"
-          : decisions.some((decision) => decision.code === "lineage")
-            ? "lineage"
-            : decisions.some((decision) => decision.code === "not-requested")
-              ? "not-requested"
-              : "missing-grant",
+        code: decisions.some((decision) => decision.code === "user-denied")
+          ? "user-denied"
+          : decisions.some((decision) => decision.code === "fixed-code-not-requested")
+            ? "fixed-code-not-requested"
+            : decisions.some((decision) => decision.code === "invalid-session")
+              ? "invalid-session"
+              : decisions.some((decision) => decision.code === "receiver-rejected")
+                ? "receiver-rejected"
+                : "approval-required",
         reason: decisions.map((decision) => decision.reason).join("; "),
         requirement,
       };
@@ -308,7 +316,7 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
           compareVersions(session.version, requirement.minVersion) >= 0);
       return {
         allowed,
-        code: allowed ? "allowed" : "session",
+        code: allowed ? "allowed" : "invalid-session",
         reason: allowed ? "session constraints satisfied" : "session constraint failed",
         requirement,
       };
@@ -325,11 +333,7 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
         : builtinRelationship(input.context, requirement.name, requirement.value);
       return {
         allowed,
-        code: allowed
-          ? "allowed"
-          : requirement.name === "context-integrity"
-            ? "lineage"
-            : "relationship",
+        code: allowed ? "allowed" : "receiver-rejected",
         reason: allowed
           ? `relationship ${requirement.name} satisfied`
           : `relationship ${requirement.name} not satisfied`,
@@ -341,7 +345,7 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
     if (!principal) {
       return {
         allowed: false,
-        code: "missing-principal",
+        code: "receiver-rejected",
         reason: `authenticated ${requirement.principal} principal is required`,
         requirement,
       };
@@ -349,7 +353,7 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
     if (!isCanonicalPrincipal(principal)) {
       return {
         allowed: false,
-        code: "missing-principal",
+        code: "receiver-rejected",
         reason: `authenticated ${requirement.principal} principal is malformed`,
         requirement,
       };
@@ -367,20 +371,26 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
       };
     }
 
-    // Installed code must have explicitly requested the semantic capability.
-    // A code-mediated eval session has no manifest of its own, but the host
-    // projects its owner's sealed eval ceiling into executingCode.requested.
-    // That ceiling caps what the dynamic session may ask to acquire. A direct
-    // user/host eval has no executingCode fact and is bounded by its session
-    // envelope instead.
-    if (
-      input.context.authorizingOrigin.kind === "code" ||
-      (input.context.authorizingOrigin.kind === "session" && input.context.executingCode)
-    ) {
+    const standingLock = input.locks?.[0];
+    if (standingLock) {
+      return {
+        allowed: false,
+        code: "user-denied",
+        reason: `The user locked ${requirement.capability} for this agent`,
+        requirement,
+        principal,
+        grantId: standingLock.id,
+        standing: true,
+      };
+    }
+
+    // Installed code is bounded by its exact manifest. Host-admitted evaluated
+    // sessions use executingCode only for attribution and confinement.
+    if (input.context.authorizingOrigin.kind === "code") {
       const manifest = input.context.executingCode;
       const requested =
         manifest !== null &&
-        (input.context.authorizingOrigin.kind === "session" || manifest.principal === principal) &&
+        manifest.principal === principal &&
         manifest.requested.some(
           (scope) =>
             capabilityPatternCovers(scope.capability, requirement.capability) &&
@@ -389,7 +399,7 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
       if (!requested) {
         return {
           allowed: false,
-          code: "not-requested",
+          code: "fixed-code-not-requested",
           reason: `${principal} did not request ${requirement.capability} for ${input.resourceKey}`,
           requirement,
           principal,
@@ -434,11 +444,12 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
     if (denied) {
       return {
         allowed: false,
-        code: "denied",
+        code: "user-denied",
         reason: `${principal} is explicitly denied ${requirement.capability} on ${input.resourceKey}`,
         requirement,
         principal,
         ...(denied.id ? { grantId: denied.id } : {}),
+        standing: denied.constraints?.sessionId === undefined,
       };
     }
     const lineageRejected = tierCandidates.some(
@@ -450,7 +461,7 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
     if (!allowed && lineageRejected) {
       return {
         allowed: false,
-        code: "lineage",
+        code: "approval-required",
         reason: `${principal} has authority, but new outside content entered the session`,
         requirement,
         principal,
@@ -458,7 +469,7 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
     }
     return {
       allowed: Boolean(allowed),
-      code: allowed ? "allowed" : "missing-grant",
+      code: allowed ? "allowed" : "approval-required",
       reason: allowed
         ? `${principal} is granted ${requirement.capability}`
         : `${principal} lacks ${requirement.capability} on ${input.resourceKey}`,
@@ -471,8 +482,16 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
   return evaluate(input.requirement);
 }
 
-export function subjectsForOrigin(context: AuthorizationContext): ReadonlySet<Principal> {
-  const subjects = new Set<Principal>([context.authorizingOrigin.principal]);
+export function subjectsForOrigin(
+  context: AuthorizationContext
+): ReadonlySet<AuthorityGrantSubject> {
+  const subjects = new Set<AuthorityGrantSubject>([context.authorizingOrigin.principal]);
+  if (
+    context.authorizingOrigin.kind === "session" &&
+    context.executionSession?.agentBinding?.bindingId
+  ) {
+    subjects.add(`agent:${context.executionSession.agentBinding.bindingId}`);
+  }
   if (context.authorizingOrigin.kind === "session" && context.session.mission) {
     subjects.add(
       `mission:${context.session.mission.missionId}@${context.session.mission.closureDigest}`
@@ -607,6 +626,13 @@ function grantConstraintsMatch(
   if (!constraints) return true;
   if (constraints.sessionId !== undefined && constraints.sessionId !== context.session.id)
     return false;
+  if (constraints.taskRef !== undefined && constraints.taskRef !== context.session.taskRef)
+    return false;
+  if (
+    constraints.agentBindingId !== undefined &&
+    constraints.agentBindingId !== context.executionSession?.agentBinding?.bindingId
+  )
+    return false;
   if (
     constraints.invocationDigest !== undefined &&
     constraints.invocationDigest !== invocationDigest
@@ -628,11 +654,30 @@ function lineageAtConsentCovers(grant: AuthorityGrant, context: AuthorizationCon
   // P3 interim semantics: no latch fact means no lineage gate yet.
   if (!integrity || integrity.class === "not-applicable") return true;
   const consented = new Set(grant.constraints?.lineageAtConsent ?? []);
-  return integrity.externalKeys.every((key) => consented.has(key));
+  return lineageClasses(integrity).every((lineageClass) => consented.has(lineageClass));
+}
+
+export function lineageClasses(
+  integrity: import("@vibestudio/rpc").ContextIntegrityFact
+): readonly string[] {
+  if (integrity.class !== "external") return ["none"];
+  const classes = new Set<string>();
+  for (const key of integrity.externalKeys) {
+    const prefix = key.split(":", 1)[0]?.toLowerCase();
+    classes.add(
+      prefix === "web" || prefix === "email" || prefix === "channel"
+        ? prefix === "channel"
+          ? "channel-external"
+          : prefix
+        : "external"
+    );
+  }
+  return [...classes].sort();
 }
 
 function isCanonicalPrincipal(principal: Principal): boolean {
   if (/^(host|user|session):[^:][^\0]*$/.test(principal)) return true;
+  if (/^agent:[^:][^\0]*$/.test(principal)) return true;
   if (/^code:[^@]+@[0-9a-f]{64}$/.test(principal)) return true;
   return /^mission:[^@]+@[0-9a-f]{64}$/.test(principal);
 }

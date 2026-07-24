@@ -104,7 +104,7 @@ describe("approvalCopy", () => {
       approval: {
         ...base,
         kind: "capability",
-        capability: "external-network-fetch",
+        capability: "network.response.read",
         title: "Allow network access",
         resource: {
           type: "url-origin",

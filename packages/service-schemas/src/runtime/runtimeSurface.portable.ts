@@ -310,6 +310,9 @@ export const PANEL_TREE_MEMBERS = [
  * manifests override those five with target-specific wording.
  */
 export const portableExports: Record<string, RuntimeSurfaceEntry> = {
+  PanelOperationError: valueEntry(
+    "Structured error class thrown by panel create, navigation, reload, rebuild, and readiness operations. Inspect its failure provenance instead of parsing message text."
+  ),
   id: valueEntry(),
   contextId: valueEntry(),
   rpc: valueEntry("Portable RPC client (the full createRpcClient)."),
@@ -330,7 +333,9 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
     "Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer."
   ),
   openExternal: valueEntry(),
-  openPanel: valueEntry("Open a workspace or browser panel and return a PanelHandle."),
+  openPanel: valueEntry(
+    "Open a workspace or browser panel and return a PanelHandle only after application boot-ready."
+  ),
   listPanels: valueEntry("List open panels."),
   getPanelHandle: valueEntry("Get a handle to a panel by id."),
   workers: namespaceEntry(

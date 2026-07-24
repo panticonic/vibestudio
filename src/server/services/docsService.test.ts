@@ -10,6 +10,11 @@ import type { RuntimeSurface } from "@vibestudio/shared/runtimeSurface";
 import type { CatalogEntry, CatalogHit } from "@vibestudio/service-schemas/docs";
 import { createDocsService } from "./docsService.js";
 
+const TEST_WORKSPACE_SERVICE_PRESENTATION = {
+  action: "use the test service",
+  presentation: { domain: "automation" as const, verb: "act" as const },
+};
+
 const blobstore: ServiceDefinition = {
   name: "blobstore",
   description: "Content-addressable blob storage",
@@ -230,6 +235,7 @@ describe("docs service (caller-aware)", () => {
         declaration: {
           source: "workers/notes",
           name: "notes",
+          ...TEST_WORKSPACE_SERVICE_PRESENTATION,
           protocols: ["notes.v1"],
           authority: { principals: ["code"] },
           durableObject: { className: "NotesDO" },
@@ -287,6 +293,7 @@ describe("docs service (caller-aware)", () => {
           declaration: {
             source: "workers/notes",
             name: "notes",
+            ...TEST_WORKSPACE_SERVICE_PRESENTATION,
             protocols: ["notes.v1"],
             authority: { principals: ["code"] },
             durableObject: { className: "NotesDO" },

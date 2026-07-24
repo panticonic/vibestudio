@@ -35,6 +35,24 @@ function respond(init: RequestInit | undefined, result: unknown) {
   );
 }
 
+function readyObservation(panelId: string, source = "panels/a") {
+  return {
+    panelId,
+    title: "Panel A",
+    source,
+    kind: "workspace",
+    parentId: null,
+    contextId: "ctx",
+    requestedRef: "main",
+    runtimeEntityId: `panel:${panelId}-current-entity`,
+    attemptId: `panel:${panelId}-current-entity@build-a`,
+    effectiveVersion: "ev-a",
+    buildKey: "build-a",
+    phase: "ready",
+    updatedAt: 1,
+  };
+}
+
 
 describe("DurableObjectBase panelTree handles", () => {
   const originalFetch = globalThis.fetch;
@@ -87,7 +105,6 @@ describe("DurableObjectBase panelTree handles", () => {
         parentId: string | null;
       }> {
         const handle = this.panelTree.get("slot-a");
-        await handle.refresh();
         await handle.call["ping"]?.();
         await handle.emit("ready", { ok: true });
         return {
@@ -132,7 +149,7 @@ describe("DurableObjectBase panelTree handles", () => {
     ]);
   });
 
-  it("resolves isLoaded from the server runtime lease", async () => {
+  it("reads canonical boot readiness from observe", async () => {
     const calls: Array<{ targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = parseReq(init);
@@ -140,19 +157,8 @@ describe("DurableObjectBase panelTree handles", () => {
       delete (body as Record<string, unknown>)["requestId"];
       delete (body as Record<string, unknown>)["idempotencyKey"];
       calls.push(body);
-      if (body.method === "panelTree.getRuntimeLease") {
-        return respond(init, {
-          slotId: "slot-a",
-          runtimeEntityId: "panel:slot-a-current-entity",
-          clientSessionId: "desktop",
-          hostConnectionId: "desktop",
-          connectionId: "desktop",
-          holderLabel: "Desktop",
-          platform: "desktop",
-          supportsCdp: true,
-          loadOnLeaseAssignment: true,
-          acquiredAt: 1,
-        });
+      if (body.method === "panelTree.observe") {
+        return respond(init, readyObservation("slot-a"));
       }
       return respond(init, null);
     }) as typeof fetch;
@@ -167,7 +173,7 @@ describe("DurableObjectBase panelTree handles", () => {
 
       @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
       async probePanelTree(): Promise<boolean> {
-        return this.panelTree.get("slot-a").isLoaded();
+        return (await this.panelTree.get("slot-a").observe()).phase === "ready";
       }
     }
 
@@ -181,7 +187,7 @@ describe("DurableObjectBase panelTree handles", () => {
       {
         type: "call",
         targetId: "main",
-        method: "panelTree.getRuntimeLease",
+        method: "panelTree.observe",
         args: ["slot-a"],
       },
     ]);
@@ -378,12 +384,13 @@ describe("DurableObjectBase panelTree handles", () => {
       delete (body as Record<string, unknown>)["requestId"];
       delete (body as Record<string, unknown>)["idempotencyKey"];
       calls.push(body);
-      return respond(
-        init,
-        body.method === "panelCdp.getCdpEndpoint"
-          ? { wsEndpoint: "ws://cdp.test" }
-          : undefined
-      );
+      if (body.method === "panelCdp.getCdpEndpoint") {
+        return respond(init, { wsEndpoint: "ws://cdp.test" });
+      }
+      if (body.method === "panelTree.reload" || body.method === "panelTree.rebuildPanel") {
+        return respond(init, readyObservation("parent-slot", "panels/parent"));
+      }
+      return respond(init, undefined);
     }) as typeof fetch;
 
     const [{ DurableObjectBase }, { createTestDO }] = await Promise.all([
@@ -402,12 +409,11 @@ describe("DurableObjectBase panelTree handles", () => {
       } | null> {
         const parent = this.getParent();
         if (!parent) return null;
-        const info = await parent.getInfo();
         await parent.call["ping"]?.();
         const cdpEndpoint = await parent.cdp.getCdpEndpoint();
         await parent.reload();
-        await parent.rebuildAndReload();
-        return { id: info.id, title: info.title, cdpEndpoint };
+        await parent.rebuild();
+        return { id: parent.id, title: parent.title, cdpEndpoint };
       }
     }
 
@@ -454,7 +460,7 @@ describe("DurableObjectBase panelTree handles", () => {
     expect(responseEnvelope.message.error).toBeUndefined();
     expect(responseEnvelope.message.result).toEqual({
       id: "parent-slot",
-      title: "parent-slot",
+      title: "Panel A",
       cdpEndpoint: { wsEndpoint: "ws://cdp.test" },
     });
     expect(calls).toEqual([
@@ -479,7 +485,7 @@ describe("DurableObjectBase panelTree handles", () => {
       {
         type: "call",
         targetId: "main",
-        method: "panelTree.rebuildAndReload",
+        method: "panelTree.rebuildPanel",
         args: ["parent-slot"],
       },
     ]);

@@ -4,7 +4,7 @@ import { TestRunner } from "./test-runner.js";
 import type { HeadlessRunner } from "./runner.js";
 import { CONTENT_WORKSPACE_REPO_FIXTURE, type TestCase } from "./types.js";
 
-const TEST_MODEL = "openai-codex:gpt-5.3-codex-spark";
+const TEST_MODEL = "openai-codex:gpt-5.4-mini";
 const modelEvidence = () => ({
   totalCalls: 1,
   truncated: false,
@@ -12,7 +12,7 @@ const modelEvidence = () => ({
     {
       ref: TEST_MODEL,
       provider: "openai-codex",
-      model: "gpt-5.3-codex-spark",
+      model: "gpt-5.4-mini",
       api: "openai-codex-responses",
       auth: "url-bound",
       usage: { input: 10, output: 5, totalTokens: 15 },
@@ -144,7 +144,9 @@ describe("TestRunner", () => {
       "model_credential_reconnect_required",
     ]);
     expect(runner.collectDiagnostics).toHaveBeenCalledWith({ channelId: "chat-timeout" });
-    expect(session.close).toHaveBeenCalledWith();
+    expect(session.close).toHaveBeenCalledWith({
+      onPhase: expect.any(Function),
+    });
     expect(session.interrupt).toHaveBeenCalledWith("agent-target-timeout");
     expect(cleanupOrder).toEqual(["interrupt", "close"]);
     expect(session.captureModelExecutionEvidence).toHaveBeenCalledOnce();
@@ -896,7 +898,7 @@ describe("TestRunner", () => {
         {
           ref: TEST_MODEL,
           provider: "openai-codex",
-          model: "gpt-5.3-codex-spark",
+          model: "gpt-5.4-mini",
           api: "openai-codex-responses",
           auth: "url-bound",
           outcome: "failed",

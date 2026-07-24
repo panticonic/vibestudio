@@ -27,8 +27,7 @@
           "tier": "gated",
           "evidence": "intentional-broad"
         }
-      ],
-      "evalCeilings": []
+      ]
     },
     "extension": {
       "activationEvents": [

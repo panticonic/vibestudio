@@ -9,11 +9,11 @@ const mocks = vi.hoisted(() => ({
   testerOptions: null as Record<string, unknown> | null,
   snapshotAll: vi.fn(() => []),
   modelPolicySnapshot: vi.fn(() => ({
-    primaryModel: "openai-codex:gpt-5.3-codex-spark",
-    activeModel: "openai-codex:gpt-5.3-codex-spark",
-    fallbackModel: "openai-codex:gpt-5.6-luna",
-    fallbackThinkingLevel: "minimal" as const,
-    fallbackOn: "usage_limit_terminal" as const,
+    primaryModel: "openai-codex:gpt-5.4-mini",
+    activeModel: "openai-codex:gpt-5.4-mini",
+    fallbackModel: null,
+    fallbackThinkingLevel: null,
+    fallbackOn: null,
     activations: [],
   })),
   resolveService: vi.fn(),
@@ -102,7 +102,7 @@ import {
   systemTestTrajectory,
   type SystemTestRunRecord,
 } from "./cli.js";
-import { SYSTEM_TEST_AGENT_MODEL, SYSTEM_TEST_FALLBACK_MODEL } from "./config.js";
+import { SYSTEM_TEST_AGENT_MODEL } from "./config.js";
 
 describe("system-testing CLI-neutral API", () => {
   beforeEach(() => {
@@ -128,16 +128,13 @@ describe("system-testing CLI-neutral API", () => {
     mocks.listUnits.mockResolvedValue([{ name: "workers/agent-worker", status: "running" }]);
     mocks.rpcCall.mockImplementation(async (...args: unknown[]) => {
       const method = args[1];
-      if (method === "getDefaultModel") return { catalog: { models } };
+      if (method === "inspectModels") return { models };
       return {};
     });
   }
 
   it("doctors only an explicitly selected model when the run has no fallback", async () => {
-    configureHealthyDoctorModels([
-      { ref: "anthropic:test-model", availability: { state: "ready" } },
-      { ref: SYSTEM_TEST_FALLBACK_MODEL, availability: { state: "unavailable" } },
-    ]);
+    configureHealthyDoctorModels([{ ref: "anthropic:test-model", availability: { state: "ready" } }]);
 
     const result = await systemTestDoctor("anthropic:test-model");
 
@@ -151,10 +148,9 @@ describe("system-testing CLI-neutral API", () => {
     });
   });
 
-  it("treats an explicit default-model selection as a Spark-only run", async () => {
+  it("treats an explicit default-model selection as a single-model run", async () => {
     configureHealthyDoctorModels([
       { ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } },
-      { ref: SYSTEM_TEST_FALLBACK_MODEL, availability: { state: "unavailable" } },
     ]);
 
     const result = await systemTestDoctor(SYSTEM_TEST_AGENT_MODEL);
@@ -169,18 +165,20 @@ describe("system-testing CLI-neutral API", () => {
     });
   });
 
-  it("doctors both models in the default usage-limit fallback route", async () => {
+  it("doctors only GPT-5.4 mini for the default route", async () => {
     configureHealthyDoctorModels([
       { ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } },
-      { ref: SYSTEM_TEST_FALLBACK_MODEL, availability: { state: "unavailable" } },
     ]);
 
     const result = await systemTestDoctor();
 
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
     expect(result.checks.find((check) => check.name === "model")).toMatchObject({
-      ok: false,
-      detail: `model ${SYSTEM_TEST_FALLBACK_MODEL} is not usable (unavailable)`,
+      ok: true,
+      data: {
+        primary: { model: SYSTEM_TEST_AGENT_MODEL, availability: "ready" },
+        usageLimitFallback: null,
+      },
     });
   });
 
@@ -408,9 +406,9 @@ describe("system-testing CLI-neutral API", () => {
     expect(record.config.model).toBe(SYSTEM_TEST_AGENT_MODEL);
     expect(record.config.modelPolicy).toMatchObject({
       primaryModel: SYSTEM_TEST_AGENT_MODEL,
-      fallbackModel: "openai-codex:gpt-5.6-luna",
-      fallbackThinkingLevel: "minimal",
-      fallbackOn: "usage_limit_terminal",
+      fallbackModel: null,
+      fallbackThinkingLevel: null,
+      fallbackOn: null,
     });
   });
 

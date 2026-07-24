@@ -74,10 +74,6 @@ class TestableAiChatWorker extends AiChatWorker {
   protected override get rpc(): never {
     return {
       call: this.rpcCall,
-      callDeferred: async (...args: unknown[]) => ({
-        status: "completed" as const,
-        result: await this.rpcCall(...(args as [string, string, unknown[]])),
-      }),
     } as never;
   }
 

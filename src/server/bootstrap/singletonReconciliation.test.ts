@@ -23,7 +23,6 @@ describe("reconcileSingletons", () => {
               evidence: "exact",
             },
           ],
-          authorityEvalCeilings: [],
         },
         "system"
       )
@@ -41,7 +40,6 @@ describe("reconcileSingletons", () => {
             evidence: "exact",
           },
         ],
-        evalCeilings: [],
       },
       contextId: "ctx-settings",
       className: "ModelSettingsDO",

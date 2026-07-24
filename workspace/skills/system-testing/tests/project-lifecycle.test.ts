@@ -12,6 +12,7 @@ describe("project lifecycle prompts", () => {
     expect(panelPrompts).toEqual([
       "Create a brand-new isolated panel project and open it for use.",
       "Fork the existing panel into a new isolated panel and open the result.",
+      "Build a simple, polished To-Do list as a brand-new isolated panel. Begin with two small deliberate defects—one compiler error and one obvious usability problem—so the development loop has real failures to find. Then carry the app through the normal workspace development workflow: diagnose the compiler failure, launch and inspect the actual panel, repair both defects, exercise the add, complete, filter, and delete flows in the live UI, and publish the finished result. Make the final experience keyboard-friendly, responsive, visually polished, and free of runtime or console errors. Report the defects you observed and concrete final verification.",
     ]);
 
     for (const prompt of panelPrompts) {
@@ -35,6 +36,10 @@ describe("project lifecycle prompts", () => {
     expect(fixtureFor("commit-existing-project")).toEqual({
       kind: "created-repository",
       section: "packages",
+    });
+    expect(fixtureFor("panel-todo-debug-polish")).toEqual({
+      kind: "created-repository",
+      section: "panels",
     });
   });
 

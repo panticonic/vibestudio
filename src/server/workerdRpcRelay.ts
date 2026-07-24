@@ -2,13 +2,12 @@ import type { DORefParam } from "@vibestudio/shared/workspaceServiceRpc";
 import {
   envelopeFromMessage,
   RemoteRpcError,
-  type AuthenticatedCaller,
   type CallerKind,
-  type DirectAuthorityAttestation,
   type RpcEnvelope,
   type RpcCausalParent,
   type RpcResponse,
 } from "@vibestudio/rpc";
+import type { AttestedCaller, DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import { Agent, type Dispatcher } from "undici";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
 import { EntityNotCreatedError } from "@vibestudio/shared/runtime/entitySpec";
@@ -167,7 +166,7 @@ function generateRequestId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-function callerFromDeps(deps: DurableObjectRelayDeps): AuthenticatedCaller {
+function callerFromDeps(deps: DurableObjectRelayDeps): AttestedCaller {
   return {
     callerId: deps.callerId ?? "main",
     callerKind: (deps.callerKind as CallerKind | undefined) ?? "server",
@@ -196,7 +195,7 @@ function describeFetchCause(cause: unknown): string {
   return parts.join(" ");
 }
 
-function describeFetchFailure(error: unknown): string {
+export function describeWorkerdFetchFailure(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const cause = error instanceof Error ? (error as Error & { cause?: unknown }).cause : undefined;
   if (!cause) return message;
@@ -234,7 +233,7 @@ async function fetchEnvelopeFromDO(
     } as RequestInit);
   } catch (error) {
     const wrapped = new Error(
-      `DO RPC fetch to ${url} failed: ${describeFetchFailure(error)}`
+      `DO RPC fetch to ${url} failed: ${describeWorkerdFetchFailure(error)}`
     ) as Error & { cause?: unknown };
     wrapped.cause = error;
     throw wrapped;

@@ -27,7 +27,7 @@
         "getModelExecutionEvidence",
         "initFromTrajectoryFork",
         "onChannelEnvelope",
-        "onDeferredResult",
+        "onAuthorityChanged",
         "onEvalComplete",
         "onEvalProgress",
         "onMethodCall",

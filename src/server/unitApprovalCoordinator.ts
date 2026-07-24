@@ -1,5 +1,6 @@
-import type { UnitApprovalCoordinator, UnitApprovalDecision } from "@vibestudio/unit-host";
+import type { UnitApprovalCoordinator } from "@vibestudio/unit-host";
 import type { PendingUnitBatchApproval, UnitBatchEntry } from "@vibestudio/shared/approvals";
+import type { ApprovalQueueDecision } from "./services/approvalQueue.js";
 
 export interface UnitApprovalQueueLike {
   request(req: {
@@ -14,7 +15,7 @@ export interface UnitApprovalQueueLike {
     description: string;
     units: PendingUnitBatchApproval["units"];
     configWrite?: PendingUnitBatchApproval["configWrite"];
-  }): Promise<UnitApprovalDecision>;
+  }): Promise<ApprovalQueueDecision>;
 }
 
 interface PendingRequest {
@@ -48,7 +49,6 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
       delayMs?: number;
       /** Startup has an explicit staging barrier so every unit shares one prompt. */
       autoPublishStartup?: boolean;
-      autoApproveStartupUnits?: boolean;
     }
   ) {}
 
@@ -110,23 +110,20 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
     if (batch.timer) clearTimeout(batch.timer);
     const requests = batch.requests;
     const units = requests.flatMap((request) => request.entries);
-    let decision: Promise<UnitApprovalDecision>;
+    let decision: Promise<ApprovalQueueDecision>;
     try {
-      decision =
-        trigger === "startup" && this.deps.autoApproveStartupUnits
-          ? Promise.resolve("once")
-          : this.deps.approvalQueue.request({
-              kind: "unit-batch",
-              callerId: "system:units",
-              callerKind: "system",
-              repoPath: "meta",
-              effectiveVersion: "",
-              trigger,
-              title: unitBatchTitle(units, trigger),
-              description: unitBatchDescription(units),
-              units,
-              configWrite: null,
-            });
+      decision = this.deps.approvalQueue.request({
+        kind: "unit-batch",
+        callerId: "system:units",
+        callerKind: "system",
+        repoPath: "meta",
+        effectiveVersion: "",
+        trigger,
+        title: unitBatchTitle(units, trigger),
+        description: unitBatchDescription(units),
+        units,
+        configWrite: null,
+      });
     } catch (error) {
       decision = Promise.reject(error);
     }
@@ -140,7 +137,15 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
           .then(async (resolvedDecision) => {
             if (resolvedDecision === "deny" || resolvedDecision === "dismiss")
               request.applyDenied();
-            else await request.applyApproved();
+            else if (
+              resolvedDecision === "once" ||
+              resolvedDecision === "session" ||
+              resolvedDecision === "version"
+            ) {
+              await request.applyApproved();
+            } else {
+              throw new Error(`Invalid ${resolvedDecision} decision for a workspace-unit approval`);
+            }
             request.resolve();
           })
           .catch((error: unknown) => {

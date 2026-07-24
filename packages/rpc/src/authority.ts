@@ -2,6 +2,8 @@
 
 export type PrincipalKind = "host" | "user" | "code" | "session" | "mission";
 export type Principal = `${PrincipalKind}:${string}`;
+export type AgentGrantPrincipal = `agent:${string}`;
+export type AuthorityGrantSubject = Principal | AgentGrantPrincipal;
 export type EntityPrincipal = `entity:${string}`;
 
 export type ResourceScope =
@@ -47,6 +49,89 @@ export interface SessionMissionFact {
   harness: { unit: string; ev: string };
 }
 
+export type AgentExecutionMode = "interactive" | "mission" | "test";
+
+export interface AgentExecutionTestAuthorityRule {
+  ruleId: string;
+  capability: string;
+  resource: ResourceScope;
+  tier: "gated" | "critical";
+  decision: "once" | "deny";
+}
+
+export interface AgentExecutionTestUserlandRule {
+  ruleId: string;
+  subjectId: string;
+  decision: string;
+  remember: boolean;
+}
+
+export interface AgentExecutionTestCasePolicy {
+  testId: string;
+  authority: readonly AgentExecutionTestAuthorityRule[];
+  userland: readonly AgentExecutionTestUserlandRule[];
+  unexpectedPrompts: "fail";
+}
+
+export type AgentExecutionTestPolicy =
+  | {
+      policyId: string;
+      kind: "orchestrator";
+    }
+  | {
+      policyId: string;
+      kind: "case";
+      orchestratorPolicyId: string;
+      case: AgentExecutionTestCasePolicy;
+    };
+
+export interface AgentExecutionTestPolicySpec {
+  testId: string;
+  authority: readonly AgentExecutionTestAuthorityRule[];
+  userland: readonly AgentExecutionTestUserlandRule[];
+  unexpectedPrompts: "fail";
+}
+
+/**
+ * Host-created proof that one concrete EvalDO run belongs to a live task,
+ * approved mission, or test policy. It is relationship evidence, never a
+ * capability token and never accepted from caller input.
+ */
+export interface AgentExecutionSessionFact {
+  v: 1;
+  authoritySessionId: string;
+  authoritySessionVersion: number;
+  mode: AgentExecutionMode;
+  ownerUser: `user:${string}`;
+  workspaceId: string;
+  contextId: string;
+  agentBinding: {
+    entityId: string;
+    channelId: string;
+    bindingId: string;
+  } | null;
+  taskRef: string;
+  harness: {
+    principal: `code:${string}`;
+    repoPath: string;
+    effectiveVersion: string;
+  };
+  eval: {
+    runtimeId: string;
+    runId: string;
+  };
+  causalParent: {
+    logId: string;
+    head: string;
+    invocationId: string;
+  } | null;
+  mission?: SessionMissionFact;
+  testPolicy?: AgentExecutionTestPolicy;
+  issuedAt: number;
+  expiresAt: number;
+  nonce: string;
+}
+
 /**
  * Every field is constructed from authenticated transport and live host state.
  * The harness is a conduit: its identity is a fact, while session/mission grants
@@ -66,6 +151,17 @@ export interface AuthorizationContext {
   initiatorChain: readonly string[];
   ownerChain: readonly `user:${string}`[];
   agentBinding: { entity: EntityPrincipal; contextId: string; channelId: string } | null;
+  executionSession: AgentExecutionSessionFact | null;
+  /**
+   * Host-attested unattended-test policy for the live execution context.
+   *
+   * An evaluated run carries this through `executionSession`. Reviewed
+   * infrastructure code created inside that run's context carries the same
+   * policy without pretending to be the eval/session author. Its code origin
+   * and manifest confinement therefore remain intact while gated test
+   * invocations can settle without a nonexistent human approver.
+   */
+  testPolicy: AgentExecutionTestPolicy | null;
   workspace: LiveWorkspaceRelationship | null;
   session: {
     id: string;
@@ -85,19 +181,40 @@ export interface AuthorityGrantConstraints {
   missionSubject?: `mission:${string}`;
   envelopeId?: string;
   lineageAtConsent?: readonly string[];
+  taskRef?: string;
+  agentBindingId?: string;
 }
 
 export interface AuthorityGrant extends CapabilityScope {
   id?: string;
-  subject: Principal;
+  subject: AuthorityGrantSubject;
   effect: "allow" | "deny";
   issuedBy: string;
   createdAt: number;
   expiresAt?: number;
   revokedAt?: number;
   consumedAt?: number;
+  suspendedAt?: number;
+  lastUsedAt?: number;
+  scope?: "once" | "task" | "agent" | "mission" | "version" | "session" | "system";
   constraints?: AuthorityGrantConstraints;
   provenance: string;
+}
+
+export interface AuthorityLock {
+  id: string;
+  agentBindingId: string;
+  level: "resource" | "capability" | "cell";
+  capability?: string;
+  resource?: ResourceScope;
+  domain?: string;
+  verb?: string;
+  decidedBy: string;
+  surface: "card" | "profile";
+  createdAt: number;
+  revokedAt?: number;
+  attemptCount: number;
+  lastAttemptAt?: number;
 }
 
 export type AuthorityRequirement =
@@ -123,18 +240,19 @@ export interface AuthorizationDecision {
   allowed: boolean;
   code:
     | "allowed"
-    | "missing-principal"
-    | "denied"
-    | "missing-grant"
-    | "not-requested"
-    | "relationship"
-    | "session"
-    | "lineage";
+    | "approval-required"
+    | "mission-change-required"
+    | "user-denied"
+    | "receiver-rejected"
+    | "fixed-code-not-requested"
+    | "invalid-session"
+    | "invalid-attestation";
   reason: string;
   requirement: AuthorityRequirement;
   principal?: Principal;
   grantId?: string;
   consumable?: boolean;
+  standing?: boolean;
 }
 
 export interface InvocationSnapshot {
@@ -150,6 +268,14 @@ export interface InvocationSnapshot {
   preparedStateDigest: string;
   callerPrincipal: Principal;
   sessionId: string;
+  taskRef?: string;
+  agentBindingId?: string;
+  agentName?: string;
+  lineageClasses?: readonly string[];
+  irreversible?: boolean;
+  agentScopeEligible?: boolean;
+  executionMode?: AgentExecutionMode;
+  testPolicyId?: string;
   mission: `mission:${string}` | "-";
   snippetDigest: string;
   codeLineage: { class: CodeLineageFact["class"]; chain: readonly string[] };
@@ -169,6 +295,9 @@ export interface AcquisitionInfo {
   cardType: "permission.gated" | "permission.outside" | "confirm.critical";
   renderedAction: string;
   pending: boolean;
+  /** The host has minted an exact invocation grant; the receiver may retry
+   * authorization inline without entering the human-decision rendezvous. */
+  preauthorized?: true;
   cooldownUntil?: number;
   decidedBy?: "user" | "rule";
 }
@@ -182,7 +311,8 @@ export type AuthorityFailureReasonCode =
 
 export type AuthorityRemediationKind =
   | "request-user-approval"
-  | "update-authority-manifest"
+  | "request-mission-change"
+  | "update-installed-code-manifest"
   | "declare-rpc-receiver"
   | "use-admitted-principal"
   | "satisfy-relationship"
@@ -255,6 +385,7 @@ export interface DirectAuthorityAttestation {
   nonce: string;
   context: AuthorizationContext;
   grants: readonly AuthorityGrant[];
+  locks?: readonly AuthorityLock[];
   /** Host-resolved containment, enforced by the receiver before method entry. */
   readOnly?: true;
 }

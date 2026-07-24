@@ -62,6 +62,47 @@ Grep({ pattern: "openPanel(", path: "packages/runtime" })
 Grep({ pattern: "import.*runtime", path: "panels/my-app", literal: false })
 ```
 
+`Read`, `Glob`/`find`, and `Grep` may use the optional native
+`@workspace-extensions/file-tools` accelerator. It is never a liveness
+dependency: every invocation has a 15-second deadline, inherits tool
+cancellation, and falls back to the context filesystem (or the host
+filesystem service for grep). A fallback is announced as tool progress and
+recorded in `details.extensionFallback` with the exact operation and reason,
+for example `file-tools find timed out after 15000ms`. Do not wait on or retry
+a stalled helper; continue from the successful fallback result. Abort remains
+an abort and is never converted into a fallback.
+
+The context filesystem transport itself is also bounded to 15 seconds per
+operation. If the context cannot materialize or its filesystem service stops
+settling, the tool returns a structured `fs_runtime_unresponsive` infrastructure
+failure naming the exact `fs.*` method and deadline. This is distinct from a
+normal missing path (a successful discovery diagnostic) and from explicit
+tool cancellation. Reobserve context health before retrying; do not keep a
+filesystem call pending.
+
+Every ordinary in-process agent tool also has a runtime-owned 30-second
+wall-clock boundary, including tool-registry and host-RPC work before the
+tool's own implementation settles. A tool may declare a different positive,
+finite `executionTimeoutMs` when its public contract needs a longer bounded
+operation. A timeout returns an `agent-tool-failure.v1` terminal with
+`code: "tool_execution_timeout"`, the exact `tool.<name>` operation,
+invocation/command causality, and `{ tool, timeoutMs, elapsedMs }` evidence.
+It also aborts the tool's child signal. Never encode intentionally unbounded
+work as an ordinary tool: use a deferred protocol such as `eval`, whose run
+owns its explicit `timeoutMs` and delivers its result asynchronously.
+
+Channel trajectory terminals and other structured envelopes use a durable
+delivery outbox with a 15-second transport attempt deadline. An unavailable
+or wedged participant therefore releases the channel alarm, records the exact
+delivery failure, and retries from the outbox; it cannot indefinitely block
+the caller's terminal tool result or unrelated channel work.
+
+Protected publication settles the package graph and effective-version index
+before speculative cache warming. Resolving or opening a newly published unit
+therefore waits only for its graph identity and its own on-demand build; a slow
+unrelated background build cannot make the new unit disappear or stall every
+filesystem/VCS request behind global build settlement.
+
 ---
 
 ## Creating Projects
@@ -185,10 +226,16 @@ Execute TypeScript/JavaScript code server-side in your own persistent sandbox (a
 | `panel.focusPanel(panelId)`      | Focus an existing panel by ID (panel/component code — not in eval)                                    |
 | `panel.switchContext(id, opts?)` | Explicitly move this panel to an already-created workspace branch; state args cannot select a context |
 
-`openPanel(source)` creates a new panel for main/pushed code. To run code from
-the current context branch, pass `ref: \`ctx:${ctx.contextId}\``explicitly (and
-usually`contextId: ctx.contextId`for matching storage).`contextId` alone only
-selects the panel's filesystem/storage context; it does not select code.
+`await openPanel(...)` returns only after the exact runtime attempt is
+application boot-ready; resolve/build/host/boot failures reject with
+`PanelOperationError` and structured provenance. The underlying tree slot is
+committed immediately and its build/host/boot lifecycle continues
+asynchronously, so a broken panel cannot block owner seeding or unrelated tree
+operations; the public promise observes that lifecycle and has a finite
+90-second readiness deadline. `openPanel(source)` creates a new panel for
+main/pushed code. To run code from the current context branch, pass
+`ref: \`ctx:${ctx.contextId}\``explicitly (and usually`contextId: ctx.contextId`for matching storage).`contextId` alone only selects
+the panel's filesystem/storage context; it does not select code.
 
 In **eval**, `rpc` is the same portable client shape used by panels and workers:
 `rpc.call(target, method, args)`. Raw server services target `"main"`, for
@@ -359,6 +406,15 @@ because the adapter resolves exact identity and routes through these commands
 before projection. A shell copy or delete-plus-create
 cannot express those facts.
 
+Workspace skill discovery follows the same rule. Runtime
+`workspace.listSkills()` and `workspace.readSkill(path)` read through the
+caller's verified ambient context. The terminal CLI uses
+`vibestudio agent skills ... --session NAME`, which supplies that durable
+session's exact context explicitly. Neither surface falls back to checkout
+files. Catalog reads query top-level `SKILL.md` files directly and bound
+semantic receiver fan-out, so a large workspace cannot turn prompt setup into
+an unbounded burst of control-plane calls.
+
 Branch on result/error discriminants such as `RevisionChanged`,
 `DependencyBlocked`, `ConflictPresent`, `IntegrationIncomplete`,
 `ScopeTooLarge`, and `IntegrityFailure`.
@@ -377,6 +433,12 @@ copies with explicit ancestry. Dry-run unfamiliar worker forks and provide a
 Type-check a panel. The extension infers the current eval/agent context and checks that context folder, not canonical workspace source. Workspace package imports resolve through the same context tree, so context-local package edits are visible. Pass `{ contextId }` only when intentionally checking a different context. Pass the panel source path, or omit it to auto-detect from a panel caller ID.
 
 Returns `{ diagnostics, errorCount, warningCount }` where each diagnostic has `{ file, line, column, message, severity, code }`.
+
+This is an installed extension method, not a static service-catalog method, so
+`docs_search` does not enumerate `checkPanel`. Invoke the exact extension call
+below instead of repeatedly searching the service catalog. If the extension is
+unavailable, use `services.build.getBuildReport(source, \`ctx:${ctx.contextId}\`)`;
+its target diagnostics and `status` are the canonical compiler/build fallback.
 
 ```
 eval({ code: `
@@ -547,21 +609,22 @@ import { openPanel } from "@workspace/runtime";
 // Rebuilds the panel's current build ref: explicit ref if the panel was pinned,
 // otherwise main. It does not infer ctx:<contextId> from the panel context.
 const handle = await openPanel("panels/my-app");
-const lifecycle = await handle.rebuildAndReload();
-console.log(lifecycle.status, lifecycle.effectiveVersion);
+const observation = await handle.rebuild();
+console.log(observation.phase, observation.effectiveVersion, observation.buildKey);
 ```
 
 When iterating on an already-open panel after code changes, reuse its
 handle from `scope` or rediscover it with `listPanels()`, then call
-`handle.rebuildAndReload()`. It is target-only and does not recurse into
-children. `handle.rebuildPanel()` only invalidates/prebuilds the target bundle;
-it does not reload the renderer. `handle.reload()` is a browser-style renderer
-reload; it does not rebuild code by itself and can cancel an eval running inside
-that same target after the command is sent.
+`handle.rebuild()`. It transactionally prepares a new immutable attempt,
+activates it without adding a history entry, and waits for its boot handshake.
+It is target-only and does not recurse into children. `handle.reload()` reloads
+the current renderer and also waits for boot-ready.
 
-Lifecycle calls return a structured result with `panelId`, `operation`,
-`status`, `loaded`, `rebuilt`, `reloaded`, `buildRevision`, and
-`effectiveVersion` when the host can report those values.
+Lifecycle calls return `PanelObservation`, including `phase`, `attemptId`,
+`runtimeEntityId`, `requestedRef`, `effectiveVersion`, and `buildKey`. Use
+`handle.observe()` for a cheap current read, `handle.diagnose()` for a bounded
+post-mortem packet, and `handle.snapshot().document` for rendered content tied
+to the observed attempt.
 
 ---
 

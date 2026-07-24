@@ -78,7 +78,7 @@ export function declaredMethodCapabilityDependencies(matrix) {
           leaf?.requirement?.kind === "selected"
             ? leaf.requirement.principals?.includes("code")
             : includesCode(leaf?.requirement);
-        if (typeof leaf?.capability === "string" && !leaf.capability.endsWith("*") && admitsCode) {
+        if (typeof leaf?.capability === "string" && admitsCode) {
           required.add(leaf.capability);
         }
       }
@@ -108,7 +108,7 @@ export function expandCapabilityDependencies(capabilities, dependencies) {
  */
 export function inferDirectRpcCapabilities(source, directCapabilities) {
   const capabilities = new Set();
-  const directMethodCalls = new Set(["call", "callDeferred", "stream", "streamReadable"]);
+  const directMethodCalls = new Set(["call", "stream", "streamReadable"]);
   // The package source fold can contain both .ts and .tsx files. Parse both
   // ways and union the result: generic arrow functions such as `async <T>` are
   // ambiguous in TSX, while JSX is ambiguous in TS.

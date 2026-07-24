@@ -46,6 +46,7 @@ import type {
   PendingClientConfigApproval,
   PendingDeviceCodeApproval,
   PendingExternalAgentApproval,
+  PendingMissionReviewApproval,
   PendingUnitBatchApproval,
   PendingUserlandApproval,
 } from "@vibestudio/shared/approvals";
@@ -65,6 +66,8 @@ import {
 import type { ApprovalDecision } from "@vibestudio/shared/approvals";
 import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
 import { unitKindLabel } from "@vibestudio/shared/bootstrapLaunchGate";
+import { AUTHORITY_DOMAINS } from "@vibestudio/shared/authority/capabilityDomains";
+import { authorityRowKey } from "@vibestudio/shared/authority/authorityRowDiff";
 import {
   parseApprovalMarkdown,
   type ApprovalMarkdownInline,
@@ -110,6 +113,16 @@ export function ApprovalCard({
   // Secret-config / credential-input values are held locally and only leave the
   // surface on submit.
   const [secretConfigValues, setSecretConfigValues] = useState<Record<string, string>>({});
+  const [selectedMissionAuthorityKeys, setSelectedMissionAuthorityKeys] = useState<Set<string>>(
+    () =>
+      new Set(
+        approval.kind === "mission-review"
+          ? approval.authority.diff.added
+              .filter((row) => row.tier === "gated")
+              .map(authorityRowKey)
+          : []
+      )
+  );
   const emitForApproval = (intent: ApprovalCardIntentBody) => {
     emit({ ...intent, approvalId: approval.approvalId });
   };
@@ -136,6 +149,11 @@ export function ApprovalCard({
         // Browser permission decisions have no one-shot "deny": dismissing
         // denies only this request, while "block" is the explicit durable act.
         emitForApproval({ type: "decide", decision: "dismiss" });
+      } else if (approval.kind === "mission-review") {
+        emitForApproval({
+          type: "resolve-mission-review",
+          resolution: { decision: "dismiss" },
+        });
       } else if (approval.kind !== "device-code") {
         emitForApproval({ type: "decide", decision: "deny" });
       }
@@ -153,6 +171,14 @@ export function ApprovalCard({
         const primary =
           approval.options.find((option) => option.tone === "primary") ?? approval.options[0];
         if (primary) emitForApproval({ type: "resolve-userland", choice: primary.value });
+      } else if (approval.kind === "mission-review") {
+        emitForApproval({
+          type: "resolve-mission-review",
+          resolution: {
+            decision: "approve",
+            selectedAuthorityKeys: [...selectedMissionAuthorityKeys],
+          },
+        });
       } else if (approval.kind !== "device-code") {
         emitForApproval({
           type: "decide",
@@ -211,6 +237,25 @@ export function ApprovalCard({
         approval={approval}
         decide={(decision) => emitForApproval({ type: "decide", decision })}
       />
+    ) : approval.kind === "mission-review" ? (
+      <MissionReviewActions
+        approval={approval}
+        onApprove={() =>
+          emitForApproval({
+            type: "resolve-mission-review",
+            resolution: {
+              decision: "approve",
+              selectedAuthorityKeys: [...selectedMissionAuthorityKeys],
+            },
+          })
+        }
+        onDismiss={() =>
+          emitForApproval({
+            type: "resolve-mission-review",
+            resolution: { decision: "dismiss" },
+          })
+        }
+      />
     ) : approval.kind === "secret-input" ? (
       <SecretInputActions
         approval={approval}
@@ -225,7 +270,7 @@ export function ApprovalCard({
       <StandardApprovalActions
         approval={approval}
         decide={(decision) => emitForApproval({ type: "decide", decision })}
-        onBlock={() => emitForApproval({ type: "block-capability" })}
+        onBlock={() => emitForApproval({ type: "decide", decision: "lock" })}
       />
     );
 
@@ -252,6 +297,14 @@ export function ApprovalCard({
 
           <Flex direction="column" gap="1" style={{ minWidth: 0, flex: 1 }}>
             <Flex align="center" gap="2" wrap="wrap" style={{ minWidth: 0 }}>
+              {approval.kind === "capability" && approval.authorityRow ? (
+                <Badge color="blue" variant="soft">
+                  {AUTHORITY_DOMAINS[approval.authorityRow.domain].label}
+                  {approval.authorityRow.provenance.surface
+                    ? ` · ${approval.authorityRow.provenance.surface}`
+                    : ""}
+                </Badge>
+              ) : null}
               <Text
                 size="3"
                 weight="bold"
@@ -333,6 +386,37 @@ export function ApprovalCard({
                   })
                 }
               />
+            ) : null}
+
+            {approval.kind === "mission-review" ? (
+              <MissionReviewBody
+                approval={approval}
+                selected={selectedMissionAuthorityKeys}
+                onToggle={(key, checked) =>
+                  setSelectedMissionAuthorityKeys((current) => {
+                    const next = new Set(current);
+                    if (checked) next.add(key);
+                    else next.delete(key);
+                    return next;
+                  })
+                }
+              />
+            ) : null}
+
+            {approval.kind === "capability" && approval.operationSubstance ? (
+              <Box className="approval-operation-substance">
+                <Text as="div" size="1" color="gray" weight="bold">
+                  What exactly
+                </Text>
+                <Text as="div" size="2">
+                  {approval.operationSubstance.summary}
+                </Text>
+                {approval.operationSubstance.detail ? (
+                  <Text as="div" size="1" color="gray" style={{ whiteSpace: "pre-wrap" }}>
+                    {approval.operationSubstance.detail}
+                  </Text>
+                ) : null}
+              </Box>
             ) : null}
 
             <ApprovalDetails
@@ -625,6 +709,11 @@ function StandardApprovalActions({
     approval.allowedDecisions === undefined ||
     approval.allowedDecisions.includes(decision);
   const isSevereCapability = approval.kind === "capability" && approval.severity === "severe";
+  const critical = approval.kind === "capability" && approval.cardType === "confirm.critical";
+  const agentName =
+    approval.kind === "capability"
+      ? (approval.snapshot?.agentName ?? "this agent")
+      : "this agent";
   return (
     <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
       {permits("once") ? (
@@ -646,6 +735,22 @@ function StandardApprovalActions({
           onClick={() => decide("session")}
         />
       )}
+      {!critical && permits("task") ? (
+        <DecisionButton
+          label="Allow for this task"
+          description="Allow while the agent works on this task"
+          variant="surface"
+          onClick={() => decide("task")}
+        />
+      ) : null}
+      {!critical && permits("agent") ? (
+        <DecisionButton
+          label={`Always for ${agentName}`}
+          description="Save this exact access for this agent until you remove it"
+          variant="surface"
+          onClick={() => decide("agent")}
+        />
+      ) : null}
       {copy.version && permits("version") && (
         <DecisionButton
           label={copy.version.label}
@@ -659,7 +764,7 @@ function StandardApprovalActions({
       )}
       {permits("deny") ? (
         <DecisionButton
-          label={HOST_APPROVAL_COPY.chrome.deny}
+          label={critical ? "Cancel" : "Don't allow"}
           description={copy.denyDescription}
           color="red"
           icon={<CrossCircledIcon />}
@@ -669,10 +774,11 @@ function StandardApprovalActions({
       ) : null}
       {approval.kind === "capability" &&
       approval.snapshot &&
-      approval.cardType !== "confirm.critical" ? (
+      approval.cardType !== "confirm.critical" &&
+      permits("lock") ? (
         <DecisionButton
-          label={HOST_APPROVAL_COPY.chrome.block}
-          description={HOST_APPROVAL_COPY.chrome.blockDescription}
+          label="Don't allow and don't ask again"
+          description="Keep this agent from asking for this access again. Change it in Permissions."
           color="red"
           variant="surface"
           onClick={onBlock}
@@ -728,6 +834,155 @@ function BrowserPermissionActions({
           <Cross2Icon />
         </IconButton>
       </Tooltip>
+    </Flex>
+  );
+}
+
+function MissionReviewBody({
+  approval,
+  selected,
+  onToggle,
+}: {
+  approval: PendingMissionReviewApproval;
+  selected: ReadonlySet<string>;
+  onToggle: (key: string, checked: boolean) => void;
+}) {
+  return (
+    <Flex direction="column" gap="3" className="approval-mission-review">
+      <Box>
+        <Text size="1" color="gray">
+          Task description
+        </Text>
+        <Text as="p" size="2">
+          {approval.taskSummary}
+        </Text>
+      </Box>
+      <Text size="2">Runs: {approval.triggerSummary}</Text>
+      <Flex direction="column" gap="2">
+        <Text size="2" weight="bold">
+          What it can do
+        </Text>
+        {approval.authority.rows.length === 0 ? (
+          <Text size="2" color="gray">
+            No standing permissions
+          </Text>
+        ) : (
+          approval.authority.rows.map((row) => {
+            const key = authorityRowKey(row);
+            const isNew = approval.authority.diff.added.some(
+              (candidate) => authorityRowKey(candidate) === key
+            );
+            const interactiveOnly = row.tier === "critical";
+            const selectable = isNew && !interactiveOnly;
+            const retiered = approval.authority.diff.retiered.some(
+              ({ after }) => authorityRowKey(after) === key
+            );
+            return (
+              <label
+                key={key}
+                style={{ display: "flex", alignItems: "flex-start", gap: 8 }}
+              >
+                {selectable ? (
+                  <input
+                    type="checkbox"
+                    checked={selected.has(key)}
+                    onChange={(event) => onToggle(key, event.currentTarget.checked)}
+                    aria-label={`${row.action} ${row.resource}`}
+                  />
+                ) : (
+                  <LockClosedIcon style={{ marginTop: 2 }} />
+                )}
+                <Flex direction="column" gap="1">
+                  <Flex align="center" gap="2">
+                    <Badge color="blue" variant="soft">
+                      {AUTHORITY_DOMAINS[row.domain].label}
+                    </Badge>
+                    <Text size="2">
+                      {row.action} — {row.resource}
+                    </Text>
+                    <Badge
+                      color={interactiveOnly ? "amber" : isNew || retiered ? "amber" : "gray"}
+                      variant="soft"
+                    >
+                      {interactiveOnly
+                        ? "asks every time"
+                        : isNew
+                          ? "new"
+                          : retiered
+                            ? "permission changed"
+                            : "already allowed"}
+                    </Badge>
+                  </Flex>
+                </Flex>
+              </label>
+            );
+          })
+        )}
+      </Flex>
+      <Flex direction="column" gap="1">
+        <Text size="1">If it needs a new permission within its toolkit, it pauses and asks you.</Text>
+        <Text size="1">
+          To do anything beyond its toolkit, it stops and proposes an update for your review.
+        </Text>
+        <Text size="1">Actions that can’t be undone always wait for you.</Text>
+      </Flex>
+      <Flex gap="2" wrap="wrap">
+        {approval.toolkitDomains.map((domain) => (
+          <Badge key={domain} color="gray" variant="soft">
+            Uses {AUTHORITY_DOMAINS[domain].label.toLowerCase()}
+          </Badge>
+        ))}
+      </Flex>
+      <Text size="1">Can reach: {approval.networkSummary}</Text>
+      <Text size="1">Works with content from: {approval.lineageSummary}</Text>
+      {approval.charterChanges.map((change) => (
+        <Text
+          key={change.field}
+          size="1"
+          color={change.widening ? "red" : "gray"}
+        >
+          {change.field}: {change.before ?? "not set"} → {change.after}
+        </Text>
+      ))}
+      <Text size="1" color="gray">
+        Like all agents, it can’t change your safety controls.
+      </Text>
+      <details>
+        <summary>For developers</summary>
+        <Code size="1">
+          {approval.closureDigest} · {approval.charter.harness.unit}@
+          {approval.charter.harness.ev} · {approval.charter.model.modelId}
+        </Code>
+      </details>
+    </Flex>
+  );
+}
+
+function MissionReviewActions({
+  approval,
+  onApprove,
+  onDismiss,
+}: {
+  approval: PendingMissionReviewApproval;
+  onApprove: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <Flex direction="column" align="end" gap="1">
+      <Flex align="center" gap="2">
+        <Button color="sky" onClick={onApprove} data-testid="mission-review-approve">
+          <CheckCircledIcon />
+          {approval.reviewKind === "out-of-charter"
+            ? "Allow and update mission"
+            : "Approve mission"}
+        </Button>
+        <Button variant="soft" color="gray" onClick={onDismiss}>
+          {approval.reviewKind === "out-of-charter" ? "Don’t add" : "Not now"}
+        </Button>
+      </Flex>
+      <Text size="1" color="gray">
+        You can pause or change this anytime. Changes take effect after you review them.
+      </Text>
     </Flex>
   );
 }
@@ -1266,7 +1521,7 @@ function ApprovalDetails({
           <SecretInputDetails approval={approval} />
         ) : approval.kind === "browser-permission" ? (
           <BrowserPermissionDetails approval={approval} />
-        ) : (
+        ) : approval.kind === "mission-review" ? null : (
           <CapabilityDetails approval={approval} />
         )}
       </Flex>
@@ -1711,34 +1966,22 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
       {approval.units.map((entry) => {
         const deps = Object.entries(entry.dependencyEvs ?? {});
         const external = Object.entries(entry.externalDeps ?? {});
-        const addedPermissionCount =
-          (entry.authority?.groups.reduce((count, group) => count + group.addedCount, 0) ?? 0) +
-          (entry.authority?.eval.reduce(
-            (count, review) =>
-              count + review.groups.reduce((sum, group) => sum + group.addedCount, 0),
-            0
-          ) ?? 0);
-        const removedPermissionCount =
-          (entry.authority?.removedCount ?? 0) +
-          (entry.authority?.eval.reduce((count, review) => count + review.removedCount, 0) ?? 0);
+        const addedRows = entry.authority?.diff.added ?? [];
+        const retieredRows = entry.authority?.diff.retiered ?? [];
+        const addedPermissionCount = addedRows.length + retieredRows.length;
+        const removedPermissionCount = entry.authority?.diff.removed.length ?? 0;
+        const addedDomains = [
+          ...new Set(addedRows.map((row) => row.domain)),
+        ];
         return (
           <details key={`${entry.unitKind}:${entry.unitName}`} className="approval-details">
             <summary>
               <ChevronDownIcon className="approval-details-chevron" width={13} height={13} />
               {entry.displayName}
               {entry.version ? ` · v${entry.version}` : ""}
-              {entry.authority?.groups
-                .filter((group) => group.addedCount > 0)
-                .map((group) => (
-                  <Badge key={group.id} color="green" variant="soft" ml="1">
-                    + {group.label}
-                  </Badge>
-                ))}
-              {entry.authority?.eval
-                .filter((review) => review.groups.some((group) => group.addedCount > 0))
-                .map((review) => (
-                  <Badge key={review.purpose} color="green" variant="soft" ml="1">
-                    + {review.label}
+              {addedDomains.map((domain) => (
+                  <Badge key={domain} color="green" variant="soft" ml="1">
+                    + {AUTHORITY_DOMAINS[domain].label}
                   </Badge>
                 ))}
               {entry.authority && addedPermissionCount === 0 ? (
@@ -1790,96 +2033,30 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
                   label="Permissions"
                   value={
                     <Flex direction="column" gap="2">
-                      {entry.authority.groups
-                        .filter((group) => group.addedCount > 0)
-                        .map((group) => (
-                          <Flex key={group.id} direction="column" gap="1">
-                            <Flex align="center" gap="1" wrap="wrap">
-                              <Tooltip content={group.description}>
-                                <Badge color="amber" variant="soft">
-                                  {group.label}
-                                </Badge>
-                              </Tooltip>
-                              {group.addedCount > 0 ? (
-                                <Badge color="green" variant="soft">
-                                  +{group.addedCount} new
-                                </Badge>
-                              ) : null}
-                            </Flex>
-                            {group.items
-                              .filter((item) => item.added)
-                              .map((item) => (
-                                <Tooltip key={item.capability} content={item.description}>
-                                  <Text size="1" color="green">
-                                    + {item.title}
-                                  </Text>
-                                </Tooltip>
-                              ))}
-                          </Flex>
-                        ))}
-                      {entry.authority.eval
-                        .filter((review) => review.groups.some((group) => group.addedCount > 0))
-                        .map((review) => (
-                          <Flex key={review.purpose} direction="column" gap="1">
-                            <Tooltip
-                              content={HOST_APPROVAL_COPY.unitReview.evaluatedCodeExplanation}
-                            >
-                              <Badge color="amber" variant="soft">
-                                {review.label}
-                              </Badge>
-                            </Tooltip>
-                            {review.groups.flatMap((group) =>
-                              group.items
-                                .filter((item) => item.added)
-                                .map((item) => (
-                                  <Tooltip
-                                    key={`${review.purpose}:${item.capability}`}
-                                    content={item.description}
-                                  >
-                                    <Text size="1" color="green">
-                                      + {item.title}
-                                    </Text>
-                                  </Tooltip>
-                                ))
-                            )}
-                          </Flex>
-                        ))}
-                      {entry.authority.groups.some((group) =>
-                        group.items.some((item) => !item.added)
-                      ) ||
-                      entry.authority.eval.some((review) =>
-                        review.groups.some((group) => group.items.some((item) => !item.added))
-                      ) ? (
+                      {addedRows.map((row) => (
+                        <Flex key={`${row.capability}:${row.resource}`} align="center" gap="1" wrap="wrap">
+                          <Badge color="amber" variant="soft">
+                            {AUTHORITY_DOMAINS[row.domain].label}
+                          </Badge>
+                          <Text size="1" color="green">
+                            + {row.action} — {row.resource}
+                          </Text>
+                        </Flex>
+                      ))}
+                      {retieredRows.map(({ before, after }) => (
+                        <Text key={`${after.capability}:${after.resource}`} size="1" color="amber">
+                          {after.action} — {after.resource}: {before.tier} → {after.tier}
+                        </Text>
+                      ))}
+                      {entry.authority.diff.unchanged.length > 0 ? (
                         <details className="approval-details">
                           <summary>{HOST_APPROVAL_COPY.chrome.unchangedPermissions}</summary>
                           <Flex direction="column" gap="1" pt="1">
-                            {entry.authority.groups.flatMap((group) =>
-                              group.items
-                                .filter((item) => !item.added)
-                                .map((item) => (
-                                  <Tooltip key={item.capability} content={item.description}>
-                                    <Text size="1" color="gray">
-                                      {item.title}
-                                    </Text>
-                                  </Tooltip>
-                                ))
-                            )}
-                            {entry.authority.eval.flatMap((review) =>
-                              review.groups.flatMap((group) =>
-                                group.items
-                                  .filter((item) => !item.added)
-                                  .map((item) => (
-                                    <Tooltip
-                                      key={`${review.purpose}:${item.capability}`}
-                                      content={item.description}
-                                    >
-                                      <Text size="1" color="gray">
-                                        {review.label}: {item.title}
-                                      </Text>
-                                    </Tooltip>
-                                  ))
-                              )
-                            )}
+                            {entry.authority.diff.unchanged.map((row) => (
+                              <Text key={`${row.capability}:${row.resource}`} size="1" color="gray">
+                                {row.action} — {row.resource}
+                              </Text>
+                            ))}
                           </Flex>
                         </details>
                       ) : null}

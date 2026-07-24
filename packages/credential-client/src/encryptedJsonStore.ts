@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as fsSync from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { getCentralDataPath } from "@vibestudio/env-paths";
+import { getProfileDataPath } from "@vibestudio/env-paths";
 
 const IDENTIFIER_RE = /^[a-zA-Z0-9][a-zA-Z0-9._@+=:-]{0,127}$/;
 
@@ -68,7 +68,7 @@ export function __setSafeStorageForTests(ss: SafeStorage | null): void {
 }
 
 function getKeyFilePath(): string {
-  return path.join(getCentralDataPath(), "keys", "store.key");
+  return path.join(getProfileDataPath(), "keys", "store.key");
 }
 
 function loadOrCreateAesKey(): Buffer {
@@ -345,5 +345,5 @@ export abstract class EncryptedJsonStore<TRecord> {
 }
 
 export function getDefaultCredentialStorePath(): string {
-  return path.join(getCentralDataPath(), "credentials");
+  return path.join(getProfileDataPath(), "credentials");
 }

@@ -12,6 +12,11 @@ import {
 } from "@vibestudio/workspace/singletonRegistry";
 import { createWorkerService } from "./workerService.js";
 
+const TEST_WORKSPACE_SERVICE_PRESENTATION = {
+  action: "use the test service",
+  presentation: { domain: "automation" as const, verb: "act" as const },
+};
+
 const panelCtx: ServiceContext = { caller: createVerifiedCaller("panel-test", "panel") };
 const ownedPanelCtx: ServiceContext = {
   caller: createVerifiedCaller("panel-owned", "panel", null, null, {
@@ -29,6 +34,7 @@ function createDeps() {
       {
         source: "workers/example-store",
         name: "channel",
+        ...TEST_WORKSPACE_SERVICE_PRESENTATION,
         protocols: ["example.store.v1"],
         authority: { principals: ["code", "user"] },
         durableObject: { className: "ExampleStoreDO" },
@@ -36,6 +42,7 @@ function createDeps() {
       {
         source: "workers/example-store",
         name: "panel-channel",
+        ...TEST_WORKSPACE_SERVICE_PRESENTATION,
         protocols: ["example.panel-store.v1"],
         authority: { principals: ["code"] },
         durableObject: { className: "ExampleStoreDO" },
@@ -43,6 +50,7 @@ function createDeps() {
       {
         source: "workers/stateless-api",
         name: "stateless-api",
+        ...TEST_WORKSPACE_SERVICE_PRESENTATION,
         protocols: ["example.stateless.v1"],
         authority: { principals: ["user"] },
         worker: { routePath: "/api" },
@@ -99,7 +107,6 @@ function ungrantedExtensionCaller() {
     effectiveVersion: "ev-test",
     executionDigest: "0".repeat(64),
     requested: [],
-    evalCeilings: [],
   });
 }
 
@@ -136,10 +143,9 @@ function browserDataExtensionCaller() {
           resource: { kind: "prefix", prefix: "" },
         },
       ],
-      evalCeilings: [],
     },
     null,
-    { userId: "usr_alice", handle: "alice" }
+    { userId: "system", handle: "system" }
   );
 }
 
@@ -174,14 +180,13 @@ describe("workerService workspace service resolution", () => {
   it("binds dynamic workspace-service approval to the provider's exact EV", async () => {
     const deps = createDeps();
     const assertUserlandServiceExposure = vi.fn(async () => {});
+    const service = createWorkerService({
+      ...(deps as object),
+      assertUserlandServiceExposure,
+      buildSystem: { ...deps.buildSystem, getEffectiveVersion: () => "ev-example-store" },
+    } as never);
     const dispatcher = createTestServiceDispatcher();
-    dispatcher.registerService(
-      createWorkerService({
-        ...(deps as object),
-        assertUserlandServiceExposure,
-        buildSystem: { ...deps.buildSystem, getEffectiveVersion: () => "ev-example-store" },
-      } as never)
-    );
+    dispatcher.registerService(service);
     dispatcher.markInitialized();
 
     await dispatcher.dispatch(panelCtx, "workers", "resolveService", ["example.store.v1", "chat"]);
@@ -191,6 +196,23 @@ describe("workerService workspace service resolution", () => {
       provider: "workers/example-store",
       providerEv: "ev-example-store",
     });
+    await expect(
+      service.authorityPreparation?.["workers.resolveService.workspace-service"]?.(panelCtx, [
+        "example.store.v1",
+        "chat",
+      ])
+    ).resolves.toEqual([
+      expect.objectContaining({
+        challenge: expect.objectContaining({
+          operation: expect.objectContaining({ verb: "use the test service" }),
+          authorityVocabulary: {
+            domain: "automation",
+            verb: "act",
+            declaredBy: "workers/example-store",
+          },
+        }),
+      }),
+    ]);
   });
 
   it("lists every launchable worker with its real manifest entry point", async () => {
@@ -260,6 +282,8 @@ describe("workerService workspace service resolution", () => {
         name: "gad.workspace",
         title: "Workspace history",
         description: "Read or update your workspace's collaboration and version history.",
+        action: "read or update your workspace's collaboration history",
+        presentation: { domain: "files", verb: "manage" },
         protocols: ["vibestudio.gad.workspace.v1"],
         source: "vibestudio/internal",
         kind: "durable-object",
@@ -270,6 +294,7 @@ describe("workerService workspace service resolution", () => {
         origin: "workspace",
         name: "channel",
         kind: "durable-object",
+        ...TEST_WORKSPACE_SERVICE_PRESENTATION,
         protocols: ["example.store.v1"],
         source: "workers/example-store",
         docsId: "workspace:channel",
@@ -278,6 +303,7 @@ describe("workerService workspace service resolution", () => {
       expect.objectContaining({
         name: "panel-channel",
         kind: "durable-object",
+        ...TEST_WORKSPACE_SERVICE_PRESENTATION,
         protocols: ["example.panel-store.v1"],
         source: "workers/example-store",
         className: "ExampleStoreDO",
@@ -285,6 +311,7 @@ describe("workerService workspace service resolution", () => {
       expect.objectContaining({
         name: "stateless-api",
         kind: "worker",
+        ...TEST_WORKSPACE_SERVICE_PRESENTATION,
         protocols: ["example.stateless.v1"],
         source: "workers/stateless-api",
         routePath: "/api",
@@ -342,6 +369,7 @@ describe("workerService workspace service resolution", () => {
       {
         source: "workers/poem-store",
         name: "poem-store",
+        ...TEST_WORKSPACE_SERVICE_PRESENTATION,
         protocols: ["poem.store.v1"],
         authority: { principals: ["code", "user"] },
         durableObject: { className: "PoemStoreDO" },
@@ -370,6 +398,7 @@ describe("workerService workspace service resolution", () => {
         {
           source: "workers/poem-collection-store",
           name: "poem-collection",
+          ...TEST_WORKSPACE_SERVICE_PRESENTATION,
           protocols: ["poems.collection.v1"],
           authority: { principals: ["code"] },
           durableObject: { className: "PoemStore" },
@@ -419,6 +448,7 @@ describe("workerService workspace service resolution", () => {
         {
           source: "workers/example-store",
           name: "panel-channel",
+          ...TEST_WORKSPACE_SERVICE_PRESENTATION,
           protocols: ["example.panel-store.v1"],
           authority: { principals: ["code"] },
           durableObject: { className: "ExampleStoreDO" },
@@ -498,9 +528,13 @@ describe("workerService workspace service resolution", () => {
   it("derives BrowserDataDO identity from the verified broker user and workspace", async () => {
     const dispatcher = createProductionAuthorityDispatcher(createDeps());
     const caller = browserDataExtensionCaller();
+    const authorizingCaller = createVerifiedCaller("shell:dev_alice", "shell", null, null, {
+      userId: "usr_alice",
+      handle: "alice",
+    });
 
     await expect(
-      dispatcher.dispatch({ caller }, "workers", "resolveDurableObject", [
+      dispatcher.dispatch({ caller, authorizingCaller }, "workers", "resolveDurableObject", [
         "vibestudio/internal",
         "BrowserDataDO",
         "browser-environment",
@@ -509,11 +543,12 @@ describe("workerService workspace service resolution", () => {
       targetId: expect.stringMatching(/^do:vibestudio\/internal:BrowserDataDO:v1_[A-Za-z0-9_-]+$/),
     });
 
-    const second = await dispatcher.dispatch({ caller }, "workers", "resolveDurableObject", [
-      "vibestudio/internal",
-      "BrowserDataDO",
-      "caller-controlled-key",
-    ]);
+    const second = await dispatcher.dispatch(
+      { caller, authorizingCaller },
+      "workers",
+      "resolveDurableObject",
+      ["vibestudio/internal", "BrowserDataDO", "caller-controlled-key"]
+    );
     expect(second).toMatchObject({
       targetId: expect.stringMatching(/^do:vibestudio\/internal:BrowserDataDO:v1_[A-Za-z0-9_-]+$/),
     });
@@ -553,6 +588,7 @@ describe("workerService workspace service resolution", () => {
         {
           source: "workers/poem-collection-store",
           name: "poem-collection",
+          ...TEST_WORKSPACE_SERVICE_PRESENTATION,
           protocols: ["poems.collection.v1"],
           authority: { principals: ["code"] },
           durableObject: { className: "PoemStore" },
@@ -623,6 +659,7 @@ describe("workerService workspace service resolution", () => {
         {
           source: "workers/example-store",
           name: "panel-channel",
+          ...TEST_WORKSPACE_SERVICE_PRESENTATION,
           protocols: ["example.panel-store.v1"],
           authority: { principals: ["code"] },
           durableObject: { className: "ExampleStoreDO" },
@@ -775,6 +812,7 @@ describe("workerService workspace service resolution", () => {
       {
         source: "workers/model-settings",
         name: "models",
+        ...TEST_WORKSPACE_SERVICE_PRESENTATION,
         protocols: ["vibestudio.models.v1"],
         authority: { principals: ["host", "user", "code"] },
         durableObject: { className: "ModelSettingsDO" },

@@ -49,6 +49,10 @@ commits and pushes once. Extra task-authored repository identities are removed
 by the same causal walk and reported as scope failures; newer unpublished work
 is left to task-context destruction. Refer to the harness-provided fixture; do
 not put cleanup commands, fixed shared names, or seed instructions in prompts.
+The fixture also supplies both protected-effect rules: main publication and
+repository deletion, exact for a seeded repo or section-prefixed for an owned
+task-created/derived repo. Teardown must use those rules through ordinary VCS;
+never add a cleanup-only transport or ignore an approval failure.
 
 Multi-actor behavior belongs in `TestCase.orchestrate`. The first/base-author
 role runs in the fixture task context and publishes the shared base through the

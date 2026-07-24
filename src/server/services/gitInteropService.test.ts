@@ -150,6 +150,53 @@ describe("gitInteropService", () => {
     });
   });
 
+  it("discovers and persists the remote default branch when the request omits it", async () => {
+    const workspacePath = tempWorkspace();
+    const workspaceConfig: WorkspaceConfig = { ...BASE_WORKSPACE_CONFIG };
+    fs.writeFileSync(
+      path.join(workspacePath, "meta", "vibestudio.yml"),
+      YAML.stringify(BASE_WORKSPACE_CONFIG),
+      "utf-8"
+    );
+    const invokeGitProvider = vi.fn(async (_ctx, method: string, args: unknown[]) => {
+      if (method === "remoteDefaultBranch") return { branch: "trunk" };
+      if (method === "cloneRepo") {
+        const [{ repoPath }] = args as [{ repoPath: string }];
+        return {
+          contextId: `git-bridge:${repoPath}`,
+          eventId: `event:${repoPath}`,
+          changed: true,
+        };
+      }
+      throw new Error(`Unexpected provider method: ${method}`);
+    }) as unknown as GitProviderInvoker;
+    const service = createGitInteropService({
+      workspacePath,
+      workspaceConfig,
+      invokeGitProvider,
+      ...diskConfigPersistence(workspacePath),
+    });
+
+    await service.handler(serviceContext(), "importProject", [
+      {
+        path: "projects/bgkit",
+        remote: {
+          name: "origin",
+          url: "https://github.com/werg/bgkit.git",
+        },
+      },
+    ]);
+
+    expect(invokeGitProvider).toHaveBeenNthCalledWith(1, expect.anything(), "remoteDefaultBranch", [
+      { url: "https://github.com/werg/bgkit.git" },
+    ]);
+    expect(invokeGitProvider).toHaveBeenNthCalledWith(2, expect.anything(), "cloneRepo", [
+      { repoPath: "projects/bgkit" },
+    ]);
+    expect(workspaceConfig.git?.remotes?.["projects"]?.["bgkit"]?.["origin"]?.branch).toBe("trunk");
+    expect(workspaceConfig.git?.upstreams?.["projects"]?.["bgkit"]?.branch).toBe("trunk");
+  });
+
   it("publishes the protected config mutation before cloning an imported project", async () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = { ...BASE_WORKSPACE_CONFIG };
@@ -241,8 +288,8 @@ describe("gitInteropService", () => {
       ...diskConfigPersistence(workspacePath),
     });
 
-    await expect(
-      service.handler(panelServiceContext(), "importProject", [
+    const rejected = await service
+      .handler(panelServiceContext(), "importProject", [
         {
           path: "projects/bgkit",
           remote: {
@@ -252,7 +299,20 @@ describe("gitInteropService", () => {
           },
         },
       ])
-    ).rejects.toThrow(/failed during clone: network unavailable.*re-run the same import command/s);
+      .catch((error: unknown) => error);
+
+    expect(rejected).toMatchObject({
+      message: expect.stringMatching(
+        /failed during clone: network unavailable.*re-run the same import command/s
+      ),
+      errorData: {
+        operation: "git.importProject",
+        repoPath: "projects/bgkit",
+        stage: "clone",
+        primary: { message: "network unavailable" },
+        config: { changed: true, rolledBack: true },
+      },
+    });
 
     // No phantom declaration survives a failed clone: the remote/upstream
     // config is rolled back and the retry path is a clean re-import.
@@ -262,6 +322,81 @@ describe("gitInteropService", () => {
     expect(config.git?.remotes?.["projects"]?.["bgkit"]?.["origin"]).toBeUndefined();
     expect(config.git?.upstreams?.["projects"]?.["bgkit"]).toBeUndefined();
     expect(fs.existsSync(path.join(workspacePath, "projects", "bgkit"))).toBe(false);
+  });
+
+  it("keeps clone failure primary and attaches a failed rollback as secondary data", async () => {
+    const workspacePath = tempWorkspace();
+    const workspaceConfig: WorkspaceConfig = { ...BASE_WORKSPACE_CONFIG };
+    const cloneFailure = Object.assign(new Error("network unavailable"), {
+      code: "ENETDOWN",
+      errorKind: "transport",
+      errorData: { requestStage: "smart-http" },
+    });
+    const rollbackFailure = Object.assign(new Error("rollback cleanup failed"), {
+      code: "EACCES",
+      errorKind: "access",
+      errorData: {
+        cleanupFailures: [{ stage: "drop-temporary-context", message: "context cleanup failed" }],
+      },
+    });
+    const persistWorkspaceConfigMutation = vi
+      .fn()
+      .mockImplementationOnce(
+        async ({ mutate }: { mutate: (current: WorkspaceConfig) => WorkspaceConfig }) => ({
+          changed: true,
+          nextConfig: mutate(workspaceConfig),
+        })
+      )
+      .mockRejectedValueOnce(rollbackFailure);
+    const service = createGitInteropService({
+      workspacePath,
+      workspaceConfig,
+      invokeGitProvider: cloneProvider(vi.fn().mockRejectedValueOnce(cloneFailure)),
+      persistWorkspaceConfigMutation,
+    });
+
+    const rejected = await service
+      .handler(panelServiceContext(), "importProject", [
+        {
+          path: "projects/bgkit",
+          remote: {
+            name: "origin",
+            url: "https://github.com/werg/bgkit.git",
+            branch: "main",
+          },
+        },
+      ])
+      .catch((error: unknown) => error);
+
+    expect(rejected).toMatchObject({
+      message: expect.stringMatching(/^Import of projects\/bgkit failed during clone:/),
+      cause: cloneFailure,
+      errorData: {
+        operation: "git.importProject",
+        repoPath: "projects/bgkit",
+        stage: "clone",
+        primary: {
+          message: "network unavailable",
+          code: "ENETDOWN",
+          errorKind: "transport",
+          errorData: { requestStage: "smart-http" },
+        },
+        config: {
+          changed: true,
+          rolledBack: false,
+          rollbackFailure: {
+            message: "rollback cleanup failed",
+            code: "EACCES",
+            errorKind: "access",
+            errorData: {
+              cleanupFailures: [
+                { stage: "drop-temporary-context", message: "context cleanup failed" },
+              ],
+            },
+          },
+        },
+      },
+    });
   });
 
   it("imports dependencies already present in protected workspace config", async () => {

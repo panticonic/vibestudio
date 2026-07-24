@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { browserEnvironmentIdentity } from "./browserEnvironmentIdentity.js";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  browserEnvironmentIdentity,
+  browserEnvironmentIdentityFromContext,
+} from "./browserEnvironmentIdentity.js";
 
 describe("browserEnvironmentIdentity", () => {
   it("is stable for one verified user and workspace", () => {
@@ -35,5 +39,20 @@ describe("browserEnvironmentIdentity", () => {
         subject: { userId: "system", handle: "system" },
       })
     ).toThrow(/verified user/);
+  });
+
+  it("uses the verified authorizing user for extension-mediated calls", () => {
+    const identity = browserEnvironmentIdentityFromContext("workspace-a", {
+      caller: createVerifiedCaller("extension:browser-data", "extension", null, null, {
+        userId: "system",
+        handle: "system",
+      }),
+      authorizingCaller: createVerifiedCaller("shell:dev_alice", "shell", null, null, {
+        userId: "user-a",
+        handle: "alice",
+      }),
+    });
+
+    expect(identity.ownerUserId).toBe("user-a");
   });
 });

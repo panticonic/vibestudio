@@ -272,6 +272,16 @@ export function ConsentApprovalBar() {
       shellApproval.resolveExternalAgent(current.approvalId, behavior)
     );
   };
+  const resolveMissionReview = (
+    resolution:
+      | { decision: "approve"; selectedAuthorityKeys: string[] }
+      | { decision: "dismiss" }
+  ) => {
+    if (current?.kind !== "mission-review") return;
+    runApprovalAction(current, () =>
+      shellApproval.resolveMissionReview(current.approvalId, resolution)
+    );
+  };
   const runApprovalAction = (approval: PendingApproval, action: () => Promise<unknown>) => {
     if (submittingApprovalId) return;
     setDecisionError(null);
@@ -337,11 +347,6 @@ export function ConsentApprovalBar() {
       case "decide":
         decide(intent.decision);
         return;
-      case "block-capability":
-        if (current.kind === "capability") {
-          runApprovalAction(current, () => shellApproval.blockCapability(current.approvalId));
-        }
-        return;
       case "device-cancel":
         decide("dismiss");
         return;
@@ -359,6 +364,9 @@ export function ConsentApprovalBar() {
         return;
       case "resolve-external-agent":
         resolveExternalAgent(intent.behavior);
+        return;
+      case "resolve-mission-review":
+        resolveMissionReview(intent.resolution);
         return;
       case "fetch-blob":
         fetchBlob(intent.hash);

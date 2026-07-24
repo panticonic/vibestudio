@@ -31,12 +31,10 @@ export interface HttpClientTransportConfig {
  * The connectionless transport surface: the standard `EnvelopeRpcTransport`
  * plus the off-socket extras a Durable Object base needs.
  *
- * - `request(envelope)` — POST an envelope to `/rpc` and return the RAW server
- *   JSON (a response envelope, or a `{deferred,requestId}` ack). Used by the
- *   `callDeferred` extension, which must inspect the deferral discriminator
- *   that `send()` swallows.
+ * - `request(envelope)` — POST an envelope to `/rpc` and return the raw server
+ *   response envelope.
  * - `deliver(envelope)` — feed an inbound envelope to the core's listeners
- *   (server→DO event push, deferred replies) with no response expected.
+ *   (server→DO event push) with no response expected.
  * - `respond(envelope)` — feed an inbound REQUEST and capture the response
  *   envelope the core produces, so the DO's `fetch` can return it synchronously
  *   in the HTTP body (the server's relay reads the result from that body).

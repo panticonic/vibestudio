@@ -7,6 +7,7 @@ import { connectViaRpc } from "./rpc-client.js";
 import type { PubSubClient } from "./client.js";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
+  agentToolFailureFromUnknown,
   agenticEventSchema,
   invocationAbandonedPayload,
   invocationCancelledPayload,
@@ -36,6 +37,10 @@ function invocation(
       : kind === "invocation.failed"
         ? invocationFailedPayload("tool_error", String(payload["reason"] ?? "method failed"), {
             terminalReasonCode: "method_failed",
+            failure: agentToolFailureFromUnknown(payload, {
+              operation: "channel-method",
+              stage: "test",
+            }),
           })
         : kind === "invocation.cancelled"
           ? invocationCancelledPayload("cancelled", String(payload["reason"] ?? "cancelled"), {
@@ -188,6 +193,7 @@ function createMockRpc() {
         channelId: CHANNEL,
         message: {
           kind: "signal",
+          messageId: msg["messageId"],
           type: msg["type"],
           payload: msg["payload"],
           senderId: msg["senderId"],

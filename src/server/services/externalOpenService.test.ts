@@ -16,7 +16,6 @@ const panelCaller = () =>
         resource: { kind: "origin", origin: "https://example.com" },
       },
     ],
-    evalCeilings: [],
   });
 
 describe("externalOpenService", () => {

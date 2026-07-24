@@ -30,7 +30,11 @@ function presenceDescription(entry: ChannelPresenceEntry | undefined): string {
 /** Current-channel member management and invite acknowledgement. Workspace
  * accounts come from the host-bound account projection, so the UI never asks a
  * person to paste an opaque user id. */
-export function ChannelPeopleMenu({ compact = false }: { compact?: boolean }) {
+export function ChannelPeopleMenu({
+  variant = "button",
+}: {
+  variant?: "button" | "icon" | "submenu";
+}) {
   const { chat, clientRef, connected, selfId } = useChatContext();
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -136,10 +140,102 @@ export function ChannelPeopleMenu({ compact = false }: { compact?: boolean }) {
     }
   }, [clientRef, refresh, selfId]);
 
+  const content = (
+    <>
+      <DropdownMenu.Label>
+        <Flex align="center" justify="between" gap="3">
+          <Text>Channel people</Text>
+          {loading ? <Spinner size="1" /> : null}
+        </Flex>
+      </DropdownMenu.Label>
+
+      {invites.length > 0 ? (
+        <>
+          <DropdownMenu.Item color="blue" onSelect={() => void acknowledge()}>
+            You were invited · mark as joined
+          </DropdownMenu.Item>
+          <DropdownMenu.Separator />
+        </>
+      ) : null}
+
+      {members.length === 0 && !loading ? (
+        <DropdownMenu.Item disabled>No invited members yet</DropdownMenu.Item>
+      ) : null}
+      {members.map((member) => {
+        const profile = profileByUserId.get(member.userId);
+        const entry = presenceByUserId.get(member.userId);
+        const isSelf = member.memberId === selfId;
+        return (
+          <DropdownMenu.Sub key={member.memberId}>
+            <DropdownMenu.SubTrigger>
+              <Flex align="center" gap="2">
+                <Badge color={presenceColor(entry?.status)} variant="soft" radius="full">
+                  @{profile?.handle ?? member.handle}
+                </Badge>
+                <Text size="1" color="gray">
+                  {presenceDescription(entry)}
+                </Text>
+              </Flex>
+            </DropdownMenu.SubTrigger>
+            <DropdownMenu.SubContent>
+              <DropdownMenu.Label>{profile?.displayName ?? member.handle}</DropdownMenu.Label>
+              <DropdownMenu.Item
+                color="red"
+                disabled={busyUserId === member.userId}
+                onSelect={() => void remove(member.userId)}
+              >
+                {isSelf ? "Leave channel" : "Remove from channel"}
+              </DropdownMenu.Item>
+            </DropdownMenu.SubContent>
+          </DropdownMenu.Sub>
+        );
+      })}
+
+      {available.length > 0 ? (
+        <>
+          <DropdownMenu.Separator />
+          <DropdownMenu.Label>Invite from workspace</DropdownMenu.Label>
+          {available.map((profile) => (
+            <DropdownMenu.Item
+              key={profile.userId}
+              disabled={busyUserId === profile.userId}
+              onSelect={() => void add(profile.userId)}
+            >
+              Invite @{profile.handle}
+              <Text size="1" color="gray" ml="2">
+                {profile.displayName}
+              </Text>
+            </DropdownMenu.Item>
+          ))}
+        </>
+      ) : null}
+
+      {error ? (
+        <>
+          <DropdownMenu.Separator />
+          <DropdownMenu.Item color="red" disabled>
+            {error}
+          </DropdownMenu.Item>
+        </>
+      ) : null}
+    </>
+  );
+
+  if (variant === "submenu") {
+    return (
+      <DropdownMenu.Sub open={open} onOpenChange={onOpenChange}>
+        <DropdownMenu.SubTrigger disabled={!connected}>People</DropdownMenu.SubTrigger>
+        <DropdownMenu.SubContent style={{ minWidth: 260, maxWidth: 340 }}>
+          {content}
+        </DropdownMenu.SubContent>
+      </DropdownMenu.Sub>
+    );
+  }
+
   return (
     <DropdownMenu.Root open={open} onOpenChange={onOpenChange}>
       <DropdownMenu.Trigger>
-        {compact ? (
+        {variant === "icon" ? (
           <IconButton
             variant="soft"
             color="gray"
@@ -157,82 +253,7 @@ export function ChannelPeopleMenu({ compact = false }: { compact?: boolean }) {
         )}
       </DropdownMenu.Trigger>
       <DropdownMenu.Content align="end" style={{ minWidth: 260, maxWidth: 340 }}>
-        <DropdownMenu.Label>
-          <Flex align="center" justify="between" gap="3">
-            <Text>Channel people</Text>
-            {loading ? <Spinner size="1" /> : null}
-          </Flex>
-        </DropdownMenu.Label>
-
-        {invites.length > 0 ? (
-          <>
-            <DropdownMenu.Item color="blue" onSelect={() => void acknowledge()}>
-              You were invited · mark as joined
-            </DropdownMenu.Item>
-            <DropdownMenu.Separator />
-          </>
-        ) : null}
-
-        {members.length === 0 && !loading ? (
-          <DropdownMenu.Item disabled>No invited members yet</DropdownMenu.Item>
-        ) : null}
-        {members.map((member) => {
-          const profile = profileByUserId.get(member.userId);
-          const entry = presenceByUserId.get(member.userId);
-          const isSelf = member.memberId === selfId;
-          return (
-            <DropdownMenu.Sub key={member.memberId}>
-              <DropdownMenu.SubTrigger>
-                <Flex align="center" gap="2">
-                  <Badge color={presenceColor(entry?.status)} variant="soft" radius="full">
-                    @{profile?.handle ?? member.handle}
-                  </Badge>
-                  <Text size="1" color="gray">
-                    {presenceDescription(entry)}
-                  </Text>
-                </Flex>
-              </DropdownMenu.SubTrigger>
-              <DropdownMenu.SubContent>
-                <DropdownMenu.Label>{profile?.displayName ?? member.handle}</DropdownMenu.Label>
-                <DropdownMenu.Item
-                  color="red"
-                  disabled={busyUserId === member.userId}
-                  onSelect={() => void remove(member.userId)}
-                >
-                  {isSelf ? "Leave channel" : "Remove from channel"}
-                </DropdownMenu.Item>
-              </DropdownMenu.SubContent>
-            </DropdownMenu.Sub>
-          );
-        })}
-
-        {available.length > 0 ? (
-          <>
-            <DropdownMenu.Separator />
-            <DropdownMenu.Label>Invite from workspace</DropdownMenu.Label>
-            {available.map((profile) => (
-              <DropdownMenu.Item
-                key={profile.userId}
-                disabled={busyUserId === profile.userId}
-                onSelect={() => void add(profile.userId)}
-              >
-                Invite @{profile.handle}
-                <Text size="1" color="gray" ml="2">
-                  {profile.displayName}
-                </Text>
-              </DropdownMenu.Item>
-            ))}
-          </>
-        ) : null}
-
-        {error ? (
-          <>
-            <DropdownMenu.Separator />
-            <DropdownMenu.Item color="red" disabled>
-              {error}
-            </DropdownMenu.Item>
-          </>
-        ) : null}
+        {content}
       </DropdownMenu.Content>
     </DropdownMenu.Root>
   );

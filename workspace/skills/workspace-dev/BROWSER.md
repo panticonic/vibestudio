@@ -184,11 +184,9 @@ console.log(history.dropped); // overflow is explicit
 `history.entries` is the recent general log buffer. `history.errors` is a
 separate error-only buffer so high-value errors survive noisy normal logging.
 Entries include `timestamp`, `level`, `message`, `line`, `sourceId`, and `url`.
-For a single panel-debugging call, use `await handle.diagnostics({ limit: 200,
-errorLimit: 100 })`. The bundle includes handle metadata and the same
-host-captured console history. Renderer lifecycle failures such as crashes,
-failed loads, and unresponsive renderers are recorded in the historical error
-buffer with `source: "lifecycle"`.
+For a single panel-debugging call, use `await handle.diagnose()`. The packet
+includes the canonical attempt/phase/failure, host-captured console and
+lifecycle history, and a provenance-bearing document when ready.
 
 Use the server host log stream for failures outside the renderer, such as panel
 broker errors, build/reload scheduling, workerd supervision, reconnects, and
@@ -230,10 +228,9 @@ const sibling = panelTree.get("sibling-panel-id");
 await sibling.cdp.navigate("https://example.com/status");
 ```
 
-CDP access transparently loads unloaded targets after approval. Use
-`handle.ensureLoaded()` only when you need a live target for RPC or `_agent`
-introspection before calling `handle.call`, `handle.snapshot()`, `handle.tree()`,
-`handle.state()`, `handle.routes()`, or `handle.setMode()`.
+Readiness-bearing operations establish a live, booted target. For a discovered
+panel, call `observe()` and require `phase === "ready"` before custom RPC or
+`_agent` inspection. Use `diagnose()` when it is failed or stalled.
 
 ## Methods
 
@@ -242,7 +239,7 @@ introspection before calling `handle.call`, `handle.snapshot()`, `handle.tree()`
 | `handle.cdp.lightweightPage()`                     | Connect the lightweight CDP client and return the Playwright-style page  |
 | `handle.cdp.getCdpEndpoint()`                      | Get `{ wsEndpoint, token }` for raw `CdpConnection.connect`              |
 | `handle.cdp.consoleHistory({ limit, errorLimit })` | Read host-captured historical console logs and the separate error buffer |
-| `handle.diagnostics({ limit, errorLimit })`        | Read handle metadata plus host-captured console/lifecycle diagnostics    |
+| `handle.diagnose()`                                | Read canonical observation, bounded console/lifecycle history, and ready document |
 | `handle.click(selector)`                           | Click in the target panel through CDP                                    |
 | `handle.cdp.navigate(url)`                         | Load a URL in the target panel                                           |
 | `handle.cdp.goBack()` / `goForward()`              | Chromium history                                                         |

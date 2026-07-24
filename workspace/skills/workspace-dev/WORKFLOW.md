@@ -137,7 +137,8 @@ new command ID. Follow the typed discriminant, not prose.
 import { openPanel } from "@workspace/runtime";
 
 scope.myApp = await openPanel("panels/my-app", { focus: true });
-await scope.myApp.snapshot();
+const first = await scope.myApp.snapshot();
+console.log(first.attemptId, first.buildKey, first.document.text);
 ```
 
 Runtime-managed workers and Durable Objects follow their owning context unless
@@ -148,32 +149,46 @@ ref-capable launch/navigation path.
 8. Iterate visually with the same handle:
 
 ```ts
-const lifecycle = await scope.myApp.rebuildAndReload();
-console.log(lifecycle);
-await scope.myApp.snapshot();
+const observation = await scope.myApp.rebuild();
+console.log(observation.phase, observation.attemptId, observation.buildKey);
+const capture = await scope.myApp.snapshot();
+console.log(capture.document.text);
 ```
 
-`rebuildAndReload()` refreshes the running panel at its active build ref. It
-does not create work, commit an event, publish main, or replace build
-validation. It targets the panel named by the handle and does not reload child
-panels.
+`rebuild()` transactionally prepares and activates a new immutable runtime
+attempt at the panel's active build ref, then waits for the application boot
+handshake. It does not create work, commit an event, publish main, or affect
+child panels.
 
-| Method               | Build cache               | Renderer                    | Runtime lease | Descendants |
-| -------------------- | ------------------------- | --------------------------- | ------------- | ----------- |
-| `refresh()`          | unchanged                 | unchanged                   | unchanged     | unchanged   |
-| `rebuildPanel()`     | invalidate/rebuild target | unchanged until reload/load | unchanged     | unchanged   |
-| `reload()`           | unchanged                 | reload target renderer      | unchanged     | unchanged   |
-| `rebuildAndReload()` | invalidate/rebuild target | reload target renderer      | unchanged     | unchanged   |
+| Method       | Completion                                                                              |
+| ------------ | --------------------------------------------------------------------------------------- |
+| `observe()`  | Returns the canonical current attempt and phase without mutating it                     |
+| `rebuild()`  | Atomically replaces the current entry with a prepared attempt and returns at boot-ready |
+| `reload()`   | Reloads the current renderer and returns at boot-ready                                  |
+| `navigate()` | Prepares a new source/ref/context attempt and returns at boot-ready                     |
 
 Before reloading a parent or ancestor, verify the target:
 
 ```ts
-const info = await handle.refresh().then((h) => h.getInfo());
-console.log(info.id, info.source, info.contextId, info.runtimeEntityId, info.effectiveVersion);
+const observed = await handle.observe();
+console.log(
+  observed.panelId,
+  observed.source,
+  observed.contextId,
+  observed.requestedRef,
+  observed.runtimeEntityId,
+  observed.buildKey,
+  observed.phase
+);
 ```
 
-Lifecycle results include `operation`, `status`, `panelId`, `loaded`,
-`rebuilt`, `reloaded`, `buildRevision`, and `effectiveVersion` when available.
+Readiness-bearing lifecycle results are `PanelObservation` values. `phase:
+"ready"` means both host navigation and application bootstrap completed.
+Failures throw `PanelOperationError` with the same provenance fields.
+Slot creation itself is durable and immediately observable; runtime preparation
+continues asynchronously so one broken panel cannot hold the panel-tree queue.
+`openPanel` bridges those two boundaries by waiting up to 90 seconds for the
+created attempt's terminal observation.
 
 9. Tune running state without reopening:
 
@@ -199,10 +214,10 @@ const children = await scope.myApp.children();
 await children[0]?.close();
 ```
 
-Reuse an existing handle instead of opening duplicates. Handles carry metadata
-snapshots; call `handle.refresh()` or rediscover with `listPanels()` after
-lifecycle transitions. Close temporary inspection, browser, diagnostic, and
-child panels in `finally`.
+Reuse an existing handle instead of opening duplicates. Scalar handle fields
+are last-observed descriptors; call `handle.observe()` whenever live state
+matters. Close temporary inspection, browser, diagnostic, and child panels in
+`finally`.
 
 ## Browser panels
 
@@ -220,17 +235,19 @@ try {
 }
 ```
 
-CDP automation lives under `handle.cdp`. Use `handle.ensureLoaded()` before RPC
-to unloaded targets; CDP loads automatically after approval.
+CDP automation lives under `handle.cdp`. `openPanel()`, `focus()`, `navigate()`,
+`reload()`, and `rebuild()` already establish boot readiness; there is no
+separate handle lease/load step.
 
 ## Verification
 
-Use `handle.snapshot()` for an agent-readable view. Use `handle.tree()`,
+Use `handle.snapshot()` for a provenance-bearing agent-readable view and read
+its `document` field. Use `handle.tree()`,
 `handle.state()`, and `handle.routes()` for deeper inspection. Typecheck before
 launch when the change is more than a small text edit.
 
 For runtime failures, choose the narrowest log surface first:
-`handle.diagnostics(...)` for renderer state,
+`handle.diagnose()` for the canonical observation plus bounded renderer evidence,
 `workspace.units.diagnostics(name)` for unit state, and `serverLog` for host
 behavior. See [server logs](../server-logs/SKILL.md).
 

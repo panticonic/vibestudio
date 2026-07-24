@@ -285,14 +285,6 @@
   }
 }
 
-.chat-connection-dot {
-  display: inline-block;
-  flex: 0 0 auto;
-  inline-size: 8px;
-  block-size: 8px;
-  border-radius: 999px;
-}
-
 .chat-action-bar {
   flex: 0 0 auto;
   display: flex;

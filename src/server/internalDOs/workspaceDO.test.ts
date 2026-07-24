@@ -34,7 +34,6 @@ const ACTIVE_AUTHORITY: UnitAuthorityManifest = {
       evidence: "exact",
     },
   ],
-  evalCeilings: [],
 };
 
 async function createDbAtSchemaVersion(schemaVersion: number) {
@@ -92,6 +91,7 @@ describe("WorkspaceDO exact pre-release schema", () => {
   it("migrates the v24 production schema to the preparing lifecycle without losing rows", async () => {
     const first = await createTestDO(WorkspaceDOTestable);
     const existing = first.instance.entityActivate(panelInput());
+    first.db.run(`DROP TABLE do_alarm_test_policies`);
     first.db.run(`DELETE FROM _vibestudio_schema_migrations`);
     first.db.run(
       `INSERT INTO _vibestudio_schema_migrations (version, name, applied_at)
@@ -110,10 +110,11 @@ describe("WorkspaceDO exact pre-release schema", () => {
     ).toEqual([
       [24, "fresh-install:workspace-state-v24"],
       [25, "introduce-preparing-panel-lifecycle"],
+      [26, "persist-test-authority-with-owned-alarms"],
     ]);
     expect(
       first.db.exec(`SELECT value FROM state WHERE key = 'schema_version'`)[0]!.values
-    ).toEqual([["25"]]);
+    ).toEqual([["26"]]);
   });
 
   it("creates one exact fresh schema containing the complete execution identity", async () => {
@@ -299,7 +300,7 @@ describe("WorkspaceDO.entityActivate", () => {
     expect(() =>
       instance.entityActivate(
         panelInput({
-          activeAuthority: { requests: [], evalCeilings: [], extra: true } as never,
+          activeAuthority: { requests: [], extra: true } as never,
         })
       )
     ).toThrow(/unknown field.*extra/);
@@ -917,6 +918,24 @@ describe("WorkspaceDO lifecycle registry", () => {
     instance.alarmClear(b);
     expect(instance.alarmNextWakeAt()).toBeNull();
     expect(instance.alarmListDue(10_000)).toEqual([]);
+  });
+
+  it("retains host-attested test authority with a derived alarm until acknowledgement", () => {
+    const key = { source: "workers/poller", className: "PollerDO", objectKey: "test-case" };
+    const testPolicy = {
+      policyId: "system-test:permissions-list",
+      kind: "orchestrator" as const,
+    };
+    activateAlarmKey(instance, key);
+
+    instance.alarmSet({ ...key, wakeAt: 1_000, testPolicy });
+    // A derived schedule update from the alarm driver has no ambient caller,
+    // but it must not detach the authority of the durable work it is advancing.
+    instance.alarmSet({ ...key, wakeAt: 2_000 });
+
+    expect(instance.alarmListDue(2_000)).toEqual([{ ...key, wakeAt: 2_000, testPolicy }]);
+    instance.alarmClear(key);
+    expect(instance.alarmListDue(2_000)).toEqual([]);
   });
 
   it("opens an epoch and snapshots live leases into prepare and resume ops", () => {

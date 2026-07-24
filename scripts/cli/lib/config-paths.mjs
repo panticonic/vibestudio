@@ -3,6 +3,8 @@ import path from "node:path";
 
 /** XDG-aware root shared by compiled CLI code and raw-node support scripts. */
 export function cliConfigRoot() {
+  const instanceRoot = process.env.VIBESTUDIO_INSTANCE_ROOT?.trim();
+  if (instanceRoot) return path.resolve(instanceRoot);
   const xdg = process.env.XDG_CONFIG_HOME?.trim();
   return path.join(xdg || path.join(os.homedir(), ".config"), "vibestudio");
 }

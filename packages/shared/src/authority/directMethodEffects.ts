@@ -41,7 +41,6 @@ const WORKSPACE_GRAPH_DELETE = new Set([
   "deleteLogHead",
   "deleteRef",
   "purgeRevokedUserChannelIndexes",
-  "vcsDropContext",
 ]);
 
 /**

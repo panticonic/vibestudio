@@ -1,7 +1,7 @@
 import type { WorkspaceAppTarget } from "./unitManifest.js";
 import type { AppCapability } from "./unitManifest.js";
 import type { PendingUnitBatchApproval } from "./approvals.js";
-import type { EvalAuthorityCeiling, UnitAuthorityRequest } from "./authorityManifest.js";
+import type { UnitAuthorityRequest } from "./authorityManifest.js";
 
 export type HostTarget = WorkspaceAppTarget;
 export type HostTargetSelectionMode = "follow-ref" | "pinned-build" | "pinned-ref";
@@ -69,7 +69,6 @@ export type HostTargetLaunchResult =
       effectiveVersion?: string | null;
       executionDigest: string;
       authorityRequests: readonly UnitAuthorityRequest[];
-      authorityEvalCeilings: readonly EvalAuthorityCeiling[];
       adoptionPolicy?: "immediate" | "prompt" | "artifact-only";
     }
   | {

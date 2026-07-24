@@ -25,7 +25,6 @@ describe("panelAccessPolicy", () => {
       "takeOver",
       "openDevTools",
       "rebuildPanel",
-      "rebuildAndReload",
       "updatePanelState",
       "stateArgs.set",
     ] as const) {

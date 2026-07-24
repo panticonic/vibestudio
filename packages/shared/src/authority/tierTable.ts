@@ -379,22 +379,26 @@ export const METHOD_TIERS = {
   "browserEnvironment.getImportHost": {
     tier: "open",
     session: "family",
-    rationale: "Host/code read of the browser-import host descriptor; per-method authority principals gate callers.",
+    rationale:
+      "Host/code read of the browser-import host descriptor; per-method authority principals gate callers.",
   },
   "browserEnvironment.listImportSources": {
     tier: "open",
     session: "family",
-    rationale: "Enumerates importable external browser profiles; read-only discovery gated by authority principals.",
+    rationale:
+      "Enumerates importable external browser profiles; read-only discovery gated by authority principals.",
   },
   "browserEnvironment.previewImportSource": {
     tier: "open",
     session: "family",
-    rationale: "Read-only preview of an external browser profile import; gated by authority principals.",
+    rationale:
+      "Read-only preview of an external browser profile import; gated by authority principals.",
   },
   "browserEnvironment.startImportRead": {
     tier: "open",
     session: "family",
-    rationale: "Starts a streamed read of an external browser profile for import; gated by authority principals.",
+    rationale:
+      "Starts a streamed read of an external browser profile for import; gated by authority principals.",
   },
   "browserEnvironment.nextImportFrame": {
     tier: "open",
@@ -409,7 +413,8 @@ export const METHOD_TIERS = {
   "browserEnvironment.listImportOpenTabs": {
     tier: "open",
     session: "family",
-    rationale: "Reads open tabs from an external browser profile for import; gated by authority principals.",
+    rationale:
+      "Reads open tabs from an external browser profile for import; gated by authority principals.",
   },
   "browserEnvironment.flushCookieProjection": {
     tier: "open",
@@ -617,9 +622,10 @@ export const METHOD_TIERS = {
       "Secret-free lifecycle projection used by the open model-availability catalog; credential inspection and use remain gated",
   },
   "credentials.proxyFetch": {
-    tier: "gated",
+    tier: "open",
     session: "family",
-    rationale: "G2: credential mediation; §2 default {code, session} family",
+    rationale:
+      "The transport exposes no response before the egress proxy authorizes exactly one concrete credential-use or network.response.read effect",
   },
   "credentials.proxyGitHttp": {
     tier: "gated",
@@ -1210,11 +1216,11 @@ export const METHOD_TIERS = {
     session: "family",
     rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
   },
-  "mission.approve": {
-    tier: "critical",
+  "mission.requestReview": {
+    tier: "open",
     session: "codeOnly",
     rationale:
-      "Mission approval charters unattended standing authority and always requires a fresh human confirmation",
+      "Opening an inert draft in the canonical review queue grants nothing; only that queue can ratify it",
   },
   "mission.createDraft": {
     tier: "gated",
@@ -1242,6 +1248,11 @@ export const METHOD_TIERS = {
     session: "codeOnly",
     rationale:
       "Human governance read; mission sessions cannot inspect or rewrite their own charter",
+  },
+  "mission.listRuns": {
+    tier: "open",
+    session: "codeOnly",
+    rationale: "Human governance read of the durable mission run timeline",
   },
   "mission.pause": {
     tier: "gated",
@@ -1312,32 +1323,38 @@ export const METHOD_TIERS = {
   "panel.clearBrowserSiteData": {
     tier: "open",
     session: "family",
-    rationale: "P-panels: shell-driven browser site-data clear for the focused panel; core mutually inspectable workspace UX.",
+    rationale:
+      "P-panels: shell-driven browser site-data clear for the focused panel; core mutually inspectable workspace UX.",
   },
   "panel.findInPage": {
     tier: "open",
     session: "family",
-    rationale: "P-panels: in-page find UI on the focused panel; core mutually inspectable workspace UX.",
+    rationale:
+      "P-panels: in-page find UI on the focused panel; core mutually inspectable workspace UX.",
   },
   "panel.getBrowserSiteState": {
     tier: "open",
     session: "family",
-    rationale: "P-panels: read of the focused browser panel's per-site UI state; core mutually inspectable workspace UX.",
+    rationale:
+      "P-panels: read of the focused browser panel's per-site UI state; core mutually inspectable workspace UX.",
   },
   "panel.printBrowserPage": {
     tier: "open",
     session: "family",
-    rationale: "P-panels: shell print action on the focused browser panel; core mutually inspectable workspace UX.",
+    rationale:
+      "P-panels: shell print action on the focused browser panel; core mutually inspectable workspace UX.",
   },
   "panel.saveBrowserPagePdf": {
     tier: "open",
     session: "family",
-    rationale: "P-panels: shell save-as-PDF action on the focused browser panel; core mutually inspectable workspace UX.",
+    rationale:
+      "P-panels: shell save-as-PDF action on the focused browser panel; core mutually inspectable workspace UX.",
   },
   "panel.setBrowserZoom": {
     tier: "open",
     session: "family",
-    rationale: "P-panels: per-site zoom control on the focused browser panel; core mutually inspectable workspace UX.",
+    rationale:
+      "P-panels: per-site zoom control on the focused browser panel; core mutually inspectable workspace UX.",
   },
   "panel.stopBrowserMedia": {
     tier: "open",
@@ -1348,12 +1365,14 @@ export const METHOD_TIERS = {
   "panel.stopFindInPage": {
     tier: "open",
     session: "family",
-    rationale: "P-panels: dismisses the in-page find session; core mutually inspectable workspace UX.",
+    rationale:
+      "P-panels: dismisses the in-page find session; core mutually inspectable workspace UX.",
   },
   "panel.toggleBrowserBookmark": {
     tier: "open",
     session: "family",
-    rationale: "P-panels: bookmark toggle on the focused browser panel; core mutually inspectable workspace UX.",
+    rationale:
+      "P-panels: bookmark toggle on the focused browser panel; core mutually inspectable workspace UX.",
   },
   "panel.forceReloadView": {
     tier: "open",
@@ -1588,6 +1607,12 @@ export const METHOD_TIERS = {
     rationale:
       "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
   },
+  "panelTree.diagnose": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "P-panels: bounded diagnostics stay within the mutually inspectable workspace panel family",
+  },
   "panelTree.ensureLoaded": {
     tier: "open",
     session: "family",
@@ -1666,13 +1691,13 @@ export const METHOD_TIERS = {
     rationale:
       "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
   },
-  "panelTree.openDevTools": {
+  "panelTree.observe": {
     tier: "open",
     session: "family",
     rationale:
-      "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+      "P-panels: canonical lifecycle observation stays within the mutually inspectable workspace panel family",
   },
-  "panelTree.rebuildAndReload": {
+  "panelTree.openDevTools": {
     tier: "open",
     session: "family",
     rationale:
@@ -1737,30 +1762,21 @@ export const METHOD_TIERS = {
     session: "family",
     rationale: "G4: privacy or authority-map read; §2 default {code, session} family",
   },
+  "permissions.listAgentProfiles": {
+    tier: "gated",
+    session: "family",
+    rationale: "G4: privacy or saved authority-map read; §2 default {code, session} family",
+  },
   "permissions.revoke": {
     tier: "critical",
     session: "family",
     rationale: "C2: removes authority or identity membership; §2 default {code, session} family",
   },
-  "phoneProvisioning.devices": {
-    tier: "gated",
+  "permissions.updateAgentProfile": {
+    tier: "critical",
     session: "family",
-    rationale: "G4: privacy or authority-map read; §2 default {code, session} family",
-  },
-  "phoneProvisioning.install": {
-    tier: "gated",
-    session: "family",
-    rationale: "G4: privacy or authority-map read; §2 default {code, session} family",
-  },
-  "phoneProvisioning.openPairing": {
-    tier: "gated",
-    session: "family",
-    rationale: "G4: privacy or authority-map read; §2 default {code, session} family",
-  },
-  "phoneProvisioning.providers": {
-    tier: "gated",
-    session: "family",
-    rationale: "G4: privacy or authority-map read; §2 default {code, session} family",
+    rationale:
+      "C2: restores or removes lasting authority choices; §2 default {code, session} family",
   },
   "presence.getPanelActiveOwner": {
     tier: "gated",
@@ -1919,12 +1935,6 @@ export const METHOD_TIERS = {
     rationale:
       "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
   },
-  "shellApproval.blockCapability": {
-    tier: "gated",
-    session: "codeOnly",
-    rationale:
-      "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
-  },
   "shellApproval.listPending": {
     tier: "gated",
     session: "codeOnly",
@@ -1936,6 +1946,11 @@ export const METHOD_TIERS = {
     session: "codeOnly",
     rationale:
       "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+  },
+  "shellApproval.resolveMissionReview": {
+    tier: "gated",
+    session: "codeOnly",
+    rationale: "G5: trusted approval plumbing resolving an exact queued mission closure",
   },
   "shellApproval.resolveBootstrap": {
     tier: "gated",
@@ -1984,17 +1999,23 @@ export const METHOD_TIERS = {
     session: "family",
     rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
   },
+  "systemAgent.resolveConversation": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Resolving the caller's own product-owned conversation is chrome lifecycle setup; exact user membership and the pinned code roster remain independently enforced.",
+  },
   "userlandApproval.list": {
     tier: "gated",
-    session: "codeOnly",
+    session: "family",
     rationale:
-      "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+      "G5: host infrastructure plumbing; §3.4 admitted eval sessions retain the mediating code identity",
   },
   "userlandApproval.request": {
     tier: "gated",
-    session: "codeOnly",
+    session: "family",
     rationale:
-      "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+      "G5: host infrastructure plumbing; §3.4 admitted eval sessions retain the mediating code identity",
   },
   "userlandApproval.requestAs": {
     tier: "gated",
@@ -2010,9 +2031,9 @@ export const METHOD_TIERS = {
   },
   "userlandApproval.requestSecretInput": {
     tier: "gated",
-    session: "codeOnly",
+    session: "family",
     rationale:
-      "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+      "G5: host infrastructure plumbing; §3.4 admitted eval sessions retain the mediating code identity",
   },
   "userlandApproval.requestSecretInputAs": {
     tier: "gated",
@@ -2022,9 +2043,9 @@ export const METHOD_TIERS = {
   },
   "userlandApproval.revoke": {
     tier: "critical",
-    session: "codeOnly",
+    session: "family",
     rationale:
-      "C2: removes authority or identity membership; §2 durable code identity or host approval plumbing",
+      "C2: removes authority or identity membership; §3.4 admitted eval sessions retain the mediating code identity",
   },
   "userlandApproval.settleExternal": {
     tier: "gated",

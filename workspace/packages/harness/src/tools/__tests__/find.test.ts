@@ -60,16 +60,10 @@ describe("createFindTool", () => {
     expect(text).toContain(".hidden");
   });
 
-  it("delegates to the file-tools extension when context rpc is available", async () => {
-    const fs = new StubFs();
+  it("uses the context-scoped host glob when RPC is available", async () => {
+    const fs = new StubFs({ files: { [`${CWD}/src/a.ts`]: "x" } });
     const rpc = {
-      call: vi.fn().mockImplementation((_target: string, method: string) => {
-        if (method === "extensions.streamingMethods") return Promise.resolve([]);
-        return Promise.resolve({
-          content: [{ type: "text", text: "src/a.ts" }],
-          details: { engine: "ripgrep" },
-        });
-      }),
+      call: vi.fn().mockResolvedValue([`${CWD}/src/a.ts`]),
       stream: vi.fn(async () => new Response()),
     };
     const tool = createFindTool(CWD, fs, { rpc });
@@ -77,10 +71,32 @@ describe("createFindTool", () => {
     const result = await tool.execute("call-1", { pattern: "**/*.ts", path: ".", limit: 10 });
 
     expect((result.content[0] as { text: string }).text).toBe("src/a.ts");
-    expect(rpc.call).toHaveBeenCalledWith("main", "extensions.invoke", [
-      "@workspace-extensions/file-tools",
-      "find",
-      [{ pattern: "**/*.ts", path: ".", cwd: CWD, limit: 10 }],
-    ]);
+    expect(rpc.call).toHaveBeenCalledWith(
+      "main",
+      "fs.glob",
+      ["**/*.ts", { path: CWD }],
+      undefined
+    );
+  });
+
+  it("bounds host glob results without issuing per-directory RPC calls", async () => {
+    const fs = new StubFs({ files: { [`${CWD}/src/a.ts`]: "x" } });
+    const rpc = {
+      call: vi
+        .fn()
+        .mockResolvedValue([`${CWD}/src/a.ts`, `${CWD}/src/b.ts`, `${CWD}/src/c.ts`]),
+    };
+    const tool = createFindTool(CWD, fs, { rpc: rpc as never });
+
+    const result = await tool.execute("call-1", { pattern: "**/*.ts", limit: 2 });
+
+    expect((result.content[0] as { text: string }).text).toContain("src/a.ts");
+    expect((result.content[0] as { text: string }).text).toContain("src/b.ts");
+    expect((result.content[0] as { text: string }).text).not.toContain("src/c.ts");
+    expect(result.details).toMatchObject({
+      engine: "runtime-fs",
+      resultLimitReached: 2,
+    });
+    expect(rpc.call).toHaveBeenCalledTimes(1);
   });
 });

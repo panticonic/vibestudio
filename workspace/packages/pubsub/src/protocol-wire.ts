@@ -41,6 +41,7 @@ export interface RpcErrorMessage {
 
 export interface RpcSignalMessage {
   kind: "signal";
+  messageId: string;
   type: string;
   payload: unknown;
   senderId?: string;

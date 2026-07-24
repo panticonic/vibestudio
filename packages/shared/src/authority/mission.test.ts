@@ -9,6 +9,7 @@ import {
 
 const hex = "a".repeat(64);
 const charter = (): MissionCharter => ({
+  agentBindingId: "agent-backup",
   taskSpec: "Back up the project",
   harness: { unit: "workers/system-agent", ev: hex },
   skills: [{ path: "workspace/skills/backup", contentHash: "b".repeat(64) }],
@@ -20,6 +21,7 @@ const charter = (): MissionCharter => ({
     declaredOrigins: [],
   },
   model: { modelId: "openai-codex:gpt-5.3-codex-spark", params: { reasoningEffort: "medium" } },
+  declaredLineageClasses: ["none"],
   trigger: { kind: "cron", cron: "0 2 * * *" },
 });
 const closure = (value: MissionCharter): string => missionClosureDigest(value, [], []);
@@ -42,6 +44,7 @@ describe("mission closure", () => {
           {
             capability: "service:notification.post",
             resource: { kind: "exact", key: "service:notification.post" },
+            tier: "gated",
           },
         ],
         []

@@ -46,6 +46,7 @@ import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot
 import { describeCapability } from "@vibestudio/shared/authorityPresentation";
 import { connect as netConnect, isIP } from "node:net";
 import type { ResolvedCodeIdentity } from "./principalIdentity.js";
+import { testPolicyAllowsGatedInvocation } from "./authorityRuntime.js";
 import { bridgeDuplexSockets } from "../socketBridge.js";
 
 const HOP_BY_HOP_REQUEST_HEADERS = new Set([
@@ -75,7 +76,7 @@ const INTERNAL_EGRESS_HEADERS = new Set([
 const PASSTHROUGH_PROVIDER_ID = "passthrough";
 const PASSTHROUGH_CONNECTION_ID = "passthrough";
 const RPC_RUNTIME_ID_HEADER = "x-vibestudio-runtime-id";
-const RAW_EGRESS_CAPABILITY = "external-network-fetch";
+const RAW_EGRESS_CAPABILITY = "network.response.read";
 const DEFAULT_RETRY_ATTEMPTS = 2;
 const DEFAULT_WEBSOCKET_CONNECT_RETRY_ATTEMPTS = 2;
 const DEFAULT_RETRY_INITIAL_DELAY_MS = 100;
@@ -1061,6 +1062,12 @@ export class EgressProxy {
   }): Promise<Authorization> {
     const caller = params.caller;
     const attribution = caller ? this.resolveAttribution(caller, params.credentialId) : null;
+    const testPolicyApproved = caller
+      ? testPolicyAllowsGatedInvocation(caller, undefined, {
+          capability: "credential.use",
+          resourceKey: "credential.use",
+        })
+      : false;
     if (!params.credentialId) {
       const credential = attribution
         ? await this.resolveCredentialForRequest(
@@ -1069,7 +1076,8 @@ export class EgressProxy {
             params.credentialUse,
             params.method,
             params.gitIntent,
-            caller?.subject?.userId
+            caller?.subject?.userId,
+            testPolicyApproved
           )
         : null;
       if (caller && attribution && !credential) {
@@ -1120,6 +1128,7 @@ export class EgressProxy {
     // pass. Acceptable because only the trusted bridge holds git credentials.
     if (
       callerId &&
+      !testPolicyApproved &&
       (params.gitIntent?.force ||
         !this.isCallerAllowed(credential, attribution, usage.sessionResource))
     ) {
@@ -1168,39 +1177,42 @@ export class EgressProxy {
           : undefined
     );
     try {
-      await this.deps.authorizeEffect({ caller, authorityAcquisition: "wait" } as ServiceContext, {
-        service: "gateway",
-        method: "fetch",
-        capability: RAW_EGRESS_CAPABILITY,
-        resourceKey: origin,
-        requirement: requirementForPrincipals(
-          ["host", "user", "code", "session"],
-          RAW_EGRESS_CAPABILITY
-        ),
-        tier: "gated",
-        sessionAdmission: "family",
-        args: [method, targetUrl.toString()],
-        preparedStateDigest: sha256Canonical({ origin, method }),
-        sensitivity: "write",
-        challenge: {
-          dedupKey: `raw-egress:${caller.runtime.id}:${origin}`,
-          resource: { type: "url-origin", label: "Website", value: origin },
-          operation: {
-            kind: "network",
-            verb: "connect to a website",
-            object: { type: "url-origin", label: "Website", value: origin },
-            groupKey: `raw-egress:${caller.runtime.id}:${origin}`,
+      await this.deps.authorizeEffect(
+        { caller, authorityAcquisition: "wait" },
+        {
+          service: "gateway",
+          method: "fetch",
+          capability: RAW_EGRESS_CAPABILITY,
+          resourceKey: origin,
+          requirement: requirementForPrincipals(
+            ["host", "user", "code", "session"],
+            RAW_EGRESS_CAPABILITY
+          ),
+          tier: "gated",
+          sessionAdmission: "family",
+          args: [method, targetUrl.toString()],
+          preparedStateDigest: sha256Canonical({ origin, method }),
+          sensitivity: "write",
+          challenge: {
+            dedupKey: `raw-egress:${caller.runtime.id}:${origin}`,
+            resource: { type: "url-origin", label: "Website", value: origin },
+            operation: {
+              kind: "network",
+              verb: "connect to a website",
+              object: { type: "url-origin", label: "Website", value: origin },
+              groupKey: `raw-egress:${caller.runtime.id}:${origin}`,
+            },
+            title: `Connect to ${origin}`,
+            description: presentation.description,
+            details: [
+              { label: "Method", value: method },
+              { label: "Website", value: origin },
+              { label: "Source", value: attribution.repoPath },
+            ],
+            deniedReason: "Raw network egress denied",
           },
-          title: `Connect to ${origin}`,
-          description: presentation.description,
-          details: [
-            { label: "Method", value: method },
-            { label: "Website", value: origin },
-            { label: "Source", value: attribution.repoPath },
-          ],
-          deniedReason: "Raw network egress denied",
-        },
-      });
+        }
+      );
     } catch (error) {
       throw new ForwardRejection(
         403,
@@ -1215,7 +1227,8 @@ export class EgressProxy {
     use: CredentialBindingUse = "fetch",
     method = "GET",
     gitIntent?: GitIntentMetadata,
-    requestedByUserId?: string
+    requestedByUserId?: string,
+    testPolicyApproved = false
   ): Promise<Credential | null> {
     const listUrlBound = this.deps.credentialStore.listUrlBound;
     if (!listUrlBound) {
@@ -1240,8 +1253,9 @@ export class EgressProxy {
         }
         const usage = credentialUseResource(binding, targetUrl, method);
         if (
-          gitIntent?.force ||
-          !this.isCallerAllowed(credential, attribution, usage.sessionResource)
+          !testPolicyApproved &&
+          (gitIntent?.force ||
+            !this.isCallerAllowed(credential, attribution, usage.sessionResource))
         ) {
           await this.requestCredentialUseGrant(
             credential,
@@ -1436,7 +1450,7 @@ export class EgressProxy {
     if (!identity) {
       throw new ForwardRejection(403, `Unknown caller identity: ${callerId}`, "unknown-caller");
     }
-    if (!identity.executionDigest || !identity.requested || !identity.evalCeilings) {
+    if (!identity.executionDigest || !identity.requested) {
       throw new ForwardRejection(
         403,
         `Caller has no sealed execution authority: ${callerId}`,
@@ -1450,9 +1464,8 @@ export class EgressProxy {
       effectiveVersion: identity.effectiveVersion,
       executionDigest: identity.executionDigest,
       requested: identity.requested,
-      evalCeilings: identity.evalCeilings,
       policyKey: `${identity.repoPath}:${identity.callerId}`,
-      ...(caller.sessionOrigin === true
+      ...(caller.executionSession
         ? { agentId: identity.evalOrigin?.ownerId ?? caller.agentBinding?.entityId }
         : {}),
     };

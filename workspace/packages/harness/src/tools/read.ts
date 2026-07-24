@@ -58,7 +58,7 @@ export interface ReadToolDetails {
     height: number;
   };
   wasResized?: boolean;
-  engine?: "node-file" | "runtime-fs";
+  engine?: "runtime-fs";
   directory?: boolean;
   extensionFallback?: string;
   missing?: boolean;
@@ -88,41 +88,34 @@ interface ImageServiceApi {
   ): Promise<ImageResizeResult>;
 }
 const IMAGE_SERVICE_EXTENSION = "@workspace-extensions/image-service";
-const FILE_TOOLS_EXTENSION = "@workspace-extensions/file-tools";
 
 export interface ReadToolDeps {
   /** RPC caller — needed for image resize. */
   rpc?: RpcCaller;
-  /**
-   * Optional deadline for the Node-side bounded reader. Omitted/null means the
-   * invocation settles through the ordinary RPC/extension lifecycle.
-   */
-  fileToolsReadTimeoutMs?: number | null;
 }
 export function createReadTool(
   cwd: string,
   fs: RuntimeFs,
   deps?: ReadToolDeps
 ): AgentTool<typeof readSchema, ReadToolDetails> {
-  const fileToolsRpc = deps?.rpc ?? null;
-  const fileToolsReadTimeoutMs = deps?.fileToolsReadTimeoutMs ?? null;
+  const runtimeRpc = deps?.rpc ?? null;
   const imageService = deps?.rpc
     ? createExtensionProxy<ImageServiceApi>(deps.rpc, IMAGE_SERVICE_EXTENSION, () => false)
     : null;
 
   const resolveWorkspaceSkillAlias = async (requestedPath: string): Promise<ReadResult | null> => {
-    if (!fileToolsRpc) return null;
+    if (!runtimeRpc) return null;
     const normalized = requestedPath.replace(/^\/+/, "");
     const match = /^(?:skills\/)?([^/]+)\/SKILL\.md$/iu.exec(normalized);
     if (!match?.[1]) return null;
     try {
-      const entries = await fileToolsRpc.call<
+      const entries = await runtimeRpc.call<
         Array<{ name: string; dirPath: string; skillPath: string }>
       >("main", "workspace.listSkills", []);
       const matches = entries.filter((entry) => entry.name === match[1]);
       if (matches.length !== 1) return null;
       const entry = matches[0]!;
-      const content = await fileToolsRpc.call<string>("main", "workspace.readSkill", [
+      const content = await runtimeRpc.call<string>("main", "workspace.readSkill", [
         entry.dirPath,
       ]);
       return {
@@ -182,7 +175,7 @@ export function createReadTool(
     executionMode: "parallel",
     description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
     parameters: readSchema,
-    execute: async (_toolCallId, input, signal, onUpdate) => {
+    execute: async (_toolCallId, input, signal, _onUpdate) => {
       const path = normalizeReadLocation(input);
       if (!path) {
         return {
@@ -199,13 +192,6 @@ export function createReadTool(
       if (signal?.aborted) {
         throw new Error("Operation aborted");
       }
-      // Resolve semantic skill names before probing the sparse context
-      // filesystem. Extension-owned skills intentionally do not live at
-      // `skills/<name>`, so a filesystem-first lookup creates misleading
-      // materialization/ENOENT warnings even though the canonical skill is
-      // available through workspace.listSkills/readSkill.
-      const skillAlias = await resolveWorkspaceSkillAlias(path);
-      if (skillAlias) return skillAlias;
       const absolutePath = resolveToCwd(path, cwd);
       // A file-or-directory probe is a reasonable discovery action. Return a
       // bounded listing here so callers do not need to recover from EISDIR and
@@ -241,34 +227,6 @@ export function createReadTool(
       } catch {
         // stat failures fall through — the read below reports them naturally.
       }
-      let fileToolsFallbackReason: string | undefined;
-      let skipImageExtensionDetection = false;
-      if (fileToolsRpc && !isLikelyImagePath(path)) {
-        try {
-          return await callFileToolsRead(
-            fileToolsRpc,
-            { path, cwd, offset, limit },
-            fileToolsReadTimeoutMs,
-            signal
-          );
-        } catch (err) {
-          if (isFileToolsReadAbort(err)) throw err;
-          if (isMissingReadError(err)) return missingResult(path, absolutePath);
-          if (!isFileToolsExtensionFallback(err) && !isFileToolsReadTimeout(err)) throw err;
-          fileToolsFallbackReason = describeFileToolsFallback(err, fileToolsReadTimeoutMs);
-          if (isFileToolsReadTimeout(err)) {
-            skipImageExtensionDetection = true;
-            console.warn(`[read] ${fileToolsFallbackReason}; falling back to RuntimeFs`);
-            (onUpdate as ((update: unknown) => void) | undefined)?.({
-              content: [],
-              details: {
-                type: "console",
-                content: `${fileToolsFallbackReason}; falling back to RuntimeFs read`,
-              },
-            });
-          }
-        }
-      }
       // Check that the file exists / is readable; preserve ENOENT semantics.
       try {
         await fs.access(absolutePath, fs.constants.R_OK);
@@ -281,20 +239,23 @@ export function createReadTool(
       if (signal?.aborted) {
         throw new Error("Operation aborted");
       }
-      // --- Image branch ------------------------------------------------------------------
-      // Read raw bytes once; if the magic bytes look like an image we hand off
-      // to the image service, otherwise we fall through to the text path with
-      // the same bytes (so we never re-read the file).
+      // --- Image/text read ---------------------------------------------------------------
+      // Text is the overwhelmingly common path and should remain a single
+      // compact UTF-8 RPC response. Binary envelopes add base64 expansion and
+      // unnecessary control-frame pressure, which is especially costly when
+      // the model reads several skills in parallel. Only likely image paths
+      // need raw bytes for detection and resize.
+      const likelyImage = isLikelyImagePath(path);
       let raw: string | Buffer;
       try {
-        raw = await fs.readFile(absolutePath);
+        raw = await fs.readFile(absolutePath, likelyImage ? undefined : "utf8");
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
           return missingResult(path, absolutePath);
         }
         throw err;
       }
-      if (raw instanceof Uint8Array && imageService && !skipImageExtensionDetection) {
+      if (raw instanceof Uint8Array && imageService && likelyImage) {
         const mimeType = await imageService.detectMimeType(raw);
         if (mimeType?.startsWith("image/")) {
           const resized = await imageService.resize(raw, mimeType, {
@@ -323,7 +284,7 @@ export function createReadTool(
       }
       // --- Text branch -------------------------------------------------------------------
       const textContent = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf-8");
-      return formatTextResult(textContent, path, offset, limit, fileToolsFallbackReason);
+      return formatTextResult(textContent, path, offset, limit);
     },
   };
 }
@@ -335,14 +296,6 @@ function normalizeReadLocation(input: { path?: unknown; target?: unknown }): str
   // Accept them directly so the agent does not have to manually translate a
   // resource descriptor back into the read tool's path spelling.
   return raw.replace(/^file:(?:\/\/)?/iu, "");
-}
-
-function isMissingReadError(error: unknown): boolean {
-  const code = (error as { code?: unknown } | null)?.code;
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    code === "ENOENT" || /\b(?:ENOENT|file not found|path not found|no such file)\b/i.test(message)
-  );
 }
 
 function similarityScore(candidate: string, wanted: string): number {
@@ -357,119 +310,9 @@ function similarityScore(candidate: string, wanted: string): number {
   return score;
 }
 
-async function callFileToolsRead(
-  rpc: RpcCaller,
-  request: {
-    path: string;
-    cwd: string;
-    offset?: number;
-    limit?: number;
-  },
-  timeoutMs: number | null,
-  signal?: AbortSignal
-): Promise<ReadResult> {
-  const controller = new AbortController();
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let abortListener: (() => void) | undefined;
-
-  const abortPromise = signal
-    ? new Promise<never>((_, reject) => {
-        abortListener = () => {
-          const err = createAbortError(signal);
-          controller.abort(err);
-          reject(err);
-        };
-        if (signal.aborted) {
-          abortListener();
-        } else {
-          signal.addEventListener("abort", abortListener, { once: true });
-        }
-      })
-    : null;
-
-  const timeoutPromise =
-    timeoutMs !== null && Number.isFinite(timeoutMs) && timeoutMs > 0
-      ? new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => {
-            const err = new FileToolsReadTimeoutError(timeoutMs);
-            controller.abort(err);
-            reject(err);
-          }, timeoutMs);
-        })
-      : null;
-
-  const invokePromise = rpc.call<ReadResult>(
-    "main",
-    "extensions.invoke",
-    [FILE_TOOLS_EXTENSION, "read", [request]],
-    { signal: controller.signal }
-  );
-  invokePromise.catch(() => {});
-
-  try {
-    const contenders: Promise<ReadResult>[] = [invokePromise];
-    if (timeoutPromise) contenders.push(timeoutPromise);
-    if (abortPromise) contenders.push(abortPromise);
-    return await Promise.race(contenders);
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
-    if (signal && abortListener) signal.removeEventListener("abort", abortListener);
-  }
-}
-
-class FileToolsReadTimeoutError extends Error {
-  code = "ETIMEOUT";
-
-  constructor(timeoutMs: number) {
-    super(`file-tools read timed out after ${timeoutMs}ms`);
-    this.name = "FileToolsReadTimeoutError";
-  }
-}
-
-function createAbortError(signal: AbortSignal): Error {
-  const reason = signal.reason;
-  if (reason instanceof Error) return reason;
-  const err = new Error(typeof reason === "string" ? reason : "Operation aborted");
-  err.name = "AbortError";
-  return err;
-}
 function isLikelyImagePath(filePath: string): boolean {
   return /\.(?:png|jpe?g|gif|webp)$/iu.test(filePath);
 }
-function isFileToolsExtensionFallback(err: unknown): boolean {
-  const code =
-    typeof err === "object" && err !== null ? (err as { code?: unknown }).code : undefined;
-  // ENOTREADY = declared but not yet running; treat like ENOEXT and fall back.
-  if (code === "ENOEXT" || code === "ENOTREADY" || code === "EIMAGE") return true;
-  const message = err instanceof Error ? err.message : String(err);
-  if (message.includes("Image reads are handled by the image service path")) return true;
-  return /Extension @workspace-extensions\/file-tools(?:\.\w+)? invocation failed: Extension is not installed|Extension is not running/.test(
-    message
-  );
-}
-
-function isFileToolsReadTimeout(err: unknown): boolean {
-  return (
-    err instanceof FileToolsReadTimeoutError ||
-    (typeof err === "object" && err !== null && (err as { code?: unknown }).code === "ETIMEOUT")
-  );
-}
-
-function isFileToolsReadAbort(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  return err.name === "AbortError" && !isFileToolsReadTimeout(err);
-}
-
-function describeFileToolsFallback(err: unknown, timeoutMs: number | null): string {
-  if (isFileToolsReadTimeout(err)) {
-    return `file-tools read timed out after ${timeoutMs ?? "configured"}ms`;
-  }
-  const code =
-    typeof err === "object" && err !== null ? (err as { code?: unknown }).code : undefined;
-  if (code === "ENOTREADY") return "file-tools extension or context not ready";
-  return "file-tools extension unavailable";
-}
-
 function formatTextResult(
   textContent: string,
   displayPath: string,

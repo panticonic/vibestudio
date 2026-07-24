@@ -23,8 +23,7 @@
           "tier": "critical",
           "evidence": "intentional-broad"
         }
-      ],
-      "evalCeilings": []
+      ]
     }
   },
   "dependencies": {
