@@ -93,7 +93,10 @@ export class LeaseTracker {
         if (current.keepLoaded) continue;
         this.held.delete(slotId);
         intents.push({ kind: "unload", slotId, reason: "lease-transfer" });
-      } else if (next.connectionId !== current.connectionId) {
+      } else if (
+        next.connectionId !== current.connectionId ||
+        next.runtimeEntityId !== current.runtimeEntityId
+      ) {
         this.held.set(slotId, {
           runtimeEntityId: next.runtimeEntityId,
           connectionId: next.connectionId,
@@ -158,7 +161,10 @@ export class LeaseTracker {
           },
         ];
       }
-      if (current.connectionId !== lease.connectionId) {
+      if (
+        current.connectionId !== lease.connectionId ||
+        current.runtimeEntityId !== lease.runtimeEntityId
+      ) {
         this.held.set(slotId, {
           runtimeEntityId: lease.runtimeEntityId,
           connectionId: lease.connectionId,

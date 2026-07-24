@@ -283,6 +283,20 @@ export class PanelRuntimeCoordinator {
       if (lease.slotId !== normalizedSlotId) continue;
       if (!lease.supportsCdp) return { assigned: false, reason: "mobile_held", lease };
       if (
+        lease.runtimeEntityId !== entityId &&
+        (!options.isHostAvailable || options.isHostAvailable(lease.hostConnectionId))
+      ) {
+        const replacement = this.replaceRuntimeEntityForSlot(
+          normalizedSlotId,
+          lease.runtimeEntityId,
+          entityId
+        );
+        return {
+          assigned: true,
+          lease: replacement ?? lease,
+        };
+      }
+      if (
         options.replaceUnavailableLease &&
         options.isHostAvailable &&
         !options.isHostAvailable(lease.hostConnectionId)
@@ -309,6 +323,61 @@ export class PanelRuntimeCoordinator {
         { defaultCdpLease: true }
       ),
     };
+  }
+
+  /**
+   * Move one slot's host lease to a committed replacement runtime in a single
+   * versioned transition. This prevents hosts from observing an unleased gap
+   * between immutable panel incarnations.
+   */
+  replaceRuntimeEntityForSlot(
+    slotId: string,
+    previousRuntimeEntityId: string,
+    nextRuntimeEntityId: string
+  ): PanelRuntimeLease | null {
+    const normalizedSlotId = asPanelSlotId(slotId);
+    const previousEntityId = asPanelEntityId(previousRuntimeEntityId);
+    const nextEntityId = asPanelEntityId(nextRuntimeEntityId);
+    if (previousEntityId === nextEntityId) return this.leases.get(previousEntityId) ?? null;
+
+    const previous = this.leases.get(previousEntityId);
+    if (!previous || previous.slotId !== normalizedSlotId) {
+      return this.leases.get(nextEntityId) ?? null;
+    }
+    const existingNext = this.leases.get(nextEntityId);
+    if (existingNext) {
+      // Converge recovery state as well as the ordinary single-lease path. A
+      // pre-existing next lease must not leave the retiring incarnation as a
+      // second lease for the same slot.
+      this.clearExpiry(previousEntityId);
+      this.leases.delete(previousEntityId);
+      this.defaultCdpLeaseConnections.delete(previous.connectionId);
+      this.closeConnection?.(
+        previousEntityId,
+        previous.connectionId,
+        4091,
+        "Panel runtime replaced"
+      );
+      this.emitChange(nextEntityId, normalizedSlotId, previous, existingNext, "acquired");
+      return existingNext;
+    }
+
+    const wasDefaultCdpLease = this.defaultCdpLeaseConnections.delete(previous.connectionId);
+    this.clearExpiry(previousEntityId);
+    this.leases.delete(previousEntityId);
+    this.closeConnection?.(previousEntityId, previous.connectionId, 4091, "Panel runtime replaced");
+
+    const next: PanelRuntimeLease = {
+      ...previous,
+      runtimeEntityId: nextEntityId,
+      connectionId: `replacement-cdp-${normalizedSlotId}-${randomUUID()}`,
+      acquiredAt: Date.now(),
+    };
+    delete next.expiresAt;
+    this.leases.set(nextEntityId, next);
+    if (wasDefaultCdpLease) this.defaultCdpLeaseConnections.add(next.connectionId);
+    this.emitChange(nextEntityId, normalizedSlotId, previous, next, "acquired");
+    return next;
   }
 
   acquire(

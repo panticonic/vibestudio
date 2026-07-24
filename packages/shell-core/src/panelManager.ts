@@ -160,6 +160,16 @@ export interface PanelManagerDeps {
    * Implementations should call into the shell's auth service.
    */
   grantConnection?(panelId: PanelEntityId): Promise<{ token: string }>;
+  /**
+   * Atomically move any host lease from the retiring runtime incarnation to
+   * its committed replacement. Called after the durable slot cursor changes
+   * and before the previous runtime is retired.
+   */
+  transferRuntimeLease?(
+    slotId: PanelSlotId,
+    previousEntityId: PanelEntityId,
+    nextEntityId: PanelEntityId
+  ): void;
 }
 
 // =============================================================================
@@ -191,6 +201,7 @@ export class PanelManager {
   private readonly workspaceConfig?: WorkspaceConfig;
   private readonly allowMissingManifests: boolean;
   private readonly grantConnectionImpl?: (panelId: PanelEntityId) => Promise<{ token: string }>;
+  private readonly transferRuntimeLeaseImpl?: PanelManagerDeps["transferRuntimeLease"];
 
   private readonly collapsedIds = new Set<string>();
   private readonly localPanelTitles = new Map<string, { source: string; title: string }>();
@@ -233,6 +244,7 @@ export class PanelManager {
     this.workspaceConfig = deps.workspaceConfig;
     this.allowMissingManifests = deps.allowMissingManifests ?? false;
     this.grantConnectionImpl = deps.grantConnection;
+    this.transferRuntimeLeaseImpl = deps.transferRuntimeLease;
   }
 
   // ===========================================================================
@@ -300,14 +312,25 @@ export class PanelManager {
         isRoot: opts?.isRoot,
       })
     );
-    const contextId = opts?.contextId ?? generateContextId(slotId);
     const historyEntryKey = mintHistoryEntryKey();
     const stateArgsPayload = validatedStateArgs ?? {};
     const positionId = this.rankForAppend(opts?.parentId ?? null);
 
+    const entitySpec: RuntimePanelEntityCreateSpec = {
+      kind: "panel",
+      source: relativePath,
+      key: historyEntryKey,
+      ...(opts?.contextId ? { contextId: opts.contextId } : {}),
+      stateArgs: stateArgsPayload,
+      ref: opts?.ref,
+    };
+    const handle = await this.runtime.reservePanelEntity(entitySpec);
+    const entityId = asPanelEntityId(handle.id);
+    const contextId = handle.contextId;
+
     // Effective placement hint: call-site override wins, else the manifest's
-    // declared default. Resolved once here so every consumer (persistence,
-    // shell layout) reads a single canonical value from the snapshot.
+    // declared default. Resolved after reservation because the runtime owns
+    // fresh panel-context allocation and returns its durable coordinate.
     const placement = opts?.placement ?? manifest.placement;
     const snapshot = createSnapshot(
       relativePath,
@@ -321,17 +344,6 @@ export class PanelManager {
     if (manifest.privileged) {
       snapshot.privileged = true;
     }
-
-    const entitySpec: RuntimePanelEntityCreateSpec = {
-      kind: "panel",
-      source: relativePath,
-      key: historyEntryKey,
-      contextId,
-      stateArgs: stateArgsPayload,
-      ref: opts?.ref,
-    };
-    const handle = await this.runtime.reservePanelEntity(entitySpec);
-    const entityId = asPanelEntityId(handle.id);
 
     try {
       await this.workspaceState.createSlot({
@@ -454,7 +466,11 @@ export class PanelManager {
   async createBrowser(
     parentId: PanelSlotId | null,
     url: string,
-    opts?: { name?: string; addAsRoot?: boolean; ownerUserId?: string }
+    opts?: {
+      name?: string;
+      addAsRoot?: boolean;
+      ownerUserId?: string;
+    }
   ): Promise<CreatePanelResult & { url: string }> {
     if (typeof url !== "string" || !isOpenPanelBrowserUrl(url)) {
       throw new Error(
@@ -796,6 +812,7 @@ export class PanelManager {
     this.indexPanel(slotId, title, nextSnapshot.source);
 
     if (transition.previousEntityId !== entityId) {
+      this.transferRuntimeLease(slotId, transition.previousEntityId, entityId);
       await this.runtime.retireEntity(transition.previousEntityId).catch((error: unknown) => {
         log.warn(
           `Failed to retire panel entity ${transition.previousEntityId} on navigate: ${
@@ -894,6 +911,7 @@ export class PanelManager {
       this.registry.replaceCurrentSnapshot(slotId, targetSnapshot, nextHistoryState);
     }
     if (transition.previousEntityId !== entityId) {
+      this.transferRuntimeLease(slotId, transition.previousEntityId, entityId);
       await this.runtime.retireEntity(transition.previousEntityId).catch((error: unknown) => {
         log.warn(
           `Failed to retire panel entity ${transition.previousEntityId} on history navigate: ${
@@ -1094,20 +1112,48 @@ export class PanelManager {
   }
 
   /**
-   * Force-refresh a slot's cached current entity + source from the authoritative
-   * store. Required after a SERVER-side mutation (navigate / history): the
-   * panel-tree broadcast refreshes the registry mirror, but these caches are only
-   * repopulated by fetchPanelTree, so a thin client (e.g. the desktop, which
-   * applies the broadcast without re-syncing) would otherwise keep resolving —
-   * and leasing — the now-retired previous entity.
+   * Force-refresh a slot's complete current incarnation from the authoritative
+   * store. Runtime identity, immutable build identity, and navigation snapshot
+   * are one bootstrap fact: refreshing only the entity id can pair a replacement
+   * runtime with the previous build URL.
+   *
+   * Required after a SERVER-side mutation (navigate / history): the panel-tree
+   * broadcast refreshes the owner mirror, but thin clients may not receive or
+   * apply that mirror before a lease assignment asks them to load the new
+   * incarnation.
    */
   async refreshSlotEntity(slotId: PanelSlotId): Promise<PanelEntityId | null> {
     this.currentEntityBySlot.delete(slotId);
     this.currentEntitySourceBySlot.delete(slotId);
     const slot = await this.workspaceState.getSlot(slotId);
     if (!slot?.current_entity_id) return null;
-    this.currentEntityBySlot.set(slotId, slot.current_entity_id);
-    return slot.current_entity_id;
+    const entityId = slot.current_entity_id;
+    const [entity, historyRows] = await Promise.all([
+      this.workspaceState.resolveEntity(entityId),
+      this.workspaceState.getSlotHistory(slotId),
+    ]);
+    this.currentEntityBySlot.set(slotId, entityId);
+    if (entity?.source) this.currentEntitySourceBySlot.set(slotId, entity.source);
+
+    const panel = this.registry.getPanel(slotId);
+    if (panel) {
+      const history = historyRows.map((row) => this.snapshotFromHistoryRow(slotId, row));
+      const cursor = this.resolveCursor(historyRows, slot.current_entry_key);
+      const currentSnapshot = cursor === null ? undefined : history[cursor];
+      panel.runtimeEntityId = entityId;
+      panel.effectiveVersion = entity?.source.effectiveVersion ?? null;
+      panel.buildKey = entity?.activeBuildKey ?? null;
+      panel.executionDigest = entity?.activeExecutionDigest ?? null;
+      panel.authorityRequests = entity?.activeAuthority?.requests;
+      if (slot.current_entity_title) panel.title = slot.current_entity_title;
+      if (cursor !== null && currentSnapshot) {
+        this.registry.replaceCurrentSnapshot(slotId, currentSnapshot, {
+          entries: history,
+          index: cursor,
+        });
+      }
+    }
+    return entityId;
   }
 
   /**
@@ -1427,6 +1473,7 @@ export class PanelManager {
       });
     }
     if (transition.previousEntityId !== entityId) {
+      this.transferRuntimeLease(slotId, transition.previousEntityId, entityId);
       await this.runtime.retireEntity(transition.previousEntityId).catch((error: unknown) => {
         log.warn(
           `Failed to retire panel entity ${transition.previousEntityId} on replace-current: ${
@@ -1435,6 +1482,18 @@ export class PanelManager {
         );
       });
     }
+  }
+
+  private transferRuntimeLease(
+    slotId: PanelSlotId,
+    previousEntityId: PanelEntityId,
+    nextEntityId: PanelEntityId
+  ): void {
+    // Lease transfer is part of committing a replacement runtime, not a
+    // best-effort notification. If the configured coordinator rejects the
+    // transition, surface that invariant failure and keep the previous runtime
+    // alive instead of retiring it behind a stale host lease.
+    this.transferRuntimeLeaseImpl?.(slotId, previousEntityId, nextEntityId);
   }
 
   // ===========================================================================

@@ -159,6 +159,25 @@ describe("HeadlessHost lifecycle guards", () => {
 
   it("releases and unloads a panel when a load intent fails", async () => {
     const host = new HeadlessHost(config());
+    const tracker = new LeaseTracker("headless-test");
+    const slotId = asPanelSlotId("panel:tree/panel-1");
+    tracker.reconcile({
+      version: { epoch: "boot", counter: 1 },
+      leases: [
+        {
+          slotId,
+          runtimeEntityId: asPanelEntityId("panel:nav-entry-1"),
+          clientSessionId: "headless-test",
+          hostConnectionId: "headless-test",
+          connectionId: "lease-1",
+          holderLabel: "Headless",
+          platform: "headless",
+          supportsCdp: true,
+          loadOnLeaseAssignment: true,
+          acquiredAt: 1,
+        },
+      ],
+    });
     const processIntent = vi.fn(async () => {
       throw new Error("load failed");
     });
@@ -170,23 +189,70 @@ describe("HeadlessHost lifecycle guards", () => {
         intentQueue: Promise<void>;
       },
       {
+        tracker,
         processIntent,
         releaseAndUnload,
         intentQueue: Promise.resolve(),
       }
     );
 
-    (host as unknown as { enqueueIntents(produce: () => unknown[]): void }).enqueueIntents(() => [
+    (host as unknown as { enqueueIntents(intents: unknown[]): void }).enqueueIntents([
       {
         kind: "load",
-        slotId: "panel-1",
-        runtimeEntityId: "panel:entry-1",
+        slotId,
+        runtimeEntityId: "panel:nav-entry-1",
         connectionId: "lease-1",
       },
     ]);
     await (host as unknown as { intentQueue: Promise<void> }).intentQueue;
 
-    expect(releaseAndUnload).toHaveBeenCalledWith("panel-1", "load failed");
+    expect(releaseAndUnload).toHaveBeenCalledWith(slotId, "load failed");
+  });
+
+  it("advances lease identity immediately while older host effects are queued", () => {
+    const host = new HeadlessHost(config());
+    const tracker = new LeaseTracker("headless-test");
+    const slotId = asPanelSlotId("panel:tree/panel-1");
+    const previous = {
+      slotId,
+      runtimeEntityId: asPanelEntityId("panel:nav-entry-1"),
+      clientSessionId: "headless-test",
+      hostConnectionId: "headless-test",
+      connectionId: "lease-1",
+      holderLabel: "Headless",
+      platform: "headless" as const,
+      supportsCdp: true,
+      loadOnLeaseAssignment: true,
+      acquiredAt: 1,
+    };
+    const next = {
+      ...previous,
+      runtimeEntityId: asPanelEntityId("panel:nav-entry-2"),
+      connectionId: "lease-2",
+      acquiredAt: 2,
+    };
+    tracker.reconcile({
+      version: { epoch: "boot", counter: 1 },
+      leases: [previous],
+    });
+    Object.assign(host as unknown as Record<string, unknown>, {
+      tracker,
+      intentQueue: new Promise<void>(() => {}),
+    });
+
+    host.handleRuntimeLeaseChanged({
+      version: { epoch: "boot", counter: 2 },
+      runtimeEntityId: next.runtimeEntityId,
+      slotId,
+      previous,
+      next,
+      reason: "acquired",
+    });
+
+    expect(tracker.heldLease(slotId)).toMatchObject({
+      runtimeEntityId: next.runtimeEntityId,
+      connectionId: next.connectionId,
+    });
   });
 
   it("drops a queued load after its lease was released", async () => {

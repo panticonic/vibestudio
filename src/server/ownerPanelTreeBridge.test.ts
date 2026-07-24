@@ -638,6 +638,7 @@ describe("createServerPanelTreeBridge reload", () => {
       ),
     };
     const unloadSlot = vi.fn();
+    const replaceRuntimeEntityForSlot = vi.fn();
     const bridge = await createServerPanelTreeBridge({
       container: { get: vi.fn(() => cdpBridge) },
       dispatcher: { dispatch },
@@ -653,6 +654,7 @@ describe("createServerPanelTreeBridge reload", () => {
           assigned: true,
           lease: { holderLabel: "Desktop" },
         })),
+        replaceRuntimeEntityForSlot,
         unloadSlot,
       },
       eventService: { emit: vi.fn() },
@@ -673,6 +675,11 @@ describe("createServerPanelTreeBridge reload", () => {
     });
 
     expect(unloadSlot).not.toHaveBeenCalled();
+    expect(replaceRuntimeEntityForSlot).toHaveBeenCalledWith(
+      "panel:tree/slot-a",
+      "panel:entry-a",
+      "panel:nav-entry-rebuilt"
+    );
     expect(dispatch).toHaveBeenCalledWith(
       expect.anything(),
       "workspace-state",
@@ -901,13 +908,14 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
         }
       }
       if (service === "runtime" && method === "reservePanelEntity") {
-        const spec = args[0] as { source: string; contextId: string; key: string };
+        const spec = args[0] as { source: string; contextId?: string; key: string };
         const id = `panel:nav-new-${++entityCounter}`;
+        const contextId = spec.contextId ?? `ctx-created-${entityCounter}`;
         const record = {
           id,
           kind: "panel",
           source: { repoPath: spec.source, effectiveVersion: "" },
-          contextId: spec.contextId,
+          contextId,
           key: spec.key,
           createdAt: 2,
           status: "preparing",
@@ -918,7 +926,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
           id,
           kind: "panel",
           source: record.source,
-          contextId: spec.contextId,
+          contextId,
           targetId: id,
         };
       }
@@ -939,7 +947,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
           buildKey: record["activeBuildKey"],
           executionDigest: record["activeExecutionDigest"],
           authorityRequests: [],
-          contextId: spec.contextId,
+          contextId: record["contextId"],
           targetId: record["id"],
         };
       }
@@ -1134,13 +1142,14 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
           }
         }
         if (service === "runtime" && method === "reservePanelEntity") {
-          const spec = args[0] as { source: string; contextId: string; key: string };
+          const spec = args[0] as { source: string; contextId?: string; key: string };
           const id = `panel:nav-new-${++entityCounter}`;
+          const contextId = spec.contextId ?? `ctx-created-${entityCounter}`;
           const record = {
             id,
             kind: "panel",
             source: { repoPath: spec.source, effectiveVersion: "" },
-            contextId: spec.contextId,
+            contextId,
             key: spec.key,
             parentId: ctx.caller.runtime.id,
             ownerUserId: ctx.caller.subject?.userId,
@@ -1153,7 +1162,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
             id,
             kind: "panel",
             source: record.source,
-            contextId: spec.contextId,
+            contextId,
             targetId: id,
           };
         }
@@ -1173,7 +1182,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
             buildKey: record["activeBuildKey"],
             executionDigest: record["activeExecutionDigest"],
             authorityRequests: [],
-            contextId: spec.contextId,
+            contextId: record["contextId"],
             targetId: record["id"],
           };
         }

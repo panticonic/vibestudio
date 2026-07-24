@@ -450,21 +450,23 @@ export class CdpBridge {
 
   handleRuntimeLeaseChanged(event: PanelRuntimeLeaseChangedEvent): void {
     if (!event.previous && !event.next) return;
-    if (
+    const sameRuntimeLease =
+      event.previous &&
+      event.next &&
+      event.previous.hostConnectionId === event.next.hostConnectionId &&
+      event.previous.runtimeEntityId === event.next.runtimeEntityId &&
+      event.previous.connectionId === event.next.connectionId;
+    if (sameRuntimeLease) return;
+    const reason =
       event.previous &&
       event.next &&
       event.previous.hostConnectionId === event.next.hostConnectionId
-    ) {
-      return;
-    }
+        ? "CDP target runtime changed"
+        : "CDP target host changed";
     if (event.previous) {
-      this.detachTargetFromHost(
-        event.slotId,
-        event.previous.hostConnectionId,
-        "CDP target host changed"
-      );
+      this.detachTargetFromHost(event.slotId, event.previous.hostConnectionId, reason);
     }
-    this.closeTargetConnections(event.slotId, "CDP target host changed");
+    this.closeTargetConnections(event.slotId, reason);
   }
 
   /**
@@ -963,7 +965,7 @@ export class CdpBridge {
     this.sendErrorToClient(
       ws,
       msg.id,
-      "CDP navigation is only available for browser panel targets. Use panelTree.navigate only when intentionally replacing a workspace panel.",
+      "CDP navigation is only available for browser panel targets. For a workspace panel, use handle.reload() to reload its current build, handle.rebuild() after source changes, or handle.navigate() only when intentionally replacing its source.",
       msg.sessionId
     );
     return true;

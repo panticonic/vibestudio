@@ -613,6 +613,8 @@ describe("PanelManager", () => {
         ref: "ctx:panel-dev",
       })
     );
+    expect(reservePanelEntity.mock.calls[0]?.[0]).not.toHaveProperty("contextId");
+    expect(created.contextId).toBe("ctx-default");
     expect(activatePanelEntity).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "panel",
@@ -996,6 +998,118 @@ describe("PanelManager", () => {
     expect(mem.state.history.get(created.panelId)).toHaveLength(1);
     expect(mem.state.entities.get(originalEntityId!)?.status).toBe("active");
     expect(retireEntity).not.toHaveBeenCalled();
+  });
+
+  it("transfers the host lease to a committed replacement before retiring the old runtime", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
+    tempDirs.push(workspacePath);
+    const panelDir = path.join(workspacePath, "panels", "first");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({ name: "first", vibestudio: { title: "First Panel" } })
+    );
+
+    const registry = new PanelRegistry({});
+    const { mem, deps } = makeManagerDeps(workspacePath);
+    const transferRuntimeLease = vi.fn();
+    const retireEntity = vi.spyOn(deps.runtime, "retireEntity");
+    const manager = new PanelManager({ registry, ...deps, transferRuntimeLease });
+    const created = await manager.create("panels/first", { isRoot: true, addAsRoot: true });
+    const previousEntityId = mem.state.slots.get(created.panelId)?.current_entity_id;
+
+    await manager.replaceCurrentSnapshot(created.panelId, {});
+
+    const nextEntityId = mem.state.slots.get(created.panelId)?.current_entity_id;
+    expect(nextEntityId).not.toBe(previousEntityId);
+    expect(transferRuntimeLease).toHaveBeenCalledWith(
+      created.panelId,
+      previousEntityId,
+      nextEntityId
+    );
+    expect(transferRuntimeLease.mock.invocationCallOrder[0]).toBeLessThan(
+      retireEntity.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("does not retire the previous runtime when its host lease cannot transfer", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
+    tempDirs.push(workspacePath);
+    const panelDir = path.join(workspacePath, "panels", "first");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({ name: "first", vibestudio: { title: "First Panel" } })
+    );
+
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps(workspacePath);
+    const retireEntity = vi.spyOn(deps.runtime, "retireEntity");
+    const manager = new PanelManager({
+      registry,
+      ...deps,
+      transferRuntimeLease: () => {
+        throw new Error("lease transfer failed");
+      },
+    });
+    const created = await manager.create("panels/first", { isRoot: true, addAsRoot: true });
+
+    await expect(manager.replaceCurrentSnapshot(created.panelId, {})).rejects.toThrow(
+      "lease transfer failed"
+    );
+    expect(retireEntity).not.toHaveBeenCalled();
+  });
+
+  it("refreshes runtime, build, and navigation state as one authoritative incarnation", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
+    tempDirs.push(workspacePath);
+    for (const name of ["first", "second"]) {
+      const panelDir = path.join(workspacePath, "panels", name);
+      fs.mkdirSync(panelDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(panelDir, "package.json"),
+        JSON.stringify({ name, vibestudio: { title: `${name} Panel` } })
+      );
+    }
+
+    const registry = new PanelRegistry({});
+    const { mem, deps } = makeManagerDeps(workspacePath);
+    const manager = new PanelManager({ registry, ...deps });
+    const created = await manager.create("panels/first", { isRoot: true, addAsRoot: true });
+    const panel = registry.getPanel(created.panelId)!;
+    const previousEntityId = panel.runtimeEntityId!;
+    const previousSnapshot = getCurrentSnapshot(panel);
+
+    await manager.navigate(created.panelId, "panels/second");
+    const currentEntityId = mem.state.slots.get(created.panelId)?.current_entity_id;
+    const currentBuildKey = currentEntityId
+      ? mem.state.entities.get(currentEntityId)?.activeBuildKey
+      : undefined;
+
+    // Model a thin host whose local tree mirror missed the server-side
+    // replacement broadcast before receiving the new runtime lease.
+    panel.runtimeEntityId = previousEntityId;
+    panel.effectiveVersion = "stale";
+    panel.buildKey = "0".repeat(64);
+    panel.snapshot = previousSnapshot;
+    panel.history = { entries: [previousSnapshot], index: 0 };
+
+    await expect(manager.refreshSlotEntity(created.panelId)).resolves.toBe(currentEntityId);
+    expect(panel).toMatchObject({
+      runtimeEntityId: currentEntityId,
+      effectiveVersion: "test",
+      buildKey: currentBuildKey,
+    });
+    expect(getCurrentSnapshot(panel).source).toBe("panels/second");
+    expect(panel.history?.entries.map((entry) => entry.source)).toEqual([
+      "panels/first",
+      "panels/second",
+    ]);
+    await expect(manager.getPanelInit(created.panelId)).resolves.toMatchObject({
+      entityId: currentEntityId,
+      sourceRepo: "panels/second",
+      buildKey: currentBuildKey,
+    });
   });
 
   it("prepares a history destination before swapping and retiring the current incarnation", async () => {

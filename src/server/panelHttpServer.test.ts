@@ -483,9 +483,51 @@ describe("PanelHttpServer build cache", () => {
       referer: `http://localhost/panels/my-app/?contextId=ctx-panel&buildKey=${BUILD_KEY}`,
     });
 
-    expect(response.statusCodeWritten).toBe(200);
-    expect(response.body).toBe("console.log('hi')");
+    expect(response.statusCodeWritten).toBe(307);
+    expect(response.headersWritten).toMatchObject({
+      Location: `../../__vibestudio/panel-build/${BUILD_KEY}/bundle.js`,
+    });
     expect(getBuildByKey).toHaveBeenCalledWith(BUILD_KEY);
+
+    const pinned = await handlePanelRequest(
+      server,
+      `/__vibestudio/panel-build/${BUILD_KEY}/bundle.js`
+    );
+    expect(pinned.statusCodeWritten).toBe(200);
+    expect(pinned.body).toBe("console.log('hi')");
+  });
+
+  it("rewrites activated HTML artifact references onto the immutable build route", async () => {
+    const server = new PanelHttpServer();
+    const activated = {
+      ...buildResult,
+      artifacts: buildResult.artifacts.map((artifact) =>
+        artifact.role === "html"
+          ? {
+              ...artifact,
+              content:
+                '<html><head><link rel="stylesheet" href="./bundle.css"></head>' +
+                '<body><script src="./__loader.js" data-bundle-src="./bundle.js"></script></body></html>',
+            }
+          : artifact
+      ),
+    } as typeof buildResult;
+    server.setCallbacks({
+      onBuildComplete: vi.fn(),
+      getBuild: vi.fn(async () => activated),
+      getBuildByKey: vi.fn(() => activated),
+    });
+
+    const response = await handlePanelRequest(
+      server,
+      `/panels/my-app/?contextId=ctx-panel&buildKey=${BUILD_KEY}`
+    );
+    const prefix = `../../__vibestudio/panel-build/${BUILD_KEY}/`;
+
+    expect(response.statusCodeWritten).toBe(200);
+    expect(response.body).toContain(`href="${prefix}bundle.css"`);
+    expect(response.body).toContain(`data-bundle-src="${prefix}bundle.js"`);
+    expect(response.body).toContain('src="./__loader.js"');
   });
 
   it("compresses cacheable panel startup artifacts for desktop and mobile clients", async () => {

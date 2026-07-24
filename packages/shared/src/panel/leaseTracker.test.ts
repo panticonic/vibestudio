@@ -94,6 +94,22 @@ describe("LeaseTracker", () => {
     ]);
   });
 
+  it("treats a runtime incarnation change as unload + reload even on the same host lease", () => {
+    const tracker = new LeaseTracker(ME);
+    tracker.reconcile(snapshot([lease(A)]));
+    const replacement = lease(A, { runtimeEntityId: asPanelEntityId("panel:nav-a-next") });
+    expect(tracker.reconcile(snapshot([replacement], 2))).toEqual([
+      { kind: "unload", slotId: A, reason: "stale" },
+      {
+        kind: "load",
+        slotId: A,
+        runtimeEntityId: "panel:nav-a-next",
+        connectionId: "default-cdp-a-1",
+      },
+    ]);
+    expect(tracker.heldLease(A)?.runtimeEntityId).toBe("panel:nav-a-next");
+  });
+
   it("applies acquire/transfer/release events", () => {
     const tracker = new LeaseTracker(ME);
     expect(tracker.apply(event(A, lease(A), null, 1))).toEqual([
@@ -133,6 +149,22 @@ describe("LeaseTracker", () => {
     const tracker = new LeaseTracker(ME);
     tracker.apply(event(A, lease(A), null, 1));
     expect(tracker.apply(event(A, lease(A), null, 2))).toEqual([]);
+  });
+
+  it("reloads when an acquire event replaces the runtime on the same connection", () => {
+    const tracker = new LeaseTracker(ME);
+    const initial = lease(A);
+    tracker.apply(event(A, initial, null, 1));
+    const replacement = lease(A, { runtimeEntityId: asPanelEntityId("panel:nav-a-next") });
+    expect(tracker.apply(event(A, replacement, initial, 2))).toEqual([
+      { kind: "unload", slotId: A, reason: "stale" },
+      {
+        kind: "load",
+        slotId: A,
+        runtimeEntityId: "panel:nav-a-next",
+        connectionId: "default-cdp-a-1",
+      },
+    ]);
   });
 
   it("never unloads a keepLoaded lease that vanishes from a later snapshot", () => {

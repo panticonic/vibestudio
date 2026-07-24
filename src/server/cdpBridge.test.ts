@@ -52,14 +52,24 @@ function waitForError(ws: WebSocket): Promise<Error> {
 function leaseChangedEvent(
   slotId: string,
   previousHost: string | null,
-  nextHost: string | null
+  nextHost: string | null,
+  options: {
+    previousRuntimeEntityId?: string;
+    nextRuntimeEntityId?: string;
+    nextConnectionId?: string;
+  } = {}
 ): PanelRuntimeLeaseChangedEvent {
-  const lease = (hostConnectionId: string) => ({
+  const defaultRuntimeEntityId = `panel:nav-${slotId.replace("panel:tree/", "")}`;
+  const lease = (
+    hostConnectionId: string,
+    runtimeEntityId: string,
+    connectionId = `${hostConnectionId}-connection`
+  ) => ({
     slotId: asPanelSlotId(slotId),
-    runtimeEntityId: asPanelEntityId(`panel:nav-${slotId.replace("panel:tree/", "")}`),
+    runtimeEntityId: asPanelEntityId(runtimeEntityId),
     clientSessionId: `${hostConnectionId}-session`,
     hostConnectionId,
-    connectionId: `${hostConnectionId}-connection`,
+    connectionId,
     holderLabel: hostConnectionId,
     platform: "desktop" as const,
     supportsCdp: true,
@@ -70,9 +80,19 @@ function leaseChangedEvent(
     type: "panel:runtimeLeaseChanged",
     version: { epoch: "test", counter: 1 },
     slotId: asPanelSlotId(slotId),
-    runtimeEntityId: asPanelEntityId(`panel:nav-${slotId.replace("panel:tree/", "")}`),
-    previous: previousHost ? lease(previousHost) : null,
-    next: nextHost ? lease(nextHost) : null,
+    runtimeEntityId: asPanelEntityId(
+      options.nextRuntimeEntityId ?? options.previousRuntimeEntityId ?? defaultRuntimeEntityId
+    ),
+    previous: previousHost
+      ? lease(previousHost, options.previousRuntimeEntityId ?? defaultRuntimeEntityId)
+      : null,
+    next: nextHost
+      ? lease(
+          nextHost,
+          options.nextRuntimeEntityId ?? defaultRuntimeEntityId,
+          options.nextConnectionId
+        )
+      : null,
     reason: "acquired",
   };
 }
@@ -288,6 +308,39 @@ describe("CdpBridge authentication", () => {
     await expect(waitForJson(client)).resolves.toMatchObject({
       id: 9,
       result: { frameId: "frame-1" },
+    });
+  });
+
+  it("rejects workspace Page.navigate with the canonical lifecycle alternatives", async () => {
+    const harness = await createHarness();
+    await connectHostProvider(harness, "desktop-host", "panel:tree/workspace-1");
+
+    const endpoint = await waitForEndpoint(
+      harness,
+      "panel:tree/workspace-1",
+      "panel:tree/workspace-1"
+    );
+    const client = new WebSocket(endpoint.wsEndpoint);
+    harness.sockets.push(client);
+    await waitForOpen(client);
+    client.send(JSON.stringify({ type: "vibestudio:cdp-auth", token: endpoint.token }));
+    await expect(waitForJson(client)).resolves.toMatchObject({ type: "vibestudio:cdp-auth-ok" });
+
+    client.send(
+      JSON.stringify({
+        id: 10,
+        method: "Page.navigate",
+        params: { url: "https://example.org/" },
+      })
+    );
+
+    await expect(waitForJson(client)).resolves.toMatchObject({
+      id: 10,
+      error: {
+        message: expect.stringContaining(
+          "use handle.reload() to reload its current build, handle.rebuild() after source changes"
+        ),
+      },
     });
   });
 
@@ -571,6 +624,39 @@ describe("CdpBridge authentication", () => {
       targetId: "panel:tree/browser-1",
       method: "Runtime.evaluate",
     });
+  });
+
+  it("detaches the old target when the runtime incarnation changes on the same host", async () => {
+    const harness = await createHarness({
+      resolveHostForTarget: () => "desktop-host",
+    });
+    const provider = await connectHostProvider(harness, "desktop-host");
+
+    const endpoint = await waitForEndpoint(harness);
+    const client = new WebSocket(endpoint.wsEndpoint);
+    harness.sockets.push(client);
+    await waitForOpen(client);
+    client.send(JSON.stringify({ type: "vibestudio:cdp-auth", token: endpoint.token }));
+    await expect(waitForJson(client)).resolves.toMatchObject({ type: "vibestudio:cdp-auth-ok" });
+
+    harness.bridge.handleRuntimeLeaseChanged(
+      leaseChangedEvent("panel:tree/browser-1", "desktop-host", "desktop-host", {
+        previousRuntimeEntityId: "panel:nav-old",
+        nextRuntimeEntityId: "panel:nav-new",
+        nextConnectionId: "desktop-host-replacement",
+      })
+    );
+
+    await expect(waitForJson(provider)).resolves.toMatchObject({
+      type: "cdp:detach",
+      targetId: "panel:tree/browser-1",
+      reason: "CDP target runtime changed",
+    });
+    await expect(waitForClose(client)).resolves.toMatchObject({
+      code: 1000,
+      reason: "CDP target runtime changed",
+    });
+    expect(harness.bridge.isTargetRegistered("panel:tree/browser-1")).toBe(false);
   });
 
   it("does not mint endpoints for registered targets without the lease holder provider", async () => {

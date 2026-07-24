@@ -111,13 +111,18 @@ function parseBridgeDiagnostic(value: unknown): HeadlessHostBridgeDiagnostic | n
   return diagnostic;
 }
 
-function formatBridgeDiagnostic(diagnostic: HeadlessHostBridgeDiagnostic): string {
+function formatBridgeDiagnostic(
+  diagnostic: HeadlessHostBridgeDiagnostic,
+  includeLastMessage = true
+): string {
   const parts = [`state=${diagnostic.state ?? "unknown"}`, `attempt=${diagnostic.attempt ?? 0}`];
   if (diagnostic.url) parts.push(`url=${diagnostic.url}`);
   parts.push(`opened=${diagnostic.opened === true ? "yes" : "no"}`);
   parts.push(`authSent=${diagnostic.authSent === true ? "yes" : "no"}`);
   parts.push(`authenticated=${diagnostic.authenticated === true ? "yes" : "no"}`);
-  if (diagnostic.lastMessageType) parts.push(`lastMessage=${diagnostic.lastMessageType}`);
+  if (includeLastMessage && diagnostic.lastMessageType) {
+    parts.push(`lastMessage=${diagnostic.lastMessageType}`);
+  }
   if (diagnostic.lastCloseCode !== undefined) parts.push(`closeCode=${diagnostic.lastCloseCode}`);
   if (diagnostic.lastCloseReason) parts.push(`closeReason=${diagnostic.lastCloseReason}`);
   if (diagnostic.lastError) parts.push(`error=${diagnostic.lastError}`);
@@ -246,6 +251,7 @@ export class HeadlessHostManager {
     let childReportedReady = false;
     let reportedClientSessionId: string | null = null;
     let lastBridgeDiagnostic: HeadlessHostBridgeDiagnostic | null = null;
+    let lastLoggedBridgeState: string | null = null;
     child.stdout?.on("data", (chunk: Buffer) => {
       log.info(`[host] ${String(chunk).trimEnd()}`);
     });
@@ -272,7 +278,15 @@ export class HeadlessHostManager {
         const diagnostic = parseBridgeDiagnostic(message.diagnostic);
         if (!diagnostic) return;
         lastBridgeDiagnostic = diagnostic;
-        log.info(`headless host bridge ${formatBridgeDiagnostic(diagnostic)}`);
+        // The host updates lastMessageType for every CDP command. Keep the full
+        // diagnostic for timeout/error reporting, but operational logs should
+        // describe transport state transitions rather than readiness-poll
+        // traffic.
+        const bridgeState = formatBridgeDiagnostic(diagnostic, false);
+        if (bridgeState !== lastLoggedBridgeState) {
+          lastLoggedBridgeState = bridgeState;
+          log.info(`headless host bridge ${formatBridgeDiagnostic(diagnostic)}`);
+        }
         return;
       }
       childReportedRegistered = true;

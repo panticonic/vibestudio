@@ -283,6 +283,100 @@ describe("PanelRuntimeCoordinator", () => {
     });
   });
 
+  it("moves a slot lease to the replacement runtime before reporting it loaded", () => {
+    const coordinator = new PanelRuntimeCoordinator();
+    const closeConnection = vi.fn();
+    coordinator.setCloseConnection(closeConnection);
+    coordinator.registerClient({
+      clientSessionId: "headless-session",
+      hostConnectionId: "headless-host",
+      label: "Headless",
+      platform: "headless",
+      loadOnLeaseAssignment: true,
+    });
+    const first = coordinator.ensureDefaultCdpHostForSlot("panel:tree/slot-a", "panel:nav-old");
+    expect(first.assigned).toBe(true);
+    const leaseEvents: unknown[] = [];
+    coordinator.onLeaseChanged((event) => leaseEvents.push(event));
+
+    const replacement = coordinator.ensureDefaultCdpHostForSlot(
+      "panel:tree/slot-a",
+      "panel:nav-new",
+      { isHostAvailable: () => true }
+    );
+
+    expect(replacement).toMatchObject({
+      assigned: true,
+      lease: {
+        slotId: "panel:tree/slot-a",
+        runtimeEntityId: "panel:nav-new",
+        clientSessionId: "headless-session",
+        hostConnectionId: "headless-host",
+      },
+    });
+    expect(coordinator.getLease("panel:nav-old")).toBeNull();
+    expect(coordinator.resolveRouteRuntimeEntityId("panel:tree/slot-a")).toBe("panel:nav-new");
+    expect(closeConnection).toHaveBeenCalledWith(
+      "panel:nav-old",
+      expect.any(String),
+      4091,
+      "Panel runtime replaced"
+    );
+    expect(leaseEvents).toEqual([
+      expect.objectContaining({
+        slotId: "panel:tree/slot-a",
+        runtimeEntityId: "panel:nav-new",
+        previous: expect.objectContaining({ runtimeEntityId: "panel:nav-old" }),
+        next: expect.objectContaining({ runtimeEntityId: "panel:nav-new" }),
+      }),
+    ]);
+  });
+
+  it("converges duplicate old and replacement leases to one slot incarnation", () => {
+    const coordinator = new PanelRuntimeCoordinator();
+    const closeConnection = vi.fn();
+    coordinator.setCloseConnection(closeConnection);
+    coordinator.registerClient({
+      clientSessionId: "headless-session",
+      hostConnectionId: "headless-host",
+      label: "Headless",
+      platform: "headless",
+      loadOnLeaseAssignment: true,
+    });
+    coordinator.acquire("panel:nav-old", {
+      slotId: "panel:tree/slot-a",
+      clientSessionId: "headless-session",
+      connectionId: "old-connection",
+    });
+    coordinator.acquire("panel:nav-new", {
+      slotId: "panel:tree/slot-a",
+      clientSessionId: "headless-session",
+      connectionId: "new-connection",
+    });
+
+    const replacement = coordinator.replaceRuntimeEntityForSlot(
+      "panel:tree/slot-a",
+      "panel:nav-old",
+      "panel:nav-new"
+    );
+
+    expect(replacement?.runtimeEntityId).toBe("panel:nav-new");
+    expect(coordinator.getLease("panel:nav-old")).toBeNull();
+    expect(coordinator.getSnapshot().leases).toEqual([
+      expect.objectContaining({
+        slotId: "panel:tree/slot-a",
+        runtimeEntityId: "panel:nav-new",
+        connectionId: "new-connection",
+      }),
+    ]);
+    expect(closeConnection).toHaveBeenCalledWith(
+      "panel:nav-old",
+      "old-connection",
+      4091,
+      "Panel runtime replaced"
+    );
+  });
+
   it("prefers the headless host for a programmatic panel even when a desktop host is also a load-on-assignment default", () => {
     // Production config: BOTH desktop and headless register with
     // loadOnLeaseAssignment: true (src/main/index.ts). A programmatic panel

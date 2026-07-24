@@ -12,7 +12,12 @@ import {
   createWorkspaceStateClient,
 } from "@vibestudio/shell-core/createShellCore";
 import type { CreatePanelResult, NavigatePanelOptions } from "@vibestudio/shell-core/panelManager";
-import { asPanelSlotId, type PanelSlotId } from "@vibestudio/shared/panel/ids";
+import {
+  asPanelEntityId,
+  asPanelSlotId,
+  type PanelEntityId,
+  type PanelSlotId,
+} from "@vibestudio/shared/panel/ids";
 import { buildPanelUrl } from "@vibestudio/shared/panelFactory";
 import type { PanelRuntimeAcquireResult } from "@vibestudio/shared/panel/panelLease";
 import {
@@ -75,11 +80,32 @@ export class PanelInitClient {
    * the lease connectionId merged in. Fetch fresh on every (re)load — the
    * embedded gateway token is single-use.
    */
-  async getPanelLoadInfo(slotId: string, connectionId: string): Promise<PanelLoadInfo> {
-    const init = (await this.panelManager.getPanelInit(asPanelSlotId(slotId))) as Record<
+  async getPanelLoadInfo(
+    slotId: string,
+    runtimeEntityId: PanelEntityId,
+    connectionId: string
+  ): Promise<PanelLoadInfo> {
+    const normalizedSlotId = asPanelSlotId(slotId);
+    // This headless PanelManager is an RPC adapter, not the owner-side tree
+    // mirror. Its in-memory entity cache therefore does not receive panel-tree
+    // broadcasts. Resolve the authoritative slot cursor for every load and
+    // prove it still matches the lease that caused this load before minting the
+    // single-use panel credential.
+    const currentEntityId = await this.panelManager.refreshSlotEntity(normalizedSlotId);
+    if (currentEntityId !== asPanelEntityId(runtimeEntityId)) {
+      throw new Error(
+        `panel ${slotId} lease targets ${runtimeEntityId}, but the current runtime is ${currentEntityId ?? "missing"}`
+      );
+    }
+    const init = (await this.panelManager.getPanelInit(normalizedSlotId)) as Record<
       string,
       unknown
     >;
+    if (init["entityId"] !== runtimeEntityId) {
+      throw new Error(
+        `panel ${slotId} bootstrap targets ${String(init["entityId"] ?? "missing")}, but the lease targets ${runtimeEntityId}`
+      );
+    }
     const source = String(init["sourceRepo"] ?? "");
     const contextId = String(init["contextId"] ?? "");
     const buildKey = typeof init["buildKey"] === "string" ? init["buildKey"] : null;

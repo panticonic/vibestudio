@@ -443,6 +443,17 @@ export class PanelHttpServer {
       return;
     }
 
+    const activatedArtifactMatch = pathname.match(
+      /^\/__vibestudio\/panel-build\/([0-9a-f]{64})(\/.*)$/u
+    );
+    if (activatedArtifactMatch) {
+      const buildKey = assertPresent(activatedArtifactMatch[1]);
+      const resource = assertPresent(activatedArtifactMatch[2]);
+      const build = this.resolveActivatedBuild(res, buildKey);
+      if (build) await this.servePanelResource(req, res, build, resource);
+      return;
+    }
+
     // ── Static runtime helpers ────────────────────────────────────────────
     if (this.serveRuntimeHelper(pathname, res)) {
       return;
@@ -660,25 +671,40 @@ export class PanelHttpServer {
       return;
     }
 
+    const build = this.resolveActivatedBuild(res, buildKey);
+    if (!build) return;
+
+    if (build.metadata.kind !== "panel" || build.metadata.sourcePath !== source) {
+      res.writeHead(403, { "Content-Type": "text/plain" });
+      res.end(`Activated build ${buildKey} does not belong to panel ${source}`);
+      return;
+    }
+    await this.serveActivatedPanelResource(req, res, build, resource, buildKey);
+  }
+
+  private resolveActivatedBuild(
+    res: import("http").ServerResponse,
+    buildKey: string
+  ): CachedBuild | null {
     let build = this.activatedBuildCache.get(buildKey);
     if (!build) {
       const result = this.callbacks?.getBuildByKey(buildKey) ?? null;
       if (!result) {
         res.writeHead(410, { "Content-Type": "text/plain" });
         res.end(`Activated panel build is unavailable: ${buildKey}`);
-        return;
+        return null;
       }
       if (result.buildKey !== buildKey || result.metadata.buildKey !== buildKey) {
         res.writeHead(500, { "Content-Type": "text/plain" });
         res.end("Immutable panel build store returned a mismatched artifact");
-        return;
+        return null;
       }
       const htmlArtifact = result.artifacts.find((artifact) => artifact.role === "html");
       const primaryArtifact = result.artifacts.find((artifact) => artifact.role === "primary");
       if (!htmlArtifact || !primaryArtifact) {
         res.writeHead(500, { "Content-Type": "text/plain" });
         res.end(`Activated panel build ${buildKey} is incomplete`);
-        return;
+        return null;
       }
       build = {
         dir: result.dir,
@@ -692,13 +718,39 @@ export class PanelHttpServer {
       this.registerSharedStyles(build);
       this.scheduleTransportDerivatives(build);
     }
+    return build;
+  }
 
-    if (build.metadata.kind !== "panel" || build.metadata.sourcePath !== source) {
-      res.writeHead(403, { "Content-Type": "text/plain" });
-      res.end(`Activated build ${buildKey} does not belong to panel ${source}`);
+  private async serveActivatedPanelResource(
+    req: import("http").IncomingMessage,
+    res: import("http").ServerResponse,
+    build: CachedBuild,
+    resource: string,
+    buildKey: string
+  ): Promise<void> {
+    if (resource === "/" || resource === "/index.html") {
+      // Panel URLs may be mounted below a routed-workspace prefix. Keep
+      // immutable artifacts relative to the panel source route so the browser
+      // does not escape to the developer hub root.
+      const prefix = `../../__vibestudio/panel-build/${buildKey}/`;
+      const artifactPaths = new Set(
+        build.artifacts
+          .filter((artifact) => artifact.role !== "html")
+          .map((artifact) => artifact.path)
+      );
+      const content = build.htmlArtifact.content.replace(
+        /\b(src|href|data-bundle-src)=(["'])(?:\.\/)?([^"'?#]+)([^"']*)\2/giu,
+        (match, attribute: string, quote: string, path: string, suffix: string) =>
+          artifactPaths.has(path) ? `${attribute}=${quote}${prefix}${path}${suffix}${quote}` : match
+      );
+      await this.writeArtifact(req, res, build, { ...build.htmlArtifact, content });
       return;
     }
-    await this.servePanelResource(req, res, build, resource);
+    res.writeHead(307, {
+      Location: `../../__vibestudio/panel-build/${buildKey}/${resource.replace(/^\/+/, "")}`,
+      "Cache-Control": "no-store",
+    });
+    res.end();
   }
 
   private contextIdFromReferer(req: import("http").IncomingMessage): string | null {

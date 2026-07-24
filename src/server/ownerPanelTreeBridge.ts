@@ -497,6 +497,13 @@ export async function createServerPanelTreeBridge(
       gatewayConfig: { serverUrl: `http://127.0.0.1:${deps.getGatewayPort?.() ?? 0}` },
     },
     grantConnection: (panelId) => call<{ token: string }>("auth", "grantConnection", [panelId]),
+    transferRuntimeLease: (slotId, previousEntityId, nextEntityId) => {
+      deps.panelRuntimeCoordinator?.replaceRuntimeEntityForSlot(
+        slotId,
+        previousEntityId,
+        nextEntityId
+      );
+    },
   });
   // Canonical terminal failures from asynchronous lifecycle work. Build
   // artifacts describe build output; they must not be overloaded to represent

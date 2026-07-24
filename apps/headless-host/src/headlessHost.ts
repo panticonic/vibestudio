@@ -157,7 +157,11 @@ export class HeadlessHost implements PanelHost {
   }
 
   handleRuntimeLeaseChanged(event: PanelRuntimeLeaseChangedEvent): void {
-    this.enqueueIntents(() => this.tracker.apply(event));
+    // Advance ownership at event receipt, not when the serialized side-effect
+    // queue eventually reaches this event. In-flight loads consult the tracker
+    // after each await, so this is the cancellation signal for an immutable
+    // runtime that has already been replaced.
+    this.enqueueIntents(this.tracker.apply(event));
   }
 
   async syncRuntimeLeases(): Promise<void> {
@@ -308,14 +312,22 @@ export class HeadlessHost implements PanelHost {
       case "rebuildPanel": {
         const lease = this.tracker.heldLease(panelSlotId);
         if (!lease) throw new Error(`no lease held for panel ${slotId}`);
-        const info = await this.panelInit!.getPanelLoadInfo(panelSlotId, lease.connectionId);
+        const info = await this.panelInit!.getPanelLoadInfo(
+          panelSlotId,
+          lease.runtimeEntityId,
+          lease.connectionId
+        );
         await this.pages!.reloadPanel(panelSlotId, info.panelUrl, info.panelInit);
         return { action, status: "reloaded" };
       }
       case "reloadPanel": {
         const lease = this.tracker.heldLease(panelSlotId);
         if (!lease) throw new Error(`no lease held for panel ${slotId}`);
-        const info = await this.panelInit!.getPanelLoadInfo(panelSlotId, lease.connectionId);
+        const info = await this.panelInit!.getPanelLoadInfo(
+          panelSlotId,
+          lease.runtimeEntityId,
+          lease.connectionId
+        );
         await this.pages!.reloadPanel(panelSlotId, info.panelUrl, info.panelInit);
         return {
           panelId: slotId,
@@ -375,35 +387,34 @@ export class HeadlessHost implements PanelHost {
       "panelRuntime.getSnapshot",
       []
     );
-    this.enqueueIntents(() => {
-      const intents = this.tracker.reconcile(snapshot);
-      if (opts?.forceReload) {
-        // After a browser relaunch every held lease needs a fresh page even
-        // though the tracker considers it converged.
-        const held = new Set(intents.filter((i) => i.kind === "load").map((i) => i.slotId));
-        for (const slotId of this.tracker.heldSlots()) {
-          if (held.has(slotId)) continue;
-          const lease = this.tracker.heldLease(slotId)!;
-          intents.push({
-            kind: "load",
-            slotId,
-            runtimeEntityId: lease.runtimeEntityId,
-            connectionId: lease.connectionId,
-          });
-        }
+    const intents = this.tracker.reconcile(snapshot);
+    if (opts?.forceReload) {
+      // After a browser relaunch every held lease needs a fresh page even
+      // though the tracker considers it converged.
+      const held = new Set(intents.filter((i) => i.kind === "load").map((i) => i.slotId));
+      for (const slotId of this.tracker.heldSlots()) {
+        if (held.has(slotId)) continue;
+        const lease = this.tracker.heldLease(slotId)!;
+        intents.push({
+          kind: "load",
+          slotId,
+          runtimeEntityId: lease.runtimeEntityId,
+          connectionId: lease.connectionId,
+        });
       }
-      return intents;
-    });
+    }
+    this.enqueueIntents(intents);
     await this.intentQueue;
   }
 
-  /** Serialize intent processing — lease events and reconciles never interleave. */
-  private enqueueIntents(produce: () => LeaseIntent[]): void {
+  /** Serialize host side effects; lease ownership itself advances immediately. */
+  private enqueueIntents(intents: LeaseIntent[]): void {
     this.intentQueue = this.intentQueue.then(async () => {
-      for (const intent of produce()) {
+      for (const intent of intents) {
         try {
           await this.processIntent(intent);
         } catch (error) {
+          if (intent.kind === "load" && !this.isCurrentLoadIntent(intent)) continue;
           log.warn(`intent ${intent.kind} for ${intent.slotId} failed: ${String(error)}`);
           if (intent.kind === "load") {
             await this.releaseAndUnload(intent.slotId, "load failed");
@@ -411,6 +422,14 @@ export class HeadlessHost implements PanelHost {
         }
       }
     });
+  }
+
+  private isCurrentLoadIntent(intent: Extract<LeaseIntent, { kind: "load" }>): boolean {
+    const current = this.tracker.heldLease(intent.slotId);
+    return (
+      current?.connectionId === intent.connectionId &&
+      current.runtimeEntityId === intent.runtimeEntityId
+    );
   }
 
   private async processIntent(intent: LeaseIntent): Promise<void> {
@@ -427,18 +446,23 @@ export class HeadlessHost implements PanelHost {
     // therefore be obsolete by the time it reaches this boundary. Re-check
     // ownership before asking the server for a single-use load token; otherwise
     // a normal close/navigate race becomes a noisy "Panel not found" failure.
-    const currentLease = this.tracker.heldLease(intent.slotId);
-    if (
-      !currentLease ||
-      currentLease.connectionId !== intent.connectionId ||
-      currentLease.runtimeEntityId !== intent.runtimeEntityId
-    ) {
-      return;
-    }
+    if (!this.isCurrentLoadIntent(intent)) return;
 
     await this.enforcePanelCap();
+    if (!this.isCurrentLoadIntent(intent)) return;
     // Fetch init fresh each load — the embedded gateway token is single-use.
-    const info = await this.panelInit!.getPanelLoadInfo(intent.slotId, intent.connectionId);
+    let info;
+    try {
+      info = await this.panelInit!.getPanelLoadInfo(
+        intent.slotId,
+        intent.runtimeEntityId,
+        intent.connectionId
+      );
+    } catch (error) {
+      if (!this.isCurrentLoadIntent(intent)) return;
+      throw error;
+    }
+    if (!this.isCurrentLoadIntent(intent)) return;
     const tabId = ++this.tabCounter;
     await this.pages.loadPanel({
       slotId: intent.slotId,
@@ -447,6 +471,10 @@ export class HeadlessHost implements PanelHost {
       panelInit: info.panelInit,
       tabId,
     });
+    if (!this.isCurrentLoadIntent(intent)) {
+      await this.pages.unloadPanel(intent.slotId);
+      return;
+    }
     this.tabIds.set(intent.slotId, tabId);
     this.bridge?.registerTarget(intent.slotId, tabId, {
       kind: info.source.startsWith("browser:") ? "browser" : "workspace",
