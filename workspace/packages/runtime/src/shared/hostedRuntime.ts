@@ -218,7 +218,10 @@ export function createHostedRuntime(host: RuntimeHost): WorkspaceRuntime {
   const workspace = helpfulNamespace("workspace", createWorkspaceClient(rpc));
   const vcs = helpfulNamespace(
     "vcs",
-    createVcsClient(<T>(method: string, ...args: unknown[]) => rpc.call<T>("main", method, args))
+    createVcsClient(
+      <T>(method: string, ...args: unknown[]) => rpc.call<T>("main", method, args),
+      host.contextId
+    )
   );
   const webhooks = helpfulNamespace("webhooks", createWebhookIngressClient(rpc));
   const extensions = helpfulNamespace("extensions", createExtensionsClient(rpc));

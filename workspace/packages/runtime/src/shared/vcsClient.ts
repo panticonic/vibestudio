@@ -1,6 +1,11 @@
 /** Canonical runtime client for the deliberately small semantic VCS API. */
 
-import { vcsMethods } from "@vibestudio/service-schemas/vcs";
+import {
+  vcsMethods,
+  vcsOperationRegistry,
+  type VcsStatusInput,
+  type VcsStatusResult,
+} from "@vibestudio/service-schemas/vcs";
 import {
   createTypedServiceClient,
   type TypedServiceClient,
@@ -13,12 +18,56 @@ export type * from "@vibestudio/service-schemas/vcs";
  * merge verbs, selective-commit compilers, provenance facades, or routing
  * overlays to keep synchronized with it.
  */
-export type VcsClient = TypedServiceClient<typeof vcsMethods>;
+type SchemaVcsClient = TypedServiceClient<typeof vcsMethods>;
+type ContextBoundMethodName = {
+  [Method in keyof typeof vcsMethods]: Extract<
+    (typeof vcsMethods)[Method]["references"][number],
+    { kind: "context"; path: readonly ["contextId"] }
+  > extends never
+    ? never
+    : Method;
+}[keyof typeof vcsMethods];
+type ContextOptionalMethod<Method> = Method extends (input: infer Input) => Promise<infer Result>
+  ? (input: Omit<Input, "contextId"> & { contextId?: string }) => Promise<Result>
+  : Method;
+type ContextBoundStatusInput = Omit<VcsStatusInput, "contextId"> & { contextId?: string };
+
+type ContextBoundVcsClient = {
+  [Method in keyof SchemaVcsClient]: Method extends ContextBoundMethodName
+    ? ContextOptionalMethod<SchemaVcsClient[Method]>
+    : SchemaVcsClient[Method];
+};
+
+export type VcsClient = Omit<ContextBoundVcsClient, "status"> & {
+  status(input?: ContextBoundStatusInput): Promise<VcsStatusResult>;
+};
 
 export function createVcsClient(
-  callMain: <T>(method: string, ...args: unknown[]) => Promise<T>
+  callMain: <T>(method: string, ...args: unknown[]) => Promise<T>,
+  boundContextId: string
 ): VcsClient {
-  return createTypedServiceClient("vcs", vcsMethods, (_service, method, args) =>
+  const schemaClient = createTypedServiceClient("vcs", vcsMethods, (_service, method, args) =>
     callMain(`vcs.${method}`, ...args)
   );
+  return Object.fromEntries(
+    Object.entries(schemaClient).map(([method, invoke]) => [
+      method,
+      vcsOperationRegistry[method as keyof typeof vcsOperationRegistry].references.some(
+        (reference) =>
+          reference.kind === "context" &&
+          reference.path.length === 1 &&
+          reference.path[0] === "contextId"
+      )
+        ? (input?: unknown) => {
+            const boundInput =
+              input === undefined
+                ? { contextId: boundContextId }
+                : input !== null && typeof input === "object" && !Array.isArray(input)
+                  ? { contextId: boundContextId, ...input }
+                  : input;
+            return (invoke as (value: unknown) => Promise<unknown>)(boundInput);
+          }
+        : invoke,
+    ])
+  ) as VcsClient;
 }

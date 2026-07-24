@@ -1706,11 +1706,15 @@ interface VcsMethodSchema extends MethodSchema {
   references: readonly VcsReferenceDescriptor[];
 }
 
-const ref = (
-  kind: VcsSemanticReferenceKind,
-  role: VcsSemanticReferenceRole,
-  ...path: string[]
-): VcsReferenceDescriptor => ({ kind, role, path });
+const ref = <
+  const Kind extends VcsSemanticReferenceKind,
+  const Role extends VcsSemanticReferenceRole,
+  const Path extends readonly string[],
+>(
+  kind: Kind,
+  role: Role,
+  ...path: Path
+): VcsReferenceDescriptor & { kind: Kind; role: Role; path: Path } => ({ kind, role, path });
 
 const commonMutationRefs = [
   ref("command", "resource", "commandId"),
