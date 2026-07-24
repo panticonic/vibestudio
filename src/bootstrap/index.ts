@@ -25,11 +25,17 @@ import {
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
-import type {
-  HostTargetLaunchSessionSnapshot,
-  HostTargetLaunchTimelinePhase,
-} from "@vibestudio/shared/hostTargets";
+import type { HostTargetLaunchSessionSnapshot } from "@vibestudio/shared/hostTargets";
 import { parseConnectLink } from "@vibestudio/shared/connect";
+import {
+  isStartupConnectionProgress,
+  type StartupConnectionProgress,
+} from "../startupConnectionProgress.js";
+import {
+  launchTimelineWithConnection,
+  startupTimeline,
+  type BootstrapTimelinePhase,
+} from "./startupTimeline.js";
 
 type ShellTransportBridge = {
   send: (envelope: RpcEnvelope) => Promise<void>;
@@ -58,7 +64,7 @@ type BootstrapConnectionState = {
   pendingPairConfirmed?: boolean;
   startupError?: { message: string; detail?: string; logPath?: string } | null;
   serverLogPath?: string | null;
-  startupDetail?: string | null;
+  startupProgress?: StartupConnectionProgress | null;
 };
 
 const globals = globalThis as unknown as {
@@ -307,7 +313,7 @@ function appendApprovalActions(card: HTMLElement, approval: PendingUnitBatchAppr
 
 function appendLaunchTimeline(
   parent: HTMLElement,
-  phases: readonly HostTargetLaunchTimelinePhase[]
+  phases: readonly BootstrapTimelinePhase[]
 ): void {
   if (phases.length === 0) return;
   const list = document.createElement("ol");
@@ -326,36 +332,6 @@ function appendLaunchTimeline(
     list.append(item);
   }
   parent.append(list);
-}
-
-/**
- * The pre-session half of the SAME timeline the host emits once a launch session
- * exists (launchTimeline() in hostTargetLaunchCoordinator): same phase ids, same
- * labels, same order. Startup used to show a single sentence here and only grew
- * the step list once the host answered, so the window changed shape mid-launch.
- * Rendering these phases from the first frame means the host snapshot is a
- * continuation - the "Connect" row just flips from active to complete.
- *
- * The bootstrap window always launches the electron target, so the target-named
- * labels are fixed to "desktop" (targetLabel("electron")).
- */
-function startupTimeline(
-  detail: string | null | undefined,
-  connectState: HostTargetLaunchTimelinePhase["state"] = "active"
-): HostTargetLaunchTimelinePhase[] {
-  return [
-    {
-      id: "pair",
-      label: "Connect",
-      state: connectState,
-      ...(detail ? { detail } : {}),
-    },
-    { id: "review-trust", label: "Review trust", state: "pending" },
-    { id: "start-units", label: "Start privileged units", state: "pending" },
-    { id: "build-app", label: "Build desktop app", state: "pending" },
-    { id: "activate-target", label: "Activate desktop", state: "pending" },
-    { id: "connected", label: "Connected", state: "pending" },
-  ];
 }
 
 /**
@@ -440,12 +416,18 @@ function render(): void {
     approvalsContainer.className = "launch-body";
     if (!launchSession) {
       setHeader("Starting", "Starting workspace", emptyLaunchText);
-      appendLaunchTimeline(approvalsContainer, startupTimeline(null));
+      appendLaunchTimeline(
+        approvalsContainer,
+        startupTimeline(connectionState?.startupProgress, "complete")
+      );
       return;
     }
     const header = launchSessionHeader(launchSession);
     setHeader(header.eyebrow, header.title, header.copy, header.tone ?? "normal");
-    appendLaunchTimeline(approvalsContainer, launchSession.timeline);
+    appendLaunchTimeline(
+      approvalsContainer,
+      launchTimelineWithConnection(connectionState?.startupProgress, launchSession.timeline)
+    );
     if (pending.length === 0) {
       if (launchSession.status === "denied") appendDeniedRecovery(approvalsContainer);
       return;
@@ -571,7 +553,10 @@ function isBootstrapConnectionState(value: unknown): value is BootstrapConnectio
     Array.isArray(value["localWorkspaces"]) &&
     (value["connectionKind"] === "local" ||
       value["connectionKind"] === "remote" ||
-      value["connectionKind"] === null)
+      value["connectionKind"] === null) &&
+    (value["startupProgress"] === undefined ||
+      value["startupProgress"] === null ||
+      isStartupConnectionProgress(value["startupProgress"]))
   );
 }
 
@@ -643,10 +628,9 @@ function renderConnectionHandoff(): void {
   );
   approvalsContainer.className = "launch-body";
   approvalsContainer.replaceChildren();
-  // The same step list the launch gate shows, so this state is the first leg of
-  // one journey rather than a different-looking screen. The live host progress
-  // rides on the active phase instead of being a second status line.
-  appendLaunchTimeline(approvalsContainer, startupTimeline(connectionState?.startupDetail));
+  // Connection establishment and host launch form one timeline. Every reported
+  // connection milestone remains visible as later stages become active.
+  appendLaunchTimeline(approvalsContainer, startupTimeline(connectionState?.startupProgress));
   const elapsedMs = startupWaitBeganAt ? Date.now() - startupWaitBeganAt : 0;
   const startupLogPath = connectionState?.serverLogPath ?? connectionState?.startupError?.logPath;
   if (elapsedMs >= 15_000 && startupLogPath) {
@@ -1000,7 +984,7 @@ function renderStartupFailure(state: BootstrapConnectionState): void {
   approvalsContainer.replaceChildren();
   // Same step list, stopped where it broke — the failure keeps its place in the
   // sequence instead of replacing it with a bare error card.
-  appendLaunchTimeline(approvalsContainer, startupTimeline(state.startupDetail, "failed"));
+  appendLaunchTimeline(approvalsContainer, startupTimeline(state.startupProgress, "failed"));
   if (failure?.logPath) {
     const path = document.createElement("code");
     path.className = "log-path";

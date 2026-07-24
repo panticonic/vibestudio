@@ -11,7 +11,7 @@
 import { app } from "electron";
 import * as path from "node:path";
 import { createDevLogger } from "@vibestudio/dev-log";
-import { getAppRoot } from "./paths.js";
+import { getAppRoot, getServerProcessBuildId } from "./paths.js";
 import { HubProcessManager } from "./hubProcessManager.js";
 import { createServerClient, type ServerClient, type ConnectionStatus } from "./serverClient.js";
 import { createWebRtcServerClient } from "./webrtcServerClient.js";
@@ -39,6 +39,15 @@ import {
   serverAuthRouteUrl,
   type ConnectPairing,
 } from "@vibestudio/shared/connect";
+import {
+  FRESH_REMOTE_STARTUP_CONNECTION_PHASES,
+  LOCAL_STARTUP_CONNECTION_PHASES,
+  RETURNING_REMOTE_STARTUP_CONNECTION_PHASES,
+  startupConnectionProgress,
+  type StartupConnectionPhase,
+  type StartupConnectionPhaseId,
+  type StartupConnectionProgress,
+} from "../startupConnectionProgress.js";
 
 const log = createDevLogger("ServerSession");
 
@@ -121,6 +130,20 @@ export interface SessionConnection {
   getCdpAuthToken: () => string;
 }
 
+function createStartupPhaseReporter(
+  context: string,
+  phases: readonly StartupConnectionPhase[],
+  onProgress: ((progress: StartupConnectionProgress) => void) | undefined
+): (phase: StartupConnectionPhaseId) => void {
+  const beganAt = Date.now();
+  return (phaseId) => {
+    const progress = startupConnectionProgress(phases, phaseId);
+    const phase = progress.phases.find((candidate) => candidate.id === phaseId);
+    log.info(`[Server] ${context} +${Date.now() - beganAt}ms: ${phase?.label ?? phaseId}`);
+    onProgress?.(progress);
+  };
+}
+
 /**
  * Build the ServerInfo object that provides RPC proxying and gateway wiring.
  */
@@ -188,8 +211,8 @@ export async function establishServerSession(args: {
    */
   storedRemote?: StoredRemote;
   centralData: CentralDataManager;
-  /** Human-readable startup progress, phase by phase (drives the bootstrap splash). */
-  onStartupPhase?: (detail: string) => void;
+  /** Structured startup progress for the bootstrap timeline. */
+  onStartupProgress?: (progress: StartupConnectionProgress) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
   onReconnectProgress?: (progress: ReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
@@ -220,13 +243,19 @@ export async function establishServerSession(args: {
     ephemeralLifecycle: mode.ephemeralLifecycle,
     appRoot: getAppRoot(),
     appVersion: app.getVersion(),
+    buildId: getServerProcessBuildId(),
     centralData: args.centralData,
     onCrash: (code) => {
       console.error(`[App] Local hub died and could not be recovered (code ${code ?? "?"})`);
       relaunchApp({ exitCode: 1 });
     },
   });
-  args.onStartupPhase?.("Starting the local workspace server…");
+  const phase = createStartupPhaseReporter(
+    "local connect",
+    LOCAL_STARTUP_CONNECTION_PHASES,
+    args.onStartupProgress
+  );
+  phase("start-local-server");
   const target = await hubProcessManager.attachOrSpawn();
   log.info(
     `[Server] ${target.attached ? "Attached to" : "Spawned"} local hub and routed ${mode.workspaceName}`
@@ -259,7 +288,7 @@ export async function establishServerSession(args: {
     }
   };
 
-  args.onStartupPhase?.("Server ready — connecting to the workspace…");
+  phase("connect-workspace");
   const serverClient = await createServerClient(target.gatewayPort, target.authToken, {
     reconnect: true,
     getWsUrl: () => hubProcessManager.getCurrentWsUrl() ?? target.wsUrl,
@@ -285,6 +314,7 @@ export async function establishServerSession(args: {
       }
     );
     const connectedHubControlClient = hubControlClient;
+    phase("prepare-workspace-session");
     await refreshCdpAuthToken();
 
     log.info("[Server] Shell client connected through the local hub");
@@ -361,7 +391,7 @@ export async function establishServerSession(args: {
 
 /** The connect-callback subset both remote-session paths forward to the pipe. */
 type RemoteConnectArgs = {
-  onStartupPhase?: (detail: string) => void;
+  onStartupProgress?: (progress: StartupConnectionProgress) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
   onReconnectProgress?: (progress: ReconnectProgress) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
@@ -390,15 +420,15 @@ async function establishRemoteSession(
     saveDeviceCredential(current);
   };
   const auth = () => `refresh:${current.deviceId}:${current.refreshToken}`;
-  const phaseBegan = Date.now();
-  const phase = (detail: string): void => {
-    log.info(`[Server] remote connect +${Date.now() - phaseBegan}ms: ${detail}`);
-    args.onStartupPhase?.(detail);
-  };
+  const phase = createStartupPhaseReporter(
+    "remote connect",
+    RETURNING_REMOTE_STARTUP_CONNECTION_PHASES,
+    args.onStartupProgress
+  );
   // Both pipes authenticate with the SAME stable refresh credential
   // (validateRefresh does not rotate; onPaired fires only on fresh pairing), so
   // the control and workspace dials are independent and run concurrently.
-  phase("Connecting to the server and workspace…");
+  phase("connect-server-and-workspace");
   const dials = await Promise.allSettled([
     connectRemoteViaWebRtc(
       { ...stored.controlPairing, code: "" },
@@ -450,11 +480,9 @@ async function establishRemoteSession(
   const hubControlClient = hubDial.value;
   const serverClient = workspaceDial.value;
   try {
-    phase("Connected — preparing the workspace session…");
+    phase("prepare-workspace-session");
     const connection = await buildRemoteSessionConnection(serverClient, hubControlClient);
-    log.info(
-      `[Server] Shell client connected over WebRTC remote pipe (${origin}) in ${Date.now() - phaseBegan}ms`
-    );
+    log.info(`[Server] Shell client connected over WebRTC remote pipe (${origin})`);
     return connection;
   } catch (error) {
     return throwAfterOwnedCleanup(
@@ -499,12 +527,12 @@ async function establishFreshPairSession(
     current: null,
   };
   let currentStored: StoredRemote | null = null;
-  const phaseBegan = Date.now();
-  const phase = (detail: string): void => {
-    log.info(`[Server] fresh pairing +${Date.now() - phaseBegan}ms: ${detail}`);
-    args.onStartupPhase?.(detail);
-  };
-  phase("Redeeming the pairing link…");
+  const phase = createStartupPhaseReporter(
+    "fresh pairing",
+    FRESH_REMOTE_STARTUP_CONNECTION_PHASES,
+    args.onStartupProgress
+  );
+  phase("redeem-pairing-link");
   const controlClient = await connectRemoteViaWebRtc(pairing, {
     // The server assigns the real `shell:<deviceId>` principal when it redeems the
     // one-time code; we don't know that id yet, so dial with a stable selfId. (If
@@ -544,7 +572,7 @@ async function establishFreshPairSession(
       );
     }
     const issued = paired.current;
-    phase("Paired — resolving the workspace…");
+    phase("resolve-workspace");
     const route = HubWorkspaceRouteSchema.parse(
       await controlClient.call("hubControl", "routeWorkspace", [
         { workspaceId: issued.workspaceId },
@@ -573,7 +601,7 @@ async function establishFreshPairSession(
       if (!active) throw new Error("Fresh pairing credential was not committed");
       return `refresh:${active.deviceId}:${active.refreshToken}`;
     };
-    phase("Connecting to the workspace…");
+    phase("connect-workspace");
     workspaceClient = await connectRemoteViaWebRtc(
       { ...currentStored.workspacePairing, code: "" },
       {
@@ -595,11 +623,9 @@ async function establishFreshPairSession(
         onMainSessionTerminalClose: args.onMainSessionTerminalClose,
       }
     );
-    phase("Connected — preparing the workspace session…");
+    phase("prepare-workspace-session");
     const connection = await buildRemoteSessionConnection(workspaceClient, controlClient);
-    log.info(
-      `[Server] Shell client connected over WebRTC remote pipe (fresh pairing) in ${Date.now() - phaseBegan}ms`
-    );
+    log.info("[Server] Shell client connected over WebRTC remote pipe (fresh pairing)");
     return connection;
   } catch (error) {
     return throwAfterOwnedCleanup(

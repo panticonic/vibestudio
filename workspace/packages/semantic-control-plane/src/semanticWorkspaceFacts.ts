@@ -29,6 +29,7 @@ import {
   type WorkspaceFactRoot,
   type WorkspaceRepositoryMember,
 } from "@workspace/vcs-engine";
+import { execBatchedInsert, execBatchedInsertReturning } from "./sqlBatch.js";
 
 type Row = Record<string, unknown>;
 const text = (row: Row, key: string): string => String(row[key]);
@@ -67,7 +68,7 @@ export class SemanticWorkspaceFacts {
 
   empty(): WorkspaceFactRoot {
     const { root, nodes } = emptyWorkspaceFactRoot();
-    for (const node of nodes) this.persistNode(node);
+    this.persistNodes(nodes);
     this.persistRoot(root);
     return root;
   }
@@ -475,7 +476,7 @@ export class SemanticWorkspaceFacts {
       }
     }
     const proof = this.compose(changeSet);
-    for (const node of proof.createdNodes) this.persistNode(node);
+    this.persistNodes(proof.createdNodes);
     for (const manifest of changeSet.manifestUpdates) this.persistManifest(manifest.resultManifest);
     this.persistRoot(proof.resultRoot);
     return proof;
@@ -736,62 +737,80 @@ export class SemanticWorkspaceFacts {
     }
   }
 
-  private persistNode(node: PersistentRadixNode): void {
-    // The composer returns content-addressed nodes. Authenticate the value in
-    // memory once, then let INSERT OR IGNORE distinguish a new node from an
-    // existing identical identity. Reading every node before and after insert
-    // made a large immutable snapshot pay two needless database round trips per
-    // radix node.
-    authenticatePersistentRadixNode(node, "");
-    this.sql.exec(
-      `INSERT OR IGNORE INTO gad_persistent_radix_nodes
-         (node_id, index_kind, route_strategy, node_kind, branch_depth, branch_prefix)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      node.nodeId,
-      node.indexKind,
-      node.routeStrategy,
-      node.shape.kind,
-      node.shape.kind === "branch" ? node.shape.depth : null,
-      node.shape.kind === "branch" ? node.shape.prefix : null
+  private persistNodes(nodes: readonly PersistentRadixNode[]): void {
+    const uniqueById = new Map<string, PersistentRadixNode>();
+    for (const node of nodes) {
+      authenticatePersistentRadixNode(node, "");
+      const duplicate = uniqueById.get(node.nodeId);
+      if (duplicate && canonicalJson(duplicate) !== canonicalJson(node)) {
+        throw new SemanticWorkspaceFactsError(
+          "InvalidNode",
+          `Persistent radix node ${node.nodeId} repeats with a different exact value`,
+          [node.nodeId]
+        );
+      }
+      uniqueById.set(node.nodeId, node);
+    }
+    const uniqueNodes = [...uniqueById.values()];
+    const insertedNodeIds = new Set(
+      execBatchedInsertReturning(
+        this.sql,
+        `INSERT OR IGNORE INTO gad_persistent_radix_nodes
+         (node_id, index_kind, route_strategy, node_kind, branch_depth, branch_prefix)`,
+        6,
+        uniqueNodes.map((node) => [
+          node.nodeId,
+          node.indexKind,
+          node.routeStrategy,
+          node.shape.kind,
+          node.shape.kind === "branch" ? node.shape.depth : null,
+          node.shape.kind === "branch" ? node.shape.prefix : null,
+        ]),
+        " RETURNING node_id"
+      ).map((row) => text(row, "node_id"))
     );
-    const inserted = Number((this.sql.exec(`SELECT changes() AS n`).toArray()[0] as Row)["n"]);
-    if (inserted === 1) {
-      if (node.shape.kind === "branch") {
-        node.shape.children.forEach((child, ordinal) =>
-          this.sql.exec(
-            `INSERT INTO gad_persistent_radix_edges
-             (node_id, ordinal, slot, child_node_id, entry_key, entry_value)
-             VALUES (?, ?, ?, ?, NULL, NULL)`,
+    execBatchedInsert(
+      this.sql,
+      `INSERT INTO gad_persistent_radix_edges
+       (node_id, ordinal, slot, child_node_id, entry_key, entry_value)`,
+      6,
+      uniqueNodes.flatMap((node) => {
+        if (!insertedNodeIds.has(node.nodeId)) return [];
+        if (node.shape.kind === "branch") {
+          return node.shape.children.map((child, ordinal) => [
             node.nodeId,
             ordinal,
             child.slot,
-            child.childNodeId
-          )
-        );
-      } else if (node.shape.kind === "leaf") {
-        node.shape.entries.forEach((entry, ordinal) =>
-          this.sql.exec(
-            `INSERT INTO gad_persistent_radix_edges
-             (node_id, ordinal, slot, child_node_id, entry_key, entry_value)
-             VALUES (?, ?, NULL, NULL, ?, ?)`,
+            child.childNodeId,
+            null,
+            null,
+          ]);
+        }
+        if (node.shape.kind === "leaf") {
+          return node.shape.entries.map((entry, ordinal) => [
             node.nodeId,
             ordinal,
+            null,
+            null,
             entry.key,
-            entry.value
-          )
+            entry.value,
+          ]);
+        }
+        return [];
+      })
+    );
+    for (const node of uniqueNodes) {
+      if (insertedNodeIds.has(node.nodeId)) continue;
+      // A reused content identity must still prove it denotes the same exact
+      // node. This is the collision/corruption path, not the normal write path.
+      const exact = this.node(node.indexKind, node.routeStrategy, node.nodeId, "");
+      if (!exact || canonicalJson(exact) !== canonicalJson(node)) {
+        throw new SemanticWorkspaceFactsError(
+          "InvalidNode",
+          `Stored persistent radix node ${node.nodeId} differs from its exact value`,
+          [node.nodeId]
         );
       }
-      return;
-    }
-    // A reused content identity must still prove it denotes the same exact
-    // node. This is the collision/corruption path, not the normal write path.
-    const exact = this.node(node.indexKind, node.routeStrategy, node.nodeId, "");
-    if (!exact || canonicalJson(exact) !== canonicalJson(node)) {
-      throw new SemanticWorkspaceFactsError(
-        "InvalidNode",
-        `Stored persistent radix node ${node.nodeId} differs from its exact value`,
-        [node.nodeId]
-      );
     }
   }
 

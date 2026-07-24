@@ -76,6 +76,8 @@ import { WorkspaceRepositories } from "./workspaceRepositories.js";
 const SYSTEM_ACTOR = { id: "system", kind: "system" } as const;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 const BUILDS_LOG_ID = "builds:workspace";
+const CONTENT_OBSERVATION_CONCURRENCY = 32;
+const SLOW_SEMANTIC_EFFECT_MS = 500;
 
 function intrinsicContentDescriptor(bytes: Uint8Array): {
   contentKind: "text" | "bytes";
@@ -350,13 +352,16 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (result.kind === "host-read") return (await this.executeHostRead(result.request)) as T;
       const effect = result.effects[0];
       if (!effect) throw new Error("semantic command reported effects-pending without an effect");
+      const effectStartedAt = performance.now();
       const receipt = await this.executeSemanticEffect(effect, publicationGateContext);
+      const executeMs = performance.now() - effectStartedAt;
       // The applied head remains replay evidence; marking it acknowledged
       // before the semantic ack closes the crash gap that could otherwise
       // leave one uncompactible evidence row per publication.
       if (effect.kind === "publish-main") {
         this.deps.refs.acknowledgePublication(effect.effectId);
       }
+      const acknowledgeStartedAt = performance.now();
       result = await this.gad().call<SemanticDispatchResult>("vcsSemanticEffectAck", {
         acknowledgement: {
           effectId: effect.effectId,
@@ -364,6 +369,16 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           receipt,
         },
       });
+      const acknowledgeMs = performance.now() - acknowledgeStartedAt;
+      const totalMs = performance.now() - effectStartedAt;
+      if (totalMs >= SLOW_SEMANTIC_EFFECT_MS) {
+        console.info("[Vcs] slow semantic effect", {
+          kind: effect.kind,
+          executeMs: Math.round(executeMs),
+          acknowledgeMs: Math.round(acknowledgeMs),
+          totalMs: Math.round(totalMs),
+        });
+      }
     }
     throw new Error("semantic command exceeded the host-effect drain limit");
   }
@@ -468,21 +483,33 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     }
     const files = effect.payload["files"];
     if (!Array.isArray(files)) throw new Error("content observation effect lacks files");
-    const observed = [];
-    for (const value of files) {
+    const contentHashes = files.map((value) => {
       if (!value || typeof value !== "object") {
         throw new Error("content observation contains an invalid file");
       }
       const file = value as Record<string, unknown>;
       const contentHash = String(file["contentHash"] ?? "");
-      const bytes = await getBytes(this.deps.blobsDir, contentHash);
-      if (!contentHash || !bytes) throw new Error(`content observation cannot read ${contentHash}`);
-      observed.push(
-        representation === "bytes"
-          ? { contentHash, base64: Buffer.from(bytes).toString("base64") }
-          : { contentHash, ...intrinsicContentDescriptor(bytes) }
-      );
-    }
+      if (!contentHash) throw new Error("content observation contains an empty content hash");
+      return contentHash;
+    });
+    const observed = new Array<Record<string, unknown>>(contentHashes.length);
+    const pending = contentHashes.entries();
+    const observeNext = async (): Promise<void> => {
+      for (const [index, contentHash] of pending) {
+        const bytes = await getBytes(this.deps.blobsDir, contentHash);
+        if (!bytes) throw new Error(`content observation cannot read ${contentHash}`);
+        observed[index] =
+          representation === "bytes"
+            ? { contentHash, base64: Buffer.from(bytes).toString("base64") }
+            : { contentHash, ...intrinsicContentDescriptor(bytes) };
+      }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(CONTENT_OBSERVATION_CONCURRENCY, contentHashes.length) },
+        observeNext
+      )
+    );
     return { files: observed };
   }
 
@@ -724,7 +751,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         intentSummary: "Import the initial workspace snapshot",
         source: {
           kind: "filesystem",
-          uri: "vibestudio://workspace-source",
+          uri: "vibestudio://workspace/source",
           snapshotRevision: scanned.stateHash,
         },
         repositories,

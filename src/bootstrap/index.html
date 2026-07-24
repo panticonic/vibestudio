@@ -651,14 +651,14 @@
           <h1 id="bootstrap-title">Starting workspace</h1>
           <p id="launch-copy">Connecting to your workspace...</p>
         </header>
-        <!-- The first paint already shows the launch sequence — index.ts replaces
-             these rows with live phase state, keeping the same shape. Mirrors
-             startupTimeline() there; keep the labels in sync. -->
+        <!-- The static first paint cannot know whether startup is local, returning
+             remote, or fresh pairing. index.ts replaces this neutral placeholder
+             with the authoritative phase plan as soon as the host reports it. -->
         <section id="approvals" class="launch-body">
           <ol class="launch-timeline">
             <li class="launch-phase active" aria-current="step">
               <span class="launch-phase-dot" aria-hidden="true"></span>
-              <span class="launch-phase-text">Connect</span>
+              <span class="launch-phase-text">Connect to workspace</span>
             </li>
             <li class="launch-phase pending">
               <span class="launch-phase-dot" aria-hidden="true"></span>

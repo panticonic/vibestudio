@@ -24,6 +24,7 @@ import {
   contentMappingRowValues,
   encodeContentMappingRow,
 } from "./semanticVcsContentMappingCodec.js";
+import { execBatchedInsert } from "./sqlBatch.js";
 
 export { NORMALIZATION_PROTOCOL, SEMANTIC_PROTOCOL } from "@workspace/vcs-engine";
 
@@ -611,25 +612,27 @@ export class SemanticVcsStore {
       throw new SemanticVcsError("IntegrityFailure", "Application basis differs from context CAS");
     }
     this.validateApplicationPlan(plan);
-    for (const repository of plan.newRepositories) {
-      this.sql.exec(
-        `INSERT INTO vcs_repositories (repository_id, created_work_unit_id, created_at)
-         VALUES (?, ?, ?)`,
+    execBatchedInsert(
+      this.sql,
+      `INSERT INTO vcs_repositories (repository_id, created_work_unit_id, created_at)`,
+      3,
+      plan.newRepositories.map((repository) => [
         repository.repositoryId,
         plan.workUnit.workUnitId,
-        plan.workUnit.createdAt
-      );
-    }
-    for (const file of plan.newFiles) {
-      this.sql.exec(
-        `INSERT INTO vcs_files (file_id, created_repository_id, created_change_id, created_at)
-         VALUES (?, ?, ?, ?)`,
+        plan.workUnit.createdAt,
+      ])
+    );
+    execBatchedInsert(
+      this.sql,
+      `INSERT INTO vcs_files (file_id, created_repository_id, created_change_id, created_at)`,
+      4,
+      plan.newFiles.map((file) => [
         file.fileId,
         file.repositoryId,
         file.changeId,
-        plan.workUnit.createdAt
-      );
-    }
+        plan.workUnit.createdAt,
+      ])
+    );
     if (plan.workspaceChangeSet) {
       this.persistResultStates(plan.workspaceChangeSet);
       const proof = this.facts.apply(plan.workspaceChangeSet);
@@ -645,9 +648,9 @@ export class SemanticVcsStore {
       );
     }
     this.persistWorkUnit(plan.workUnit);
-    for (const change of plan.changes) this.persistChange(change);
+    this.persistChanges(plan.changes);
     this.persistApplication(plan.application);
-    for (const applied of plan.appliedChanges) this.persistAppliedChange(applied);
+    this.persistAppliedChanges(plan.appliedChanges);
     for (const edge of plan.contentEdges) this.persistContentEdge(edge);
     for (const decision of plan.decisions) this.persistDecision(decision);
     this.sql.exec(
@@ -1200,57 +1203,72 @@ export class SemanticVcsStore {
   }
 
   private persistResultStates(changeSet: WorkspaceFactChangeSet): void {
-    for (const update of changeSet.repositoryUpdates) {
-      const value = update.result;
-      this.sql.exec(
-        value.presence === "present"
-          ? `INSERT OR IGNORE INTO vcs_repository_states
-             (repository_state_id, repository_id, presence, repo_path, file_manifest_id,
-              prior_repository_state_id, tombstone_change_id)
-             VALUES (?, ?, 'present', ?, ?, NULL, NULL)`
-          : `INSERT OR IGNORE INTO vcs_repository_states
-             (repository_state_id, repository_id, presence, repo_path, file_manifest_id,
-              prior_repository_state_id, tombstone_change_id)
-             VALUES (?, ?, 'deleted', NULL, NULL, ?, ?)`,
-        value.repositoryStateId,
-        value.repositoryId,
-        value.presence === "present" ? value.repoPath : value.priorRepositoryStateId,
-        value.presence === "present" ? value.fileManifestId : value.tombstoneChangeId
-      );
-    }
-    for (const update of changeSet.fileUpdates) {
-      const value = update.result;
-      if (value.presence === "placed") {
-        this.sql.exec(
-          `INSERT OR IGNORE INTO vcs_file_states
-           (file_state_id, file_id, presence, repository_id, path, content_hash, mode,
-            content_kind, byte_length, coordinate_extent,
-            prior_file_state_id, tombstone_change_id)
-           VALUES (?, ?, 'placed', ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
-          value.fileStateId,
-          value.fileId,
-          value.repositoryId,
-          value.path,
-          value.contentHash,
-          value.mode,
-          value.contentKind,
-          value.byteLength,
-          value.coordinateExtent
-        );
-      } else {
-        this.sql.exec(
-          `INSERT OR IGNORE INTO vcs_file_states
-           (file_state_id, file_id, presence, repository_id, path, content_hash, mode,
-            content_kind, byte_length, coordinate_extent,
-            prior_file_state_id, tombstone_change_id)
-           VALUES (?, ?, 'deleted', NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
-          value.fileStateId,
-          value.fileId,
-          value.priorFileStateId,
-          value.tombstoneChangeId
-        );
-      }
-    }
+    execBatchedInsert(
+      this.sql,
+      `INSERT OR IGNORE INTO vcs_repository_states
+       (repository_state_id, repository_id, presence, repo_path, file_manifest_id,
+        prior_repository_state_id, tombstone_change_id)`,
+      7,
+      changeSet.repositoryUpdates.map(({ result }) =>
+        result.presence === "present"
+          ? [
+              result.repositoryStateId,
+              result.repositoryId,
+              result.presence,
+              result.repoPath,
+              result.fileManifestId,
+              null,
+              null,
+            ]
+          : [
+              result.repositoryStateId,
+              result.repositoryId,
+              result.presence,
+              null,
+              null,
+              result.priorRepositoryStateId,
+              result.tombstoneChangeId,
+            ]
+      )
+    );
+    execBatchedInsert(
+      this.sql,
+      `INSERT OR IGNORE INTO vcs_file_states
+       (file_state_id, file_id, presence, repository_id, path, content_hash, mode,
+        content_kind, byte_length, coordinate_extent, prior_file_state_id, tombstone_change_id)`,
+      12,
+      changeSet.fileUpdates.map(({ result }) =>
+        result.presence === "placed"
+          ? [
+              result.fileStateId,
+              result.fileId,
+              result.presence,
+              result.repositoryId,
+              result.path,
+              result.contentHash,
+              result.mode,
+              result.contentKind,
+              result.byteLength,
+              result.coordinateExtent,
+              null,
+              null,
+            ]
+          : [
+              result.fileStateId,
+              result.fileId,
+              result.presence,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              result.priorFileStateId,
+              result.tombstoneChangeId,
+            ]
+      )
+    );
   }
 
   private persistWorkUnit(value: WorkUnitRecord): void {
@@ -1271,53 +1289,69 @@ export class SemanticVcsStore {
     );
   }
 
-  private persistChange(value: ChangeRecord): void {
-    this.sql.exec(
+  private persistChanges(values: readonly ChangeRecord[]): void {
+    execBatchedInsert(
+      this.sql,
       `INSERT INTO gad_changes
        (change_id, work_unit_id, operation, ordinal, kind, source_json, base_json, result_json,
-        payload_json, effect_digest)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      value.changeId,
-      value.workUnitId,
-      value.operation,
-      value.ordinal,
-      value.kind,
-      value.source ? canonicalJson(value.source) : null,
-      value.base ? canonicalJson(value.base) : null,
-      value.result ? canonicalJson(value.result) : null,
-      canonicalJson(value.payload),
-      value.effectDigest
-    );
-    for (const [role, endpoint] of [
-      ["base", value.base],
-      ["result", value.result],
-    ] as const) {
-      if (!endpoint) continue;
-      this.sql.exec(
-        `INSERT INTO gad_change_coordinates
-         (change_id, role, repository_id, repo_path, file_id, path)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        payload_json, effect_digest)`,
+      10,
+      values.map((value) => [
         value.changeId,
-        role,
-        endpoint["repositoryId"] ?? null,
-        endpoint["repoPath"] ?? null,
-        endpoint["fileId"] ?? null,
-        endpoint["path"] ?? null
-      );
-    }
-    const counteractions = value.payload["counteractsChangeIds"];
-    if (Array.isArray(counteractions)) {
-      counteractions.forEach((counteractedChangeId, ordinal) => {
-        if (typeof counteractedChangeId !== "string") return;
-        this.sql.exec(
-          `INSERT INTO gad_change_counteractions
-           (change_id, ordinal, counteracted_change_id) VALUES (?, ?, ?)`,
-          value.changeId,
-          ordinal,
-          counteractedChangeId
-        );
-      });
-    }
+        value.workUnitId,
+        value.operation,
+        value.ordinal,
+        value.kind,
+        value.source ? canonicalJson(value.source) : null,
+        value.base ? canonicalJson(value.base) : null,
+        value.result ? canonicalJson(value.result) : null,
+        canonicalJson(value.payload),
+        value.effectDigest,
+      ])
+    );
+    execBatchedInsert(
+      this.sql,
+      `INSERT INTO gad_change_coordinates
+       (change_id, role, repository_id, repo_path, file_id, path)`,
+      6,
+      values.flatMap((value) =>
+        (
+          [
+            ["base", value.base],
+            ["result", value.result],
+          ] as const
+        ).flatMap(([role, endpoint]) =>
+          endpoint
+            ? [
+                [
+                  value.changeId,
+                  role,
+                  endpoint["repositoryId"] ?? null,
+                  endpoint["repoPath"] ?? null,
+                  endpoint["fileId"] ?? null,
+                  endpoint["path"] ?? null,
+                ],
+              ]
+            : []
+        )
+      )
+    );
+    execBatchedInsert(
+      this.sql,
+      `INSERT INTO gad_change_counteractions
+       (change_id, ordinal, counteracted_change_id)`,
+      3,
+      values.flatMap((value) => {
+        const counteractions = value.payload["counteractsChangeIds"];
+        return Array.isArray(counteractions)
+          ? counteractions.flatMap((counteractedChangeId, ordinal) =>
+              typeof counteractedChangeId === "string"
+                ? [[value.changeId, ordinal, counteractedChangeId]]
+                : []
+            )
+          : [];
+      })
+    );
   }
 
   private persistApplication(value: ApplicationRecord): void {
@@ -1336,27 +1370,33 @@ export class SemanticVcsStore {
     );
   }
 
-  private persistAppliedChange(value: AppliedChangeRecord): void {
-    this.sql.exec(
+  private persistAppliedChanges(values: readonly AppliedChangeRecord[]): void {
+    execBatchedInsert(
+      this.sql,
       `INSERT INTO gad_applied_changes
-       (applied_change_id, application_id, change_id, ordinal, applied_base_json, applied_result_json)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      value.appliedChangeId,
-      value.applicationId,
-      value.changeId,
-      value.ordinal,
-      value.appliedBase ? canonicalJson(value.appliedBase) : null,
-      value.appliedResult ? canonicalJson(value.appliedResult) : null
-    );
-    value.resultPredicates.forEach((predicate, ordinal) =>
-      this.sql.exec(
-        `INSERT INTO gad_applied_change_predicates
-         (applied_change_id, ordinal, predicate_json, predicate_digest)
-         VALUES (?, ?, ?, ?)`,
+       (applied_change_id, application_id, change_id, ordinal, applied_base_json, applied_result_json)`,
+      6,
+      values.map((value) => [
         value.appliedChangeId,
-        ordinal,
-        canonicalJson(predicate),
-        compactId("state-predicate", predicate)
+        value.applicationId,
+        value.changeId,
+        value.ordinal,
+        value.appliedBase ? canonicalJson(value.appliedBase) : null,
+        value.appliedResult ? canonicalJson(value.appliedResult) : null,
+      ])
+    );
+    execBatchedInsert(
+      this.sql,
+      `INSERT INTO gad_applied_change_predicates
+       (applied_change_id, ordinal, predicate_json, predicate_digest)`,
+      4,
+      values.flatMap((value) =>
+        value.resultPredicates.map((predicate, ordinal) => [
+          value.appliedChangeId,
+          ordinal,
+          canonicalJson(predicate),
+          compactId("state-predicate", predicate),
+        ])
       )
     );
   }

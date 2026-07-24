@@ -168,6 +168,7 @@ import {
   type ConnectedStartupMode,
 } from "./startupMode.js";
 import { establishServerSession, type SessionConnection } from "./serverSession.js";
+import type { StartupConnectionProgress } from "../startupConnectionProgress.js";
 import { getLocalHubLogPath } from "./hubProcessManager.js";
 import {
   loadStoredRemotePairing,
@@ -314,7 +315,7 @@ let electronHostLaunchBlockedByApproval = false;
 let electronHostTargetSyncLoop: AsyncStateConvergenceLoop<ElectronHostTargetSyncResult> | null =
   null;
 let bootstrapWorkspaceRpcReady = false;
-let bootstrapStartupDetail: string | null = null;
+let bootstrapStartupProgress: StartupConnectionProgress | null = null;
 let bootstrapConnectionKind: "local" | "remote" | null =
   startupMode.kind === "local" ? "local" : null;
 let desktopAutoUpdater: {
@@ -1318,7 +1319,7 @@ type BootstrapConnectionState = {
   pendingPairConfirmed: boolean;
   startupError: { message: string; detail?: string; logPath?: string } | null;
   serverLogPath: string | null;
-  startupDetail: string | null;
+  startupProgress: StartupConnectionProgress | null;
 };
 
 const WORKSPACE_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -1365,7 +1366,7 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
         bootstrapConnectionKind === "local" && startupMode.kind === "local"
           ? getLocalHubLogPath()
           : null,
-      startupDetail: bootstrapStartupDetail,
+      startupProgress: bootstrapStartupProgress,
     };
   }
   const localWorkspaces = centralData.listWorkspaces().map((entry) => ({
@@ -1385,7 +1386,7 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
       bootstrapConnectionKind === "local" && startupMode.kind === "local"
         ? getLocalHubLogPath()
         : null,
-    startupDetail: bootstrapStartupDetail,
+    startupProgress: bootstrapStartupProgress,
   };
 }
 
@@ -1921,8 +1922,6 @@ app.on("ready", async () => {
           pushBootstrapConnectionState();
           return;
         }
-        const autoApproveStartupUnits =
-          process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] === "1" || startup.resolved.created;
         startupMode = {
           kind: "local",
           connectionIntent: "local",
@@ -1931,7 +1930,6 @@ app.on("ready", async () => {
           workspaceId: startup.resolved.workspace.config.id,
           isEphemeral: false,
           ephemeralLifecycle: null,
-          autoApproveStartupUnits,
         };
         workspaceId = startupMode.workspaceId;
         log.info(`[bootstrap] Local workspace chosen: ${workspaceId} (${startupMode.wsDir})`);
@@ -1974,8 +1972,7 @@ app.on("ready", async () => {
       !identity?.source ||
       !identity.effectiveVersion ||
       !identity.executionDigest ||
-      !identity.requested ||
-      !identity.evalCeilings
+      !identity.requested
     ) {
       return null;
     }
@@ -1986,7 +1983,6 @@ app.on("ready", async () => {
       effectiveVersion: identity.effectiveVersion,
       executionDigest: identity.executionDigest,
       requested: identity.requested,
-      evalCeilings: identity.evalCeilings,
     } as const;
   };
 
@@ -2125,11 +2121,6 @@ app.on("ready", async () => {
     // once the WS lifecycle begins.
     const remoteHost = !skipRemotePairingLaunch ? storedRemoteAtLaunch?.workspaceName : undefined;
     const isRemoteSession = pendingRemotePairing !== null || remotePairedAtLaunch;
-    bootstrapStartupDetail = isRemoteSession
-      ? `Connecting to ${remoteHost || "the paired server"}…`
-      : startupMode.kind === "local"
-        ? `Starting local workspace “${startupMode.workspaceName}”…`
-        : null;
     pushBootstrapConnectionState();
 
     eventService.emit("server-connection-changed", {
@@ -2145,8 +2136,8 @@ app.on("ready", async () => {
     const establish = (mode: ConnectedStartupMode | null) =>
       establishServerSession({
         mode,
-        onStartupPhase: (detail) => {
-          bootstrapStartupDetail = detail;
+        onStartupProgress: (progress) => {
+          bootstrapStartupProgress = progress;
           pushBootstrapConnectionState();
         },
         pendingPairing: pendingRemotePairing ?? undefined,
