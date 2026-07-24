@@ -78,11 +78,14 @@ const GUIDE_OFFSET = 6;
 const ELBOW_WIDTH = INDENTATION_WIDTH - GUIDE_OFFSET;
 const ELBOW_RADIUS = 4;
 const GUIDE_COLOR = "var(--gray-a5)";
-const GUIDE_COLOR_ACTIVE = "var(--accent-8)";
+const GUIDE_COLOR_ACTIVE = "var(--gray-10)";
 
+// Persistent chrome stays neutral: selection reads as a grey wash plus a
+// brighter, heavier title, not an accent tint. The accent is reserved for
+// transient drag feedback (the drop indicator), where it has to cut through.
 const COLORS = {
-  selected: "var(--accent-a3)",
-  selectedHover: "var(--accent-a4)",
+  selected: "var(--gray-a4)",
+  selectedHover: "var(--gray-a5)",
   hover: "var(--gray-a3)",
   dropIndicator: "var(--accent-9)",
 } as const;
@@ -571,7 +574,7 @@ const SortableTreeItem = memo(
                   width: CARET_SLOT,
                   height: CARET_SLOT,
                   margin: 0,
-                  color: isSelected ? "var(--accent-11)" : "var(--gray-9)",
+                  color: isSelected ? "var(--gray-12)" : "var(--gray-9)",
                   transition: "transform var(--motion-base) var(--ease-standard)",
                   transform: collapsed ? "rotate(0deg)" : "rotate(90deg)",
                 }}
@@ -593,7 +596,7 @@ const SortableTreeItem = memo(
               whiteSpace: "nowrap",
               overflow: "hidden",
               textOverflow: "ellipsis",
-              color: isSelected ? "var(--accent-12)" : "var(--gray-11)",
+              color: isSelected ? "var(--gray-12)" : "var(--gray-11)",
             }}
           >
             {panel.title}
@@ -604,7 +607,7 @@ const SortableTreeItem = memo(
             <Tooltip content="Pinned — exempt from auto-unload">
               <DrawingPinFilledIcon
                 aria-label="Pinned"
-                style={{ flexShrink: 0, color: "var(--accent-11)", width: 12, height: 12 }}
+                style={{ flexShrink: 0, color: "var(--gray-11)", width: 12, height: 12 }}
               />
             </Tooltip>
           )}
@@ -617,7 +620,7 @@ const SortableTreeItem = memo(
             <Badge
               size="1"
               variant="soft"
-              color={isSelected ? undefined : "gray"}
+              color="gray"
               radius="full"
               style={{ fontSize: "10px", flexShrink: 0 }}
             >
@@ -758,6 +761,7 @@ function SidebarFooter({ activeWorkspaceName, onSwitchWorkspace, onNewPanel }: S
     <Box p="2">
       <Button
         variant="soft"
+        color="gray"
         size="2"
         className="app-touch-target"
         onClick={onNewPanel}
@@ -867,8 +871,10 @@ function OwnerBandHeader({
   const isSelf = selfUserId !== null && owner === selfUserId;
   const label = ownerBandLabel(owner, selfUserId, profile);
   // User-selected tints belong on the decorative presence dot. Keeping text
-  // on semantic theme colors preserves contrast in both appearances.
-  const labelColor = isSelf || owner === "" ? "var(--accent-11)" : "var(--gray-11)";
+  // on neutral theme colors preserves contrast in both appearances and keeps
+  // the band from tinting the chrome; your own band is distinguished by
+  // contrast, not hue.
+  const labelColor = isSelf || owner === "" ? "var(--gray-12)" : "var(--gray-11)";
   const endpoints = presence?.endpoints ?? 0;
   return (
     <Flex
@@ -1136,6 +1142,7 @@ export function LazyPanelTreeSidebar({
           </Text>
           <Button
             variant="soft"
+            color="gray"
             size="2"
             mt="1"
             className="app-touch-target"

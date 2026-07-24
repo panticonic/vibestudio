@@ -12,25 +12,35 @@ body,
   overflow: hidden;
   /* Pre-paint background before the Radix theme mounts — follow the system
      preference so a light-mode user never gets a dark flash. Tuned to the
-     greyed chrome base below (Radix slate step 4 light / step 3 dark) so the
-     first paint already reads as calm grey, not bright white. */
-  background: #e8e8ec;
+     greyed chrome base below (Radix neutral gray step 6 light / step 3 dark) so
+     the first paint already reads as calm grey, not bright white. */
+  background: #d9d9d9;
 }
 
 @media (prefers-color-scheme: dark) {
   html,
   body,
   #app {
-    background: #212225;
+    background: #222222;
   }
 }
 
 /* ============================================================================
-   Greyed app chrome. We step the shell's surface tokens a couple of rungs along
-   the Radix gray scale so light-mode chrome reads as a soft grey (not bright
-   white) and dark-mode chrome lifts off near-black toward a neutral grey. Raised
-   surfaces (cards, the approval overlay, toolbars) stay one rung "lighter" than
-   the chrome base in BOTH appearances so elevation still reads.
+   Greyed app chrome. The shell frame (titlebar, panel tree, pane backing) is a
+   neutral grey shelf that panels — app panels, and browser panels showing
+   arbitrary third-party pages — sit inside. Two things make that read:
+
+   1. TONE. Light-mode chrome steps well down the scale so it reads as a real
+      grey shelf rather than off-white; dark-mode chrome lifts off near-black.
+      Raised surfaces (cards, the approval overlay, toolbars) stay one rung
+      "lighter" than the chrome base in BOTH appearances so elevation reads.
+   2. HUE. The chrome opts out of the theme's `grayColor` (mauve — a violet
+      leaning neutral that belongs to the brand and suits panel content) and
+      pins its surfaces to Radix's pure `gray` steps, written as literals since
+      `--gray-*` is aliased to the chosen grayColor. A tinted frame wrapped
+      around a browser page reads as branded and clashes with the page; a true
+      neutral one just recedes. Alpha greys (borders, hovers) are near-neutral
+      already and stay tokenised.
 
    These override the shared `--surface-*` tokens (defined in tokens.css) but are
    SHELL-SCOPED: they live in this file, which is loaded only by the shell bundle
@@ -41,9 +51,9 @@ body,
    chrome and off the panels.
    ============================================================================ */
 .radix-themes:where(.light, .light-theme) {
-  --surface-chrome: var(--gray-4);
-  --surface-card: var(--gray-4);
-  --surface-raised: var(--gray-3);
+  --surface-chrome: #d9d9d9; /* gray-6 */
+  --surface-card: #e0e0e0; /* gray-5 */
+  --surface-raised: #e8e8e8; /* gray-4 */
   --surface-border: var(--gray-a7);
   /* Approval cards already have a border and tone ring. Keep their light-mode
      lift compact enough for the native overlay's 16px transparent margin. */
@@ -51,9 +61,9 @@ body,
 }
 
 .radix-themes:where(.dark, .dark-theme) {
-  --surface-chrome: var(--gray-3);
-  --surface-card: var(--gray-3);
-  --surface-raised: var(--gray-4);
+  --surface-chrome: #222222; /* gray-3 */
+  --surface-card: #222222; /* gray-3 */
+  --surface-raised: #2a2a2a; /* gray-4 */
   --surface-border: var(--gray-a7);
   --approval-card-shadow: var(--elevation-overlay);
 }
@@ -134,7 +144,7 @@ body,
 .app-tree-action:hover {
   opacity: 1;
   color: var(--gray-12);
-  background-color: var(--accent-a4);
+  background-color: var(--gray-a4);
 }
 
 .app-tree-action-danger:hover {

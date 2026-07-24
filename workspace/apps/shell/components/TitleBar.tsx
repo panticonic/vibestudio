@@ -1269,17 +1269,18 @@ function HoverableBreadcrumbItem({
         style={{
           position: "relative",
           ...itemStyle,
-          // Breadcrumb look (not tabs): the current item reads as a soft accent
-          // fill rather than a hard outlined box — calmer in the dense titlebar.
+          // Breadcrumb look (not tabs): the current item reads as a soft grey
+          // fill rather than a hard outlined box — calmer in the dense titlebar,
+          // and neutral so the frame doesn't tint against a browser page.
           borderColor: "transparent",
           backgroundColor: isCurrentActive
             ? isHovered
-              ? "var(--accent-a4)"
-              : "var(--accent-a3)"
+              ? "var(--gray-a5)"
+              : "var(--gray-a4)"
             : isHovered
               ? "var(--gray-a3)"
               : undefined,
-          color: isCurrentActive ? "var(--accent-12)" : undefined,
+          color: isCurrentActive ? "var(--gray-12)" : undefined,
         }}
         onClick={handleActivate}
         onMouseDown={handleMouseDown}
