@@ -700,10 +700,6 @@ function isMetaPath(filePath: string): boolean {
   return filePath === "meta" || filePath.startsWith("meta/");
 }
 
-function metaIdentityGrantKey(identityKey: string): string {
-  return `unit-meta-identity\x00${identityKey}`;
-}
-
 function userlandCallerKind(kind: string): "panel" | "app" | "worker" | "do" | null {
   if (kind === "panel" || kind === "app" || kind === "worker" || kind === "do") return kind;
   return null;

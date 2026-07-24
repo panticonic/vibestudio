@@ -3374,9 +3374,7 @@ async function main() {
   }
 
   const { wireWorkerdCore } = await import("./bootstrap/workerd.js");
-  const { resolveLiveExecutionCaller } = await import(
-    "./services/liveExecutionCaller.js"
-  );
+  const { resolveLiveExecutionCaller } = await import("./services/liveExecutionCaller.js");
   wireWorkerdCore({
     container,
     tokenManager,

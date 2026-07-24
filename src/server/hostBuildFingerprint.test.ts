@@ -37,18 +37,12 @@ describe("host build fingerprint", () => {
       "incremental compiler cache\n"
     );
     expect(
-      sameHostBuildFingerprint(
-        before,
-        computeHostBuildFingerprint({ cwd, mode: "development" })
-      )
+      sameHostBuildFingerprint(before, computeHostBuildFingerprint({ cwd, mode: "development" }))
     ).toBe(true);
 
     writeFileSync(join(cwd, "src", "index.ts"), "export const value = 2;\n");
     expect(
-      sameHostBuildFingerprint(
-        before,
-        computeHostBuildFingerprint({ cwd, mode: "development" })
-      )
+      sameHostBuildFingerprint(before, computeHostBuildFingerprint({ cwd, mode: "development" }))
     ).toBe(false);
   });
 

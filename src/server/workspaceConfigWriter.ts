@@ -231,22 +231,33 @@ export function createWorkspaceConfigMainWriter(deps: {
   const withFreshContext = async <T>(operation: (contextId: string) => Promise<T>): Promise<T> => {
     const contextId = `system:workspace-config:${randomUUID()}`;
     await deps.vcs.ensureContext(contextId);
-    let primaryFailure: unknown;
+
+    // The context drop is mandatory, but it can't live in a `finally`: a throw
+    // there hijacks the control flow leaving the try block (that's what
+    // no-unsafe-finally warns about). Settle both outcomes first, then decide
+    // what propagates — the operation's own failure always stays primary, with
+    // any cleanup failure attached to it.
+    let outcome: { ok: true; value: T } | { ok: false; error: unknown };
     try {
-      return await operation(contextId);
+      outcome = { ok: true, value: await operation(contextId) };
     } catch (error) {
-      primaryFailure = error;
-      throw error;
-    } finally {
-      try {
-        await deps.vcs.dropContext(contextId);
-      } catch (cleanupFailure) {
-        if (primaryFailure !== undefined) {
-          throw attachCleanupFailure(primaryFailure, cleanupFailure, contextId);
-        }
-        throw cleanupFailure;
-      }
+      outcome = { ok: false, error };
     }
+
+    let cleanup: { failure: unknown } | null = null;
+    try {
+      await deps.vcs.dropContext(contextId);
+    } catch (failure) {
+      cleanup = { failure };
+    }
+
+    if (cleanup) {
+      throw outcome.ok
+        ? cleanup.failure
+        : attachCleanupFailure(outcome.error, cleanup.failure, contextId);
+    }
+    if (!outcome.ok) throw outcome.error;
+    return outcome.value;
   };
 
   const render = (

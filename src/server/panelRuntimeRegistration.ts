@@ -39,10 +39,7 @@ import type { SlotRow } from "@vibestudio/shell-core/workspaceStateClient";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { ContextIngestionRecorder } from "./services/contextIntegrityStore.js";
 import { rpcErrorDataOf } from "@vibestudio/rpc";
-import {
-  panelFailure,
-  panelFailureBoundaryError,
-} from "@vibestudio/shared/panel/observation";
+import { panelFailure, panelFailureBoundaryError } from "@vibestudio/shared/panel/observation";
 
 const log = createDevLogger("PanelRuntimeRegistration");
 

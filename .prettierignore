@@ -2,3 +2,9 @@ node_modules
 dist
 build
 *.lock
+
+# Generated goldens. Written by their test with `JSON.stringify(x, null, 2)`
+# (see serviceAuthorityMatrix.test.ts), which expands short arrays where
+# Prettier collapses them — formatting these would be undone by the next
+# `UPDATE_GOLDEN=1` regeneration.
+**/__*.golden.json

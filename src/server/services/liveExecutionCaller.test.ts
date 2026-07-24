@@ -2,10 +2,7 @@ import type { AgentExecutionSessionFact, AgentExecutionTestPolicy } from "@vibes
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { describe, expect, it } from "vitest";
-import {
-  refineExecutionTestPolicy,
-  resolveLiveExecutionCaller,
-} from "./liveExecutionCaller.js";
+import { refineExecutionTestPolicy, resolveLiveExecutionCaller } from "./liveExecutionCaller.js";
 
 const orchestratorPolicy: AgentExecutionTestPolicy = {
   policyId: "test:run-1",

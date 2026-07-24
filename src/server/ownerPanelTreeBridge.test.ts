@@ -222,7 +222,10 @@ async function createSinglePanelBridge(options?: {
             platform: "desktop",
             supportsInspection: true,
             view: { exists: true, url: "http://localhost/panels/target", loading: false },
-            boot: { ...readyBoot(slot.current_entity_id, activeExecution!.buildKey), updatedAt: now },
+            boot: {
+              ...readyBoot(slot.current_entity_id, activeExecution!.buildKey),
+              updatedAt: now,
+            },
           }
         );
       }

@@ -57,10 +57,7 @@ export function resolveLiveExecutionCaller(input: {
     return null;
   }
 
-  const testPolicy = refineExecutionTestPolicy(
-    executionSession?.testPolicy,
-    contextTestPolicy
-  );
+  const testPolicy = refineExecutionTestPolicy(executionSession?.testPolicy, contextTestPolicy);
   if (executionSession?.testPolicy && contextTestPolicy && !testPolicy) {
     return null;
   }

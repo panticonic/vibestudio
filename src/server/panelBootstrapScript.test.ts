@@ -39,7 +39,7 @@ describe("PANEL_BOOTSTRAP_SCRIPT", () => {
   });
 
   it("publishes a machine-readable boot handshake instead of using DOM presence as readiness", () => {
-    expect(PANEL_BOOTSTRAP_SCRIPT).toContain('__vibestudioPanelBoot');
+    expect(PANEL_BOOTSTRAP_SCRIPT).toContain("__vibestudioPanelBoot");
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain('reportBoot("loading")');
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain('reportBoot("booting")');
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain('bundle.onload = () => reportBoot("ready")');

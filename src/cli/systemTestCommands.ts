@@ -509,7 +509,7 @@ function withElapsedProgress(value: unknown): unknown {
       : NaN;
   const now = Number.isFinite(terminalAt) ? terminalAt : Date.now();
   const startedAt = typeof progress["startedAt"] === "string" ? progress["startedAt"] : null;
-      const running = Array.isArray(progress["running"])
+  const running = Array.isArray(progress["running"])
     ? progress["running"].map((raw) => {
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
         const test = raw as Record<string, unknown>;

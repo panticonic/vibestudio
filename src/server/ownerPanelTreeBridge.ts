@@ -83,14 +83,14 @@ function operationFailure(
     record?.["errorData"] && typeof record["errorData"] === "object"
       ? (record["errorData"] as Record<string, unknown>)
       : undefined;
-  const diagnostics = Array.isArray(record?.["diagnostics"])
-    ? record?.["diagnostics"]
-    : undefined;
+  const diagnostics = Array.isArray(record?.["diagnostics"]) ? record?.["diagnostics"] : undefined;
   const unitMissing =
     errorData?.["code"] === "package_not_found" ||
     /unknown (?:runtime )?build unit|unknown build unit/iu.test(message);
-  const refMissing = !unitMissing && /(?:unknown|missing|invalid).*(?:ref|context|state)/iu.test(message);
-  const compileFailure = Boolean(diagnostics) || /(?:compile|esbuild|typescript|syntax)/iu.test(message);
+  const refMissing =
+    !unitMissing && /(?:unknown|missing|invalid).*(?:ref|context|state)/iu.test(message);
+  const compileFailure =
+    Boolean(diagnostics) || /(?:compile|esbuild|typescript|syntax)/iu.test(message);
   return panelFailure({
     code: unitMissing
       ? "unit_not_found"
@@ -934,11 +934,7 @@ export async function createServerPanelTreeBridge(
         },
       });
       phase = "failed";
-    } else if (
-      host.boot.phase === "ready" &&
-      host.view.loading === false &&
-      bootMatchesAttempt
-    ) {
+    } else if (host.boot.phase === "ready" && host.view.loading === false && bootMatchesAttempt) {
       phase = "ready";
     } else {
       phase = "booting";
@@ -1162,13 +1158,10 @@ export async function createServerPanelTreeBridge(
               code: "parent_resolution_timeout",
               stage: "resolve",
               message:
-                error instanceof Error
-                  ? error.message
-                  : "Panel parent resolution did not settle",
+                error instanceof Error ? error.message : "Panel parent resolution did not settle",
               provenance: {
                 source,
-                contextId:
-                  typeof options.contextId === "string" ? options.contextId : "unassigned",
+                contextId: typeof options.contextId === "string" ? options.contextId : "unassigned",
                 requestedRef: options.ref ?? "main",
               },
               details: {

@@ -104,10 +104,7 @@ async function waitForReady(file: string, child: ChildProcess): Promise<unknown>
     try {
       return JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
     } catch (error) {
-      if (
-        (error as NodeJS.ErrnoException).code !== "ENOENT" &&
-        !(error instanceof SyntaxError)
-      ) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof SyntaxError)) {
         throw error;
       }
     }
@@ -147,9 +144,7 @@ async function runServer(
   const readyFile =
     configuredReadyFile ?? path.join(instance.root, "server-auth", "hub-ready.json");
   fs.rmSync(readyFile, { force: true });
-  const serverArgs = configuredReadyFile
-    ? forwarded
-    : [...forwarded, "--ready-file", readyFile];
+  const serverArgs = configuredReadyFile ? forwarded : [...forwarded, "--ready-file", readyFile];
   const child = spawn(process.execPath, [tsxCli, "src/server/index.ts", ...serverArgs], {
     cwd: process.cwd(),
     env,
@@ -183,10 +178,7 @@ async function runServer(
   }
 }
 
-async function runDesktop(
-  forwarded: string[],
-  env: NodeJS.ProcessEnv
-): Promise<number> {
+async function runDesktop(forwarded: string[], env: NodeJS.ProcessEnv): Promise<number> {
   await run(process.execPath, ["build.mjs"], { env });
   // Preserve the existing non-blocking developer typecheck, but make it an
   // owned child of this instance instead of a leaked shell background job.
@@ -238,9 +230,7 @@ async function main(): Promise<void> {
   }
   const disposable = hasFlag(parsed.forwarded, "--ephemeral");
   const id = parsed.instanceId ?? (disposable ? generatedInstanceId(mode) : "source");
-  const root = disposable
-    ? createEphemeralInstanceRoot(id)
-    : persistentInstanceRoot(repoRoot, id);
+  const root = disposable ? createEphemeralInstanceRoot(id) : persistentInstanceRoot(repoRoot, id);
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const instance = registerDevInstance({
     id,

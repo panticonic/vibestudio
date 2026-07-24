@@ -29,10 +29,7 @@ import type {
 } from "@vibestudio/shared/doDispatcher";
 import { assertPresent } from "../lintHelpers";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
-import {
-  describeWorkerdFetchFailure,
-  getWorkerdConnectionDispatcher,
-} from "./workerdRpcRelay.js";
+import { describeWorkerdFetchFailure, getWorkerdConnectionDispatcher } from "./workerdRpcRelay.js";
 
 /** Canonical string key for a DORef, used for maps and logging. */
 export function doRefKey(ref: DORef): string {

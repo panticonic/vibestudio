@@ -50,4 +50,3 @@ describe("developer instance registry", () => {
     expect(() => persistentInstanceRoot(tempDir, "../escape")).toThrow(/Invalid instance id/u);
   });
 });
-

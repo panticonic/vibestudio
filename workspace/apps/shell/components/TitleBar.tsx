@@ -19,7 +19,6 @@ import {
   SpeakerLoudIcon,
 } from "@radix-ui/react-icons";
 import {
-  Badge,
   Box,
   DropdownMenu,
   Flex,
