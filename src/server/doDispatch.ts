@@ -385,7 +385,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
    * recreate infrastructure after its entity has retired.
    */
   async dispatch(ref: DORef, method: string, ...args: unknown[]): Promise<unknown> {
-    return this.withSlowWarning(`${doRefKey(ref)}.${method}`, () =>
+    return this.withProgressReport(`${doRefKey(ref)}.${method}`, () =>
       this.dispatchImpl(ref, method, args)
     );
   }
@@ -400,10 +400,11 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     // A held call is INTENTIONALLY long (the eval runs for its whole duration),
     // so report coarse liveness at info level. Warning/error streams are
     // reserved for calls whose duration is actually anomalous.
-    return this.withSlowWarning(
+    return this.withProgressReport(
       `${doRefKey(ref)}.${method} (held)`,
       () => this.dispatchImpl(ref, method, args),
       300_000,
+      "working",
       console.info
     );
   }
@@ -413,16 +414,19 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
    * dead workerd socket) otherwise hangs its caller with zero output. Warns
    * every `intervalMs` (default 10s) while the call is pending so the offender is named in the log.
    */
-  private async withSlowWarning<T>(
+  private async withProgressReport<T>(
     label: string,
     fn: () => Promise<T>,
     intervalMs = 10_000,
+    state: "working" | "slow" = "slow",
     report: (message: string) => void = console.warn
   ): Promise<T> {
     const startedAt = Date.now();
+    let reported = false;
     const timer = setInterval(() => {
+      reported = true;
       report(
-        `[DODispatch] ${label} still pending after ${Math.round((Date.now() - startedAt) / 1000)}s`
+        `[DODispatch] state=${state} ${label} has been active for ${Math.round((Date.now() - startedAt) / 1000)}s`
       );
     }, intervalMs);
     timer.unref?.();
@@ -430,6 +434,11 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       return await fn();
     } finally {
       clearInterval(timer);
+      if (reported && state === "working") {
+        report(
+          `[DODispatch] state=completed ${label} finished after ${Math.round((Date.now() - startedAt) / 1000)}s`
+        );
+      }
     }
   }
 
@@ -463,7 +472,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     method: "prepare" | "resume",
     arg: unknown
   ): Promise<unknown> {
-    return this.withSlowWarning(`${doRefKey(ref)}.__lifecycle/${method}`, () =>
+    return this.withProgressReport(`${doRefKey(ref)}.__lifecycle/${method}`, () =>
       this.dispatchLifecycleImpl(ref, method, arg)
     );
   }
@@ -496,8 +505,14 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     signal?: AbortSignal,
     testPolicy?: AgentExecutionTestPolicy
   ): Promise<DoAlarmDispatchResult> {
-    return this.withSlowWarning(`${doRefKey(ref)}.__alarm`, () =>
-      this.dispatchAlarmImpl(ref, signal, testPolicy)
+    // Agent alarms own a complete model/tool turn and routinely wait longer
+    // than a transport request. Report that as healthy work, not as a warning.
+    return this.withProgressReport(
+      `${doRefKey(ref)}.__alarm`,
+      () => this.dispatchAlarmImpl(ref, signal, testPolicy),
+      30_000,
+      "working",
+      console.info
     );
   }
 

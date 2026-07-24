@@ -592,6 +592,20 @@ export const HOST_CAPABILITY_PRESENTATIONS = {
     description: "Allows {requesterKind} to remove a saved site permission.",
     group: "approvals",
   },
+  "permissions.safetyStatus": {
+    title: "View workspace authority safety status",
+    action: "view workspace authority safety status",
+    description:
+      "Allows {requesterKind} to view whether workspace authority is locked and how much agent work it affects.",
+    group: "approvals",
+  },
+  "permissions.setWorkspaceAuthorityLock": {
+    title: "Change the workspace authority lock",
+    action: "change the workspace authority lock",
+    description:
+      "Allows {requesterKind} to stop or restore protected authority across the workspace.",
+    group: "approvals",
+  },
   "permissions.updateAgentProfile": {
     title: "Change saved agent choices",
     action: "change saved agent choices",

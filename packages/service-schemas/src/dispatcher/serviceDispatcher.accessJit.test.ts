@@ -188,6 +188,94 @@ describe("dispatcher: access descriptor + JIT errors", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it("keeps nested preflight bound to the immutable eval transport identity", async () => {
+    const d = new ServiceDispatcher({
+      tierLookup: (method) =>
+        method === "sealed.write"
+          ? { tier: "open", session: "codeOnly", rationale: "durable code only" }
+          : { tier: "open", session: "family", rationale: "discovery" },
+    });
+    d.setAuthorityResolver(({ caller, capability, resourceKey }) => ({
+      ...testAuthority(caller, capability, resourceKey),
+      grants: [],
+    }));
+    d.registerService({
+      name: "authority",
+      authority: { principals: ["code", "session"] },
+      methods: {
+        preflight: {
+          args: z.tuple([
+            z.object({
+              service: z.string(),
+              method: z.string(),
+              args: z.array(z.unknown()),
+            }),
+          ]),
+          access: { sensitivity: "read" },
+        },
+      },
+      handler: (context, _method, [input]) => {
+        const request = input as { service: string; method: string; args: unknown[] };
+        return d.preflightAuthority(context, request.service, request.method, request.args);
+      },
+    });
+    d.registerService({
+      name: "sealed",
+      authority: { principals: ["code"] },
+      methods: {
+        write: {
+          args: z.tuple([]),
+          access: { sensitivity: "write" },
+        },
+      },
+      handler: vi.fn(async () => "effect"),
+    });
+    d.markInitialized();
+    const executionSession = createTestExecutionSession({ runtimeId: "eval-runtime" });
+    const caller = createVerifiedCaller(
+      "eval-runtime",
+      "do",
+      {
+        callerId: "eval-runtime",
+        callerKind: "do",
+        repoPath: "skills/system-testing",
+        effectiveVersion: "test",
+        executionDigest: "0".repeat(64),
+      },
+      null,
+      null,
+      executionSession
+    );
+    const context: ServiceContext = {
+      caller,
+      evalInvocation: {
+        runId: executionSession.eval.runId,
+        credential: "test-credential",
+        objectKey: "eval-runtime",
+      },
+    };
+
+    await expect(
+      d.dispatch(context, "authority", "preflight", [
+        { service: "sealed", method: "write", args: [] },
+      ])
+    ).resolves.toMatchObject({
+      decision: "denied",
+      leaves: [
+        {
+          capability: "service:sealed.write",
+          status: "denied",
+          failure: {
+            reasonCode: "invalid-session",
+            remediation: {
+              kind: "use-admitted-principal",
+            },
+          },
+        },
+      ],
+    });
+  });
+
   it("keeps discovery open while gating a dynamically selected authority leaf", async () => {
     const d = new ServiceDispatcher({
       tierLookup: () => ({ tier: "open", session: "family", rationale: "discovery" }),
@@ -459,5 +547,4 @@ describe("dispatcher: access descriptor + JIT errors", () => {
     expect(request).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledTimes(1);
   });
-
 });

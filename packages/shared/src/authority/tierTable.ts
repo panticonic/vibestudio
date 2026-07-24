@@ -566,7 +566,8 @@ export const METHOD_TIERS = {
   "contextIntegrity.explain": {
     tier: "open",
     session: "family",
-    rationale: "A session may inspect bounded verified lineage for its own monotone ingestion latch",
+    rationale:
+      "A session may inspect bounded verified lineage for its own monotone ingestion latch",
   },
   "contextIntegrity.ingest": {
     tier: "open",
@@ -767,9 +768,9 @@ export const METHOD_TIERS = {
   },
   "extensions.invoke": {
     tier: "open",
-    session: "codeOnly",
+    session: "family",
     rationale:
-      "Open bias: no C1-C4 or G1-G5 rule applies; §2 durable code identity or host approval plumbing",
+      "Invocation is limited to an installed, approved extension and preserves the admitted caller and execution-session context; the extension's own sensitive operations remain authority-checked",
   },
   "extensions.invokeProvider": {
     tier: "open",
@@ -779,15 +780,14 @@ export const METHOD_TIERS = {
   },
   "extensions.invokeStream": {
     tier: "open",
-    session: "codeOnly",
+    session: "family",
     rationale:
-      "Open bias: no C1-C4 or G1-G5 rule applies; §2 durable code identity or host approval plumbing",
+      "Streaming invocation has the same installed-extension boundary and caller propagation as unary invocation",
   },
   "extensions.list": {
     tier: "open",
-    session: "codeOnly",
-    rationale:
-      "Open bias: no C1-C4 or G1-G5 rule applies; §2 durable code identity or host approval plumbing",
+    session: "family",
+    rationale: "Read-only discovery of installed workspace extensions",
   },
   "extensions.log": {
     tier: "open",
@@ -1783,6 +1783,17 @@ export const METHOD_TIERS = {
     tier: "critical",
     session: "family",
     rationale: "C2: removes authority or identity membership; §2 default {code, session} family",
+  },
+  "permissions.safetyStatus": {
+    tier: "gated",
+    session: "family",
+    rationale: "G4: privacy or live authority-map read; §2 default {code, session} family",
+  },
+  "permissions.setWorkspaceAuthorityLock": {
+    tier: "critical",
+    session: "family",
+    rationale:
+      "C2: suspends or restores protected authority workspace-wide; §2 default {code, session} family",
   },
   "permissions.updateAgentProfile": {
     tier: "critical",

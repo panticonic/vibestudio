@@ -106,6 +106,15 @@
           "evidence": "intentional-broad"
         },
         {
+          "capability": "permissions.read",
+          "resource": {
+            "kind": "exact",
+            "key": "permissions.read"
+          },
+          "tier": "gated",
+          "evidence": "exact"
+        },
+        {
           "capability": "subagents.create",
           "resource": {
             "kind": "prefix",

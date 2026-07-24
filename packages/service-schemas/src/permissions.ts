@@ -12,6 +12,12 @@ export const savedPermissionGrantSchema = z
     repoPath: z.string().optional(),
     effectiveVersion: z.string().optional(),
     grantedAt: z.number().optional(),
+    lastUsedAt: z.number().optional(),
+    expiresAt: z.number().optional(),
+    why: z.string().min(1),
+    approvedBy: z.string().min(1),
+    duration: z.string().min(1),
+    revokeEffect: z.string().min(1),
   })
   .strict();
 
@@ -43,6 +49,10 @@ export const agentAuthorityItemSchema = z
     lastUsedAt: z.number().optional(),
     attemptCount: z.number().int().nonnegative().optional(),
     lastAttemptAt: z.number().optional(),
+    why: z.string().min(1),
+    approvedBy: z.string().min(1),
+    duration: z.string().min(1),
+    revokeEffect: z.string().min(1),
   })
   .strict();
 
@@ -61,11 +71,20 @@ export const agentAuthorityProfileSchema = z
     bindingId: z.string().min(1),
     name: z.string().min(1),
     summary: z.string().min(1),
+    paused: z.boolean(),
     cells: z.array(agentAuthorityCellSchema),
   })
   .strict();
 
 export type AgentAuthorityProfile = z.infer<typeof agentAuthorityProfileSchema>;
+
+export const authoritySafetyStatusSchema = z
+  .object({
+    workspaceLocked: z.boolean(),
+    activeAgentCount: z.number().int().nonnegative(),
+    pendingAcquisitionCount: z.number().int().nonnegative(),
+  })
+  .strict();
 
 export const permissionsMethods = defineServiceMethods({
   list: {
@@ -94,23 +113,34 @@ export const permissionsMethods = defineServiceMethods({
     returns: z.array(agentAuthorityProfileSchema),
     access: { sensitivity: "read" },
   },
+  safetyStatus: {
+    description:
+      "Read the live emergency authority state and the work it can immediately interrupt.",
+    args: z.tuple([]),
+    returns: authoritySafetyStatusSchema,
+    access: { sensitivity: "read" },
+  },
   updateAgentProfile: {
-    description: "Restore, remove, unlock, or reset one agent's lasting authority settings.",
+    description:
+      "Pause or resume an agent, revoke all of its authority, or change one lasting authority setting.",
     args: z.tuple([
       z.discriminatedUnion("action", [
         z.object({ action: z.literal("revoke-grant"), id: z.string().min(1) }).strict(),
         z.object({ action: z.literal("restore-grant"), id: z.string().min(1) }).strict(),
         z.object({ action: z.literal("unlock"), id: z.string().min(1) }).strict(),
-        z
-          .object({
-            action: z.literal("reset"),
-            bindingId: z.string().min(1),
-            keepLocks: z.boolean(),
-          })
-          .strict(),
+        z.object({ action: z.literal("pause-agent"), bindingId: z.string().min(1) }).strict(),
+        z.object({ action: z.literal("resume-agent"), bindingId: z.string().min(1) }).strict(),
+        z.object({ action: z.literal("revoke-all-agent"), bindingId: z.string().min(1) }).strict(),
       ]),
     ]),
     returns: z.void(),
+    access: { sensitivity: "write" },
+  },
+  setWorkspaceAuthorityLock: {
+    description:
+      "Engage or release the emergency workspace lock for every agent's protected authority.",
+    args: z.tuple([z.object({ locked: z.boolean() }).strict()]),
+    returns: authoritySafetyStatusSchema,
     access: { sensitivity: "write" },
   },
 });

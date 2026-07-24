@@ -19,6 +19,7 @@ export interface AlarmDriverDeps {
   doDispatch: AlarmDoDispatcher;
   workspaceId: string;
   concurrency?: number;
+  isAuthorityPaused?: (ref: DORef) => boolean;
 }
 
 /**
@@ -186,6 +187,21 @@ export class AlarmDriver {
           className: target.className,
           objectKey: target.objectKey,
         };
+        if (this.deps.isAuthorityPaused?.(ref)) {
+          // Preserve the durable wake without spinning or admitting fresh
+          // agent work. Resuming the agent causes its normal event path to
+          // schedule an immediate wake.
+          await this.dispatchWorkspace("alarmSet", {
+            source: target.source,
+            className: target.className,
+            objectKey: target.objectKey,
+            wakeAt: Date.now() + 60_000,
+          });
+          log.info(
+            `state=paused authority lock deferred ${target.source}:${target.className}/${target.objectKey}`
+          );
+          return;
+        }
         let result: Awaited<ReturnType<AlarmDoDispatcher["dispatchAlarm"]>>;
         const controller = new AbortController();
         this.activeDispatches.add(controller);

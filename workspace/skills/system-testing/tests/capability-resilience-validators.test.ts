@@ -305,6 +305,40 @@ describe("approval semantic validators", () => {
               "const revoked = await approvals.revoke(subject.id);",
               "const afterRevoke = await approvals.list();",
               "return {",
+              "  subjectId: subject.id,",
+              "  beforeCount: before.length,",
+              "  decision,",
+              "  afterApproveCount: afterApprove.length,",
+              "  revoked,",
+              "  afterRevokeCount: afterRevoke.length,",
+              "  afterRevokeHasSubject: afterRevoke.some((entry) => entry.subject.id === subject.id),",
+              "};",
+            ].join("\n"),
+            {
+              subjectId: subject,
+              beforeCount: 0,
+              decision: { kind: "choice", choice: "allow" },
+              afterApproveCount: 1,
+              revoked: true,
+              afterRevokeCount: 0,
+              afterRevokeHasSubject: false,
+            }
+          ),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+    expect(
+      test.validate(
+        execution([
+          evalCall(
+            [
+              `const subject = { id: "${subject}", label: "Harmless check" };`,
+              "const before = await approvals.list();",
+              "const decision = await approvals.request({ subject, title: 'Allow check?' });",
+              "const afterApprove = await approvals.list();",
+              "const revoked = await approvals.revoke(subject.id);",
+              "const afterRevoke = await approvals.list();",
+              "return {",
               "  beforeCount: before.length,",
               "  decision,",
               "  afterApproveCount: afterApprove.length,",

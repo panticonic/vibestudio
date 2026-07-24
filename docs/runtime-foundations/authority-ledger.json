@@ -5617,6 +5617,47 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
+      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:interruptAllChannels",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
+      "source": "packages/agentic-do",
+      "method": "interruptAllChannels",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:interruptAllChannels",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:interruptAllChannels)",
+      "r3b": {
+        "review": "host-only-agent-transport-barrier",
+        "change": "Adds a host-only lifecycle operation that enumerates the exact agent vessel's subscribed channels and interrupts their active transports while flushing deferred work; no user, code, or entity principal can invoke it directly."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
       "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:interruptChannel",
       "rpcPlane": "workspace-do",
       "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
@@ -27142,6 +27183,88 @@
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
       "capability": "service:permissions.revoke"
+    },
+    {
+      "id": "host:permissions.safetyStatus",
+      "rpcPlane": "host-service",
+      "owner": "permissions",
+      "method": "safetyStatus",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:permissions.safetyStatus"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:permissions.safetyStatus),allOf(capability(user,service:permissions.safetyStatus),workspace-member),allOf(capability(code,service:permissions.safetyStatus),workspace-member))",
+      "r3b": {
+        "review": "bounded-live-authority-safety-read",
+        "change": "Adds the permission inventory's bounded read of workspace and per-agent authority locks; the ordinary permissions.read capability and workspace membership checks remain in force."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:permissions.safetyStatus"
+    },
+    {
+      "id": "host:permissions.setWorkspaceAuthorityLock",
+      "rpcPlane": "host-service",
+      "owner": "permissions",
+      "method": "setWorkspaceAuthorityLock",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:permissions.setWorkspaceAuthorityLock"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:permissions.setWorkspaceAuthorityLock),allOf(capability(user,service:permissions.setWorkspaceAuthorityLock),workspace-member),allOf(capability(code,service:permissions.setWorkspaceAuthorityLock),workspace-member))",
+      "r3b": {
+        "review": "user-approved-emergency-authority-barrier",
+        "change": "Adds the critical control that durably blocks protected agent authority workspace-wide before interrupting live agent transports. Releasing the barrier uses the same reviewed critical capability."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:permissions.setWorkspaceAuthorityLock"
     },
     {
       "id": "host:permissions.updateAgentProfile",

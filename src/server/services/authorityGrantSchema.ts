@@ -50,7 +50,7 @@ const ENVELOPE_RULES_SQL = `CREATE TABLE envelope_rules (
 const AUTHORITY_LOCKS_SQL = `CREATE TABLE authority_locks (
   id TEXT PRIMARY KEY,
   agent_binding_id TEXT NOT NULL,
-  level TEXT NOT NULL CHECK (level IN ('resource','capability','cell')),
+  level TEXT NOT NULL CHECK (level IN ('resource','capability','cell','agent','workspace')),
   capability TEXT,
   resource_key TEXT,
   resource_scope TEXT CHECK (resource_scope IS NULL OR resource_scope IN ('exact','prefix','origin','domain','network')),
@@ -65,11 +65,13 @@ const AUTHORITY_LOCKS_SQL = `CREATE TABLE authority_locks (
   CHECK (
     (level = 'resource' AND capability IS NOT NULL AND resource_key IS NOT NULL AND domain IS NULL AND verb IS NULL) OR
     (level = 'capability' AND capability IS NOT NULL AND resource_key IS NULL AND domain IS NULL AND verb IS NULL) OR
-    (level = 'cell' AND capability IS NULL AND resource_key IS NULL AND domain IS NOT NULL AND verb IS NOT NULL)
+    (level = 'cell' AND capability IS NULL AND resource_key IS NULL AND domain IS NOT NULL AND verb IS NOT NULL) OR
+    (level = 'agent' AND agent_binding_id <> '*' AND capability IS NULL AND resource_key IS NULL AND domain IS NULL AND verb IS NULL) OR
+    (level = 'workspace' AND agent_binding_id = '*' AND capability IS NULL AND resource_key IS NULL AND domain IS NULL AND verb IS NULL)
   )
 )`;
 
-export const AUTHORITY_GRANTS_SCHEMA_VERSION = 4;
+export const AUTHORITY_GRANTS_SCHEMA_VERSION = 5;
 
 export const AUTHORITY_GRANTS_SCHEMA: CanonicalSqliteSchema = {
   version: AUTHORITY_GRANTS_SCHEMA_VERSION,

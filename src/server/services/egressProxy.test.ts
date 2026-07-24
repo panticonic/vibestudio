@@ -78,6 +78,17 @@ class MemoryCredentialUseGrantStore {
     return false;
   }
 
+  revokeForAgent(agentId: string): number {
+    const before = this.grants.length;
+    for (let index = this.grants.length - 1; index >= 0; index -= 1) {
+      const grant = this.grants[index];
+      if (grant?.scope === "agent" && grant.agentId === agentId) {
+        this.grants.splice(index, 1);
+      }
+    }
+    return before - this.grants.length;
+  }
+
   upsert(credentialId: string, grant: CredentialUseGrant): void {
     const key = credentialUseGrantTestKey(credentialId, grant);
     const index = this.grants.findIndex(

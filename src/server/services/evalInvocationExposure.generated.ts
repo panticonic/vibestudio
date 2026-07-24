@@ -1878,6 +1878,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:interruptAllChannels",
+    rpcPlane: "workspace-do",
+    capability: "rpc:interruptAllChannels",
+    authorityPrincipals: ["host"],
+    owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    source: "packages/agentic-do",
+    method: "interruptAllChannels",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    },
+  },
+  {
     id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:interruptChannel",
     rpcPlane: "workspace-do",
     capability: "rpc:interruptChannel",
@@ -8857,6 +8871,32 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:permissions.safetyStatus",
+    rpcPlane: "host-service",
+    capability: "service:permissions.safetyStatus",
+    authorityPrincipals: ["user", "host", "code"],
+    owner: "permissions",
+    method: "safetyStatus",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:permissions.safetyStatus",
+    },
+  },
+  {
+    id: "host:permissions.setWorkspaceAuthorityLock",
+    rpcPlane: "host-service",
+    capability: "service:permissions.setWorkspaceAuthorityLock",
+    authorityPrincipals: ["user", "host", "code"],
+    owner: "permissions",
+    method: "setWorkspaceAuthorityLock",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:permissions.setWorkspaceAuthorityLock",
+    },
+  },
+  {
     id: "host:permissions.updateAgentProfile",
     rpcPlane: "host-service",
     capability: "service:permissions.updateAgentProfile",
@@ -11995,6 +12035,14 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "permissions",
+    method: "safetyStatus",
+  },
+  {
+    service: "permissions",
+    method: "setWorkspaceAuthorityLock",
+  },
+  {
+    service: "permissions",
     method: "updateAgentProfile",
   },
   {
@@ -13273,6 +13321,8 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:permissions.list",
   "service:permissions.listAgentProfiles",
   "service:permissions.revoke",
+  "service:permissions.safetyStatus",
+  "service:permissions.setWorkspaceAuthorityLock",
   "service:permissions.updateAgentProfile",
   "service:phoneProvisioning.devices",
   "service:phoneProvisioning.install",

@@ -31,7 +31,17 @@ let workerdConnectionDispatcher: Agent | null = null;
  * fresh pool rather than inheriting connections or terminal state.
  */
 export function getWorkerdConnectionDispatcher(): Dispatcher {
-  workerdConnectionDispatcher ??= new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+  workerdConnectionDispatcher ??= new Agent({
+    headersTimeout: 0,
+    bodyTimeout: 0,
+    // DODispatch POSTs are semantic invocations, and several intentionally
+    // have no replay-safe command identity. Workerd may close an idle HTTP/1
+    // connection before Undici observes the FIN; reusing that pooled socket
+    // produces an ambiguous UND_ERR_SOCKET after the request was written.
+    // `pipelining: 0` gives each loopback invocation its own connection, so we
+    // preserve exactly-once dispatch without a transport retry or stale socket.
+    pipelining: 0,
+  });
   return workerdConnectionDispatcher;
 }
 

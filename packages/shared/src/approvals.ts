@@ -163,6 +163,7 @@ export const userlandApprovalGrantSchema = z
       .strict(),
     choice: z.string(),
     grantedAt: z.number(),
+    grantedBy: z.string().optional(),
     scope: z.enum(["caller", "session", "version"]).optional(),
   })
   .strict();
@@ -417,6 +418,7 @@ export interface UserlandApprovalGrant {
   subject: UserlandApprovalSubject;
   choice: string;
   grantedAt: number;
+  grantedBy?: string;
   scope?: UserlandApprovalGrantScope;
 }
 

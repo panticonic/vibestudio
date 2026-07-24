@@ -117,9 +117,7 @@ export function ApprovalCard({
     () =>
       new Set(
         approval.kind === "mission-review"
-          ? approval.authority.diff.added
-              .filter((row) => row.tier === "gated")
-              .map(authorityRowKey)
+          ? approval.authority.diff.added.filter((row) => row.tier === "gated").map(authorityRowKey)
           : []
       )
   );
@@ -286,7 +284,9 @@ export function ApprovalCard({
       aria-keyshortcuts="Enter D Escape ArrowLeft ArrowRight"
       onKeyDown={handleKeyboardDecision}
       aria-modal="false"
-      aria-label={copy.title}
+      aria-labelledby={`approval-title-${approval.approvalId}`}
+      aria-describedby={`approval-summary-${approval.approvalId}`}
+      aria-busy={actionPending}
     >
       <span key={approval.approvalId} className="approval-attention-pulse" aria-hidden="true" />
       <div className="approval-card-scroll">
@@ -306,6 +306,7 @@ export function ApprovalCard({
                 </Badge>
               ) : null}
               <Text
+                id={`approval-title-${approval.approvalId}`}
                 size="3"
                 weight="bold"
                 style={{ lineHeight: 1.25, color: "var(--gray-12)", overflowWrap: "anywhere" }}
@@ -323,6 +324,10 @@ export function ApprovalCard({
                 />
               ) : null}
             </Flex>
+
+            <Box id={`approval-summary-${approval.approvalId}`}>
+              <ApprovalMarkdown source={copy.summary} tone="muted" compact />
+            </Box>
 
             <Flex align="center" gap="1" wrap="wrap" style={{ minWidth: 0 }}>
               <CallerChip caller={caller} onShow={() => emitForApproval({ type: "show-panel" })} />
@@ -354,7 +359,13 @@ export function ApprovalCard({
               </Flex>
             ) : null}
             {decisionError ? (
-              <Flex align="center" gap="1" style={{ color: "var(--red-11)" }}>
+              <Flex
+                align="center"
+                gap="1"
+                style={{ color: "var(--red-11)" }}
+                role="alert"
+                aria-live="assertive"
+              >
                 <ExclamationTriangleIcon width={13} height={13} />
                 <Text size="1" style={{ lineHeight: 1.35 }}>
                   Approval action failed: {decisionError}
@@ -468,7 +479,7 @@ export function ApprovalCard({
       <fieldset className="approval-card-footer" disabled={actionPending} aria-busy={actionPending}>
         {actions}
         {actionPending ? (
-          <Text size="1" color="gray" ml="2" role="status">
+          <Text size="1" color="gray" ml="2" role="status" aria-live="polite">
             Saving…
           </Text>
         ) : null}
@@ -711,9 +722,7 @@ function StandardApprovalActions({
   const isSevereCapability = approval.kind === "capability" && approval.severity === "severe";
   const critical = approval.kind === "capability" && approval.cardType === "confirm.critical";
   const agentName =
-    approval.kind === "capability"
-      ? (approval.snapshot?.agentName ?? "this agent")
-      : "this agent";
+    approval.kind === "capability" ? (approval.snapshot?.agentName ?? "this agent") : "this agent";
   return (
     <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
       {permits("once") ? (
@@ -878,10 +887,7 @@ function MissionReviewBody({
               ({ after }) => authorityRowKey(after) === key
             );
             return (
-              <label
-                key={key}
-                style={{ display: "flex", alignItems: "flex-start", gap: 8 }}
-              >
+              <label key={key} style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
                 {selectable ? (
                   <input
                     type="checkbox"
@@ -920,7 +926,9 @@ function MissionReviewBody({
         )}
       </Flex>
       <Flex direction="column" gap="1">
-        <Text size="1">If it needs a new permission within its toolkit, it pauses and asks you.</Text>
+        <Text size="1">
+          If it needs a new permission within its toolkit, it pauses and asks you.
+        </Text>
         <Text size="1">
           To do anything beyond its toolkit, it stops and proposes an update for your review.
         </Text>
@@ -936,11 +944,7 @@ function MissionReviewBody({
       <Text size="1">Can reach: {approval.networkSummary}</Text>
       <Text size="1">Works with content from: {approval.lineageSummary}</Text>
       {approval.charterChanges.map((change) => (
-        <Text
-          key={change.field}
-          size="1"
-          color={change.widening ? "red" : "gray"}
-        >
+        <Text key={change.field} size="1" color={change.widening ? "red" : "gray"}>
           {change.field}: {change.before ?? "not set"} → {change.after}
         </Text>
       ))}
@@ -950,8 +954,8 @@ function MissionReviewBody({
       <details>
         <summary>For developers</summary>
         <Code size="1">
-          {approval.closureDigest} · {approval.charter.harness.unit}@
-          {approval.charter.harness.ev} · {approval.charter.model.modelId}
+          {approval.closureDigest} · {approval.charter.harness.unit}@{approval.charter.harness.ev} ·{" "}
+          {approval.charter.model.modelId}
         </Code>
       </details>
     </Flex>
@@ -1970,9 +1974,7 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
         const retieredRows = entry.authority?.diff.retiered ?? [];
         const addedPermissionCount = addedRows.length + retieredRows.length;
         const removedPermissionCount = entry.authority?.diff.removed.length ?? 0;
-        const addedDomains = [
-          ...new Set(addedRows.map((row) => row.domain)),
-        ];
+        const addedDomains = [...new Set(addedRows.map((row) => row.domain))];
         return (
           <details key={`${entry.unitKind}:${entry.unitName}`} className="approval-details">
             <summary>
@@ -1980,10 +1982,10 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
               {entry.displayName}
               {entry.version ? ` · v${entry.version}` : ""}
               {addedDomains.map((domain) => (
-                  <Badge key={domain} color="green" variant="soft" ml="1">
-                    + {AUTHORITY_DOMAINS[domain].label}
-                  </Badge>
-                ))}
+                <Badge key={domain} color="green" variant="soft" ml="1">
+                  + {AUTHORITY_DOMAINS[domain].label}
+                </Badge>
+              ))}
               {entry.authority && addedPermissionCount === 0 ? (
                 <Badge color="gray" variant="soft" ml="1">
                   {HOST_APPROVAL_COPY.chrome.noNewPermissions}
@@ -2034,7 +2036,12 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
                   value={
                     <Flex direction="column" gap="2">
                       {addedRows.map((row) => (
-                        <Flex key={`${row.capability}:${row.resource}`} align="center" gap="1" wrap="wrap">
+                        <Flex
+                          key={`${row.capability}:${row.resource}`}
+                          align="center"
+                          gap="1"
+                          wrap="wrap"
+                        >
                           <Badge color="amber" variant="soft">
                             {AUTHORITY_DOMAINS[row.domain].label}
                           </Badge>

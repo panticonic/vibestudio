@@ -160,4 +160,24 @@ describe("CapabilityGrantStore agent authority", () => {
     });
     grants.close();
   });
+
+  it("applies agent and workspace safety locks before every protected capability", () => {
+    const grants = store("safety-locks");
+    const bindingId = "do:workers/agent-worker:news@context-news";
+    grants.setAgentPaused(bindingId, true, "user:alice", 1);
+
+    expect(
+      grants.matchingLocks(bindingId, "external.open", "https://example.com", 2)[0]
+    ).toMatchObject({ level: "agent" });
+    expect(
+      grants.matchingLocks("binding:other", "external.open", "https://example.com", 2)
+    ).toEqual([]);
+
+    grants.setWorkspaceAuthorityLocked(true, "user:alice", 3);
+    expect(
+      grants.matchingLocks("binding:other", "external.open", "https://example.com", 4)[0]
+    ).toMatchObject({ level: "workspace" });
+    expect(grants.isRuntimeAuthorityPaused("do:workers/agent-worker:news")).toBe(true);
+    grants.close();
+  });
 });

@@ -2712,9 +2712,25 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     tier: "open",
     sensitivity: "write",
   })
-  async interruptChannel(channelId: string): Promise<{ interrupted: true }> {
-    await this.driver.interruptChannel(channelId, false);
+  async interruptChannel(channelId: string, flushDeferred = false): Promise<{ interrupted: true }> {
+    await this.driver.interruptChannel(channelId, flushDeferred);
     return { interrupted: true };
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async interruptAllChannels(flushDeferred = true): Promise<{ interrupted: number }> {
+    const channelIds = [
+      ...new Set(this.subscriptions.listAll().map((subscription) => subscription.channelId)),
+    ];
+    await Promise.all(
+      channelIds.map((channelId) => this.driver.interruptChannel(channelId, flushDeferred))
+    );
+    return { interrupted: channelIds.length };
   }
 
   protected async handleStandardAgentMethodCall(

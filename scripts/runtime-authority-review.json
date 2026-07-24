@@ -1,7 +1,19 @@
 {
   "version": 1,
-  "censusDigest": "sha256:053b10b03fd3bd89b4cf5232491e3616f9fe30d37a8304c43884648a6cdb3253",
+  "censusDigest": "sha256:33c51f4e7297c6728eb992288a8c4429062b5e6f99b299987445be92a282906e",
   "decisions": {
+    "host:permissions.safetyStatus": {
+      "review": "bounded-live-authority-safety-read",
+      "change": "Adds the permission inventory's bounded read of workspace and per-agent authority locks; the ordinary permissions.read capability and workspace membership checks remain in force."
+    },
+    "host:permissions.setWorkspaceAuthorityLock": {
+      "review": "user-approved-emergency-authority-barrier",
+      "change": "Adds the critical control that durably blocks protected agent authority workspace-wide before interrupting live agent transports. Releasing the barrier uses the same reviewed critical capability."
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:interruptAllChannels": {
+      "review": "host-only-agent-transport-barrier",
+      "change": "Adds a host-only lifecycle operation that enumerates the exact agent vessel's subscribed channels and interrupts their active transports while flushing deferred work; no user, code, or entity principal can invoke it directly."
+    },
     "direct:workspace/packages/semantic-control-plane/src/index.ts:diagnoseInvocation": {
       "review": "bounded-read-only-causal-diagnostics",
       "change": "Adds an open, read-only exact-coordinate projection over existing trajectory, semantic command, effect-intent, and receipt authorities; every collection is bounded and reports truncation, and the method performs no mutation."

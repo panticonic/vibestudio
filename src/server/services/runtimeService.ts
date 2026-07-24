@@ -237,6 +237,7 @@ function deriveEntityKey(srcKey: string, targetKey: string, srcId: string): stri
 
 export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceResult {
   const store = deps.entityStore;
+  const creationChains = new Map<string, Promise<unknown>>();
   const retirementChains = new Map<string, Promise<unknown>>();
 
   function isTrustedRuntimeHost(caller: VerifiedCaller): boolean {
@@ -398,16 +399,27 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   ): Promise<RuntimeEntityHandle> {
     const spec = rawSpec;
     assertCreateEntityAllowed(caller, spec);
-    const requestedContextId =
-      spec.contextId == null || spec.contextId === "" ? undefined : spec.contextId;
-    const agentBinding = await resolveAgentBinding(
-      caller,
-      "createEntity",
-      requestedContextId,
-      bindingFromSpec(spec)
-    );
-    const contextId = await resolveTargetContext(caller, spec.contextId, agentBinding);
-    return activateEntity(caller, spec, contextId, agentBinding, selfAgentChannelFromSpec(spec));
+    const canonicalId = spec.key
+      ? canonicalEntityId({
+          kind: spec.kind,
+          source: "source" in spec ? spec.source : undefined,
+          className: spec.kind === "do" ? spec.className : undefined,
+          key: spec.key,
+        })
+      : null;
+    const create = async (): Promise<RuntimeEntityHandle> => {
+      const requestedContextId =
+        spec.contextId == null || spec.contextId === "" ? undefined : spec.contextId;
+      const agentBinding = await resolveAgentBinding(
+        caller,
+        "createEntity",
+        requestedContextId,
+        bindingFromSpec(spec)
+      );
+      const contextId = await resolveTargetContext(caller, spec.contextId, agentBinding);
+      return activateEntity(caller, spec, contextId, agentBinding, selfAgentChannelFromSpec(spec));
+    };
+    return canonicalId ? serializeByKey(creationChains, canonicalId, create) : create();
   }
 
   const panelHandle = (record: EntityRecord): RuntimeEntityHandle => ({

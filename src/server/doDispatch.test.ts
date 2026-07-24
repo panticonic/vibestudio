@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { doRefKey, doRefUrl, encodeUniversalKey, DODispatch } from "./doDispatch.js";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
@@ -78,6 +78,11 @@ describe("DODispatch", () => {
     dispatch.setAuthorityAttester(() => ({}) as never);
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   describe("dispatch without token-backed configuration", () => {
     it("fails closed", async () => {
       const ref = makeRef();
@@ -120,6 +125,40 @@ describe("DODispatch", () => {
       expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
         dispatcher: getWorkerdConnectionDispatcher(),
       });
+    });
+
+    it("reports a long-running agent alarm as healthy work and then completion", async () => {
+      vi.useFakeTimers();
+      const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      let finish!: (response: Response) => void;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          () =>
+            new Promise<Response>((resolve) => {
+              finish = resolve;
+            })
+        )
+      );
+      dispatch.setTokenManager(new TokenManager());
+      dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
+      dispatch.setGetDispatchSecret(() => "dispatch-secret");
+      dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+
+      const pending = dispatch.dispatchAlarm(makeRef());
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(info).toHaveBeenCalledWith(expect.stringContaining("state=working"));
+      expect(warn).not.toHaveBeenCalled();
+
+      finish(
+        new Response(JSON.stringify({ nextAlarm: null }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      );
+      await pending;
+      expect(info).toHaveBeenCalledWith(expect.stringContaining("state=completed"));
     });
 
     it("forwards scheduler cancellation to exactly the owned alarm transport", async () => {

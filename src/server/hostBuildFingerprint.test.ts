@@ -1,10 +1,11 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   computeHostBuildFingerprint,
   sameHostBuildFingerprint,
+  writeHostBuildFingerprint,
 } from "../../scripts/host-build-fingerprint.mjs";
 
 const temporaryDirectories: string[] = [];
@@ -54,5 +55,19 @@ describe("host build fingerprint", () => {
         computeHostBuildFingerprint({ cwd, mode: "production" })
       )
     ).toBe(false);
+  });
+
+  it("publishes the success marker atomically without leaving transaction files", () => {
+    const cwd = fixture();
+    const fingerprint = computeHostBuildFingerprint({ cwd, mode: "development" });
+
+    writeHostBuildFingerprint(fingerprint, cwd);
+
+    expect(
+      JSON.parse(readFileSync(join(cwd, "dist", "host-build-fingerprint.json"), "utf8"))
+    ).toEqual(fingerprint);
+    expect(existsSync(join(cwd, "dist", `host-build-fingerprint.json.${process.pid}.tmp`))).toBe(
+      false
+    );
   });
 });

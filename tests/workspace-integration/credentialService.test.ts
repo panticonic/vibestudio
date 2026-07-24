@@ -139,6 +139,17 @@ class MemoryCredentialUseGrantStore {
     return false;
   }
 
+  revokeForAgent(agentId: string): number {
+    const before = this.grants.length;
+    for (let index = this.grants.length - 1; index >= 0; index -= 1) {
+      const grant = this.grants[index];
+      if (grant?.scope === "agent" && grant.agentId === agentId) {
+        this.grants.splice(index, 1);
+      }
+    }
+    return before - this.grants.length;
+  }
+
   upsert(credentialId: string, grant: CredentialUseGrant): void {
     const key = credentialUseGrantTestKey(credentialId, grant);
     const index = this.grants.findIndex(
@@ -875,66 +886,65 @@ describe("credentialService", () => {
     )) as StoredCredentialSummary;
     approvalQueue.request.mockClear();
 
-    const caller = verifiedTestCaller(
-      "do:workers/agent-worker:AiChatWorker:test-run",
-      "do"
-    );
-    const result = await service.handler({
-      caller,
-      // The dispatcher-authenticated context is the final authority fact. A
-      // receiver must not depend on a redundant caller projection surviving
-      // every relay layer.
-      authorization: {
-        authorizingOrigin: { kind: "host", principal: "host:system-test" },
-        host: "host:system-test",
-        actingUser: "user:system-test",
-        entity: null,
-        incarnation: null,
-        executingCode: null,
-        initiatorChain: ["host:system-test"],
-        ownerChain: ["user:system-test"],
-        agentBinding: null,
-        executionSession: null,
-        testPolicy: {
-          policyId: "test:credential-run",
-          kind: "case",
-          orchestratorPolicyId: "test:credential-orchestrator",
-          case: {
-            testId: "credential-run",
-            authority: [
-              {
-                ruleId: "resolve-example-credential",
-                capability: "credential.use",
-                resource: { kind: "exact", key: "credential.use" },
-                tier: "gated",
-                decision: "once",
-              },
-            ],
-            userland: [],
-            unexpectedPrompts: "fail",
+    const caller = verifiedTestCaller("do:workers/agent-worker:AiChatWorker:test-run", "do");
+    const result = await service.handler(
+      {
+        caller,
+        // The dispatcher-authenticated context is the final authority fact. A
+        // receiver must not depend on a redundant caller projection surviving
+        // every relay layer.
+        authorization: {
+          authorizingOrigin: { kind: "host", principal: "host:system-test" },
+          host: "host:system-test",
+          actingUser: "user:system-test",
+          entity: null,
+          incarnation: null,
+          executingCode: null,
+          initiatorChain: ["host:system-test"],
+          ownerChain: ["user:system-test"],
+          agentBinding: null,
+          executionSession: null,
+          testPolicy: {
+            policyId: "test:credential-run",
+            kind: "case",
+            orchestratorPolicyId: "test:credential-orchestrator",
+            case: {
+              testId: "credential-run",
+              authority: [
+                {
+                  ruleId: "resolve-example-credential",
+                  capability: "credential.use",
+                  resource: { kind: "exact", key: "credential.use" },
+                  tier: "gated",
+                  decision: "once",
+                },
+              ],
+              userland: [],
+              unexpectedPrompts: "fail",
+            },
           },
-        },
-        workspace: {
-          workspaceId: "workspace:test",
-          member: true,
-          role: "owner",
-          revision: "1",
-        },
-        session: {
-          id: "session:test",
-          audience: "credentials",
-          version: "1",
-          expiresAt: Date.now() + 60_000,
-        },
-        contextIntegrity: {
-          class: "not-applicable",
-          latchEpoch: 0,
-          externalKeys: [],
-        },
-      } satisfies NonNullable<ServiceContext["authorization"]>,
-    }, "resolveCredential", [
-      { url: "https://api.example.test/v1" },
-    ]);
+          workspace: {
+            workspaceId: "workspace:test",
+            member: true,
+            role: "owner",
+            revision: "1",
+          },
+          session: {
+            id: "session:test",
+            audience: "credentials",
+            version: "1",
+            expiresAt: Date.now() + 60_000,
+          },
+          contextIntegrity: {
+            class: "not-applicable",
+            latchEpoch: 0,
+            externalKeys: [],
+          },
+        } satisfies NonNullable<ServiceContext["authorization"]>,
+      },
+      "resolveCredential",
+      [{ url: "https://api.example.test/v1" }]
+    );
 
     expect(result).toMatchObject({ id: stored.id });
     expect(approvalQueue.request).not.toHaveBeenCalled();

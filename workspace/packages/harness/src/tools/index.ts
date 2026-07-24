@@ -70,6 +70,8 @@ export type { EvalToolInput } from "./eval.js";
 
 export { createDocsSearchTool, createDocsOpenTool } from "./docs.js";
 export type { DocsSearchInput, DocsOpenInput, CatalogHit, CatalogEntry } from "./docs.js";
+export { createHostAuthorityNextActionTool } from "./authority-next-action.js";
+export type { HostAuthorityNextActionInput } from "./authority-next-action.js";
 
 export { createWorkspaceServiceTool } from "./workspace-service.js";
 export type {

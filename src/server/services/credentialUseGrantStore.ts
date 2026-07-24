@@ -79,6 +79,7 @@ export interface CredentialUseGrantStoreLike {
   listAll(): StoredCredentialUseGrant[];
   upsert(credentialId: string, grant: CredentialUseGrant): void | Promise<void>;
   revoke(id: string): boolean | Promise<boolean>;
+  revokeForAgent(agentId: string): number | Promise<number>;
 }
 
 export class CredentialUseGrantStore implements CredentialUseGrantStoreLike {
@@ -109,6 +110,17 @@ export class CredentialUseGrantStore implements CredentialUseGrantStoreLike {
     if (this.grants.length === before) return false;
     this.save();
     return true;
+  }
+
+  revokeForAgent(agentId: string): number {
+    this.load();
+    const before = this.grants.length;
+    this.grants = this.grants.filter(
+      (grant) => !(grant.scope === "agent" && grant.agentId === agentId)
+    );
+    const removed = before - this.grants.length;
+    if (removed > 0) this.save();
+    return removed;
   }
 
   upsert(credentialId: string, grant: CredentialUseGrant): void {

@@ -1396,6 +1396,19 @@ describe("runtimeService session entities", () => {
     });
   });
 
+  it("coalesces concurrent creation of one named session onto its first context", async () => {
+    const { service } = await buildDeps();
+    const create = () =>
+      service.handler({ caller: shellCaller }, "createEntity", [
+        sessionSpec({ key: "shared", title: "Shared session" }),
+      ]) as Promise<{ id: string; contextId: string }>;
+
+    const [first, second] = await Promise.all([create(), create()]);
+
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({ id: "session:shared" });
+  });
+
   it("honors an explicitly supplied contextId", async () => {
     const { service, contextFolders } = await buildDeps();
     const handle = (await service.handler({ caller: serverCaller }, "createEntity", [

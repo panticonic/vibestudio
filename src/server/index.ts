@@ -38,6 +38,8 @@ import {
   sealAndDrainDurableObjectRelays,
 } from "./workerdRpcRelay.js";
 import { resolveHttpRuntimeCaller } from "./httpRuntimeIdentity.js";
+import { classifyStartupDependency } from "./startupDependencyStatus.js";
+import { getProductBootManifest } from "./internalDOs/productBootManifest.js";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
@@ -309,6 +311,11 @@ serverLogStore.installConsoleCapture();
 process.env["VIBESTUDIO_APP_ROOT"] =
   args.appRoot ?? process.env["VIBESTUDIO_APP_ROOT"] ?? process.cwd();
 if (args.logLevel) process.env["VIBESTUDIO_LOG_LEVEL"] = args.logLevel;
+// A boot identity is immutable process state, not a live view of the shared
+// checkout's latest build marker. Capture it before asynchronous startup so a
+// parallel source build can publish a later identity without invalidating this
+// already-starting hub or workspace child.
+getProductBootManifest();
 
 // =============================================================================
 // Phase B: Async main — load app modules, initialize services
@@ -1668,12 +1675,18 @@ async function main() {
         );
       }
       for (const failure of result.failed) {
-        console.warn(
-          `[GitRemotes] Failed to import configured workspace dependency ${failure.path}: ${failure.error}`
+        const status = classifyStartupDependency(failure.error);
+        const log = status.state === "waiting-for-consent" ? console.info : console.warn;
+        log(
+          `[GitRemotes] state=${status.state} workspace dependency ${failure.path}: ${status.message}`
         );
       }
     } catch (err) {
-      console.warn("[GitRemotes] Failed to import configured workspace dependencies:", err);
+      const status = classifyStartupDependency(err);
+      const log = status.state === "waiting-for-consent" ? console.info : console.warn;
+      log(
+        `[GitRemotes] state=${status.state} configured workspace dependencies: ${status.message}`
+      );
     }
   };
   const { createBuildUnitChangeApprovalProvider } =
@@ -1976,12 +1989,52 @@ async function main() {
   // than through an Electron-only facade.
   {
     const { createPermissionsService } = await import("./services/permissionsService.js");
+    const activeAgentBindings = () => {
+      const graph = buildSystemInstance?.getGraph().allNodes() ?? [];
+      const agentSources = new Set(
+        graph.filter((node) => node.manifest.agent).map((node) => node.relativePath)
+      );
+      return entityCache
+        .listActive()
+        .filter(
+          (record) =>
+            record.kind === "do" &&
+            record.contextId !== null &&
+            agentSources.has(record.source.repoPath)
+        )
+        .map((record) => `${record.id}@${record.contextId}`);
+    };
+    const interruptAgentBinding = async (bindingId: string, reason: string): Promise<void> => {
+      console.info(`[AuthoritySafety] state=stopping ${bindingId}: ${reason}`);
+      const separator = bindingId.lastIndexOf("@");
+      const runtimeId = separator > 0 ? bindingId.slice(0, separator) : bindingId;
+      const ref = parseDoTargetId(runtimeId);
+      if (!ref) return;
+      const dispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
+      await dispatch.dispatch(ref, "interruptAllChannels", true);
+    };
     container.registerRpc(
       createPermissionsService({
         capabilityGrants: capabilityGrantStore,
         credentialUseGrants: credentialUseGrantStore,
         browserPermissions: browserPermissionGrantStore,
         workspaceId,
+        pendingAcquisitionCount: () => acquisitionCoordinator.pending().length,
+        activeAgentBindingCount: () => new Set(activeAgentBindings()).size,
+        activeAgentBindings: () => [...new Set(activeAgentBindings())],
+        closeAgentAcquisitions: (bindingId) => acquisitionCoordinator.closeAgent(bindingId),
+        closeAllAcquisitions: () => acquisitionCoordinator.closeAll(),
+        interruptAgent: interruptAgentBinding,
+        resumeAgent: async () => {
+          // Removing the durable pause lock re-opens admission. The next
+          // queued/user event owns wake-up; resuming must not manufacture work.
+        },
+        interruptAllAgents: async (reason) => {
+          const bindings = new Set(activeAgentBindings());
+          await Promise.all(
+            [...bindings].map((bindingId) => interruptAgentBinding(bindingId, reason))
+          );
+        },
       })
     );
   }
@@ -3497,6 +3550,16 @@ async function main() {
         const driver = new AlarmDriver({
           doDispatch: assertPresent(resolve<import("./doDispatch.js").DODispatch>("doDispatch")),
           workspaceId,
+          isAuthorityPaused: (ref) => {
+            const unit = buildSystemInstance
+              ?.getGraph()
+              .allNodes()
+              .find((node) => node.relativePath === ref.source);
+            if (!unit?.manifest.agent) return false;
+            return capabilityGrantStore.isRuntimeAuthorityPaused(
+              `do:${ref.source}:${ref.className}:${ref.objectKey}`
+            );
+          },
         });
         alarmDriverInstance = driver;
         return driver;

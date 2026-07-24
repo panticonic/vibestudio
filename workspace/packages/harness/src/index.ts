@@ -56,6 +56,7 @@ export {
   type NormalizedEvalToolSource,
   createDocsSearchTool,
   createDocsOpenTool,
+  createHostAuthorityNextActionTool,
   createWorkspaceServiceTool,
   resolveToCwd,
   expandPath,

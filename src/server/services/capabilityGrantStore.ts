@@ -142,6 +142,8 @@ export class CapabilityGrantStore {
       scope: input.scope ?? inferGrantScope(input),
       ...(input.suspendedAt === undefined ? {} : { suspendedAt: input.suspendedAt }),
       ...(input.lastUsedAt === undefined ? {} : { lastUsedAt: input.lastUsedAt }),
+      ...(input.decidedBy === undefined ? {} : { decidedBy: input.decidedBy }),
+      ...(input.decisionSurface === undefined ? {} : { decisionSurface: input.decisionSurface }),
     };
   }
 
@@ -253,7 +255,19 @@ export class CapabilityGrantStore {
     if (
       (input.level === "resource" && (!input.capability || !input.resource)) ||
       (input.level === "capability" && (!input.capability || input.resource)) ||
-      (input.level === "cell" && (!input.domain || !input.verb))
+      (input.level === "cell" && (!input.domain || !input.verb)) ||
+      (input.level === "agent" &&
+        (input.agentBindingId === "*" ||
+          input.capability !== undefined ||
+          input.resource !== undefined ||
+          input.domain !== undefined ||
+          input.verb !== undefined)) ||
+      (input.level === "workspace" &&
+        (input.agentBindingId !== "*" ||
+          input.capability !== undefined ||
+          input.resource !== undefined ||
+          input.domain !== undefined ||
+          input.verb !== undefined))
     ) {
       throw new Error(`Invalid ${input.level} authority lock`);
     }
@@ -303,8 +317,10 @@ export class CapabilityGrantStore {
     const rows = this.db
       .prepare(
         `SELECT * FROM authority_locks
-         WHERE agent_binding_id = ? AND revoked_at IS NULL
+         WHERE (agent_binding_id = ? OR agent_binding_id = '*') AND revoked_at IS NULL
            AND (
+             level = 'workspace' OR
+             (level = 'agent' AND agent_binding_id = ?) OR
              (level = 'resource' AND capability = ?) OR
              (level = 'capability' AND capability = ?) OR
              (level = 'cell' AND domain = ? AND verb = ?)
@@ -312,6 +328,7 @@ export class CapabilityGrantStore {
          ORDER BY created_at ASC, id ASC`
       )
       .all(
+        agentBindingId,
         agentBindingId,
         capability,
         capability,
@@ -358,6 +375,69 @@ export class CapabilityGrantStore {
           .prepare("UPDATE authority_locks SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
           .run(now, lockId).changes
       ) === 1
+    );
+  }
+
+  setAgentPaused(
+    agentBindingId: string,
+    paused: boolean,
+    decidedBy: string,
+    now = Date.now()
+  ): boolean {
+    const active = this.listLocks(agentBindingId).find(
+      (lock) => lock.level === "agent" && lock.revokedAt === undefined
+    );
+    if (paused) {
+      if (active) return false;
+      this.createLock({
+        agentBindingId,
+        level: "agent",
+        decidedBy,
+        surface: "profile",
+        createdAt: now,
+      });
+      return true;
+    }
+    return active ? this.revokeLock(active.id, now) : false;
+  }
+
+  setWorkspaceAuthorityLocked(locked: boolean, decidedBy: string, now = Date.now()): boolean {
+    const active = this.listLocks("*").find(
+      (lock) => lock.level === "workspace" && lock.revokedAt === undefined
+    );
+    if (locked) {
+      if (active) return false;
+      this.createLock({
+        agentBindingId: "*",
+        level: "workspace",
+        decidedBy,
+        surface: "profile",
+        createdAt: now,
+      });
+      return true;
+    }
+    return active ? this.revokeLock(active.id, now) : false;
+  }
+
+  workspaceAuthorityLocked(): boolean {
+    return this.listLocks("*").some(
+      (lock) => lock.level === "workspace" && lock.revokedAt === undefined
+    );
+  }
+
+  isAgentPaused(agentBindingId: string): boolean {
+    return this.listLocks(agentBindingId).some(
+      (lock) => lock.level === "agent" && lock.revokedAt === undefined
+    );
+  }
+
+  isRuntimeAuthorityPaused(runtimeId: string): boolean {
+    if (this.workspaceAuthorityLocked()) return true;
+    return this.listLocks().some(
+      (lock) =>
+        lock.level === "agent" &&
+        lock.revokedAt === undefined &&
+        lock.agentBindingId.startsWith(`${runtimeId}@`)
     );
   }
 
@@ -847,6 +927,7 @@ function userlandGrantFromRow(row: GrantRow): UserlandApprovalGrant {
     subject: { id: String(row["resource_key"]) },
     choice,
     grantedAt: Number(row["created_at"]),
+    ...(row["decided_by"] === null ? {} : { grantedBy: String(row["decided_by"]) }),
     scope,
   };
 }
@@ -916,6 +997,10 @@ function rowToGrant(row: GrantRow): AuthorityGrant {
     ...(row["consumed_at"] === null ? {} : { consumedAt: Number(row["consumed_at"]) }),
     ...(row["suspended_at"] === null ? {} : { suspendedAt: Number(row["suspended_at"]) }),
     ...(row["last_used_at"] === null ? {} : { lastUsedAt: Number(row["last_used_at"]) }),
+    ...(row["decided_by"] === null ? {} : { decidedBy: String(row["decided_by"]) }),
+    ...(row["decision_surface"] === null
+      ? {}
+      : { decisionSurface: String(row["decision_surface"]) }),
     scope: String(row["scope"]) as NonNullable<AuthorityGrant["scope"]>,
   };
 }

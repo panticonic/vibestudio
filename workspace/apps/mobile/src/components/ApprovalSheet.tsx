@@ -196,9 +196,7 @@ export interface ApprovalSheetProps {
   onResolveExternalAgent: (approvalId: string, behavior: "allow" | "deny") => Promise<void> | void;
   onResolveMissionReview: (
     approvalId: string,
-    resolution:
-      | { decision: "approve"; selectedAuthorityKeys: string[] }
-      | { decision: "dismiss" }
+    resolution: { decision: "approve"; selectedAuthorityKeys: string[] } | { decision: "dismiss" }
   ) => Promise<void> | void;
   /**
    * Optional. When supplied and the current approval comes from a panel,
@@ -279,9 +277,7 @@ export function ApprovalSheet({
     setSelectedMissionAuthorityKeys(
       new Set(
         current.kind === "mission-review"
-          ? current.authority.diff.added
-              .filter((row) => row.tier === "gated")
-              .map(authorityRowKey)
+          ? current.authority.diff.added.filter((row) => row.tier === "gated").map(authorityRowKey)
           : []
       )
     );
@@ -331,6 +327,9 @@ export function ApprovalSheet({
       } catch (err) {
         const message = err instanceof Error ? err.message : "Couldn't resolve. Try again.";
         setError(message || "Couldn't resolve. Try again.");
+        AccessibilityInfo.announceForAccessibility(
+          `Approval action failed. ${message || "Couldn't resolve. Try again."}`
+        );
       } finally {
         setPendingAction(null);
       }
@@ -422,6 +421,11 @@ export function ApprovalSheet({
         >
           <SafeAreaView edges={["bottom"]} style={styles.safeArea}>
             <Animated.View
+              accessible
+              accessibilityRole="summary"
+              accessibilityLabel={`${copy.title}. Requested by ${callerInfo.label}. ${copy.summary}`}
+              accessibilityHint="Review the details, then choose an action at the bottom of the sheet."
+              accessibilityState={{ busy: isBusy }}
               accessibilityViewIsModal
               style={[
                 styles.sheet,
@@ -1392,9 +1396,9 @@ function UnitBatchEntryDetails({ entry }: { entry: UnitBatchEntry }) {
   const addedCount = addedRows.length + retieredRows.length;
   const changeSummary =
     addedRows.length > 0
-      ? `New: ${[
-          ...new Set(addedRows.map((row) => AUTHORITY_DOMAINS[row.domain].label)),
-        ].join(", ")}`
+      ? `New: ${[...new Set(addedRows.map((row) => AUTHORITY_DOMAINS[row.domain].label))].join(
+          ", "
+        )}`
       : entry.authority
         ? HOST_APPROVAL_COPY.chrome.noNewPermissions
         : "Review exact version";
@@ -1789,9 +1793,7 @@ function StandardActions({
   const isSevereCapability = approval.kind === "capability" && approval.severity === "severe";
   const critical = approval.kind === "capability" && approval.cardType === "confirm.critical";
   const agentName =
-    approval.kind === "capability"
-      ? (approval.snapshot?.agentName ?? "this agent")
-      : "this agent";
+    approval.kind === "capability" ? (approval.snapshot?.agentName ?? "this agent") : "this agent";
   return (
     <View style={styles.actionGroups}>
       <View style={styles.actionRow}>
@@ -1980,9 +1982,7 @@ function MissionReviewPanel({
       <Text style={[styles.detailValue, { color: colors.text }]}>
         Runs: {approval.triggerSummary}
       </Text>
-      <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>
-        What it can do
-      </Text>
+      <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>What it can do</Text>
       {approval.authority.rows.map((row) => {
         const key = authorityRowKey(row);
         const isNew = approval.authority.diff.added.some(

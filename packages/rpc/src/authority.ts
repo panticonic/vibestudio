@@ -199,12 +199,14 @@ export interface AuthorityGrant extends CapabilityScope {
   scope?: "once" | "task" | "agent" | "mission" | "version" | "session" | "system";
   constraints?: AuthorityGrantConstraints;
   provenance: string;
+  decidedBy?: string;
+  decisionSurface?: string;
 }
 
 export interface AuthorityLock {
   id: string;
   agentBindingId: string;
-  level: "resource" | "capability" | "cell";
+  level: "resource" | "capability" | "cell" | "agent" | "workspace";
   capability?: string;
   resource?: ResourceScope;
   domain?: string;

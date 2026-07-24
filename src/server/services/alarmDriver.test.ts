@@ -132,6 +132,48 @@ describe("AlarmDriver", () => {
     expect(fired).toHaveLength(0);
   });
 
+  it("durably defers agent alarms while authority is paused", async () => {
+    vi.setSystemTime(10_000);
+    const due: Alarm = {
+      source: "workers/agent-worker",
+      className: "AiChatWorker",
+      objectKey: "agent-1",
+      wakeAt: 10_000,
+    };
+    const alarms = [due];
+    const dispatchAlarm = vi.fn(async () => ({ nextAlarm: null }));
+    const dispatch = vi.fn(async (_ref: DORef, method: string, ...args: unknown[]) => {
+      if (method === "alarmNextWakeAt") return alarms[0]?.wakeAt ?? null;
+      if (method === "alarmListDue") {
+        const now = args[0] as number;
+        return alarms.filter((alarm) => alarm.wakeAt <= now);
+      }
+      if (method === "alarmSet") {
+        replaceAlarm(alarms, args[0] as Alarm);
+        return undefined;
+      }
+      throw new Error(`Unexpected workspace method ${method}`);
+    });
+    const isAuthorityPaused = vi.fn(() => true);
+    const driver = new AlarmDriver({
+      workspaceId: "ws-1",
+      doDispatch: { dispatch, dispatchAlarm } as unknown as DODispatch,
+      isAuthorityPaused,
+    });
+
+    driver.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(isAuthorityPaused).toHaveBeenCalledWith({
+      source: due.source,
+      className: due.className,
+      objectKey: due.objectKey,
+    });
+    expect(dispatchAlarm).not.toHaveBeenCalled();
+    expect(alarms).toEqual([{ ...due, wakeAt: 70_000 }]);
+    driver.stop();
+  });
+
   it("persists the next schedule returned by an alarm handler after dispatch completes", async () => {
     vi.setSystemTime(0);
     const testPolicy = {

@@ -135,6 +135,28 @@ function renderCard(
 }
 
 describe("ApprovalCard", () => {
+  it("exposes a labelled, described dialog and assertive decision errors with long copy", () => {
+    const title =
+      "Autoriser la publication de cette très longue synthèse dans l’espace de travail partagé";
+    const description =
+      "Cette action partage le compte rendu complet avec toutes les personnes actuellement présentes.";
+    renderCard(
+      capabilityApproval({
+        approvalId: "localized-long-copy",
+        title,
+        description,
+      }),
+      { decisionError: "La décision n’a pas pu être enregistrée." }
+    );
+
+    const dialog = screen.getByRole("dialog", { name: title });
+    expect(dialog.getAttribute("aria-describedby")).toBe("approval-summary-localized-long-copy");
+    expect(screen.getByText(description)).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "La décision n’a pas pu être enregistrée."
+    );
+  });
+
   it("renders a severe capability with a danger tone and emits a version decision", () => {
     const { emit } = renderCard(
       capabilityApproval({

@@ -1,20 +1,12 @@
 {
   "account": {
     "service": {
-      "principals": [
-        "host",
-        "user",
-        "code"
-      ]
+      "principals": ["host", "user", "code"]
     },
     "methods": {
       "getProfile": {
         "authority": {
-          "principals": [
-            "host",
-            "user",
-            "code"
-          ]
+          "principals": ["host", "user", "code"]
         },
         "access": {
           "sensitivity": "read"
@@ -22,11 +14,7 @@
       },
       "isMember": {
         "authority": {
-          "principals": [
-            "host",
-            "user",
-            "code"
-          ]
+          "principals": ["host", "user", "code"]
         },
         "access": {
           "sensitivity": "read"
@@ -34,11 +22,7 @@
       },
       "listWorkspaceMembers": {
         "authority": {
-          "principals": [
-            "host",
-            "user",
-            "code"
-          ]
+          "principals": ["host", "user", "code"]
         },
         "access": {
           "sensitivity": "read"
@@ -46,11 +30,7 @@
       },
       "resolveProfiles": {
         "authority": {
-          "principals": [
-            "host",
-            "user",
-            "code"
-          ]
+          "principals": ["host", "user", "code"]
         },
         "access": {
           "sensitivity": "read"
@@ -60,11 +40,7 @@
   },
   "audit": {
     "service": {
-      "principals": [
-        "user",
-        "host",
-        "code"
-      ]
+      "principals": ["user", "host", "code"]
     },
     "methods": {
       "query": {
@@ -79,19 +55,12 @@
   },
   "auth": {
     "service": {
-      "principals": [
-        "host",
-        "user"
-      ]
+      "principals": ["host", "user"]
     },
     "methods": {
       "getConnectionInfo": {
         "authority": {
-          "principals": [
-            "host",
-            "user",
-            "code"
-          ]
+          "principals": ["host", "user", "code"]
         },
         "access": {
           "sensitivity": "read"
@@ -99,11 +68,7 @@
       },
       "grantConnection": {
         "authority": {
-          "principals": [
-            "host",
-            "user",
-            "code"
-          ]
+          "principals": ["host", "user", "code"]
         },
         "access": {
           "sensitivity": "admin"
@@ -111,10 +76,7 @@
       },
       "mintAgentCredential": {
         "authority": {
-          "principals": [
-            "code",
-            "host"
-          ]
+          "principals": ["code", "host"]
         },
         "access": {
           "sensitivity": "admin"
@@ -122,10 +84,7 @@
       },
       "revokeAgentCredential": {
         "authority": {
-          "principals": [
-            "code",
-            "host"
-          ]
+          "principals": ["code", "host"]
         },
         "access": {
           "sensitivity": "admin"
@@ -135,24 +94,12 @@
   },
   "authority": {
     "service": {
-      "principals": [
-        "host",
-        "user",
-        "code",
-        "session",
-        "mission"
-      ]
+      "principals": ["host", "user", "code", "session", "mission"]
     },
     "methods": {
       "awaitDecision": {
         "authority": {
-          "principals": [
-            "host",
-            "user",
-            "code",
-            "session",
-            "mission"
-          ]
+          "principals": ["host", "user", "code", "session", "mission"]
         },
         "access": {
           "sensitivity": "read"
@@ -160,13 +107,7 @@
       },
       "preflight": {
         "authority": {
-          "principals": [
-            "host",
-            "user",
-            "code",
-            "session",
-            "mission"
-          ]
+          "principals": ["host", "user", "code", "session", "mission"]
         },
         "access": {
           "sensitivity": "read"
@@ -176,19 +117,12 @@
   },
   "blobstore": {
     "service": {
-      "principals": [
-        "code",
-        "user",
-        "host"
-      ]
+      "principals": ["code", "user", "host"]
     },
     "methods": {
       "delete": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "destructive"
@@ -196,11 +130,7 @@
       },
       "diffTrees": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -208,11 +138,7 @@
       },
       "getBase64": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -220,11 +146,7 @@
       },
       "getRange": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -232,11 +154,7 @@
       },
       "getRangeBytes": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -244,11 +162,7 @@
       },
       "getText": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -256,11 +170,7 @@
       },
       "getTree": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -268,11 +178,7 @@
       },
       "grep": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -280,11 +186,7 @@
       },
       "has": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -292,10 +194,7 @@
       },
       "list": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -303,11 +202,7 @@
       },
       "listTree": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -315,10 +210,7 @@
       },
       "materializeTree": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -326,11 +218,7 @@
       },
       "putBase64": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -338,11 +226,7 @@
       },
       "putText": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -350,11 +234,7 @@
       },
       "putTree": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -362,11 +242,7 @@
       },
       "readFileAtTree": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -374,11 +250,7 @@
       },
       "stat": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -388,16 +260,12 @@
   },
   "browserPermissions": {
     "service": {
-      "principals": [
-        "host"
-      ]
+      "principals": ["host"]
     },
     "methods": {
       "request": {
         "authority": {
-          "principals": [
-            "host"
-          ]
+          "principals": ["host"]
         },
         "access": {
           "sensitivity": "write"
@@ -405,9 +273,7 @@
       },
       "revoke": {
         "authority": {
-          "principals": [
-            "host"
-          ]
+          "principals": ["host"]
         },
         "access": {
           "sensitivity": "destructive"
@@ -415,9 +281,7 @@
       },
       "snapshot": {
         "authority": {
-          "principals": [
-            "host"
-          ]
+          "principals": ["host"]
         },
         "access": {
           "sensitivity": "read"
@@ -427,11 +291,7 @@
   },
   "build": {
     "service": {
-      "principals": [
-        "code",
-        "user",
-        "host"
-      ]
+      "principals": ["code", "user", "host"]
     },
     "methods": {
       "doctorExtension": {
@@ -550,18 +410,12 @@
   },
   "contentTrust": {
     "service": {
-      "principals": [
-        "user",
-        "host"
-      ]
+      "principals": ["user", "host"]
     },
     "methods": {
       "addPolicy": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "admin"
@@ -569,10 +423,7 @@
       },
       "list": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -580,10 +431,7 @@
       },
       "revoke": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "destructive"
@@ -591,10 +439,7 @@
       },
       "status": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -602,10 +447,7 @@
       },
       "vouch": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "admin"
@@ -615,9 +457,7 @@
   },
   "contextIntegrity": {
     "service": {
-      "principals": [
-        "code"
-      ]
+      "principals": ["code"]
     },
     "methods": {
       "explain": {
@@ -783,9 +623,7 @@
   },
   "corsApproval": {
     "service": {
-      "principals": [
-        "code"
-      ]
+      "principals": ["code"]
     },
     "methods": {
       "authorize": {
@@ -834,9 +672,7 @@
                 "capability": "network.response.read",
                 "requirement": {
                   "kind": "selected",
-                  "principals": [
-                    "code"
-                  ]
+                  "principals": ["code"]
                 },
                 "tier": "gated"
               }
@@ -852,11 +688,7 @@
                 "kind": "network",
                 "verb": "Read cross-origin response"
               },
-              "grantScopes": [
-                "once",
-                "session",
-                "version"
-              ],
+              "grantScopes": ["once", "session", "version"],
               "reason": "Reading CORS-protected responses from another origin requires user consent."
             }
           ]
@@ -866,11 +698,7 @@
   },
   "credentials": {
     "service": {
-      "principals": [
-        "user",
-        "code",
-        "host"
-      ]
+      "principals": ["user", "code", "host"]
     },
     "methods": {
       "audit": {
@@ -928,11 +756,7 @@
                 "kind": "credential",
                 "verb": "Connect credential"
               },
-              "grantScopes": [
-                "once",
-                "session",
-                "version"
-              ],
+              "grantScopes": ["once", "session", "version"],
               "reason": "Running an OAuth/browser sign-in flow and storing the result requires the user to authorize the connection."
             }
           ]
@@ -995,9 +819,7 @@
           "resource": {
             "kind": "argument",
             "index": 0,
-            "path": [
-              "configId"
-            ]
+            "path": ["configId"]
           }
         },
         "access": {
@@ -1075,11 +897,7 @@
                 "kind": "credential",
                 "verb": "Enter credential"
               },
-              "grantScopes": [
-                "once",
-                "session",
-                "version"
-              ],
+              "grantScopes": ["once", "session", "version"],
               "reason": "Collecting a secret from the user and storing it requires explicit user input."
             }
           ]
@@ -1098,11 +916,7 @@
                 "kind": "credential",
                 "verb": "Use credential"
               },
-              "grantScopes": [
-                "once",
-                "session",
-                "version"
-              ],
+              "grantScopes": ["once", "session", "version"],
               "reason": "Handing a stored credential to an agent for use requires the user to authorize it."
             }
           ]
@@ -1165,9 +979,7 @@
           "resource": {
             "kind": "argument",
             "index": 0,
-            "path": [
-              "credentialId"
-            ]
+            "path": ["credentialId"]
           }
         },
         "access": {
@@ -1187,11 +999,7 @@
                 "kind": "credential",
                 "verb": "Store credential"
               },
-              "grantScopes": [
-                "once",
-                "session",
-                "version"
-              ],
+              "grantScopes": ["once", "session", "version"],
               "reason": "Persisting a credential the agent supplied requires the user to approve it."
             }
           ]
@@ -1201,11 +1009,7 @@
   },
   "docs": {
     "service": {
-      "principals": [
-        "code",
-        "host",
-        "user"
-      ]
+      "principals": ["code", "host", "user"]
     },
     "methods": {
       "describe": {
@@ -1260,11 +1064,7 @@
   },
   "eval": {
     "service": {
-      "principals": [
-        "code",
-        "user",
-        "host"
-      ]
+      "principals": ["code", "user", "host"]
     },
     "methods": {
       "cancel": {
@@ -1327,11 +1127,7 @@
   },
   "events": {
     "service": {
-      "principals": [
-        "user",
-        "code",
-        "host"
-      ]
+      "principals": ["user", "code", "host"]
     },
     "methods": {
       "watch": {
@@ -1346,11 +1142,7 @@
   },
   "extensions": {
     "service": {
-      "principals": [
-        "code",
-        "user",
-        "host"
-      ]
+      "principals": ["code", "user", "host"]
     },
     "methods": {
       "emit": {
@@ -1453,11 +1245,7 @@
   },
   "externalOpen": {
     "service": {
-      "principals": [
-        "user",
-        "host",
-        "code"
-      ]
+      "principals": ["user", "host", "code"]
     },
     "methods": {
       "openExternal": {
@@ -1525,9 +1313,7 @@
                 "capability": "external.open",
                 "requirement": {
                   "kind": "selected",
-                  "principals": [
-                    "code"
-                  ]
+                  "principals": ["code"]
                 },
                 "tier": "gated"
               }
@@ -1544,11 +1330,7 @@
                 "kind": "browser",
                 "verb": "Open external browser"
               },
-              "grantScopes": [
-                "once",
-                "session",
-                "version"
-              ],
+              "grantScopes": ["once", "session", "version"],
               "reason": "Opening URLs in the system browser from code requires user consent."
             }
           ]
@@ -1558,11 +1340,7 @@
   },
   "fs": {
     "service": {
-      "principals": [
-        "code",
-        "host",
-        "user"
-      ]
+      "principals": ["code", "host", "user"]
     },
     "methods": {
       "access": {
@@ -1801,10 +1579,7 @@
   },
   "gateway": {
     "service": {
-      "principals": [
-        "user",
-        "code"
-      ]
+      "principals": ["user", "code"]
     },
     "methods": {
       "fetch": {
@@ -1819,11 +1594,7 @@
   },
   "gitInterop": {
     "service": {
-      "principals": [
-        "user",
-        "code",
-        "host"
-      ]
+      "principals": ["user", "code", "host"]
     },
     "methods": {
       "commitMapping": {
@@ -1974,11 +1745,7 @@
   },
   "governance": {
     "service": {
-      "principals": [
-        "user",
-        "code",
-        "host"
-      ]
+      "principals": ["user", "code", "host"]
     },
     "methods": {
       "list": {
@@ -1993,10 +1760,7 @@
   },
   "hostLifecycle": {
     "service": {
-      "principals": [
-        "user",
-        "host"
-      ]
+      "principals": ["user", "host"]
     },
     "methods": {
       "shutdown": {
@@ -2011,20 +1775,12 @@
   },
   "mirror": {
     "service": {
-      "principals": [
-        "user",
-        "code",
-        "host"
-      ]
+      "principals": ["user", "code", "host"]
     },
     "methods": {
       "objects": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -2032,11 +1788,7 @@
       },
       "targets": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -2046,18 +1798,12 @@
   },
   "mission": {
     "service": {
-      "principals": [
-        "user",
-        "host"
-      ]
+      "principals": ["user", "host"]
     },
     "methods": {
       "createDraft": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -2065,10 +1811,7 @@
       },
       "edit": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -2076,9 +1819,7 @@
       },
       "finishSession": {
         "authority": {
-          "principals": [
-            "host"
-          ]
+          "principals": ["host"]
         },
         "access": {
           "sensitivity": "write"
@@ -2086,10 +1827,7 @@
       },
       "get": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -2097,10 +1835,7 @@
       },
       "list": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -2108,10 +1843,7 @@
       },
       "listRuns": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -2119,10 +1851,7 @@
       },
       "pause": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -2130,10 +1859,7 @@
       },
       "requestReview": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "admin"
@@ -2141,10 +1867,7 @@
       },
       "resume": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -2152,10 +1875,7 @@
       },
       "retire": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "destructive"
@@ -2163,9 +1883,7 @@
       },
       "startSession": {
         "authority": {
-          "principals": [
-            "host"
-          ]
+          "principals": ["host"]
         },
         "access": {
           "sensitivity": "write"
@@ -2175,11 +1893,7 @@
   },
   "notification": {
     "service": {
-      "principals": [
-        "user",
-        "code",
-        "host"
-      ]
+      "principals": ["user", "code", "host"]
     },
     "methods": {
       "dismiss": {
@@ -2208,10 +1922,7 @@
       },
       "signalUserInbox": {
         "authority": {
-          "principals": [
-            "code",
-            "host"
-          ]
+          "principals": ["code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -2221,11 +1932,7 @@
   },
   "panelCdp": {
     "service": {
-      "principals": [
-        "user",
-        "host",
-        "code"
-      ]
+      "principals": ["user", "host", "code"]
     },
     "methods": {
       "consoleHistory": {
@@ -2344,10 +2051,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -2473,10 +2177,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -2602,10 +2303,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -2731,10 +2429,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -2746,10 +2441,7 @@
       },
       "hostProvider.close": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "admin"
@@ -2757,10 +2449,7 @@
       },
       "hostProvider.open": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "admin"
@@ -2768,10 +2457,7 @@
       },
       "hostProvider.send": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "admin"
@@ -2893,10 +2579,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -3022,10 +2705,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -3151,10 +2831,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -3280,10 +2957,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -3297,10 +2971,7 @@
   },
   "panelLog": {
     "service": {
-      "principals": [
-        "user",
-        "host"
-      ]
+      "principals": ["user", "host"]
     },
     "methods": {
       "append": {
@@ -3315,10 +2986,7 @@
   },
   "panelRuntime": {
     "service": {
-      "principals": [
-        "user",
-        "host"
-      ],
+      "principals": ["user", "host"],
       "description": "Authenticated clients and the product host control runtime leases"
     },
     "methods": {
@@ -3332,11 +3000,7 @@
       },
       "getSnapshot": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -3378,11 +3042,7 @@
   },
   "panelTree": {
     "service": {
-      "principals": [
-        "code",
-        "user",
-        "host"
-      ]
+      "principals": ["code", "user", "host"]
     },
     "methods": {
       "archive": {
@@ -3501,10 +3161,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -3516,9 +3173,7 @@
       },
       "archiveOwnedRoots": {
         "authority": {
-          "principals": [
-            "host"
-          ]
+          "principals": ["host"]
         },
         "access": {
           "sensitivity": "destructive"
@@ -3640,10 +3295,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -3769,10 +3421,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -3898,10 +3547,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -3921,9 +3567,7 @@
       },
       "ensureLoaded": {
         "authority": {
-          "principals": [
-            "host"
-          ]
+          "principals": ["host"]
         },
         "access": {
           "sensitivity": "write"
@@ -4045,10 +3689,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -4084,9 +3725,7 @@
       },
       "getRuntimeLease": {
         "authority": {
-          "principals": [
-            "host"
-          ]
+          "principals": ["host"]
         },
         "access": {
           "sensitivity": "read"
@@ -4102,11 +3741,7 @@
       },
       "getTreeSnapshot": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -4122,11 +3757,7 @@
       },
       "metadata": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -4248,10 +3879,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -4438,10 +4066,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -4628,10 +4253,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -4765,10 +4387,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -4894,10 +4513,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -5023,10 +4639,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -5160,10 +4773,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -5289,10 +4899,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -5426,10 +5033,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -5555,10 +5159,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -5684,10 +5285,7 @@
                   ]
                 },
                 "tier": {
-                  "selectedFrom": [
-                    "gated",
-                    "critical"
-                  ]
+                  "selectedFrom": ["gated", "critical"]
                 }
               }
             ]
@@ -5701,11 +5299,7 @@
   },
   "permissions": {
     "service": {
-      "principals": [
-        "user",
-        "host",
-        "code"
-      ]
+      "principals": ["user", "host", "code"]
     },
     "methods": {
       "list": {
@@ -5732,6 +5326,22 @@
           "sensitivity": "write"
         }
       },
+      "safetyStatus": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "setWorkspaceAuthorityLock": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
       "updateAgentProfile": {
         "authority": {
           "inherits": true
@@ -5744,10 +5354,7 @@
   },
   "phoneProvisioning": {
     "service": {
-      "principals": [
-        "code",
-        "user"
-      ]
+      "principals": ["code", "user"]
     },
     "methods": {
       "devices": {
@@ -5806,19 +5413,12 @@
   },
   "presence": {
     "service": {
-      "principals": [
-        "host",
-        "user"
-      ]
+      "principals": ["host", "user"]
     },
     "methods": {
       "getPanelActiveOwner": {
         "authority": {
-          "principals": [
-            "host",
-            "user",
-            "code"
-          ]
+          "principals": ["host", "user", "code"]
         },
         "access": {
           "sensitivity": "read"
@@ -5840,18 +5440,12 @@
   },
   "push": {
     "service": {
-      "principals": [
-        "user",
-        "code",
-        "host"
-      ]
+      "principals": ["user", "code", "host"]
     },
     "methods": {
       "listRegistrations": {
         "authority": {
-          "principals": [
-            "host"
-          ]
+          "principals": ["host"]
         },
         "access": {
           "sensitivity": "read"
@@ -5867,9 +5461,7 @@
       },
       "send": {
         "authority": {
-          "principals": [
-            "host"
-          ]
+          "principals": ["host"]
         },
         "access": {
           "sensitivity": "write"
@@ -5887,18 +5479,12 @@
   },
   "runtime": {
     "service": {
-      "principals": [
-        "code",
-        "user",
-        "host"
-      ]
+      "principals": ["code", "user", "host"]
     },
     "methods": {
       "activatePanelEntity": {
         "authority": {
-          "principals": [
-            "host"
-          ]
+          "principals": ["host"]
         },
         "access": {
           "sensitivity": "write"
@@ -6288,19 +5874,12 @@
           "restrictedTo": [
             {
               "when": "spec.kind is 'app'",
-              "principals": [
-                "host",
-                "user"
-              ],
+              "principals": ["host", "user"],
               "reason": "app runtime entities are host-managed"
             },
             {
               "when": "spec.kind is 'session'",
-              "principals": [
-                "host",
-                "user",
-                "code"
-              ],
+              "principals": ["host", "user", "code"],
               "reason": "session entities are host-managed, except a launch-orchestrator extension may create a source-tagged session"
             }
           ],
@@ -6578,11 +6157,7 @@
       },
       "listEntities": {
         "authority": {
-          "principals": [
-            "code",
-            "host",
-            "user"
-          ]
+          "principals": ["code", "host", "user"]
         },
         "access": {
           "sensitivity": "read"
@@ -6590,11 +6165,7 @@
       },
       "listOwnedContexts": {
         "authority": {
-          "principals": [
-            "code",
-            "host",
-            "user"
-          ]
+          "principals": ["code", "host", "user"]
         },
         "access": {
           "sensitivity": "read"
@@ -6602,10 +6173,7 @@
       },
       "recordContextEdge": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -6613,9 +6181,7 @@
       },
       "reservePanelEntity": {
         "authority": {
-          "principals": [
-            "host"
-          ]
+          "principals": ["host"]
         },
         "access": {
           "sensitivity": "write"
@@ -6623,11 +6189,7 @@
       },
       "resolveContext": {
         "authority": {
-          "principals": [
-            "code",
-            "host",
-            "user"
-          ]
+          "principals": ["code", "host", "user"]
         },
         "access": {
           "sensitivity": "read"
@@ -6759,9 +6321,7 @@
       },
       "setTitle": {
         "authority": {
-          "principals": [
-            "code"
-          ]
+          "principals": ["code"]
         },
         "access": {
           "sensitivity": "write"
@@ -6771,11 +6331,7 @@
   },
   "serverLog": {
     "service": {
-      "principals": [
-        "user",
-        "code",
-        "host"
-      ]
+      "principals": ["user", "code", "host"]
     },
     "methods": {
       "query": {
@@ -6806,10 +6362,7 @@
   },
   "settings": {
     "service": {
-      "principals": [
-        "user",
-        "code"
-      ]
+      "principals": ["user", "code"]
     },
     "methods": {
       "getData": {
@@ -6824,11 +6377,7 @@
   },
   "shellApproval": {
     "service": {
-      "principals": [
-        "user",
-        "code",
-        "host"
-      ]
+      "principals": ["user", "code", "host"]
     },
     "methods": {
       "listPending": {
@@ -6865,11 +6414,7 @@
       },
       "resolveExternalAgentByRequest": {
         "authority": {
-          "principals": [
-            "code",
-            "user",
-            "host"
-          ]
+          "principals": ["code", "user", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -6919,20 +6464,12 @@
   },
   "shellPresence": {
     "service": {
-      "principals": [
-        "user",
-        "code",
-        "host"
-      ]
+      "principals": ["user", "code", "host"]
     },
     "methods": {
       "heartbeat": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -6942,18 +6479,12 @@
   },
   "systemAgent": {
     "service": {
-      "principals": [
-        "user",
-        "code"
-      ]
+      "principals": ["user", "code"]
     },
     "methods": {
       "resolveConversation": {
         "authority": {
-          "principals": [
-            "user",
-            "code"
-          ]
+          "principals": ["user", "code"]
         },
         "access": {
           "sensitivity": "write"
@@ -6963,10 +6494,7 @@
   },
   "userlandApproval": {
     "service": {
-      "principals": [
-        "code",
-        "session"
-      ]
+      "principals": ["code", "session"]
     },
     "methods": {
       "list": {
@@ -6987,9 +6515,7 @@
       },
       "requestAs": {
         "authority": {
-          "principals": [
-            "code"
-          ]
+          "principals": ["code"]
         },
         "access": {
           "sensitivity": "write"
@@ -6997,9 +6523,7 @@
       },
       "requestExternal": {
         "authority": {
-          "principals": [
-            "code"
-          ]
+          "principals": ["code"]
         },
         "access": {
           "sensitivity": "write"
@@ -7015,9 +6539,7 @@
       },
       "requestSecretInputAs": {
         "authority": {
-          "principals": [
-            "code"
-          ]
+          "principals": ["code"]
         },
         "access": {
           "sensitivity": "write"
@@ -7033,9 +6555,7 @@
       },
       "settleExternal": {
         "authority": {
-          "principals": [
-            "code"
-          ]
+          "principals": ["code"]
         },
         "access": {
           "sensitivity": "write"
@@ -7045,11 +6565,7 @@
   },
   "vcs": {
     "service": {
-      "principals": [
-        "user",
-        "code",
-        "host"
-      ]
+      "principals": ["user", "code", "host"]
     },
     "methods": {
       "blame": {
@@ -7200,11 +6716,7 @@
   },
   "webhookIngress": {
     "service": {
-      "principals": [
-        "user",
-        "host",
-        "code"
-      ]
+      "principals": ["user", "host", "code"]
     },
     "methods": {
       "createSubscription": {
@@ -7243,11 +6755,7 @@
   },
   "workerdInspector": {
     "service": {
-      "principals": [
-        "user",
-        "host",
-        "code"
-      ]
+      "principals": ["user", "host", "code"]
     },
     "methods": {
       "getEndpoint": {
@@ -7315,9 +6823,7 @@
                 "capability": "runtime.inspect",
                 "requirement": {
                   "kind": "selected",
-                  "principals": [
-                    "code"
-                  ]
+                  "principals": ["code"]
                 },
                 "tier": "gated"
               }
@@ -7340,11 +6846,7 @@
   },
   "workerLog": {
     "service": {
-      "principals": [
-        "user",
-        "code",
-        "host"
-      ]
+      "principals": ["user", "code", "host"]
     },
     "methods": {
       "write": {
@@ -7359,11 +6861,7 @@
   },
   "workers": {
     "service": {
-      "principals": [
-        "user",
-        "host",
-        "code"
-      ]
+      "principals": ["user", "host", "code"]
     },
     "methods": {
       "listServices": {
@@ -7448,22 +6946,14 @@
                 "tier": "gated",
                 "requirement": {
                   "kind": "selected",
-                  "principals": [
-                    "host",
-                    "user",
-                    "code",
-                    "session",
-                    "mission"
-                  ]
+                  "principals": ["host", "user", "code", "session", "mission"]
                 }
               },
               {
                 "capability": "service:workers.resolveDurableObject",
                 "requirement": {
                   "kind": "selected",
-                  "principals": [
-                    "code"
-                  ]
+                  "principals": ["code"]
                 }
               }
             ]
@@ -7539,13 +7029,7 @@
                 "tier": "gated",
                 "requirement": {
                   "kind": "selected",
-                  "principals": [
-                    "host",
-                    "user",
-                    "code",
-                    "session",
-                    "mission"
-                  ]
+                  "principals": ["host", "user", "code", "session", "mission"]
                 }
               }
             ]
@@ -7559,20 +7043,12 @@
   },
   "workspace": {
     "service": {
-      "principals": [
-        "user",
-        "code",
-        "host"
-      ]
+      "principals": ["user", "code", "host"]
     },
     "methods": {
       "ensureContextFolder": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -7620,11 +7096,7 @@
       },
       "heartbeats.list": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -7632,11 +7104,7 @@
       },
       "heartbeats.pause": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -7644,11 +7112,7 @@
       },
       "heartbeats.resume": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -7656,11 +7120,7 @@
       },
       "heartbeats.runNow": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -7668,11 +7128,7 @@
       },
       "hostTargets.beginLaunch": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -7680,11 +7136,7 @@
       },
       "hostTargets.cancelLaunchSession": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -7692,10 +7144,7 @@
       },
       "hostTargets.clearSelection": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -7703,11 +7152,7 @@
       },
       "hostTargets.getLaunchSession": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -7715,10 +7160,7 @@
       },
       "hostTargets.getSelection": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -7726,11 +7168,7 @@
       },
       "hostTargets.launch": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -7738,10 +7176,7 @@
       },
       "hostTargets.list": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -7749,10 +7184,7 @@
       },
       "hostTargets.preparePinnedRef": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -7760,11 +7192,7 @@
       },
       "hostTargets.resolveLaunchSessionApproval": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -7772,10 +7200,7 @@
       },
       "hostTargets.setSelection": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -7783,10 +7208,7 @@
       },
       "hostTargets.versions": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -7794,11 +7216,7 @@
       },
       "listSkills": {
         "authority": {
-          "principals": [
-            "host",
-            "user",
-            "code"
-          ]
+          "principals": ["host", "user", "code"]
         },
         "access": {
           "sensitivity": "read"
@@ -7806,11 +7224,7 @@
       },
       "readSkill": {
         "authority": {
-          "principals": [
-            "host",
-            "user",
-            "code"
-          ]
+          "principals": ["host", "user", "code"]
         },
         "access": {
           "sensitivity": "read"
@@ -7818,11 +7232,7 @@
       },
       "recurring.list": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -7830,11 +7240,7 @@
       },
       "setConfigField": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -7842,11 +7248,7 @@
       },
       "setInitPanels": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -7862,10 +7264,7 @@
       },
       "units.bakeAppDist": {
         "authority": {
-          "principals": [
-            "user",
-            "host"
-          ]
+          "principals": ["user", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -7929,11 +7328,7 @@
       },
       "validateConfig": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -7943,19 +7338,12 @@
   },
   "workspace-state": {
     "service": {
-      "principals": [
-        "user",
-        "code",
-        "host"
-      ]
+      "principals": ["user", "code", "host"]
     },
     "methods": {
       "alarmClear": {
         "authority": {
-          "principals": [
-            "host",
-            "code"
-          ]
+          "principals": ["host", "code"]
         },
         "access": {
           "sensitivity": "destructive"
@@ -7963,10 +7351,7 @@
       },
       "alarmSet": {
         "authority": {
-          "principals": [
-            "host",
-            "code"
-          ]
+          "principals": ["host", "code"]
         },
         "access": {
           "sensitivity": "write"
@@ -7974,11 +7359,7 @@
       },
       "entity.resolve": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -7986,11 +7367,7 @@
       },
       "entity.resolveActive": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -7998,10 +7375,7 @@
       },
       "heartbeatRegister": {
         "authority": {
-          "principals": [
-            "host",
-            "code"
-          ]
+          "principals": ["host", "code"]
         },
         "access": {
           "sensitivity": "write"
@@ -8009,10 +7383,7 @@
       },
       "heartbeatRemove": {
         "authority": {
-          "principals": [
-            "host",
-            "code"
-          ]
+          "principals": ["host", "code"]
         },
         "access": {
           "sensitivity": "destructive"
@@ -8020,10 +7391,7 @@
       },
       "lifecycleLeaseClear": {
         "authority": {
-          "principals": [
-            "host",
-            "code"
-          ]
+          "principals": ["host", "code"]
         },
         "access": {
           "sensitivity": "destructive"
@@ -8031,10 +7399,7 @@
       },
       "lifecycleLeaseUpsert": {
         "authority": {
-          "principals": [
-            "host",
-            "code"
-          ]
+          "principals": ["host", "code"]
         },
         "access": {
           "sensitivity": "write"
@@ -8042,11 +7407,7 @@
       },
       "panel.incrementAccess": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -8054,11 +7415,7 @@
       },
       "panel.index": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -8066,11 +7423,7 @@
       },
       "panel.rebuildIndex": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -8078,11 +7431,7 @@
       },
       "panel.search": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -8090,11 +7439,7 @@
       },
       "panel.updateTitle": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -8102,11 +7447,7 @@
       },
       "slot.close": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "destructive"
@@ -8114,11 +7455,7 @@
       },
       "slot.commitPreparedNavigation": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -8126,11 +7463,7 @@
       },
       "slot.create": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -8138,11 +7471,7 @@
       },
       "slot.get": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -8150,11 +7479,7 @@
       },
       "slot.history": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -8162,11 +7487,7 @@
       },
       "slot.list": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -8174,11 +7495,7 @@
       },
       "slot.move": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -8186,11 +7503,7 @@
       },
       "slot.resolveByEntity": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "read"
@@ -8198,11 +7511,7 @@
       },
       "slot.setParent": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -8210,11 +7519,7 @@
       },
       "slot.setPosition": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -8222,11 +7527,7 @@
       },
       "slot.updateCurrentStateArgs": {
         "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
+          "principals": ["user", "code", "host"]
         },
         "access": {
           "sensitivity": "write"
@@ -8236,11 +7537,7 @@
   },
   "workspacePresence": {
     "service": {
-      "principals": [
-        "host",
-        "user",
-        "code"
-      ]
+      "principals": ["host", "user", "code"]
     },
     "methods": {
       "list": {

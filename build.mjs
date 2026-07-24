@@ -2,6 +2,7 @@ import * as esbuild from "esbuild";
 import * as fs from "fs";
 import * as path from "path";
 import { execSync } from "child_process";
+import { randomUUID } from "node:crypto";
 import { builtinModules, createRequire } from "node:module";
 import { collectWorkersFromDependencies, workersToArray } from "./scripts/collectWorkers.mjs";
 import { SERVER_ESM_BANNER } from "./scripts/build-artifact-contracts.mjs";
@@ -10,6 +11,7 @@ import { buildWorkerdPrograms } from "./scripts/build-workerd-programs.mjs";
 import {
   computeHostBuildFingerprint,
   HOST_BUILD_FINGERPRINT_PATH,
+  readHostBuildFingerprint,
   sameHostBuildFingerprint,
   writeHostBuildFingerprint,
 } from "./scripts/host-build-fingerprint.mjs";
@@ -19,6 +21,75 @@ const isDev = process.env.NODE_ENV === "development";
 const logOverride = {
   "suspicious-logical-operator": "silent",
 };
+
+const SOURCE_PREREQUISITE_LOCK_PATH = "dist/source-server-prerequisites.lock";
+
+async function acquireSourcePrerequisiteLock() {
+  fs.mkdirSync(path.dirname(SOURCE_PREREQUISITE_LOCK_PATH), { recursive: true });
+  const token = randomUUID();
+  let announced = false;
+  for (;;) {
+    try {
+      fs.writeFileSync(SOURCE_PREREQUISITE_LOCK_PATH, JSON.stringify({ pid: process.pid, token }), {
+        flag: "wx",
+        mode: 0o600,
+      });
+      return () => {
+        try {
+          const owner = JSON.parse(fs.readFileSync(SOURCE_PREREQUISITE_LOCK_PATH, "utf8"));
+          if (owner.token === token) fs.rmSync(SOURCE_PREREQUISITE_LOCK_PATH);
+        } catch (error) {
+          if (error?.code !== "ENOENT") throw error;
+        }
+      };
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+
+    let owner = null;
+    try {
+      owner = JSON.parse(fs.readFileSync(SOURCE_PREREQUISITE_LOCK_PATH, "utf8"));
+    } catch {
+      // A contender may observe the file between its atomic create and write.
+      // Re-read on the next poll; an ownerless crash is reclaimed below once
+      // the file is no longer in that creation window.
+    }
+    const ownerPid = Number(owner?.pid);
+    let ownerAlive = false;
+    if (Number.isInteger(ownerPid) && ownerPid > 0) {
+      try {
+        process.kill(ownerPid, 0);
+        ownerAlive = true;
+      } catch (error) {
+        if (error?.code !== "ESRCH") throw error;
+      }
+    }
+    const lockAgeMs = (() => {
+      try {
+        return Date.now() - fs.statSync(SOURCE_PREREQUISITE_LOCK_PATH).mtimeMs;
+      } catch {
+        return 0;
+      }
+    })();
+    if ((!owner || !ownerAlive) && lockAgeMs >= 1_000) {
+      try {
+        fs.rmSync(SOURCE_PREREQUISITE_LOCK_PATH);
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+      continue;
+    }
+    if (!announced) {
+      announced = true;
+      console.log(
+        `[build] Waiting for source-server prerequisites${
+          ownerAlive ? ` from process ${ownerPid}` : ""
+        }...`
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
 
 // Plugin to mark node: prefixed imports as external (for browser platform builds)
 const nodeBuiltinsExternalPlugin = {
@@ -550,8 +621,19 @@ async function buildInternalDoOnly() {
 }
 
 async function buildSourceServerPrerequisites() {
+  let releaseLock;
   try {
+    releaseLock = await acquireSourcePrerequisiteLock();
     const inputSnapshot = computeHostBuildFingerprint();
+    if (sameHostBuildFingerprint(readHostBuildFingerprint(), inputSnapshot)) {
+      console.log("Source server prerequisites already match the current source snapshot.");
+      return;
+    }
+    // The marker is the commit point for the whole prerequisite set. Remove it
+    // before touching any output so a failed or interrupted first build cannot
+    // make a partial runtime look reusable on the next launch.
+    fs.mkdirSync("dist", { recursive: true });
+    fs.rmSync(HOST_BUILD_FINGERPRINT_PATH, { force: true });
     // Source-mode servers import infrastructure packages through their public
     // dist exports, and auto-spawn the compiled headless host. Rebuilding only
     // the internal DO bundle can therefore combine live server source with
@@ -559,7 +641,6 @@ async function buildSourceServerPrerequisites() {
     // infrastructure portion of `pnpm dev` without rebuilding desktop UI.
     await buildVibestudioPackages();
     await buildHeadlessHost();
-    fs.mkdirSync("dist", { recursive: true });
     // Injected into every non-Electron/headless panel by PanelHttpServer. It
     // embeds the RPC WebSocket client, so leaving it stale can make panels use
     // an older wire protocol even when packages/rpc/dist is current.
@@ -583,6 +664,8 @@ async function buildSourceServerPrerequisites() {
   } catch (error) {
     console.error("Source server prerequisite build failed:", error);
     process.exitCode = 1;
+  } finally {
+    releaseLock?.();
   }
 }
 

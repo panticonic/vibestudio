@@ -30,7 +30,20 @@ export function createPermissionsService(deps: {
   credentialUseGrants: CredentialUseGrantStoreLike;
   browserPermissions: BrowserPermissionGrantStore;
   workspaceId: string;
+  pendingAcquisitionCount?: () => number;
+  activeAgentBindingCount?: () => number;
+  activeAgentBindings?: () => readonly string[];
+  interruptAgent?: (bindingId: string, reason: string) => Promise<void>;
+  resumeAgent?: (bindingId: string) => Promise<void>;
+  interruptAllAgents?: (reason: string) => Promise<void>;
+  closeAgentAcquisitions?: (bindingId: string) => number;
+  closeAllAcquisitions?: () => number;
 }): ServiceDefinition {
+  const safetyStatus = () => ({
+    workspaceLocked: deps.capabilityGrants.workspaceAuthorityLocked(),
+    activeAgentCount: deps.activeAgentBindingCount?.() ?? 0,
+    pendingAcquisitionCount: deps.pendingAcquisitionCount?.() ?? 0,
+  });
   return {
     name: SERVICE,
     description: "Trusted review and revocation of durable permission grants",
@@ -40,10 +53,11 @@ export function createPermissionsService(deps: {
       list: async (ctx) => {
         await deps.browserPermissions.ensureLoaded();
         const identity = browserEnvironmentIdentityFromContext(deps.workspaceId, ctx);
+        const reviewingUserId = ctx.caller.subject?.userId;
         const capability: SavedPermissionGrant[] = deps.capabilityGrants
           .listActiveAuthorityGrants()
           .filter((grant) => !grant.capability.startsWith("userland.choice/"))
-          .map(savedAuthorityGrant);
+          .map((grant) => savedAuthorityGrant(grant, reviewingUserId));
         const userland: SavedPermissionGrant[] = deps.capabilityGrants
           .listPersistentUserland()
           .map(({ id, grant }) => ({
@@ -61,6 +75,14 @@ export function createPermissionsService(deps: {
               ? { effectiveVersion: grant.principal.effectiveVersion }
               : {}),
             grantedAt: grant.grantedAt,
+            why: `Remembered the answer “${grant.choice}” so this request does not interrupt you again.`,
+            approvedBy: humanizeDecisionPrincipal(grant.grantedBy ?? "", reviewingUserId),
+            duration:
+              grant.scope === "version"
+                ? "Until this exact installed version changes or you revoke it"
+                : "Until you revoke it",
+            revokeEffect:
+              "The next matching request will ask again; requests already being handled are stopped.",
           }));
         const credentialUse: SavedPermissionGrant[] = deps.credentialUseGrants
           .listAll()
@@ -76,6 +98,14 @@ export function createPermissionsService(deps: {
               ? { repoPath: grant.repoPath, effectiveVersion: grant.effectiveVersion }
               : {}),
             grantedAt: grant.grantedAt,
+            why: `Lets this ${grant.scope === "agent" ? "agent" : "installed code version"} use the selected account for ${grant.action} access.`,
+            approvedBy: humanizeDecisionPrincipal(grant.grantedBy, reviewingUserId),
+            duration:
+              grant.scope === "agent"
+                ? "Until you revoke it, or the agent is retired"
+                : "Until this exact installed version changes or you revoke it",
+            revokeEffect:
+              "Future account use will ask again; an active request from this agent is stopped.",
           }));
         const browserSites: SavedPermissionGrant[] = deps.browserPermissions
           .list(identity.environmentKey, identity.ownerUserId)
@@ -92,6 +122,17 @@ export function createPermissionsService(deps: {
             capability: `Website ${grant.capability}`,
             resource: grant.origin,
             grantedAt: grant.updatedAt,
+            why:
+              grant.decision === "block"
+                ? "Keeps this website from asking for the same browser access."
+                : "Lets this website use the selected browser feature.",
+            approvedBy: "You",
+            duration:
+              grant.scope === "session"
+                ? "Until this browser session ends or you revoke it"
+                : "Until you revoke it",
+            revokeEffect:
+              "The website loses saved access and must ask again before using this feature.",
           }));
         return [...capability, ...userland, ...credentialUse, ...browserSites].sort(
           (a, b) => (b.grantedAt ?? 0) - (a.grantedAt ?? 0)
@@ -119,23 +160,44 @@ export function createPermissionsService(deps: {
         if (!removed)
           throw new ServiceError(SERVICE, "revoke", "Permission grant not found", "ENOENT");
       },
-      listAgentProfiles: async () => {
+      listAgentProfiles: async (ctx) => {
         deps.capabilityGrants.suspendIdleAgentGrants();
-        return agentProfiles(deps.capabilityGrants);
+        return agentProfiles(
+          deps.capabilityGrants,
+          deps.activeAgentBindings?.() ?? [],
+          ctx.caller.subject?.userId
+        );
       },
-      updateAgentProfile: async (_ctx, [request]) => {
+      safetyStatus: async () => safetyStatus(),
+      updateAgentProfile: async (ctx, [request]) => {
         let changed = false;
+        const decidedBy = ctx.caller.subject ? `user:${ctx.caller.subject.userId}` : "user:system";
         if (request.action === "revoke-grant") {
           changed = deps.capabilityGrants.revoke(request.id);
         } else if (request.action === "restore-grant") {
           changed = deps.capabilityGrants.restore(request.id);
         } else if (request.action === "unlock") {
           changed = deps.capabilityGrants.revokeLock(request.id);
+        } else if (request.action === "pause-agent") {
+          deps.capabilityGrants.setAgentPaused(request.bindingId, true, decidedBy);
+          deps.closeAgentAcquisitions?.(request.bindingId);
+          await deps.interruptAgent?.(request.bindingId, "The user paused this agent.");
+          changed = true;
+        } else if (request.action === "resume-agent") {
+          deps.capabilityGrants.setAgentPaused(request.bindingId, false, decidedBy);
+          await deps.resumeAgent?.(request.bindingId);
+          changed = true;
         } else {
-          const result = deps.capabilityGrants.resetAgentAuthority(request.bindingId, {
-            keepLocks: request.keepLocks,
+          deps.capabilityGrants.resetAgentAuthority(request.bindingId, {
+            keepLocks: true,
           });
-          changed = result.grants > 0 || result.locks > 0;
+          await deps.credentialUseGrants.revokeForAgent(request.bindingId);
+          deps.closeAgentAcquisitions?.(request.bindingId);
+          await deps.interruptAgent?.(
+            request.bindingId,
+            "The user revoked all authority for this agent."
+          );
+          changed = true;
         }
         if (!changed) {
           throw new ServiceError(
@@ -146,6 +208,17 @@ export function createPermissionsService(deps: {
           );
         }
       },
+      setWorkspaceAuthorityLock: async (ctx, [{ locked }]) => {
+        const decidedBy = ctx.caller.subject ? `user:${ctx.caller.subject.userId}` : "user:system";
+        deps.capabilityGrants.setWorkspaceAuthorityLocked(locked, decidedBy);
+        if (locked) {
+          deps.closeAllAcquisitions?.();
+          await deps.interruptAllAgents?.(
+            "The user engaged the emergency workspace authority lock."
+          );
+        }
+        return safetyStatus();
+      },
     }),
   };
 }
@@ -153,22 +226,33 @@ export function createPermissionsService(deps: {
 type AgentAuthorityProfile =
   import("@vibestudio/service-schemas/permissions").AgentAuthorityProfile;
 
-function agentProfiles(store: CapabilityGrantStore): AgentAuthorityProfile[] {
+function agentProfiles(
+  store: CapabilityGrantStore,
+  activeBindingIds: readonly string[],
+  reviewingUserId?: string
+): AgentAuthorityProfile[] {
   const grants = store.listAgentAuthorityGrants();
   const locks = store.listLocks().filter((lock) => lock.revokedAt === undefined);
   const bindingIds = new Set<string>();
+  for (const bindingId of activeBindingIds) bindingIds.add(bindingId);
   for (const grant of grants) bindingIds.add(grant.subject.slice("agent:".length));
-  for (const lock of locks) bindingIds.add(lock.agentBindingId);
-  return [...bindingIds].sort().map((bindingId) => agentProfile(bindingId, grants, locks));
+  for (const lock of locks) {
+    if (lock.agentBindingId !== "*") bindingIds.add(lock.agentBindingId);
+  }
+  return [...bindingIds]
+    .sort()
+    .map((bindingId) => agentProfile(bindingId, grants, locks, reviewingUserId));
 }
 
 function agentProfile(
   bindingId: string,
   allGrants: readonly AuthorityGrant[],
-  allLocks: readonly import("@vibestudio/rpc").AuthorityLock[]
+  allLocks: readonly import("@vibestudio/rpc").AuthorityLock[],
+  reviewingUserId?: string
 ): AgentAuthorityProfile {
   const grants = allGrants.filter((grant) => grant.subject === `agent:${bindingId}`);
   const locks = allLocks.filter((lock) => lock.agentBindingId === bindingId);
+  const paused = locks.some((lock) => lock.level === "agent");
   const cells: AgentAuthorityProfile["cells"] = [];
   for (const domain of Object.keys(AUTHORITY_DOMAINS) as AuthorityDomainId[]) {
     for (const verb of Object.keys(AUTHORITY_VERBS) as AuthorityVerb[]) {
@@ -177,6 +261,7 @@ function agentProfile(
         return category?.domain === domain && category.verb === verb;
       });
       const cellLocks = locks.filter((lock) => {
+        if (lock.level === "agent" || lock.level === "workspace") return false;
         if (lock.level === "cell") return lock.domain === domain && lock.verb === verb;
         const category = lock.capability ? capabilityDomain(lock.capability) : null;
         return category?.domain === domain && category.verb === verb;
@@ -195,6 +280,14 @@ function agentProfile(
             state: grant.suspendedAt ? ("suspended" as const) : ("active" as const),
             decidedAt: grant.createdAt,
             ...(grant.lastUsedAt ? { lastUsedAt: grant.lastUsedAt } : {}),
+            why: "You chose lasting access after this agent requested the action.",
+            approvedBy: humanizeDecisionPrincipal(
+              grant.decidedBy ?? grant.issuedBy,
+              reviewingUserId
+            ),
+            duration: "Until you revoke it, or after 3 months without use",
+            revokeEffect:
+              "The next matching action asks again, and active protected work is stopped.",
           };
         }),
         ...cellLocks.map((lock) => ({
@@ -211,6 +304,10 @@ function agentProfile(
           decidedAt: lock.createdAt,
           attemptCount: lock.attemptCount,
           ...(lock.lastAttemptAt ? { lastAttemptAt: lock.lastAttemptAt } : {}),
+          why: "You chose “Never” for this action or permission area.",
+          approvedBy: humanizeDecisionPrincipal(lock.decidedBy, reviewingUserId),
+          duration: "Until you unlock it",
+          revokeEffect: "The agent may ask for this action again.",
         })),
       ];
       const activeCount = cellGrants.filter((grant) => !grant.suspendedAt).length;
@@ -240,7 +337,7 @@ function agentProfile(
       : `${name} has saved access to ${[...allowedDomains]
           .map((domain) => AUTHORITY_DOMAINS[domain].label.toLowerCase())
           .join(", ")}. It can never change your safety controls.`;
-  return { bindingId, name, summary, cells };
+  return { bindingId, name, summary, paused, cells };
 }
 
 function agentBindingLabel(bindingId: string): string {
@@ -249,7 +346,10 @@ function agentBindingLabel(bindingId: string): string {
   return tail.replace(/[-_]+/g, " ").replace(/\b\w/g, (value) => value.toUpperCase());
 }
 
-function savedAuthorityGrant(grant: AuthorityGrant): SavedPermissionGrant {
+function savedAuthorityGrant(
+  grant: AuthorityGrant,
+  reviewingUserId?: string
+): SavedPermissionGrant {
   if (!grant.id) throw new Error("Persisted authority grant has no id");
   const code = codeSubject(grant.subject);
   const sessionScoped = Boolean(grant.constraints?.sessionId);
@@ -269,7 +369,55 @@ function savedAuthorityGrant(grant: AuthorityGrant): SavedPermissionGrant {
     resource: authorityResourceLabel(grant.resource),
     ...(code ? { repoPath: code.repoPath, effectiveVersion: code.executionDigest } : {}),
     grantedAt: grant.createdAt,
+    ...(grant.lastUsedAt ? { lastUsedAt: grant.lastUsedAt } : {}),
+    ...(grant.expiresAt ? { expiresAt: grant.expiresAt } : {}),
+    why: authorityGrantReason(grant),
+    approvedBy: humanizeDecisionPrincipal(grant.decidedBy ?? grant.issuedBy, reviewingUserId),
+    duration: authorityGrantDuration(grant),
+    revokeEffect:
+      grant.scope === "agent"
+        ? "The next matching action asks again, and this agent's active protected work is stopped."
+        : "The next matching action asks again; work using this permission can no longer continue.",
   };
+}
+
+function authorityGrantReason(grant: AuthorityGrant): string {
+  if (grant.effect === "deny") return "Remembers a decision not to allow this action.";
+  if (grant.provenance === "install") {
+    return "Provides the access declared and reviewed for this exact installed code version.";
+  }
+  if (grant.provenance === "preauthorization") {
+    return "Allows one action covered by the task you approved.";
+  }
+  return "Allows the protected action you reviewed when it was requested.";
+}
+
+function authorityGrantDuration(grant: AuthorityGrant): string {
+  if (grant.expiresAt) return "Until the shown expiry time or until you revoke it";
+  switch (grant.scope) {
+    case "once":
+      return "For one matching action";
+    case "task":
+      return "For the current approved task";
+    case "session":
+      return "Until this session ends or you revoke it";
+    case "agent":
+      return "Until you revoke it, or after 3 months without use";
+    case "mission":
+      return "Until the mission changes, ends, or you revoke it";
+    case "version":
+      return "Until this exact installed version changes or you revoke it";
+    default:
+      return "Until you revoke it";
+  }
+}
+
+function humanizeDecisionPrincipal(principal: string, reviewingUserId?: string): string {
+  const userId = principal.startsWith("user:") ? principal.slice("user:".length) : principal;
+  if (reviewingUserId && userId === reviewingUserId) return "You";
+  if (principal.startsWith("user:")) return "Another workspace member";
+  if (principal.startsWith("host:")) return "Vibestudio for an approved task";
+  return principal || "A workspace member";
 }
 
 function codeSubject(

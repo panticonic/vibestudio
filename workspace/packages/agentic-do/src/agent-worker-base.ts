@@ -23,6 +23,7 @@ import {
   createEvalTool,
   createDocsSearchTool,
   createDocsOpenTool,
+  createHostAuthorityNextActionTool,
   createWorkspaceServiceTool,
   createWebTools,
   createToolVcs,
@@ -325,6 +326,9 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       createDocsOpenTool(<T>(method: string, methodArgs: unknown[]) =>
         toolRpc.call<T>("main", method, methodArgs)
       ),
+      createHostAuthorityNextActionTool(<T>(method: string, methodArgs: unknown[]) =>
+        toolRpc.call<T>("main", method, methodArgs)
+      ),
       createWorkspaceServiceTool(vcs, mutationContext, {
         validateConfig: (content) =>
           toolRpc.call("main", "workspace.validateConfig", [content]).then(() => undefined),
@@ -368,10 +372,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
    *  `attachments` names image files in the agent's working tree (the same fs
    *  the read/write tools use), so a captured screenshot reaches the user by
    *  path — the bytes never travel through the model. */
-  protected createSayTool(
-    channelId: string,
-    fs: ReturnType<typeof createRpcFs>
-  ): AgentTool<never> {
+  protected createSayTool(channelId: string, fs: ReturnType<typeof createRpcFs>): AgentTool<never> {
     return {
       name: "say",
       label: "say",

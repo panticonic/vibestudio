@@ -535,12 +535,14 @@ describe("AgentVesselBase lifecycle release", () => {
     await instance.registerSubscriptionForTest();
     instance.callerKindForTest = "do";
     instance.callerIdForTest = "do:workers/pubsub-channel:PubSubChannel:chan-1";
-    const subscriptions = (instance as unknown as {
-      subscriptions: {
-        unsubscribeFromChannel(channelId: string): Promise<void>;
-        getParticipantId(channelId: string): string | null;
-      };
-    }).subscriptions;
+    const subscriptions = (
+      instance as unknown as {
+        subscriptions: {
+          unsubscribeFromChannel(channelId: string): Promise<void>;
+          getParticipantId(channelId: string): string | null;
+        };
+      }
+    ).subscriptions;
     vi.spyOn(subscriptions, "unsubscribeFromChannel").mockImplementation(async () => {
       expect(subscriptions.getParticipantId(CHANNEL)).toBeNull();
       await instance.onChannelEnvelope(CHANNEL, {
@@ -1345,7 +1347,9 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
       },
     };
 
-    await expect(probe.callGate(CHANNEL, "inv-infra", { code: "import('broken')" })).resolves.toMatchObject({
+    await expect(
+      probe.callGate(CHANNEL, "inv-infra", { code: "import('broken')" })
+    ).resolves.toMatchObject({
       isError: true,
       terminalOutcome: "infrastructure_error",
     });
@@ -2444,6 +2448,18 @@ describe("AgentVesselBase pause", () => {
     const { interruptChannel } = probe.stubDriverForPause();
     await probe.callAgentMethod(CHANNEL, "pause", { flushDeferred: true });
     expect(interruptChannel).toHaveBeenCalledWith(CHANNEL, true);
+  });
+
+  it("lets the host interrupt every subscribed transport for an emergency authority lock", async () => {
+    const probe = await makeGateProbe();
+    await probe.registerSubscriptionForTest(CHANNEL);
+    await probe.registerSubscriptionForTest("channel-2");
+    const { interruptChannel } = probe.stubDriverForPause();
+
+    await expect(probe.interruptAllChannels()).resolves.toEqual({ interrupted: 2 });
+    expect(interruptChannel).toHaveBeenCalledTimes(2);
+    expect(interruptChannel).toHaveBeenCalledWith(CHANNEL, true);
+    expect(interruptChannel).toHaveBeenCalledWith("channel-2", true);
   });
 });
 

@@ -122,7 +122,9 @@ export function sameHostBuildFingerprint(left, right) {
 export function writeHostBuildFingerprint(fingerprint, cwd = process.cwd()) {
   const destination = path.resolve(cwd, HOST_BUILD_FINGERPRINT_PATH);
   fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.writeFileSync(destination, `${JSON.stringify(fingerprint, null, 2)}\n`, {
+  const temporary = `${destination}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(fingerprint, null, 2)}\n`, {
     mode: 0o600,
   });
+  fs.renameSync(temporary, destination);
 }

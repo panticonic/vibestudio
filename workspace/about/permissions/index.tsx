@@ -30,6 +30,12 @@ export interface SavedPermissionGrant {
   repoPath?: string;
   effectiveVersion?: string;
   grantedAt?: number;
+  lastUsedAt?: number;
+  expiresAt?: number;
+  why: string;
+  approvedBy: string;
+  duration: string;
+  revokeEffect: string;
 }
 
 type DomainId =
@@ -55,11 +61,16 @@ type ProfileItem = {
   lastUsedAt?: number;
   attemptCount?: number;
   lastAttemptAt?: number;
+  why: string;
+  approvedBy: string;
+  duration: string;
+  revokeEffect: string;
 };
 type AgentAuthorityProfile = {
   bindingId: string;
   name: string;
   summary: string;
+  paused: boolean;
   cells: Array<{
     domain: DomainId;
     verb: Verb;
@@ -67,6 +78,11 @@ type AgentAuthorityProfile = {
     allowanceCount: number;
     items: ProfileItem[];
   }>;
+};
+type AuthoritySafetyStatus = {
+  workspaceLocked: boolean;
+  activeAgentCount: number;
+  pendingAcquisitionCount: number;
 };
 type MissionRecord = {
   missionId: string;
@@ -164,7 +180,10 @@ function ProfileCard({
     <Card size="3">
       <Flex direction="column" gap="4">
         <div>
-          <Heading size="4">{profile.name}</Heading>
+          <Flex align="center" gap="2" wrap="wrap">
+            <Heading size="4">{profile.name}</Heading>
+            {profile.paused ? <Badge color="red">Paused</Badge> : null}
+          </Flex>
           <Text size="2" color="gray">
             {profile.summary}
           </Text>
@@ -198,40 +217,49 @@ function ProfileCard({
                     </Badge>
                   ))}
                 </Flex>
-                {cells.flatMap((cell) => cell.items).map((item) => (
-                  <Flex key={`${item.kind}:${item.id}`} justify="between" align="center" gap="3">
-                    <Text size="2">
-                      {item.action}
-                      {item.resource ? ` — ${item.resource}` : ""}
-                      {item.state === "suspended" ? " · paused after 3 months without use" : ""}
-                      {item.kind === "lock" && item.attemptCount
-                        ? ` · ${item.attemptCount} attempts while locked`
-                        : ""}
-                    </Text>
-                    <Button
-                      size="1"
-                      variant="soft"
-                      disabled={changingId === item.id}
-                      onClick={() =>
-                        onChange({
-                          action:
-                            item.kind === "lock"
-                              ? "unlock"
-                              : item.state === "suspended"
-                                ? "restore-grant"
-                                : "revoke-grant",
-                          id: item.id,
-                        })
-                      }
-                    >
-                      {item.kind === "lock"
-                        ? "Unlock"
-                        : item.state === "suspended"
-                          ? "Restore"
-                          : "Remove"}
-                    </Button>
-                  </Flex>
-                ))}
+                {cells
+                  .flatMap((cell) => cell.items)
+                  .map((item) => (
+                    <Flex key={`${item.kind}:${item.id}`} justify="between" align="center" gap="3">
+                      <Text size="2">
+                        {item.action}
+                        {item.resource ? ` — ${item.resource}` : ""}
+                        {item.state === "suspended" ? " · paused after 3 months without use" : ""}
+                        {item.kind === "lock" && item.attemptCount
+                          ? ` · ${item.attemptCount} attempts while locked`
+                          : ""}
+                      </Text>
+                      <details>
+                        <summary>Why this setting exists</summary>
+                        <Text as="div" size="1" color="gray">
+                          {item.why} Approved by {item.approvedBy}. {item.duration}. If changed:{" "}
+                          {item.revokeEffect}
+                        </Text>
+                      </details>
+                      <Button
+                        size="1"
+                        variant="soft"
+                        disabled={changingId === item.id}
+                        onClick={() =>
+                          onChange({
+                            action:
+                              item.kind === "lock"
+                                ? "unlock"
+                                : item.state === "suspended"
+                                  ? "restore-grant"
+                                  : "revoke-grant",
+                            id: item.id,
+                          })
+                        }
+                      >
+                        {item.kind === "lock"
+                          ? "Unlock"
+                          : item.state === "suspended"
+                            ? "Restore"
+                            : "Remove"}
+                      </Button>
+                    </Flex>
+                  ))}
               </Flex>
             </Card>
           ))}
@@ -241,25 +269,26 @@ function ProfileCard({
             variant="soft"
             disabled={changingId === profile.bindingId}
             onClick={() =>
-              onChange({ action: "reset", bindingId: profile.bindingId, keepLocks: true })
+              onChange({
+                action: profile.paused ? "resume-agent" : "pause-agent",
+                bindingId: profile.bindingId,
+              })
             }
           >
-            <ResetIcon /> Make {profile.name} ask first for everything
+            {profile.paused ? "Resume agent" : "Pause agent now"}
           </Button>
           <Button
             color="red"
             variant="soft"
             disabled={changingId === profile.bindingId}
-            onClick={() =>
-              onChange({ action: "reset", bindingId: profile.bindingId, keepLocks: false })
-            }
+            onClick={() => onChange({ action: "revoke-all-agent", bindingId: profile.bindingId })}
           >
-            Remove all permission settings
+            <ResetIcon /> Revoke all authority
           </Button>
         </Flex>
         <Text size="1" color="gray">
-          Resetting removes permissions you granted to this agent. Its built-in code keeps the
-          abilities declared by its installed version.
+          Pausing stops active work and blocks new protected actions. Revoking removes access you
+          granted to this agent; its installed code still cannot exceed the abilities you reviewed.
         </Text>
       </Flex>
     </Card>
@@ -294,8 +323,8 @@ function DomainPivot({
       <Card size="3">
         <Heading size="4">{DOMAIN_COPY[domain]}</Heading>
         <Text as="p" size="2" color="gray">
-          See every agent with a saved setting here. “Asks first” means no lasting access is
-          stored; “Never” stops the request without prompting.
+          See every agent with a saved setting here. “Asks first” means no lasting access is stored;
+          “Never” stops the request without prompting.
         </Text>
       </Card>
       {visible.length === 0 ? (
@@ -330,39 +359,41 @@ function DomainPivot({
                   </Text>
                 </div>
               </Flex>
-              {cells.flatMap((cell) => cell.items).map((item) => (
-                <Flex key={`${item.kind}:${item.id}`} justify="between" align="center" gap="3">
-                  <Text size="2">
-                    {item.action}
-                    {item.resource ? ` — ${item.resource}` : ""}
-                    {item.kind === "lock" && item.attemptCount
-                      ? ` · ${item.attemptCount} attempts while locked`
-                      : ""}
-                  </Text>
-                  <Button
-                    size="1"
-                    variant="soft"
-                    disabled={changingId === item.id}
-                    onClick={() =>
-                      onChange({
-                        action:
-                          item.kind === "lock"
-                            ? "unlock"
-                            : item.state === "suspended"
-                              ? "restore-grant"
-                              : "revoke-grant",
-                        id: item.id,
-                      })
-                    }
-                  >
-                    {item.kind === "lock"
-                      ? "Unlock"
-                      : item.state === "suspended"
-                        ? "Restore"
-                        : "Remove"}
-                  </Button>
-                </Flex>
-              ))}
+              {cells
+                .flatMap((cell) => cell.items)
+                .map((item) => (
+                  <Flex key={`${item.kind}:${item.id}`} justify="between" align="center" gap="3">
+                    <Text size="2">
+                      {item.action}
+                      {item.resource ? ` — ${item.resource}` : ""}
+                      {item.kind === "lock" && item.attemptCount
+                        ? ` · ${item.attemptCount} attempts while locked`
+                        : ""}
+                    </Text>
+                    <Button
+                      size="1"
+                      variant="soft"
+                      disabled={changingId === item.id}
+                      onClick={() =>
+                        onChange({
+                          action:
+                            item.kind === "lock"
+                              ? "unlock"
+                              : item.state === "suspended"
+                                ? "restore-grant"
+                                : "revoke-grant",
+                          id: item.id,
+                        })
+                      }
+                    >
+                      {item.kind === "lock"
+                        ? "Unlock"
+                        : item.state === "suspended"
+                          ? "Restore"
+                          : "Remove"}
+                    </Button>
+                  </Flex>
+                ))}
             </Flex>
           </Card>
         ))
@@ -426,17 +457,63 @@ function GrantCard({
                 ? "System capability"
                 : grant.kind === "browser-site"
                   ? "Website permission"
-                : grant.kind === "credential-use"
-                  ? "Credential use"
-                  : "Agent choice"}
+                  : grant.kind === "credential-use"
+                    ? "Credential use"
+                    : "Agent choice"}
             </Badge>
           </Flex>
           <Text size="2">{grant.scopeLabel}</Text>
-          {grant.capability || grant.resource ? (
-            <Text size="2" color="gray">
-              {[grant.capability, grant.resource].filter(Boolean).join(" · ")}
-            </Text>
-          ) : null}
+          <dl
+            style={{
+              margin: 0,
+              display: "grid",
+              gridTemplateColumns: "minmax(6rem, auto) 1fr",
+              gap: "6px 12px",
+            }}
+          >
+            <dt>
+              <Text size="1" weight="bold">
+                What
+              </Text>
+            </dt>
+            <dd style={{ margin: 0 }}>
+              <Text size="2">
+                {[grant.capability, grant.resource].filter(Boolean).join(" · ") || grant.scopeLabel}
+              </Text>
+            </dd>
+            <dt>
+              <Text size="1" weight="bold">
+                Why
+              </Text>
+            </dt>
+            <dd style={{ margin: 0 }}>
+              <Text size="2">{grant.why}</Text>
+            </dd>
+            <dt>
+              <Text size="1" weight="bold">
+                Approved by
+              </Text>
+            </dt>
+            <dd style={{ margin: 0 }}>
+              <Text size="2">{grant.approvedBy}</Text>
+            </dd>
+            <dt>
+              <Text size="1" weight="bold">
+                How long
+              </Text>
+            </dt>
+            <dd style={{ margin: 0 }}>
+              <Text size="2">{grant.duration}</Text>
+            </dd>
+            <dt>
+              <Text size="1" weight="bold">
+                If you revoke it
+              </Text>
+            </dt>
+            <dd style={{ margin: 0 }}>
+              <Text size="2">{grant.revokeEffect}</Text>
+            </dd>
+          </dl>
           {grant.repoPath ? (
             <Text size="1" color="gray">
               {grant.repoPath}
@@ -445,6 +522,8 @@ function GrantCard({
           ) : null}
           <Text size="1" color="gray">
             Granted {dateLabel(grant.grantedAt)}
+            {grant.lastUsedAt ? ` · last used ${dateLabel(grant.lastUsedAt)}` : ""}
+            {grant.expiresAt ? ` · expires ${dateLabel(grant.expiresAt)}` : ""}
           </Text>
         </Flex>
         <Button color="red" variant="soft" disabled={revoking} onClick={onRevoke}>
@@ -509,15 +588,24 @@ function MissionCard({
               </Button>
             ) : null}
             {mission.state !== "retired" ? (
-              <Button color="red" variant="soft" disabled={changing} onClick={() => onAction("retire")}>
+              <Button
+                color="red"
+                variant="soft"
+                disabled={changing}
+                onClick={() => onAction("retire")}
+              >
                 Retire
               </Button>
             ) : null}
           </Flex>
         </Flex>
         <div>
-          <Text as="div" size="1" color="gray">What it will do</Text>
-          <Text as="div" size="2">{mission.charter.taskSpec}</Text>
+          <Text as="div" size="1" color="gray">
+            What it will do
+          </Text>
+          <Text as="div" size="2">
+            {mission.charter.taskSpec}
+          </Text>
         </div>
         <Text size="2">{trigger}</Text>
         <Flex gap="2" wrap="wrap">
@@ -529,15 +617,15 @@ function MissionCard({
                 ? `Can reach ${mission.charter.toolExposure.declaredOrigins.length} approved sites`
                 : "Can reach the web"}
           </Badge>
-          <Badge variant="soft">
-            Content: {mission.charter.declaredLineageClasses.join(", ")}
-          </Badge>
+          <Badge variant="soft">Content: {mission.charter.declaredLineageClasses.join(", ")}</Badge>
         </Flex>
         <details>
           <summary>Run timeline</summary>
           <Flex direction="column" gap="2" mt="2">
             {runs.length === 0 ? (
-              <Text size="2" color="gray">This mission has not run yet.</Text>
+              <Text size="2" color="gray">
+                This mission has not run yet.
+              </Text>
             ) : (
               runs.map((run) => (
                 <Text key={run.runId} size="2">
@@ -599,7 +687,7 @@ function CatalogCard({
         </Flex>
         <Text size="1" color="gray">
           {unit.source}
-          {unit.activeEv ?? unit.ev ? ` · exact version ${unit.activeEv ?? unit.ev}` : ""}
+          {(unit.activeEv ?? unit.ev) ? ` · exact version ${unit.activeEv ?? unit.ev}` : ""}
         </Text>
         {unit.lastError ? (
           <Callout.Root color="red" size="1">
@@ -690,22 +778,29 @@ function PermissionsPage() {
   const [units, setUnits] = useState<WorkspaceUnitStatus[]>([]);
   const [decisions, setDecisions] = useState<GovernanceDecision[]>([]);
   const [missionRuns, setMissionRuns] = useState<Record<string, MissionRunRecord[]>>({});
-  const [view, setView] = useState<
-    "catalog" | "agents" | "domains" | "missions" | "recent"
-  >("catalog");
+  const [view, setView] = useState<"catalog" | "agents" | "domains" | "missions" | "recent">(
+    "catalog"
+  );
   const [domain, setDomain] = useState<DomainId>("sharing");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [safety, setSafety] = useState<AuthoritySafetyStatus>({
+    workspaceLocked: false,
+    activeAgentCount: 0,
+    pendingAcquisitionCount: 0,
+  });
+  const [statusMessage, setStatusMessage] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [nextGrants, nextProfiles, nextMissions, nextUnits, nextDecisions] =
+      const [nextGrants, nextProfiles, nextSafety, nextMissions, nextUnits, nextDecisions] =
         await Promise.all([
           rpc.call<SavedPermissionGrant[]>("main", "permissions.list", []),
           rpc.call<AgentAuthorityProfile[]>("main", "permissions.listAgentProfiles", []),
+          rpc.call<AuthoritySafetyStatus>("main", "permissions.safetyStatus", []),
           rpc.call<MissionRecord[]>("main", "mission.list", []),
           rpc.call<WorkspaceUnitStatus[]>("main", "workspace.units.list", []),
           rpc.call<GovernanceDecision[]>("main", "governance.list", [
@@ -714,6 +809,7 @@ function PermissionsPage() {
         ]);
       setGrants(nextGrants);
       setProfiles(nextProfiles);
+      setSafety(nextSafety);
       setMissions(nextMissions);
       setUnits(nextUnits);
       setDecisions(nextDecisions);
@@ -735,17 +831,16 @@ function PermissionsPage() {
   }, []);
 
   const updateMission = useCallback(
-    async (
-      mission: MissionRecord,
-      action: "requestReview" | "pause" | "resume" | "retire"
-    ) => {
+    async (mission: MissionRecord, action: "requestReview" | "pause" | "resume" | "retire") => {
       setRevokingId(mission.missionId);
       setError(null);
       try {
         await rpc.call("main", `mission.${action}`, [mission.missionId]);
         await load();
       } catch (err) {
-        setError(`Couldn't update this mission: ${err instanceof Error ? err.message : String(err)}`);
+        setError(
+          `Couldn't update this mission: ${err instanceof Error ? err.message : String(err)}`
+        );
       } finally {
         setRevokingId(null);
       }
@@ -763,12 +858,44 @@ function PermissionsPage() {
         await rpc.call<AgentAuthorityProfile[]>("main", "permissions.listAgentProfiles", [])
       );
       setGrants(await rpc.call<SavedPermissionGrant[]>("main", "permissions.list", []));
+      setSafety(await rpc.call<AuthoritySafetyStatus>("main", "permissions.safetyStatus", []));
+      setStatusMessage("Agent authority settings updated.");
     } catch (err) {
       setError(`Couldn't change this setting: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setRevokingId(null);
     }
   }, []);
+
+  const setWorkspaceLock = useCallback(
+    async (locked: boolean) => {
+      setRevokingId("workspace-authority-lock");
+      setError(null);
+      try {
+        const next = await rpc.call<AuthoritySafetyStatus>(
+          "main",
+          "permissions.setWorkspaceAuthorityLock",
+          [{ locked }]
+        );
+        setSafety(next);
+        setStatusMessage(
+          locked
+            ? "Workspace authority locked. Active agent work was stopped."
+            : "Workspace authority unlocked. Agents may work when asked."
+        );
+        await load();
+      } catch (err) {
+        setError(
+          `Couldn't ${locked ? "lock" : "unlock"} workspace authority: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      } finally {
+        setRevokingId(null);
+      }
+    },
+    [load]
+  );
 
   useEffect(() => {
     void load();
@@ -802,24 +929,73 @@ function PermissionsPage() {
         </Button>
       }
     >
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        style={{
+          position: "absolute",
+          width: 1,
+          height: 1,
+          overflow: "hidden",
+          clipPath: "inset(50%)",
+        }}
+      >
+        {statusMessage}
+      </div>
+      <Section>
+        <Flex direction="column" gap="3">
+          <Flex justify="between" align="center" gap="3" wrap="wrap">
+            <div>
+              <Flex align="center" gap="2" wrap="wrap">
+                <Heading size="3">Emergency agent authority lock</Heading>
+                <Badge color={safety.workspaceLocked ? "red" : "green"}>
+                  {safety.workspaceLocked ? "Locked" : "Ready"}
+                </Badge>
+              </Flex>
+              <Text as="div" size="2" color="gray">
+                {safety.workspaceLocked
+                  ? "Every agent is blocked from protected workspace actions."
+                  : `${safety.activeAgentCount} active agent${safety.activeAgentCount === 1 ? "" : "s"} · ${safety.pendingAcquisitionCount} approval${safety.pendingAcquisitionCount === 1 ? "" : "s"} waiting`}
+              </Text>
+            </div>
+            <Button
+              color={safety.workspaceLocked ? "gray" : "red"}
+              variant="soft"
+              disabled={revokingId === "workspace-authority-lock"}
+              onClick={() => void setWorkspaceLock(!safety.workspaceLocked)}
+            >
+              <LockClosedIcon />
+              {safety.workspaceLocked ? "Unlock agent authority" : "Lock all agent authority"}
+            </Button>
+          </Flex>
+          <Text size="1" color="gray">
+            Locking cancels pending permission requests, interrupts active agent transports, and
+            prevents new protected work. Your own permission controls remain available.
+          </Text>
+        </Flex>
+      </Section>
       <Section>
         <Flex direction="column" gap="3">
           <Text size="2" color="gray">
             See what each agent can do, make it ask first again, or keep a lasting “never” choice.
             One-time decisions appear only in Recent decisions.
           </Text>
-          <SegmentedControl.Root
-            value={view}
-            onValueChange={(value) =>
-              setView(value as "catalog" | "agents" | "domains" | "missions" | "recent")
-            }
-          >
-            <SegmentedControl.Item value="catalog">Catalog</SegmentedControl.Item>
-            <SegmentedControl.Item value="agents">Agents</SegmentedControl.Item>
-            <SegmentedControl.Item value="domains">By area</SegmentedControl.Item>
-            <SegmentedControl.Item value="missions">Missions</SegmentedControl.Item>
-            <SegmentedControl.Item value="recent">Recent decisions</SegmentedControl.Item>
-          </SegmentedControl.Root>
+          <div style={{ maxWidth: "100%", overflowX: "auto" }}>
+            <SegmentedControl.Root
+              aria-label="Permission view"
+              value={view}
+              onValueChange={(value) =>
+                setView(value as "catalog" | "agents" | "domains" | "missions" | "recent")
+              }
+            >
+              <SegmentedControl.Item value="catalog">Catalog</SegmentedControl.Item>
+              <SegmentedControl.Item value="agents">Agents</SegmentedControl.Item>
+              <SegmentedControl.Item value="domains">By area</SegmentedControl.Item>
+              <SegmentedControl.Item value="missions">Missions</SegmentedControl.Item>
+              <SegmentedControl.Item value="recent">Recent decisions</SegmentedControl.Item>
+            </SegmentedControl.Root>
+          </div>
           {view === "domains" ? (
             <label>
               <Text as="div" size="1" color="gray" mb="1">
@@ -882,101 +1058,97 @@ function PermissionsPage() {
         </Section>
       ) : null}
       <Flex direction="column" gap="3">
-        {view === "catalog"
-          ? (
-              <>
-                {(["agent", "worker", "panel", "app", "extension"] as const).map((kind) => {
-                  const matching = units.filter((unit) =>
-                    kind === "agent"
-                      ? unit.kind === "worker" && unit.isAgent
+        {view === "catalog" ? (
+          <>
+            {(["agent", "worker", "panel", "app", "extension"] as const).map((kind) => {
+              const matching = units.filter((unit) =>
+                kind === "agent"
+                  ? unit.kind === "worker" && unit.isAgent
+                  : kind === "worker"
+                    ? unit.kind === "worker" && !unit.isAgent
+                    : unit.kind === kind
+              );
+              if (matching.length === 0) return null;
+              return (
+                <Flex key={kind} direction="column" gap="2">
+                  <Heading size="3">
+                    {kind === "agent"
+                      ? "Agents"
                       : kind === "worker"
-                        ? unit.kind === "worker" && !unit.isAgent
-                        : unit.kind === kind
-                  );
-                  if (matching.length === 0) return null;
-                  return (
-                    <Flex key={kind} direction="column" gap="2">
-                      <Heading size="3">
-                        {kind === "agent"
-                          ? "Agents"
-                          : kind === "worker"
-                            ? "Workers"
-                          : kind === "panel"
-                            ? "Panels"
-                            : kind === "app"
-                              ? "Apps"
-                              : "Extensions"}
-                      </Heading>
-                      {matching.map((unit) => (
-                        <CatalogCard
-                          key={`${unit.kind}:${unit.name}`}
-                          unit={unit}
-                          profile={profiles.find(
-                            (profile) =>
-                              profile.name.toLowerCase() ===
-                              (unit.displayName ?? unit.name).toLowerCase()
-                          )}
-                        />
-                      ))}
-                    </Flex>
-                  );
-                })}
-                {missions.length > 0 ? (
-                  <Flex direction="column" gap="2">
-                    <Heading size="3">Missions</Heading>
-                    {missions.map((mission) => (
-                      <MissionCard
-                        key={mission.missionId}
-                        mission={mission}
-                        runs={missionRuns[mission.missionId] ?? []}
-                        changing={revokingId === mission.missionId}
-                        onAction={(action) => void updateMission(mission, action)}
-                      />
-                    ))}
-                  </Flex>
-                ) : null}
-              </>
-            )
-          : view === "agents"
-          ? profiles.map((profile) => (
-              <ProfileCard
-                key={profile.bindingId}
-                profile={profile}
-                changingId={revokingId}
-                onChange={(request) => void updateProfile(request)}
-              />
-            ))
-          : view === "domains"
-            ? (
-                <DomainPivot
-                  domain={domain}
-                  profiles={profiles}
-                  units={units}
-                  changingId={revokingId}
-                  onChange={(request) => void updateProfile(request)}
-                />
-              )
-          : view === "missions"
-            ? missions.map((mission) => (
-                <MissionCard
-                  key={mission.missionId}
-                  mission={mission}
-                  runs={missionRuns[mission.missionId] ?? []}
-                  changing={revokingId === mission.missionId}
-                  onAction={(action) => void updateMission(mission, action)}
-                />
-              ))
-          : decisions.length > 0
-            ? decisions.map((decision) => (
-                <DecisionCard key={decision.approvalId} decision={decision} />
-              ))
-            : (
-                <Card size="2">
-                  <Text size="2" color="gray">
-                    No authority decisions have been recorded yet.
-                  </Text>
-                </Card>
-              )}
+                        ? "Workers"
+                        : kind === "panel"
+                          ? "Panels"
+                          : kind === "app"
+                            ? "Apps"
+                            : "Extensions"}
+                  </Heading>
+                  {matching.map((unit) => (
+                    <CatalogCard
+                      key={`${unit.kind}:${unit.name}`}
+                      unit={unit}
+                      profile={profiles.find(
+                        (profile) =>
+                          profile.name.toLowerCase() ===
+                          (unit.displayName ?? unit.name).toLowerCase()
+                      )}
+                    />
+                  ))}
+                </Flex>
+              );
+            })}
+            {missions.length > 0 ? (
+              <Flex direction="column" gap="2">
+                <Heading size="3">Missions</Heading>
+                {missions.map((mission) => (
+                  <MissionCard
+                    key={mission.missionId}
+                    mission={mission}
+                    runs={missionRuns[mission.missionId] ?? []}
+                    changing={revokingId === mission.missionId}
+                    onAction={(action) => void updateMission(mission, action)}
+                  />
+                ))}
+              </Flex>
+            ) : null}
+          </>
+        ) : view === "agents" ? (
+          profiles.map((profile) => (
+            <ProfileCard
+              key={profile.bindingId}
+              profile={profile}
+              changingId={revokingId}
+              onChange={(request) => void updateProfile(request)}
+            />
+          ))
+        ) : view === "domains" ? (
+          <DomainPivot
+            domain={domain}
+            profiles={profiles}
+            units={units}
+            changingId={revokingId}
+            onChange={(request) => void updateProfile(request)}
+          />
+        ) : view === "missions" ? (
+          missions.map((mission) => (
+            <MissionCard
+              key={mission.missionId}
+              mission={mission}
+              runs={missionRuns[mission.missionId] ?? []}
+              changing={revokingId === mission.missionId}
+              onAction={(action) => void updateMission(mission, action)}
+            />
+          ))
+        ) : decisions.length > 0 ? (
+          decisions.map((decision) => (
+            <DecisionCard key={decision.approvalId} decision={decision} />
+          ))
+        ) : (
+          <Card size="2">
+            <Text size="2" color="gray">
+              No authority decisions have been recorded yet.
+            </Text>
+          </Card>
+        )}
       </Flex>
     </AboutPage>
   );

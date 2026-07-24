@@ -284,9 +284,14 @@ async function credentialApprovalActionStyles(
   });
 }
 
-async function capabilityApprovalUiSnapshot(
-  testApp: TestApp
-): Promise<{ text: string; buttons: string[] } | null> {
+async function capabilityApprovalUiSnapshot(testApp: TestApp): Promise<{
+  text: string;
+  buttons: string[];
+  role: string | null;
+  labelledByText: string;
+  describedByText: string;
+  keyboardShortcuts: string | null;
+} | null> {
   return testApp.app.evaluate(async ({ webContents }) => {
     for (const contents of webContents.getAllWebContents()) {
       if (contents.isDestroyed()) continue;
@@ -300,6 +305,12 @@ async function capabilityApprovalUiSnapshot(
               buttons: Array.from(card.querySelectorAll("button"))
                 .map((button) => button.innerText.trim())
                 .filter(Boolean),
+              role: card.getAttribute("role"),
+              labelledByText: document.getElementById(card.getAttribute("aria-labelledby") ?? "")
+                ?.textContent?.trim() ?? "",
+              describedByText: document.getElementById(card.getAttribute("aria-describedby") ?? "")
+                ?.textContent?.trim() ?? "",
+              keyboardShortcuts: card.getAttribute("aria-keyshortcuts"),
             };
           })()`,
           true
@@ -574,6 +585,49 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
       snapshot: panel.snapshot,
       source: panel.snapshot?.source,
       text,
+      boot: await executePanelScript(
+        testApp.app,
+        id,
+        `(async () => {
+          const loader = document.querySelector("script[data-bundle-src]");
+          const bundleSrc = loader instanceof HTMLScriptElement ? loader.dataset.bundleSrc : null;
+          const bundleUrl = bundleSrc ? new URL(bundleSrc, document.baseURI).href : null;
+          const resources = performance.getEntriesByType("resource").map((entry) => {
+            const resource = entry;
+            return {
+              name: resource.name,
+              duration: resource.duration,
+              transferSize: "transferSize" in resource ? resource.transferSize : undefined,
+              responseStatus: "responseStatus" in resource ? resource.responseStatus : undefined,
+            };
+          });
+          let bundleFetch = null;
+          if (bundleUrl) {
+            try {
+              const response = await fetch(bundleUrl, { cache: "no-store" });
+              bundleFetch = {
+                ok: response.ok,
+                status: response.status,
+                contentType: response.headers.get("content-type"),
+                bodyPrefix: (await response.text()).slice(0, 300),
+              };
+            } catch (error) {
+              bundleFetch = { error: error instanceof Error ? error.message : String(error) };
+            }
+          }
+          return {
+            href: location.href,
+            baseURI: document.baseURI,
+            bundleSrc,
+            bundleUrl,
+            state: globalThis.__vibestudioPanelBoot ?? null,
+            resources,
+            bundleFetch,
+          };
+        })()`
+      ).catch((error: unknown) => ({
+        error: error instanceof Error ? error.message : String(error),
+      })),
       htmlSummary: await getPanelHtml(testApp.app, id)
         .then((html) => ({
           length: html.length,
@@ -1278,6 +1332,12 @@ test.describe("Desktop Startup Approvals", () => {
     expect(rendered?.buttons).not.toContain("Always for AI Chat");
     expect(rendered?.buttons).not.toContain("Don't allow and don't ask again");
     expect(rendered?.buttons).not.toContain("Trust this version");
+    expect(rendered).toMatchObject({
+      role: "dialog",
+      labelledByText: "Connect to example.com",
+      keyboardShortcuts: "Enter D Escape ArrowLeft ArrowRight",
+    });
+    expect(rendered?.describedByText.length).toBeGreaterThan(0);
 
     expect(await clickShellButton(testApp, /^Connect once$/)).toBe(true);
     await expect

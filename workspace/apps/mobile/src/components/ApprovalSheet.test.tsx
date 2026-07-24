@@ -244,6 +244,23 @@ function renderSheet(
 }
 
 describe("ApprovalSheet", () => {
+  it("presents one accessible modal summary that remains usable with long localized copy", () => {
+    const localized = {
+      ...userland,
+      title:
+        "Autoriser l’ouverture de cette adresse particulièrement longue dans le navigateur sécurisé",
+      summary:
+        "Cette demande particulièrement détaillée reste lisible même avec un agrandissement important du texte.",
+    };
+    const { getByTestId } = renderSheet(localized);
+    const sheet = getByTestId("approval-sheet");
+
+    expect(sheet.props.accessible).toBe(true);
+    expect(sheet.props.accessibilityViewIsModal).toBe(true);
+    expect(sheet.props.accessibilityLabel).toContain(localized.title);
+    expect(sheet.props.accessibilityHint).toContain("choose an action");
+  });
+
   it.each([
     [capability, "Open github.com/foo/..."],
     [credential, "Connect Google Calendar"],

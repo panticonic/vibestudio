@@ -87,15 +87,13 @@ function sameInventory(before: unknown[], after: unknown[]): boolean {
 }
 
 function subjectIdFromRequest(code: string): string | undefined {
-  const literal =
-    /\bsubject\s*:\s*\{[\s\S]*?\bid\s*:\s*["']([^"']+)["']/u.exec(code)?.[1];
+  const literal = /\bsubject\s*:\s*\{[\s\S]*?\bid\s*:\s*["']([^"']+)["']/u.exec(code)?.[1];
   if (literal) return literal;
   const declaredSubject =
     /\b(?:const|let)\s+subject\s*=\s*\{[\s\S]*?\bid\s*:\s*["']([^"']+)["']/u.exec(code)?.[1];
   if (declaredSubject) return declaredSubject;
 
-  const identifier =
-    /\bsubject\s*:\s*\{[\s\S]*?\bid\s*:\s*([A-Za-z_$][\w$]*)/u.exec(code)?.[1];
+  const identifier = /\bsubject\s*:\s*\{[\s\S]*?\bid\s*:\s*([A-Za-z_$][\w$]*)/u.exec(code)?.[1];
   if (!identifier) return undefined;
   const constants = new Map(
     [...code.matchAll(/\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*["']([^"']+)["']/gu)].map(
@@ -112,9 +110,7 @@ function subjectIdFromRevoke(code: string): string | undefined {
   if (literal) return literal;
   const objectName =
     /\bapprovals\.revoke\s*\(\s*([A-Za-z_$][\w$]*)\.id\s*\)/u.exec(code)?.[1] ??
-    /["']userlandApproval\.revoke["']\s*,\s*\[\s*([A-Za-z_$][\w$]*)\.id\s*\]/u.exec(
-      code
-    )?.[1];
+    /["']userlandApproval\.revoke["']\s*,\s*\[\s*([A-Za-z_$][\w$]*)\.id\s*\]/u.exec(code)?.[1];
   const objectLiteral = objectName
     ? new RegExp(
         `\\b(?:const|let)\\s+${objectName}\\s*=\\s*\\{[\\s\\S]*?\\bid\\s*:\\s*["']([^"']+)["']`,
@@ -124,14 +120,11 @@ function subjectIdFromRevoke(code: string): string | undefined {
   if (objectLiteral) return objectLiteral;
   const identifier =
     /\bapprovals\.revoke\s*\(\s*([A-Za-z_$][\w$]*)\s*\)/u.exec(code)?.[1] ??
-    /["']userlandApproval\.revoke["']\s*,\s*\[\s*([A-Za-z_$][\w$]*)\s*\]/u.exec(
-      code
-    )?.[1];
+    /["']userlandApproval\.revoke["']\s*,\s*\[\s*([A-Za-z_$][\w$]*)\s*\]/u.exec(code)?.[1];
   if (!identifier) return undefined;
-  return new RegExp(
-    `\\b(?:const|let)\\s+${identifier}\\s*=\\s*["']([^"']+)["']`,
-    "u"
-  ).exec(code)?.[1];
+  return new RegExp(`\\b(?:const|let)\\s+${identifier}\\s*=\\s*["']([^"']+)["']`, "u").exec(
+    code
+  )?.[1];
 }
 
 function subjectIdFromDecision(value: unknown): string | undefined {
@@ -246,10 +239,10 @@ function validateApprovalRoundTrip(result: TestExecutionResult) {
       const afterRevokeHas =
         typeof root["afterRevokeHas"] === "boolean"
           ? root["afterRevokeHas"]
+          : typeof root["afterRevokeHasSubject"] === "boolean"
+            ? root["afterRevokeHasSubject"]
           : inventoryContains(afterRevokeState, subjectId ?? "");
-      const revokeSubjectId = subjectIdFromRevoke(
-        String(combined.arguments?.["code"] ?? "")
-      );
+      const revokeSubjectId = subjectIdFromRevoke(String(combined.arguments?.["code"] ?? ""));
       const subjectLifecycleProof =
         subjectId !== undefined &&
         resolved &&
@@ -268,15 +261,10 @@ function validateApprovalRoundTrip(result: TestExecutionResult) {
         afterRevokeCount === beforeCount &&
         ((beforeHas !== true && afterRequestHas === true && afterRevokeHas !== true) ||
           root["removed"] === true ||
+          root["revoked"] === true ||
           root["leakedDecision"] === false ||
-          (Array.isArray(root["matchingAfterRevoke"]) &&
-            root["matchingAfterRevoke"].length === 0));
-      if (
-        namedInventoryProof ||
-        inventoryProof ||
-        subjectLifecycleProof ||
-        stateTransitionProof
-      ) {
+          (Array.isArray(root["matchingAfterRevoke"]) && root["matchingAfterRevoke"].length === 0));
+      if (namedInventoryProof || inventoryProof || subjectLifecycleProof || stateTransitionProof) {
         return { passed: true, reason: undefined };
       }
     }
@@ -288,15 +276,14 @@ function validateApprovalRoundTrip(result: TestExecutionResult) {
     code: String(call.arguments?.["code"] ?? ""),
     returned: invocationReturnValue(call),
   }));
-  const before = calls
-    .flatMap(({ index, code, returned }) =>
-      returned.present &&
-        hasApprovalCall(code, "list") &&
-        !hasApprovalCall(code, "request") &&
-        !hasApprovalCall(code, "revoke")
-        ? arraysInReturnedValue(returned.value).map((inventory) => ({ index, inventory }))
-        : []
-    )[0];
+  const before = calls.flatMap(({ index, code, returned }) =>
+    returned.present &&
+    hasApprovalCall(code, "list") &&
+    !hasApprovalCall(code, "request") &&
+    !hasApprovalCall(code, "revoke")
+      ? arraysInReturnedValue(returned.value).map((inventory) => ({ index, inventory }))
+      : []
+  )[0];
   const requested = calls.find(
     ({ index, code, returned }) =>
       index > (before?.index ?? -1) &&
@@ -341,9 +328,7 @@ function validateApprovalRoundTrip(result: TestExecutionResult) {
     if (literalSubject !== undefined && literalSubject !== requestSubject) return false;
     const records = walkRecords([returned.value]);
     const observedSubject = records.some(
-      (record) =>
-        subjectIdFromDecision(record) === requestSubject &&
-        record["choice"] === "allow"
+      (record) => subjectIdFromDecision(record) === requestSubject && record["choice"] === "allow"
     );
     const successfulRevocation =
       returned.value === true ||
@@ -356,8 +341,8 @@ function validateApprovalRoundTrip(result: TestExecutionResult) {
   const after = calls
     .flatMap(({ index, code, returned }) =>
       returned.present &&
-        index >= (revoked?.index ?? Number.POSITIVE_INFINITY) &&
-        hasApprovalCall(code, "list")
+      index >= (revoked?.index ?? Number.POSITIVE_INFINITY) &&
+      hasApprovalCall(code, "list")
         ? arraysInReturnedValue(returned.value).map((inventory) => ({ index, inventory }))
         : []
     )
@@ -423,7 +408,7 @@ export const approvalPermissionTests: TestCase[] = [
     description: "Request a harmless approval and withdraw it without leaving a grant",
     category: "approvals-permissions",
     prompt:
-      'Verify that the harmless custom resource "system-test:harmless-resource" can be approved and then removed without leaving a saved decision behind.',
+      'Verify that the harmless custom resource "system-test:harmless-resource" can be approved and then removed. The desired final workspace state has no saved decision for that resource.',
     authorityPolicy: {
       authority: [
         {

@@ -998,11 +998,8 @@ export class ServiceDispatcher {
     const resourceKey = deriveAuthorityResource(descriptor.resource, args);
     const preflightLeaves: AuthorityPreflightLeaf[] = [];
     let preflightPrompt: AuthorityPreflightResult["wouldPrompt"];
-    if (
-      methodTierDecision.session === "codeOnly" &&
-      (ctx.authorization?.authorizingOrigin.kind === "session" ||
-        (!ctx.authorization && ctx.caller.executionSession !== undefined))
-    ) {
+    const inboundCaller = ctx.transportCaller ?? ctx.caller;
+    if (methodTierDecision.session === "codeOnly" && inboundCaller.executionSession !== undefined) {
       if (preflight) {
         return preflightResult(
           [
@@ -1011,6 +1008,17 @@ export class ServiceDispatcher {
               resourceKey,
               status: "denied",
               tier: methodTierDecision.tier,
+              failure: {
+                reasonCode: "invalid-session",
+                reason: `The reviewed ${service}.${method} surface requires a durable code identity`,
+                capability: capabilityName,
+                resourceKey,
+                remediation: {
+                  kind: "use-admitted-principal",
+                  message:
+                    "Run this operation from installed workspace code with a durable code identity.",
+                },
+              },
             },
           ],
           reviewedSeverity(methodTierDecision.tier)

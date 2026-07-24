@@ -36,6 +36,7 @@ interface PendingAcquisition {
   requestKey: string;
   info: AcquisitionInfo;
   sessionId: string;
+  agentBindingId: string | null;
   outcome: Promise<AcquisitionOutcome>;
   settle: (outcome: AcquisitionOutcome) => void;
 }
@@ -209,6 +210,7 @@ export class AcquisitionCoordinator {
       requestKey,
       info,
       sessionId: input.snapshot.sessionId,
+      agentBindingId: input.snapshot.agentBindingId ?? null,
       outcome,
       settle,
     };
@@ -277,12 +279,44 @@ export class AcquisitionCoordinator {
   closeSession(sessionId: string): void {
     for (const entry of [...this.byId.values()]) {
       if (entry.sessionId !== sessionId) continue;
+      this.cancelPresentation(entry);
       this.finish(entry, { state: "closed" });
     }
     for (const [acquisitionId, completed] of this.completedById) {
       if (completed.sessionId === sessionId) this.completedById.delete(acquisitionId);
     }
     this.deps.grantStore.pruneSession(sessionId);
+  }
+
+  closeAgent(agentBindingId: string): number {
+    let closed = 0;
+    for (const entry of [...this.byId.values()]) {
+      if (entry.agentBindingId !== agentBindingId) continue;
+      this.cancelPresentation(entry);
+      this.finish(entry, { state: "closed" });
+      closed += 1;
+    }
+    return closed;
+  }
+
+  closeAll(): number {
+    const pending = [...this.byId.values()];
+    for (const entry of pending) {
+      this.cancelPresentation(entry);
+      this.finish(entry, { state: "closed" });
+    }
+    return pending.length;
+  }
+
+  private cancelPresentation(entry: PendingAcquisition): void {
+    this.deps.approvalQueue.resolveMatching?.(
+      (approval) =>
+        approval.kind === "capability" &&
+        approval.callerId === entry.info.ownerRuntimeId &&
+        approval.capability === entry.info.capability &&
+        approval.grantResourceKey === entry.info.resourceKey,
+      "deny"
+    );
   }
 
   pending(): readonly AcquisitionInfo[] {
