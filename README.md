@@ -18,6 +18,10 @@ The vibestudio sandbox:
 - has an extension system for native access node.js code.
 - has mobile, cli and desktop apps based on one sanbox runtime that you can customize yourself.
 
+## Status
+
+This is alpha software. It is *not* reliable or safe. Or possibly fit for your purposes. The architecture is subject to sudden and violent spasmodic changes. You have been warned.
+
 ## Installation
 
 Requires **Node.js 22.19.0+**. Both packages update via npm (re-run with `@latest`).
