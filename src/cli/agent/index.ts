@@ -385,18 +385,30 @@ async function services(inv: ParsedInvocation): Promise<number> {
 async function skills(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const workspace = typedClient(
-      "workspace",
-      workspaceMethods,
-      new RpcClient(requireWorkspaceCredentials())
-    );
+    const creds = requireWorkspaceCredentials();
+    const selectedSession =
+      typeof inv.flags["session"] === "string" ? inv.flags["session"] : DEFAULT_SESSION;
+    if (!isValidSessionName(selectedSession)) {
+      throw new UsageError(
+        `Invalid session name: ${selectedSession} (use letters, digits, "_", "-")`
+      );
+    }
+    const session = loadAgentSession(selectedSession);
+    if (!session) {
+      throw new CliError(
+        `no session named ${selectedSession} — run \`vibestudio agent attach ${selectedSession}\``
+      );
+    }
+    assertSessionWorkspace(session, creds);
+    const workspace = typedClient("workspace", workspaceMethods, new RpcClient(creds));
+    const context = { contextId: session.contextId };
     const name = inv.positionals[0];
     if (name) {
-      const content = await workspace.readSkill(name);
+      const content = await workspace.readSkill(name, context);
       printResult(content, { json });
       return 0;
     }
-    const entries = await workspace.listSkills();
+    const entries = await workspace.listSkills(context);
     printResult(entries, {
       json,
       human: () => {
@@ -584,8 +596,15 @@ export const agentCommands: CliCommand[] = [
     group: "agent",
     name: "skills",
     summary: "List workspace skills, or print one SKILL.md",
-    usage: "vibestudio agent skills [NAME_OR_REPO_PATH]",
-    flags: [JSON_FLAG],
+    usage: "vibestudio agent skills [NAME_OR_REPO_PATH] [--session NAME]",
+    flags: [
+      {
+        name: "session",
+        takesValue: true,
+        description: "Agent session whose semantic workspace context to read (default: default)",
+      },
+      JSON_FLAG,
+    ],
     run: skills,
   },
   {

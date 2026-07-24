@@ -80,6 +80,25 @@ function sessionFile(tmpDir: string, name: string): string {
   return path.join(tmpDir, ".config", "vibestudio", "agent-sessions", `${name}.json`);
 }
 
+function writeSession(tmpDir: string, name = "default", contextId = "ctx_cli"): void {
+  const filePath = sessionFile(tmpDir, name);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify({
+      schemaVersion: 3,
+      name,
+      serverId: `srv_${"S".repeat(24)}`,
+      workspaceId: "ws_dev",
+      workspaceName: "dev",
+      entityId: `session:${name}`,
+      contextId,
+      scopeKey: name,
+      createdAt: 1,
+    })
+  );
+}
+
 function jsonOutput(): unknown {
   const lines = vi.mocked(console.log).mock.calls.map((call) => String(call[0]));
   return JSON.parse(lines[lines.length - 1]!);
@@ -502,6 +521,7 @@ describe("vibestudio agent commands", () => {
 
   it("skills and logs hit the workspace service with the right shapes", async () => {
     writeCredentials(tmpDir);
+    writeSession(tmpDir, "docs", "ctx_docs");
     const { main } = await import("../client.js");
     const { rpcBodies } = stubServer((body) => {
       if (body.method === "workspace.listSkills") {
@@ -530,16 +550,34 @@ describe("vibestudio agent commands", () => {
       throw new Error(`unexpected method ${body.method}`);
     });
 
-    await expect(main(["agent", "skills", "--json"])).resolves.toBe(0);
-    await expect(main(["agent", "skills", "alpha", "--json"])).resolves.toBe(0);
+    await expect(main(["agent", "skills", "--session", "docs", "--json"])).resolves.toBe(0);
+    await expect(main(["agent", "skills", "alpha", "--session", "docs", "--json"])).resolves.toBe(
+      0
+    );
     await expect(
       main(["agent", "logs", "workers/foo", "--level", "info", "--limit", "10", "--json"])
     ).resolves.toBe(0);
 
     expect(rpcBodies).toEqual([
-      { method: "workspace.listSkills", args: [] },
-      { method: "workspace.readSkill", args: ["alpha"] },
+      { method: "workspace.listSkills", args: [{ contextId: "ctx_docs" }] },
+      { method: "workspace.readSkill", args: ["alpha", { contextId: "ctx_docs" }] },
       { method: "workspace.units.logs", args: ["workers/foo", { level: "info", limit: 10 }] },
     ]);
+  });
+
+  it("skills fails before RPC with an actionable session error", async () => {
+    writeCredentials(tmpDir);
+    const { main } = await import("../client.js");
+    const { rpcBodies } = stubServer(() => {
+      throw new Error("unexpected RPC");
+    });
+
+    await expect(main(["agent", "skills", "--json"])).resolves.toBe(1);
+
+    expect(rpcBodies).toEqual([]);
+    const error = JSON.parse(String(vi.mocked(console.error).mock.calls.at(-1)?.[0]));
+    expect(error).toMatchObject({
+      error: expect.stringContaining("vibestudio agent attach default"),
+    });
   });
 });
