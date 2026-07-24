@@ -37,7 +37,11 @@ const CHECKPOINT_BASENAME = "__vibestudioDeadlineCheckpoint__";
  */
 export function instrumentDeadlineCheckpoints(code: string): InstrumentedDeadlineCode {
   const checkpointName = unusedCheckpointName(code);
-  const checkpointCall = `${checkpointName}()`;
+  // Authored callbacks can be serialized into another JavaScript realm (for
+  // example by page.evaluate). The lexical checkpoint binding intentionally
+  // does not cross that boundary. A guarded call keeps the callback portable
+  // while still enforcing the deadline whenever it executes in this sandbox.
+  const checkpointCall = `(typeof ${checkpointName}==="function"&&${checkpointName}())`;
   const checkpoint = `${checkpointCall};`;
   const root = parse(code, {
     ecmaVersion: "latest",

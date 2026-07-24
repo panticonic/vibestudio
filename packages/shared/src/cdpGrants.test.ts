@@ -11,6 +11,16 @@ describe("CdpGrantService", () => {
     grants.stop();
   });
 
+  it("validates the exact principal and target without consuming the grant", () => {
+    const grants = new CdpGrantService();
+    const { token } = grants.grant("do:eval:one", "panel:one");
+
+    expect(grants.validatesTarget(token, "panel:one")).toBe(true);
+    expect(grants.validatesTarget(token, "panel:two")).toBe(false);
+    expect(grants.redeem(token, "panel:one")).toEqual({ principalId: "do:eval:one" });
+    grants.stop();
+  });
+
   it("rejects grants for another target", () => {
     const grants = new CdpGrantService();
     const { token } = grants.grant("panel:one", "browser:one");

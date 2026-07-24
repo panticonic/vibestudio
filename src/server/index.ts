@@ -703,6 +703,8 @@ async function main() {
   const { ClientConfigStore } = await import("@vibestudio/credential-client/clientConfigStore");
   const { AuditLog } = await import("@vibestudio/credential-client/audit");
   const { createEgressProxy } = await import("./services/egressProxy.js");
+  const { CdpGrantService, CDP_INTERNAL_GRANT_HEADER } =
+    await import("@vibestudio/shared/cdpGrants");
   const { CredentialLifecycle } = await import("./services/credentialLifecycle.js");
   const { CredentialSessionGrantStore } = await import("./services/credentialSessionGrants.js");
   const { CredentialUseGrantStore } = await import("./services/credentialUseGrantStore.js");
@@ -800,6 +802,7 @@ async function main() {
   });
   const { LocalModelLoopbackAuthority } = await import("./services/localModelLoopbackAuthority.js");
   const localModelLoopbackAuthority = new LocalModelLoopbackAuthority();
+  const cdpGrants = new CdpGrantService();
 
   const egressProxy = createEgressProxy({
     credentialStore,
@@ -809,7 +812,31 @@ async function main() {
     sessionGrantStore: credentialSessionGrantStore,
     credentialUseGrantStore,
     credentialLifecycle,
-    authorizeInternalRequest: (input) => localModelLoopbackAuthority.authorize(input),
+    authorizeInternalRequest: async (input) => {
+      if (await localModelLoopbackAuthority.authorize(input)) return true;
+      let gatewayOrigin: string;
+      try {
+        gatewayOrigin = new URL(getLocalGatewayUrl("CDP transport")).origin;
+      } catch {
+        return false;
+      }
+      if (
+        input.targetUrl.origin !== gatewayOrigin ||
+        !input.targetUrl.pathname.startsWith("/cdp/")
+      ) {
+        return false;
+      }
+      const rawHeader =
+        input.headers instanceof Headers
+          ? input.headers.get(CDP_INTERNAL_GRANT_HEADER)
+          : Object.entries(input.headers).find(
+              ([name]) => name.toLowerCase() === CDP_INTERNAL_GRANT_HEADER
+            )?.[1];
+      const token = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+      if (typeof token !== "string" || token.length === 0) return false;
+      const targetId = decodeURIComponent(input.targetUrl.pathname.slice("/cdp/".length));
+      return cdpGrants.validatesTarget(token, targetId);
+    },
     authorizePlatformRpcCallback: ({ targetUrl, authorization, runtimeId }) => {
       let gatewayOrigin: string;
       try {
@@ -3654,6 +3681,7 @@ async function main() {
     args,
     hostConfig,
     tokenManager,
+    cdpGrants,
     grantStore: capabilityGrantStore,
     recordContextIngestion,
     hasAppCapability: (callerId: string, capability: AppCapability) =>

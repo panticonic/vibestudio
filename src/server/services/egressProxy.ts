@@ -48,6 +48,7 @@ import { connect as netConnect, isIP } from "node:net";
 import type { ResolvedCodeIdentity } from "./principalIdentity.js";
 import { testPolicyAllowsGatedInvocation } from "./authorityRuntime.js";
 import { bridgeDuplexSockets } from "../socketBridge.js";
+import { CDP_INTERNAL_GRANT_HEADER } from "@vibestudio/shared/cdpGrants";
 
 const HOP_BY_HOP_REQUEST_HEADERS = new Set([
   "connection",
@@ -70,6 +71,7 @@ const VIBESTUDIO_WS_HEADERS_PARAM = "__vibestudio_ws_headers";
 const INTERNAL_EGRESS_HEADERS = new Set([
   EGRESS_CALLER_HEADER,
   EGRESS_SECRET_HEADER,
+  CDP_INTERNAL_GRANT_HEADER,
   "x-forwarded-proto",
 ]);
 
@@ -2261,6 +2263,10 @@ function mergeWebSocketMetadataHeaders(
 }
 
 function isBlockedVibestudioWebSocketMetadataHeader(name: string): boolean {
+  // This is a single-use, target/principal-bound internal transport
+  // attestation. authorizeInternalRequest verifies it; prepareForwardRequest
+  // strips it because it remains in INTERNAL_EGRESS_HEADERS.
+  if (name === CDP_INTERNAL_GRANT_HEADER) return false;
   return (
     HOP_BY_HOP_REQUEST_HEADERS.has(name) ||
     name === "authorization" ||

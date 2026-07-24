@@ -107,8 +107,17 @@ describe("instrumentDeadlineCheckpoints", () => {
       `function value() { "use strict"; "custom directive"; return 1; } return value();`
     );
     expect(transformed.code).toContain(
-      `"use strict"; "custom directive";${transformed.checkpointName}(); return 1;`
+      `"use strict"; "custom directive";(typeof ${transformed.checkpointName}==="function"&&${transformed.checkpointName}()); return 1;`
     );
+  });
+
+  it("keeps serialized callbacks executable outside the sandbox realm", () => {
+    const callback = runInstrumented("return (value) => value + 1;", () => {}) as (
+      value: number
+    ) => number;
+    const executeSerialized = new Function(`return (${callback.toString()})(4);`);
+
+    expect(executeSerialized()).toBe(5);
   });
 
   it("orders nested concise-arrow insertions that share a closing position", () => {

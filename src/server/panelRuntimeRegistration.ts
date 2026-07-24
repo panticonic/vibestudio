@@ -116,6 +116,7 @@ export interface CommonDeps {
   adminToken: string;
   hostConfig: HostConfig;
   tokenManager?: import("@vibestudio/shared/tokenManager").TokenManager;
+  cdpGrants?: import("@vibestudio/shared/cdpGrants").CdpGrantService;
   eventService?: import("@vibestudio/shared/eventsService").EventService;
   grantStore?: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
   /** Whether a workspace-app caller declares a capability (e.g. panel-hosting). */
@@ -393,6 +394,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         const { CdpBridge } = await import("./cdpBridge.js");
         const cdpBridge = new CdpBridge({
           adminToken,
+          cdpGrants: deps.cdpGrants,
           port: deps.getGatewayPort?.() ?? hostConfig.gatewayPort,
           protocol: hostConfig.protocol,
           externalHost: hostConfig.externalHost,
