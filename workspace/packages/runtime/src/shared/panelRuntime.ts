@@ -63,11 +63,7 @@ export interface PanelRuntimeTree {
   roots(): Promise<PanelHandle[]>;
   children(id: string): Promise<PanelHandle[]>;
   parent(id: string): PanelHandle | null;
-  navigate(
-    id: string,
-    source: string,
-    options?: PanelNavigateOptions
-  ): Promise<PanelObservation>;
+  navigate(id: string, source: string, options?: PanelNavigateOptions): Promise<PanelObservation>;
 }
 
 export interface PanelRuntimeApi {
