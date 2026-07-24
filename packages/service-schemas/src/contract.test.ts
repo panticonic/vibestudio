@@ -265,6 +265,30 @@ describe("service schema contracts", () => {
     ).toBe(true);
   });
 
+  it("carries exact eval-kernel restart recovery through run and getRun", () => {
+    const result = {
+      success: true,
+      console: "",
+      scopeKeys: ["panelId"],
+      kernel: {
+        incarnationId: "kernel-2",
+        startedAt: 10,
+        idleExpiresAt: 30 * 60 * 1_000 + 10,
+        event: {
+          kind: "restarted" as const,
+          recovery: {
+            status: "complete" as const,
+            restored: ["panelId"],
+            lost: ["panelHandle"],
+          },
+        },
+      },
+    };
+
+    expect(evalMethods.run.returns.safeParse(result).success).toBe(true);
+    expect(evalMethods.getRun.returns.safeParse({ status: "done", result }).success).toBe(true);
+  });
+
   it("reports whether eval cancellation required a shared-scope reset", () => {
     expect(evalMethods.cancel.returns.safeParse({ ok: true, forcedReset: false }).success).toBe(
       true

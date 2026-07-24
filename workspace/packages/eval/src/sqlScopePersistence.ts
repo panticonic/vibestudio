@@ -21,7 +21,7 @@ interface ScopeRow {
   data: string;
   serialized_keys: string;
   dropped_paths: string;
-  partial_keys: string;
+  volatile_keys: string;
   blob_refs: string;
   created_at: number;
 }
@@ -47,7 +47,7 @@ export class SqlScopeRowBackend implements ScopeRowBackend {
         data TEXT NOT NULL,
         serialized_keys TEXT NOT NULL,
         dropped_paths TEXT NOT NULL,
-        partial_keys TEXT NOT NULL,
+        volatile_keys TEXT NOT NULL,
         blob_refs TEXT NOT NULL DEFAULT '[]',
         created_at INTEGER NOT NULL
       )
@@ -64,7 +64,7 @@ export class SqlScopeRowBackend implements ScopeRowBackend {
   async upsert(entry: ScopeEntry): Promise<void> {
     this.sql.exec(
       `INSERT OR REPLACE INTO ${SCOPE_TABLE}
-        (id, channel_id, panel_id, data, serialized_keys, dropped_paths, partial_keys, blob_refs, created_at)
+        (id, channel_id, panel_id, data, serialized_keys, dropped_paths, volatile_keys, blob_refs, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       entry.id,
       entry.channelId,
@@ -72,7 +72,7 @@ export class SqlScopeRowBackend implements ScopeRowBackend {
       entry.data,
       JSON.stringify(entry.serializedKeys),
       JSON.stringify(entry.droppedPaths),
-      JSON.stringify(entry.partialKeys),
+      JSON.stringify(entry.volatileKeys),
       JSON.stringify(entry.blobRefs ?? []),
       entry.createdAt
     );
@@ -102,20 +102,20 @@ export class SqlScopeRowBackend implements ScopeRowBackend {
   async list(channelId: string): Promise<ScopeListEntry[]> {
     const rows = this.sql
       .exec(
-        `SELECT id, serialized_keys, partial_keys, created_at FROM ${SCOPE_TABLE} WHERE channel_id = ? ORDER BY created_at ASC`,
+        `SELECT id, serialized_keys, volatile_keys, created_at FROM ${SCOPE_TABLE} WHERE channel_id = ? ORDER BY created_at ASC`,
         channelId
       )
       .toArray() as Array<{
       id: string;
       serialized_keys: string;
-      partial_keys: string;
+      volatile_keys: string;
       created_at: number;
     }>;
     return rows.map((row) => ({
       id: row.id,
       createdAt: row.created_at,
       keys: JSON.parse(row.serialized_keys) as string[],
-      partial: JSON.parse(row.partial_keys) as string[],
+      volatile: JSON.parse(row.volatile_keys) as string[],
     }));
   }
 }
@@ -134,7 +134,7 @@ function fromRow(row: ScopeRow): ScopeEntry {
     data: row.data,
     serializedKeys: JSON.parse(row.serialized_keys) as string[],
     droppedPaths: JSON.parse(row.dropped_paths) as Array<{ path: string; reason: string }>,
-    partialKeys: JSON.parse(row.partial_keys) as string[],
+    volatileKeys: JSON.parse(row.volatile_keys) as string[],
     blobRefs: JSON.parse(row.blob_refs || "[]") as string[],
     createdAt: row.created_at,
   };

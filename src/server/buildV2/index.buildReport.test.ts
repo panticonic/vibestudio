@@ -211,6 +211,7 @@ describe("BuildSystemV2 — explicit build reports", () => {
       diagnostics: [],
       builds: [{ target: "library:panel", exportPath: ".", diagnostics: [] }],
     });
+    expect(first.builds.every((build) => !("artifacts" in build))).toBe(true);
 
     const second = await buildSystem.getBuildReport("@workspace/lib", CANDIDATE_VIEW);
 

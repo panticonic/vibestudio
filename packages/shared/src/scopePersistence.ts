@@ -5,7 +5,8 @@ export interface ScopeEntry {
   data: string;
   serializedKeys: string[];
   droppedPaths: Array<{ path: string; reason: string }>;
-  partialKeys: string[];
+  /** Top-level live values omitted because exact reconstruction was impossible. */
+  volatileKeys: string[];
   /** Content digests of values spilled to the blob store, used to validate placeholder hydration. */
   blobRefs?: string[];
   createdAt: number;
@@ -15,7 +16,7 @@ export interface ScopeListEntry {
   id: string;
   createdAt: number;
   keys: string[];
-  partial: string[];
+  volatile: string[];
 }
 
 export interface ScopePersistence {

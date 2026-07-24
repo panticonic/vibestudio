@@ -128,14 +128,12 @@ describe("project lifecycle prompts", () => {
       invocation(
         "broken-build",
         "eval",
-        { code: "getBuildReport()" },
+        { code: `getBuildReport("${source}")` },
         {
           returnValue: {
-            repoPath: source,
-            kind: "panel",
             status: "failed",
             diagnostics: [{ severity: "error", source: "tsc", message: "Expected token" }],
-            builds: [],
+            builds: [{ target: "runtime", diagnostics: 1 }],
           },
         }
       ),

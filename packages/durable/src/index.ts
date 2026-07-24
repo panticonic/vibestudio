@@ -426,6 +426,27 @@ export abstract class DurableObjectBase {
 
   async resumeAfterRestart(_input: LifecycleResumeInput): Promise<void> {}
 
+  /**
+   * Declare that this activation owns a live resource which must be released
+   * before workerd replacement or server shutdown.
+   *
+   * Registration is part of acquiring the resource: callers await this write
+   * before acknowledging ownership, so lifecycle discovery is complete rather
+   * than a best-effort side channel.
+   */
+  protected async registerLifecycleRelease(detail?: unknown): Promise<void> {
+    await this.rpc.call<void>("main", "workspace-state.lifecycleLeaseUpsert", [
+      { ...this.lifecycleKey(), detail },
+    ]);
+  }
+
+  /** Clear this activation's durable lifecycle ownership declaration. */
+  protected async clearLifecycleRelease(): Promise<void> {
+    await this.rpc.call<void>("main", "workspace-state.lifecycleLeaseClear", [
+      this.lifecycleKey(),
+    ]);
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const segments = url.pathname.split("/").filter(Boolean);

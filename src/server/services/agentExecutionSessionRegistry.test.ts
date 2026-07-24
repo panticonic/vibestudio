@@ -197,6 +197,50 @@ describe("AgentExecutionSessionRegistry admission", () => {
     expect(second.authoritySessionId).not.toBe(first.authoritySessionId);
   });
 
+  it("queues concurrent runs in FIFO order until the prior admission closes", async () => {
+    const registry = new AgentExecutionSessionRegistry();
+    const first = registry.admit(admission());
+    const order: string[] = [];
+    const secondPromise = registry
+      .admitWhenAvailable(admission(first.eval.runtimeId, "run:two"))
+      .then((fact) => {
+        order.push(fact.eval.runId);
+        return fact;
+      });
+    const thirdPromise = registry
+      .admitWhenAvailable(admission(first.eval.runtimeId, "run:three"))
+      .then((fact) => {
+        order.push(fact.eval.runId);
+        return fact;
+      });
+
+    await Promise.resolve();
+    expect(order).toEqual([]);
+    expect(registry.close(first.eval.runtimeId, first.eval.runId)).toBe(true);
+    const second = await secondPromise;
+    expect(order).toEqual(["run:two"]);
+    expect(registry.close(second.eval.runtimeId, second.eval.runId)).toBe(true);
+    const third = await thirdPromise;
+    expect(order).toEqual(["run:two", "run:three"]);
+    expect(registry.close(third.eval.runtimeId, third.eval.runId)).toBe(true);
+  });
+
+  it("removes a cancelled admission wait without blocking the next run", async () => {
+    const registry = new AgentExecutionSessionRegistry();
+    const first = registry.admit(admission());
+    const controller = new AbortController();
+    const cancelled = registry.admitWhenAvailable(
+      admission(first.eval.runtimeId, "run:cancelled"),
+      controller.signal
+    );
+    const next = registry.admitWhenAvailable(admission(first.eval.runtimeId, "run:next"));
+
+    controller.abort();
+    await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+    registry.close(first.eval.runtimeId, first.eval.runId);
+    await expect(next).resolves.toMatchObject({ eval: { runId: "run:next" } });
+  });
+
   it("rejects a same-run replay whose immutable admission facts changed", () => {
     const registry = new AgentExecutionSessionRegistry();
     const first = registry.admit(admission());

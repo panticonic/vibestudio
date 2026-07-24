@@ -65,6 +65,7 @@ function createHarness(
     retryStartGate?: Promise<void>;
     rejectFirstGetRun?: boolean;
     retryGetRunGate?: Promise<void>;
+    kernelLeaseError?: Error;
   } = {}
 ) {
   const calls: Array<{ ref: unknown; method: string; args: unknown[] }> = [];
@@ -177,11 +178,39 @@ function createHarness(
     } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
     workspaceId: "ws_1",
     executionSessions,
+    kernelLeases: {
+      touch: async () => {
+        if (options.kernelLeaseError) throw options.kernelLeaseError;
+      },
+    },
   });
   return { service, calls, executionSessions };
 }
 
 describe("createEvalService", () => {
+  it("closes admission when kernel residency cannot be established", async () => {
+    const ownerId = "session:default";
+    const subKey = "default";
+    const { service, executionSessions } = createHarness(
+      { [ownerId]: "ctx_1" },
+      { kernelLeaseError: new Error("kernel lease unavailable") }
+    );
+
+    await expect(
+      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "run", [
+        {
+          ownerId,
+          contextId: "ctx_1",
+          subKey,
+          code: "return 1;",
+        },
+      ])
+    ).rejects.toThrow("kernel lease unavailable");
+
+    const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${evalKey(ownerId, subKey)}`;
+    expect(executionSessions.resolve(runtimeId)).toBeNull();
+  });
+
   it("runs CLI eval as the selected session owner and context", async () => {
     const { service, calls } = createHarness({ "session:default": "ctx_1" });
 
@@ -353,6 +382,7 @@ describe("createEvalService", () => {
       } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
       workspaceId: "ws",
       executionSessions: new AgentExecutionSessionRegistry(),
+      kernelLeases: { touch: async () => undefined },
     });
 
     await service.handler(
@@ -702,6 +732,7 @@ function createHeldFailHarness(opts: {
     executionSessions: new AgentExecutionSessionRegistry(),
     recoverUnresponsiveSandbox,
     watchdogGraceMs: 1,
+    kernelLeases: { touch: async () => undefined },
   });
   return { service, calls, ownerId, recoverUnresponsiveSandbox };
 }

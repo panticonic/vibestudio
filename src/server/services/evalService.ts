@@ -16,6 +16,7 @@ import type { RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec"
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
 import { resolveCodeIdentity } from "./principalIdentity.js";
+import { EvalKernelLeaseCoordinator, type EvalKernelLease } from "./evalKernelLease.js";
 
 const DEFAULT_EVAL_WATCHDOG_GRACE_MS = 1_000;
 
@@ -121,8 +122,16 @@ export function createEvalService(deps: {
   recoverUnresponsiveSandbox?: (input: EvalSandboxRecoveryInput) => Promise<void>;
   /** Test seam for the host watchdog's post-deadline scheduling grace. */
   watchdogGraceMs?: number;
+  /** Test seam; production uses one held inter-cell lease per EvalDO. */
+  kernelLeases?: EvalKernelLease;
 }): ServiceDefinition {
   const store = deps.entityStore;
+  const kernelLeases =
+    deps.kernelLeases ??
+    new EvalKernelLeaseCoordinator(deps.doDispatch, {
+      onError: (message, error) =>
+        console.warn(message, error instanceof Error ? error.message : error),
+    });
   const evalExecutionIdentity = internalDOExecutionIdentity(getInternalDOBundle(), EVAL_DO_CLASS);
 
   const evalDoKey = (ownerId: string, subKey: string): string =>
@@ -441,37 +450,50 @@ export function createEvalService(deps: {
         (deps.isSystemTestHarness?.(ctx.caller, runId)
           ? deps.executionSessions.createTestPolicy(runId)
           : null));
-    deps.executionSessions.admit({
-      mode: mission ? "mission" : testPolicy ? "test" : "interactive",
-      ownerUser: `user:${ctx.caller.subject.userId}`,
-      workspaceId: deps.workspaceId,
-      contextId: owner.contextId,
-      agentBinding: agentBinding
-        ? {
-            entityId: agentBinding.entityId,
-            channelId: agentBinding.channelId,
-            bindingId: `${agentBinding.entityId}@${agentBinding.contextId}`,
-          }
-        : null,
-      taskRef: agentBinding?.channelId ?? `eval:${ownerId}:${runId}`,
-      harness: {
-        principal: `code:${harness.repoPath}@${harness.executionDigest}`,
-        repoPath: harness.repoPath,
-        effectiveVersion: harness.effectiveVersion,
+    await deps.executionSessions.admitWhenAvailable(
+      {
+        mode: mission ? "mission" : testPolicy ? "test" : "interactive",
+        ownerUser: `user:${ctx.caller.subject.userId}`,
+        workspaceId: deps.workspaceId,
+        contextId: owner.contextId,
+        agentBinding: agentBinding
+          ? {
+              entityId: agentBinding.entityId,
+              channelId: agentBinding.channelId,
+              bindingId: `${agentBinding.entityId}@${agentBinding.contextId}`,
+            }
+          : null,
+        taskRef: agentBinding?.channelId ?? `eval:${ownerId}:${runId}`,
+        harness: {
+          principal: `code:${harness.repoPath}@${harness.executionDigest}`,
+          repoPath: harness.repoPath,
+          effectiveVersion: harness.effectiveVersion,
+        },
+        eval: { runtimeId: evalRuntimeId, runId },
+        causalParent: ctx.causalParent
+          ? {
+              logId: ctx.causalParent.logId,
+              head: ctx.causalParent.head,
+              invocationId: ctx.causalParent.invocationId,
+            }
+          : null,
+        ...(mission ? { mission } : {}),
+        ...(testPolicy ? { testPolicy } : {}),
       },
-      eval: { runtimeId: evalRuntimeId, runId },
-      causalParent: ctx.causalParent
-        ? {
-            logId: ctx.causalParent.logId,
-            head: ctx.causalParent.head,
-            invocationId: ctx.causalParent.invocationId,
-          }
-        : null,
-      ...(mission ? { mission } : {}),
-      ...(testPolicy ? { testPolicy } : {}),
-    });
+      ctx.signal
+    );
+    const evalDoRef = { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey };
+    try {
+      await kernelLeases.touch(evalDoRef);
+    } catch (error) {
+      // Admission and kernel residency are one preparation transaction. If the
+      // lease cannot be established, no run can start and nothing downstream
+      // will reach the normal completion cleanup.
+      deps.executionSessions.close(evalRuntimeId, runId);
+      throw error;
+    }
     return {
-      evalDoRef: { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey },
+      evalDoRef,
       assembledArgs: {
         runId,
         code: runArgs.code,

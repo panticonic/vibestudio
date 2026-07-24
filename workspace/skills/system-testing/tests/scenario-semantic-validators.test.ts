@@ -12,6 +12,7 @@ interface EvalStep {
   code: string;
   imports?: Record<string, string>;
   returnValue?: unknown;
+  kernelIncarnationId?: string;
   reset?: boolean;
   status?: "complete" | "error" | "cancelled";
   result?: unknown;
@@ -58,7 +59,14 @@ function execution(finalMessage: string, steps: EvalStep[]): TestExecutionResult
           step.result ??
           (step.returnValue === undefined
             ? undefined
-            : { details: { returnValue: step.returnValue } }),
+            : {
+                details: {
+                  returnValue: step.returnValue,
+                  ...(step.kernelIncarnationId
+                    ? { kernel: { incarnationId: step.kernelIncarnationId } }
+                    : {}),
+                },
+              }),
       },
     } as unknown as TestExecutionResult["messages"][number]);
   });
@@ -453,10 +461,12 @@ describe("eval lifecycle semantic validators", () => {
       {
         code: "scope.__kernelContinuityProbe = { ping: () => 'LIVE_KERNEL_OK' }; return { methodType: typeof scope.__kernelContinuityProbe.ping };",
         returnValue: { methodType: "function" },
+        kernelIncarnationId: "kernel-1",
       },
       {
-        code: "return { methodType: typeof scope.__kernelContinuityProbe.ping, value: scope.__kernelContinuityProbe.ping() };",
+        code: "const probe = scope.__kernelContinuityProbe as any; return { methodType: typeof probe.ping, value: probe.ping() };",
         returnValue: { methodType: "function", value: "LIVE_KERNEL_OK" },
+        kernelIncarnationId: "kernel-1",
       },
     ]);
     const validator = scenario(evalLifecycleTests, "eval-live-kernel-continuity");
@@ -467,10 +477,28 @@ describe("eval lifecycle semantic validators", () => {
           {
             code: "scope.__kernelContinuityProbe = { ping: () => 'LIVE_KERNEL_OK' }; return true;",
             returnValue: true,
+            kernelIncarnationId: "kernel-1",
           },
           {
             code: "scope.__kernelContinuityProbe = { ping: () => 'LIVE_KERNEL_OK' }; return { methodType: 'function', value: scope.__kernelContinuityProbe.ping() };",
             returnValue: { methodType: "function", value: "LIVE_KERNEL_OK" },
+            kernelIncarnationId: "kernel-1",
+          },
+        ])
+      ).passed
+    ).toBe(false);
+    expect(
+      validator.validate(
+        execution("It was reconstructed.", [
+          {
+            code: "scope.__kernelContinuityProbe = { ping: () => 'LIVE_KERNEL_OK' }; return true;",
+            returnValue: true,
+            kernelIncarnationId: "kernel-1",
+          },
+          {
+            code: "const probe = scope.__kernelContinuityProbe; return { methodType: typeof probe.ping, value: probe.ping() };",
+            returnValue: { methodType: "function", value: "LIVE_KERNEL_OK" },
+            kernelIncarnationId: "kernel-2",
           },
         ])
       ).passed

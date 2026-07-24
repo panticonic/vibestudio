@@ -1,9 +1,11 @@
 /**
  * scopeSerialize — Recursive per-property serializer for REPL scope.
  *
- * Keeps data leaves, drops function leaves, reports full dotted paths
- * of dropped values. Handles type-tagged values (Date, Map, Set, RegExp),
- * circular references, and max depth.
+ * Persists a top-level scope value only when it can be reconstructed exactly.
+ * Any unsupported leaf makes that complete top-level key volatile; a cold
+ * kernel never receives a methodless or otherwise semantically changed copy.
+ * Handles type-tagged values (Date, Map, Set, RegExp), circular references,
+ * and max depth.
  */
 
 // Depth is a safety/perf bound only — circular refs are handled separately by `seen`, so it can be
@@ -41,8 +43,12 @@ export interface SerializedScope {
   serializedKeys: string[];
   /** Paths that were dropped, with reasons (functions/symbols/circular/depth — bounded). */
   droppedPaths: Array<{ path: string; reason: string }>;
-  /** Top-level keys that were only partially serialized. */
-  partialKeys: string[];
+  /**
+   * Top-level keys excluded because only a partial representation was possible.
+   * Retained as persistence metadata for diagnostics; these keys are never
+   * present in `serialized`.
+   */
+  volatileKeys: string[];
 }
 
 /** A spilled-value placeholder produced by `serializeScope` (top-level only). */
@@ -59,7 +65,7 @@ export function isScopeBlobRef(value: unknown): value is Record<string, unknown>
 // ---------------------------------------------------------------------------
 
 interface TypeTagged {
-  __t: string;
+  __vibestudioScopeType__: string;
   v: unknown;
 }
 
@@ -67,9 +73,13 @@ function isTypeTagged(val: unknown): val is TypeTagged {
   return (
     typeof val === "object" &&
     val !== null &&
-    "__t" in val &&
-    typeof (val as TypeTagged).__t === "string"
+    "__vibestudioScopeType__" in val &&
+    typeof (val as TypeTagged).__vibestudioScopeType__ === "string"
   );
+}
+
+function tagged(type: string, value: unknown = null): TypeTagged {
+  return { __vibestudioScopeType__: type, v: value };
 }
 
 // ---------------------------------------------------------------------------
@@ -89,12 +99,34 @@ function isPlainObject(val: unknown): val is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
+function hasExactObjectShape(val: object, prototype: object, expectedKeys: PropertyKey[]): boolean {
+  const ownKeys = Reflect.ownKeys(val);
+  return (
+    Object.getPrototypeOf(val) === prototype &&
+    ownKeys.length === expectedKeys.length &&
+    ownKeys.every((key) => expectedKeys.includes(key))
+  );
+}
+
+function rejectInexactBuiltin(
+  val: object,
+  prototype: object,
+  expectedKeys: PropertyKey[],
+  path: string,
+  name: string,
+  dropped: DroppedEntry[]
+): boolean {
+  if (hasExactObjectShape(val, prototype, expectedKeys)) return false;
+  dropped.push({ path, reason: `${name} subclass or custom property` });
+  return true;
+}
+
 function serializeValue(
   val: unknown,
   path: string,
   dropped: DroppedEntry[],
   seen: Set<unknown>,
-  depth: number,
+  depth: number
 ): unknown {
   // Max depth
   if (depth > MAX_DEPTH) {
@@ -103,10 +135,18 @@ function serializeValue(
   }
 
   // Primitives
-  if (val === null || val === undefined) return val;
+  if (val === null) return val;
+  if (val === undefined) return tagged("Undefined");
   const t = typeof val;
-  if (t === "string" || t === "number" || t === "boolean") return val;
-  if (t === "bigint") return { __t: "BigInt", v: val.toString() };
+  if (t === "string" || t === "boolean") return val;
+  if (t === "number") {
+    if (Number.isNaN(val)) return tagged("NaN");
+    if (val === Number.POSITIVE_INFINITY) return tagged("Infinity");
+    if (val === Number.NEGATIVE_INFINITY) return tagged("-Infinity");
+    if (Object.is(val, -0)) return tagged("-0");
+    return val;
+  }
+  if (t === "bigint") return tagged("BigInt", val.toString());
 
   // Drop functions and symbols
   if (t === "function") {
@@ -121,7 +161,7 @@ function serializeValue(
   // Circular reference check
   if (typeof val === "object" && val !== null) {
     if (seen.has(val)) {
-      dropped.push({ path, reason: "circular" });
+      dropped.push({ path, reason: "circular or shared object reference" });
       return undefined;
     }
     seen.add(val);
@@ -130,12 +170,50 @@ function serializeValue(
   try {
     // Type-tagged values
     if (val instanceof Date) {
-      return { __t: "Date", v: val.toISOString() };
+      if (rejectInexactBuiltin(val, Date.prototype, [], path, "Date", dropped)) {
+        return undefined;
+      }
+      const time = val.getTime();
+      return tagged("Date", {
+        // An invalid Date has a NaN time value. JSON would silently turn that
+        // into null, so invalidity is represented deliberately.
+        time: Number.isNaN(time) ? null : time,
+        extensible: Object.isExtensible(val),
+      });
     }
     if (val instanceof RegExp) {
-      return { __t: "RegExp", v: { source: val.source, flags: val.flags } };
+      if (rejectInexactBuiltin(val, RegExp.prototype, ["lastIndex"], path, "RegExp", dropped)) {
+        return undefined;
+      }
+      const lastIndexDescriptor = Object.getOwnPropertyDescriptor(val, "lastIndex");
+      if (
+        !lastIndexDescriptor ||
+        !("value" in lastIndexDescriptor) ||
+        lastIndexDescriptor.enumerable ||
+        lastIndexDescriptor.configurable ||
+        !lastIndexDescriptor.writable
+      ) {
+        dropped.push({ path: `${path}.lastIndex`, reason: "custom property descriptor" });
+        return undefined;
+      }
+      const lastIndex = serializeValue(
+        lastIndexDescriptor.value,
+        `${path}.lastIndex`,
+        dropped,
+        seen,
+        depth + 1
+      );
+      return tagged("RegExp", {
+        source: val.source,
+        flags: val.flags,
+        lastIndex,
+        extensible: Object.isExtensible(val),
+      });
     }
     if (val instanceof Map) {
+      if (rejectInexactBuiltin(val, Map.prototype, [], path, "Map", dropped)) {
+        return undefined;
+      }
       const entries: [unknown, unknown][] = [];
       let i = 0;
       for (const [k, v] of val) {
@@ -144,9 +222,15 @@ function serializeValue(
         entries.push([kSer, vSer]);
         i++;
       }
-      return { __t: "Map", v: entries };
+      return tagged("Map", {
+        entries,
+        extensible: Object.isExtensible(val),
+      });
     }
     if (val instanceof Set) {
+      if (rejectInexactBuiltin(val, Set.prototype, [], path, "Set", dropped)) {
+        return undefined;
+      }
       const items: unknown[] = [];
       let i = 0;
       for (const item of val) {
@@ -154,7 +238,10 @@ function serializeValue(
         items.push(ser);
         i++;
       }
-      return { __t: "Set", v: items };
+      return tagged("Set", {
+        items,
+        extensible: Object.isExtensible(val),
+      });
     }
 
     // WeakMap, WeakSet — drop
@@ -170,46 +257,115 @@ function serializeValue(
 
     // Arrays
     if (Array.isArray(val)) {
+      if (Object.getPrototypeOf(val) !== Array.prototype) {
+        dropped.push({ path, reason: "Array subclass or custom prototype" });
+        return undefined;
+      }
+      const ownKeys = Reflect.ownKeys(val);
+      const expectedKeys = new Set([
+        "length",
+        ...Array.from({ length: val.length }, (_, i) => String(i)),
+      ]);
+      if (
+        ownKeys.length !== expectedKeys.size ||
+        ownKeys.some((key) => typeof key === "symbol" || !expectedKeys.has(key)) ||
+        [...expectedKeys].some((key) => !Object.prototype.hasOwnProperty.call(val, key))
+      ) {
+        dropped.push({ path, reason: "sparse array or custom array property" });
+        return undefined;
+      }
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(val, "length");
+      if (
+        !lengthDescriptor ||
+        !("value" in lengthDescriptor) ||
+        lengthDescriptor.value !== val.length ||
+        lengthDescriptor.enumerable ||
+        lengthDescriptor.configurable ||
+        !lengthDescriptor.writable
+      ) {
+        dropped.push({ path: `${path}.length`, reason: "custom property descriptor" });
+        return undefined;
+      }
       const result: unknown[] = [];
       for (let i = 0; i < val.length; i++) {
+        const descriptor = Object.getOwnPropertyDescriptor(val, String(i));
+        if (
+          !descriptor ||
+          !("value" in descriptor) ||
+          !descriptor.enumerable ||
+          !descriptor.configurable ||
+          !descriptor.writable
+        ) {
+          dropped.push({ path: `${path}[${i}]`, reason: "custom property descriptor" });
+          return undefined;
+        }
         const elemPath = `${path}[${i}]`;
         const ser = serializeValue(val[i], elemPath, dropped, seen, depth + 1);
-        result.push(ser !== undefined ? ser : null);
+        result.push(ser);
       }
-      return result;
+      return tagged("Array", {
+        items: result,
+        extensible: Object.isExtensible(val),
+      });
     }
 
     // Plain objects
     if (isPlainObject(val)) {
-      const result: Record<string, unknown> = {};
-      for (const key of Object.keys(val)) {
-        const childPath = path ? `${path}.${key}` : key;
-        const ser = serializeValue(val[key], childPath, dropped, seen, depth + 1);
-        if (ser !== undefined) {
-          result[key] = ser;
+      const result: Array<[string, unknown]> = [];
+      for (const key of Reflect.ownKeys(val)) {
+        if (typeof key === "symbol") {
+          dropped.push({ path, reason: "symbol property key" });
+          return undefined;
         }
+        const descriptor = Object.getOwnPropertyDescriptor(val, key);
+        if (
+          !descriptor ||
+          !("value" in descriptor) ||
+          !descriptor.enumerable ||
+          !descriptor.configurable ||
+          !descriptor.writable
+        ) {
+          dropped.push({ path: `${path}.${key}`, reason: "custom property descriptor" });
+          return undefined;
+        }
+        const childPath = path ? `${path}.${key}` : key;
+        const ser = serializeValue(descriptor.value, childPath, dropped, seen, depth + 1);
+        result.push([key, ser]);
       }
-      return result;
+      return tagged("Object", {
+        nullPrototype: Object.getPrototypeOf(val) === null,
+        entries: result,
+        extensible: Object.isExtensible(val),
+      });
     }
 
     // Class instances — drop (prototype not Object.prototype/null)
     dropped.push({ path, reason: `class instance (${val.constructor?.name ?? "unknown"})` });
     return undefined;
   } finally {
-    if (typeof val === "object" && val !== null) {
-      seen.delete(val);
-    }
+    // Keep every visited object in `seen` for the complete top-level value.
+    // Repeated references carry identity semantics that a tree snapshot cannot
+    // reproduce exactly, so they are volatile just like cycles.
   }
 }
 
 export function serializeScope(scope: Map<string, unknown>): SerializedScope {
   const dropped: DroppedEntry[] = [];
   const entries: SerializedTopLevelEntry[] = [];
+  const serializedKeys: string[] = [];
+  const volatileKeys: string[] = [];
 
   for (const [key, value] of scope) {
+    const droppedBefore = dropped.length;
     const ser = serializeValue(value, key, dropped, new Set(), 0);
-    if (ser !== undefined) {
+    // Scope durability is exact, never a best-effort data projection. A plain
+    // object containing functions is a live object, not the smaller object
+    // produced after deleting those functions.
+    if (ser !== undefined && dropped.length === droppedBefore) {
       entries.push({ key, value: ser, jsonChars: serializedJsonChars(ser) });
+      serializedKeys.push(key);
+    } else {
+      volatileKeys.push(key);
     }
   }
 
@@ -237,7 +393,12 @@ export function serializeScope(scope: Map<string, unknown>): SerializedScope {
     if (spillKeys.has(e.key)) {
       const placeholder: Record<string, unknown> = { [SCOPE_BLOB_REF]: "", bytes: e.jsonChars };
       serialized[e.key] = placeholder;
-      spills.push({ placeholder, valueJson: JSON.stringify(e.value), bytes: e.jsonChars, key: e.key });
+      spills.push({
+        placeholder,
+        valueJson: JSON.stringify(e.value),
+        bytes: e.jsonChars,
+        key: e.key,
+      });
     } else {
       serialized[e.key] = e.value;
     }
@@ -250,19 +411,7 @@ export function serializeScope(scope: Map<string, unknown>): SerializedScope {
     dropped.push({ path: "(truncated)", reason: `${omitted} more dropped paths omitted` });
   }
 
-  // serializedKeys = fully-preserved top-level keys (spilled values are lossless, so they count);
-  // partialKeys = keys with some internal drops (functions/circular/depth).
-  const serializedKeys: string[] = [];
-  const partialKeys: string[] = [];
-  for (const key of scope.keys()) {
-    if (!(key in serialized)) continue; // not serializable at all (already in droppedPaths)
-    const hasDrops = dropped.some(
-      (d) => d.path === key || d.path.startsWith(key + ".") || d.path.startsWith(key + "["),
-    );
-    (hasDrops ? partialKeys : serializedKeys).push(key);
-  }
-
-  return { serialized, spills, serializedKeys, droppedPaths: dropped, partialKeys };
+  return { serialized, spills, serializedKeys, droppedPaths: dropped, volatileKeys };
 }
 
 function serializedJsonChars(value: unknown): number {
@@ -277,6 +426,11 @@ function serializedJsonChars(value: unknown): number {
 // Deserialization
 // ---------------------------------------------------------------------------
 
+function restoreExtensibility<T extends object>(value: T, extensible: boolean): T {
+  if (!extensible) Object.preventExtensions(value);
+  return value;
+}
+
 function deserializeValue(val: unknown): unknown {
   if (val === null || val === undefined) return val;
   const t = typeof val;
@@ -289,23 +443,77 @@ function deserializeValue(val: unknown): unknown {
   if (typeof val === "object" && val !== null) {
     // Type-tagged values
     if (isTypeTagged(val)) {
-      switch (val.__t) {
-        case "Date":
-          return new Date(val.v as string);
+      switch (val.__vibestudioScopeType__) {
+        case "Undefined":
+          return undefined;
+        case "NaN":
+          return Number.NaN;
+        case "Infinity":
+          return Number.POSITIVE_INFINITY;
+        case "-Infinity":
+          return Number.NEGATIVE_INFINITY;
+        case "-0":
+          return -0;
+        case "Date": {
+          const date = val.v as { time: number | null; extensible: boolean };
+          return restoreExtensibility(
+            new Date(date.time === null ? Number.NaN : date.time),
+            date.extensible
+          );
+        }
         case "RegExp": {
-          const rv = val.v as { source: string; flags: string };
-          return new RegExp(rv.source, rv.flags);
+          const rv = val.v as {
+            source: string;
+            flags: string;
+            lastIndex: unknown;
+            extensible: boolean;
+          };
+          const expression = new RegExp(rv.source, rv.flags);
+          expression.lastIndex = deserializeValue(rv.lastIndex) as number;
+          return restoreExtensibility(expression, rv.extensible);
         }
         case "Map": {
-          const entries = val.v as [unknown, unknown][];
-          return new Map(entries.map(([k, v]) => [deserializeValue(k), deserializeValue(v)]));
+          const map = val.v as {
+            entries: [unknown, unknown][];
+            extensible: boolean;
+          };
+          return restoreExtensibility(
+            new Map(
+              map.entries.map(([key, value]) => [deserializeValue(key), deserializeValue(value)])
+            ),
+            map.extensible
+          );
         }
         case "Set": {
-          const items = val.v as unknown[];
-          return new Set(items.map(deserializeValue));
+          const set = val.v as { items: unknown[]; extensible: boolean };
+          return restoreExtensibility(new Set(set.items.map(deserializeValue)), set.extensible);
         }
         case "BigInt":
           return BigInt(val.v as string);
+        case "Array": {
+          const array = val.v as { items: unknown[]; extensible: boolean };
+          return restoreExtensibility(array.items.map(deserializeValue), array.extensible);
+        }
+        case "Object": {
+          const object = val.v as {
+            nullPrototype: boolean;
+            entries: Array<[string, unknown]>;
+            extensible: boolean;
+          };
+          const result = Object.create(object.nullPrototype ? null : Object.prototype) as Record<
+            string,
+            unknown
+          >;
+          for (const [key, child] of object.entries) {
+            Object.defineProperty(result, key, {
+              value: deserializeValue(child),
+              enumerable: true,
+              configurable: true,
+              writable: true,
+            });
+          }
+          return restoreExtensibility(result, object.extensible);
+        }
       }
     }
 

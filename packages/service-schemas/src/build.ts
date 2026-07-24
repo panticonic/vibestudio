@@ -138,28 +138,12 @@ export const buildDiagnosticSchema = z
   .strict();
 export type BuildDiagnosticWire = z.infer<typeof buildDiagnosticSchema>;
 
-/**
- * One built target inside a repo build report. Artifacts carry only manifests
- * (path/role/contentType/integrity) — never byte content — plus the structured
- * diagnostics produced while building it.
- */
+/** One target inside a compact, diagnostic-first repo build report. */
 export const unitBuildTargetSchema = z
   .object({
     target: z.enum(["runtime", "library:panel", "library:worker"]),
     exportPath: z.string().optional(),
     buildKey: z.string().optional(),
-    artifacts: z
-      .array(
-        z
-          .object({
-            path: z.string(),
-            role: z.string(),
-            contentType: z.string(),
-            integrity: z.string().optional(),
-          })
-          .strict()
-      )
-      .optional(),
     diagnostics: z.array(buildDiagnosticSchema),
   })
   .strict();
@@ -375,7 +359,7 @@ export const buildMethods = defineServiceMethods({
   },
   getBuildReport: {
     description:
-      "Explicitly build a unit (runtime, or library targets for packages) at the requested workspace state and return an agent-actionable unit build report. Read diagnostics from report.builds.flatMap((build) => build.diagnostics); diagnostics are per target, not a top-level report field. This advisory projection does not publish source, authorize publication, or advance any head.",
+      "Explicitly build a unit (runtime, or library targets for packages) at the requested workspace state and return a compact, agent-actionable report. Read all diagnostics from report.diagnostics or target-specific diagnostics from report.builds. Artifact manifests are intentionally excluded; inspect an immutable build key separately when artifact provenance is needed. This advisory projection does not publish source, authorize publication, or advance any head.",
     args: z.tuple([
       z.string().describe("Unit name or workspace-relative path."),
       z
@@ -394,6 +378,16 @@ export const buildMethods = defineServiceMethods({
           unitName: "@workspace-workers/example",
           kind: "worker",
           status: "failed",
+          diagnostics: [
+            {
+              source: "esbuild",
+              severity: "error",
+              file: "workers/example/index.ts",
+              line: 12,
+              column: 4,
+              message: "Example build diagnostic",
+            },
+          ],
           builds: [
             {
               target: "runtime",

@@ -47,7 +47,6 @@ export interface ScopesApi {
 export interface HydrateResult {
   restored: string[];
   lost: string[];
-  partial: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -67,11 +66,7 @@ export class ScopeManager {
   private dirty = false;
   private disposed = false;
 
-  constructor(opts: {
-    channelId: string;
-    panelId: string;
-    persistence: ScopePersistence;
-  }) {
+  constructor(opts: { channelId: string; panelId: string; persistence: ScopePersistence }) {
     this.channelId = opts.channelId;
     this.panelId = opts.panelId;
     this.persistence = opts.persistence;
@@ -155,7 +150,7 @@ export class ScopeManager {
   async hydrate(): Promise<HydrateResult> {
     const entry = await this.persistence.loadCurrent(this.channelId, this.panelId);
     if (!entry) {
-      return { restored: [], lost: [], partial: [] };
+      return { restored: [], lost: [] };
     }
 
     // Restore scope ID and timestamp from persisted state
@@ -176,21 +171,11 @@ export class ScopeManager {
       this.backing.set(key, resolved);
     }
 
-    // Compute what was lost (dropped entirely — not in serializedKeys or partialKeys)
-    const allPersistedKeys = new Set([...entry.serializedKeys, ...entry.partialKeys]);
-    const topLevelKey = (path: string) => path.split(/[.\[]/)[0]!;
-    const lostTopLevel = [
-      ...new Set(
-        entry.droppedPaths
-          .map((d) => topLevelKey(d.path))
-          .filter((key) => !allPersistedKeys.has(key)),
-      ),
-    ];
-
     return {
       restored: entry.serializedKeys.filter((k) => !blobFailures.includes(k)),
-      lost: [...lostTopLevel, ...blobFailures],
-      partial: entry.partialKeys,
+      // `volatileKeys` is the complete top-level recovery authority.
+      // `droppedPaths` is deliberately bounded and diagnostic-only.
+      lost: [...new Set([...entry.volatileKeys, ...blobFailures])],
     };
   }
 
@@ -204,7 +189,7 @@ export class ScopeManager {
     // Snapshot dirty before the await — if a mutation arrives during the
     // upsert, dirty will be re-set to true and we must not clear it.
     this.dirty = false;
-    const { serialized, spills, serializedKeys, droppedPaths, partialKeys } = serializeScope(
+    const { serialized, spills, serializedKeys, droppedPaths, volatileKeys } = serializeScope(
       this.backing
     );
     const p = this.persistence;
@@ -226,7 +211,7 @@ export class ScopeManager {
       data: JSON.stringify(serialized),
       serializedKeys,
       droppedPaths,
-      partialKeys,
+      volatileKeys,
       blobRefs,
       createdAt: this.currentCreatedAt,
     });

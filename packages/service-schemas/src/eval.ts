@@ -75,6 +75,33 @@ export const evalRunArgsSchema = z
   });
 export type EvalRunArgs = z.infer<typeof evalRunArgsSchema>;
 
+export const evalKernelStatusSchema = z
+  .object({
+    /** Exact in-memory notebook incarnation that produced this result. */
+    incarnationId: z.string().min(1),
+    startedAt: z.number().int().nonnegative(),
+    /** Current 30-minute idle residency deadline, refreshed before each cell. */
+    idleExpiresAt: z.number().int().nonnegative().optional(),
+    /** First-result-only lifecycle event for this incarnation. */
+    event: z
+      .object({
+        kind: z.enum(["started", "restarted"]),
+        recovery: z.union([
+          z
+            .object({
+              status: z.literal("complete"),
+              restored: z.array(z.string()),
+              lost: z.array(z.string()),
+            })
+            .strict(),
+          z.object({ status: z.literal("unavailable") }).strict(),
+        ]),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
 export const evalRunResultSchema = z
   .object({
     success: z.boolean(),
@@ -97,8 +124,10 @@ export const evalRunResultSchema = z
      * it is diagnostic data, not display copy.
      */
     errorData: z.unknown().optional(),
-    /** Keys currently held in the persistent REPL scope (for the agent's awareness). */
+    /** Keys currently held in the live notebook scope (for the agent's awareness). */
     scopeKeys: z.array(z.string()).optional(),
+    /** Notebook incarnation, residency, and exact cold-recovery diagnostics. */
+    kernel: evalKernelStatusSchema.optional(),
   })
   .strict();
 
@@ -211,14 +240,14 @@ export const evalMethods = defineServiceMethods({
     args: z.tuple([evalRunArgsSchema]),
     returns: evalRunResultSchema,
     description:
-      "Run TypeScript/JS in the caller's per-owner EvalDO sandbox (persistent REPL scope + synchronous in-DO SQLite `db`). Set reset:true to atomically clear scope/db before this run. Owner is the verified caller; fs is scoped to the owner's context.",
+      "Run TypeScript/JS in the caller's per-owner EvalDO notebook (30-minute live heap plus exact cold scope recovery and synchronous in-DO SQLite `db`). Kernel restarts report exact restored/lost keys. Set reset:true to atomically clear scope/db before this run. Owner is the verified caller; fs is scoped to the owner's context.",
     access: { sensitivity: "write" },
   },
   reset: {
     args: z.union([z.tuple([]), z.tuple([evalResetArgsSchema])]),
     returns: z.object({ ok: z.boolean() }).strict(),
     description:
-      "Reset the eval context: wipe the persistent scope + the user `db` tables (a fresh scope), preserving the kernel's own state. The owner's existing data is cleared.",
+      "Reset the eval context: wipe the live/durable scope and user `db` tables while preserving kernel infrastructure. The owner's existing eval data is cleared.",
     access: { sensitivity: "destructive" },
   },
   startRun: {

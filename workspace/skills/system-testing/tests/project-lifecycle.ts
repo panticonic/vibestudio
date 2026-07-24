@@ -329,13 +329,28 @@ function compilerCheckSummary(
     );
   }
   if (!code.includes("getBuildReport")) return null;
-  const report = records.find(
+  const identityBearingReport = records.find(
     (record) =>
       record["repoPath"] === expectedSource &&
       record["kind"] === "panel" &&
       typeof record["status"] === "string" &&
       Array.isArray(record["builds"])
   );
+  // A concise projection is still source-bound evidence when the invocation
+  // itself passes the exact created panel path to getBuildReport. Requiring the
+  // agent to echo repoPath/kind after selecting that exact resource makes
+  // validation depend on redundant presentation rather than provenance.
+  const sourceBoundProjection =
+    code.includes(expectedSource) &&
+    records.find(
+      (record) =>
+        record["repoPath"] === undefined &&
+        record["kind"] === undefined &&
+        typeof record["status"] === "string" &&
+        Array.isArray(record["diagnostics"]) &&
+        Array.isArray(record["builds"])
+    );
+  const report = identityBearingReport ?? sourceBoundProjection;
   if (!report) return null;
   const diagnostics = [
     ...(Array.isArray(report["diagnostics"]) ? report["diagnostics"] : []),

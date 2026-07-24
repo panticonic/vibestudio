@@ -16,6 +16,19 @@ function successfulEvalCalls(result: TestExecutionResult) {
   );
 }
 
+function invocationKernelIncarnation(
+  call: ReturnType<typeof getToolCalls>[number]
+): string | null {
+  const result = call.execution?.result;
+  if (!result || typeof result !== "object" || Array.isArray(result)) return null;
+  const details = (result as Record<string, unknown>)["details"];
+  if (!details || typeof details !== "object" || Array.isArray(details)) return null;
+  const kernel = (details as Record<string, unknown>)["kernel"];
+  if (!kernel || typeof kernel !== "object" || Array.isArray(kernel)) return null;
+  const incarnationId = (kernel as Record<string, unknown>)["incarnationId"];
+  return typeof incarnationId === "string" && incarnationId.length > 0 ? incarnationId : null;
+}
+
 function validateDbPersistence(result: TestExecutionResult) {
   const base = completedScenarioEvidence(result);
   if (!base.passed) return base;
@@ -187,15 +200,29 @@ function validateLiveKernelContinuity(result: TestExecutionResult) {
     const code = String(call.arguments?.["code"] ?? "");
     return (
       index > writer &&
-      /scope\.__kernelContinuityProbe(?:\?|\.)[\s\S]*\.?ping\s*\(/u.test(code) &&
+      /scope\.__kernelContinuityProbe\b/u.test(code) &&
+      /\.ping\s*\(/u.test(code) &&
       !/scope\.__kernelContinuityProbe\s*=/u.test(code)
     );
   });
+  const writerCall = calls[writer];
   const readerCall = calls[reader];
-  if (writer < 0 || reader < 0 || !readerCall) {
+  if (writer < 0 || reader < 0 || !writerCall || !readerCall) {
     return {
       passed: false,
       reason: "The agent did not create and later invoke one unchanged live scope object",
+    };
+  }
+  const writerIncarnation = invocationKernelIncarnation(writerCall);
+  const readerIncarnation = invocationKernelIncarnation(readerCall);
+  if (
+    !writerIncarnation ||
+    !readerIncarnation ||
+    writerIncarnation !== readerIncarnation
+  ) {
+    return {
+      passed: false,
+      reason: "The eval kernel incarnation changed across the inter-cell idle boundary",
     };
   }
   const returned = invocationReturnValue(readerCall);

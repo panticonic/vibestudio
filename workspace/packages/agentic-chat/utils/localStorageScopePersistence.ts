@@ -35,7 +35,7 @@ function parseEntry(raw: string | null): ScopeEntry | null {
       typeof record["createdAt"] !== "number" ||
       !Array.isArray(record["serializedKeys"]) ||
       !Array.isArray(record["droppedPaths"]) ||
-      !Array.isArray(record["partialKeys"])
+      !Array.isArray(record["volatileKeys"])
     ) {
       return null;
     }
@@ -44,7 +44,9 @@ function parseEntry(raw: string | null): ScopeEntry | null {
       channelId: record["channelId"],
       panelId: record["panelId"],
       data: record["data"],
-      serializedKeys: record["serializedKeys"].filter((item): item is string => typeof item === "string"),
+      serializedKeys: record["serializedKeys"].filter(
+        (item): item is string => typeof item === "string"
+      ),
       droppedPaths: record["droppedPaths"].filter(
         (item): item is { path: string; reason: string } =>
           !!item &&
@@ -52,11 +54,15 @@ function parseEntry(raw: string | null): ScopeEntry | null {
           typeof (item as Record<string, unknown>)["path"] === "string" &&
           typeof (item as Record<string, unknown>)["reason"] === "string"
       ),
-      partialKeys: record["partialKeys"].filter((item): item is string => typeof item === "string"),
+      volatileKeys: record["volatileKeys"].filter(
+        (item): item is string => typeof item === "string"
+      ),
       createdAt: record["createdAt"],
     };
     if (Array.isArray(record["blobRefs"])) {
-      entry.blobRefs = record["blobRefs"].filter((item): item is string => typeof item === "string");
+      entry.blobRefs = record["blobRefs"].filter(
+        (item): item is string => typeof item === "string"
+      );
     }
     return entry;
   } catch {
@@ -95,7 +101,7 @@ class LocalStorageScopeRowBackend implements ScopeRowBackend {
         id: entry.id,
         createdAt: entry.createdAt,
         keys: [...entry.serializedKeys],
-        partial: [...entry.partialKeys],
+        volatile: [...entry.volatileKeys],
       }));
   }
 
@@ -119,9 +125,6 @@ export class LocalStorageScopePersistence extends ScopePersistenceAdapter {
   }
 }
 
-export function panelLocalScopeChannelId(
-  channelId: string,
-  panelId: string
-): string {
+export function panelLocalScopeChannelId(channelId: string, panelId: string): string {
   return JSON.stringify(["panel-ui", channelId, panelId]);
 }

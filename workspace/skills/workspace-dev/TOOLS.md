@@ -484,7 +484,10 @@ Compile a panel against the current context working head and return the
 canonical structured build report. Pass the panel source path and the exact
 context ref. The report contains `status`, top-level `diagnostics`, and
 per-target `builds`; diagnostics include source, severity, file, line, column,
-message, and optional source context.
+message, and optional source context. The routine report intentionally omits
+artifact manifests so compiler feedback remains compact and structurally
+available through eval. Each target includes its immutable `buildKey`; use
+build provenance or metadata inspection only when artifact details are needed.
 
 ```
 eval({ code: `

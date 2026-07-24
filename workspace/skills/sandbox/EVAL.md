@@ -7,8 +7,10 @@ in the chat/editor panel. Console output is captured and the return value is
 sent back.
 
 **Eval does not need a connected panel.** It keeps working even if the
-chat/editor panel — or the user — disconnects. State (`scope`, the in-DO SQLite
-`db`) lives in the EvalDO and persists across calls and across turns.
+chat/editor panel — or the user — disconnects. It is a notebook kernel: the
+same live heap remains resident for 30 minutes after the latest cell, and every
+cell renews that idle lease. The in-DO SQLite `db` and exact serializable scope
+snapshot survive unavoidable kernel restarts.
 
 ## Eval Perspective
 
@@ -138,7 +140,7 @@ same live binding rather than shadowing it.
 | `services`                         | Convenience namespace for server services. If the service name is also a rich runtime binding (`workers`, `vcs`, `fs`, `credentials`, `blobstore`, …), `services.<name>` is that ergonomic runtime client, not the raw service catalog. Raw catalog methods are always reachable with `rpc.call("main", "<svc>.<method>", [...])`; non-colliding services are also reachable as `services.<svc>.<method>(...)`. Access is still gated server-side by each method's policy. Use `help()` to list services and `help("workers")` to inspect a runtime binding. |
 | `fs`                               | Context-scoped filesystem — the EvalDO resolves your context, so you do NOT pass a contextId: `await fs.readdir("/")`, `await fs.readFile("src/index.ts", "utf-8")`                                                                                                                                                                                                                                                                                                                                                                                          |
 | `ctx`                              | `{ contextId, objectKey }` for the current eval session                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `scope`                            | Persistent REPL scope (see below); `scope.x = …` survives across calls in the same channel                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `scope`                            | Live notebook scope (see below); `scope.x = …` retains object identity across cells while the 30-minute kernel lease is active                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `scopes`                           | Management API for the serialized scope layer (see below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `db`                               | Synchronous in-DO SQLite (see below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `chat`                             | The full chat API for the current channel — `publish`/`send`, custom-message cards, `registerMessageType`, `callMethod`, etc. (agent eval only; see below)                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -273,7 +275,8 @@ open the `about/server-logs` viewer for a live follow. See
 
 ## Result Shape
 
-`eval.run` returns `{ success, console, returnValue?, error?, scopeKeys? }`:
+`eval.run` returns
+`{ success, console, returnValue?, error?, scopeKeys?, kernel? }`:
 
 - `success` — whether the run completed without throwing.
 - `console` — captured console output. Oversized output is windowed in the
@@ -283,7 +286,16 @@ open the `about/server-logs` viewer for a live follow. See
   Oversized values may be replaced with a structured truncation summary pointing
   at `scope.$lastLargeReturn`.
 - `error` — present on failure.
-- `scopeKeys` — the keys currently held in the persistent `scope`.
+- `scopeKeys` — the keys currently held in the live notebook `scope`.
+- `kernel` — structured notebook-incarnation metadata: the incarnation ID,
+  start time, current idle-lease deadline, and (on the first result of an
+  incarnation) a `started` or `restarted` event with exact restored/lost keys.
+
+After an unavoidable restart, the formatted tool result begins with
+`[kernel] Restarted`. Treat that line as a state transition, not a warning to
+ignore: module singletons and all live-only objects are gone. The same line
+names every durably restored scope key and every lost live-only key. Reacquire
+lost handles from their stable IDs before continuing.
 
 Non-serializable values (functions, symbols, circular refs) are safely converted
 to string representations in `returnValue`.
@@ -490,35 +502,73 @@ and never pass host absolute paths such as `/home/user/.../workspace/...`.
 
 ## REPL Scope
 
-`scope` is a persistent object shared across eval calls within the same channel.
-Store data — query results, intermediate state, config — in `scope.*` and it is
-available on the next eval call. After every eval call the EvalDO serializes
-`scope` to its own SQLite (`repl_scopes` table) and rehydrates it on the next
-run, so scope survives EvalDO eviction and reconstruction.
+`scope` is the live notebook heap shared across eval cells in the same channel.
+The EvalDO's in-memory backing map remains authoritative while that kernel is
+warm: objects are not serialized and reconstructed between ordinary calls.
+Functions, class instances, handles, and open connections therefore retain
+identity and behavior across cells. Before each cell, the host renews one held
+kernel request; it expires 30 minutes after the latest cell. There is no
+heartbeat, polling loop, or cell-end disconnect.
+
+After each cell, EvalDO also writes an exact recovery snapshot to its
+SQLite `repl_scopes` table. That snapshot is not the active heap and does not
+replace live values. It is read only when a new ScopeManager is created after a
+cold start, reset, eviction, or reconstruction.
 
 ### scope vs scopes
 
-- **`scope`** — the persistent REPL object. Read/write `scope.x` during normal
-  operation; assignments and deep mutations are saved after each eval call.
+- **`scope`** — the warm notebook object. Read/write `scope.x` during normal
+  operation; live identity remains stable across cells while the kernel is warm,
+  and serializable state is snapshotted after each cell.
 - **`scopes`** — management API for the serialized (DB) layer:
   - `scopes.currentId` — current scope's durable UUID
   - `scopes.push()` — serialize + archive current scope, start a fresh one (only serializable values carry over)
   - `scopes.get(id)` — retrieve an archived scope by its durable ID (deserialized snapshot — data only, no functions)
-  - `scopes.list()` — list all scopes for this channel with keys and partial keys
+  - `scopes.list()` — list all scopes for this channel with durable keys and
+    volatile (live-only) keys
   - `scopes.save()` — force-serialize scope to DB now
 
 ### Serialization
 
-Scope is serialized per-property when persisted:
+The recovery snapshot is exact per top-level property:
 
 - **Kept:** primitives, plain objects, arrays, Date, Map, Set, RegExp
-- **Dropped:** functions, symbols, class instances, WeakRef/WeakMap/WeakSet, circular refs, depth > 20
+- **Volatile:** functions, symbols, class instances, WeakRef/WeakMap/WeakSet,
+  circular/shared object references, accessors or custom property descriptors,
+  sparse/custom arrays, depth > 100
 
-Because the EvalDO is a server-side isolate (not the browser), prefer storing
-plain serializable data in `scope`. Functions and class instances held in
-`scope` between calls only survive while the EvalDO instance stays warm; after
-normal runtime eviction the scope is rehydrated from the serialized snapshot, so any
-non-serializable values are lost.
+If any nested leaf is volatile, the complete top-level value is excluded from
+cold recovery. Eval never returns a smaller, methodless imitation under the
+original key.
+
+This produces an intentional two-layer contract:
+
+- **Warm kernel:** every value remains live, including functions, class
+  instances, `PanelHandle`, and `CdpPage`.
+- **Cold recovery:** serializable data is restored; non-serializable top-level
+  keys are reported as lost and must be reacquired from retained identity or
+  provenance.
+
+Do not reduce every notebook workflow to IDs merely because cold recovery
+exists. Keep useful live objects in `scope`, and keep the smallest stable
+descriptor beside them when reacquisition matters:
+
+```ts
+scope.panel = await openPanel("panels/my-app");
+scope.panelId = scope.panel.id;
+scope.page = await scope.panel.cdp.page();
+
+// A later warm cell uses the same objects:
+return await scope.page.getByRole("heading").innerText();
+
+// After cold recovery, reacquire without creating a duplicate:
+scope.panel ??= getPanelHandle(scope.panelId);
+scope.page ??= await scope.panel.cdp.page();
+```
+
+There is no cell-end collection step. The 30-minute idle lease is a usability
+window, not durable storage, so code needing recovery must still retain stable
+data.
 
 ### Resetting scope
 

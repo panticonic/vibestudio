@@ -134,8 +134,6 @@ export interface UnitBuildTarget {
   target: UnitBuildTargetKind;
   exportPath?: string;
   buildKey?: string;
-  /** Artifact manifests only — never byte content. */
-  artifacts?: Array<{ path: string; role: string; contentType: string; integrity?: string }>;
   diagnostics: BuildDiagnostic[];
 }
 
@@ -673,15 +671,6 @@ export async function initBuildSystemV2(
   // Exact-state unit build reports
   // -------------------------------------------------------------------------
 
-  /** Manifest-only artifacts (no byte content) for a report. */
-  const artifactManifests = (build: BuildResult): UnitBuildTarget["artifacts"] =>
-    build.artifacts.map((a) => ({
-      path: a.path,
-      role: a.role,
-      contentType: a.contentType,
-      ...(a.integrity ? { integrity: a.integrity } : {}),
-    }));
-
   /**
    * Build a single target for a unit at a state, capturing structured esbuild
    * diagnostics on failure + folding tsc diagnostics. Never throws — failures
@@ -711,11 +700,9 @@ export async function initBuildSystemV2(
 
     const internalDeps = collectTransitiveInternalDeps(node, graphAtView);
     let diagnostics: BuildDiagnostic[] = [];
-    let artifacts: UnitBuildTarget["artifacts"] | undefined;
     let buildError: unknown = null;
     try {
-      const build = await buildUnit(node, ev, graphAtView, workspaceRoot, viewStateHash, options);
-      artifacts = artifactManifests(build);
+      await buildUnit(node, ev, graphAtView, workspaceRoot, viewStateHash, options);
     } catch (error) {
       buildError = error;
     }
@@ -766,7 +753,6 @@ export async function initBuildSystemV2(
         ? { exportPath: (spec as { exportPath: string }).exportPath }
         : {}),
       buildKey,
-      ...(artifacts ? { artifacts } : {}),
       diagnostics,
     };
   };

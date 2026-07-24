@@ -337,11 +337,10 @@ export function useAgenticChat({
       .then((result) => {
         if (cancelled) return;
         bumpScopeVersion();
-        if (result.lost.length > 0 || result.partial.length > 0) {
-          const parts: string[] = [];
-          if (result.partial.length) parts.push(`partial=[${result.partial.join(", ")}]`);
-          if (result.lost.length) parts.push(`lost=[${result.lost.join(", ")}]`);
-          console.warn(`[panel-ui-scope] Hydrated with degraded state: ${parts.join(" ")}`);
+        if (result.lost.length > 0) {
+          console.warn(
+            `[panel-ui-scope] Cold recovery lost live-only keys: [${result.lost.join(", ")}]`
+          );
         }
       })
       .catch((err) => {

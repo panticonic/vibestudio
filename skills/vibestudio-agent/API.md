@@ -105,7 +105,7 @@ Authority principals: `code`, `host`, `user`
 | `build.getBuild` | Build a panel/worker/extension unit (or a library bundle) and return its artifacts. The optional ref selects the workspace state to build from: omitted = main HEAD, a head name (e.g. 'ctx:abc'), or an immutable 'state:…' hash. Results are cached by content-derived build key, so rebuilding an unchanged unit reuses the cache. |
 | `build.getBuildNpm` | Build an npm package as a CJS library bundle for sandbox use, leaving the given externals unbundled. |
 | `build.getBuildMetadata` | Cached build metadata for an immutable build key, or null if it is not cached. Includes the unit's most recent structured build diagnostics (esbuild + tsc) when any were captured. |
-| `build.getBuildReport` | Explicitly build a unit (runtime, or library targets for packages) at the requested workspace state and return an agent-actionable unit build report. Read diagnostics from report.builds.flatMap((build) => build.diagnostics); diagnostics are per target, not a top-level report field. This advisory projection does not publish source, authorize publication, or advance any head. |
+| `build.getBuildReport` | Explicitly build a unit (runtime, or library targets for packages) at the requested workspace state and return a compact, agent-actionable report. Read all diagnostics from report.diagnostics or target-specific diagnostics from report.builds. Artifact manifests are intentionally excluded; inspect an immutable build key separately when artifact provenance is needed. This advisory projection does not publish source, authorize publication, or advance any head. |
 | `build.getEffectiveVersion` | Effective version (content-derived identity) of a workspace unit, or null if unknown. |
 | `build.inspectBuildProvenance` | Resolve a workspace build unit (by name, relative path, or basename) and report its effective version, immutable build keys, and cached artifact metadata. Reports ambiguity when a basename matches multiple units. |
 | `build.listRecentBuildEvents` | List recent state-triggered build lifecycle events and failures, optionally filtered by unit name or workspace-relative path. |
@@ -179,8 +179,8 @@ Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `eval.run` | Run TypeScript/JS in the caller's per-owner EvalDO sandbox (persistent REPL scope + synchronous in-DO SQLite `db`). Set reset:true to atomically clear scope/db before this run. Owner is the verified caller; fs is scoped to the owner's context. |
-| `eval.reset` | Reset the eval context: wipe the persistent scope + the user `db` tables (a fresh scope), preserving the kernel's own state. The owner's existing data is cleared. |
+| `eval.run` | Run TypeScript/JS in the caller's per-owner EvalDO notebook (30-minute live heap plus exact cold scope recovery and synchronous in-DO SQLite `db`). Kernel restarts report exact restored/lost keys. Set reset:true to atomically clear scope/db before this run. Owner is the verified caller; fs is scoped to the owner's context. |
+| `eval.reset` | Reset the eval context: wipe the live/durable scope and user `db` tables while preserving kernel infrastructure. The owner's existing eval data is cleared. |
 | `eval.startRun` | Start an asynchronous eval for an agent DO: returns a runId after the EvalDO durably records and schedules the idempotent run; reset:true atomically clears scope/db before first insertion. The owning EvalDO delivers the result directly to its agent, while getRun reads the canonical durable result for recovery. Panels/CLI should use run for a one-request result. |
 | `eval.getRun` | Poll an async run started with startRun: returns its status, latest durable progress heartbeat, and (when done) result. |
 | `eval.readScopeTextPage` | Read a bounded page from a string in the caller's current durable eval scope. Use this to retrieve a large eval result losslessly after an eval caches it under a scope key; pages are UTF-16LE base64 so every JavaScript string code unit round-trips exactly. |
@@ -435,7 +435,9 @@ Authority principals: `code`, `host`, `user`
 | `permissions.list` | List active session and durable capability, userland, and credential-use grants. |
 | `permissions.revoke` | Revoke one durable permission grant by its opaque id. |
 | `permissions.listAgentProfiles` | List the living authority profile for every agent with standing permissions or locks. |
-| `permissions.updateAgentProfile` | Restore, remove, unlock, or reset one agent's lasting authority settings. |
+| `permissions.safetyStatus` | Read the live emergency authority state and the work it can immediately interrupt. |
+| `permissions.updateAgentProfile` | Pause or resume an agent, revoke all of its authority, or change one lasting authority setting. |
+| `permissions.setWorkspaceAuthorityLock` | Engage or release the emergency workspace lock for every agent's protected authority. |
 
 ## `phoneProvisioning`
 

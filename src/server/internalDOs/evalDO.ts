@@ -1,4 +1,10 @@
-import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibestudio/durable";
+import {
+  DurableObjectBase,
+  rpc,
+  type DurableObjectContext,
+  type LifecyclePrepareInput,
+  type LifecycleResumeInput,
+} from "@vibestudio/durable";
 import * as asyncHooks from "node:async_hooks";
 import {
   type RpcCallOptions,
@@ -63,6 +69,7 @@ const RESULT_CONSOLE_MAX_CHARS = 80_000;
 const RESULT_ERROR_MAX_CHARS = 20_000;
 const RESULT_STORAGE_MAX_CHARS = 250_000;
 const CANCELLATION_GRACE_MS = 5_000;
+const MAX_KERNEL_IDLE_LEASE_MS = 60 * 60 * 1_000;
 
 interface RunCleanupPhase {
   active: boolean;
@@ -142,10 +149,15 @@ interface SandboxResult {
 interface ScopeManagerLike {
   readonly current: Record<string, unknown>;
   readonly api: unknown;
-  hydrate(): Promise<unknown>;
+  hydrate(): Promise<ScopeRecovery>;
   persist(): Promise<void>;
   enterEval(): void;
   exitEval(): Promise<void>;
+}
+
+interface ScopeRecovery {
+  restored: string[];
+  lost: string[];
 }
 
 function utf16leBase64(value: string): string {
@@ -299,6 +311,31 @@ interface RunResult {
   failureCode?: string;
   errorData?: unknown;
   scopeKeys?: string[];
+  kernel?: KernelRunStatus;
+}
+
+interface KernelRunStatus {
+  /** Identifies the exact in-memory notebook heap serving this result. */
+  incarnationId: string;
+  startedAt: number;
+  /** The current residency lease deadline, refreshed before every eval cell. */
+  idleExpiresAt?: number;
+  /** Present only on the first result produced by this kernel incarnation. */
+  event?: {
+    kind: "started" | "restarted";
+    recovery:
+      | { status: "complete"; restored: string[]; lost: string[] }
+      | { status: "unavailable" };
+  };
+}
+
+interface KernelLeaseState {
+  id: string;
+  expiresAt: number;
+  holderAttached: boolean;
+  timer: ReturnType<typeof setTimeout> | null;
+  settled: Promise<{ reason: "expired" | "released" | "replaced" }>;
+  settle: (result: { reason: "expired" | "released" | "replaced" }) => void;
 }
 
 export class EvalDO extends DurableObjectBase {
@@ -359,10 +396,33 @@ export class EvalDO extends DurableObjectBase {
    * DO's runs for import continuity (a module loaded in one run is reusable by the next).
    */
   private moduleMap: Record<string, unknown> = {};
+  /** Stable only for this exact in-memory notebook heap. */
+  private readonly kernelIncarnationId: string;
+  private readonly kernelStartedAt: number;
+  private readonly kernelRestarted: boolean;
+  private kernelEventPending = true;
+  /** Exact durable recovery report captured when this incarnation first hydrates scope. */
+  private scopeRecovery: ScopeRecovery | null = null;
+  /**
+   * One host-held request owns inter-cell notebook residency. Individual eval
+   * requests protect only their own execution; this lease keeps the same heap
+   * (scope objects, module singletons, open client handles) alive between cells.
+   */
+  private kernelLease: KernelLeaseState | null = null;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
     this.ensureReady();
+    this.kernelIncarnationId = crypto.randomUUID();
+    this.kernelStartedAt = Date.now();
+    this.kernelRestarted = this.getStateValue("eval_kernel_incarnation") !== null;
+    this.setStateValue(
+      "eval_kernel_incarnation",
+      JSON.stringify({
+        id: this.kernelIncarnationId,
+        startedAt: this.kernelStartedAt,
+      })
+    );
     // Runs once per boot (this instance), before any run executes — so every `running`
     // row is orphaned by a prior instance whose held connection dropped (server restart).
     this.reconcileOrphanedRuns();
@@ -552,6 +612,112 @@ export class EvalDO extends DurableObjectBase {
 
   // ── public RPC methods (dispatched by the server `eval` service) ──────────────
 
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "runtime.code-execution.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
+  acquireKernelLease(input: { leaseId: string; idleMs: number }): {
+    leaseId: string;
+    expiresAt: number;
+    holderAttached: boolean;
+  } {
+    if (!input || typeof input.leaseId !== "string" || input.leaseId.length === 0) {
+      throw new Error("eval kernel lease requires a non-empty leaseId");
+    }
+    if (
+      !Number.isSafeInteger(input.idleMs) ||
+      input.idleMs <= 0 ||
+      input.idleMs > MAX_KERNEL_IDLE_LEASE_MS
+    ) {
+      throw new Error(
+        `eval kernel lease idleMs must be an integer between 1 and ${MAX_KERNEL_IDLE_LEASE_MS}`
+      );
+    }
+
+    let lease = this.kernelLease;
+    if (lease?.id !== input.leaseId) {
+      if (lease) this.settleKernelLease(lease, "replaced");
+      let settle!: KernelLeaseState["settle"];
+      const settled = new Promise<Awaited<KernelLeaseState["settled"]>>((resolve) => {
+        settle = resolve;
+      });
+      lease = {
+        id: input.leaseId,
+        expiresAt: 0,
+        holderAttached: false,
+        timer: null,
+        settled,
+        settle,
+      };
+      this.kernelLease = lease;
+    } else {
+      if (lease.timer) clearTimeout(lease.timer);
+    }
+
+    lease.expiresAt = Date.now() + input.idleMs;
+    lease.timer = setTimeout(() => void this.expireKernelLease(lease), input.idleMs);
+    // Unit tests run in Node; the held request itself owns process lifetime in
+    // production workerd, so a Node timer need not pin the Vitest process.
+    lease.timer.unref?.();
+    return {
+      leaseId: lease.id,
+      expiresAt: lease.expiresAt,
+      holderAttached: lease.holderAttached,
+    };
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "runtime.code-execution.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
+  async attachKernelLeaseHolder(leaseId: string): Promise<{ attached: true }> {
+    const lease = this.kernelLease;
+    if (!lease || lease.id !== leaseId) {
+      throw new Error(`eval kernel lease ${leaseId} is not active`);
+    }
+    if (lease.holderAttached) {
+      throw new Error(`eval kernel lease ${leaseId} already has a holder`);
+    }
+    // The lifecycle registry is the authoritative inventory of live
+    // activation-owned resources. Register before acknowledging the holder so
+    // every successful long request is discoverable by planned restart and
+    // server-shutdown preparation.
+    await this.registerLifecycleRelease({ kind: "eval-kernel", leaseId });
+    if (this.kernelLease !== lease) {
+      throw new Error(`eval kernel lease ${leaseId} changed while its holder was attaching`);
+    }
+    lease.holderAttached = true;
+    return { attached: true };
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "runtime.code-execution.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
+  async holdKernelLease(
+    leaseId: string
+  ): Promise<{ leaseId: string; reason: "expired" | "released" | "replaced" }> {
+    const lease = this.kernelLease;
+    if (!lease || lease.id !== leaseId) {
+      throw new Error(`eval kernel lease ${leaseId} is not active`);
+    }
+    if (!lease.holderAttached) {
+      throw new Error(`eval kernel lease ${leaseId} has no attached holder`);
+    }
+    try {
+      const terminal = await lease.settled;
+      return { leaseId, ...terminal };
+    } finally {
+      lease.holderAttached = false;
+    }
+  }
+
   /**
    * Held synchronous run for connection-holding callers (panels over their persistent WS, the CLI):
    * insert + execute in this held handler, return the result in one response. The CALLER holds its
@@ -567,6 +733,23 @@ export class EvalDO extends DurableObjectBase {
     const runId = args.runId ?? crypto.randomUUID();
     await this.enqueueRun({ ...args, runId }, false);
     return this.executeRun(runId);
+  }
+
+  override async releaseForLifecycle(_input: LifecyclePrepareInput): Promise<{ status: "ready" }> {
+    // Clear the durable ownership declaration before ending the held request.
+    // This ordering prevents workerd from disappearing with a stale lifecycle
+    // row that claims the new activation should reconstruct an in-memory heap.
+    await this.clearLifecycleRelease();
+    if (this.kernelLease) this.settleKernelLease(this.kernelLease, "released");
+    return { status: "ready" };
+  }
+
+  override async resumeAfterRestart(_input: LifecycleResumeInput): Promise<void> {
+    // A process crash cannot preserve the JavaScript heap. A stale lease row
+    // may therefore survive only until lifecycle recovery reaches the new
+    // activation; future eval cells establish a fresh, explicitly reported
+    // kernel incarnation.
+    await this.clearLifecycleRelease();
   }
 
   /**
@@ -734,6 +917,7 @@ export class EvalDO extends DurableObjectBase {
     let cancellationCleanupError: unknown;
 
     let result: RunResult;
+    let kernel: KernelRunStatus | undefined;
     try {
       if (deadlineAt != null) {
         const remaining = deadlineAt - Date.now();
@@ -748,9 +932,15 @@ export class EvalDO extends DurableObjectBase {
           timer.unref?.();
         }
       }
-      const ran = this.runChain.then(() =>
-        this.runLocked(args, controller.signal, runId, deadlineAt, cleanupPhase)
-      );
+      const ran = this.runChain.then(async () => {
+        try {
+          return await this.runLocked(args, controller.signal, runId, deadlineAt, cleanupPhase);
+        } finally {
+          // Consume the incarnation event inside the serialized run chain. A
+          // second queued cell can never race the first and also claim it.
+          kernel = this.kernelStatusForRun();
+        }
+      });
       this.runChain = ran.catch(() => undefined);
       result = await ran;
       if (controller.signal.aborted && deadlineAt !== null) {
@@ -787,6 +977,7 @@ export class EvalDO extends DurableObjectBase {
           error: `${result.error ?? `eval timed out after ${args.timeoutMs}ms`}; cancellation cleanup failed: ${cleanupMessage}`,
         };
       }
+      result = { ...result, kernel };
     } catch (err) {
       console.error(
         `[EvalDO] run ${runId} failed`,
@@ -798,6 +989,7 @@ export class EvalDO extends DurableObjectBase {
         error: err instanceof Error ? err.message : String(err),
         failureKind: "infrastructure",
         failureCode: "eval_host_failed",
+        kernel: kernel ?? this.kernelStatusForRun(),
       };
     } finally {
       if (timer) clearTimeout(timer);
@@ -823,6 +1015,7 @@ export class EvalDO extends DurableObjectBase {
         error: "eval: run cancelled",
         failureKind: "cancelled",
         failureCode: "eval_cancelled",
+        kernel: result.kernel,
       });
     }
     return terminalResult;
@@ -1163,10 +1356,52 @@ export class EvalDO extends DurableObjectBase {
     // works before the first run (e.g. `--fresh-scope`); the next run recreates it empty.
     this.sql.exec(`DROP TABLE IF EXISTS repl_scopes`);
     this.scopeManager = null; // force fresh hydrate (empty) on next run
+    this.scopeRecovery = null;
     return { ok: true };
   }
 
   // ── internals ─────────────────────────────────────────────────────────────────
+
+  private settleKernelLease(lease: KernelLeaseState, reason: "released" | "replaced"): void {
+    if (lease.timer) clearTimeout(lease.timer);
+    if (this.kernelLease === lease) this.kernelLease = null;
+    lease.settle({ reason });
+  }
+
+  private async expireKernelLease(lease: KernelLeaseState): Promise<void> {
+    if (this.kernelLease !== lease) return;
+    // Keep the holder alive until its durable lifecycle declaration is gone.
+    // The pending hold request itself keeps this activation resident while the
+    // registry write completes.
+    await this.clearLifecycleRelease();
+    if (this.kernelLease === lease) {
+      if (lease.timer) clearTimeout(lease.timer);
+      this.kernelLease = null;
+      lease.settle({ reason: "expired" });
+    }
+  }
+
+  private kernelStatusForRun(): KernelRunStatus {
+    const event = this.kernelEventPending
+      ? {
+          kind: this.kernelRestarted ? ("restarted" as const) : ("started" as const),
+          recovery: this.scopeRecovery
+            ? {
+                status: "complete" as const,
+                restored: [...this.scopeRecovery.restored],
+                lost: [...this.scopeRecovery.lost],
+              }
+            : { status: "unavailable" as const },
+        }
+      : undefined;
+    this.kernelEventPending = false;
+    return {
+      incarnationId: this.kernelIncarnationId,
+      startedAt: this.kernelStartedAt,
+      ...(this.kernelLease ? { idleExpiresAt: this.kernelLease.expiresAt } : {}),
+      ...(event ? { event } : {}),
+    };
+  }
 
   private async runLocked(
     args: RunArgs,
@@ -1395,7 +1630,7 @@ export class EvalDO extends DurableObjectBase {
     // evals (fs/vcs/git) never touch it, and the build is a cold-path round-trip
     // that dominated first-run latency. Direct `import "@workspace/cdp-client"`
     // self-heals via the engine's loadImport; this pre-seed is for the
-    // `handle.cdp` → loadLightweightClient sync-require path. The check is
+    // `handle.cdp` → loadCdpClient sync-require path. The check is
     // conservative — every route to the client (the import specifier,
     // `handle.cdp`, `CdpConnection`, `getCdpEndpoint`) contains "cdp", so a
     // no-match guarantees no CDP use; a false positive just restores prior cost.
@@ -1504,6 +1739,7 @@ export class EvalDO extends DurableObjectBase {
         ? { errorData: this.compactReturnValue(result.errorData) }
         : {}),
       ...(result.scopeKeys ? { scopeKeys: result.scopeKeys.slice(0, 500) } : {}),
+      ...(result.kernel ? { kernel: result.kernel } : {}),
     };
     if (result.returnValue !== undefined) {
       compact.returnValue = this.compactReturnValue(result.returnValue);
@@ -1523,6 +1759,7 @@ export class EvalDO extends DurableObjectBase {
       ...(compact.errorData !== undefined ? { errorData: compact.errorData } : {}),
       ...(compact.returnValue !== undefined ? { returnValue: compact.returnValue } : {}),
       ...(compact.scopeKeys ? { scopeKeys: compact.scopeKeys.slice(0, 200) } : {}),
+      ...(compact.kernel ? { kernel: compact.kernel } : {}),
     };
     encoded = JSON.stringify(fallback);
     if (encoded.length <= RESULT_STORAGE_MAX_CHARS) return fallback;
@@ -1538,6 +1775,7 @@ export class EvalDO extends DurableObjectBase {
         ? { errorData: this.compactReturnValue(result.errorData) }
         : {}),
       ...(result.scopeKeys ? { scopeKeys: result.scopeKeys.slice(0, 100) } : {}),
+      ...(result.kernel ? { kernel: result.kernel } : {}),
     };
   }
 
@@ -1662,7 +1900,7 @@ export class EvalDO extends DurableObjectBase {
   private async loadLibraryModule(
     specifier: string,
     execution: EvalExecutionContext,
-    opts: { externals?: string[] } = {}
+    opts: { externals?: string[]; endowments?: Readonly<Record<string, unknown>> } = {}
   ): Promise<unknown> {
     const moduleMap = this.isolateModuleMap;
     if (!moduleMap[specifier]) {
@@ -1692,7 +1930,10 @@ export class EvalDO extends DurableObjectBase {
           `  }).apply(undefined, this.receiver);\n` +
           `}`
       );
-      await runConfined.call({ receiver }, createPrivateGuestGlobal());
+      await runConfined.call(
+        { receiver },
+        createPrivateGuestGlobal(globalThis as unknown as Record<string, unknown>, opts.endowments)
+      );
       moduleMap[specifier] = hardenBoundary(module.exports);
     }
     return moduleMap[specifier];
@@ -1794,10 +2035,11 @@ export class EvalDO extends DurableObjectBase {
     // would execute with an empty scope and then OVERWRITE the persisted scope on
     // exit (cold-start data loss). loadCurrent is safe pre-write (ensureSchema
     // created the table in the persistence ctor) and returns empty on a fresh DO.
-    await mgr.hydrate();
+    const recovery = await mgr.hydrate();
     if (generation !== this.scopeGeneration) {
       throw new Error("eval execution was invalidated by a scope reset");
     }
+    this.scopeRecovery = recovery;
     this.scopeManager = mgr;
     return mgr;
   }
@@ -1867,6 +2109,7 @@ export class EvalDO extends DurableObjectBase {
         if (cdpSource && id === cdpSource) {
           return this.loadLibraryModule(cdpSource, execution, {
             externals: Object.keys(this.isolateModuleMap),
+            endowments: { fetch: globalThis.fetch.bind(globalThis) },
           });
         }
         throw new Error(`Module "${id}" is not endowed to this eval runtime`);
@@ -1940,11 +2183,17 @@ export class EvalDO extends DurableObjectBase {
     const sharedMap = this.isolateModuleMap;
     const loaded = (await this.loadLibraryModule(cdpSource, execution, {
       externals: Object.keys(sharedMap),
+      // Authored eval code deliberately receives neither fetch nor WebSocket.
+      // The reviewed CDP provider still needs workerd's native outbound
+      // WebSocket-upgrade transport, so endow fetch only while evaluating that
+      // provider bundle. Exported client functions retain the private lexical
+      // binding without publishing fetch on the guest eval global.
+      endowments: { fetch: globalThis.fetch.bind(globalThis) },
     })) as { CdpConnection?: unknown } | undefined;
     if (typeof loaded?.CdpConnection !== "function") {
       // The default (".") library entry must re-export BOTH `CdpConnection`
       // (for `import {CdpConnection}`) and the browser impl (for
-      // `handle.cdp.lightweightPage()` via loadLightweightClient). A missing
+      // `handle.cdp.page()` via loadCdpClient). A missing
       // CdpConnection means the build resolved the wrong entry.
       throw new Error(
         `EvalDO: ${cdpSource} (providers.cdpClient) did not expose CdpConnection (wrong build entry?)`

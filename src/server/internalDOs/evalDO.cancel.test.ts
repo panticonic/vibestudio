@@ -74,6 +74,125 @@ function seedPendingRun(
 }
 
 describe("EvalDO cancellation + forced recovery", () => {
+  it("records kernel incarnations and emits one exact recovery event after reconstruction", async () => {
+    const first = await createTestDO(EvalDO);
+    setPriv(first.instance, "scopeRecovery", {
+      restored: [],
+      lost: [],
+    });
+    const firstStatus = priv<
+      () => {
+        incarnationId: string;
+        event?: { kind: string };
+      }
+    >(first.instance, "kernelStatusForRun").call(first.instance);
+    expect(firstStatus.event?.kind).toBe("started");
+
+    const second = await createTestDO(EvalDO, undefined, { db: first.db });
+    setPriv(second.instance, "scopeRecovery", {
+      restored: ["panelId"],
+      lost: ["panelHandle"],
+    });
+    const restarted = priv<
+      () => {
+        incarnationId: string;
+        event?: {
+          kind: string;
+          recovery: { status: string; restored?: string[]; lost?: string[] };
+        };
+      }
+    >(second.instance, "kernelStatusForRun").call(second.instance);
+
+    expect(restarted.incarnationId).not.toBe(firstStatus.incarnationId);
+    expect(restarted.event).toEqual({
+      kind: "restarted",
+      recovery: {
+        status: "complete",
+        restored: ["panelId"],
+        lost: ["panelHandle"],
+      },
+    });
+    expect(
+      priv<() => { event?: unknown }>(second.instance, "kernelStatusForRun").call(second.instance)
+    ).not.toHaveProperty("event");
+  });
+
+  it("holds one notebook kernel across cells until its refreshed idle lease expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const { instance } = await createTestDO(EvalDO);
+      const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
+      Object.defineProperty(instance, "rpc", {
+        value: { call: lifecycleCall },
+        configurable: true,
+      });
+      const first = instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 1_000 });
+      await instance.attachKernelLeaseHolder("kernel-1");
+      const held = instance.holdKernelLease("kernel-1");
+
+      await vi.advanceTimersByTimeAsync(750);
+      const refreshed = instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 1_000 });
+      expect(refreshed.expiresAt).toBeGreaterThan(first.expiresAt);
+
+      await vi.advanceTimersByTimeAsync(750);
+      let settled = false;
+      void held.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(held).resolves.toEqual({ leaseId: "kernel-1", reason: "expired" });
+      expect(lifecycleCall).toHaveBeenNthCalledWith(
+        1,
+        "main",
+        "workspace-state.lifecycleLeaseUpsert",
+        [
+          expect.objectContaining({
+            detail: {
+              kind: "eval-kernel",
+              leaseId: "kernel-1",
+            },
+          }),
+        ]
+      );
+      expect(lifecycleCall).toHaveBeenNthCalledWith(
+        2,
+        "main",
+        "workspace-state.lifecycleLeaseClear",
+        [expect.any(Object)]
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases the inter-cell kernel hold during planned lifecycle shutdown", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
+    Object.defineProperty(instance, "rpc", {
+      value: { call: lifecycleCall },
+      configurable: true,
+    });
+    instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 60_000 });
+    await instance.attachKernelLeaseHolder("kernel-1");
+    const held = instance.holdKernelLease("kernel-1");
+
+    await expect(
+      instance.releaseForLifecycle({
+        epoch: "e1",
+        mode: "suspend",
+        reason: "test",
+        deadlineMs: 1_000,
+      })
+    ).resolves.toEqual({ status: "ready" });
+    await expect(held).resolves.toEqual({ leaseId: "kernel-1", reason: "released" });
+    expect(lifecycleCall).toHaveBeenLastCalledWith("main", "workspace-state.lifecycleLeaseClear", [
+      expect.any(Object),
+    ]);
+  });
+
   it("runs startRun in the DO lifetime and delivers its terminal result directly to its agent", async () => {
     const { instance } = await createTestDO(EvalDO);
     const call = vi.fn(() => Promise.resolve(undefined));

@@ -2453,6 +2453,88 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
+      "id": "direct:src/server/internalDOs/evalDO.ts:acquireKernelLease",
+      "rpcPlane": "workspace-do",
+      "owner": "src/server/internalDOs/evalDO.ts",
+      "source": "product/eval",
+      "method": "acquireKernelLease",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "src/server/internalDOs/evalDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "capability": "runtime.code-execution.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:acquireKernelLease)",
+      "r3b": {
+        "review": "host-only-eval-kernel-residency-refresh",
+        "change": "Adds a host-only, gated code-execution authority that creates or refreshes the exact EvalDO incarnation's bounded idle residency lease. The receiver validates the lease identity and duration, and no user or code principal may invoke it directly."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
+      "id": "direct:src/server/internalDOs/evalDO.ts:attachKernelLeaseHolder",
+      "rpcPlane": "workspace-do",
+      "owner": "src/server/internalDOs/evalDO.ts",
+      "source": "product/eval",
+      "method": "attachKernelLeaseHolder",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "src/server/internalDOs/evalDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "capability": "runtime.code-execution.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:attachKernelLeaseHolder)",
+      "r3b": {
+        "review": "host-only-eval-kernel-holder-claim",
+        "change": "Adds a host-only, gated code-execution authority that atomically claims the single held-request slot for an already-active exact kernel lease. It cannot create, widen, or extend a lease."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
       "id": "direct:src/server/internalDOs/evalDO.ts:cancel",
       "rpcPlane": "workspace-do",
       "owner": "src/server/internalDOs/evalDO.ts",
@@ -2654,6 +2736,47 @@
       "r3b": {
         "review": "unchanged-parity",
         "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
+      "id": "direct:src/server/internalDOs/evalDO.ts:holdKernelLease",
+      "rpcPlane": "workspace-do",
+      "owner": "src/server/internalDOs/evalDO.ts",
+      "source": "product/eval",
+      "method": "holdKernelLease",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "src/server/internalDOs/evalDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "capability": "runtime.code-execution.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:holdKernelLease)",
+      "r3b": {
+        "review": "host-only-bounded-eval-kernel-hold",
+        "change": "Adds a host-only, gated code-execution authority whose request remains held only for the exact attached lease and settles on expiry, release, or replacement. It exposes no scope data and cannot outlive the receiver-owned lease deadline."
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },

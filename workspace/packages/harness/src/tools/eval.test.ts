@@ -23,6 +23,61 @@ describe("formatEvalResult (shared by the eval tool's execute + the agent's defe
     expect(tool.description).toContain("before guessing an API or return shape");
   });
 
+  it("documents the warm notebook contract and makes a cold restart impossible to miss", () => {
+    const tool = createEvalTool(async () => ({ success: true, console: "" }) as never);
+    expect(tool.description).toContain("retained for 30 minutes");
+    expect(tool.description).toContain("objects with methods");
+    expect(tool.description).toContain("[kernel] Restarted");
+
+    const text = textOf(
+      formatEvalResult({
+        success: true,
+        console: "",
+        scopeKeys: ["panelId"],
+        kernel: {
+          incarnationId: "kernel-2",
+          startedAt: 2,
+          idleExpiresAt: 3,
+          event: {
+            kind: "restarted",
+            recovery: {
+              status: "complete",
+              restored: ["panelId"],
+              lost: ["panelHandle"],
+            },
+          },
+        },
+      })
+    );
+
+    expect(text).toContain("[kernel] Restarted");
+    expect(text).toContain("Durable scope restored: panelId");
+    expect(text).toContain("Live-only scope lost: panelHandle");
+    expect(text).toContain("Reacquire lost handles from stable IDs");
+  });
+
+  it("reports restart recovery as unavailable when hydration itself fails", () => {
+    const text = textOf(
+      formatEvalResult({
+        success: false,
+        console: "",
+        error: "scope backend unavailable",
+        kernel: {
+          incarnationId: "kernel-2",
+          startedAt: 2,
+          event: {
+            kind: "restarted",
+            recovery: { status: "unavailable" },
+          },
+        },
+      })
+    );
+
+    expect(text).toContain("[kernel] Restarted");
+    expect(text).toContain("recovery could not be assessed");
+    expect(text).toContain("[eval] Error: scope backend unavailable");
+  });
+
   it("accepts only a positive integer timeout and forwards the explicit deadline", async () => {
     const calls: unknown[][] = [];
     const tool = createEvalTool(async (_method, args) => {

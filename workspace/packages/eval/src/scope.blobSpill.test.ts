@@ -35,7 +35,7 @@ function memPersistence() {
           id: row.id,
           createdAt: row.createdAt,
           keys: row.serializedKeys,
-          partial: row.partialKeys,
+          volatile: row.volatileKeys,
         }));
     },
   };
@@ -66,6 +66,76 @@ const set = (m: ScopeManager, k: string, v: unknown) => {
 const get = (m: ScopeManager, k: string) => (m.current as Record<string, unknown>)[k];
 
 describe("ScopeManager — blob-spilled large values", () => {
+  it("keeps live objects across cells and uses serialization only for cold recovery", async () => {
+    class LivePage {
+      readonly connectionId = crypto.randomUUID();
+      title(): string {
+        return "still connected";
+      }
+    }
+
+    const persistence = memPersistence();
+    const warm = new ScopeManager({
+      channelId: "notebook",
+      panelId: "eval",
+      persistence,
+    });
+    const page = new LivePage();
+
+    warm.enterEval();
+    set(warm, "page", page);
+    set(warm, "panelId", "panel:one");
+    await warm.exitEval();
+
+    warm.enterEval();
+    expect(get(warm, "page")).toBe(page);
+    expect((get(warm, "page") as LivePage).title()).toBe("still connected");
+    await warm.exitEval();
+
+    const cold = new ScopeManager({
+      channelId: "notebook",
+      panelId: "eval",
+      persistence,
+    });
+    const hydration = await cold.hydrate();
+
+    expect(get(cold, "panelId")).toBe("panel:one");
+    expect("page" in cold.current).toBe(false);
+    expect(hydration.restored).toContain("panelId");
+    expect(hydration.lost).toContain("page");
+  });
+
+  it("never cold-hydrates a plain live handle as a methodless data projection", async () => {
+    const persistence = memPersistence();
+    const warm = new ScopeManager({
+      channelId: "notebook",
+      panelId: "eval",
+      persistence,
+    });
+    const handle = {
+      id: "panel:one",
+      cdp: { page: async () => ({ title: () => "live" }) },
+      observe: async () => ({ phase: "ready" }),
+    };
+
+    set(warm, "handle", handle);
+    set(warm, "panelId", handle.id);
+    await warm.api.save();
+    expect(get(warm, "handle")).toBe(handle);
+    expect(typeof (get(warm, "handle") as typeof handle).cdp.page).toBe("function");
+
+    const cold = new ScopeManager({
+      channelId: "notebook",
+      panelId: "eval",
+      persistence,
+    });
+    const hydration = await cold.hydrate();
+
+    expect("handle" in cold.current).toBe(false);
+    expect(get(cold, "panelId")).toBe("panel:one");
+    expect(hydration.lost).toContain("handle");
+  });
+
   it("persists + hydrates a large value losslessly via the blob store", async () => {
     const p = memPersistence();
     const big = "x".repeat(512 * 1024);
@@ -137,8 +207,6 @@ describe("ScopeManager — blob-spilled large values", () => {
     await m.api.save();
 
     expect(p.storedBlobs.size).toBe(1); // same content -> one blob
-    expect(new Set([...p.storedRows.values()][0]!.blobRefs)).toEqual(
-      new Set(p.storedBlobs.keys())
-    );
+    expect(new Set([...p.storedRows.values()][0]!.blobRefs)).toEqual(new Set(p.storedBlobs.keys()));
   });
 });

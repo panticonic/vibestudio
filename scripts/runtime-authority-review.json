@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:33c51f4e7297c6728eb992288a8c4429062b5e6f99b299987445be92a282906e",
+  "censusDigest": "sha256:a60a32088e31b2253b4ce569cd688d33def0cf349153eec972cd75b7673a8aab",
   "decisions": {
     "host:permissions.safetyStatus": {
       "review": "bounded-live-authority-safety-read",
@@ -45,6 +45,18 @@
     "direct:workspace/workers/pubsub-channel/channel-do.ts:initializeLockedChannel": {
       "review": "host-locked-membership-initialization",
       "change": "Adds host-only atomic initialization of an immutable exact-participant channel boundary; user and code callers cannot create, replace, or widen the locked membership policy."
+    },
+    "direct:src/server/internalDOs/evalDO.ts:acquireKernelLease": {
+      "review": "host-only-eval-kernel-residency-refresh",
+      "change": "Adds a host-only, gated code-execution authority that creates or refreshes the exact EvalDO incarnation's bounded idle residency lease. The receiver validates the lease identity and duration, and no user or code principal may invoke it directly."
+    },
+    "direct:src/server/internalDOs/evalDO.ts:attachKernelLeaseHolder": {
+      "review": "host-only-eval-kernel-holder-claim",
+      "change": "Adds a host-only, gated code-execution authority that atomically claims the single held-request slot for an already-active exact kernel lease. It cannot create, widen, or extend a lease."
+    },
+    "direct:src/server/internalDOs/evalDO.ts:holdKernelLease": {
+      "review": "host-only-bounded-eval-kernel-hold",
+      "change": "Adds a host-only, gated code-execution authority whose request remains held only for the exact attached lease and settles on expiry, release, or replacement. It exposes no scope data and cannot outlive the receiver-owned lease deadline."
     }
   }
 }

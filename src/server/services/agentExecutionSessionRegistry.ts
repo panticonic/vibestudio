@@ -1,6 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { AgentExecutionSessionFact, AgentExecutionTestPolicySpec } from "@vibestudio/rpc";
 
+type AdmissionInput = Omit<
+  AgentExecutionSessionFact,
+  "v" | "authoritySessionId" | "authoritySessionVersion" | "issuedAt" | "expiresAt" | "nonce"
+> & { expiresAt?: number };
+
+interface AdmissionWaiter {
+  input: AdmissionInput;
+  resolve: (fact: AgentExecutionSessionFact) => void;
+  reject: (error: Error) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+}
+
 /**
  * Live host admission for evaluated execution. Facts intentionally live only
  * in the host process: a restart invalidates every run instead of pretending
@@ -13,6 +26,7 @@ export class AgentExecutionSessionRegistry {
     NonNullable<AgentExecutionSessionFact["testPolicy"]>
   >();
   private readonly orchestratorRuns = new Map<string, { runtimeId: string; runId: string }>();
+  private readonly admissionWaiters = new Map<string, AdmissionWaiter[]>();
 
   createTestPolicy(runId: string): NonNullable<AgentExecutionSessionFact["testPolicy"]> {
     if (!runId.startsWith("system-test-runner:")) {
@@ -107,12 +121,7 @@ export class AgentExecutionSessionRegistry {
     return this.testPoliciesByContext.get(contextId) ?? null;
   }
 
-  admit(
-    input: Omit<
-      AgentExecutionSessionFact,
-      "v" | "authoritySessionId" | "authoritySessionVersion" | "issuedAt" | "expiresAt" | "nonce"
-    > & { expiresAt?: number }
-  ): AgentExecutionSessionFact {
+  admit(input: AdmissionInput): AgentExecutionSessionFact {
     const issuedAt = Date.now();
     const active = this.resolve(input.eval.runtimeId, issuedAt);
     if (active) {
@@ -157,11 +166,54 @@ export class AgentExecutionSessionRegistry {
     return fact;
   }
 
+  /**
+   * Acquire the one live admission for an EvalDO in FIFO order.
+   *
+   * EvalDO deliberately serializes runs because they share one persistent
+   * scope. Admission mirrors that existing execution queue instead of rejecting
+   * concurrent callers before they reach it. There is no invented wait
+   * deadline: the inbound RPC's cancellation signal owns abandonment.
+   */
+  admitWhenAvailable(
+    input: AdmissionInput,
+    signal?: AbortSignal
+  ): Promise<AgentExecutionSessionFact> {
+    const runtimeId = input.eval.runtimeId;
+    const queued = this.admissionWaiters.get(runtimeId);
+    const active = this.resolve(runtimeId);
+    if ((!queued || queued.length === 0) && !active) {
+      return Promise.resolve(this.admit(input));
+    }
+    if (active?.eval.runId === input.eval.runId) {
+      return Promise.resolve(this.admit(input));
+    }
+    if (signal?.aborted) return Promise.reject(admissionAbortError(runtimeId));
+
+    return new Promise<AgentExecutionSessionFact>((resolve, reject) => {
+      const waiter: AdmissionWaiter = { input, resolve, reject, ...(signal ? { signal } : {}) };
+      if (signal) {
+        waiter.onAbort = () => {
+          const waiters = this.admissionWaiters.get(runtimeId);
+          const index = waiters?.indexOf(waiter) ?? -1;
+          if (index >= 0) waiters!.splice(index, 1);
+          if (waiters?.length === 0) this.admissionWaiters.delete(runtimeId);
+          reject(admissionAbortError(runtimeId));
+        };
+        signal.addEventListener("abort", waiter.onAbort, { once: true });
+      }
+      const waiters = queued ?? [];
+      waiters.push(waiter);
+      this.admissionWaiters.set(runtimeId, waiters);
+      this.drainAdmissionWaiters(runtimeId);
+    });
+  }
+
   resolve(runtimeId: string, now = Date.now()): AgentExecutionSessionFact | null {
     const fact = this.byRuntime.get(runtimeId);
     if (!fact) return null;
     if (fact.expiresAt <= now) {
       this.remove(fact);
+      this.drainAdmissionWaiters(runtimeId);
       return null;
     }
     if (fact.mode === "test" && fact.testPolicy) {
@@ -180,6 +232,7 @@ export class AgentExecutionSessionRegistry {
     const fact = this.byRuntime.get(runtimeId);
     if (!fact || (runId !== undefined && fact.eval.runId !== runId)) return false;
     this.remove(fact);
+    this.drainAdmissionWaiters(runtimeId);
     return true;
   }
 
@@ -187,6 +240,13 @@ export class AgentExecutionSessionRegistry {
     this.byRuntime.clear();
     this.testPoliciesByContext.clear();
     this.orchestratorRuns.clear();
+    for (const [runtimeId, waiters] of this.admissionWaiters) {
+      for (const waiter of waiters) {
+        this.detachAdmissionWaiter(waiter);
+        waiter.reject(new Error(`Admission registry cleared while waiting for ${runtimeId}`));
+      }
+    }
+    this.admissionWaiters.clear();
   }
 
   private remove(fact: AgentExecutionSessionFact): void {
@@ -206,6 +266,7 @@ export class AgentExecutionSessionRegistry {
 
   private revokeOrchestrator(policyId: string): void {
     this.orchestratorRuns.delete(policyId);
+    const removedRuntimeIds: string[] = [];
     for (const [runtimeId, fact] of this.byRuntime) {
       if (
         fact.mode === "test" &&
@@ -213,6 +274,7 @@ export class AgentExecutionSessionRegistry {
         orchestratorPolicyId(fact.testPolicy) === policyId
       ) {
         this.byRuntime.delete(runtimeId);
+        removedRuntimeIds.push(runtimeId);
       }
     }
     for (const [contextId, contextPolicy] of this.testPoliciesByContext) {
@@ -223,10 +285,42 @@ export class AgentExecutionSessionRegistry {
         this.testPoliciesByContext.delete(contextId);
       }
     }
+    for (const runtimeId of removedRuntimeIds) this.drainAdmissionWaiters(runtimeId);
+  }
+
+  private drainAdmissionWaiters(runtimeId: string): void {
+    if (this.byRuntime.has(runtimeId)) return;
+    const waiters = this.admissionWaiters.get(runtimeId);
+    if (!waiters) return;
+    for (;;) {
+      const waiter = waiters.shift();
+      if (!waiter) {
+        this.admissionWaiters.delete(runtimeId);
+        return;
+      }
+      this.detachAdmissionWaiter(waiter);
+      if (waiter.signal?.aborted) {
+        waiter.reject(admissionAbortError(runtimeId));
+        continue;
+      }
+      try {
+        const fact = this.admit(waiter.input);
+        if (waiters.length === 0) this.admissionWaiters.delete(runtimeId);
+        waiter.resolve(fact);
+      } catch (error) {
+        waiter.reject(error instanceof Error ? error : new Error(String(error)));
+        continue;
+      }
+      return;
+    }
+  }
+
+  private detachAdmissionWaiter(waiter: AdmissionWaiter): void {
+    if (waiter.signal && waiter.onAbort) {
+      waiter.signal.removeEventListener("abort", waiter.onAbort);
+    }
   }
 }
-
-type AdmissionInput = Parameters<AgentExecutionSessionRegistry["admit"]>[0];
 
 function sameAdmission(fact: AgentExecutionSessionFact, input: AdmissionInput): boolean {
   return (
@@ -242,6 +336,12 @@ function sameAdmission(fact: AgentExecutionSessionFact, input: AdmissionInput): 
     JSON.stringify(fact.mission ?? null) === JSON.stringify(input.mission ?? null) &&
     JSON.stringify(fact.testPolicy ?? null) === JSON.stringify(input.testPolicy ?? null)
   );
+}
+
+function admissionAbortError(runtimeId: string): Error {
+  const error = new Error(`Admission wait cancelled for ${runtimeId}`);
+  error.name = "AbortError";
+  return error;
 }
 
 function orchestratorPolicyId(

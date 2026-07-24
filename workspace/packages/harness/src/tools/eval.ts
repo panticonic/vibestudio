@@ -96,6 +96,17 @@ export interface EvalRunResult {
   failureCode?: string;
   errorData?: unknown;
   scopeKeys?: string[];
+  kernel?: {
+    incarnationId: string;
+    startedAt: number;
+    idleExpiresAt?: number;
+    event?: {
+      kind: "started" | "restarted";
+      recovery:
+        | { status: "complete"; restored: string[]; lost: string[] }
+        | { status: "unavailable" };
+    };
+  };
 }
 
 export interface NormalizedEvalToolSource {
@@ -151,6 +162,24 @@ export function normalizeEvalToolSource(params: {
  */
 export function formatEvalResult(result: EvalRunResult): AgentToolResult<EvalRunResult> {
   const parts: string[] = [];
+  const kernelEvent = result.kernel?.event;
+  if (kernelEvent?.kind === "restarted") {
+    if (kernelEvent.recovery.status === "complete") {
+      const restored = kernelEvent.recovery.restored;
+      const lost = kernelEvent.recovery.lost;
+      parts.push(
+        "[kernel] Restarted: the prior live notebook heap and module state no longer exist. " +
+          `Durable scope restored: ${restored.length ? restored.join(", ") : "(none)"}. ` +
+          `Live-only scope lost: ${lost.length ? lost.join(", ") : "(none)"}.` +
+          (lost.length ? " Reacquire lost handles from stable IDs before continuing." : "")
+      );
+    } else {
+      parts.push(
+        "[kernel] Restarted: the prior live notebook heap and module state no longer exist. " +
+          "Durable scope recovery could not be assessed because this run failed before hydration."
+      );
+    }
+  }
   if (!result.success) parts.push(`[eval] Error: ${result.error ?? "unknown error"}`);
   if (!result.success && result.errorData !== undefined) {
     parts.push(
@@ -187,7 +216,7 @@ export function createEvalTool(
     name: "eval",
     label: "eval",
     description:
-      'Execute TypeScript/JS in your persistent sandbox (a per-agent EvalDO, not the visible panel). Calls have no implicit wall deadline; pass a positive integer timeoutMs when work may stall or must finish within a known bound. Split intentionally bounded workflows when useful and persist intermediate state in `scope` or `db`. REPL scope persists across calls via `scope`; a synchronous in-DO SQLite `db` is available. Set reset:true to clear scope/db atomically before this call; never call eval.reset from inside the running eval. The live runtime is self-describing: call `await help()` to list bindings or `await help("workers")` (and the analogous binding name) before guessing an API or return shape. Call workspace services via `rpc`/`services`; `chat.channelId` is only the channel where this agent is responding; for visible panel perspective use `parent`/`getParent()` and `panelTree` plus target panel stateArgs. `return` sends a bounded value back; console output is captured. Very large console/return payloads are windowed with recovery pointers to `scope.$lastConsole` / `scope.$lastReturn`, so prefer compact summaries and store large artifacts in scope/blobstore.',
+      'Execute TypeScript/JS in your persistent notebook sandbox (a per-agent EvalDO, not the visible panel). The live heap—including objects with methods, module singletons, and client handles—is retained for 30 minutes after the latest cell. Calls have no implicit wall deadline; pass a positive integer timeoutMs when work may stall or must finish within a known bound. Split intentionally bounded workflows when useful and keep live working objects in `scope`; store stable IDs and exact serializable data there for recovery, or durable records in `db`. An unavoidable process restart is reported explicitly as `[kernel] Restarted` with exact restored/lost scope keys—reacquire lost handles from stable IDs before continuing. Set reset:true to clear scope/db atomically before this call; never call eval.reset from inside the running eval. The live runtime is self-describing: call `await help()` to list bindings or `await help("workers")` (and the analogous binding name) before guessing an API or return shape. Call workspace services via `rpc`/`services`; `chat.channelId` is only the channel where this agent is responding; for visible panel perspective use `parent`/`getParent()` and `panelTree` plus target panel stateArgs. `return` sends a bounded value back; console output is captured. Very large console/return payloads are windowed with recovery pointers to `scope.$lastConsole` / `scope.$lastReturn`, so prefer compact summaries and store large artifacts in scope/blobstore.',
     parameters: evalSchema,
     execute: async (_toolCallId, params): Promise<AgentToolResult<EvalRunResult>> => {
       // Some model transports materialize an optional string as "". Treat an

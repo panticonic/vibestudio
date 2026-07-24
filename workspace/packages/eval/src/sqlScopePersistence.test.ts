@@ -9,7 +9,7 @@ interface FakeScopeRow {
   data: string;
   serialized_keys: string;
   dropped_paths: string;
-  partial_keys: string;
+  volatile_keys: string;
   blob_refs: string;
   created_at: number;
 }
@@ -34,7 +34,7 @@ class FakeSql {
         data,
         serializedKeys,
         droppedPaths,
-        partialKeys,
+        volatileKeys,
         blobRefs,
         createdAt,
       ] = bindings as [string, string, string, string, string, string, string, string, number];
@@ -45,7 +45,7 @@ class FakeSql {
         data,
         serialized_keys: serializedKeys,
         dropped_paths: droppedPaths,
-        partial_keys: partialKeys,
+        volatile_keys: volatileKeys,
         blob_refs: blobRefs,
         created_at: createdAt,
       });
@@ -66,7 +66,7 @@ class FakeSql {
       return result([this.rows.get(String(bindings[0]))].filter(Boolean));
     }
 
-    if (q.startsWith("SELECT id, serialized_keys, partial_keys, created_at FROM repl_scopes")) {
+    if (q.startsWith("SELECT id, serialized_keys, volatile_keys, created_at FROM repl_scopes")) {
       const [channelId] = bindings as [string];
       return result(
         [...this.rows.values()]
@@ -75,7 +75,7 @@ class FakeSql {
           .map((row) => ({
             id: row.id,
             serialized_keys: row.serialized_keys,
-            partial_keys: row.partial_keys,
+            volatile_keys: row.volatile_keys,
             created_at: row.created_at,
           }))
       );
