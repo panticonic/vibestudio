@@ -165,6 +165,11 @@ describe("reportStage", () => {
       messages,
       invocations: [{ id: "call-1", name: "read", status: "complete" }],
       debugEvents: [],
+      cleanup: {
+        phase: "complete" as const,
+        phaseStartedAt: 10,
+        completedAt: 10,
+      },
       cleanupErrors: [],
       participants: {},
       localMethodNames: [],

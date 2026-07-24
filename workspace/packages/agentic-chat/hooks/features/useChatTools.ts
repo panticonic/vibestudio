@@ -8,21 +8,24 @@
 
 import { useCallback, useMemo } from "react";
 import type { MethodDefinition } from "@workspace/pubsub";
-import {
-  useToolApproval,
-} from "@workspace/tool-ui";
+import { useToolApproval } from "@workspace/tool-ui";
 import type { ToolApprovalProps } from "@workspace/tool-ui";
 import type { SandboxOptions, SandboxResult } from "@workspace/eval";
+import type { ScopeManager } from "@workspace/eval";
 import type { PubSubClient } from "@workspace/pubsub";
-import type { ToolProvider, ChatSandboxValue } from "../../types";
+import type { ToolProvider, ChatSandboxValue, SandboxConfig } from "../../types";
 import type { ChatParticipantMetadata } from "@workspace/agentic-core";
+import { buildClientEvalMethod } from "./clientEval";
 
 interface UseChatToolsOptions {
   clientRef: React.RefObject<PubSubClient<ChatParticipantMetadata> | null>;
   tools?: ToolProvider;
   contextId: string;
   executeSandbox: (code: string, options?: SandboxOptions) => Promise<SandboxResult>;
+  sandbox: SandboxConfig;
+  loadSourceFile: (path: string) => Promise<string>;
   chat: ChatSandboxValue;
+  scopeManager: ScopeManager;
 }
 
 export interface ChatToolsState {
@@ -37,24 +40,45 @@ export function useChatTools({
   tools,
   contextId,
   executeSandbox,
+  sandbox,
+  loadSourceFile,
   chat,
+  scopeManager,
 }: UseChatToolsOptions): ChatToolsState {
   const approval = useToolApproval(clientRef.current as Parameters<typeof useToolApproval>[0]);
 
   const buildToolMethods = useCallback((): Record<string, MethodDefinition> => {
-    if (!tools) return {};
-    return tools({
-      clientRef,
-      contextId,
-      executeSandbox,
-      chat,
-    });
-  }, [tools, clientRef, contextId, executeSandbox, chat]);
+    const provided =
+      tools?.({
+        clientRef,
+        contextId,
+        executeSandbox,
+        chat,
+        scope: scopeManager.current,
+        scopes: scopeManager.api,
+      }) ?? {};
+    if ("client_eval" in provided) {
+      throw new Error("client_eval is reserved by AgenticChat");
+    }
+    return {
+      ...provided,
+      client_eval: buildClientEvalMethod({
+        sandbox,
+        executeSandbox,
+        loadSourceFile,
+        getChat: () => chat,
+        scopeManager,
+      }),
+    };
+  }, [tools, clientRef, contextId, executeSandbox, sandbox, loadSourceFile, chat, scopeManager]);
 
-  const toolApprovalValue: ToolApprovalProps = useMemo(() => ({
-    settings: approval.settings,
-    onSetFloor: approval.setGlobalFloor,
-  }), [approval.settings, approval.setGlobalFloor]);
+  const toolApprovalValue: ToolApprovalProps = useMemo(
+    () => ({
+      settings: approval.settings,
+      onSetFloor: approval.setGlobalFloor,
+    }),
+    [approval.settings, approval.setGlobalFloor]
+  );
 
   return {
     buildToolMethods,

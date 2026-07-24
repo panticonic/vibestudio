@@ -92,6 +92,8 @@
       "@workspace-skills/google-workspace": ["workspace/skills/google-workspace/index.ts"],
       "@workspace-skills/gmail": ["workspace/skills/gmail/index.ts"],
       "@workspace-skills/github": ["workspace/skills/github/index.ts"],
+      "@workspace-skills/onboarding": ["workspace/skills/onboarding/index.ts"],
+      "@workspace-skills/web-research": ["workspace/skills/web-research/index.ts"],
       "@workspace-skills/system-testing": ["workspace/skills/system-testing/index.ts"],
       "@workspace-workers/agent-worker": ["workspace/workers/agent-worker/index.ts"],
       "@workspace-workers/email-sync": ["workspace/workers/email-sync/index.ts"],

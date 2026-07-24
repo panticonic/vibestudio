@@ -712,7 +712,11 @@ export class HeadlessSession {
 
   async send(
     text: string,
-    options?: { attachments?: AttachmentInput[]; idempotencyKey?: string }
+    options?: {
+      attachments?: AttachmentInput[];
+      idempotencyKey?: string;
+      metadata?: Record<string, unknown>;
+    }
   ): Promise<string> {
     if (!this._client) throw new Error("Not connected");
     const result = await this._client.send(text, options);

@@ -38,6 +38,7 @@ export type EventName =
   | "panel-tree-updated"
   | "workspace-presence-changed"
   | "open-workspace-switcher"
+  | "open-connection-settings"
   | "open-command-palette"
   | "focus-approval-card"
   | "toggle-address-bar"
@@ -171,6 +172,7 @@ export interface EventPayloads {
   "panel-title-updated": { panelId: string; title: string; explicit?: boolean };
   "panel:snapshot": PanelRecoverySnapshot;
   "open-workspace-switcher": undefined;
+  "open-connection-settings": undefined;
   "open-command-palette": undefined;
   "focus-approval-card": undefined;
   "toggle-address-bar": undefined;
@@ -350,6 +352,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "panel-title-updated",
   "panel:snapshot",
   "open-workspace-switcher",
+  "open-connection-settings",
   "open-command-palette",
   "focus-approval-card",
   "toggle-address-bar",

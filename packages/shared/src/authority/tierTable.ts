@@ -159,6 +159,12 @@ export const METHOD_TIERS = {
     session: "family",
     rationale: "G1: external-system effect or listening surface; §2 default {code, session} family",
   },
+  "app.openShellSurface": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Open bias: opens bounded first-party shell chrome without changing the managed state; §2 default {code, session} family",
+  },
   "app.openWorkspacePath": {
     tier: "open",
     session: "family",
@@ -1288,6 +1294,12 @@ export const METHOD_TIERS = {
     tier: "open",
     session: "family",
     rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+  },
+  "onboardingStatus.read": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Open bias: returns only the reviewed redacted topology projection; §2 default {code, session} family",
   },
   "notification.signalUserInbox": {
     tier: "open",

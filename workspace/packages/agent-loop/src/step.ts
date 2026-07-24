@@ -75,9 +75,34 @@ function isProviderLevelFailureCode(code: unknown): code is ModelFailureInfo["co
   );
 }
 
-function channelToolOwnersFor(roster: AgentLoopConfig["roster"]): Record<string, ParticipantRef> {
+function participantId(ref: ParticipantRef): string {
+  return ref.participantId ?? ref.id;
+}
+
+function latestUserParticipantId(state: AgentState): string | undefined {
+  for (let index = state.entries.length - 1; index >= 0; index -= 1) {
+    const entry = state.entries[index];
+    if (entry?.kind === "user" && entry.senderRef) {
+      return participantId(entry.senderRef);
+    }
+  }
+  return undefined;
+}
+
+function channelToolOwnersFor(
+  roster: AgentLoopConfig["roster"],
+  preferredParticipantId?: string
+): Record<string, ParticipantRef> {
   const owners: Record<string, ParticipantRef> = {};
-  for (const participant of roster.participants) {
+  const preferred = preferredParticipantId
+    ? roster.participants.find(
+        (participant) => participantId(participant.ref) === preferredParticipantId
+      )
+    : undefined;
+  const ordered = preferred
+    ? [preferred, ...roster.participants.filter((participant) => participant !== preferred)]
+    : roster.participants;
+  for (const participant of ordered) {
     for (const method of participant.methods) {
       owners[method.name] ??= participant.ref;
     }
@@ -120,7 +145,7 @@ function modelStartItems(
     ...(config.skillIndexHash ? { skillIndexHash: config.skillIndexHash } : {}),
     ...(config.toolSchemasHash ? { toolSchemasHash: config.toolSchemasHash } : {}),
     activeToolNames: config.activeToolNames,
-    channelToolOwners: channelToolOwnersFor(config.roster),
+    channelToolOwners: channelToolOwnersFor(config.roster, latestUserParticipantId(state)),
     contextThroughSeq: state.lastSeq + itemsBefore,
     attemptId,
     ...(state.openTurn?.metadata ? { turnMetadata: state.openTurn.metadata } : {}),
@@ -638,7 +663,7 @@ function expandToolCalls(
   const attemptId = messageId ? ids.attemptId(messageId) : "";
   const channelToolOwners =
     state.openTurn?.activeModelRequest?.channelToolOwners ??
-    channelToolOwnersFor(state.config.roster);
+    channelToolOwnersFor(state.config.roster, latestUserParticipantId(state));
   let projected = state;
   for (const block of toolCalls) {
     const invocationId = block.id;
@@ -1529,9 +1554,7 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
         payload["triggerEnvelopeId"] ?? details["triggerEnvelopeId"] ?? "unknown"
       );
       const turnTriggerEnvelopeId = String(
-        payload["turnTriggerEnvelopeId"] ??
-          details["turnTriggerEnvelopeId"] ??
-          triggerEnvelopeId
+        payload["turnTriggerEnvelopeId"] ?? details["turnTriggerEnvelopeId"] ?? triggerEnvelopeId
       );
       const reason = String(payload["reason"] ?? details["reason"] ?? "prompt setup failed");
       const turnId =
@@ -1547,8 +1570,7 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
           blocks: [
             {
               type: "diagnostic",
-              content:
-                "Agent prompt setup failed. The input was not sent to a model.",
+              content: "Agent prompt setup failed. The input was not sent to a model.",
               metadata: {
                 code: "prompt_artifact_load_failed",
                 severity: "error",

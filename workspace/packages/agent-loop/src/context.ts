@@ -28,7 +28,11 @@ export function buildModelContext(
 }
 
 /** Speaker label for an attributed (non-self) message — handle/name, else the id. */
-function participantLabel(ref: { displayName?: string; metadata?: Record<string, unknown>; id: string }): string {
+function participantLabel(ref: {
+  displayName?: string;
+  metadata?: Record<string, unknown>;
+  id: string;
+}): string {
   if (typeof ref.displayName === "string" && ref.displayName) return ref.displayName;
   const handle = ref.metadata?.["handle"];
   if (typeof handle === "string" && handle) return handle;
@@ -52,8 +56,18 @@ function assistantBlocksToText(blocks: unknown[]): string {
 
 function modelMessageFromEntry(entry: SessionEntry, selfId?: string): ModelMessage {
   switch (entry.kind) {
-    case "user":
-      return { role: "user", content: entry.content };
+    case "user": {
+      const interaction = entry.metadata?.interaction;
+      return {
+        role: "user",
+        content: interaction
+          ? {
+              message: entry.content,
+              interaction,
+            }
+          : entry.content,
+      };
+    }
     case "assistant": {
       // Another participant's message (e.g. a different agent in the channel) is presented
       // as an attributed `user` message, NOT as this agent's own prior `assistant` turn —

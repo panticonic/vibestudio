@@ -4552,6 +4552,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:app.openShellSurface",
+    rpcPlane: "host-service",
+    capability: "service:app.openShellSurface",
+    authorityPrincipals: ["user", "host", "code"],
+    owner: "app",
+    method: "openShellSurface",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:app.openShellSurface",
+    },
+  },
+  {
     id: "host:app.openWorkspacePath",
     rpcPlane: "host-service",
     capability: "service:app.openWorkspacePath",
@@ -7424,6 +7437,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:notification.signalUserInbox",
+    },
+  },
+  {
+    id: "host:onboardingStatus.read",
+    rpcPlane: "host-service",
+    capability: "service:onboardingStatus.read",
+    authorityPrincipals: ["user", "host", "code"],
+    owner: "onboardingStatus",
+    method: "read",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:onboardingStatus.read",
     },
   },
   {
@@ -12994,6 +13020,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:app.listPendingUpdates",
   "service:app.openDevTools",
   "service:app.openExternal",
+  "service:app.openShellSurface",
   "service:app.openWorkspacePath",
   "service:app.setThemeMode",
   "service:audit.query",
@@ -13175,6 +13202,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:notification.reportAction",
   "service:notification.show",
   "service:notification.signalUserInbox",
+  "service:onboardingStatus.read",
   "service:palette.list",
   "service:palette.register",
   "service:palette.run",

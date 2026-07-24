@@ -13713,6 +13713,47 @@
       "capability": "service:app.openExternal"
     },
     {
+      "id": "host:app.openShellSurface",
+      "rpcPlane": "host-service",
+      "owner": "app",
+      "method": "openShellSurface",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:app.openShellSurface"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:app.openShellSurface),allOf(capability(user,service:app.openShellSurface),workspace-member),allOf(capability(code,service:app.openShellSurface),workspace-member))",
+      "r3b": {
+        "review": "bounded-first-party-shell-navigation",
+        "change": "Adds open navigation to an enumerated first-party shell management surface in the current client; it neither opens an external system nor changes managed state, and the receiver rejects unknown targets."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:app.openShellSurface"
+    },
+    {
       "id": "host:app.openWorkspacePath",
       "rpcPlane": "host-service",
       "owner": "app",
@@ -22678,6 +22719,47 @@
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
       "capability": "service:notification.signalUserInbox"
+    },
+    {
+      "id": "host:onboardingStatus.read",
+      "rpcPlane": "host-service",
+      "owner": "onboardingStatus",
+      "method": "read",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:onboardingStatus.read"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:onboardingStatus.read),allOf(capability(user,service:onboardingStatus.read),workspace-member),allOf(capability(code,service:onboardingStatus.read),workspace-member))",
+      "r3b": {
+        "review": "bounded-owner-status-projection",
+        "change": "Adds a read-only aggregate of existing host-owned onboarding facts for the calling workspace and device; it returns normalized status only, performs no live verification, and exposes no credential secret."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:onboardingStatus.read"
     },
     {
       "id": "host:palette.list",

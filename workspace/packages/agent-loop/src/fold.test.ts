@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { LogEnvelope } from "@workspace/agentic-protocol";
 import { applyEvent } from "./fold.js";
+import { buildModelContext } from "./context.js";
 import {
   initialAgentState,
   type AgentLoopConfig,
@@ -73,6 +74,40 @@ function request(contextThroughSeq: number): ModelRequestDescriptor {
 }
 
 describe("fold: an agent only owns turns it authored", () => {
+  it("carries a stable UI interaction from ingress metadata into model context", () => {
+    const selfId = "agent:self";
+    const interaction = {
+      source: "onboarding-setup-hub",
+      kind: "onboarding-capability",
+      action: "setup",
+      targetId: "connection.github",
+    };
+    const payload = {
+      role: "user",
+      blocks: [{ type: "text", content: "Set up GitHub" }],
+      outcome: "completed",
+      turnTriggerEnvelopeId: "channel-message-1",
+      metadata: { interaction },
+      senderRef: { kind: "user", id: "user:1", participantId: "user:1" },
+    };
+    const state = applyEvent(
+      initialAgentState({ channelId: "c", config, selfId }),
+      envelope(selfId, "message.completed", payload, { messageId: "recv:1" }, 1)
+    );
+
+    expect(state.entries[0]).toMatchObject({
+      kind: "user",
+      metadata: { interaction },
+    });
+    expect(buildModelContext(state)[0]).toEqual({
+      role: "user",
+      content: {
+        message: payload,
+        interaction,
+      },
+    });
+  });
+
   it("rejects descriptor-less model requests instead of replaying pre-materialization events", () => {
     const selfId = "agent:self";
     const turnId = "t:c:trigger:agent:self";

@@ -19,7 +19,7 @@ import type {
 } from "@workspace/pubsub";
 import type { MessageTier } from "@workspace/agentic-protocol";
 import type { RecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
-import type { SandboxOptions, SandboxResult } from "@workspace/eval";
+import type { SandboxOptions, SandboxResult, ScopesApi } from "@workspace/eval";
 import type { ChatMethodResult } from "./invocation-result.js";
 import type { AgentSubscriptionConfig } from "./agent-subscription-config.js";
 import type { DefaultAgentConfig, ModelCatalog } from "@workspace/model-catalog/catalog";
@@ -159,7 +159,11 @@ export interface ChatSandboxValue {
   ) => Promise<unknown>;
   send: (
     content: string,
-    options?: { idempotencyKey?: string; tier?: MessageTier }
+    options?: {
+      idempotencyKey?: string;
+      tier?: MessageTier;
+      metadata?: Record<string, unknown>;
+    }
   ) => Promise<unknown>;
   publishCustomMessage: (
     input: { typeId: string; initialState?: unknown; displayMode?: CustomMessageDisplayMode },
@@ -248,6 +252,9 @@ export interface ToolProviderDeps {
   contextId: string;
   executeSandbox: (code: string, options: SandboxOptions) => Promise<SandboxResult>;
   chat: ChatSandboxValue;
+  /** The inviting panel's durable local scope, shared with client_eval and rendered UI. */
+  scope: Record<string, unknown>;
+  scopes: ScopesApi;
 }
 
 /** Inject tools at connect time */

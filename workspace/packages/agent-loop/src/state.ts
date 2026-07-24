@@ -142,6 +142,17 @@ export interface AgentTurnMetadata {
    *  deferred post-turn queue and promoted (one per turn) after close, instead
    *  of steering the open turn. */
   deliverAfterTurn?: boolean;
+  /**
+   * A machine-stable user-interface selection carried by the same message as
+   * its readable text. The context builder exposes this bounded structure to
+   * the model; delivery controls above remain transport-only.
+   */
+  interaction?: {
+    source: string;
+    kind: string;
+    action: string;
+    targetId: string;
+  };
 }
 
 /** Config fields that are FOLD-OWNED: the reducer derives them from the log
@@ -433,10 +444,7 @@ export function initialAgentState(input: InitialStateInput): AgentState {
 export function derivedTurnStatus(
   state: AgentState
 ): "idle" | "starting" | "running_model" | "waiting_external" | "continuing" {
-  if (
-    state.pendingPrompt ||
-    Object.keys(state.pendingPromptPreparations).length > 0
-  ) {
+  if (state.pendingPrompt || Object.keys(state.pendingPromptPreparations).length > 0) {
     return "starting";
   }
   if (!state.openTurn) return "idle";

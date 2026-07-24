@@ -50,4 +50,36 @@ describe("buildModelContext: multi-agent attribution", () => {
       blocks: [{ type: "text", content: "my own turn" }],
     });
   });
+
+  it("exposes structured UI interaction metadata beside readable message text", () => {
+    const interaction = {
+      source: "onboarding-setup-hub",
+      kind: "onboarding-capability",
+      action: "setup",
+      targetId: "connection.github",
+    };
+    const entries: SessionEntry[] = [
+      {
+        kind: "user",
+        seq: 1,
+        envelopeId: "e1",
+        content: "Set up GitHub",
+        metadata: { interaction },
+      },
+    ];
+    const state: AgentState = {
+      ...initialAgentState({ channelId: "c", config, selfId: "agent:self" }),
+      entries,
+    };
+
+    expect(buildModelContext(state)).toEqual([
+      {
+        role: "user",
+        content: {
+          message: "Set up GitHub",
+          interaction,
+        },
+      },
+    ]);
+  });
 });

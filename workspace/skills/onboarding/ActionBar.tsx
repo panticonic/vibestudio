@@ -1,114 +1,80 @@
-import { Box, Button, Flex, Text } from "@radix-ui/themes";
+import { Button, Flex, Spinner, Text } from "@radix-ui/themes";
+import { ReloadIcon } from "@radix-ui/react-icons";
 import { useState } from "react";
 
-interface OnboardingActionBarProps {
+interface ActionBarProps {
+  props?: {
+    mode?: "preparing" | "resume" | "reopen" | "error";
+    label?: string;
+  };
   chat: {
-    send?: (content: string, options?: Record<string, unknown>) => Promise<unknown>;
-    publish?: (type: string, payload: Record<string, unknown>) => Promise<unknown>;
+    send: (content: string, options?: { metadata?: Record<string, unknown> }) => Promise<unknown>;
   };
 }
 
-const actionGroups = [
-  {
-    title: "Connect services",
-    description: "Let the agent work with accounts, APIs, and models.",
-    actions: [
-      { label: "Google Workspace", message: "Set up Google Workspace provider integration" },
-      { label: "GitHub", message: "Set up GitHub provider integration" },
-      { label: "Slack", message: "Set up Slack provider integration" },
-      { label: "Model/API key", message: "Set up a model or API key provider" },
-      {
-        label: "Agent defaults",
-        message: "I want to change the agent's default model or tune its behavior",
-      },
-      { label: "Custom API", message: "Set up a custom OAuth or API provider" },
-    ],
-  },
-  {
-    title: "Bring in local context",
-    description:
-      "Import browser state when you want cookies, bookmarks, or passwords available locally.",
-    actions: [{ label: "Browser import", message: "Import browser data" }],
-  },
-  {
-    title: "Build or explore",
-    description: "Create your first panel, inspect runtime APIs, or organize workspaces.",
-    actions: [
-      { label: "Build a panel", message: "Help me build a panel" },
-      { label: "Explore runtime", message: "Show me what Vibestudio runtime APIs can do" },
-      { label: "Workspaces", message: "Help me organize Vibestudio workspaces" },
-    ],
-  },
-];
+export default function OnboardingActionBar({ props, chat }: ActionBarProps) {
+  const mode = props?.mode ?? "preparing";
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-export default function OnboardingActionBar({ chat }: OnboardingActionBarProps) {
-  const [pendingLabel, setPendingLabel] = useState<string | null>(null);
-  const [sendError, setSendError] = useState<string | null>(null);
-
-  async function send(label: string, message: string) {
-    setPendingLabel(label);
-    setSendError(null);
+  async function send(action: "resume" | "refresh") {
+    setPending(true);
+    setError(null);
     try {
-      const metadata = { source: "onboarding-action-bar", action: label };
-      if (typeof chat.send === "function") {
-        await chat.send(message, { metadata });
-      } else if (typeof chat.publish === "function") {
-        await chat.publish("message", { content: message, metadata });
-      } else {
-        throw new Error("Action bar chat API does not expose send() or publish()");
-      }
-    } catch (error) {
-      console.error("Onboarding action bar send failed", error);
-      setSendError("Couldn't send that request. Check the connection and try again.");
+      await chat.send(action === "resume" ? "Resume setup" : "Open a fresh setup overview", {
+        metadata: {
+          interaction: {
+            source: "onboarding-setup-hub",
+            kind: "onboarding-overview",
+            action,
+            targetId: "setup-overview",
+          },
+        },
+      });
+    } catch {
+      setError("Setup could not be opened. Try again.");
     } finally {
-      setPendingLabel(null);
+      setPending(false);
     }
   }
 
-  return (
-    <Flex direction="column" gap="2" p="2">
-      <Flex align="baseline" gap="2" wrap="wrap">
-        <Text size="2" weight="bold">
-          Start here
-        </Text>
+  if (mode === "preparing") {
+    return (
+      <Flex align="center" gap="2" px="3" py="2">
+        <Spinner size="1" />
         <Text size="1" color="gray">
-          Pick a path and the onboarding agent will tailor the next step.
+          Preparing setup overview…
         </Text>
       </Flex>
-      {sendError ? (
+    );
+  }
+
+  return (
+    <Flex direction="column" gap="1" px="3" py="2">
+      <Flex align="center" justify="between" gap="2">
+        <Text size="1" color={mode === "error" ? "red" : "gray"}>
+          {props?.label ??
+            (mode === "resume"
+              ? "A setup workflow is ready to resume."
+              : mode === "error"
+                ? "The setup overview needs another try."
+                : "Setup")}
+        </Text>
+        <Button
+          size="1"
+          variant="soft"
+          disabled={pending}
+          onClick={() => void send(mode === "resume" ? "resume" : "refresh")}
+        >
+          <ReloadIcon />
+          {pending ? "Opening…" : mode === "resume" ? "Resume" : "Open setup"}
+        </Button>
+      </Flex>
+      {error ? (
         <Text size="1" color="red" role="alert">
-          {sendError}
+          {error}
         </Text>
       ) : null}
-      <Flex gap="3" wrap="wrap" align="start">
-        {actionGroups.map((group) => (
-          <Box key={group.title} style={{ minWidth: 190, flex: "1 1 220px" }}>
-            <Flex direction="column" gap="1">
-              <Text size="1" weight="bold" color="gray">
-                {group.title}
-              </Text>
-              <Text size="1" color="gray" style={{ lineHeight: 1.25 }}>
-                {group.description}
-              </Text>
-              <Flex gap="1" wrap="wrap" pt="1">
-                {group.actions.map((action) => (
-                  <Button
-                    key={action.label}
-                    size="1"
-                    variant="soft"
-                    type="button"
-                    disabled={pendingLabel !== null}
-                    onClick={() => send(action.label, action.message)}
-                    style={{ flex: "0 0 auto", whiteSpace: "nowrap" }}
-                  >
-                    {pendingLabel === action.label ? "Sending..." : action.label}
-                  </Button>
-                ))}
-              </Flex>
-            </Flex>
-          </Box>
-        ))}
-      </Flex>
     </Flex>
   );
 }

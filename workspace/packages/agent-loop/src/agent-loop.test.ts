@@ -215,8 +215,7 @@ describe("agent-loop core lifecycle", () => {
     expect(
       s.log.find(
         (row) =>
-          row.payloadKind === "message.completed" &&
-          row.envelopeId.includes(":prompt-artifacts:")
+          row.payloadKind === "message.completed" && row.envelopeId.includes(":prompt-artifacts:")
       )
     ).toMatchObject({
       payloadKind: "message.completed",
@@ -251,12 +250,7 @@ describe("agent-loop core lifecycle", () => {
       },
     });
 
-    expect(kinds(s)).toEqual([
-      "message.completed",
-      "turn.opened",
-      "message.failed",
-      "turn.closed",
-    ]);
+    expect(kinds(s)).toEqual(["message.completed", "turn.opened", "message.failed", "turn.closed"]);
     expect(s.log[2]).toMatchObject({
       payload: {
         reason: "prompt resource unavailable",
@@ -386,9 +380,7 @@ describe("agent-loop core lifecycle", () => {
       terminalOutcome: "infrastructure_error",
     });
 
-    const terminal = s.log.find(
-      (row) => row.envelopeId === ids.invocationTerminal("tc-infra")
-    )!;
+    const terminal = s.log.find((row) => row.envelopeId === ids.invocationTerminal("tc-infra"))!;
     expect(terminal).toMatchObject({
       payloadKind: "invocation.failed",
       payload: {
@@ -418,14 +410,14 @@ describe("agent-loop core lifecycle", () => {
       terminalReasonCode: "WorkingChangesPresent",
     });
 
-    expect(
-      s.log.find((row) => row.envelopeId === ids.invocationTerminal("tc-user"))
-    ).toMatchObject({
-      payload: {
-        terminalOutcome: "tool_error",
-        terminalReasonCode: "WorkingChangesPresent",
-      },
-    });
+    expect(s.log.find((row) => row.envelopeId === ids.invocationTerminal("tc-user"))).toMatchObject(
+      {
+        payload: {
+          terminalOutcome: "tool_error",
+          terminalReasonCode: "WorkingChangesPresent",
+        },
+      }
+    );
     expect(s.state.openTurn).not.toBeNull();
     expect(pendingEffectIds(s)).toEqual([ids.modelEffect(ids.messageId(turn1, 1))]);
   });
@@ -1581,9 +1573,7 @@ describe("channel tools", () => {
       stopReason: "completed",
     });
 
-    const started = s.log.find(
-      (row) => row.envelopeId === ids.invocationStart("tc-title")
-    )!;
+    const started = s.log.find((row) => row.envelopeId === ids.invocationStart("tc-title"))!;
     expect(started.payload).toMatchObject({
       transport: {
         kind: "channel",
@@ -1595,6 +1585,37 @@ describe("channel tools", () => {
     expect(derivePendingEffects(s.state)).toEqual([
       expect.objectContaining({ kind: "channel_call", method: "set_title" }),
     ]);
+  });
+
+  it("routes duplicate client tools to the panel that initiated the turn", () => {
+    const s = scenario({
+      roster: {
+        participants: [
+          {
+            participantId: "panel:other",
+            ref: { kind: "panel", id: "panel:other", participantId: "panel:other" },
+            type: "panel",
+            methods: [{ name: "client_eval" }],
+          },
+          {
+            participantId: "panel:user",
+            ref: { kind: "panel", id: "panel:user", participantId: "panel:user" },
+            type: "panel",
+            methods: [{ name: "client_eval" }],
+          },
+        ],
+      },
+    });
+
+    prompt(s);
+
+    expect(s.state.inFlightModelCall?.request.channelToolOwners).toEqual({
+      client_eval: {
+        kind: "panel",
+        id: "panel:user",
+        participantId: "panel:user",
+      },
+    });
   });
 });
 

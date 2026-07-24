@@ -18,6 +18,7 @@ vi.mock("electron", () => ({
 }));
 
 function makeService() {
+  const onOpenShellSurface = vi.fn();
   const appOrchestrator = {
     applyPendingAppUpdate: vi.fn(async () => true),
     listPendingAppUpdates: vi.fn(() => [
@@ -48,11 +49,12 @@ function makeService() {
     getViewManager: () => viewManager as never,
     getAppOrchestrator: () => appOrchestrator as never,
     connectionMode: "local",
+    onOpenShellSurface,
   });
   const dispatcher = createTestServiceDispatcher();
   dispatcher.registerService(service);
   dispatcher.markInitialized();
-  return { service, dispatcher, viewManager, appOrchestrator };
+  return { service, dispatcher, viewManager, appOrchestrator, onOpenShellSurface };
 }
 
 function appCaller() {
@@ -114,5 +116,35 @@ describe("createAppService", () => {
       { appId: "@workspace-apps/shell", url: "https://updates.example/app" },
     ]);
     expect(appOrchestrator.applyPendingAppUpdate).toHaveBeenCalledWith("@workspace-apps/shell");
+  });
+
+  it("opens only typed shell-owned management surfaces for code callers", async () => {
+    const { dispatcher, onOpenShellSurface } = makeService();
+    const codeCtx = { caller: createVerifiedCaller("do:onboarding", "do") };
+
+    await expect(
+      dispatcher.dispatch(codeCtx, "app", "openShellSurface", ["connection-settings"])
+    ).resolves.toBeUndefined();
+    expect(onOpenShellSurface).toHaveBeenCalledWith("connection-settings");
+    await expect(
+      dispatcher.dispatch(codeCtx, "app", "openShellSurface", ["invented"])
+    ).rejects.toThrow();
+  });
+
+  it("does not claim shell navigation succeeded when the host has no navigation owner", async () => {
+    const unavailable = createAppService({
+      panelOrchestrator: {} as never,
+      serverClient: null,
+      getViewManager: () => ({}) as never,
+      connectionMode: "local",
+    });
+
+    await expect(
+      unavailable.handler(
+        { caller: createVerifiedCaller("do:onboarding", "do") },
+        "openShellSurface",
+        ["connection-settings"]
+      )
+    ).rejects.toThrow("navigation is unavailable");
   });
 });

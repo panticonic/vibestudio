@@ -71,6 +71,13 @@ export const appMethods = defineServiceMethods({
     returns: z.void(),
     access: WRITE_ACCESS,
   },
+  openShellSurface: {
+    description:
+      "Open a typed shell-owned management surface without exposing its private state to the caller.",
+    args: z.tuple([z.enum(["connection-settings", "workspace-chooser"])]),
+    returns: z.void(),
+    access: WRITE_ACCESS,
+  },
   clearBuildCache: {
     description:
       "Recompute the build graph and invalidate ready panels so they rebuild on next load. Requires the panel-hosting capability.",

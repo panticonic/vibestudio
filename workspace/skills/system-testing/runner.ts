@@ -1,4 +1,8 @@
-import { HeadlessSession, type SessionSnapshot } from "@workspace/agentic-session";
+import {
+  HeadlessSession,
+  type HeadlessWithAgentConfig,
+  type SessionSnapshot,
+} from "@workspace/agentic-session";
 import type { ConnectionConfig } from "@workspace/agentic-core";
 import { blobstore, gad, rpc, vcs } from "@workspace/runtime";
 import { SYSTEM_TEST_AGENT_MODEL, systemTestModelRoute } from "./config.js";
@@ -293,6 +297,10 @@ export class HeadlessRunner {
      * fault-injection seam for harness resilience tests, not a product tool.
      */
     validationRetryProbeTool?: boolean;
+    /** Additional test-owned participant methods advertised to the agent. */
+    methods?: HeadlessWithAgentConfig["methods"];
+    /** Test-specific policy appended after the shared system-test prompt. */
+    additionalSystemPrompt?: string;
   }): Promise<HeadlessSession> {
     const policy = this.shared.modelPolicy;
     const model = policy.activeModel;
@@ -339,6 +347,7 @@ export class HeadlessRunner {
         : {}),
       includeSyntheticPanelUiMethods: opts?.syntheticPanelUiTools === true,
       includeValidationRetryProbeMethod: opts?.validationRetryProbeTool === true,
+      ...(opts?.methods ? { methods: opts.methods } : {}),
       // The model rides the spawned agent's CREATION config (per-agent, seeded
       // from stateArgs.agentConfig) so it inherits the orchestrator's model.
       extraConfig: {
@@ -346,7 +355,7 @@ export class HeadlessRunner {
         // here instead of relying only on the channel default, so a workspace
         // or client default cannot leave a run waiting for approval.
         approvalLevel: 2,
-        systemPrompt: `${SYSTEM_TEST_AGENT_PROMPT}${fixturePrompt}`,
+        systemPrompt: `${SYSTEM_TEST_AGENT_PROMPT}${fixturePrompt}${opts?.additionalSystemPrompt ?? ""}`,
         systemPromptMode: "append",
         model,
       },

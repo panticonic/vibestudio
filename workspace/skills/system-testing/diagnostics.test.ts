@@ -290,6 +290,11 @@ describe("system-testing diagnostics", () => {
       messages: [],
       invocations: [],
       debugEvents: [],
+      cleanup: {
+        phase: "complete",
+        phaseStartedAt: 1,
+        completedAt: 1,
+      },
       cleanupErrors: [
         {
           phase: "unsubscribeHeadlessAgent",

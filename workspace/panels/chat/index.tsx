@@ -24,7 +24,6 @@ import { ErrorBoundary } from "@workspace/agentic-chat/error-boundary";
 import type {
   ConnectionConfig,
   AgenticChatActions,
-  ToolProvider,
   ForkNavHandlers,
   NewConversationOptions,
 } from "@workspace/agentic-chat/types";
@@ -984,11 +983,6 @@ export default function ChatPanel() {
   // Sandbox config — provides RPC and import loading to agentic-chat.
   const sandboxConfig = useMemo(() => createPanelSandboxConfig(rpc), []);
 
-  // Tool provider: the panel advertises no local channel tools. eval now runs
-  // server-side in the per-agent EvalDO (invoked by the agent's local tool);
-  // all other operations use runtime APIs.
-  const toolProvider: ToolProvider = useCallback(() => ({}), []);
-
   const panelMetadata = useMemo(
     () => ({
       name: channelName ?? "Channel",
@@ -1103,7 +1097,6 @@ export default function ChatPanel() {
           channelConfig={stateArgs.channelConfig}
           contextId={resolvedContextId}
           metadata={panelMetadata}
-          tools={toolProvider}
           actions={chatActions}
           theme={theme}
           installedAgents={installedAgents}

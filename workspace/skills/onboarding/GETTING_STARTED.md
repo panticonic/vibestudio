@@ -1,315 +1,53 @@
-# Getting Started
+# Getting started
 
-A step-by-step guide for onboarding. The agent should first detect the user's experience level, then walk through the relevant steps interactively.
+The first-run chat opens with a compact “Preparing setup overview…” action bar.
+The agent reads [SKILL.md](SKILL.md), composes the authoritative snapshot, gives
+a short welcome, renders [SetupHub.tsx](SetupHub.tsx), and clears the action
+bar.
 
-## Step 0: Detect Experience Level And Setup State
+## Run the setup projection
 
-Before anything else, inspect the current workspace and what is already set up.
-Keep this lightweight and tolerate helper-call failures because some APIs
-are panel-only or depend on optional services/runtime state.
+Use `client_eval` to statically import `composeOnboardingSnapshot` from
+`@workspace-skills/onboarding` and return its result. This runs the one
+composer inside the inviting chat panel, where direct owner APIs and the
+redacted Electron host topology read are both reachable.
 
-```
-eval({ code: `
-  import { browserData } from "@workspace/runtime";
-  import { getGoogleOnboardingStatus } from "@workspace-skills/google-workspace";
-  import { getActiveSearchProvider } from "@workspace-skills/web-research";
+Render that array as the `snapshot` prop of the checked-in setup hub. Do not
+recreate its catalog in prose. In a non-panel client, summarize blocking or
+attention states concisely and mention that all other configuration is
+optional.
 
-  const config = await services.workspace.getConfig();
-  const storedCredentials = await services.credentials.listStoredCredentials().catch(() => []);
-  const google = await getGoogleOnboardingStatus()
-    .catch(error => ({ error: error instanceof Error ? error.message : String(error) }));
-  const importJobs = await browserData.listImportJobs().catch(() => []);
-  const searchProvider = await getActiveSearchProvider().catch(() => "duckduckgo");
-  const panels = await fs.readdir("panels").catch(() => []);
-  const providerIds = [...new Set(storedCredentials.map(c =>
-    String(c.metadata?.providerId ?? c.providerId ?? "unknown")
-  ))];
+## Handle a choice
 
-  return {
-    workspaceId: config.id,
-    providerIds,
-    storedCredentialCount: storedCredentials.length,
-    google,
-    searchProvider, // "tavily" | "brave" | "exa" | "duckduckgo"
-    browserImportCount: importJobs.length,
-    panelCount: panels.length,
-  };
-`
-})
-```
+The user message contains an `interaction` object. Through `client_eval`,
+statically import `executeOnboardingSelection` from
+`@workspace-skills/onboarding` and pass the complete structured object, then
+follow an unhandled owner target. The function performs validated About, panel,
+and shell navigation. This is the only selection route; the visible sentence
+is for people and transcript replay, not dispatch.
 
-- Use static imports for runtime APIs, workspace packages, and workspace skills.
-  `await import(...)` bypasses the eval loader's static dependency planning and
-  is not the supported way to load `@workspace/*`, `@workspace-skills/*`, or
-  `@vibestudio/*` modules.
-- `fs` paths are rooted at the current context folder. `panels` and `/panels`
-  resolve to the same workspace source directory; prefer `panels` in docs and
-  examples so agents do not mistake it for a host absolute path.
+Owner workflows remain authoritative:
 
-- **Little setup evidence** → start from Step 1 and explain concepts thoroughly.
-- **Existing setup evidence** → greet them briefly, mention the current
-  workspace, and ask what they need.
-- Use `providerIds`, Google status, `searchProvider`, `browserImportCount`, and `panelCount` to make the first recommendations specific. A `searchProvider === "duckduckgo"` value is fine for most users; only suggest upgrading if they bring up research, hit rate limits, or ask about search quality.
+- Google and GitHub setup/checks use their dedicated skill helpers.
+- Browser migration uses `extensions/browser-data/SKILL.md`.
+- Enhanced search uses `skills/web-research/SKILL.md`; DuckDuckGo is already a
+  healthy default.
+- Model/provider and agent-default changes use model settings.
+- Device and remote controls open the typed shell connection surface.
+- Credential inspection/revocation and agent grants open their distinct About
+  pages.
 
-## Step 1: Explore Your Workspace
+After any check or workflow outcome, call the composer through `client_eval`
+again and render a new observation. A Google/GitHub check passes the selected
+ID as `verifyCapabilityId`. Do not update an old card optimistically.
 
-Start by showing the user what's in their workspace:
+## Continue from intent
 
-```
-eval({ code: `
-  const config = await services.workspace.getConfig();
-  console.log("Workspace:", config.id);
-  console.log("Init panels:", config.initPanels);
+Ready-now choices begin work directly. For example, a PDF choice asks for the
+document or starts an ingestion task; it never creates a PDF setup flow.
+Channel and project configuration is disclosed only when the user chooses that
+channel or project goal.
 
-  const entries = await fs.readdir(".", { withFileTypes: true });
-  const dirs = entries.filter(e => e.isDirectory()).map(e => e.name);
-  console.log("Top-level directories:", dirs.join(", "));
-  return { config, dirs };
-` })
-```
-
-Key directories:
-
-- `panels/` — panel apps (UI)
-- `packages/` — shared workspace packages
-- `workers/` — workerd workers and Durable Objects
-- `skills/` — reusable cross-repo skills; repo-specific skills can live at
-  `<repo>/SKILL.md`
-- `projects/` — plain editable repos
-
-## Step 2: Recommend a First Setup Path
-
-After the workspace overview, ask what the user wants to do first. In the
-template workspace, the chat panel loads [ActionBar.tsx](ActionBar.tsx) through
-`actionBarFile` in `meta/vibestudio.yml`, so these choices are already pinned
-above the chat history before the first agent reply:
-
-- **Google Workspace** — set up Google provider integration
-- **GitHub** — set up GitHub provider integration
-- **Slack** — set up Slack provider integration
-- **Model key** — set up a model or API key provider credential
-- **Agent defaults** — change the default model, swap providers, or tune effort/approval/chattiness; load the `agentic-do` skill
-- **Web search upgrade** — register a Tavily / Brave / Exa key so `web_search` graduates from DuckDuckGo (optional; see `web-research` skill)
-- **Custom API** — set up a custom OAuth or API provider
-- **Browser import** — import cookies, bookmarks, passwords, or local browser state
-- **Build panel** — scaffold and launch a panel app
-- **Explore runtime** — inspect runtime APIs and live examples
-- **Workspaces** — create, fork, or switch workspaces
-
-Do not duplicate that full list in the first message. Mention the most relevant
-state-aware next steps and tell the user they can use the pinned actions or ask
-for something specific.
-
-Use MDX `ActionButton`s only as a fallback when the action bar is unavailable,
-or later in the transcript for contextual choices that are not already pinned.
-
-If neither the action bar nor MDX is available, use the same choices in a
-concise plain-text list:
-
-1. **Connect API providers** — set up Gmail, GitHub, Slack, or other provider
-   integrations through OAuth/credentials. This is available immediately and
-   does not require importing browser data.
-2. **Import browser data** — bring in cookies, bookmarks, passwords, history,
-   and optionally current open tabs from Chrome/Firefox/etc. when they want
-   local browser state in Vibestudio. Repeat imports are deterministic for the
-   same trusted host/source pair.
-3. **Build something** — scaffold and launch a panel app.
-4. **Organize workspaces** — create, fork, or switch workspaces.
-5. **Explore capabilities** — inspect runtime APIs and live examples.
-
-Only run browser import when the user chooses browser data or specifically needs
-local browser state. OAuth/API provider setup should go straight to the relevant
-provider setup flow.
-
-## Step 3: Set Up API Integrations (Credentials)
-
-API integrations use the credential system. See `docs/credential-system.md` for the current architecture and provider setup details.
-
-For Google Workspace, load the dedicated setup skill:
-
-```
-read("skills/google-workspace/SKILL.md")
-```
-
-Then use `getGoogleOnboardingStatus()` from
-`@workspace-skills/google-workspace` to detect state and guide the user through
-`skills/google-workspace/ONBOARDING.md` and the workflow UI in
-`skills/google-workspace/SETUP.md` when configuration is missing. Do not paste
-the Google Cloud setup checklist into chat as plain text; show the workflow UI
-with internal/external deep links.
-
-**Check if already configured:**
-
-```
-eval({ code: `
-  import {
-    formatGoogleOnboardingStatus,
-    getGoogleOnboardingStatus,
-  } from "@workspace-skills/google-workspace";
-  import { getActiveSearchProvider } from "@workspace-skills/web-research";
-  const storedCredentials = await services.credentials.listStoredCredentials();
-  const googleStatus = await getGoogleOnboardingStatus();
-  const searchProvider = await getActiveSearchProvider();
-  console.log(formatGoogleOnboardingStatus(googleStatus));
-  console.log("Active web_search provider:", searchProvider);
-  const providerIds = [...new Set(storedCredentials.map(c =>
-    String(c.metadata?.providerId ?? c.providerId ?? "unknown")
-  ))];
-  if (providerIds.length > 0 || googleStatus.connected) {
-    console.log("Configured providers:", [...new Set([
-      ...providerIds,
-      ...(googleStatus.connected ? ["google-workspace"] : []),
-    ])].join(", "));
-  } else {
-    console.log("No stored provider credentials are configured yet.");
-  }
-  return {
-    configured: providerIds.length > 0 || googleStatus.connected,
-    providerIds,
-    googleStatus,
-    searchProvider,
-  };
-`
-})
-```
-
-### Optional: Upgrade web search
-
-`web_search` works zero-config via DuckDuckGo, but DDG rate-limits and ships
-short snippets. If the user is doing real research or hits a
-`DuckDuckGoBlockedError`, offer to register a Tavily / Brave / Exa key. Use
-the **web-research** skill's helpers — each pops the trusted credential-input
-UI and stores the key encrypted, bound to the provider's API origin:
-
-```
-eval({ code: `
-  import { requestTavilyApiKey } from "@workspace-skills/web-research";
-  await requestTavilyApiKey(); // user pastes the key into the trusted prompt
-` })
-```
-
-Same shape for `requestBraveApiKey()` and `requestExaApiKey()`. Provider
-preference is fixed: **Tavily > Brave > Exa > DuckDuckGo**; the first one
-with a stored credential wins.
-
-## Step 3.5: Tune The Agent
-
-Cold-start choices live in `packages/agentic-do/src/agent-config.ts`; provider
-credential presets are derived from `@workspace/model-catalog/providerConnect`.
-Edit and reload or resubscribe to change the default model/provider. Session
-knobs (effort, approval, chattiness) are agent method calls that can change
-during a conversation. Use `packages/agentic-do/SKILL.md` for either path.
-
-## Step 4: Import Browser Data
-
-If the user wants to bring in their existing browser data (cookies for authentication, bookmarks, passwords), use the **browser-import** skill at `extensions/browser-data/SKILL.md`.
-
-Quick start — discover trusted import hosts and the installed browsers they
-expose:
-
-```
-eval({ code: `
-  import { browserData } from "@workspace/runtime";
-  const hosts = await browserData.listImportHosts();
-  for (const host of hosts) {
-    const sources = await browserData.listImportSources(host.hostId);
-    console.log(host.label, sources.map(source => ({
-      sourceId: source.sourceId,
-      browser: source.displayName,
-      status: source.status,
-    })));
-  }
-  return hosts;
-`
-})
-```
-
-Then ask the user which host/browser source and data types they want. Source
-profiles and filesystem paths remain private to the trusted provider. See the
-canonical [browser environment skill](../../extensions/browser-data/SKILL.md)
-for preview, import jobs, cancellation, open tabs, and browser-data management.
-
-- [BOOKMARKS.md](../../extensions/browser-data/references/BOOKMARKS.md) — bookmark browsing
-- [WORKFLOWS.md](../../extensions/browser-data/references/WORKFLOWS.md) — end-to-end recipes
-
-## Step 5: Configure This Workspace
-
-Listing, creating, deleting, and selecting workspaces are human-shell control
-operations over the stable hub session. They are intentionally unavailable to
-agent eval running inside a selected workspace. If the user asks for one, point
-them to the workspace chooser or the corresponding `vibestudio workspace`
-command rather than attempting a child RPC.
-
-Configure which panels open on first launch:
-
-```
-eval({ code: `
-  await services.workspace.setInitPanels([{ source: "panels/chat" }]);
-  console.log("Init panels set");
-` })
-```
-
-## Step 6: Create Your First Panel
-
-Use the **workspace-dev** skill to scaffold and launch a panel. See the `workspace-dev` skill for the full workflow:
-
-- [WORKFLOW.md](../workspace-dev/WORKFLOW.md) — step-by-step development process
-- [WORKFLOW.md](../workspace-dev/WORKFLOW.md) — agent panel workflow
-- [PANEL_API.md](../workspace-dev/PANEL_API.md) — runtime panel API reference
-
-Quick version:
-
-```
-eval({ code: `
-  import { createProject } from "@workspace-skills/workspace-dev";
-  return await createProject({ projectType: "panel", name: "hello", title: "Hello World" });
-`
-})
-```
-
-Require the returned `preflight.ok` proof and keep the `publication` facts. A structured
-`scaffold_publication_failed` result means creation and commit succeeded but
-protected publication did not; call
-`recoverProjectPublication(error)` from `@workspace-skills/workspace-dev` for
-that committed event instead of running the scaffold again.
-
-Then edit the generated files through the managed tools. Read
-[vibestudio-vcs](../vibestudio-vcs/SKILL.md), build or test the exact working
-head, commit the complete local application chain, and publish the committed
-event through semantic ancestry/integration validation, approval, and atomic
-protected-ref publication. Builds are explicit advisory checks and
-post-publication projections; a failed activation retains the previous runnable
-artifact.
-
-`openPanel` is part of the portable runtime surface from `@workspace/runtime`;
-it works from server-side eval, panels, workers, and DOs:
-
-```tsx
-import { openPanel } from "@workspace/runtime";
-await openPanel("panels/hello");
-```
-
-## Step 7: Explore the Runtime
-
-Use the **sandbox** skill to learn what you can do from the chat panel:
-
-- [EVAL.md](../sandbox/EVAL.md) — running code in the sandbox
-- [INLINE_UI.md](../sandbox/INLINE_UI.md) — rendering interactive components in chat
-- [RUNTIME_API.md](../sandbox/RUNTIME_API.md) — full API reference (fs, db, ai, workers, etc.)
-- [BROWSER_AUTOMATION.md](../sandbox/BROWSER_AUTOMATION.md) — Playwright via CDP
-- [PATTERNS.md](../sandbox/PATTERNS.md) — common recipes
-
-## Adapting the Flow
-
-Not every user needs every step. Tailor the walkthrough:
-
-| User goal                                 | Steps to focus on                                           |
-| ----------------------------------------- | ----------------------------------------------------------- |
-| "I want to browse the web with my logins" | Steps 1, 2, 4 (import cookies + sync)                       |
-| "I want to connect Gmail/Slack/GitHub"    | Steps 1, 2, 3 (OAuth/API setup; no browser import required) |
-| "I want to build an app"                  | Steps 1, 2, 6 (scaffold + launch panel)                     |
-| "I want to organize my projects"          | Steps 1, 2, 5 (workspace management)                        |
-| "I want to see what this can do"          | Steps 1, 2, 7 (explore runtime APIs)                        |
-| "Set everything up"                       | All steps in order                                          |
-
-Ask the user what they're most interested in and skip to the relevant section.
+Use the owner’s trusted workflow UI for OAuth, credential entry, browser
+imports, and other side effects. Use `feedback_custom` when the turn must wait
+for structured user input and `inline_ui` for durable results.

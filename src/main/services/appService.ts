@@ -21,6 +21,7 @@ export function createAppService(deps: {
   getAppOrchestrator?: () => AppOrchestrator | null;
   connectionMode: "local" | "remote";
   remoteHost?: string;
+  onOpenShellSurface?: (target: "connection-settings" | "workspace-chooser") => void;
 }): ServiceDefinition {
   const serverClient = deps.serverClient;
   const callServer = serverClient
@@ -77,6 +78,13 @@ export function createAppService(deps: {
         }
         const error = await shell.openPath(workspacePath);
         if (error) throw new Error(error);
+        return;
+      },
+      openShellSurface: async (_ctx, [target]) => {
+        if (!deps.onOpenShellSurface) {
+          throw new Error("Shell-owned management navigation is unavailable in this host");
+        }
+        deps.onOpenShellSurface(target);
         return;
       },
       clearBuildCache: async (ctx) => {

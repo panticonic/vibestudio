@@ -2558,6 +2558,14 @@ app.on("ready", async () => {
         getAppOrchestrator: () => applicationWindow.appOrchestrator,
         connectionMode: conn.connectionMode,
         remoteHost: undefined,
+        onOpenShellSurface: (target) => {
+          eventService.emit(
+            target === "connection-settings"
+              ? "open-connection-settings"
+              : "open-workspace-switcher",
+            undefined
+          );
+        },
       })
     );
     const { createHubControlHostService } = await import("./services/hubControlService.js");
@@ -2566,6 +2574,13 @@ app.on("ready", async () => {
         client: conn.hubControlClient,
         getViewManager,
         onWorkspaceRoute: handleWorkspaceRoute,
+      })
+    );
+    const { createOnboardingStatusService } = await import("./services/onboardingStatusService.js");
+    electronContainer.registerRpc(
+      createOnboardingStatusService({
+        client: conn.hubControlClient,
+        getConnectionMode: () => conn.connectionMode,
       })
     );
     // The layout store is keyed main-side by (workspace, signed-in account);

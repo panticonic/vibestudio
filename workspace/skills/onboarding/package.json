@@ -1,0 +1,24 @@
+{
+  "name": "@workspace-skills/onboarding",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./catalog": "./catalog.ts",
+    "./execution": "./execution.ts",
+    "./routing": "./routing.ts",
+    "./snapshot": "./snapshot.ts",
+    "./status": "./status.ts"
+  },
+  "dependencies": {
+    "@vibestudio/service-schemas": "workspace:*",
+    "@workspace/model-catalog": "workspace:*",
+    "@workspace/runtime": "workspace:*",
+    "@workspace-skills/github": "workspace:*",
+    "@workspace-skills/google-workspace": "workspace:*",
+    "@workspace-skills/web-research": "workspace:*",
+    "@radix-ui/react-icons": "^1.3.2",
+    "@radix-ui/themes": "^3.2.1",
+    "react": "^19.2.0"
+  }
+}

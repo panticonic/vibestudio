@@ -75,6 +75,7 @@ import {
   type ShellOverlayRow,
 } from "../shell/client";
 import { useNativeShellOverlay } from "../shell/useNativeShellOverlay";
+import { useShellEvent } from "../shell/useShellEvent";
 import { BrowserFavicon } from "./BrowserFavicon";
 import {
   preferredPaneChild,
@@ -119,6 +120,10 @@ export function TitleBar({
     lazyStatusNavigation: statusNavigation,
   } = useNavigation();
   const [connectionSettingsOpen, setConnectionSettingsOpen] = useState(false);
+  useShellEvent(
+    "open-connection-settings",
+    useCallback(() => setConnectionSettingsOpen(true), [])
+  );
   const isMobile = useIsMobile();
 
   const handleNavigationToggle = () => {

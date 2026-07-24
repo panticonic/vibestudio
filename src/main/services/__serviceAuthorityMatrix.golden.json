@@ -238,6 +238,14 @@
           "sensitivity": "write"
         }
       },
+      "openShellSurface": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
       "openWorkspacePath": {
         "authority": {
           "inherits": true
@@ -1481,6 +1489,25 @@
         },
         "access": {
           "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "onboardingStatus": {
+    "service": {
+      "principals": [
+        "user",
+        "host",
+        "code"
+      ]
+    },
+    "methods": {
+      "read": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
         }
       }
     }
