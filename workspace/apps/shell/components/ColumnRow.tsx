@@ -161,6 +161,10 @@ export function ColumnRow({
   const { activeId: treeDragActiveId } = usePanelDndDrag();
   const residentSet = useMemo(() => new Set(residentColumnIds), [residentColumnIds]);
   const residentColumns = layout.columns.filter((column) => residentSet.has(column.id));
+  // With a single pane on screen there is nothing for a focus rail to
+  // distinguish it from, so it would be decoration on every panel.
+  const showPaneFocus =
+    residentColumns.reduce((total, column) => total + column.panes.length, 0) > 1;
   const columnMinWidths = residentColumns.map((column) =>
     column.panes.reduce(
       (minimum, pane) =>
@@ -271,6 +275,7 @@ export function ColumnRow({
             column={{ ...column, widthFr: frs[index] } as LayoutColumn}
             minWidth={columnMinWidths[index] ?? MIN_COLUMN_WIDTH}
             focusedPaneId={layout.focusedPaneId}
+            showPaneFocus={showPaneFocus}
             resident={!transitioning}
             layoutEpoch={layoutEpoch}
             unresponsivePanels={unresponsivePanels}

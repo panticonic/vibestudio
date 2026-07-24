@@ -459,28 +459,44 @@ test.describe("Multi-column panel layout", () => {
       });
 
       // ---- Scenario 4: close-pane never archives ------------------------
-      await test.step("closing a pane via its header ✕ keeps the panel in the tree", async () => {
+      await test.step("closing a pane from its breadcrumb ✕ keeps the panel in the tree", async () => {
         const surfaces = await getSurfaceRects(app, wcId);
         const secondSurface = surfaces.find((surface) => surface.panelId === panel2);
         expect(secondSurface).toBeDefined();
+
+        // Focus that pane first: the close-pane ✕ rides on the focused panel's
+        // own breadcrumb item, and only while a second pane would survive it.
         expect(
           await shellEval<boolean>(
             app,
             wcId,
             `(() => {
-               // Both the PaneView frame and the surface carry data-pane-id;
-               // the header ✕ lives inside the PaneView frame.
-               const candidates = Array.from(
-                 document.querySelectorAll('[data-pane-id=${JSON.stringify(secondSurface!.paneId)}]')
-               );
-               for (const node of candidates) {
-                 const button = node.querySelector('button[aria-label="Close pane"]');
-                 if (button instanceof HTMLElement) { button.click(); return true; }
-               }
-               return false;
+               const frame = document.querySelector('[data-pane-id=${JSON.stringify(secondSurface!.paneId)}]');
+               const handle = frame?.querySelector('[role="button"]');
+               if (!(handle instanceof HTMLElement)) return false;
+               handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+               return true;
              })()`
           )
         ).toBe(true);
+
+        await expect
+          .poll(
+            async () =>
+              await shellEval<boolean>(
+                app,
+                wcId,
+                `(() => {
+                   const item = document.querySelector('[data-breadcrumb-id=${JSON.stringify(panel2)}]');
+                   const button = item?.querySelector('button[aria-label="Close pane"]');
+                   if (!(button instanceof HTMLElement)) return false;
+                   button.click();
+                   return true;
+                 })()`
+              ),
+            POLL
+          )
+          .toBe(true);
 
         await expect
           .poll(async () => (await getNativePanelSlotDebugInfo(app)).length, POLL)

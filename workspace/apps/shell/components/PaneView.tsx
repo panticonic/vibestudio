@@ -8,6 +8,12 @@ import { PANE_DROP_HANDLE_HEIGHT, type LayoutPane } from "../layout/types";
 interface PaneViewProps {
   pane: LayoutPane;
   focused: boolean;
+  /**
+   * Whether focus is worth drawing at all — false when this is the only pane on
+   * screen. Separate from `focused`, which stays true regardless because it also
+   * drives native slot binding.
+   */
+  showPaneFocus: boolean;
   resident: boolean;
   layoutEpoch: number;
   unresponsive: boolean;
@@ -17,13 +23,22 @@ interface PaneViewProps {
 
 /**
  * One pane: a native-view content state machine with only a six-pixel shell
- * handle above it. The handle preserves an unobscured tree-drop target (D9)
+ * rail above it. The rail preserves an unobscured tree-drop target (D9)
  * without duplicating the titlebar for every vertically stacked pane. Actions
  * for the focused pane live in the global titlebar, outside native-view bounds.
+ *
+ * The rail also has to carry focus. A pane's outline is drawn on shell DOM, but
+ * the native view composites above it and sits flush to the left, right and
+ * bottom edges, so only the top strip is ever actually visible — which is why
+ * this doubles as the focus indicator. It says so in neutral greys rather than
+ * a brand wash: a saturated slab across the top of every pane fights whatever
+ * page is rendering below it. The accent is spent only while a drag is over the
+ * rail, where it has to read instantly.
  */
 export function PaneView({
   pane,
   focused,
+  showPaneFocus,
   resident,
   layoutEpoch,
   unresponsive,
@@ -35,6 +50,7 @@ export function PaneView({
   const { setNodeRef: setDropRef, isOver: isDropOver } = useDroppable({
     id: paneDropId(pane.id),
   });
+  const markFocused = focused && showPaneFocus;
 
   return (
     <Flex
@@ -44,9 +60,11 @@ export function PaneView({
         flex: `${pane.heightFr} 1 0`,
         minHeight: 0,
         minWidth: 0,
-        // Focus ring on the pane frame (D7/§6): accent for focused, hairline otherwise.
-        outline: focused ? "2px solid var(--accent-8)" : "1px solid var(--gray-a5)",
-        outlineOffset: -2,
+        // Frame hairline (D7/§6). Kept to one neutral pixel in both states: the
+        // native view hides all but the top edge, where a heavier ring would
+        // only thicken the rail below into a band.
+        outline: markFocused ? "1px solid var(--gray-a7)" : "1px solid var(--gray-a4)",
+        outlineOffset: -1,
         borderRadius: "var(--radius-2)",
         overflow: "hidden",
       }}
@@ -69,9 +87,9 @@ export function PaneView({
           flexShrink: 0,
           backgroundColor: isDropOver
             ? "var(--accent-8)"
-            : focused
-              ? "var(--accent-a6)"
-              : "var(--gray-a4)",
+            : markFocused
+              ? "var(--gray-a8)"
+              : "var(--gray-a3)",
           cursor: "default",
           transition: "background-color 120ms ease-out",
         }}

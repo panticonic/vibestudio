@@ -140,6 +140,19 @@ export const settingsDialogOpenAtom = atom(false);
 export const workspaceChooserDialogOpenAtom = atom(false);
 
 // =============================================================================
+// Connection Settings State
+// =============================================================================
+
+/**
+ * Whether the connection/pairing settings dialog is open. Held here rather than
+ * in the control that opens it: the connection badge lives in the panel tree,
+ * which is unmounted in breadcrumb navigation, but the dialog is also opened
+ * from the `open-connection-settings` shell event (app.openShellSurface) and
+ * the hamburger menu, which must work in either navigation mode.
+ */
+export const connectionSettingsDialogOpenAtom = atom(false);
+
+// =============================================================================
 // Workspace Wizard State
 // =============================================================================
 

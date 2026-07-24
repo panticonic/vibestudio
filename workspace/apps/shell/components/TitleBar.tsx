@@ -5,7 +5,6 @@ import {
   BoxIcon,
   ViewVerticalIcon,
   ChevronRightIcon,
-  ColumnsIcon,
   DividerVerticalIcon,
   PlusIcon,
   ArrowLeftIcon,
@@ -18,15 +17,7 @@ import {
   ExclamationTriangleIcon,
   SpeakerLoudIcon,
 } from "@radix-ui/react-icons";
-import {
-  Box,
-  DropdownMenu,
-  Flex,
-  IconButton,
-  Text,
-  TextField,
-  Tooltip,
-} from "@radix-ui/themes";
+import { Box, DropdownMenu, Flex, IconButton, Text, TextField, Tooltip } from "@radix-ui/themes";
 import { VibestudioLogo } from "@workspace/ui";
 import {
   useCallback,
@@ -42,9 +33,6 @@ import { useIsMobile, useTouchDevice } from "@workspace/react/responsive";
 
 import { useNavigation } from "./NavigationContext";
 import type { ChromeCommand } from "./PanelStack";
-import { ConnectionStatusBadge } from "./ConnectionStatusBadge";
-import { ThemeSettings } from "./ThemeSettings";
-import { ConnectionSettingsDialog } from "./ConnectionSettingsDialog";
 import type {
   NavigationMode,
   LazyTitleNavigationData,
@@ -75,13 +63,8 @@ import {
   type ShellOverlayRow,
 } from "../shell/client";
 import { useNativeShellOverlay } from "../shell/useNativeShellOverlay";
-import { useShellEvent } from "../shell/useShellEvent";
 import { BrowserFavicon } from "./BrowserFavicon";
-import {
-  preferredPaneChild,
-  type FocusedPaneChromeState,
-  type PaneChromeCommand,
-} from "./paneChrome";
+import type { FocusedPaneChromeState, PaneChromeCommand } from "./paneChrome";
 
 const isMac = /Mac|iPhone|iPad|iPod/i.test(
   (globalThis.navigator as { userAgentData?: { platform?: string } } | undefined)?.userAgentData
@@ -119,11 +102,6 @@ export function TitleBar({
     lazyTitleNavigation: navigationData,
     lazyStatusNavigation: statusNavigation,
   } = useNavigation();
-  const [connectionSettingsOpen, setConnectionSettingsOpen] = useState(false);
-  useShellEvent(
-    "open-connection-settings",
-    useCallback(() => setConnectionSettingsOpen(true), [])
-  );
   const isMobile = useIsMobile();
 
   const handleNavigationToggle = () => {
@@ -172,13 +150,15 @@ export function TitleBar({
     }
   };
 
-  const handleOpenChildBeside = () => {
-    if (!paneChromeState) return;
-    const child = preferredPaneChild(paneChromeState);
-    if (child) {
-      onPaneChromeCommand?.({ type: "open-child-beside", panelId: child.panelId });
-    }
-  };
+  // The focused pane is closable only when something else stays on screen —
+  // closing the last visible pane would leave an empty viewport. The affordance
+  // rides on that panel's own breadcrumb item rather than a detached button.
+  const closablePanePanelId =
+    paneChromeState && paneChromeState.visiblePaneCount > 1 ? paneChromeState.panelId : null;
+  const handleClosePane = useCallback(
+    () => onPaneChromeCommand?.({ type: "close-pane" }),
+    [onPaneChromeCommand]
+  );
 
   if (isMobile) {
     return (
@@ -189,10 +169,9 @@ export function TitleBar({
             appRegion: "drag",
             WebkitAppRegion: "drag",
             userSelect: "none",
-            // Shares the panel cards' raised tone; the cards' own top border is
-            // the single divider, so the titlebar carries no border of its own
-            // (a titlebar border + the flush card border read as a doubled seam).
-            backgroundColor: "var(--surface-raised)",
+            // Same tone as the panel tree: titlebar and tree are one grey shelf
+            // wrapped around the panels, not two surfaces at different heights.
+            backgroundColor: "var(--app-chrome-bg)",
           } as CSSProperties
         }
       >
@@ -265,8 +244,6 @@ export function TitleBar({
                 <PlusIcon />
               </IconButton>
             </Tooltip>
-            <ThemeSettings />
-            <ConnectionStatusBadge onOpenSettings={() => setConnectionSettingsOpen(true)} />
           </Flex>
         </Flex>
 
@@ -297,11 +274,6 @@ export function TitleBar({
             </Flex>
           </Box>
         )}
-
-        <ConnectionSettingsDialog
-          open={connectionSettingsOpen}
-          onOpenChange={setConnectionSettingsOpen}
-        />
       </Box>
     );
   }
@@ -315,11 +287,11 @@ export function TitleBar({
           WebkitAppRegion: "drag",
           userSelect: "none",
           height: "28px",
-          // Shares the panel cards' raised tone so the chrome reads as one calm
-          // grey frame. No border of its own: the cards sit flush beneath and
-          // carry their own top border, so a titlebar border would double it
-          // into a muddy seam. The cards' top border is the single divider.
-          backgroundColor: "var(--surface-raised)",
+          // Same tone as the panel tree so the chrome reads as one calm grey
+          // shelf. No border of its own: the cards sit flush beneath and carry
+          // their own top border, so a titlebar border would double it into a
+          // muddy seam. The cards' top border is the single divider.
+          backgroundColor: "var(--app-chrome-bg)",
         } as CSSProperties
       }
     >
@@ -354,24 +326,6 @@ export function TitleBar({
             </IconButton>
           </Tooltip>
 
-          <Tooltip
-            content={
-              paneChromeState?.children.length
-                ? "Open an existing child panel beside"
-                : "No child panels to open beside"
-            }
-          >
-            <IconButton
-              variant="ghost"
-              size="1"
-              disabled={!paneChromeState?.children.length}
-              onClick={handleOpenChildBeside}
-              aria-label="Open child panel beside"
-            >
-              <ColumnsIcon />
-            </IconButton>
-          </Tooltip>
-
           <Tooltip content="New child panel beside (⌘/Ctrl+T)">
             <IconButton
               variant="ghost"
@@ -380,16 +334,6 @@ export function TitleBar({
               aria-label="New child panel beside"
             >
               <PlusIcon />
-            </IconButton>
-          </Tooltip>
-          <Tooltip content="Open address bar (⌘L / Ctrl+Shift+L)">
-            <IconButton
-              variant="ghost"
-              size="1"
-              onClick={() => setAddressBarVisible(true)}
-              aria-label="Open address bar"
-            >
-              <GlobeIcon />
             </IconButton>
           </Tooltip>
         </Flex>
@@ -437,38 +381,15 @@ export function TitleBar({
               onNavigateToId={onNavigateToId}
               onPanelContextMenu={onPanelContextMenu}
               onEditAddress={() => setAddressBarVisible(true)}
+              closablePanePanelId={closablePanePanelId}
+              onClosePane={handleClosePane}
             />
           )}
         </Box>
 
-        {/* Right side: connection badge + spacer for native window controls */}
-        <Flex
-          align="center"
-          gap="1"
-          style={{ appRegion: "no-drag", WebkitAppRegion: "no-drag" } as CSSProperties}
-        >
-          {paneChromeState && (
-            <Tooltip content="Close pane (panel stays in the tree)">
-              <IconButton
-                variant="ghost"
-                size="1"
-                aria-label="Close pane"
-                onClick={() => onPaneChromeCommand?.({ type: "close-pane" })}
-              >
-                <Cross2Icon />
-              </IconButton>
-            </Tooltip>
-          )}
-          <ThemeSettings />
-          <ConnectionStatusBadge onOpenSettings={() => setConnectionSettingsOpen(true)} />
-          {!isMac && <Box style={{ width: "138px" }} />}
-        </Flex>
+        {/* Right side: spacer for the native window controls */}
+        {!isMac && <Box style={{ width: "138px", flexShrink: 0 }} />}
       </Flex>
-
-      <ConnectionSettingsDialog
-        open={connectionSettingsOpen}
-        onOpenChange={setConnectionSettingsOpen}
-      />
     </Box>
   );
 }
@@ -481,6 +402,13 @@ interface BreadcrumbBarProps {
   onPanelContextMenu?: (panelId: string, position: { x: number; y: number }) => Promise<void>;
   /** Clicking the already-active breadcrumb switches to the address/controls view. */
   onEditAddress?: () => void;
+  /**
+   * Panel occupying the focused pane, when closing that pane would still leave
+   * another pane on screen. Its breadcrumb item carries the close-pane action;
+   * every other item's close means "archive".
+   */
+  closablePanePanelId?: string | null;
+  onClosePane?: () => void;
 }
 
 const MAX_VISIBLE_ANCESTORS = 2;
@@ -1206,6 +1134,12 @@ interface HoverableBreadcrumbItemProps {
   onNavigate: () => void;
   onContextMenu: (e: MouseEvent<HTMLSpanElement>) => void;
   onEditAddress?: () => void;
+  /**
+   * When set, this item is the one showing in the focused pane and another pane
+   * would survive closing it, so its X closes the pane instead of archiving the
+   * panel. Archiving stays on middle-click and the context menu.
+   */
+  onClosePane?: () => void;
 }
 
 function HoverableBreadcrumbItem({
@@ -1216,6 +1150,7 @@ function HoverableBreadcrumbItem({
   onNavigate,
   onContextMenu,
   onEditAddress,
+  onClosePane,
 }: HoverableBreadcrumbItemProps) {
   const [isHovered, setIsHovered] = useState(false);
   const isTouch = useTouchDevice();
@@ -1238,10 +1173,11 @@ function HoverableBreadcrumbItem({
     });
   };
 
-  const handleArchive = (e: MouseEvent<HTMLButtonElement>) => {
+  const handleClose = (e: MouseEvent<HTMLButtonElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    archivePanel();
+    if (onClosePane) onClosePane();
+    else archivePanel();
   };
 
   const handleAuxClick = (e: MouseEvent<HTMLSpanElement>) => {
@@ -1285,6 +1221,9 @@ function HoverableBreadcrumbItem({
               ? "var(--gray-a3)"
               : undefined,
           color: isCurrentActive ? "var(--gray-12)" : undefined,
+          // A persistent close-pane ✕ needs its own room; the hover-only archive
+          // ✕ may overlap the title's tail, since it only appears under a cursor.
+          ...(onClosePane ? { paddingRight: 20 } : {}),
         }}
         onClick={handleActivate}
         onMouseDown={handleMouseDown}
@@ -1307,15 +1246,18 @@ function HoverableBreadcrumbItem({
         >
           {title}
         </Text>
-        {(isHovered || isTouch) && (
+        {/* Archiving is destructive, so it stays behind a hover. Closing a pane
+            is cheap and only offered in multi-pane layouts, so it stays put. */}
+        {(isHovered || isTouch || Boolean(onClosePane)) && (
           <IconButton
             size="1"
             variant="ghost"
             color="gray"
             radius="small"
-            aria-label="Close panel"
-            onClick={handleArchive}
-            className="breadcrumb-archive-btn"
+            aria-label={onClosePane ? "Close pane" : "Close panel"}
+            title={onClosePane ? "Close pane — the panel stays in the tree" : "Close panel"}
+            onClick={handleClose}
+            className={onClosePane ? "breadcrumb-close-pane-btn" : "breadcrumb-archive-btn"}
             style={
               {
                 appRegion: "no-drag",
@@ -1437,6 +1379,8 @@ function BreadcrumbBar({
   onNavigateToId,
   onPanelContextMenu,
   onEditAddress,
+  closablePanePanelId,
+  onClosePane,
 }: BreadcrumbBarProps) {
   const ancestors = navigationData?.ancestors ?? [];
   const currentSiblings = navigationData?.currentSiblings ?? [];
@@ -1550,6 +1494,7 @@ function BreadcrumbBar({
       onNavigate={() => onNavigateToId?.(panel.id)}
       onContextMenu={(e) => handlePanelContextMenu(e, panel)}
       onEditAddress={onEditAddress}
+      {...(closablePanePanelId === panel.id && onClosePane ? { onClosePane } : {})}
     />
   );
 
@@ -1765,6 +1710,11 @@ function BreadcrumbBar({
               }}
               onContextMenu={handleCurrentPanelContextMenu}
               onEditAddress={onEditAddress}
+              {...(closablePanePanelId &&
+              closablePanePanelId === navigationData?.currentId &&
+              onClosePane
+                ? { onClosePane }
+                : {})}
             />
           </span>
         )}

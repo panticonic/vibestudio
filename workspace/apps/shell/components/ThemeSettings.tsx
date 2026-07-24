@@ -3,7 +3,7 @@
  * radius. Writes the shell's theme atoms; the accent/radius changes broadcast
  * live to every panel over the runtime bridge (see App.tsx → panel.updateThemeConfig).
  */
-import type { CSSProperties } from "react";
+import { useCallback, useRef, useState, type CSSProperties } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
   Popover,
@@ -35,6 +35,16 @@ const ACCENTS = [
   "gray",
 ] as const;
 const GRAYS = ["gray", "mauve", "slate", "sage", "olive", "sand"] as const;
+/**
+ * Panel WebContentsViews are native siblings of the shell's own view, so they
+ * always composite above shell DOM — no z-index reaches over them. Dialogs get
+ * around that by hiding the panels while they're open (useShellOverlay), but
+ * that would be self-defeating here: the whole point of this popover is
+ * watching the theme change land on those panels. So instead the popover is
+ * confined to the panel tree's rectangle, which is shell chrome and never
+ * covered. Falls back to the viewport if this ever renders outside the tree.
+ */
+const SHELL_CHROME_BOUNDARY_SELECTOR = '[data-shell-panel-sidebar="true"]';
 const RADII: ThemeConfigValue["radius"][] = ["none", "small", "medium", "large", "full"];
 const SCALINGS: ThemeConfigValue["scaling"][] = ["90%", "95%", "100%", "105%", "110%"];
 
@@ -43,12 +53,22 @@ export function ThemeSettings() {
   const config = useAtomValue(themeConfigAtom);
   const setMode = useSetAtom(setThemeModeAtom);
   const setConfig = useSetAtom(setThemeConfigAtom);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const [boundary, setBoundary] = useState<Element | null>(null);
+
+  // Resolved on open rather than on mount: the tree is remounted whenever the
+  // user toggles navigation modes, so a reference taken once goes stale.
+  const handleOpenChange = useCallback((open: boolean) => {
+    if (!open) return;
+    setBoundary(triggerRef.current?.closest(SHELL_CHROME_BOUNDARY_SELECTOR) ?? null);
+  }, []);
 
   return (
-    <Popover.Root>
+    <Popover.Root onOpenChange={handleOpenChange}>
       <Tooltip content="Appearance">
         <Popover.Trigger>
           <IconButton
+            ref={triggerRef}
             variant="ghost"
             size="2"
             className="app-touch-target"
@@ -60,7 +80,18 @@ export function ThemeSettings() {
       </Tooltip>
       <Popover.Content
         size="2"
-        style={{ width: 264, zIndex: "var(--z-popover)" as unknown as number }}
+        // Upward and end-aligned: the trigger sits at the foot of the tree, so
+        // this is the one direction with room inside the boundary.
+        side="top"
+        align="end"
+        {...(boundary ? { collisionBoundary: boundary } : {})}
+        style={{
+          width: 264,
+          // Radix publishes the room left inside the boundary; clamping to it
+          // keeps a narrowed tree from pushing the popover under the panels.
+          maxWidth: "var(--radix-popover-content-available-width)",
+          zIndex: "var(--z-popover)" as unknown as number,
+        }}
       >
         <Flex direction="column" gap="3">
           <Flex direction="column" gap="1">

@@ -1,10 +1,16 @@
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
 import { AppDialog } from "@workspace/ui";
 
-import { workspaceChooserDialogOpenAtom, shellOverlayActiveAtom } from "../state/appModeAtoms";
+import {
+  connectionSettingsDialogOpenAtom,
+  workspaceChooserDialogOpenAtom,
+  shellOverlayActiveAtom,
+} from "../state/appModeAtoms";
 import { view } from "../shell/client";
+import { useShellEvent } from "../shell/useShellEvent";
 import { useShellOverlay } from "../shell/useShellOverlay";
+import { ConnectionSettingsDialog } from "./ConnectionSettingsDialog";
 import { PanelApp } from "./PanelApp";
 import { WorkspaceChooser } from "./WorkspaceChooser";
 import { WorkspaceWizard } from "./WorkspaceWizard";
@@ -17,7 +23,16 @@ import { WorkspaceWizard } from "./WorkspaceWizard";
 export default function MainMode() {
   const workspaceChooserOpen = useAtomValue(workspaceChooserDialogOpenAtom);
   const setWorkspaceChooserOpen = useSetAtom(workspaceChooserDialogOpenAtom);
+  const connectionSettingsOpen = useAtomValue(connectionSettingsDialogOpenAtom);
+  const setConnectionSettingsOpen = useSetAtom(connectionSettingsDialogOpenAtom);
   const shellOverlayActive = useAtomValue(shellOverlayActiveAtom);
+
+  // Mounted here, not next to the badge that opens it: the badge lives in the
+  // panel tree, which breadcrumb mode unmounts, but this event arrives in both.
+  useShellEvent(
+    "open-connection-settings",
+    useCallback(() => setConnectionSettingsOpen(true), [setConnectionSettingsOpen])
+  );
 
   // Register shell overlays — hides panel views so dialogs aren't obscured
   useShellOverlay(workspaceChooserOpen);
@@ -78,6 +93,11 @@ export default function MainMode() {
       >
         <WorkspaceChooser />
       </AppDialog>
+
+      <ConnectionSettingsDialog
+        open={connectionSettingsOpen}
+        onOpenChange={setConnectionSettingsOpen}
+      />
     </>
   );
 }

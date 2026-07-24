@@ -9,6 +9,7 @@ const baseState: FocusedPaneChromeState = {
     { panelId: "panel-a/child-2", title: "Second child" },
   ],
   selectedChildPanelId: "panel-a/child-2",
+  visiblePaneCount: 1,
 };
 
 describe("preferredPaneChild", () => {

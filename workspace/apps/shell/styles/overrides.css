@@ -11,73 +11,86 @@ body,
   min-height: 100%;
   overflow: hidden;
   /* Pre-paint background before the Radix theme mounts — follow the system
-     preference so a light-mode user never gets a dark flash. Tuned to the
-     greyed chrome base below (Radix neutral gray step 6 light / step 3 dark) so
-     the first paint already reads as calm grey, not bright white. */
-  background: #d9d9d9;
+     preference so a light-mode user never gets a dark flash. Literal because
+     nothing is themed yet; these are the default `grayColor` (mauve) steps 6
+     and 3, matching `--app-chrome-bg` below, so the first paint is already the
+     frame the user is about to see. */
+  background: #dbd8e0;
 }
 
 @media (prefers-color-scheme: dark) {
   html,
   body,
   #app {
-    background: #222222;
+    background: #232225;
   }
 }
 
 /* ============================================================================
-   Greyed app chrome. The shell frame (titlebar, panel tree, pane backing) is a
-   neutral grey shelf that panels — app panels, and browser panels showing
-   arbitrary third-party pages — sit inside. Two things make that read:
+   Shell surfaces. These override the shared `--surface-*` tokens (defined in
+   tokens.css) but are SHELL-SCOPED: this file is loaded only by the shell
+   bundle — the main window AND the transparent approval overlay, both Radix
+   themes. Panels render in their own webContents that load tokens.css but never
+   this file, so panel surfaces keep the original tokens. Re-tinting
+   `--surface-*` here (rather than swapping `grayColor`) is what keeps the
+   recolour on the chrome and off the panels.
 
-   1. TONE. Light-mode chrome steps well down the scale so it reads as a real
-      grey shelf rather than off-white; dark-mode chrome lifts off near-black.
-      Raised surfaces (cards, the approval overlay, toolbars) stay one rung
-      "lighter" than the chrome base in BOTH appearances so elevation reads.
-   2. HUE. The chrome opts out of the theme's `grayColor` (mauve — a violet
-      leaning neutral that belongs to the brand and suits panel content) and
-      pins its surfaces to Radix's pure `gray` steps, written as literals since
-      `--gray-*` is aliased to the chosen grayColor. A tinted frame wrapped
-      around a browser page reads as branded and clashes with the page; a true
-      neutral one just recedes. Alpha greys (borders, hovers) are near-neutral
-      already and stay tokenised.
+   Hue rides the theme's own `grayColor` — `--gray-*`, which the app pairs with
+   its violet accent as `mauve`. That keeps the frame in the brand's neutral
+   family rather than a foreign one, and it follows the user's gray choice for
+   free. What made mauve read as "branded" before was never the hue but the
+   step: chrome sat at gray-2/4, so it came out as lavender-tinted near-white.
+   Several rungs down it reads as grey with a warm undertone, and the tint
+   works *for* it — a perfectly neutral grey next to these faintly magenta
+   panel surfaces picks up a green cast by simultaneous contrast.
 
-   These override the shared `--surface-*` tokens (defined in tokens.css) but are
-   SHELL-SCOPED: they live in this file, which is loaded only by the shell bundle
-   — the main window AND the transparent approval overlay, both Radix themes.
-   Panels render in their own webContents that load tokens.css but never this
-   file, so panel surfaces keep the original tokens. Re-tinting `--surface-*`
-   here (rather than swapping `grayColor`) is what keeps the recolour on the
-   chrome and off the panels.
+   ONE ramp serves both the frame (titlebar, tree, pane backing — via the
+   `--app-chrome-*` aliases below) and the floating surfaces (approval card and
+   pill, which read `--surface-raised`/`--surface-card` directly). That is
+   deliberate: a floating card reads as a lighter shade of the same grey the
+   frame is cut from. It does mean retuning the frame moves those cards with it,
+   so check the approval overlay after changing a step here.
+
+   Light mode is a properly grey shelf, several rungs down the scale — not
+   off-white, and not dark-mode dark either. Raised surfaces stay one rung
+   lighter than the chrome base in BOTH appearances so elevation still reads.
    ============================================================================ */
 .radix-themes:where(.light, .light-theme) {
-  --surface-chrome: #d9d9d9; /* gray-6 */
-  --surface-card: #e0e0e0; /* gray-5 */
-  --surface-raised: #e8e8e8; /* gray-4 */
+  --surface-chrome: var(--gray-6);
+  --surface-card: var(--gray-5);
+  --surface-raised: var(--gray-4);
   --surface-border: var(--gray-a7);
-  /* Approval cards already have a border and tone ring. Keep their light-mode
-     lift compact enough for the native overlay's 16px transparent margin. */
+  /* Approval cards already carry a hairline border. Keep their light-mode lift
+     compact enough for the native overlay's 16px transparent margin. */
   --approval-card-shadow: 0 4px 12px var(--gray-a5), 0 1px 3px var(--black-a3);
 }
 
 .radix-themes:where(.dark, .dark-theme) {
-  --surface-chrome: #222222; /* gray-3 */
-  --surface-card: #222222; /* gray-3 */
-  --surface-raised: #2a2a2a; /* gray-4 */
+  --surface-chrome: var(--gray-3);
+  --surface-card: var(--gray-3);
+  --surface-raised: var(--gray-4);
   --surface-border: var(--gray-a7);
   --approval-card-shadow: var(--elevation-overlay);
 }
 
-.app-shell-theme {
-  /* Chrome vars are thin aliases over the shared surface tokens (now greyed
-     above), so the shell reads in one surface language and inherits the
-     light/dark split automatically — no per-appearance block needed here. */
+/* Chrome vars are thin aliases over the surface tokens above, so the shell
+   reads in one surface language and inherits the light/dark split for free.
+
+   They live on `.radix-themes` rather than `.app-shell-theme` because custom
+   properties inherit as *computed* values: resolved once at the app root, an
+   alias would freeze that appearance's hex, and any nested `<Theme>` would
+   inherit the frozen literal however it redefined `--surface-*`. Declaring them
+   at every theme boundary re-resolves them. */
+.radix-themes {
   --app-chrome-bg: var(--surface-chrome);
   --app-chrome-bg-strong: var(--surface-raised);
   --app-chrome-border: var(--surface-border);
   --app-chrome-hover: var(--gray-a3);
   --app-chrome-selected: var(--gray-a4);
   --app-chrome-selected-hover: var(--gray-a5);
+}
+
+.app-shell-theme {
   width: 100%;
   height: 100%;
   min-height: 100dvh;
@@ -91,6 +104,13 @@ body,
 }
 
 .app-shell-panel-card {
+  /* Radix paints a surface Card's fill on `::before`, which stacks ABOVE the
+     element's own background — so setting `background-color` alone leaves the
+     card showing Radix's near-white `--color-panel` and silently discards every
+     chrome tone below. Retint the variable that pseudo-element actually reads;
+     the element's own background stays as the fallback for a non-Card mount.
+     (Same class of problem as the `::after` ring cleared further down.) */
+  --card-background-color: var(--app-chrome-bg-strong);
   background-color: var(--app-chrome-bg-strong);
   /* No frame: the sidebar and panel panes read as flush regions of the chrome,
      not boxed cards. Separation comes from tone (panel content is darker than
@@ -105,6 +125,7 @@ body,
    raised surface was nearly identical to pale panel pages, so keep it on the
    slightly deeper chrome step used by the surrounding shell. */
 .app-shell-panel-card[data-shell-panel-sidebar="true"] {
+  --card-background-color: var(--app-chrome-bg);
   background-color: var(--app-chrome-bg);
 }
 
@@ -191,9 +212,14 @@ body,
   transform: rotate(-90deg);
 }
 
-/* Breadcrumb archive button hover effect */
+/* Breadcrumb close buttons. Archiving a panel is destructive, so it warms to
+   red on hover; closing a pane only stops showing it, so it stays neutral. */
 .breadcrumb-archive-btn:hover {
   background-color: var(--red-a4);
+}
+
+.breadcrumb-close-pane-btn:hover {
+  background-color: var(--gray-a5);
 }
 
 .titlebar-breadcrumb-scroll::-webkit-scrollbar {
@@ -232,18 +258,21 @@ body,
    Approval surface — a corner card that floats over the focused panel, plus a
    minimized pill that lives in the notifications strip. Risk tone is carried by
    an accent rail + a tinted icon, never a full background wash: the surface
-   itself stays a calm, raised neutral in both themes.
+   itself stays a calm, raised neutral in both themes. An amber prompt should
+   not arrive as a cream-coloured card — the tone is a marker on a neutral
+   surface, so it stays confined to the rail and the icon.
 
    Tone variables are set via `data-approval-tone="sky|amber|red"` and resolve
    straight off the Radix scales, so light/dark need no branching here.
    ============================================================================ */
+/* `--approval-ring` is the 38px icon box's own hairline (and its beacon pulse),
+   not a frame around the card. */
 [data-approval-tone="sky"] {
   --approval-accent: var(--sky-9);
   --approval-accent-quiet: var(--sky-a5);
   --approval-icon: var(--sky-11);
   --approval-icon-bg: var(--sky-a3);
   --approval-ring: var(--sky-a6);
-  --approval-glow: var(--sky-a3);
 }
 [data-approval-tone="amber"] {
   --approval-accent: var(--amber-9);
@@ -251,7 +280,6 @@ body,
   --approval-icon: var(--amber-11);
   --approval-icon-bg: var(--amber-a3);
   --approval-ring: var(--amber-a6);
-  --approval-glow: var(--amber-a3);
 }
 [data-approval-tone="red"] {
   --approval-accent: var(--red-9);
@@ -259,7 +287,6 @@ body,
   --approval-icon: var(--red-11);
   --approval-icon-bg: var(--red-a3);
   --approval-ring: var(--red-a6);
-  --approval-glow: var(--red-a3);
 }
 
 /* The card fills the content-overlay surface (a transparent native view floated
@@ -280,11 +307,11 @@ body,
   overflow: hidden;
   border-radius: var(--radius-5);
   background: var(--surface-raised);
-  /* Hairline border, then a whisper-thin tone ring just outside it, then lift.
-     The tone reads as a frame, not a fill. */
+  /* A neutral hairline, then lift. No tone ring: a coloured outline around the
+     whole card tints the entire silhouette, which is the wash this design
+     explicitly avoids. The rail and icon carry the tone. */
   box-shadow:
     inset 0 0 0 1px var(--surface-border),
-    0 0 0 1px var(--approval-ring),
     var(--approval-card-shadow, var(--elevation-overlay));
   transform-origin: top left;
   animation: approval-card-in var(--motion-emphasized) var(--ease-emphasized);
@@ -379,18 +406,6 @@ html[data-overlay-dragging] * {
   width: 3px;
   background: var(--approval-accent);
   z-index: 2;
-}
-
-/* A faint tone glow bleeding down from the top — tasteful, fades to nothing. */
-.approval-card::after {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 84px;
-  background: linear-gradient(var(--approval-glow), transparent);
-  opacity: 0.6;
-  pointer-events: none;
-  z-index: 0;
 }
 
 .approval-card-scroll {

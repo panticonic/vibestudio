@@ -9,6 +9,8 @@ interface PaneColumnProps {
   column: LayoutColumn;
   minWidth: number;
   focusedPaneId: string | null;
+  /** False when only one pane is on screen: nothing to distinguish focus from. */
+  showPaneFocus: boolean;
   resident: boolean;
   layoutEpoch: number;
   unresponsivePanels: Set<string>;
@@ -22,6 +24,7 @@ export function PaneColumn({
   column,
   minWidth,
   focusedPaneId,
+  showPaneFocus,
   resident,
   layoutEpoch,
   unresponsivePanels,
@@ -100,6 +103,7 @@ export function PaneColumn({
           <PaneView
             pane={{ ...pane, heightFr: frs[index] ?? pane.heightFr }}
             focused={focusedPaneId === pane.id}
+            showPaneFocus={showPaneFocus}
             resident={resident}
             layoutEpoch={layoutEpoch}
             unresponsive={unresponsivePanels.has(pane.panelId)}

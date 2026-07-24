@@ -48,11 +48,14 @@ import { isPanelClosePointerButton } from "@vibestudio/shared/panelCommands";
 import { notification, panel } from "../shell/client.js";
 import {
   activeWorkspaceNameAtom,
+  connectionSettingsDialogOpenAtom,
   pinnedPanelIdsAtom,
   workspaceChooserDialogOpenAtom,
 } from "../state/appModeAtoms.js";
 import { assertPresent } from "../utils/assertPresent";
 import { BrowserFavicon } from "./BrowserFavicon";
+import { ConnectionStatusBadge } from "./ConnectionStatusBadge";
+import { ThemeSettings } from "./ThemeSettings";
 
 // ============================================================================
 // Style Constants
@@ -747,6 +750,7 @@ interface SidebarFooterProps {
 }
 
 function SidebarFooter({ activeWorkspaceName, onSwitchWorkspace, onNewPanel }: SidebarFooterProps) {
+  const setConnectionSettingsOpen = useSetAtom(connectionSettingsDialogOpenAtom);
   const handleWorkspaceKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Enter" || e.key === " ") {
@@ -772,30 +776,43 @@ function SidebarFooter({ activeWorkspaceName, onSwitchWorkspace, onNewPanel }: S
         New panel
       </Button>
 
-      {/* Workspace selector — the whole row is the switch affordance */}
-      {activeWorkspaceName && (
-        <Flex
-          className="app-tree-workspace app-touch-target"
-          role="button"
-          tabIndex={0}
-          align="center"
-          gap="2"
-          mt="2"
-          px="2"
-          py="1"
-          onClick={onSwitchWorkspace}
-          onKeyDown={handleWorkspaceKeyDown}
-          aria-label={`Workspace: ${activeWorkspaceName}. Activate to switch workspace.`}
-          title="Switch workspace"
-          style={{ borderRadius: "var(--radius-2)", cursor: "pointer" }}
-        >
-          <CubeIcon style={{ flexShrink: 0, color: "var(--gray-9)" }} />
-          <Text size="2" truncate style={{ flex: 1, minWidth: 0, color: "var(--gray-12)" }}>
-            {activeWorkspaceName}
-          </Text>
-          <CaretSortIcon style={{ flexShrink: 0, color: "var(--gray-9)" }} />
-        </Flex>
-      )}
+      {/* One session row: which workspace you're in, plus the two controls that
+          belong to the whole app rather than any panel. The switcher is its own
+          button so the icon buttons beside it stay separately clickable — a row
+          that is itself a button can't contain other buttons. */}
+      <Flex align="center" gap="1" mt="2">
+        {activeWorkspaceName ? (
+          <Flex
+            className="app-tree-workspace app-touch-target"
+            role="button"
+            tabIndex={0}
+            align="center"
+            gap="2"
+            px="2"
+            py="1"
+            onClick={onSwitchWorkspace}
+            onKeyDown={handleWorkspaceKeyDown}
+            aria-label={`Workspace: ${activeWorkspaceName}. Activate to switch workspace.`}
+            title="Switch workspace"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              borderRadius: "var(--radius-2)",
+              cursor: "pointer",
+            }}
+          >
+            <CubeIcon style={{ flexShrink: 0, color: "var(--gray-9)" }} />
+            <Text size="2" truncate style={{ flex: 1, minWidth: 0, color: "var(--gray-12)" }}>
+              {activeWorkspaceName}
+            </Text>
+            <CaretSortIcon style={{ flexShrink: 0, color: "var(--gray-9)" }} />
+          </Flex>
+        ) : (
+          <Box style={{ flex: 1 }} />
+        )}
+        <ConnectionStatusBadge onOpenSettings={() => setConnectionSettingsOpen(true)} />
+        <ThemeSettings />
+      </Flex>
     </Box>
   );
 }

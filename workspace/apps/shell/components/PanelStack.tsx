@@ -116,19 +116,6 @@ function captureHostThemeCss(): string {
   return `${cssVariables}\n${baseline}`;
 }
 
-interface PanelTreeNode {
-  id: string;
-  children?: PanelTreeNode[];
-}
-
-function panelTreeContainsId(panels: PanelTreeNode[], id: string): boolean {
-  for (const panel of panels) {
-    if (panel.id === id) return true;
-    if (panel.children && panelTreeContainsId(panel.children, id)) return true;
-  }
-  return false;
-}
-
 export function PanelStack({
   onTitleChange,
   onChromeStateChange,
@@ -732,7 +719,6 @@ export function PanelStack({
 
   const mobileSidebarWidth = Math.max(0, Math.min(360, viewportWidth - 48));
   const effectiveSidebarWidth = isMobile ? mobileSidebarWidth : sidebarWidth;
-  const sidebarVisible = navigationMode === "tree";
 
   // Send theme CSS to main process for injection into views
   useEffect(() => {
@@ -1266,6 +1252,15 @@ export function PanelStack({
     },
     [closePane, createChildInPane, dispatch, layout.focusedPaneId]
   );
+  // Parked columns are off-screen, so they don't count toward "is there another
+  // pane to fall back to" — only the resident ones do.
+  const visiblePaneCount = useMemo(() => {
+    const resident = new Set(residentColumnIds);
+    return layout.columns.reduce(
+      (total, column) => (resident.has(column.id) ? total + column.panes.length : total),
+      0
+    );
+  }, [layout.columns, residentColumnIds]);
   const paneChromeState = useMemo<FocusedPaneChromeState | null>(() => {
     const paneId = layout.focusedPaneId;
     const location = paneId ? findPane(layout, paneId) : null;
@@ -1280,8 +1275,9 @@ export function PanelStack({
           title: child.title,
         })) ?? [],
       selectedChildPanelId: focusedTreePanel?.selectedChildId ?? null,
+      visiblePaneCount,
     };
-  }, [layout, panelMap]);
+  }, [layout, panelMap, visiblePaneCount]);
   useEffect(() => {
     onPaneChromeStateChange?.(paneChromeState);
   }, [onPaneChromeStateChange, paneChromeState]);

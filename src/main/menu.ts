@@ -47,7 +47,7 @@ export function setMenuPanelRegistry(reg: PanelRegistry): void {
 }
 
 /** Close the currently focused panel. Falls back to window close if no panel is focused. */
-async function archiveFocusedPanel(mainWindow: Electron.BaseWindow): Promise<void> {
+async function archiveFocusedPanel(mainWindow: Electron.BaseWindow | null): Promise<void> {
   const focusedId = _menuPanelRegistry?.getFocusedPanelId();
   if (focusedId && _menuPanelLifecycle) {
     const panel = _menuPanelRegistry?.getPanel(focusedId);
@@ -67,7 +67,9 @@ async function archiveFocusedPanel(mainWindow: Electron.BaseWindow): Promise<voi
     }
     await _menuPanelLifecycle.closePanel(focusedId);
   } else {
-    mainWindow.close();
+    // No focused panel: the app-menu entry falls back to closing the window.
+    // The hamburger has no window handle and simply does nothing.
+    mainWindow?.close();
   }
 }
 
@@ -149,115 +151,53 @@ function interceptPanelDevToolsShortcut(shellContents: WebContents): void {
   });
 }
 
+function refreshPanelDisplay(): void {
+  if (!_menuViewManager) return;
+  const vm = assertPresent(_menuViewManager);
+  vm.refreshVisiblePanel();
+  vm.forceRepaintVisiblePanel();
+}
+
+function copyPanelDisplayDiagnostics(): void {
+  if (!_menuViewManager) return;
+  void assertPresent(_menuViewManager).copyPanelDisplayDiagnosticsToClipboard();
+}
+
 /**
- * Build common menu items that are shared between the app menu and hamburger popup.
- * These items need shell webcontents for IPC communication.
+ * Build the hamburger popup menu template.
+ *
+ * On Windows and Linux the shell window is a `BaseWindow` with a custom
+ * titlebar, so the application menu built by `setupMenu` never renders — this
+ * popup is the only menu the user can reach and has to stay complete. Complete
+ * is not the same as flat, though: everything below the first group is filed
+ * under a task-named submenu, so the popup opens as ~10 rows rather than the
+ * thirty-odd it used to spill.
  */
-export function buildCommonMenuItems(
+export function buildHamburgerMenuTemplate(
   shellContents: WebContents,
+  clearBuildCache: () => Promise<void>,
   options?: {
-    includeClearCache?: () => Promise<void>;
     onHistoryBack?: () => void;
     onHistoryForward?: () => void;
   }
-): {
-  file: MenuItemConstructorOptions[];
-  edit: MenuItemConstructorOptions[];
-  view: MenuItemConstructorOptions[];
-  dev: MenuItemConstructorOptions[];
-} {
+): MenuItemConstructorOptions[] {
   const isMac = process.platform === "darwin";
-  const newPanelAccelerator = PANEL_KEYBOARD_ACCELERATORS.newPanel;
   const reloadPanelAccelerator = isMac ? "Cmd+R" : "Ctrl+Shift+R";
   const forceReloadAccelerator = isMac ? "Cmd+Shift+R" : "Ctrl+Alt+R";
   const addressBarAccelerator = isMac ? "Cmd+L" : "Ctrl+Shift+L";
   const commandPaletteAccelerator = isMac ? "Cmd+K" : "Ctrl+Shift+K";
   const redoAccelerator = isMac ? "Cmd+Shift+Z" : "Ctrl+Shift+Z";
-  const file: MenuItemConstructorOptions[] = [
-    {
-      label: "New Panel",
-      accelerator: newPanelAccelerator,
-      click: () => {
-        emitMenuEvent("navigate-about", { page: ABOUT_PAGES.NEW });
-      },
-    },
-    { type: "separator" },
-    {
-      label: "Command Palette...",
-      accelerator: commandPaletteAccelerator,
-      click: () => {
-        emitMenuEvent("open-command-palette");
-      },
-    },
-    {
-      label: "Focus Pending Approval",
-      accelerator: "CmdOrCtrl+Shift+A",
-      click: () => emitMenuEvent("focus-approval-card"),
-    },
-    {
-      label: "Switch Workspace...",
-      accelerator: "CmdOrCtrl+Shift+O",
-      click: () => {
-        emitMenuEvent("open-workspace-switcher");
-      },
-    },
-    { type: "separator" },
-    {
-      label: "Credentials...",
-      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.CREDENTIALS }),
-    },
-    {
-      label: "Permissions...",
-      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.PERMISSIONS }),
-    },
-    {
-      label: "Downloads...",
-      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.DOWNLOADS }),
-    },
-    {
-      label: "Bookmarks...",
-      accelerator: "CmdOrCtrl+Shift+B",
-      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.BOOKMARKS }),
-    },
-    {
-      label: "History...",
-      accelerator: "CmdOrCtrl+Y",
-      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.HISTORY }),
-    },
-  ];
 
-  const edit: MenuItemConstructorOptions[] = [
-    { label: "Undo", accelerator: "CmdOrCtrl+Z", role: "undo" },
-    { label: "Redo", accelerator: redoAccelerator, role: "redo" },
-    { type: "separator" },
-    { label: "Cut", accelerator: "CmdOrCtrl+X", role: "cut" },
-    { label: "Copy", accelerator: "CmdOrCtrl+C", role: "copy" },
-    { label: "Paste", accelerator: "CmdOrCtrl+V", role: "paste" },
-    { type: "separator" },
-    {
-      label: "Find in Page…",
-      accelerator: "CmdOrCtrl+F",
-      click: () => emitMenuEvent("toggle-find-in-page"),
-    },
-  ];
-
-  const view: MenuItemConstructorOptions[] = [];
+  // Panel: everything acting on the panel in the focused pane.
+  const panel: MenuItemConstructorOptions[] = [];
   if (options?.onHistoryBack) {
-    view.push({
-      label: "Back",
-      click: () => options.onHistoryBack?.(),
-    });
+    panel.push({ label: "Back", click: () => options.onHistoryBack?.() });
   }
   if (options?.onHistoryForward) {
-    view.push({
-      label: "Forward",
-      click: () => options.onHistoryForward?.(),
-    });
+    panel.push({ label: "Forward", click: () => options.onHistoryForward?.() });
   }
-  if (view.length > 0) {
-    view.push({ type: "separator" });
-  }
-  view.push(
+  if (panel.length > 0) panel.push({ type: "separator" });
+  panel.push(
     {
       label: "Reload Panel",
       accelerator: reloadPanelAccelerator,
@@ -269,44 +209,86 @@ export function buildCommonMenuItems(
       click: () => dispatchChromeCommand("force-reload-view"),
     },
     { label: "Stop Loading", click: () => dispatchChromeCommand("stop") },
+    { type: "separator" },
     {
       label: "Toggle Address Bar",
       accelerator: addressBarAccelerator,
-      click: () => {
-        emitMenuEvent("toggle-address-bar");
-      },
+      click: () => emitMenuEvent("toggle-address-bar"),
+    },
+    {
+      label: "Find in Page…",
+      accelerator: "CmdOrCtrl+F",
+      click: () => emitMenuEvent("toggle-find-in-page"),
     },
     { type: "separator" },
     {
-      label: "Refresh Panel Display",
-      click: () => {
-        if (_menuViewManager) {
-          const vm = assertPresent(_menuViewManager);
-          vm.refreshVisiblePanel();
-          vm.forceRepaintVisiblePanel();
-        }
-      },
-    },
-    {
-      label: "Copy Panel Display Diagnostics",
-      click: () => {
-        if (_menuViewManager) {
-          void assertPresent(_menuViewManager).copyPanelDisplayDiagnosticsToClipboard();
-        }
-      },
+      label: "Close Panel",
+      accelerator: PANEL_KEYBOARD_ACCELERATORS.closePanel,
+      click: () => void archiveFocusedPanel(null),
     }
   );
-  view.push(
+
+  const edit: MenuItemConstructorOptions[] = [
+    { label: "Undo", accelerator: "CmdOrCtrl+Z", role: "undo" },
+    { label: "Redo", accelerator: redoAccelerator, role: "redo" },
     { type: "separator" },
-    { label: "Reset Zoom", role: "resetZoom" },
+    { label: "Cut", accelerator: "CmdOrCtrl+X", role: "cut" },
+    { label: "Copy", accelerator: "CmdOrCtrl+C", role: "copy" },
+    { label: "Paste", accelerator: "CmdOrCtrl+V", role: "paste" },
+    { label: "Select All", accelerator: "CmdOrCtrl+A", role: "selectAll" },
+  ];
+
+  // View: how the window itself is presented, plus the display escape hatches.
+  const view: MenuItemConstructorOptions[] = [
     { label: "Zoom In", role: "zoomIn" },
     { label: "Zoom Out", role: "zoomOut" },
+    { label: "Reset Zoom", role: "resetZoom" },
     { type: "separator" },
     { label: "Toggle Full Screen", role: "togglefullscreen" },
-    { label: "Minimize", role: "minimize" }
-  );
+    { label: "Minimize", role: "minimize" },
+    { type: "separator" },
+    { label: "Refresh Panel Display", click: () => refreshPanelDisplay() },
+    { label: "Copy Panel Display Diagnostics", click: () => copyPanelDisplayDiagnostics() },
+  ];
 
-  const dev: MenuItemConstructorOptions[] = [
+  // Workspace: the about/* pages and settings that outlive any one panel.
+  const workspace: MenuItemConstructorOptions[] = [
+    {
+      label: "Switch Workspace…",
+      accelerator: "CmdOrCtrl+Shift+O",
+      click: () => emitMenuEvent("open-workspace-switcher"),
+    },
+    {
+      label: "Connection & Devices…",
+      click: () => emitMenuEvent("open-connection-settings"),
+    },
+    { type: "separator" },
+    {
+      label: "Bookmarks…",
+      accelerator: "CmdOrCtrl+Shift+B",
+      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.BOOKMARKS }),
+    },
+    {
+      label: "History…",
+      accelerator: "CmdOrCtrl+Y",
+      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.HISTORY }),
+    },
+    {
+      label: "Downloads…",
+      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.DOWNLOADS }),
+    },
+    { type: "separator" },
+    {
+      label: "Credentials…",
+      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.CREDENTIALS }),
+    },
+    {
+      label: "Permissions…",
+      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.PERMISSIONS }),
+    },
+  ];
+
+  const developer: MenuItemConstructorOptions[] = [
     {
       label: "Toggle Panel DevTools",
       accelerator: "CmdOrCtrl+Shift+I",
@@ -317,46 +299,53 @@ export function buildCommonMenuItems(
       accelerator: "CmdOrCtrl+Alt+I",
       click: () => toggleAppDevTools(shellContents),
     },
+    { type: "separator" },
+    { label: "Clear Build Cache", click: () => void clearBuildCache() },
   ];
 
-  if (options?.includeClearCache) {
-    dev.push({ type: "separator" });
-    dev.push({
-      label: "Clear Build Cache",
-      click: async () => {
-        await assertPresent(options.includeClearCache)();
-      },
-    });
-  }
-
-  return { file, edit, view, dev };
-}
-
-/**
- * Build the hamburger popup menu template.
- * Uses shared menu items but structured for popup display.
- */
-export function buildHamburgerMenuTemplate(
-  shellContents: WebContents,
-  clearBuildCache: () => Promise<void>,
-  options?: {
-    onHistoryBack?: () => void;
-    onHistoryForward?: () => void;
-  }
-): MenuItemConstructorOptions[] {
-  const common = buildCommonMenuItems(shellContents, {
-    includeClearCache: clearBuildCache,
-    onHistoryBack: options?.onHistoryBack,
-    onHistoryForward: options?.onHistoryForward,
-  });
+  const help: MenuItemConstructorOptions[] = [
+    {
+      // Filed with the other "how do I reach things" entries rather than at the
+      // top: it is a discovery surface, not a frequent menu click.
+      label: "Command Palette…",
+      accelerator: commandPaletteAccelerator,
+      click: () => emitMenuEvent("open-command-palette"),
+    },
+    {
+      label: "Keyboard Shortcuts",
+      accelerator: "CmdOrCtrl+/",
+      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.KEYBOARD_SHORTCUTS }),
+    },
+    {
+      label: "Documentation",
+      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.HELP }),
+    },
+    { type: "separator" },
+    {
+      label: "About Vibestudio",
+      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.ABOUT }),
+    },
+  ];
 
   return [
-    ...common.file,
+    // The two actions worth a click without hunting through a submenu.
+    {
+      label: "New Panel",
+      accelerator: PANEL_KEYBOARD_ACCELERATORS.newPanel,
+      click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.NEW }),
+    },
+    {
+      label: "Focus Pending Approval",
+      accelerator: "CmdOrCtrl+Shift+A",
+      click: () => emitMenuEvent("focus-approval-card"),
+    },
     { type: "separator" },
-    ...common.edit,
-    { type: "separator" },
-    ...common.view,
-    ...common.dev,
+    { label: "Panel", submenu: panel },
+    { label: "Edit", submenu: edit },
+    { label: "View", submenu: view },
+    { label: "Workspace", submenu: workspace },
+    { label: "Developer", submenu: developer },
+    { label: "Help", submenu: help },
     { type: "separator" },
     { label: "Exit", accelerator: "CmdOrCtrl+Q", role: "quit" },
   ];
@@ -448,6 +437,14 @@ export function setupMenu(
           accelerator: "CmdOrCtrl+Shift+O",
           click: () => {
             emitMenuEvent("open-workspace-switcher");
+          },
+        },
+        {
+          // The connection badge lives in the panel tree, which breadcrumb mode
+          // hides — so the menu has to be able to reach these settings too.
+          label: "Connection & Devices…",
+          click: () => {
+            emitMenuEvent("open-connection-settings");
           },
         },
         { type: "separator" },
