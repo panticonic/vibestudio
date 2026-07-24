@@ -11,6 +11,7 @@ import {
   closeOpenAICodexWebSocketSessions,
   releaseOpenAICodexWebSocketSession,
 } from "@earendil-works/pi-ai/api/openai-codex-responses";
+import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options";
 import type { Context, Message } from "@earendil-works/pi-ai";
 import {
   buildModelContext,
@@ -716,6 +717,8 @@ type ModelCallProgress = {
    *  warning — distinguishes a provider that throttles mid-stream (large gaps)
    *  from a steady stream that is merely long (small gaps, high totals). */
   maxEventGapMs: number;
+  /** Aggregate argument bytes received for in-flight tool calls. */
+  toolArgumentBytes: number;
   /** Stage-transition timeline for the per-call completion summary. */
   marks: Array<[string, number]>;
 };
@@ -749,6 +752,7 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
       totalEvents: 0,
       lastEventAt: null,
       maxEventGapMs: 0,
+      toolArgumentBytes: 0,
       marks: [["start", Date.now()]],
     };
     // Stall diagnostics: several phases of a model call (credential resolve,
@@ -771,6 +775,7 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
         eventsPerSecond:
           Math.round((eventsInWindow / (SLOW_MODEL_CALL_WARN_INTERVAL_MS / 1000)) * 10) / 10,
         maxEventGapMs,
+        toolArgumentBytes: progress.toolArgumentBytes,
         channelId: descriptor.channelId,
         messageId: descriptor.messageId,
         provider: descriptor.request.provider,
@@ -795,6 +800,7 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
           phaseMs: phaseDurationsFromMarks(progress.marks, endedAt),
           totalEvents: progress.totalEvents,
           eventCounts: progress.eventCounts,
+          toolArgumentBytes: progress.toolArgumentBytes,
           channelId: descriptor.channelId,
           messageId: descriptor.messageId,
           provider: descriptor.request.provider,
@@ -1069,6 +1075,16 @@ async function executeModelCall(
         : undefined;
     eventStream = stream(effectiveSpec as never, context, {
       apiKey: credentials.apiKey,
+      // We call pi-ai's raw stream surface to retain provider-native
+      // reasoning summaries. Raw stream does not apply streamSimple's base
+      // options for us, so carry the journaled model output limit across this
+      // boundary explicitly. Omitting it lets a malformed tool call stream
+      // without the model catalog's terminal token bound.
+      maxTokens: clampMaxTokensToContext(
+        effectiveSpec as never,
+        context,
+        effectiveSpec.maxTokens
+      ),
       ...(credentials.headers ? { headers: credentials.headers } : {}),
       signal: streamAbort.signal,
       sessionId: providerSessionId,
@@ -1135,6 +1151,9 @@ async function executeModelCall(
         trace("stream.first-event", {
           eventType: String(event["type"] ?? ""),
         });
+        // first-event is an instant milestone, not the phase that remains
+        // active for the rest of generation.
+        trace("streaming");
       }
       const type = String(event["type"] ?? "");
       if (type === "text_delta" || type === "thinking_delta") {
@@ -1188,7 +1207,9 @@ async function executeModelCall(
         }
         const tracked = toolCallProgress.get(index) ?? { name: null, argBytes: 0, emitted: 0 };
         if (type === "toolcall_delta") {
-          tracked.argBytes += String(event["delta"] ?? "").length;
+          const deltaBytes = String(event["delta"] ?? "").length;
+          tracked.argBytes += deltaBytes;
+          progress.toolArgumentBytes += deltaBytes;
           if (!tracked.name) tracked.name = toolCallNameFromEvent(event);
         }
         toolCallProgress.set(index, tracked);

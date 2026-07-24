@@ -233,7 +233,7 @@ describe("modelCallExecutor", () => {
       { message: "Starting local model…" },
       { message: "Loading LFM2.5 1.2B Instruct… (first use may download)" },
     ]);
-    expect(streamOptions).toMatchObject({ apiKey: "loopback-key" });
+    expect(streamOptions).toMatchObject({ apiKey: "loopback-key", maxTokens: 4096 });
     // pi-ai constructs its client from model.baseUrl and IGNORES a baseUrl
     // option — the live endpoint must be baked into the model literal.
     expect(streamedModel).toMatchObject({ baseUrl: "http://127.0.0.1:43117/v1" });
