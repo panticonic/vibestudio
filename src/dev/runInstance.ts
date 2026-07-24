@@ -4,10 +4,13 @@ import * as path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import {
+  clearDevInstanceReady,
   createEphemeralInstanceRoot,
   generatedInstanceId,
   persistentInstanceRoot,
+  publishDevInstanceReady,
   registerDevInstance,
+  removeEphemeralInstanceRoot,
   unregisterDevInstance,
   type DevInstanceRecord,
 } from "./instanceRegistry.js";
@@ -158,6 +161,7 @@ async function runServer(
   try {
     const ready = await waitForReady(readyFile, child);
     const bootstrap = await bootstrapInstanceCli(ready);
+    publishDevInstanceReady(instance, bootstrap);
     if (bootstrap.status === "invite-required") {
       console.warn(
         `[instance:${instance.id}] CLI is not paired. Create a device invite, then run ` +
@@ -241,6 +245,10 @@ async function main(): Promise<void> {
     lifecycle: disposable ? "ephemeral" : "persistent",
     startedAt: Date.now(),
   });
+  // Only the lock owner may mutate this instance's readiness marker. Once the
+  // new generation is registered, concurrent CLI readers reject the old
+  // generation even in the brief interval before this unlink.
+  if (mode === "server") clearDevInstanceReady(instance);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     NODE_ENV: "development",
@@ -262,8 +270,19 @@ async function main(): Promise<void> {
         ? await runServer(parsed.forwarded, env, instance)
         : await runDesktop(parsed.forwarded, env);
   } finally {
-    unregisterDevInstance(repoRoot, id);
-    if (disposable) fs.rmSync(root, { recursive: true, force: true });
+    const cleanupError = disposable ? removeEphemeralInstanceRoot(root) : null;
+    if (cleanupError) {
+      // Preserve the registry record and root together: the stale supervisor
+      // PID makes the instance unusable, while retaining the exact root makes
+      // a leaked descendant diagnosable. Most importantly, cleanup must not
+      // replace the hub's original exit status with a bare ENOTEMPTY.
+      console.error(
+        `[instance:${id}] could not remove ephemeral state ${root}: ${cleanupError.message}`
+      );
+      process.exitCode = process.exitCode || 1;
+    } else {
+      unregisterDevInstance(repoRoot, id);
+    }
   }
 }
 

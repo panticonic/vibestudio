@@ -15,7 +15,16 @@ export interface DevInstanceRecord {
   supervisorPid: number;
   kind: "desktop" | "server";
   lifecycle: "ephemeral" | "persistent";
+  generationId: string;
   startedAt: number;
+}
+
+export interface DevInstanceReadyRecord {
+  schemaVersion: 1;
+  instanceGeneration: string;
+  status: "existing" | "paired" | "invite-required";
+  workspaceName?: string;
+  readyAt: number;
 }
 
 function canonicalRepoRoot(repoRoot: string): string {
@@ -47,6 +56,83 @@ function registryLockPath(repoRoot: string, id: string): string {
   return `${registryPath(repoRoot, id)}.lock`;
 }
 
+export function devInstanceReadyPath(instance: Pick<DevInstanceRecord, "root">): string {
+  return path.join(instance.root, "dev-instance-ready.json");
+}
+
+export function clearDevInstanceReady(instance: Pick<DevInstanceRecord, "root">): void {
+  fs.rmSync(devInstanceReadyPath(instance), { force: true });
+}
+
+export function publishDevInstanceReady(
+  instance: Pick<DevInstanceRecord, "root" | "generationId">,
+  input: Omit<DevInstanceReadyRecord, "schemaVersion" | "instanceGeneration" | "readyAt">
+): DevInstanceReadyRecord {
+  const ready: DevInstanceReadyRecord = {
+    schemaVersion: 1,
+    instanceGeneration: instance.generationId,
+    ...input,
+    readyAt: Date.now(),
+  };
+  writeFileAtomicSync(devInstanceReadyPath(instance), `${JSON.stringify(ready, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  return ready;
+}
+
+export async function waitForDevInstanceReady(
+  instance: Pick<DevInstanceRecord, "root" | "generationId" | "supervisorPid" | "id">
+): Promise<DevInstanceReadyRecord> {
+  const file = devInstanceReadyPath(instance);
+  for (;;) {
+    try {
+      const value = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<DevInstanceReadyRecord>;
+      if (
+        value.schemaVersion !== 1 ||
+        value.instanceGeneration !== instance.generationId ||
+        (value.status !== "existing" &&
+          value.status !== "paired" &&
+          value.status !== "invite-required") ||
+        typeof value.readyAt !== "number" ||
+        !Number.isFinite(value.readyAt) ||
+        (value.status !== "invite-required" &&
+          (typeof value.workspaceName !== "string" || value.workspaceName.length === 0))
+      ) {
+        // A persistent instance root deliberately survives supervisor restarts.
+        // A structurally valid record from another generation is therefore not
+        // corruption; it is simply not the barrier this caller is waiting for.
+        if (
+          value.schemaVersion === 1 &&
+          typeof value.instanceGeneration === "string" &&
+          value.instanceGeneration !== instance.generationId
+        ) {
+          throw Object.assign(new Error("stale developer instance readiness record"), {
+            code: "ESTALE",
+          });
+        }
+        throw new Error(`Developer instance readiness record is invalid: ${file}`);
+      }
+      return value as DevInstanceReadyRecord;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ESTALE" && !(error instanceof SyntaxError)) {
+        throw error;
+      }
+    }
+    try {
+      process.kill(instance.supervisorPid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+        throw new Error(
+          `Vibestudio instance ${JSON.stringify(instance.id)} exited before CLI readiness`
+        );
+      }
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
 export function persistentInstanceRoot(repoRoot: string, id: string): string {
   assertInstanceId(id);
   return path.join(getProfileDataPath(), "instance-state", repoKey(repoRoot), id);
@@ -57,17 +143,42 @@ export function createEphemeralInstanceRoot(id: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `vibestudio-${id}-`));
 }
 
+export function removeEphemeralInstanceRoot(
+  root: string,
+  deps: {
+    rmSync?: typeof fs.rmSync;
+  } = {}
+): Error | null {
+  try {
+    (deps.rmSync ?? fs.rmSync)(root, {
+      recursive: true,
+      force: true,
+      // A workspace child can still be closing SQLite files or renaming its
+      // final diagnostics after the hub process exits. Node only retries
+      // ENOTEMPTY/EBUSY/EPERM when maxRetries is explicitly non-zero.
+      maxRetries: 20,
+      retryDelay: 100,
+    });
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+}
+
 export function generatedInstanceId(kind: DevInstanceRecord["kind"]): string {
   return `${kind}-${randomBytes(4).toString("hex")}`;
 }
 
 export function registerDevInstance(
-  input: Omit<DevInstanceRecord, "schemaVersion" | "repoRoot"> & { repoRoot: string }
+  input: Omit<DevInstanceRecord, "schemaVersion" | "repoRoot" | "generationId"> & {
+    repoRoot: string;
+  }
 ): DevInstanceRecord {
   assertInstanceId(input.id);
   const record: DevInstanceRecord = {
     schemaVersion: 1,
     ...input,
+    generationId: randomBytes(16).toString("hex"),
     root: path.resolve(input.root),
     repoRoot: canonicalRepoRoot(input.repoRoot),
   };
@@ -158,6 +269,8 @@ export function resolveDevInstance(repoRoot: string, id: string): DevInstanceRec
     record.supervisorPid <= 0 ||
     (record.kind !== "desktop" && record.kind !== "server") ||
     (record.lifecycle !== "ephemeral" && record.lifecycle !== "persistent") ||
+    typeof record.generationId !== "string" ||
+    !/^[a-f0-9]{32}$/u.test(record.generationId) ||
     typeof record.startedAt !== "number" ||
     !Number.isFinite(record.startedAt)
   ) {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import * as path from "node:path";
-import { resolveDevInstance } from "./instanceRegistry.js";
+import { resolveDevInstance, waitForDevInstanceReady } from "./instanceRegistry.js";
 
 function extractInstance(argv: string[]): { instanceId?: string; argv: string[] } {
   const remaining = [...argv];
@@ -25,6 +25,7 @@ async function main(): Promise<void> {
     const instance = resolveDevInstance(repoRoot, parsed.instanceId);
     process.env["VIBESTUDIO_INSTANCE_ROOT"] = instance.root;
     process.env["VIBESTUDIO_INSTANCE"] = instance.id;
+    if (instance.kind === "server") await waitForDevInstanceReady(instance);
   }
 
   const { installBrokenPipeHandler, main: runCli } = await import("../cli/client.js");
