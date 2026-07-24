@@ -197,14 +197,21 @@ export function createReadTool(
       // bounded listing here so callers do not need to recover from EISDIR and
       // repeat the same request through another tool.
       try {
-        const stats = await fs.stat(absolutePath);
+        const stats = await retryTransientRuntimeFs(() => fs.stat(absolutePath), signal);
         if (stats.isDirectory()) {
-          const entries = (await fs.readdir(absolutePath)).map(String).sort();
+          const entries = (
+            await retryTransientRuntimeFs(() => fs.readdir(absolutePath), signal)
+          )
+            .map(String)
+            .sort();
           const shown = entries.slice(0, 200);
           const rendered = await Promise.all(
             shown.map(async (name) => {
               try {
-                const child = await fs.stat(`${absolutePath.replace(/\/$/, "")}/${name}`);
+                const child = await retryTransientRuntimeFs(
+                  () => fs.stat(`${absolutePath.replace(/\/$/, "")}/${name}`),
+                  signal
+                );
                 return child.isDirectory() ? `${name}/` : name;
               } catch {
                 return name;
@@ -229,7 +236,10 @@ export function createReadTool(
       }
       // Check that the file exists / is readable; preserve ENOENT semantics.
       try {
-        await fs.access(absolutePath, fs.constants.R_OK);
+        await retryTransientRuntimeFs(
+          () => fs.access(absolutePath, fs.constants.R_OK),
+          signal
+        );
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
           return missingResult(path, absolutePath);
@@ -248,7 +258,10 @@ export function createReadTool(
       const likelyImage = isLikelyImagePath(path);
       let raw: string | Buffer;
       try {
-        raw = await fs.readFile(absolutePath, likelyImage ? undefined : "utf8");
+        raw = await retryTransientRuntimeFs(
+          () => fs.readFile(absolutePath, likelyImage ? undefined : "utf8"),
+          signal
+        );
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
           return missingResult(path, absolutePath);
@@ -378,4 +391,28 @@ function formatTextResult(
     content: [{ type: "text", text: outputText }],
     details: { ...details, path: displayPath, engine: "runtime-fs", extensionFallback },
   };
+}
+const TRANSIENT_RUNTIME_FS_FAILURE =
+  /(?:DO dispatch fetch|fetch failed|other side closed|socket hang up|UND_ERR_SOCKET|ECONNRESET|ECONNREFUSED|ETIMEDOUT|\btransport\b)/iu;
+const TRANSIENT_RUNTIME_FS_ATTEMPTS = 4;
+
+async function retryTransientRuntimeFs<T>(
+  operation: () => Promise<T>,
+  signal?: AbortSignal
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= TRANSIENT_RUNTIME_FS_ATTEMPTS; attempt += 1) {
+    if (signal?.aborted) throw new Error("Operation aborted");
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt === TRANSIENT_RUNTIME_FS_ATTEMPTS || !TRANSIENT_RUNTIME_FS_FAILURE.test(message)) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, attempt * 100));
+    }
+  }
+  throw lastError;
 }

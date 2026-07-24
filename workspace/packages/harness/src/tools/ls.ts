@@ -74,15 +74,6 @@ export function createLsTool(
           agentToolFailureFromUnknown(err, {
             operation: "fs.stat",
             stage: "resolve-directory",
-            ...(isUnresponsiveRuntimeFs(err)
-              ? {
-                  kind: "infrastructure" as const,
-                  retry: {
-                    policy: "reobserve" as const,
-                    commandIdPolicy: "not-applicable" as const,
-                  },
-                }
-              : {}),
           }),
           err
         );
@@ -109,15 +100,6 @@ export function createLsTool(
           agentToolFailureFromUnknown(e, {
             operation: "fs.readdir",
             stage: "list-directory",
-            ...(isUnresponsiveRuntimeFs(e)
-              ? {
-                  kind: "infrastructure" as const,
-                  retry: {
-                    policy: "reobserve" as const,
-                    commandIdPolicy: "not-applicable" as const,
-                  },
-                }
-              : {}),
           }),
           e
         );
@@ -170,12 +152,4 @@ export function createLsTool(
       };
     },
   };
-}
-
-function isUnresponsiveRuntimeFs(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as { code?: unknown }).code === "fs_runtime_unresponsive"
-  );
 }

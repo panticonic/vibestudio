@@ -72,36 +72,4 @@ describe("createLsTool", () => {
     });
   });
 
-  it("classifies an unresponsive filesystem transport as retryable infrastructure", async () => {
-    const fs = new StubFs();
-    fs.stat = async () => {
-      throw Object.assign(new Error("Filesystem operation fs.stat did not settle within 15000ms"), {
-        code: "fs_runtime_unresponsive",
-        errorData: {
-          code: "fs_runtime_unresponsive",
-          method: "stat",
-          timeoutMs: 15_000,
-        },
-      });
-    };
-    const tool = createLsTool(CWD, fs);
-
-    await expect(tool.execute("call-1", { path: "." })).rejects.toMatchObject({
-      failure: {
-        code: "fs_runtime_unresponsive",
-        kind: "infrastructure",
-        operation: "fs.stat",
-        stage: "resolve-directory",
-        retry: {
-          policy: "reobserve",
-          commandIdPolicy: "not-applicable",
-        },
-        data: {
-          code: "fs_runtime_unresponsive",
-          method: "stat",
-          timeoutMs: 15_000,
-        },
-      },
-    });
-  });
 });

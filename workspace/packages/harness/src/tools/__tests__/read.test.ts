@@ -16,6 +16,25 @@ describe("createReadTool", () => {
     expect(readFile).toHaveBeenCalledWith(`${CWD}/hello.txt`, "utf8");
   });
 
+  it("retries a transient runtime transport failure inside the same read invocation", async () => {
+    const fs = new StubFs({ files: { [`${CWD}/hello.txt`]: "hello" } });
+    const originalReadFile = fs.readFile.bind(fs);
+    const readFile = vi
+      .spyOn(fs, "readFile")
+      .mockRejectedValueOnce(
+        new Error(
+          "DO dispatch fetch failed: fetch failed (cause: SocketError: other side closed code=UND_ERR_SOCKET)"
+        )
+      )
+      .mockImplementation(originalReadFile);
+    const tool = createReadTool(CWD, fs);
+
+    await expect(tool.execute("call-1", { path: "hello.txt" })).resolves.toMatchObject({
+      content: [{ type: "text", text: "hello" }],
+    });
+    expect(readFile).toHaveBeenCalledTimes(2);
+  });
+
   it("returns a bounded directory listing instead of failing the turn", async () => {
     const fs = new StubFs({
       files: {
