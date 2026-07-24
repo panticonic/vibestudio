@@ -84,6 +84,30 @@ function fixturePublicationAuthority(
   ];
 }
 
+function fixtureContextAuthority(
+  policy: AgentExecutionTestPolicySpec | null,
+  counteractionRepoPaths: readonly string[]
+): AgentExecutionTestPolicySpec | null {
+  if (!policy || counteractionRepoPaths.length === 0) return policy;
+  const repoPaths = [...new Set(counteractionRepoPaths)].sort();
+  return {
+    ...policy,
+    authority: [
+      ...policy.authority,
+      ...repoPaths.map((repoPath, index) => ({
+        ruleId: `fixture-counteraction-delete-${index + 1}`,
+        capability: "workspace-repo-delete",
+        resource: {
+          kind: "exact" as const,
+          key: `workspace-repo-delete:${repoPath}`,
+        },
+        tier: "critical" as const,
+        decision: "once" as const,
+      })),
+    ],
+  };
+}
+
 export class HeadlessRunner {
   private contextId: string;
   private readonly shared: {
@@ -138,10 +162,15 @@ export class HeadlessRunner {
           {
             vcs,
             blobstore,
-            createContext: () =>
-              rpc.call<{ contextId: string }>("main", "runtime.createContext", [
-                testAuthorityPolicy ? { testPolicy: testAuthorityPolicy } : {},
-              ]),
+            createContext: (input) => {
+              const contextPolicy = fixtureContextAuthority(
+                testAuthorityPolicy,
+                input?.counteractionRepoPaths ?? []
+              );
+              return rpc.call<{ contextId: string }>("main", "runtime.createContext", [
+                contextPolicy ? { testPolicy: contextPolicy } : {},
+              ]);
+            },
             destroyContext: (contextId) =>
               rpc.call<void>("main", "runtime.destroyContext", [{ contextId, recursive: true }]),
           },
@@ -259,9 +288,10 @@ export class HeadlessRunner {
    * never attributed to this test.
    */
   async cleanupWorkspaceRepoFixture(
-    state: WorkspaceRepoFixtureState
+    state: WorkspaceRepoFixtureState,
+    onPhase?: (phase: string) => void
   ): Promise<WorkspaceRepoFixtureCleanup> {
-    return this.requireWorkspaceRepoFixtureLifecycle().cleanup(state);
+    return this.requireWorkspaceRepoFixtureLifecycle().cleanup(state, onPhase);
   }
 
   /**

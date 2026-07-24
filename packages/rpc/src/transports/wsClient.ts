@@ -116,7 +116,12 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       return;
     }
     try {
-      authToken = await config.adapter.refreshAuthToken();
+      const previousAuthToken = authToken;
+      const refreshedAuthToken = await config.adapter.refreshAuthToken();
+      if (refreshedAuthToken === previousAuthToken) {
+        throw new Error("Auth refresh returned the rejected token");
+      }
+      authToken = refreshedAuthToken;
       const oldSocket = socket;
       const nextGeneration = ++generation;
       oldSocket?.close(4000, "Refreshing auth token");

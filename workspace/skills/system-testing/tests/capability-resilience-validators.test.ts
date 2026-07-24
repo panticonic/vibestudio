@@ -234,10 +234,10 @@ describe("approval semantic validators", () => {
     expect(
       scenario(approvalPermissionTests, "approvals-list").validate(
         execution([
-          evalCall(
-            "const list = await approvals.list(); return { count: list.length, list };",
-            { count: 0, list: [] }
-          ),
+          evalCall("const list = await approvals.list(); return { count: list.length, list };", {
+            count: 0,
+            list: [],
+          }),
         ])
       ).passed
     ).toBe(true);
@@ -734,12 +734,12 @@ describe("edge and harness semantic validators", () => {
 });
 
 describe("project lifecycle semantic validators", () => {
-  it("requires canonical create/fork results and an opened panel", () => {
+  it("requires semantic create/fork evidence and an opened panel", () => {
     expect(
       scenario(projectLifecycleTests, "panel-create-commit-open").validate(
         execution([
           evalCall(
-            "const created = await createProject(input); const opened = await openPanel(created.created); return { ...created, openedPanelId: opened.id };",
+            "const created = await createProject(input); const opened = await openPanel(created.created); return { ...created, observation: await opened.observe(), snapshot: await opened.snapshot() };",
             {
               created: "panels/new-panel",
               files: ["index.tsx"],
@@ -753,10 +753,26 @@ describe("project lifecycle semantic validators", () => {
       ).passed
     ).toBe(true);
     expect(
+      scenario(projectLifecycleTests, "panel-create-commit-open").validate(
+        execution([
+          evalCall(
+            "const created = await createProject(input); const opened = await openPanel(created.created); return { created: created.created, files: created.files.length, preflightOk: created.preflight.ok, publication: created.publication, ready: await opened.observe(), snapshot: await opened.snapshot() };",
+            {
+              created: "panels/summarized-panel",
+              files: 2,
+              preflightOk: true,
+              publication: publication(),
+              ...bootEvidence("panel:summary"),
+            }
+          ),
+        ])
+      ).passed
+    ).toBe(true);
+    expect(
       scenario(projectLifecycleTests, "panel-fork-dry-run-and-commit").validate(
         execution([
           evalCall(
-            "const plan = await forkProject(source, { dryRun: true }); const created = await forkProject(source, { dryRun: false }); const opened = await openPanel(created.created); return { ...created, openedPanelId: opened.id };",
+            "const plan = await forkProject(source, { dryRun: true }); const created = await forkProject(source, { dryRun: false }); const opened = await openPanel(created.created); return { ...created, observation: await opened.observe(), snapshot: await opened.snapshot() };",
             {
               source: "panels/source",
               created: "panels/forked",
@@ -772,6 +788,114 @@ describe("project lifecycle semantic validators", () => {
         ])
       ).passed
     ).toBe(true);
+    expect(
+      scenario(projectLifecycleTests, "panel-fork-dry-run-and-commit").validate(
+        execution([
+          evalCall(
+            "const plan = await forkPanel({ from: source, name, dryRun: true }); const created = await forkPanel({ from: source, name, dryRun: false }); const opened = await openPanel(created.created); return { plan, created, ready: await opened.observe(), snapshot: await opened.snapshot() };",
+            {
+              plan: {
+                source: "panels/source",
+                created: "panels/typed-fork",
+                files: ["index.tsx"],
+                committed: false,
+                dryRun: true,
+                preflight: preflight("panel"),
+                publication: null,
+              },
+              created: {
+                source: "panels/source",
+                created: "panels/typed-fork",
+                files: ["index.tsx"],
+                committed: true,
+                dryRun: false,
+                preflight: preflight("panel"),
+                publication: publication(),
+              },
+              ...bootEvidence("panel:typed"),
+            }
+          ),
+        ])
+      ).passed
+    ).toBe(true);
+    expect(
+      scenario(projectLifecycleTests, "panel-fork-dry-run-and-commit").validate(
+        execution([
+          evalCall(
+            "const plan = await forkPanel({ from: source, name, dryRun: true }); const created = await forkPanel({ from: source, name, dryRun: false }); const opened = await openPanel(created.created); const observation = await opened.observe(); const snapshot = await opened.snapshot(); return { plan, created, observation, snapshot: { panelId: snapshot.panelId, attemptId: snapshot.attemptId, buildKey: snapshot.buildKey, text: snapshot.document.text.slice(0, 300) } };",
+            {
+              plan: {
+                source: "panels/source",
+                created: "panels/projected-fork",
+                files: ["index.tsx"],
+                committed: false,
+                dryRun: true,
+                preflight: preflight("panel"),
+                publication: null,
+              },
+              created: {
+                source: "panels/source",
+                created: "panels/projected-fork",
+                files: ["index.tsx"],
+                committed: true,
+                dryRun: false,
+                preflight: preflight("panel"),
+                publication: publication(),
+              },
+              observation: {
+                panelId: "panel:projected",
+                attemptId: "runtime:projected@build:projected",
+                runtimeEntityId: "runtime:projected",
+                buildKey: "build:projected",
+                phase: "ready",
+              },
+              snapshot: {
+                panelId: "panel:projected",
+                attemptId: "runtime:projected@build:projected",
+                buildKey: "build:projected",
+                text: "Rendered projected panel content",
+              },
+            }
+          ),
+        ])
+      ).passed
+    ).toBe(true);
+    expect(
+      scenario(projectLifecycleTests, "panel-fork-dry-run-and-commit").validate(
+        execution([
+          evalCall(
+            "const plan = await forkPanel({ from: source, name, dryRun: true }); const created = await forkPanel({ from: source, name, dryRun: false }); const opened = await openPanel(created.created); return { plan, created, observation: await opened.observe() };",
+            {
+              plan: {
+                source: "panels/source",
+                created: "panels/boot-only",
+                files: ["index.tsx"],
+                committed: false,
+                dryRun: true,
+                preflight: preflight("panel"),
+                publication: null,
+              },
+              created: {
+                source: "panels/source",
+                created: "panels/boot-only",
+                files: ["index.tsx"],
+                committed: true,
+                dryRun: false,
+                preflight: preflight("panel"),
+                publication: publication(),
+              },
+              observation: {
+                panelId: "panel:boot-only",
+                attemptId: "runtime:boot-only@build:boot-only",
+                runtimeEntityId: "runtime:boot-only",
+                buildKey: "build:boot-only",
+                phase: "ready",
+              },
+            }
+          ),
+        ])
+      ).passed
+    ).toBe(false);
   });
 
   it("requires a dry-run worker plan and identity-joined package commit", () => {
@@ -784,8 +908,27 @@ describe("project lifecycle semantic validators", () => {
             files: ["index.ts"],
             committed: false,
             dryRun: true,
+            publication: null,
             preflight: preflight("worker"),
           }),
+        ])
+      ).passed
+    ).toBe(true);
+    expect(
+      scenario(projectLifecycleTests, "worker-fork-classmap-dry-run").validate(
+        execution([
+          evalCall(
+            "const result = await forkWorker({ from: source, name, dryRun: true }); return { source: result.source, created: result.created, fileCount: result.files.length, committed: result.committed, dryRun: result.dryRun, publication: result.publication, preflightOk: result.preflight.ok };",
+            {
+              source: "workers/source",
+              created: "workers/projected-fork",
+              fileCount: 5,
+              committed: false,
+              dryRun: true,
+              publication: null,
+              preflightOk: true,
+            }
+          ),
         ])
       ).passed
     ).toBe(true);

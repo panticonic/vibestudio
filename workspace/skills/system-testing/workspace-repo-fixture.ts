@@ -36,7 +36,14 @@ export type WorkspaceRepoFixtureSpec = WorkspaceRepoCreationScope;
 export interface WorkspaceRepoFixturePort {
   vcs: FixtureVcs;
   blobstore: FixtureBlobstore;
-  createContext(): Promise<{ contextId: string }>;
+  createContext(input?: {
+    /**
+     * Exact repositories proved to have been created by this fixture's task
+     * lineage. A system-test host may use these identities to preauthorize the
+     * otherwise-critical deletion performed by the cleanup counteraction.
+     */
+    counteractionRepoPaths?: string[];
+  }): Promise<{ contextId: string }>;
   destroyContext(contextId: string): Promise<void>;
 }
 
@@ -244,7 +251,10 @@ export class WorkspaceRepoFixtureLifecycle {
     }
   }
 
-  async cleanup(state: WorkspaceRepoFixtureState): Promise<WorkspaceRepoFixtureCleanup> {
+  async cleanup(
+    state: WorkspaceRepoFixtureState,
+    onPhase?: (phase: string) => void
+  ): Promise<WorkspaceRepoFixtureCleanup> {
     if (this.contextId !== state.contextId) {
       throw new Error(
         `Workspace repository fixture context changed from ${state.contextId} to ${this.contextId ?? "none"}`
@@ -258,26 +268,40 @@ export class WorkspaceRepoFixtureLifecycle {
     let creationScopeError: Error | null = null;
     let cleanupContextId: string | null = null;
     try {
+      onPhase?.("task-status");
       const taskStatus = await this.port.vcs.status({ contextId: state.contextId });
       if (taskStatus.committed.kind !== "event") {
         throw new Error("Workspace fixture task context has no committed event for attribution");
       }
+      onPhase?.("task-first-parent-events");
       const taskEvents = await this.taskFirstParentEvents(state, taskStatus.committed.eventId);
-      const creationScope =
-        state.kind === "created-repository" || state.kind === "buildable-panel-with-derived"
-          ? this.resolveCreationScope(
-              state,
-              (await this.inspectTaskChanges(await this.taskWorkNewestFirst(taskEvents)))
-                .createdRepositories
-            )
-          : this.resolveCreationScope(state, []);
+      const needsCreationScope =
+        state.kind === "created-repository" || state.kind === "buildable-panel-with-derived";
+      const scopedTaskChanges = needsCreationScope
+        ? await this.inspectTaskChanges(await this.taskWorkNewestFirst(taskEvents))
+        : null;
+      onPhase?.("task-creation-scope");
+      const creationScope = this.resolveCreationScope(
+        state,
+        scopedTaskChanges?.createdRepositories ?? []
+      );
       creationScopeError = creationScope.error;
+      onPhase?.("published-boundary");
       const publishedBoundary =
         taskEvents.length === 0
           ? state.taskBaseEventId
           : await this.newestPublishedTaskEvent(state, taskEvents, taskStatus.mainEventId);
       if (publishedBoundary !== state.taskBaseEventId) {
-        cleanupContextId = (await this.port.createContext()).contextId;
+        const taskChanges =
+          scopedTaskChanges ??
+          (await this.inspectTaskChanges(await this.taskWorkNewestFirst(taskEvents)));
+        onPhase?.("cleanup-context-create");
+        cleanupContextId = (
+          await this.port.createContext({
+            counteractionRepoPaths: taskChanges.createdRepositories.map(({ repoPath }) => repoPath),
+          })
+        ).contextId;
+        onPhase?.("cleanup-context-status");
         const cleanupStatus = await this.port.vcs.status({ contextId: cleanupContextId });
         if (
           !cleanupStatus.clean ||
@@ -293,6 +317,7 @@ export class WorkspaceRepoFixtureLifecycle {
           taskEvents,
           cleanupStatus.mainEventId
         );
+        onPhase?.("published-work");
         const publishedEvents = this.eventsThroughBoundary(taskEvents, currentBoundary);
         const publishedWork = await this.taskWorkNewestFirst(publishedEvents);
         if (state.importWorkUnitId) {
@@ -308,6 +333,7 @@ export class WorkspaceRepoFixtureLifecycle {
             );
           }
         }
+        onPhase?.("published-changes");
         const publishedChanges = await this.inspectTaskChanges(publishedWork);
         const mainState = cleanupStatus.committed;
         if (creationScope.primaryRepositoryId) {
@@ -326,11 +352,13 @@ export class WorkspaceRepoFixtureLifecycle {
             left.repoPath.localeCompare(right.repoPath) ||
             left.repositoryId.localeCompare(right.repositoryId)
         );
+        onPhase?.("counteract-published-work");
         counteractedChangeIds = await this.counteractPublishedTaskWork(
           state,
           cleanupContextId,
           cleanupStatus,
-          publishedWork
+          publishedWork,
+          onPhase
         );
       }
     } catch (error) {
@@ -338,6 +366,7 @@ export class WorkspaceRepoFixtureLifecycle {
     } finally {
       if (cleanupContextId) {
         try {
+          onPhase?.("destroy-cleanup-context");
           await this.port.destroyContext(cleanupContextId);
         } catch (error) {
           cleanupError = cleanupError
@@ -352,6 +381,7 @@ export class WorkspaceRepoFixtureLifecycle {
 
     this.contextId = null;
     try {
+      onPhase?.("destroy-task-context");
       await this.port.destroyContext(state.contextId);
     } catch (error) {
       cleanupError = cleanupError
@@ -381,7 +411,8 @@ export class WorkspaceRepoFixtureLifecycle {
     state: WorkspaceRepoFixtureState,
     cleanupContextId: string,
     status: Awaited<ReturnType<FixtureVcs["status"]>>,
-    publishedWork: FixtureTaskWork[]
+    publishedWork: FixtureTaskWork[],
+    onPhase?: (phase: string) => void
   ): Promise<string[]> {
     let workingHead = status.workingHead;
     const counteractedChangeIds: string[] = [];
@@ -395,6 +426,7 @@ export class WorkspaceRepoFixtureLifecycle {
       );
       if (changeIds.length === 0) return;
       try {
+        onPhase?.("counteract-revert");
         const reverted = await this.port.vcs.revert({
           contextId: cleanupContextId,
           commandId: this.command("revert-work"),
@@ -430,6 +462,7 @@ export class WorkspaceRepoFixtureLifecycle {
       await revertDependencyClosure(work.changeIds);
     }
     if (counteractedChangeIds.length === 0) return [];
+    onPhase?.("counteract-commit");
     const committed = await this.port.vcs.commit({
       contextId: cleanupContextId,
       commandId: this.command("commit-removal"),
@@ -439,6 +472,7 @@ export class WorkspaceRepoFixtureLifecycle {
     if (committed.event.kind !== "event") {
       throw new Error("Fixture cleanup commit did not return an event");
     }
+    onPhase?.("counteract-push");
     await this.port.vcs.push({
       contextId: cleanupContextId,
       commandId: this.command("push-removal"),
@@ -721,6 +755,7 @@ function repositorySeedFiles(
               title: `System Test ${repoName}`,
               kind: "worker",
               entry: "index.ts",
+              authority: { requests: [] },
               durable: { classes: [{ className: "FixtureWorkerDO" }] },
             },
             dependencies: { "@workspace/runtime": "workspace:*" },
@@ -764,6 +799,7 @@ function repositorySeedFiles(
               title: `System Test ${repoName}`,
               kind: "worker",
               entry: "index.ts",
+              authority: { requests: [] },
             },
             dependencies: { "@workspace/runtime": "workspace:*" },
           },
@@ -809,6 +845,7 @@ function repositorySeedFiles(
             vibestudio: {
               title: `System Test ${repoName}`,
               entry: "index.ts",
+              authority: { requests: [] },
               template: "vanilla",
             },
           },

@@ -10,14 +10,14 @@ describe("create-panel validation", () => {
       createPanelTest.validate(
         execution('const handle = await openPanel("panels/spectrolite");', "complete")
       )
-    ).toMatchObject({ passed: false, reason: expect.stringContaining("lightweightPage") });
+    ).toMatchObject({ passed: false, reason: expect.stringContaining(".cdp.page(") });
   });
 
   it("rejects screenshot evidence from a failed eval", () => {
     const result = execution(
       [
         'const handle = await openPanel("panels/spectrolite");',
-        "const page = await handle.cdp.lightweightPage();",
+        "const page = await handle.cdp.page();",
         'await handle.cdp.screenshot({ format: "png" });',
         "await handle.cdp.consoleHistory();",
       ].join("\n"),
@@ -30,7 +30,7 @@ describe("create-panel validation", () => {
     const result = execution(
       [
         'const handle = await openPanel("panels/spectrolite");',
-        "const page = await handle.cdp.lightweightPage();",
+        "const page = await handle.cdp.page();",
         'await handle.cdp.screenshot({ format: "png" });',
         "await handle.cdp.consoleHistory();",
       ].join("\n"),

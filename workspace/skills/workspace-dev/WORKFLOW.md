@@ -63,6 +63,16 @@ return created;
 Require `created.preflight.ok === true`, then retain `created.publication`: the
 former proves the planned repository was validated before mutation and the
 latter proves the committed event reached protected main. If the eval fails with
+`errorData.code === "project_preflight_failed"`, use its dependency issues as
+the exact repair packet: each issue identifies its file and line, import
+specifier/kind, required manifest field, accepted package coordinates, and
+remediation. Production value imports belong to `dependencies` or
+`peerDependencies`; test-only and type-only imports may use
+`devDependencies`. This syntax-aware contract is shared with eval and renderer
+validation, and it deliberately ignores embedded examples and Node built-ins.
+Repair the named source/manifest rather than selecting another fork source.
+
+If the eval instead fails with
 `errorData.code === "scaffold_publication_failed"`, the repository is already
 committed but unpublished. Do not scaffold again. Call
 `recoverProjectPublication(error)` from the same skill. It validates a clean
@@ -81,14 +91,17 @@ canonical path.
    repository views.
 
 3. Keep the returned working head, then typecheck, test, or build that context.
-   Build results create no semantic event and grant no publication authority.
+   For panels, `services.build.getBuildReport(source,
+\`ctx:${ctx.contextId}\`)`requests the canonical structured build.`workspace.units.diagnostics(source)` only reads historical health/log
+   records and does not compile the working source. Build results create no
+   semantic event and grant no publication authority.
 
 4. Compare with current main before committing or publishing:
 
 ```ts
 import { vcs } from "@workspace/runtime";
 
-const status = await vcs.status({ contextId: ctx.contextId });
+const status = await vcs.status();
 const comparison = await vcs.compare({
   target: status.workingHead,
   sourceEventId: status.mainEventId,
@@ -97,6 +110,13 @@ const comparison = await vcs.compare({
 
 console.log(comparison.counts, comparison.changes);
 ```
+
+The portable runtime VCS client is bound to the panel/worker/eval semantic
+context. It fills an omitted `contextId` only for methods whose generated
+schema declares a top-level context reference, so `vcs.status()` is the normal
+orientation call while provenance reads such as `vcs.inspect()` keep their
+strict context-free payload. Pass `{ contextId }` only to methods whose schema
+accepts it and only when intentionally addressing another authorized context.
 
 If there is incoming work, use `vcs.integrate` to adopt applicable source
 changes, reconcile with exact state-predicate evidence, or decline with a
@@ -136,9 +156,28 @@ new command ID. Follow the typed discriminant, not prose.
 ```ts
 import { openPanel } from "@workspace/runtime";
 
-scope.myApp = await openPanel("panels/my-app", { focus: true });
-const first = await scope.myApp.snapshot();
-console.log(first.attemptId, first.buildKey, first.document.text);
+const myApp = await openPanel("panels/my-app", { focus: true });
+scope.myAppPanel = myApp;
+scope.myAppPanelId = myApp.id;
+const first = await myApp.snapshot();
+return {
+  panelId: myApp.id,
+  attemptId: first.attemptId,
+  buildKey: first.buildKey,
+  text: first.document.text,
+};
+```
+
+Eval scope has two layers. The 30-minute warm notebook lease retains
+`scope.myAppPanel` as the same live `PanelHandle` across cells. The exact
+durable recovery snapshot retains `scope.myAppPanelId` and other serializable
+provenance, but never manufactures a methodless copy of a class instance.
+Reuse the live handle when present. After `[kernel] Restarted` explicitly names
+it as lost, recover it without opening a duplicate:
+
+```ts
+const myApp = scope.myAppPanel ?? getPanelHandle(scope.myAppPanelId);
+scope.myAppPanel = myApp;
 ```
 
 Runtime-managed workers and Durable Objects follow their owning context unless
@@ -146,19 +185,27 @@ explicitly pinned to another `ref`. Panel APIs keep their own build-ref
 semantics; when testing unpublished panel code, pass the context ref on the
 ref-capable launch/navigation path.
 
-8. Iterate visually with the same handle:
+8. Iterate visually with the same panel identity:
 
 ```ts
-const observation = await scope.myApp.rebuild();
+import { getPanelHandle } from "@workspace/runtime";
+
+const myApp = scope.myAppPanel ?? getPanelHandle(scope.myAppPanelId);
+scope.myAppPanel = myApp;
+const observation = await myApp.rebuild();
 console.log(observation.phase, observation.attemptId, observation.buildKey);
-const capture = await scope.myApp.snapshot();
+const capture = await myApp.snapshot();
 console.log(capture.document.text);
 ```
 
 `rebuild()` transactionally prepares and activates a new immutable runtime
 attempt at the panel's active build ref, then waits for the application boot
 handshake. It does not create work, commit an event, publish main, or affect
-child panels.
+child panels. The stable panel id remains valid, but CDP endpoints belong to
+runtime incarnations. After `rebuild()` or `navigate()` resolves, obtain a fresh
+page with `await myApp.cdp.page()` rather than reusing the earlier page object.
+More generally, replace the page whenever a lifecycle result changes
+`runtimeEntityId`.
 
 | Method       | Completion                                                                              |
 | ------------ | --------------------------------------------------------------------------------------- |
@@ -216,8 +263,10 @@ await children[0]?.close();
 
 Reuse an existing handle instead of opening duplicates. Scalar handle fields
 are last-observed descriptors; call `handle.observe()` whenever live state
-matters. Close temporary inspection, browser, diagnostic, and child panels in
-`finally`.
+matters. Across warm eval cells, keep the handle in `scope`; keep its stable ID
+beside it for cold recovery. After an explicit kernel restart, rediscover a
+lost handle with `getPanelHandle(id)` or `listPanels()`. Close temporary
+inspection, browser, diagnostic, and child panels in `finally`.
 
 ## Browser panels
 
@@ -228,7 +277,7 @@ import { openPanel } from "@workspace/runtime";
 
 const sitePanel = await openPanel("https://example.com", { focus: true });
 try {
-  const page = await sitePanel.cdp.lightweightPage();
+  const page = await sitePanel.cdp.page();
   await page.title();
 } finally {
   await sitePanel.close();
@@ -245,6 +294,16 @@ Use `handle.snapshot()` for a provenance-bearing agent-readable view and read
 its `document` field. Use `handle.tree()`,
 `handle.state()`, and `handle.routes()` for deeper inspection. Typecheck before
 launch when the change is more than a small text edit.
+
+The verification boundary is exact: lifecycle readiness and rendered
+correctness are different facts. `openPanel()`, `rebuild()`, and `observe()` may
+return `phase: "ready"` once the immutable attempt has booted, but create,
+fork, open, rebuild, debug, and polish work is not complete until a matching
+`snapshot()` has been captured and inspected. Return the observation and
+snapshot together so `panelId`, `attemptId`, `runtimeEntityId`, and `buildKey`
+can be joined. If the snapshot is blank, contains the boot-error shell, or does
+not show the intended behavior, diagnose and repair it; never summarize the
+ready phase as success.
 
 For runtime failures, choose the narrowest log surface first:
 `handle.diagnose()` for the canonical observation plus bounded renderer evidence,
@@ -263,16 +322,28 @@ the workspace-dev helper to review metadata and class rewrites, then apply it
 as one coherent lifecycle work unit:
 
 ```ts
-import { forkProject } from "@workspace-skills/workspace-dev";
+import { forkWorker } from "@workspace-skills/workspace-dev";
 
-const plan = await forkProject({
+const plan = await forkWorker({
   from: "workers/source-worker",
-  to: "workers/new-worker",
+  name: "new-worker",
   title: "New Worker",
   dryRun: true,
 });
 console.log(plan);
 ```
+
+Use `forkPanel({ from, name, title, dryRun })` for panels. These typed helpers
+own the canonical destination section, so an isolated dry run is still planned
+under `workers/` or `panels/`; `dryRun: true` itself guarantees that no
+destination is written. Use generic `forkProject({ from, to, projectType })`
+only for an intentional advanced lifecycle operation. Crossing project types
+is rejected unless `projectType` explicitly opts into it.
+
+Every canonical panel and worker in the workspace is continuously checked
+against this same fork preflight. A dry-run failure is therefore concrete
+source/manifest drift or a platform analyzer defect, never a reason to add a
+legacy bypass.
 
 For workers with multiple Durable Object classes, pass an explicit `classMap`.
 After applying, inspect the returned working head and work-unit identity, run

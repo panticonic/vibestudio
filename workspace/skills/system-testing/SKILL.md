@@ -73,14 +73,38 @@ For CLI-driven verification, diagnosis, or repair, follow this order:
    `phaseElapsedMs`. `session-cleanup:*` means the user task has ended and the
    harness is waiting for an acknowledged unsubscribe, evidence capture,
    disconnect, or runtime-context retirement—not that the model is still
-   working. Use `inspect` while the run is live for the session's exact cleanup
-   phase and transcript evidence.
+   working. `workspace-fixture-cleanup:*` names the exact semantic teardown
+   boundary: task status/ancestry, publication intersection, cleanup-context
+   creation, each revert/commit/push counteraction boundary, or context
+   destruction. Use
+   `inspect` while the run is live for the exact cleanup phase and transcript
+   evidence.
+
+   A suite never occupies one long-lived runner RPC. The sealed runner starts
+   the durable eval and returns; the orchestrator uses short status, terminal
+   result, result-release, and cancellation calls keyed by the run ID. A
+   closed runner socket is therefore an infrastructure failure, not a reason
+   to extend a request deadline. Inspect whether the inner eval is still
+   progressing and recover its durable terminal record before rerunning.
+
+   Repository cleanup does not bypass protected-main authority. The harness
+   derives repository identities from the task line's semantic
+   `repository-create` changes, creates a case-policy cleanup context with
+   critical deletion authority for only those exact paths, and counteracts the
+   exact authored changes. Any unrelated path or unrelated test policy fails
+   closed.
 
 4. On any non-zero exit, inspect the durable run packet immediately:
 
    ```bash
    pnpm cli --instance INSTANCE system-test inspect RUN_ID --json
    ```
+
+   Completed runs are inspected from the terminal heartbeat packet first, so
+   diagnostics do not queue behind a failed run's still-unwinding eval scope.
+   The durable-record fallback is read-only and its reconstruction eval has a
+   30-second execution deadline; a failed diagnostic returns an explicit error
+   instead of waiting forever.
 
    If the bounded packet cannot explain the mismatch, inspect the full test
    trajectory:
@@ -217,6 +241,14 @@ usage-limit fallback: doctor and every spawned test agent name the same single
 model, so a provider failure remains visible instead of silently changing the
 experiment. An explicit model override is only for model-specific diagnosis.
 
+One named agent session owns one EvalDO notebook: its live heap is retained for
+30 minutes after the latest cell and its exact durable scope is cold-recovered, so eval work is
+intentionally FIFO. Concurrent CLI `inspect` and `trajectory` requests wait on
+that same admission queue and inherit caller cancellation; they do not fail
+merely because another read is active and they have no fixed wait deadline.
+Use distinct named server instances for parallel workspace experiments and
+distinct agent sessions when inspection itself must execute in parallel.
+
 ## Interactive staged runs
 
 In an interactive workspace-agent session, derive stage choices from
@@ -258,6 +290,13 @@ the ordinary protected VCS path without an interactive card or a privileged
 cleanup API. Any prompt outside that scope is an immediate
 `EUNEXPECTEDTESTPROMPT` harness failure; an unattended test must never leave a
 real approval card waiting.
+
+Repository fixtures automatically claim the suite scheduler resource
+`vcs:protected-main`. Their task contexts and local working heads are isolated,
+but successful publication and cleanup counteraction both advance the one
+protected branch. The runner therefore serializes fixture cases without
+requiring each test definition to remember this global constraint; unrelated
+cases with disjoint resources still run concurrently.
 
 The protected-publication wait remains part of the originating VCS request:
 its abort signal must reach the authority acquisition. An eval deadline or run

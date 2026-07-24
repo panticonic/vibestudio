@@ -50,8 +50,12 @@ function successfulEvalCode(result: Parameters<typeof finalMessageHasAll>[0]): s
 
 function requireCreatePanelEvidence(result: Parameters<typeof finalMessageHasAll>[0]) {
   const code = successfulEvalCode(result);
-  const required = ["openPanel", "lightweightPage", "consoleHistory"];
-  const missing = required.filter((token) => !code.includes(token));
+  const required: Array<[label: string, pattern: RegExp]> = [
+    ["openPanel", /\bopenPanel\s*\(/u],
+    [".cdp.page()", /\.cdp\.page\s*\(/u],
+    ["consoleHistory", /\.consoleHistory\s*\(/u],
+  ];
+  const missing = required.filter(([, pattern]) => !pattern.test(code)).map(([label]) => label);
   if (missing.length > 0) {
     return {
       passed: false,
@@ -70,7 +74,7 @@ export const panelTests: TestCase[] = [
     description: "Open a new panel",
     category: "panels",
     prompt:
-      "Exercise opening a spectrolite panel as a child panel using the documented @workspace/runtime panel APIs only. Do not inspect guessed internal source paths. Get a screenshot, retrieve host-captured console logs from the running panel, and run JavaScript in the child panel through handle.cdp.lightweightPage(). Finish with PANEL_OPEN_OK and handle=<panel-id>.",
+      "Exercise opening a spectrolite panel as a child panel using the documented @workspace/runtime panel APIs only. Do not inspect guessed internal source paths. Get a screenshot, retrieve host-captured console logs from the running panel, and run JavaScript in the child panel through handle.cdp.page(). Finish with PANEL_OPEN_OK and handle=<panel-id>.",
     validate: (result) => {
       const base = checkedWithField(result, ["PANEL_OPEN_OK"], "handle");
       return base.passed ? requireCreatePanelEvidence(result) : base;
@@ -102,11 +106,7 @@ export const panelTests: TestCase[] = [
     prompt:
       "Open a child browser panel for https://example.com/, then explore the panel tree around yourself: identify your own node, confirm the child appears among your children, navigate the child to https://example.org/ through the tree surface, and close it afterward so nothing is left open. Finish with PANEL_TREE_OK, children=<count>, navigated=<final-url>, and closed.",
     validate: (result) => {
-      const base = checkedWithNumericField(
-        result,
-        ["PANEL_TREE_OK", "closed"],
-        "children"
-      );
+      const base = checkedWithNumericField(result, ["PANEL_TREE_OK", "closed"], "children");
       if (!base.passed) return base;
       return finalMessageHasField(result, "navigated");
     },

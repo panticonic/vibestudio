@@ -1,4 +1,4 @@
-import type { TestCase, TestExecutionResult } from "../types.js";
+import type { TestCase, TestExecutionResult, TestOrchestrationContext } from "../types.js";
 import { getToolCalls } from "./_helpers.js";
 import {
   completedScenarioEvidence,
@@ -34,13 +34,14 @@ function validateDbPersistence(result: TestExecutionResult) {
     const code = String(call.arguments?.["code"] ?? "");
     return index > writer && /\bSELECT\b/iu.test(code) && /\bdb\.exec\b/u.test(code);
   });
-  if (writer < 0 || reader < 0) {
+  const readerCall = calls[reader];
+  if (writer < 0 || reader < 0 || !readerCall) {
     return {
       passed: false,
       reason: "Separate eval calls did not write and later read the local database",
     };
   }
-  const readValue = invocationReturnValue(calls[reader]!);
+  const readValue = invocationReturnValue(readerCall);
   return readValue.present && walkArrays([readValue.value]).some((rows) => rows.length >= 2)
     ? { passed: true, reason: undefined }
     : { passed: false, reason: "The later database read did not return the persisted rows" };
@@ -127,7 +128,97 @@ function validateCancellation(result: TestExecutionResult) {
       };
 }
 
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function orchestrateLiveKernelContinuity(
+  context: TestOrchestrationContext
+): Promise<TestExecutionResult> {
+  const startedAt = Date.now();
+  const session = await context.runner.spawn();
+  let error: string | undefined;
+  try {
+    await context.sendAndWait(
+      session,
+      "Using exactly one eval call, assign scope.__kernelContinuityProbe to a live object with a ping method that returns the string LIVE_KERNEL_OK. Return its method type and result. Do not use db or a second eval.",
+      "create live notebook object"
+    );
+    await new Promise((resolve) => setTimeout(resolve, 15_000));
+    await context.sendAndWait(
+      session,
+      "Without assigning, recreating, or replacing scope.__kernelContinuityProbe, use exactly one eval call to invoke its existing ping method and return { methodType, value }. If it is missing, report that failure rather than reconstructing it.",
+      "invoke live notebook object after idle"
+    );
+  } catch (cause) {
+    error = formatError(cause);
+  }
+
+  const execution: TestExecutionResult = {
+    messages: [...session.messages],
+    duration: Date.now() - startedAt,
+    snapshot: session.snapshot(),
+    ...(error ? { error } : {}),
+  };
+  try {
+    await session.close();
+  } catch (cause) {
+    execution.cleanupErrors = [`close: ${formatError(cause)}`];
+  }
+  const cleanupErrors = session
+    .snapshot()
+    .cleanupErrors.map((entry) => `${entry.phase}: ${entry.message}`);
+  if (cleanupErrors.length > 0) {
+    execution.cleanupErrors = [...(execution.cleanupErrors ?? []), ...cleanupErrors];
+    execution.error ??= `Headless cleanup failed: ${cleanupErrors.join("; ")}`;
+  }
+  return execution;
+}
+
+function validateLiveKernelContinuity(result: TestExecutionResult) {
+  const base = completedScenarioEvidence(result);
+  if (!base.passed) return base;
+  const calls = successfulEvalCalls(result);
+  const writer = calls.findIndex((call) => {
+    const code = String(call.arguments?.["code"] ?? "");
+    return /scope\.__kernelContinuityProbe\s*=/u.test(code) && /\bping\b/u.test(code);
+  });
+  const reader = calls.findIndex((call, index) => {
+    const code = String(call.arguments?.["code"] ?? "");
+    return (
+      index > writer &&
+      /scope\.__kernelContinuityProbe(?:\?|\.)[\s\S]*\.?ping\s*\(/u.test(code) &&
+      !/scope\.__kernelContinuityProbe\s*=/u.test(code)
+    );
+  });
+  const readerCall = calls[reader];
+  if (writer < 0 || reader < 0 || !readerCall) {
+    return {
+      passed: false,
+      reason: "The agent did not create and later invoke one unchanged live scope object",
+    };
+  }
+  const returned = invocationReturnValue(readerCall);
+  const records = returned.present ? walkRecords([returned.value]) : [];
+  return records.some(
+    (record) => record["methodType"] === "function" && record["value"] === "LIVE_KERNEL_OK"
+  )
+    ? { passed: true, reason: undefined }
+    : {
+        passed: false,
+        reason: "The live scope object's method did not survive the 15-second inter-cell idle",
+      };
+}
+
 export const evalLifecycleTests: TestCase[] = [
+  {
+    name: "eval-live-kernel-continuity",
+    description: "A live scope object retains its methods across idle eval cells",
+    category: "eval-lifecycle",
+    prompt: "Harness-orchestrated live notebook continuity check.",
+    orchestrate: orchestrateLiveKernelContinuity,
+    validate: validateLiveKernelContinuity,
+  },
   {
     name: "eval-db-persistence",
     description: "The eval-local database persists rows across separate eval calls",

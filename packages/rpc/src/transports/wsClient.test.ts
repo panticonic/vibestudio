@@ -136,6 +136,49 @@ describe("wsClientTransport", () => {
     expect(sockets).toHaveLength(1);
   });
 
+  it("does not spin when auth refresh returns the rejected token", async () => {
+    const sockets: FakeSocket[] = [];
+    const refreshAuthToken = vi.fn(async () => "token");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const transport = wsClientTransport({
+      adapter: {
+        createSocket: () => {
+          const socket = new FakeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        getAuthToken: async () => "token",
+        refreshAuthToken,
+        now: () => Date.now(),
+      },
+      getWsUrl: () => "wss://server.example/rpc",
+      selfId: "panel:nav-test",
+    });
+
+    transport.connect();
+    await Promise.resolve();
+    sockets[0]?.open();
+    sockets[0]?.onmessage?.({
+      data: JSON.stringify({
+        type: "ws:auth-result",
+        success: false,
+        error: "Invalid token",
+      }),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(refreshAuthToken).toHaveBeenCalledTimes(1);
+    expect(sockets).toHaveLength(1);
+    expect(transport.status?.()).toBe("disconnected");
+    expect(warn).toHaveBeenCalledWith(
+      "[wsClientTransport] Auth refresh failed:",
+      expect.objectContaining({ message: "Auth refresh returned the rejected token" })
+    );
+    warn.mockRestore();
+  });
+
   it("synthesizes a rejecting response envelope from ws:routed-response-error", async () => {
     const { sockets, transport } = createTransportHarness();
     const delivered: Array<{ from: string; message: unknown }> = [];

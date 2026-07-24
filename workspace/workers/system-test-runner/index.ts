@@ -8,6 +8,7 @@
  */
 import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
 import { anyOf, methodCapability, relationship } from "@vibestudio/shared/authorization";
+import { readEvalStatusWithRetry } from "./eval-status-retry.js";
 
 interface SystemTestRunConfig {
   runId: string;
@@ -43,13 +44,13 @@ interface StoredSystemTestRecord {
   length: number;
 }
 
-interface ActiveSystemTestRun {
-  evalRunId: string;
-  progress: unknown;
-}
-
 export interface SystemTestRunnerSnapshot {
-  progress: unknown;
+  status: string;
+  progress?: unknown;
+  result?: {
+    success: boolean;
+    error?: string;
+  };
 }
 
 const SYSTEM_TEST_OPERATOR = anyOf(
@@ -110,11 +111,8 @@ function systemTestEvalCode(options: SystemTestRunConfig): string {
         registerCancellationCleanup: (cleanup) => ctx.onCancel(async () => {
           const cancelledRecord = await cleanup();
           if (cancelledRecord) {
-            const runs = scope.systemTestRuns && typeof scope.systemTestRuns === "object"
-              ? scope.systemTestRuns
-              : {};
-            runs[progressKey] = cancelledRecord;
-            scope.systemTestRuns = runs;
+            const serializedRecord = JSON.stringify(cancelledRecord);
+            scope[recordScopeKey] = serializedRecord;
           }
         }),
       });
@@ -142,11 +140,9 @@ function systemTestEvalCode(options: SystemTestRunConfig): string {
 }
 
 export class SystemTestRunnerDO extends DurableObjectBase {
-  private readonly runs = new Map<string, ActiveSystemTestRun>();
-
   protected createTables(): void {
-    // The child EvalDO owns durable progress/result state. This conduit is
-    // activation-local and its runtime entity is retired after every CLI run.
+    // The child EvalDO owns durable progress/result state. This conduit stays
+    // stateless so an activation change cannot orphan an active run.
   }
 
   private async runHarnessUtility(kind: "doctor" | "list", code: string): Promise<unknown> {
@@ -231,48 +227,16 @@ export class SystemTestRunnerDO extends DurableObjectBase {
     tier: "open",
     sensitivity: "write",
   })
-  async runSystemTests(options: SystemTestRunConfig): Promise<unknown> {
-    if (this.runs.has(options.runId)) {
-      throw new Error(`System-test run ${options.runId} is already active in this runner`);
-    }
-    const evalRunId = `system-test-runner:${options.runId}`;
-    const active: ActiveSystemTestRun = { evalRunId, progress: null };
-    this.runs.set(options.runId, active);
-    try {
-      await this.rpc.call("main", "eval.startRun", [
-        {
-          runId: evalRunId,
-          subKey: options.runId,
-          code: systemTestEvalCode(options),
-          syntax: "typescript",
-        },
-      ]);
-      for (;;) {
-        const status = await this.rpc.call<EvalRunStatus>("main", "eval.getRun", [
-          { runId: evalRunId, subKey: options.runId },
-        ]);
-        active.progress = status.progress ?? active.progress;
-        if (status.status === "done") {
-          if (!status.result?.success) {
-            throw new Error(status.result?.error ?? "system-test eval failed");
-          }
-          const stored = parseStoredSystemTestRecord(status.result.returnValue);
-          try {
-            return await this.readStoredSystemTestRecord(options.runId, stored);
-          } finally {
-            await this.rpc.call("main", "eval.deleteScopeValue", [
-              { subKey: options.runId, key: stored.scopeKey },
-            ]);
-          }
-        }
-        if (status.status === "cancelled" || status.status === "unknown") {
-          throw new Error(`system-test eval became ${status.status}`);
-        }
-        await new Promise((resolve) => setTimeout(resolve, 1_000));
-      }
-    } finally {
-      this.runs.delete(options.runId);
-    }
+  async startSystemTestRun(options: SystemTestRunConfig): Promise<{ runId: string }> {
+    await this.rpc.call("main", "eval.startRun", [
+      {
+        runId: systemTestEvalRunId(options.runId),
+        subKey: options.runId,
+        code: systemTestEvalCode(options),
+        syntax: "typescript",
+      },
+    ]);
+    return { runId: options.runId };
   }
 
   private async readStoredSystemTestRecord(
@@ -319,9 +283,57 @@ export class SystemTestRunnerDO extends DurableObjectBase {
     tier: "open",
     sensitivity: "read",
   })
-  async getSystemTestRunSnapshot(runId: string): Promise<SystemTestRunnerSnapshot | null> {
-    const active = this.runs.get(runId);
-    return active ? { progress: structuredClone(active.progress) } : null;
+  async getSystemTestRunSnapshot(runId: string): Promise<SystemTestRunnerSnapshot> {
+    const status = await this.readSystemTestEvalStatus(runId);
+    return {
+      status: status.status,
+      ...(status.progress !== undefined ? { progress: status.progress } : {}),
+      ...(status.result
+        ? {
+            result: {
+              success: status.result.success,
+              ...(status.result.error ? { error: status.result.error } : {}),
+            },
+          }
+        : {}),
+    };
+  }
+
+  @rpc({
+    requires: SYSTEM_TEST_OPERATOR,
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
+  async getSystemTestRunResult(runId: string): Promise<unknown> {
+    const status = await this.readSystemTestEvalStatus(runId);
+    if (status.status !== "done") {
+      throw new Error(
+        `System-test run ${runId} is ${status.status}; no terminal result is available`
+      );
+    }
+    if (!status.result?.success) {
+      throw new Error(status.result?.error ?? `System-test run ${runId} failed`);
+    }
+    return this.readStoredSystemTestRecord(
+      runId,
+      parseStoredSystemTestRecord(status.result.returnValue)
+    );
+  }
+
+  @rpc({
+    requires: SYSTEM_TEST_OPERATOR,
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async releaseSystemTestRunResult(runId: string): Promise<{ released: boolean }> {
+    const released = await this.rpc.call<{ ok: boolean; existed: boolean }>(
+      "main",
+      "eval.deleteScopeValue",
+      [{ subKey: runId, key: systemTestRecordScopeKey(runId) }]
+    );
+    return { released: released.existed };
   }
 
   @rpc({
@@ -331,12 +343,10 @@ export class SystemTestRunnerDO extends DurableObjectBase {
     sensitivity: "write",
   })
   async cancelSystemTestRun(runId: string): Promise<unknown | null> {
-    const active = this.runs.get(runId);
-    if (!active) return null;
     let cancellation: EvalCancelResult;
     try {
       cancellation = await this.rpc.call<EvalCancelResult>("main", "eval.cancel", [
-        { runId: active.evalRunId, subKey: runId },
+        { runId: systemTestEvalRunId(runId), subKey: runId },
       ]);
     } catch (error) {
       throw new Error(
@@ -352,10 +362,9 @@ export class SystemTestRunnerDO extends DurableObjectBase {
           "its terminal cleanup record is unavailable. Restart from a fresh exact run."
       );
     }
-    // The inner eval's registered cleanup owns the complete terminal record
-    // (messages, invocations, diagnostics, fixture cleanup). Cancellation must
-    // return that record to the outer durable owner before this runner is
-    // retired; a progress heartbeat is intentionally too bounded to replace it.
+    // The inner eval's registered cleanup serializes the complete terminal
+    // record under the same durable key as ordinary completion. Read only its
+    // envelope through eval's bounded return, then retrieve the record by page.
     let recovered: EvalRunResult;
     try {
       recovered = await this.rpc.call<EvalRunResult>("main", "eval.run", [
@@ -363,13 +372,11 @@ export class SystemTestRunnerDO extends DurableObjectBase {
           subKey: runId,
           syntax: "javascript",
           code: `
-          const runs = scope.systemTestRuns && typeof scope.systemTestRuns === "object"
-            ? scope.systemTestRuns
-            : {};
-          const record = runs[${JSON.stringify(runId)}] ?? null;
-          delete runs[${JSON.stringify(runId)}];
-          scope.systemTestRuns = runs;
-          return record;
+          const scopeKey = ${JSON.stringify(systemTestRecordScopeKey(runId))};
+          const serialized = scope[scopeKey];
+          return typeof serialized === "string"
+            ? { kind: "system-test-record-v1", scopeKey, length: serialized.length }
+            : null;
         `,
         },
       ]);
@@ -386,8 +393,28 @@ export class SystemTestRunnerDO extends DurableObjectBase {
         `System-test run ${runId} cleanup record could not be recovered: ${recovered.error ?? "eval failed"}`
       );
     }
-    return recovered.returnValue ?? null;
+    if (recovered.returnValue == null) return null;
+    return this.readStoredSystemTestRecord(
+      runId,
+      parseStoredSystemTestRecord(recovered.returnValue)
+    );
   }
+
+  private readSystemTestEvalStatus(runId: string): Promise<EvalRunStatus> {
+    return readEvalStatusWithRetry(() =>
+      this.rpc.call<EvalRunStatus>("main", "eval.getRun", [
+        { runId: systemTestEvalRunId(runId), subKey: runId },
+      ])
+    );
+  }
+}
+
+function systemTestEvalRunId(runId: string): string {
+  return `system-test-runner:${runId}`;
+}
+
+function systemTestRecordScopeKey(runId: string): string {
+  return `$systemTestRecord:${runId}`;
 }
 
 function parseStoredSystemTestRecord(value: unknown): StoredSystemTestRecord {

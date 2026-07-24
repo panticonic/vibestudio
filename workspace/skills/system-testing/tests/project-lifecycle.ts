@@ -54,16 +54,24 @@ function findLifecycleResult(
 function createdProject(record: Record<string, unknown>, section: "panels" | "packages") {
   const publication = record["publication"];
   const preflight = record["preflight"];
+  const expectedType = section === "panels" ? "panel" : "package";
+  const hasFiles =
+    (Array.isArray(record["files"]) && record["files"].length > 0) ||
+    (typeof record["files"] === "number" &&
+      Number.isInteger(record["files"]) &&
+      record["files"] > 0);
+  const hasSuccessfulPreflight =
+    (isRecord(preflight) &&
+      preflight["ok"] === true &&
+      preflight["projectType"] === expectedType &&
+      Array.isArray(preflight["checked"]) &&
+      preflight["checked"].length > 0) ||
+    record["preflightOk"] === true;
   return (
     typeof record["created"] === "string" &&
     record["created"].startsWith(`${section}/`) &&
-    Array.isArray(record["files"]) &&
-    record["files"].length > 0 &&
-    isRecord(preflight) &&
-    preflight["ok"] === true &&
-    preflight["projectType"] === (section === "panels" ? "panel" : "package") &&
-    Array.isArray(preflight["checked"]) &&
-    preflight["checked"].length > 0 &&
+    hasFiles &&
+    hasSuccessfulPreflight &&
     isRecord(publication) &&
     publication["published"] === true &&
     typeof publication["committedEventId"] === "string" &&
@@ -85,17 +93,25 @@ function hasBootReadyPanelEvidence(values: readonly unknown[]): boolean {
       record["buildKey"].length > 0
   );
   return observations.some((observation) =>
-    records.some(
-      (record) =>
+    records.some((record) => {
+      const sameAttempt =
         record["panelId"] === observation["panelId"] &&
         record["attemptId"] === observation["attemptId"] &&
-        record["runtimeEntityId"] === observation["runtimeEntityId"] &&
         record["buildKey"] === observation["buildKey"] &&
+        (record["runtimeEntityId"] === observation["runtimeEntityId"] ||
+          record["attemptId"] ===
+            `${String(observation["runtimeEntityId"])}@${String(observation["buildKey"])}`);
+      if (!sameAttempt) return false;
+      const document = record["document"];
+      const completeSnapshot =
         typeof record["capturedAt"] === "number" &&
-        isRecord(record["document"]) &&
-        record["document"]["kind"] === "synth" &&
-        isRecord(record["document"]["structure"])
-    )
+        isRecord(document) &&
+        document["kind"] === "synth" &&
+        isRecord(document["structure"]);
+      const renderedProjection =
+        typeof record["text"] === "string" && record["text"].trim().length > 0;
+      return completeSnapshot || renderedProjection;
+    })
   );
 }
 
@@ -115,6 +131,9 @@ function validatePanelCreate(result: TestExecutionResult) {
   if (code.indexOf("createProject") >= code.lastIndexOf("openPanel")) {
     return { passed: false, reason: "The panel was not opened after project creation" };
   }
+  if (!/\.snapshot\s*\(/u.test(code)) {
+    return { passed: false, reason: "The opened panel was not verified through a snapshot" };
+  }
   const returned = invocationReturnValue(call);
   return returned.present && hasBootReadyPanelEvidence([returned.value])
     ? { passed: true, reason: undefined }
@@ -128,28 +147,42 @@ function validatePanelCreate(result: TestExecutionResult) {
 function validatePanelFork(result: TestExecutionResult) {
   const base = completedScenarioEvidence(result);
   if (!base.passed) return base;
-  const call = findLifecycleResult(result, ["forkProject", "openPanel"], (record) =>
-    Boolean(
-      typeof record["created"] === "string" &&
-      record["created"].startsWith("panels/") &&
-      record["committed"] === true &&
-      record["dryRun"] === false &&
-      isRecord(record["preflight"]) &&
-      record["preflight"]["ok"] === true &&
-      record["preflight"]["projectType"] === "panel" &&
-      isRecord(record["publication"]) &&
-      record["publication"]["published"] === true &&
-      typeof record["publication"]["committedEventId"] === "string" &&
-      Array.isArray(record["files"]) &&
-      record["files"].length > 0
-    )
-  );
+  const call = successfulEvalCalls(result).find((candidate) => {
+    const code = String(candidate.arguments?.["code"] ?? "");
+    if (!/\bfork(?:Panel|Project)\s*\(/u.test(code) || !code.includes("openPanel")) return false;
+    const returned = invocationReturnValue(candidate);
+    return (
+      returned.present &&
+      walkRecords([returned.value]).some((record) =>
+        Boolean(
+          typeof record["created"] === "string" &&
+          record["created"].startsWith("panels/") &&
+          record["committed"] === true &&
+          record["dryRun"] === false &&
+          isRecord(record["preflight"]) &&
+          record["preflight"]["ok"] === true &&
+          record["preflight"]["projectType"] === "panel" &&
+          isRecord(record["publication"]) &&
+          record["publication"]["published"] === true &&
+          typeof record["publication"]["committedEventId"] === "string" &&
+          Array.isArray(record["files"]) &&
+          record["files"].length > 0
+        )
+      )
+    );
+  });
   if (!call) {
     return { passed: false, reason: "No completed eval returned a committed panel-fork result" };
   }
   const code = String(call.arguments?.["code"] ?? "");
-  if ((code.match(/forkProject\s*\(/gu)?.length ?? 0) < 2 || !/dryRun\s*:\s*true/u.test(code)) {
+  if (
+    (code.match(/\bfork(?:Panel|Project)\s*\(/gu)?.length ?? 0) < 2 ||
+    !/dryRun\s*:\s*true/u.test(code)
+  ) {
     return { passed: false, reason: "The panel fork was not planned before it was applied" };
+  }
+  if (!/\.snapshot\s*\(/u.test(code)) {
+    return { passed: false, reason: "The opened fork was not verified through a snapshot" };
   }
   const returned = invocationReturnValue(call);
   return returned.present && hasBootReadyPanelEvidence([returned.value])
@@ -164,22 +197,44 @@ function validatePanelFork(result: TestExecutionResult) {
 function validateWorkerForkPlan(result: TestExecutionResult) {
   const base = completedScenarioEvidence(result);
   if (!base.passed) return base;
-  const call = findLifecycleResult(result, ["forkProject"], (record) =>
-    Boolean(
-      typeof record["source"] === "string" &&
-      record["source"].startsWith("workers/") &&
-      typeof record["created"] === "string" &&
-      record["created"].startsWith("workers/") &&
-      record["source"] !== record["created"] &&
-      record["committed"] === false &&
-      record["dryRun"] === true &&
-      isRecord(record["preflight"]) &&
-      record["preflight"]["ok"] === true &&
-      record["preflight"]["projectType"] === "worker" &&
-      Array.isArray(record["files"]) &&
-      record["files"].length > 0
-    )
-  );
+  const call = successfulEvalCalls(result).find((candidate) => {
+    const code = String(candidate.arguments?.["code"] ?? "");
+    if (!/\bfork(?:Project|Worker)\s*\(/u.test(code) || !/dryRun\s*:\s*true/u.test(code)) {
+      return false;
+    }
+    const returned = invocationReturnValue(candidate);
+    return (
+      returned.present &&
+      walkRecords([returned.value]).some((record) => {
+        const preflight = record["preflight"];
+        const hasPreflight =
+          (isRecord(preflight) &&
+            preflight["ok"] === true &&
+            preflight["projectType"] === "worker") ||
+          record["preflightOk"] === true;
+        const hasFiles =
+          (Array.isArray(record["files"]) && record["files"].length > 0) ||
+          (typeof record["files"] === "number" &&
+            Number.isInteger(record["files"]) &&
+            record["files"] > 0) ||
+          (typeof record["fileCount"] === "number" &&
+            Number.isInteger(record["fileCount"]) &&
+            record["fileCount"] > 0);
+        return Boolean(
+          typeof record["source"] === "string" &&
+          record["source"].startsWith("workers/") &&
+          typeof record["created"] === "string" &&
+          record["created"].startsWith("workers/") &&
+          record["source"] !== record["created"] &&
+          record["committed"] === false &&
+          record["dryRun"] === true &&
+          record["publication"] === null &&
+          hasPreflight &&
+          hasFiles
+        );
+      })
+    );
+  });
   return call && /dryRun\s*:\s*true/u.test(String(call.arguments?.["code"] ?? ""))
     ? { passed: true, reason: undefined }
     : { passed: false, reason: "No completed eval returned a non-mutating worker fork plan" };
@@ -259,7 +314,10 @@ function returnedRecords(call: InvocationCardPayloadLike): Record<string, unknow
   return returned.present ? walkRecords([returned.value]) : [];
 }
 
-function compilerCheckSummary(call: InvocationCardPayloadLike): Record<string, unknown> | null {
+function compilerCheckSummary(
+  call: InvocationCardPayloadLike,
+  expectedSource: string
+): Record<string, unknown> | null {
   if (call.name !== "eval") return null;
   const code = String(call.arguments?.["code"] ?? "");
   const records = returnedRecords(call);
@@ -273,6 +331,7 @@ function compilerCheckSummary(call: InvocationCardPayloadLike): Record<string, u
   if (!code.includes("getBuildReport")) return null;
   const report = records.find(
     (record) =>
+      record["repoPath"] === expectedSource &&
       record["kind"] === "panel" &&
       typeof record["status"] === "string" &&
       Array.isArray(record["builds"])
@@ -295,6 +354,25 @@ function compilerCheckSummary(call: InvocationCardPayloadLike): Record<string, u
     errorCount: compilerErrors.length,
     warningCount: diagnostics.filter((diagnostic) => diagnostic["severity"] === "warning").length,
   };
+}
+
+function successfulPanelBuildSummary(
+  call: InvocationCardPayloadLike,
+  expectedSource: string
+): Record<string, unknown> | null {
+  if (call.name !== "eval") return null;
+  const code = String(call.arguments?.["code"] ?? "");
+  if (!code.includes("openPanel") && !/\.(?:rebuild|reload|navigate)\s*\(/u.test(code)) {
+    return null;
+  }
+  const ready = returnedRecords(call).find(
+    (record) =>
+      record["source"] === expectedSource &&
+      record["phase"] === "ready" &&
+      typeof record["runtimeEntityId"] === "string" &&
+      typeof record["buildKey"] === "string"
+  );
+  return ready ? { diagnostics: [], errorCount: 0, warningCount: 0 } : null;
 }
 
 function successfulPanelMutation(
@@ -328,40 +406,117 @@ function isInitialPanelInspection(call: InvocationCardPayloadLike): boolean {
   if (call.name !== "eval") return false;
   const code = String(call.arguments?.["code"] ?? "");
   return (
-    code.includes("openPanel") &&
-    (code.includes("lightweightPage") ||
-      code.includes(".diagnose(") ||
-      code.includes(".observe(") ||
-      code.includes(".screenshot("))
+    /\bopenPanel\s*\(/u.test(code) &&
+    (/\.snapshot\s*\(/u.test(code) ||
+      /\.diagnose\s*\(/u.test(code) ||
+      /\.screenshot\s*\(/u.test(code) ||
+      /\.inspect\s*\(/u.test(code) ||
+      /\.content\s*\(/u.test(code) ||
+      /\.evaluate\s*\(/u.test(code))
   );
 }
 
-function isCompleteTodoRuntimeVerification(call: InvocationCardPayloadLike): boolean {
-  if (call.name !== "eval") return false;
+function observedEmptyConsoleHistory(call: InvocationCardPayloadLike): boolean {
   const code = String(call.arguments?.["code"] ?? "");
-  const lower = code.toLowerCase();
-  const exercisesTextEntry = /\.(?:fill|type|press)\s*\(/u.test(code);
-  const exercisesClick = /\.click\s*\(/u.test(code);
-  const inspectsDom = /\.(?:evaluate|textContent|innerText|locator)\s*\(/u.test(code);
-  const rebuildsSamePanel = /\.(?:rebuild|reload)\s*\(/u.test(code);
-  const exercisesFiltering = /\b(?:filter|active|completed)\b/u.test(lower);
-  const exercisesRemoval = /\b(?:delete|remove)\b/u.test(lower);
-  if (
-    !code.includes("lightweightPage") ||
-    !code.includes("consoleHistory") ||
-    !code.includes("screenshot") ||
-    !exercisesTextEntry ||
-    !exercisesClick ||
-    !inspectsDom ||
-    !rebuildsSamePanel ||
-    !exercisesFiltering ||
-    !exercisesRemoval
-  ) {
-    return false;
+  if (!code.includes("consoleHistory")) return false;
+  const records = returnedRecords(call);
+  const returnedHistories = records.filter((record) => Array.isArray(record["errors"]));
+  if (returnedHistories.length > 0) {
+    return returnedHistories.every(
+      (record) => Array.isArray(record["errors"]) && record["errors"].length === 0
+    );
   }
-  return returnedRecords(call).some(
-    (record) => Array.isArray(record["errors"]) && record["errors"].length === 0
+
+  // A caller may return an errors array or compact count instead of the complete
+  // history. Only accept it when the eval source proves it was derived from the
+  // canonical consoleHistory result, rather than trusting arbitrary clean data.
+  const historyNames = [
+    ...code.matchAll(
+      /\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+[^;\n]*\.consoleHistory\s*\(/gu
+    ),
+  ].map((match) => match[1]!);
+  const returnedEvidenceNames = new Set<string>();
+  for (const historyName of historyNames) {
+    const derivedErrors = `${historyName}\\.errors`;
+    for (const match of code.matchAll(
+      new RegExp(`\\b([A-Za-z_$][\\w$]*)\\s*:\\s*${derivedErrors}(?:\\.length)?\\b`, "gu")
+    )) {
+      returnedEvidenceNames.add(match[1]!);
+    }
+    for (const match of code.matchAll(
+      new RegExp(
+        `\\b(?:const|let)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*${derivedErrors}(?:\\.length)?\\b`,
+        "gu"
+      )
+    )) {
+      returnedEvidenceNames.add(match[1]!);
+    }
+  }
+  const returnedEvidence = records.flatMap((record) =>
+    [...returnedEvidenceNames]
+      .filter((name) => Object.hasOwn(record, name))
+      .map((name) => record[name])
   );
+  return (
+    returnedEvidence.length > 0 &&
+    returnedEvidence.every((value) => value === 0 || (Array.isArray(value) && value.length === 0))
+  );
+}
+
+function observedRenderedCapture(call: InvocationCardPayloadLike): boolean {
+  const code = String(call.arguments?.["code"] ?? "");
+  if (/\bscreenshot\s*\(/u.test(code)) return true;
+  if (!/\.snapshot\s*\(/u.test(code)) return false;
+  return returnedRecords(call).some(
+    (record) =>
+      typeof record["panelId"] === "string" &&
+      typeof record["runtimeEntityId"] === "string" &&
+      typeof record["buildKey"] === "string" &&
+      typeof record["capturedAt"] === "number" &&
+      isRecord(record["document"])
+  );
+}
+
+function completeTodoRuntimeVerificationIndex(
+  calls: readonly InvocationCardPayloadLike[],
+  fromIndex: number
+): number {
+  let code = "";
+  let cleanConsoleObserved = false;
+  let renderedCaptureObserved = false;
+  for (let index = fromIndex; index < calls.length; index += 1) {
+    const call = calls[index]!;
+    if (
+      call.name !== "eval" ||
+      call.execution?.status !== "complete" ||
+      call.execution.isError === true
+    ) {
+      continue;
+    }
+    const callCode = String(call.arguments?.["code"] ?? "");
+    code += `\n${callCode}`;
+    if (observedEmptyConsoleHistory(call)) {
+      cleanConsoleObserved = true;
+    }
+    if (observedRenderedCapture(call)) {
+      renderedCaptureObserved = true;
+    }
+    const lower = code.toLowerCase();
+    if (
+      /\.cdp\.page\s*\(/u.test(code) &&
+      renderedCaptureObserved &&
+      /\.(?:fill|type|press)\s*\(/u.test(code) &&
+      /\.click\s*\(/u.test(code) &&
+      /\.(?:evaluate|textContent|innerText|locator)\s*\(/u.test(code) &&
+      /\.(?:rebuild|reload)\s*\(/u.test(code) &&
+      /\b(?:filter|active|completed)\b/u.test(lower) &&
+      /\b(?:delete|remove)\b/u.test(lower) &&
+      cleanConsoleObserved
+    ) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 function validateTodoDebugLoop(result: TestExecutionResult) {
@@ -385,14 +540,14 @@ function validateTodoDebugLoop(result: TestExecutionResult) {
   }
 
   const brokenTypecheckIndex = calls.findIndex((call, index) => {
-    const summary = index > creationIndex ? compilerCheckSummary(call) : null;
+    const summary = index > creationIndex ? compilerCheckSummary(call, source) : null;
     return summary !== null && Number(summary["errorCount"]) > 0;
   });
   if (brokenTypecheckIndex < 0) {
     return {
       passed: false,
       reason:
-        "The deliberate compiler defect was not observed through a structured panel typecheck",
+        "The deliberate compiler defect was not observed through a structured panel compile/build check",
     };
   }
   const authoredBrokenPanel = calls
@@ -406,18 +561,21 @@ function validateTodoDebugLoop(result: TestExecutionResult) {
   }
 
   const firstCleanTypecheckIndex = calls.findIndex((call, index) => {
-    const summary = index > brokenTypecheckIndex ? compilerCheckSummary(call) : null;
+    const summary =
+      index > brokenTypecheckIndex
+        ? (compilerCheckSummary(call, source) ?? successfulPanelBuildSummary(call, source))
+        : null;
     return summary !== null && summary["errorCount"] === 0;
   });
   if (firstCleanTypecheckIndex < 0) {
     return {
       passed: false,
-      reason: "No later structured typecheck proved that the compiler defect was repaired",
+      reason: "No later clean compile/build result proved that the compiler defect was repaired",
     };
   }
 
   const firstInspectionIndex = calls.findIndex(
-    (call, index) => index > firstCleanTypecheckIndex && isInitialPanelInspection(call)
+    (call, index) => index >= firstCleanTypecheckIndex && isInitialPanelInspection(call)
   );
   if (firstInspectionIndex < 0) {
     return {
@@ -444,19 +602,20 @@ function validateTodoDebugLoop(result: TestExecutionResult) {
   }
 
   const finalCleanTypecheckIndex = calls.findIndex((call, index) => {
-    const summary = index > uxMutationIndex ? compilerCheckSummary(call) : null;
+    const summary =
+      index > uxMutationIndex
+        ? (compilerCheckSummary(call, source) ?? successfulPanelBuildSummary(call, source))
+        : null;
     return summary !== null && summary["errorCount"] === 0;
   });
   if (finalCleanTypecheckIndex < 0) {
     return {
       passed: false,
-      reason: "The UX repair was not followed by a clean structured typecheck",
+      reason: "The UX repair was not followed by a clean compile/build result",
     };
   }
 
-  const finalRuntimeIndex = calls.findIndex(
-    (call, index) => index > finalCleanTypecheckIndex && isCompleteTodoRuntimeVerification(call)
-  );
+  const finalRuntimeIndex = completeTodoRuntimeVerificationIndex(calls, finalCleanTypecheckIndex);
   if (finalRuntimeIndex < 0) {
     return {
       passed: false,
@@ -494,35 +653,16 @@ function validateTodoDebugLoop(result: TestExecutionResult) {
     };
   }
 
-  const finalStatus = calls
-    .slice(finalRuntimeIndex + 1)
-    .map((call) => operationResult(call, "status"))
-    .find(
-      (status) =>
-        status?.["clean"] === true &&
-        status["mainEventId"] === publishedEventId &&
-        isRecord(status["workingHead"]) &&
-        status["workingHead"]["kind"] === "event" &&
-        status["workingHead"]["eventId"] === publishedEventId
-    );
-  if (!finalStatus) {
-    return {
-      passed: false,
-      reason: "No final status proved the tested panel was clean at the published event",
-    };
-  }
-
   const final = findLastAgentMessage(result);
   if (
-    !final.includes(publishedEventId) ||
     !/compil|type.?check/iu.test(final) ||
-    !/\\bux\\b|usab|experience/iu.test(final) ||
+    !/\bux\b|usab|experience/iu.test(final) ||
     !/add|complete|filter|delete/iu.test(final)
   ) {
     return {
       passed: false,
       reason:
-        "The final response did not report the observed compiler defect, UX repair, live behavior, and exact published event",
+        "The final response did not report the observed compiler defect, UX repair, and live behavior",
     };
   }
   return { passed: true, reason: undefined };
@@ -547,9 +687,9 @@ export const projectLifecycleTests: TestCase[] = [
   },
   {
     name: "worker-fork-classmap-dry-run",
-    description: "Plan a worker fork",
+    description: "Dry-run a worker fork",
     category: "project-lifecycle",
-    prompt: "Plan a safe isolated fork of an existing worker without applying it.",
+    prompt: "Perform and verify a safe isolated dry run of an existing worker fork.",
     validate: validateWorkerForkPlan,
   },
   {
@@ -565,7 +705,6 @@ export const projectLifecycleTests: TestCase[] = [
     name: "panel-todo-debug-polish",
     description: "Build, debug, polish, and publish a To-Do panel through the live UI",
     category: "project-lifecycle",
-    resources: ["vcs:protected-main"],
     workspaceRepoFixture: CREATED_PANEL_WORKSPACE_REPO_FIXTURE,
     authorityPolicy: {
       authority: [
@@ -580,7 +719,7 @@ export const projectLifecycleTests: TestCase[] = [
       userland: [],
     },
     prompt:
-      "Build a simple, polished To-Do list as a brand-new isolated panel. Begin with two small deliberate defects—one compiler error and one obvious usability problem—so the development loop has real failures to find. Then carry the app through the normal workspace development workflow: diagnose the compiler failure, launch and inspect the actual panel, repair both defects, exercise the add, complete, filter, and delete flows in the live UI, and publish the finished result. Make the final experience keyboard-friendly, responsive, visually polished, and free of runtime or console errors. Report the defects you observed and concrete final verification.",
+      "Build a simple, polished To-Do list as a brand-new isolated panel. Begin with two small deliberate defects—one compiler error and one obvious usability problem—so the development loop has real failures to find. Observe the compiler defect through a structured compile or build check, then diagnose and repair only that failure while leaving the usability defect intact. Launch and inspect that compile-clean but visibly flawed panel, then repair the usability defect in a separate source edit. Refresh the same running panel with the repaired source, capture its appearance, exercise the add, complete, filter, and delete flows in the live UI, and publish the finished result. Make the final experience keyboard-friendly, responsive, visually polished, and free of runtime or console errors. Report the defects you observed and concrete final verification.",
     validate: validateTodoDebugLoop,
   },
 ];

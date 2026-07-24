@@ -86,6 +86,19 @@ const panel = await openPanel("panels/my-app", {
 `contextId` alone selects storage/filesystem isolation; it never selects code
 provenance.
 
+When `contextId` is omitted, panel reservation mints a fresh context and
+atomically records it as a lifecycle child of the verified creator's context.
+The creator may inspect, automate, rebuild, or close that panel without a
+foreign-context approval, and destroying the creator context recursively
+retires the panel context. Ownership comes from the authenticated bridge caller;
+there is no caller-supplied owner/parent field.
+
+Passing an explicit `contextId` deliberately shares that existing semantic
+context and does not re-parent it. This is the right form for context-local code
+(`ref: "ctx:<id>"`) and for applications that intentionally share storage.
+Use omission for an isolated panel world; use an explicit id only when sharing
+is part of the design.
+
 When parentage is implicit, the server resolves the caller's runtime lineage to
 an open tree slot under a finite five-second deadline. A stalled lineage read
 fails as `parent_resolution_timeout` with recovery guidance. Pass
@@ -106,7 +119,7 @@ interface PanelObservation {
   contextId: string;
   requestedRef: string;
   runtimeEntityId: string | null;
-  attemptId: string;          // runtimeEntityId@buildKey
+  attemptId: string; // runtimeEntityId@buildKey
   effectiveVersion: string | null;
   buildKey: string | null;
   phase:
@@ -206,24 +219,37 @@ compile error, or throwing entry module.
 
 ## Handle operations
 
-| Member | Contract |
-| --- | --- |
-| `observe()` | Current exact attempt, phase, host state, provenance, and structured failure |
-| `diagnose()` | One bounded packet containing `observation`, historical console/lifecycle records, and a document when ready |
-| `snapshot()` | Boot-ready document capture with `panelId`, `attemptId`, `runtimeEntityId`, `buildKey`, and `capturedAt` |
-| `navigate(source, opts?)` | Transactionally prepare a new source/ref/context attempt, activate it, and wait for ready |
-| `rebuild()` | Transactionally prepare a new immutable attempt for the current source/ref without adding a history entry, then wait for ready |
-| `reload()` | Reload the current view and wait for its boot handshake |
-| `focus(opts?)` | Assign/present the panel and wait for ready |
-| `children()` / `parent()` | Tree relationships |
-| `stateArgs.get()` / `stateArgs.set()` | Validated host-owned application state args |
-| `close()` / `archive()` / `unload()` | Explicit lifecycle/resource operations |
-| `tree()` / `state()` / `routes()` / `setMode()` | Optional workspace `_agent` application inspection |
-| `cdp` / `click(selector)` | Approval-gated CDP automation |
+| Member                                          | Contract                                                                                                                       |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `observe()`                                     | Current exact attempt, phase, host state, provenance, and structured failure                                                   |
+| `diagnose()`                                    | One bounded packet containing `observation`, historical console/lifecycle records, and a document when ready                   |
+| `snapshot()`                                    | Boot-ready document capture with `panelId`, `attemptId`, `runtimeEntityId`, `buildKey`, and `capturedAt`                       |
+| `navigate(source, opts?)`                       | Transactionally prepare a new source/ref/context attempt, activate it, and wait for ready                                      |
+| `rebuild()`                                     | Transactionally prepare a new immutable attempt for the current source/ref without adding a history entry, then wait for ready |
+| `reload()`                                      | Reload the current view and wait for its boot handshake                                                                        |
+| `focus(opts?)`                                  | Assign/present the panel and wait for ready                                                                                    |
+| `children()` / `parent()`                       | Tree relationships                                                                                                             |
+| `stateArgs.get()` / `stateArgs.set()`           | Validated host-owned application state args                                                                                    |
+| `close()` / `archive()` / `unload()`            | Explicit lifecycle/resource operations                                                                                         |
+| `tree()` / `state()` / `routes()` / `setMode()` | Optional workspace `_agent` application inspection                                                                             |
+| `cdp` / `click(selector)`                       | Approval-gated CDP automation                                                                                                  |
 
-`rebuild()` is an atomic replacement: the new runtime and build are prepared
-before the current history entry is replaced. A preparation failure does not
-pretend that the old attempt was rebuilt.
+`navigate()`, `reload()`, `rebuild()`, and `focus()` return
+`Promise<PanelObservation>`, not another `PanelHandle`. Keep using the original
+handle for `observe()`, `snapshot()`, and later lifecycle operations:
+
+```ts
+const observation = await handle.rebuild();
+const capture = await handle.snapshot();
+```
+
+`navigate()` and `rebuild()` are atomic replacements: the new runtime and build
+are prepared before the current history entry is replaced. A preparation
+failure does not pretend that the old attempt was replaced. The panel-tree id
+and handle remain stable, while runtime entity, build key, and CDP endpoint are
+incarnation-scoped. Create one fresh CDP page after either operation resolves;
+more generally, replace the page whenever a lifecycle result changes
+`runtimeEntityId`.
 
 ## Snapshot provenance
 
@@ -254,11 +280,18 @@ else console.log(packet.consoleHistory.error);
 console.log(packet.document?.document.text);
 ```
 
+`consoleHistory` has `entries`, `errors`, `dropped`, and `capacity`; it has no
+separate `warnings` array. Filter warnings with
+`entries.filter((entry) => entry.level === "warning")`.
+
 `diagnose()` is safe for a failed attempt: it returns the canonical failure and
 whatever bounded host evidence exists instead of requiring a successful
-snapshot first. Use `workspace.units.diagnostics(source)` for source/typecheck
-state and server logs only when this packet shows the failure is below the
-panel lifecycle boundary.
+snapshot first. `workspace.units.diagnostics(source)` reads bounded historical
+unit health, build events, and errors; it does **not** request a new build and
+must not be used as proof that the current working source compiles. Use
+`services.build.getBuildReport(source, \`ctx:${ctx.contextId}\`)` for that
+structured compile/build check. Read server logs only when the panel packet
+shows the failure is below the lifecycle boundary.
 
 ## State and agent inspection
 
@@ -283,11 +316,23 @@ const next = await handle.stateArgs.get();
 
 ## CDP
 
-`handle.cdp.lightweightPage()` is the sole Playwright-style automation surface.
+`handle.cdp.page()` is the sole Playwright-style automation surface.
 Do not install Playwright. For historical diagnostics use `diagnose()`; use
 `handle.cdp.consoleHistory()` only when you specifically need a filtered console
 read. CDP access is served by the active desktop/headless host and rejects when
 a non-CDP mobile host owns the target.
+
+In server-side eval, use this handle API directly. The CDP client selects the
+runtime's supported WebSocket transport; do not open the panel's private HTTP
+URL, construct a raw WebSocket, or install a second browser library as fallback.
+
+The page surface includes `page.keyboard.press/type/insertText`,
+`page.setViewportSize/viewportSize`, `locator.evaluate/evaluateAll`, regex
+text/name locators, and React-compatible form updates. Browser callbacks are
+serialized into the page realm, so pass external data as the explicit callback
+argument. Browser evaluation errors preserve the real exception description
+and stack; locator failures add the exact rendered locator. See
+[BROWSER.md](BROWSER.md) for the complete supported surface.
 
 ## Ownership
 

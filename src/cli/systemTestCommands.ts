@@ -38,6 +38,10 @@ type EvalStatus = Awaited<ReturnType<EvalClient["getRun"]>>;
 
 const DEFAULT_POLL_MS = 1_000;
 const MAX_CONSECUTIVE_STATUS_READ_FAILURES = 5;
+// Diagnostic commands must fail visibly when an unhealthy EvalDO cannot
+// reconstruct a persisted run. An unbounded inspector is especially harmful:
+// it turns the primary recovery surface into another silent stall.
+const SYSTEM_TEST_INSPECTION_TIMEOUT_MS = 30_000;
 // The first page is returned through eval itself. Reserve an object-envelope
 // budget and assume worst-case JSON escaping (one code unit → six characters)
 // so the pager can never compact its own response into another truncation
@@ -177,16 +181,10 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
         key: progressKey,
         contextId: ctx.contextId,
       });
-      let record = null;
-      let executionError = null;
-      let settled = false;
-      const execution = rpc.call(driver.targetId, "runSystemTests", [{
+      await rpc.call(driver.targetId, "startSystemTestRun", [{
         ...${options},
         contextId: ctx.contextId,
-      }]).then(
-        (value) => { record = value; settled = true; },
-        (error) => { executionError = error; settled = true; },
-      );
+      }]);
       ctx.onCancel(async () => {
         const cleanup = (async () => {
           const cancelledRecord = await rpc.call(
@@ -201,33 +199,47 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
             runs[progressKey] = cancelledRecord;
             scope.systemTestRuns = runs;
           }
+          await rpc.call(driver.targetId, "releaseSystemTestRunResult", [progressKey]);
           await retireDriver();
         })();
         cancellationCleanup = cleanup;
         await cleanup;
       });
-      while (!settled) {
-        await Promise.race([
-          execution,
-          new Promise((resolve) => setTimeout(resolve, 1_000)),
-        ]);
-        if (settled) break;
+      for (;;) {
         const snapshot = await rpc.call(
           driver.targetId,
           "getSystemTestRunSnapshot",
           [progressKey],
         );
         if (snapshot?.progress) publishProgress(snapshot.progress);
+        if (snapshot?.status === "pending" || snapshot?.status === "running") {
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+          continue;
+        }
+        if (snapshot?.status === "done") {
+          if (!snapshot.result?.success) {
+            throw new Error(
+              snapshot.result?.error || "System-test driver reported a failed inner eval"
+            );
+          }
+          const record = await rpc.call(
+            driver.targetId,
+            "getSystemTestRunResult",
+            [progressKey],
+          );
+          if (!record) throw new Error("System-test driver returned no record for " + progressKey);
+          const runs = scope.systemTestRuns && typeof scope.systemTestRuns === "object"
+            ? scope.systemTestRuns
+            : {};
+          runs[progressKey] = record;
+          scope.systemTestRuns = runs;
+          await rpc.call(driver.targetId, "releaseSystemTestRunResult", [progressKey]);
+          return record.summary;
+        }
+        throw new Error(
+          "System-test inner eval became " + (snapshot?.status || "unknown")
+        );
       }
-      await execution;
-      if (executionError) throw executionError;
-      if (!record) throw new Error("System-test driver returned no record for " + progressKey);
-      const runs = scope.systemTestRuns && typeof scope.systemTestRuns === "object"
-        ? scope.systemTestRuns
-        : {};
-      runs[progressKey] = record;
-      scope.systemTestRuns = runs;
-      return record.summary;
     } catch (error) {
       const prior = lastProgress && typeof lastProgress === "object"
         ? lastProgress
@@ -577,18 +589,22 @@ async function readPersisted(
   const stored = loadSystemTestRun(runId);
   const scope = await resolveSystemTestScope(inv, stored?.sessionName ?? SYSTEM_TEST_SESSION);
   const outer = await evalClientFor(scope).getRun({ ...routing(scope, stored), runId });
+  const progress =
+    outer.progress && typeof outer.progress === "object" && !Array.isArray(outer.progress)
+      ? (outer.progress as Record<string, unknown>)
+      : null;
+  // The runner heartbeat retains the completed bounded/full inspection packet.
+  // Prefer it even after terminal completion: enqueuing a second eval behind an
+  // unhealthy or still-unwinding owner EvalDO defeats the purpose of the
+  // diagnostic command and can make `inspect` appear to hang.
+  const live = progress && readLive ? readLive(progress) : undefined;
+  if (live !== undefined) return { runId, stored, value: live };
   // Eval run handles are process-local. After a source-server restart a
   // completed system-test run is legitimately "unknown", while its record is
   // still durable in the owner's EvalDO scope. Probe that durable record below
   // instead of making the volatile orchestration handle a prerequisite for
   // inspect/trajectory/rerun.
   if (outer.status !== "done" && outer.status !== "unknown" && outer.status !== "cancelled") {
-    const progress =
-      outer.progress && typeof outer.progress === "object" && !Array.isArray(outer.progress)
-        ? (outer.progress as Record<string, unknown>)
-        : null;
-    const live = progress && readLive ? readLive(progress) : undefined;
-    if (live !== undefined) return { runId, stored, value: live };
     throw new CliError(
       `system-test run ${runId} is ${outer.status}; live inspection is not available yet, retry shortly`
     );
@@ -598,6 +614,7 @@ async function readPersisted(
     ...routing(scope, stored),
     code: code(runId),
     syntax: "typescript",
+    timeoutMs: SYSTEM_TEST_INSPECTION_TIMEOUT_MS,
   });
   if (!result.success) throw new CliError(result.error ?? "could not inspect system-test run");
   const value = await expandTruncatedReturn(
@@ -681,6 +698,7 @@ async function expandTruncatedReturn(
               };
             `,
           syntax: "typescript",
+          timeoutMs: SYSTEM_TEST_INSPECTION_TIMEOUT_MS,
         });
         if (!page.success) {
           throw new CliError(page.error ?? "could not page large system-test result");

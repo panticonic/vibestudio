@@ -448,6 +448,35 @@ describe("workspace semantic validators", () => {
 });
 
 describe("eval lifecycle semantic validators", () => {
+  it("requires invoking the same live scope method without reconstructing it", () => {
+    const result = execution("The same live method remained callable after the idle boundary.", [
+      {
+        code: "scope.__kernelContinuityProbe = { ping: () => 'LIVE_KERNEL_OK' }; return { methodType: typeof scope.__kernelContinuityProbe.ping };",
+        returnValue: { methodType: "function" },
+      },
+      {
+        code: "return { methodType: typeof scope.__kernelContinuityProbe.ping, value: scope.__kernelContinuityProbe.ping() };",
+        returnValue: { methodType: "function", value: "LIVE_KERNEL_OK" },
+      },
+    ]);
+    const validator = scenario(evalLifecycleTests, "eval-live-kernel-continuity");
+    expect(validator.validate(result).passed).toBe(true);
+    expect(
+      validator.validate(
+        execution("I recreated it.", [
+          {
+            code: "scope.__kernelContinuityProbe = { ping: () => 'LIVE_KERNEL_OK' }; return true;",
+            returnValue: true,
+          },
+          {
+            code: "scope.__kernelContinuityProbe = { ping: () => 'LIVE_KERNEL_OK' }; return { methodType: 'function', value: scope.__kernelContinuityProbe.ping() };",
+            returnValue: { methodType: "function", value: "LIVE_KERNEL_OK" },
+          },
+        ])
+      ).passed
+    ).toBe(false);
+  });
+
   it("requires database writes and later reads in distinct completed evals", () => {
     const result = execution("The later query returned both rows from the earlier evaluation.", [
       {

@@ -475,11 +475,11 @@ function formatToolFailure(failure: ToolFailureLike): string {
 
 export const cdpGadDiagnosticTests: TestCase[] = [
   {
-    name: "cdp-lightweight-click-type-evaluate",
-    description: "Automate a browser page with the lightweight CDP client",
+    name: "cdp-page-click-type-evaluate",
+    description: "Automate a browser page with the canonical CDP client",
     category: "cdp-gad-diagnostics",
     prompt:
-      "On a tiny disposable browser page, use the lightweight automation client to click an element, evaluate a value, and capture a screenshot. Summarize what actually succeeded.",
+      "On a tiny disposable browser page, use the canonical automation client to click an element, evaluate a value, and capture a screenshot. Summarize what actually succeeded.",
     validate: (result) =>
       checked(
         result,
@@ -488,11 +488,11 @@ export const cdpGadDiagnosticTests: TestCase[] = [
       ),
   },
   {
-    name: "cdp-lightweight-console-dom-inspection",
-    description: "Exercise explicit lightweight CDP inspection and host historical console APIs",
+    name: "cdp-page-console-dom-inspection",
+    description: "Exercise canonical CDP page inspection and host historical console APIs",
     category: "cdp-gad-diagnostics",
     prompt:
-      "Inspect a tiny disposable browser page with the lightweight client. Check its live console events, retained console history and errors, and visible DOM state, then report the observed results.",
+      "Inspect a tiny disposable browser page with the canonical CDP client. Check its live console events, retained console history and errors, and visible DOM state, then report the observed results.",
     validate: (result) =>
       checked(
         result,

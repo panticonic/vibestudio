@@ -52,6 +52,14 @@ mirrored into the checkout. The supervisor prints
 so identical names in different worktrees do not collide. Starting or stopping
 one instance never signals another.
 
+For a server instance, the registry's process record is not readiness. The
+supervisor clears the prior lifecycle marker before launch and publishes a new
+marker only after the server is reachable and bootstrap CLI pairing has
+completed. `pnpm cli --instance NAME ...` waits on that marker while verifying
+the owning supervisor is still alive; it does not race startup, report a false
+“not paired”, or impose an arbitrary RPC deadline. Supervisor exit, malformed
+readiness data, and successful readiness are distinct terminal outcomes.
+
 Electron local mode spawns the bundled `dist/server-electron.cjs` as one
 **detached machine hub** (`process.execPath` with `ELECTRON_RUN_AS_NODE=1`, see
 `src/main/hubProcessManager.ts`). The desktop shell pairs one global device with
@@ -258,15 +266,29 @@ unexpected tool failures while still returning the run ID. Local metadata and
 mode-`0600` artifacts default to
 `${XDG_CONFIG_HOME:-~/.config}/vibestudio/system-test-runs/<run-id>/`; pass
 `--out-dir` to choose another artifact root; each run gets its own subdirectory.
+
+The CLI control plane never holds one RPC open for a suite's lifetime. A sealed
+runner starts the durable eval and returns immediately; status, live inspection,
+terminal result retrieval, result acknowledgement, and cancellation are
+separate short operations addressed by the same run ID. Long model turns and
+fixture cleanup therefore do not depend on an HTTP request staying open.
+
+Each named agent session has one durable eval scope. `inspect` and `trajectory`
+prefer the run's retained terminal heartbeat packet, so a completed run can be
+diagnosed without queuing behind its still-unwinding eval work. When a restart
+requires the durable-record fallback, reconstruction stays FIFO and read-only,
+with a 30-second execution deadline once admitted. Separate named server
+instances isolate workspace state; separate named agent sessions provide truly
+parallel eval scopes within an instance.
 Exact test names are used to avoid accidental substring expansion.
 
 The default system-test model is `openai-codex:gpt-5.4-mini` with no implicit
 usage-limit fallback. `doctor` checks that exact model, and run metadata records
 the same route.
-Each test has one five-minute agent-turn budget by default, shared by all phases
-of an orchestrated test. Pass `--test-timeout-ms N` to replace that budget in
-milliseconds; a timeout produces a terminal errored test result with captured
-diagnostics and cleanup evidence.
+Tests have no implicit wall-clock deadline. Pass `--test-timeout-ms N` only to
+set an explicit operator-owned boundary; multi-phase tests share that one
+budget. A timeout produces a terminal errored result with captured diagnostics
+and cleanup evidence.
 
 ## Mobile
 

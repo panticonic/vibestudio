@@ -99,7 +99,10 @@ export class TestRunner {
     let scheduleWaiters: Array<() => void> = [];
 
     const resourcesFor = (test: TestCase): string[] => [
-      ...new Set((test.resources ?? []).filter(Boolean)),
+      ...new Set([
+        ...(test.workspaceRepoFixture ? ["vcs:protected-main"] : []),
+        ...(test.resources ?? []).filter(Boolean),
+      ]),
     ];
     const wakeSchedulers = (): void => {
       const waiters = scheduleWaiters;
@@ -436,8 +439,10 @@ export class TestRunner {
       if (workspaceRepoFixtureState) {
         enterPhase("workspace-fixture-cleanup");
         try {
-          const fixtureCleanup =
-            await testRunner.cleanupWorkspaceRepoFixture(workspaceRepoFixtureState);
+          const fixtureCleanup = await testRunner.cleanupWorkspaceRepoFixture(
+            workspaceRepoFixtureState,
+            (phase) => enterPhase(`workspace-fixture-cleanup:${phase}`)
+          );
           if (outcome) {
             outcome.execution.diagnostics = {
               ...(outcome.execution.diagnostics ?? {}),

@@ -492,7 +492,9 @@ export class RpcClient {
       throw new RpcError(
         typeof raw["error"] === "string"
           ? (raw["error"] as string)
-          : `rpc failed (${response.status} ${response.statusText})`
+          : `rpc failed (${response.status} ${response.statusText})`,
+        undefined,
+        response.status >= 500 ? "transport" : "application"
       );
     }
     // The current HTTP RPC contract is one raw response envelope.

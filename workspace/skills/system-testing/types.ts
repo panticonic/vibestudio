@@ -101,6 +101,11 @@ export interface TestCase {
    * The runner derives a repository-qualified `workspace-main-advance`
    * authority rule from this same scope; unexpected publication outside the
    * fixture remains an immediate test-policy failure.
+   *
+   * The runner also derives the shared `vcs:protected-main` scheduler resource
+   * from this fixture. Task contexts are isolated, but publication and cleanup
+   * counteraction still advance the one protected branch, so fixture cases
+   * serialize while disjoint tests remain concurrent.
    * This keeps fixture mechanics out of the user-like prompt.
    */
   workspaceRepoFixture?: WorkspaceRepoFixtureSpec;

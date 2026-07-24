@@ -50,7 +50,7 @@ function executionWithInvocation(
 }
 
 const clickTest = cdpGadDiagnosticTests.find(
-  (test) => test.name === "cdp-lightweight-click-type-evaluate"
+  (test) => test.name === "cdp-page-click-type-evaluate"
 )!;
 const stateArgsTest = cdpGadDiagnosticTests.find(
   (test) => test.name === "panel-stateargs-cdp-roundtrip"

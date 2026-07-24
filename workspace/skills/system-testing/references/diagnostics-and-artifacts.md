@@ -84,6 +84,13 @@ state. When
 activation fails, verify the failed artifact remained inactive and the previous
 runnable artifact stayed selected.
 
+System-test orchestration is a start/status/result protocol, not a suite-long
+RPC. If the outer run reports a runner socket closure while test agents continue
+working, classify it as control-plane infrastructure breakage: inspect the
+inner eval status and durable heartbeat, recover the terminal record, and fix
+the runner lifecycle. Do not increase an HTTP/RPC deadline or accept orphaned
+test activity as a completed run.
+
 ## Cleanup is behavior
 
 Session close failures, fixture leaks, stale participants, and repository
@@ -99,6 +106,22 @@ is the live/terminal teardown state and names the exact acknowledged phase:
 `phaseStartedAt` distinguishes a slow active boundary from an old transcript;
 `completedAt` exists only for terminal cleanup. A later test that encounters
 leaked state is secondary evidence; repair the original lifecycle leak.
+
+Repository fixture cleanup exposes equally exact live phases under
+`workspace-fixture-cleanup:*`: `task-status`,
+`task-first-parent-events`, `task-creation-scope`, `published-boundary`,
+`cleanup-context-create`, `cleanup-context-status`, `published-work`,
+`published-changes`, `counteract-published-work`, `counteract-revert`,
+`counteract-commit`, `counteract-push`,
+`destroy-cleanup-context`, and `destroy-task-context`. If a run stops moving,
+the phase is the boundary to inspect; do not infer that the model is still
+running and do not add a teardown timeout to hide the blocked operation.
+
+For `counteract-push`, the cleanup context carries a host-attested case policy
+whose critical deletion rules are exact paths derived from the task's
+repository-creation changes. It is not a disposable-workspace bypass. A
+missing, broader, or unrelated policy is an authority defect and must fail
+closed rather than becoming an interactive cleanup prompt.
 
 ## Artifact handling
 

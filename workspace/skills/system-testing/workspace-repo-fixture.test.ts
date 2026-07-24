@@ -433,13 +433,33 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     expect(fake.importSnapshot).not.toHaveBeenCalled();
 
     fake.createTaskRepositories(["panels/task-created"]);
-    await expect(fixture.cleanup(state)).resolves.toEqual({
+    const phases: string[] = [];
+    await expect(fixture.cleanup(state, (phase) => phases.push(phase))).resolves.toEqual({
       publishedFixtureRemoved: {
         repositoryId: "repository:task-created:0",
         repoPath: "panels/task-created",
       },
       unexpectedPublishedRepositoriesRemoved: [],
       counteractedChangeIds: ["change:task-created:0"],
+    });
+    expect(phases).toEqual([
+      "task-status",
+      "task-first-parent-events",
+      "task-creation-scope",
+      "published-boundary",
+      "cleanup-context-create",
+      "cleanup-context-status",
+      "published-work",
+      "published-changes",
+      "counteract-published-work",
+      "counteract-revert",
+      "counteract-commit",
+      "counteract-push",
+      "destroy-cleanup-context",
+      "destroy-task-context",
+    ]);
+    expect(fake.createContext).toHaveBeenNthCalledWith(2, {
+      counteractionRepoPaths: ["panels/task-created"],
     });
   });
 
@@ -520,6 +540,8 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     const seededText = fake.putText.mock.calls.map(([text]) => text).join("\n");
     expect(seededText).toContain('"@workspace-panels/system-test-panel-source"');
     expect(seededText).toContain('"template": "vanilla"');
+    expect(seededText).toContain('"authority": {');
+    expect(seededText).toContain('"requests": []');
 
     fake.createTaskRepositories(["panels/system-test-panel-fork"]);
     await expect(fixture.cleanup(state)).resolves.toEqual({
@@ -614,6 +636,8 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     const seededText = fake.putText.mock.calls.map(([text]) => text).join("\n");
     expect(seededText).toContain('"kind": "worker"');
     expect(seededText).toContain('"entry": "index.ts"');
+    expect(seededText).toContain('"authority": {');
+    expect(seededText).toContain('"requests": []');
     expect(seededText).toContain('"className": "FixtureWorkerDO"');
     expect(seededText).toContain('from "@workspace/runtime/worker"');
     expect(seededText).toContain("Direct resolveDurableObject methods are runtime-intrinsic");

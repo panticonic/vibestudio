@@ -302,6 +302,24 @@ describe("rpcClient", () => {
     });
   });
 
+  it("classifies an HTTP gateway failure as retryable transport", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL) => {
+        if (String(url).endsWith("/refresh-shell")) {
+          return new Response(refreshShellResult("tok"));
+        }
+        return new Response("", { status: 502, statusText: "Bad Gateway" });
+      })
+    );
+    const client = new RpcClient(CREDS);
+    await expect(client.call("meta.listServices", [])).rejects.toMatchObject({
+      name: "RpcError",
+      message: "rpc failed (502 Bad Gateway)",
+      errorKind: "transport",
+    });
+  });
+
   it("sends the relay body shape for callTarget", async () => {
     const bodies: unknown[] = [];
     vi.stubGlobal(

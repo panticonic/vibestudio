@@ -613,14 +613,20 @@ describe("TestRunner", () => {
     expect(unrelatedRanWhileGitActive).toBe(true);
   });
 
-  it("runs exactly owned workspace repository fixtures concurrently", async () => {
+  it("serializes workspace repository fixtures while unrelated tests remain concurrent", async () => {
     let activeSetups = 0;
     let maxActiveSetups = 0;
-    const bothStarted = deferred<void>();
-    const session = () => ({
+    let unrelatedRanWhileFixtureActive = false;
+    const unrelatedStarted = deferred<void>();
+    const session = (testName: string) => ({
       channelId: crypto.randomUUID(),
       messages: [] as ChatMessage[],
-      sendAndWait: vi.fn(async () => undefined),
+      sendAndWait: vi.fn(async () => {
+        if (testName === "unrelated") {
+          unrelatedRanWhileFixtureActive = activeSetups === 1;
+          unrelatedStarted.resolve();
+        }
+      }),
       captureModelExecutionEvidence: vi.fn(async () => modelEvidence()),
       snapshot: vi.fn(() => ({
         channelId: "fixture-channel",
@@ -641,8 +647,7 @@ describe("TestRunner", () => {
         prepareWorkspaceRepoFixture: vi.fn(async () => {
           activeSetups += 1;
           maxActiveSetups = Math.max(maxActiveSetups, activeSetups);
-          if (activeSetups === 2) bothStarted.resolve();
-          await bothStarted.promise;
+          if (testName === "alpha") await unrelatedStarted.promise;
           activeSetups -= 1;
           return {
             kind: "content" as const,
@@ -658,7 +663,7 @@ describe("TestRunner", () => {
             taskBaseEventId: "event:main",
           };
         }),
-        spawn: vi.fn(async () => session()),
+        spawn: vi.fn(async () => session(testName)),
         collectDiagnostics: vi.fn(async () => ({})),
         cleanupWorkspaceRepoFixture: vi.fn(async () => ({
           publishedFixtureRemoved: null,
@@ -676,13 +681,22 @@ describe("TestRunner", () => {
       workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
       validate: () => ({ passed: true }),
     });
+    const unrelatedTest: TestCase = {
+      name: "unrelated",
+      category: "test",
+      description: "unrelated",
+      prompt: "unrelated",
+      validate: () => ({ passed: true }),
+    };
 
-    const suite = await tester.runSuite([fixtureTest("alpha"), fixtureTest("beta")], {
-      concurrency: 2,
-    });
+    const suite = await tester.runSuite(
+      [fixtureTest("alpha"), fixtureTest("beta"), unrelatedTest],
+      { concurrency: 3 }
+    );
 
-    expect(suite.passed).toBe(2);
-    expect(maxActiveSetups).toBe(2);
+    expect(suite.passed).toBe(3);
+    expect(maxActiveSetups).toBe(1);
+    expect(unrelatedRanWhileFixtureActive).toBe(true);
   });
 
   it("cancellation finishes the ordinary session and fixture cleanup path", async () => {
