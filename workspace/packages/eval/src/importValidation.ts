@@ -12,6 +12,7 @@
  */
 
 import { EVAL_AMBIENT_ONLY } from "@vibestudio/service-schemas/runtime/runtimeSurface.eval";
+import { analyzeModuleImports } from "@vibestudio/shared/moduleImports";
 
 /**
  * Eval globals that are injected ambiently, NOT exported by `@workspace/runtime`
@@ -31,206 +32,19 @@ export interface ParsedImport {
   hasNamespace: boolean;
 }
 
-function isIdentChar(ch: string | undefined): boolean {
-  return ch !== undefined && /[A-Za-z0-9_$]/.test(ch);
-}
-
-function hasWordBoundary(code: string, start: number, length: number): boolean {
-  return !isIdentChar(code[start - 1]) && !isIdentChar(code[start + length]);
-}
-
-function skipWhitespace(code: string, index: number): number {
-  let i = index;
-  while (i < code.length) {
-    const ch = code[i];
-    if (/\s/.test(ch ?? "")) {
-      i++;
-      continue;
-    }
-    if (ch === "/" && code[i + 1] === "/") {
-      i += 2;
-      while (i < code.length && code[i] !== "\n" && code[i] !== "\r") i++;
-      continue;
-    }
-    if (ch === "/" && code[i + 1] === "*") {
-      i += 2;
-      while (i < code.length && !(code[i] === "*" && code[i + 1] === "/")) i++;
-      i = Math.min(code.length, i + 2);
-      continue;
-    }
-    break;
-  }
-  return i;
-}
-
-function skipQuoted(code: string, index: number, quote: "'" | '"'): number {
-  let i = index + 1;
-  while (i < code.length) {
-    const ch = code[i];
-    if (ch === "\\") {
-      i += 2;
-      continue;
-    }
-    if (ch === quote) return i + 1;
-    i++;
-  }
-  return i;
-}
-
-function skipTemplate(code: string, index: number): number {
-  let i = index + 1;
-  while (i < code.length) {
-    const ch = code[i];
-    if (ch === "\\") {
-      i += 2;
-      continue;
-    }
-    if (ch === "`") return i + 1;
-    i++;
-  }
-  return i;
-}
-
-function readStringLiteral(code: string, index: number): { value: string; end: number } | null {
-  const quote = code[index];
-  if (quote !== "'" && quote !== '"') return null;
-  let value = "";
-  let i = index + 1;
-  while (i < code.length) {
-    const ch = code[i];
-    if (ch === "\\") {
-      value += code.slice(i, Math.min(code.length, i + 2));
-      i += 2;
-      continue;
-    }
-    if (ch === quote) return { value, end: i + 1 };
-    value += ch ?? "";
-    i++;
-  }
-  return null;
-}
-
-function findKeywordOutsideLiterals(code: string, keyword: string, index: number): number {
-  let i = index;
-  while (i < code.length) {
-    const ch = code[i];
-    if (ch === "'" || ch === '"') {
-      i = skipQuoted(code, i, ch);
-      continue;
-    }
-    if (ch === "`") {
-      i = skipTemplate(code, i);
-      continue;
-    }
-    if (ch === "/" && code[i + 1] === "/") {
-      i += 2;
-      while (i < code.length && code[i] !== "\n" && code[i] !== "\r") i++;
-      continue;
-    }
-    if (ch === "/" && code[i + 1] === "*") {
-      i += 2;
-      while (i < code.length && !(code[i] === "*" && code[i + 1] === "/")) i++;
-      i = Math.min(code.length, i + 2);
-      continue;
-    }
-    if (code.startsWith(keyword, i) && hasWordBoundary(code, i, keyword.length)) return i;
-    i++;
-  }
-  return -1;
-}
-
-function parseImportAt(code: string, start: number): ParsedImport | null {
-  let i = skipWhitespace(code, start + "import".length);
-  const first = code[i];
-  if (first === "(" || first === ".") return null; // dynamic import / import.meta
-  if (first === "'" || first === '"') {
-    const literal = readStringLiteral(code, i);
-    return literal
-      ? { specifier: literal.value, named: [], hasDefault: false, hasNamespace: false }
-      : null;
-  }
-  const fromIndex = findKeywordOutsideLiterals(code, "from", i);
-  if (fromIndex < 0) return null;
-  const literal = readStringLiteral(code, skipWhitespace(code, fromIndex + "from".length));
-  if (!literal) return null;
-  const clause = code.slice(i, fromIndex).trim();
-  if (/^type\b/.test(clause)) return null; // whole-statement type import
-  return { specifier: literal.value, ...parseClause(clause) };
-}
-
-function parseExportAt(code: string, start: number): ParsedImport | null {
-  let i = skipWhitespace(code, start + "export".length);
-  if (code.startsWith("type", i) && hasWordBoundary(code, i, "type".length)) return null;
-  const fromIndex = findKeywordOutsideLiterals(code, "from", i);
-  if (fromIndex < 0) return null;
-  const literal = readStringLiteral(code, skipWhitespace(code, fromIndex + "from".length));
-  if (!literal) return null;
-  const clause = code.slice(i, fromIndex).trim();
-  return { specifier: literal.value, ...parseClause(clause) };
-}
-
-function parseClause(clause: string): Omit<ParsedImport, "specifier"> {
-  let hasNamespace = false;
-  const named: string[] = [];
-
-  if (/\*\s+as\s+\w+/.test(clause)) hasNamespace = true;
-
-  const braceMatch = clause.match(/\{([^}]*)\}/);
-  if (braceMatch?.[1]) {
-    for (const raw of braceMatch[1].split(",")) {
-      const part = raw.trim();
-      if (!part || /^type\s+/.test(part)) continue; // skip inline `type` specifiers
-      const importedName = part.split(/\s+as\s+/)[0]?.trim();
-      if (importedName) named.push(importedName);
-    }
-  }
-
-  const beforeBrace = clause.replace(/\{[^}]*\}/, "").replace(/\*\s+as\s+\w+/, "");
-  const defaultMatch = beforeBrace.match(/^\s*(\w+)/);
-  const hasDefault = Boolean(defaultMatch && defaultMatch[1] !== "type");
-
-  return { named, hasDefault, hasNamespace };
-}
-
 export function parseStaticImports(code: string): ParsedImport[] {
-  const imports: ParsedImport[] = [];
-  let i = 0;
-  while (i < code.length) {
-    const ch = code[i];
-    if (ch === "'" || ch === '"') {
-      i = skipQuoted(code, i, ch);
-      continue;
-    }
-    if (ch === "`") {
-      i = skipTemplate(code, i);
-      continue;
-    }
-    if (ch === "/" && code[i + 1] === "/") {
-      i += 2;
-      while (i < code.length && code[i] !== "\n" && code[i] !== "\r") i++;
-      continue;
-    }
-    if (ch === "/" && code[i + 1] === "*") {
-      i += 2;
-      while (i < code.length && !(code[i] === "*" && code[i + 1] === "/")) i++;
-      i = Math.min(code.length, i + 2);
-      continue;
-    }
-    if (code.startsWith("import", i) && hasWordBoundary(code, i, "import".length)) {
-      const parsed = parseImportAt(code, i);
-      if (parsed) imports.push(parsed);
-      i += "import".length;
-      continue;
-    }
-    if (code.startsWith("export", i) && hasWordBoundary(code, i, "export".length)) {
-      const parsed = parseExportAt(code, i);
-      if (parsed) imports.push(parsed);
-      i += "export".length;
-      continue;
-    }
-    i++;
-  }
-  return imports;
+  return analyzeModuleImports(code)
+    .filter(
+      (reference) =>
+        reference.kind === "value" &&
+        (reference.syntax === "import" || reference.syntax === "export")
+    )
+    .map(({ specifier, named, hasDefault, hasNamespace }) => ({
+      specifier,
+      named,
+      hasDefault,
+      hasNamespace,
+    }));
 }
 
 /**

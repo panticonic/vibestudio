@@ -177,5 +177,9 @@
     "@workspace/pubsub": "workspace:*",
     "@workspace/harness": "workspace:*",
     "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@workspace/agentic-protocol": "workspace:*",
+    "vitest": "^3.2.2"
   }
 }

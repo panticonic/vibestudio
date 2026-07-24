@@ -795,6 +795,9 @@ importers:
 
   packages/shared:
     dependencies:
+      '@babel/parser':
+        specifier: ^7.29.2
+        version: 7.29.2
       '@vibestudio/content-addressing':
         specifier: workspace:*
         version: link:../content-addressing

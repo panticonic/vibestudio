@@ -291,6 +291,9 @@ importers:
 
   ../packages/shared:
     dependencies:
+      '@babel/parser':
+        specifier: ^7.29.2
+        version: 7.29.7
       '@vibestudio/content-addressing':
         specifier: workspace:*
         version: link:../content-addressing
@@ -1657,6 +1660,9 @@ importers:
       '@workspace/agentic-chat':
         specifier: workspace:*
         version: link:../../packages/agentic-chat
+      '@workspace/agentic-core':
+        specifier: workspace:*
+        version: link:../../packages/agentic-core
       '@workspace/eval':
         specifier: workspace:*
         version: link:../../packages/eval
@@ -1675,9 +1681,16 @@ importers:
       '@workspace/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
       zod:
         specifier: ^3.22.0
         version: 3.25.76
+    devDependencies:
+      vitest:
+        specifier: ^3.2.2
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   panels/gad-browser:
     dependencies:
@@ -1702,6 +1715,16 @@ importers:
       '@workspace/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
+      react-dom:
+        specifier: 19.0.0
+        version: 19.0.0(react@19.0.0)
+    devDependencies:
+      vitest:
+        specifier: ^3.2.2
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   panels/hello-svelte:
     dependencies:
@@ -1739,6 +1762,9 @@ importers:
       '@workspace/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
 
   panels/news:
     dependencies:
@@ -1748,6 +1774,9 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/credential-client':
+        specifier: workspace:*
+        version: link:../../../packages/credential-client
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
@@ -1778,6 +1807,9 @@ importers:
       '@workspace/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
       react-markdown:
         specifier: ^9.0.1
         version: 9.1.0(@types/react@19.2.17)(react@19.0.0)
@@ -1785,6 +1817,9 @@ importers:
         specifier: ^4.0.0
         version: 4.0.1
     devDependencies:
+      '@testing-library/react':
+        specifier: ^16.3.2
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
       vitest:
         specifier: ^3.2.2
         version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
@@ -1866,6 +1901,9 @@ importers:
       mdast-util-to-markdown:
         specifier: ^2.1.0
         version: 2.1.2
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
       remark-wiki-link:
         specifier: ^2.0.1
         version: 2.0.1
@@ -1873,9 +1911,15 @@ importers:
         specifier: ^2.8.0
         version: 2.9.0
     devDependencies:
+      '@testing-library/react':
+        specifier: ^16.3.2
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
       '@types/mdast':
         specifier: ^4.0.4
         version: 4.0.4
+      vitest:
+        specifier: ^3.2.2
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   panels/terminal:
     dependencies:
@@ -1885,6 +1929,9 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@workspace-extensions/shell':
+        specifier: workspace:*
+        version: link:../../extensions/shell
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
@@ -1924,12 +1971,25 @@ importers:
       '@xterm/addon-webgl':
         specifier: ^0.19.0
         version: 0.19.0
+      '@xterm/headless':
+        specifier: ^5.5.0
+        version: 5.5.0
       '@xterm/xterm':
         specifier: ^6.0.0
         version: 6.0.0
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
+      react-dom:
+        specifier: 19.0.0
+        version: 19.0.0(react@19.0.0)
       zod:
         specifier: ^3.22.0
         version: 3.25.76
+    devDependencies:
+      vitest:
+        specifier: ^3.2.2
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   panels/testbench:
     dependencies:
@@ -1951,6 +2011,12 @@ importers:
       '@workspace/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
+      react-dom:
+        specifier: 19.0.0
+        version: 19.0.0(react@19.0.0)
 
   skills/agents:
     dependencies:
@@ -2117,6 +2183,9 @@ importers:
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      svelte:
+        specifier: ^5.55.0
+        version: 5.56.4
 
   workers/agent-worker:
     dependencies:
@@ -2135,9 +2204,28 @@ importers:
       zod:
         specifier: ^3.24.0
         version: 3.25.76
+    devDependencies:
+      '@workspace/agentic-protocol':
+        specifier: workspace:*
+        version: link:../../packages/agentic-protocol
+      vitest:
+        specifier: ^3.2.2
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   workers/explorer-agent:
     dependencies:
+      '@radix-ui/react-icons':
+        specifier: ^1.3.2
+        version: 1.3.2(react@19.0.0)
+      '@radix-ui/themes':
+        specifier: ^3.2.1
+        version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../../../packages/rpc
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@workspace-workers/agent-worker':
         specifier: workspace:*
         version: link:../agent-worker
@@ -2153,6 +2241,9 @@ importers:
       '@workspace/harness':
         specifier: workspace:*
         version: link:../../packages/harness
+      '@workspace/pi-core':
+        specifier: workspace:*
+        version: link:../../packages/pi-core
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../../packages/pubsub
@@ -2162,12 +2253,19 @@ importers:
       zod:
         specifier: ^3.24.0
         version: 3.25.76
+    devDependencies:
+      vitest:
+        specifier: ^3.2.2
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   workers/gmail-agent:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.80.6
         version: 0.80.6(patch_hash=c4a17f70c78dd2fd8cfa3286e2f7d8f421e85955577f4501b89b4fe26bfb0092)(ws@8.21.0)(zod@3.25.76)
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@vibestudio/trajectory-identity':
         specifier: workspace:*
         version: link:../../../packages/trajectory-identity
@@ -2195,6 +2293,13 @@ importers:
       zod:
         specifier: ^3.24.0
         version: 3.25.76
+    devDependencies:
+      '@workspace/agent-loop':
+        specifier: workspace:*
+        version: link:../../packages/agent-loop
+      vitest:
+        specifier: ^3.2.2
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   workers/linked-agent:
     dependencies:
@@ -2213,6 +2318,9 @@ importers:
       '@workspace/harness':
         specifier: workspace:*
         version: link:../../packages/harness
+      '@workspace/pi-core':
+        specifier: workspace:*
+        version: link:../../packages/pi-core
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../../packages/pubsub
@@ -2222,21 +2330,38 @@ importers:
       zod:
         specifier: ^3.24.0
         version: 3.25.76
+    devDependencies:
+      vitest:
+        specifier: ^3.2.2
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   workers/model-settings:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.80.6
         version: 0.80.6(patch_hash=c4a17f70c78dd2fd8cfa3286e2f7d8f421e85955577f4501b89b4fe26bfb0092)(ws@8.21.0)(zod@3.25.76)
+      '@vibestudio/credential-client':
+        specifier: workspace:*
+        version: link:../../../packages/credential-client
       '@workspace/model-catalog':
         specifier: workspace:*
         version: link:../../packages/model-catalog
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+    devDependencies:
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
+      vitest:
+        specifier: ^3.2.2
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   workers/news-agent:
     dependencies:
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@workspace/agentic-do':
         specifier: workspace:*
         version: link:../../packages/agentic-do
@@ -2259,6 +2384,9 @@ importers:
         specifier: workspace:*
         version: link:../../packages/runtime
     devDependencies:
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../../../packages/rpc
       vitest:
         specifier: ^3.2.2
         version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
@@ -2268,6 +2396,9 @@ importers:
       '@vibestudio/content-addressing':
         specifier: workspace:*
         version: link:../../../packages/content-addressing
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../../../packages/rpc
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
@@ -2289,6 +2420,10 @@ importers:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+    devDependencies:
+      vitest:
+        specifier: ^3.2.2
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   workers/silent-agent-worker:
     dependencies:
@@ -2301,6 +2436,9 @@ importers:
       '@workspace/harness':
         specifier: workspace:*
         version: link:../../packages/harness
+      '@workspace/pi-core':
+        specifier: workspace:*
+        version: link:../../packages/pi-core
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../../packages/pubsub
@@ -2310,6 +2448,13 @@ importers:
       zod:
         specifier: ^3.24.0
         version: 3.25.76
+    devDependencies:
+      '@workspace/agent-loop':
+        specifier: workspace:*
+        version: link:../../packages/agent-loop
+      vitest:
+        specifier: ^3.2.2
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   workers/system-agent:
     dependencies:
@@ -2331,15 +2476,29 @@ importers:
       zod:
         specifier: ^3.24.0
         version: 3.25.76
+    devDependencies:
+      vitest:
+        specifier: ^3.2.2
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   workers/system-test-runner:
     dependencies:
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+    devDependencies:
+      vitest:
+        specifier: ^3.2.2
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   workers/terminal-chat:
     dependencies:
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@workspace/agentic-session':
         specifier: workspace:*
         version: link:../../packages/agentic-session
@@ -2361,6 +2520,10 @@ importers:
       react:
         specifier: 19.0.0
         version: 19.0.0
+    devDependencies:
+      vitest:
+        specifier: ^3.2.2
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   workers/test-agent:
     dependencies:
@@ -2376,6 +2539,10 @@ importers:
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+    devDependencies:
+      vitest:
+        specifier: ^3.2.2
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   workers/testkit-driver:
     dependencies:
@@ -4541,6 +4708,28 @@ packages:
   '@tesseract.js-data/eng@1.0.0':
     resolution: {integrity: sha512-mbTumm6KQPUHyzTPQaF3ObXYnx0SqqfV2nabqFVQBwD6Kl7PhGSLSzOlfFTWy0P3BjghaSKA2W9GB19Jk+ZcTg==}
 
+  '@testing-library/dom@10.4.1':
+    resolution: {integrity: sha512-o4PXJQidqJl82ckFaXUeoAW+XysPLauYI43Abki5hABd853iMhitooc6znOnczgbTYmEP6U6/y1ZyKAIsvMKGg==}
+    engines: {node: '>=18'}
+
+  '@testing-library/react@16.3.2':
+    resolution: {integrity: sha512-XU5/SytQM+ykqMnAnvB2umaJNIOsLF3PVv//1Ew4CTcpz0/BRyy/af40qqrt7SjKpDdT1saBMc42CUok5gaw+g==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@testing-library/dom': ^10.0.0
+      '@types/react': ^18.0.0 || ^19.0.0
+      '@types/react-dom': ^18.0.0 || ^19.0.0
+      react: 19.0.0
+      react-dom: 19.0.0
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+      '@types/react-dom':
+        optional: true
+
+  '@types/aria-query@5.0.4':
+    resolution: {integrity: sha512-rfT93uj5s0PRL7EzccGMs3brplhcrghnDoV26NqKhCAS1hVo+WdNsPvE/yb6ilfr5hi2MEk6d5EWJTKdxg8jVw==}
+
   '@types/babel__core@7.20.5':
     resolution: {integrity: sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA==}
 
@@ -4939,6 +5128,9 @@ packages:
   aria-hidden@1.2.6:
     resolution: {integrity: sha512-ik3ZgC9dY/lYVVM++OISsaYDeg1tb0VtP5uL3ouh1koGOaUMDPpbFIei4JkFimWUFPn90sbMNMXQAIVOlnYKJA==}
     engines: {node: '>=10'}
+
+  aria-query@5.3.0:
+    resolution: {integrity: sha512-b0P0sZPKtyu8HkeRAfCq0IfURZK+SuwMjY1UXGBU27wpAiTwQAIlq56IbIO+ytk/JjS1fMR14ee5WBBfKi5J6A==}
 
   aria-query@5.3.1:
     resolution: {integrity: sha512-Z/ZeOgVl7bcSYZ/u/rh0fOpvEpq//LZmdbkXyc7syVzjPAhfOa9ebsdTSjEBDU4vs5nC98Kfduj1uFo0qyET3g==}
@@ -5517,6 +5709,9 @@ packages:
   diff@7.0.0:
     resolution: {integrity: sha512-PJWHUb1RFevKCwaFA9RlG5tCd+FO5iRh9A8HEtkmBH2Li03iJriB6m6JIN4rGz3K3JLawI7/veA1xzRKP6ISBw==}
     engines: {node: '>=0.3.1'}
+
+  dom-accessibility-api@0.5.16:
+    resolution: {integrity: sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg==}
 
   dom-serializer@2.0.0:
     resolution: {integrity: sha512-wIkAryiqt/nV5EQKqQpo3SToSOV9J0DnbJqwK7Wv/Trc92zIAYZ4FlMu+JPFW1DfGFt81ZTCGgDEabffXeLyJg==}
@@ -6312,6 +6507,10 @@ packages:
       react-native: '*'
       react-native-svg: ^12.0.0 || ^13.0.0 || ^14.0.0 || ^15.0.0
 
+  lz-string@1.5.0:
+    resolution: {integrity: sha512-h5bgJWpxJNswbU7qCrV0tIKQCaS3blPDrqKWx+QxzuzL1zGUzij9XCWLrSLsJPu5t+eWA/ycetzYAO5IOMcWAQ==}
+    hasBin: true
+
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
@@ -6871,6 +7070,10 @@ packages:
     resolution: {integrity: sha512-vuwillviilfKZsg0VGj5R/YwwcHx4SLsIOI/7K6mQkWx+l5cUHTjj5g0AasTBcyXsbfTgrwsUNmVUb5xVwyPwg==}
     engines: {node: ^10 || ^12 || >=14}
 
+  pretty-format@27.5.1:
+    resolution: {integrity: sha512-Qb1gy5OrP5+zDf2Bvnzdl3jsTf1qXVMazbvCoKhtKqVs4/YK4ozX4gKQJJVyNe+cajNPn0KoC0MC3FUmaHWEmQ==}
+    engines: {node: ^10.13.0 || ^12.13.0 || ^14.15.0 || >=15.0.0}
+
   pretty-format@29.7.0:
     resolution: {integrity: sha512-Pdlw/oPxN+aXdmM9R00JVC9WVFoCLTKJvDVLgmJ+qAffBMxsV85l/Lu7sNx4zSzPyoL2euImuEwHhOXdEgNFZQ==}
     engines: {node: ^14.15.0 || ^16.10.0 || >=18.0.0}
@@ -6958,6 +7161,9 @@ packages:
 
   react-is@16.13.1:
     resolution: {integrity: sha512-24e6ynE2H+OKt4kqsOvNd8kBpV65zoxbA4BVsEOB3ARVWQki/DHzaUoC5KuON/BiccDaCCTZBuOcfZs70kR8bQ==}
+
+  react-is@17.0.2:
+    resolution: {integrity: sha512-w2GsyukL62IJnlaff/nRegPQR94C/XXamvMWmSHRJ4y7Ts/4ocGRmTHvOs8PSE6pB3dWOrD/nueuU5sduBsQ4w==}
 
   react-is@18.3.1:
     resolution: {integrity: sha512-/LLMVyas0ljjAtoYiPqYiL8VWXzUUdThrmU5+n20DZv+a+ClRoevUzw5JxU+Ieh5/c87ytoTBV9G1FiKfNJdmg==}
@@ -10440,6 +10646,29 @@ snapshots:
 
   '@tesseract.js-data/eng@1.0.0': {}
 
+  '@testing-library/dom@10.4.1':
+    dependencies:
+      '@babel/code-frame': 7.29.7
+      '@babel/runtime': 7.29.7
+      '@types/aria-query': 5.0.4
+      aria-query: 5.3.0
+      dom-accessibility-api: 0.5.16
+      lz-string: 1.5.0
+      picocolors: 1.1.1
+      pretty-format: 27.5.1
+
+  '@testing-library/react@16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)':
+    dependencies:
+      '@babel/runtime': 7.29.7
+      '@testing-library/dom': 10.4.1
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+    optionalDependencies:
+      '@types/react': 19.2.17
+      '@types/react-dom': 19.2.3(@types/react@19.2.17)
+
+  '@types/aria-query@5.0.4': {}
+
   '@types/babel__core@7.20.5':
     dependencies:
       '@babel/parser': 7.29.7
@@ -10851,6 +11080,10 @@ snapshots:
   aria-hidden@1.2.6:
     dependencies:
       tslib: 2.8.1
+
+  aria-query@5.3.0:
+    dependencies:
+      dequal: 2.0.3
 
   aria-query@5.3.1: {}
 
@@ -11432,6 +11665,8 @@ snapshots:
   diff@5.2.2: {}
 
   diff@7.0.0: {}
+
+  dom-accessibility-api@0.5.16: {}
 
   dom-serializer@2.0.0:
     dependencies:
@@ -12327,6 +12562,8 @@ snapshots:
       react: 19.0.0
       react-native: 0.79.7(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.0.0)
       react-native-svg: 15.15.5(react-native@0.79.7(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.0.0))(react@19.0.0)
+
+  lz-string@1.5.0: {}
 
   magic-string@0.30.21:
     dependencies:
@@ -13290,6 +13527,12 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
+  pretty-format@27.5.1:
+    dependencies:
+      ansi-regex: 5.0.1
+      ansi-styles: 5.2.0
+      react-is: 17.0.2
+
   pretty-format@29.7.0:
     dependencies:
       '@jest/schemas': 29.6.3
@@ -13435,6 +13678,8 @@ snapshots:
       react: 19.0.0
 
   react-is@16.13.1: {}
+
+  react-is@17.0.2: {}
 
   react-is@18.3.1: {}
 

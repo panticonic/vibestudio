@@ -1,6 +1,7 @@
 {
   "name": "@workspace-workers/system-test-runner",
   "version": "0.1.0",
+  "private": true,
   "type": "module",
   "vibestudio": {
     "title": "System Test Runner",
@@ -100,6 +101,10 @@
     }
   },
   "dependencies": {
+    "@vibestudio/shared": "workspace:*",
     "@workspace/runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.2"
   }
 }

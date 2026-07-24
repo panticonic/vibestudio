@@ -58,6 +58,7 @@
     "./keyedSerializer": "./src/keyedSerializer.ts",
     "./lexorank": "./src/lexorank.ts",
     "./lineDiff": "./src/lineDiff.ts",
+    "./moduleImports": "./src/moduleImports.ts",
     "./managedService": "./src/managedService.ts",
     "./npmInstaller": "./src/npmInstaller.ts",
     "./panelAccessPolicy": "./src/panelAccessPolicy.ts",
@@ -110,6 +111,7 @@
     "test": "cd ../.. && vitest run packages/shared/src"
   },
   "dependencies": {
+    "@babel/parser": "^7.29.2",
     "@vibestudio/content-addressing": "workspace:*",
     "@vibestudio/credential-client": "workspace:*",
     "@vibestudio/dev-log": "workspace:*",

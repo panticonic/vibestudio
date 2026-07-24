@@ -140,6 +140,7 @@
     }
   },
   "dependencies": {
+    "@vibestudio/shared": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/agentic-do": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",
@@ -149,6 +150,7 @@
     "@workspace/pi-core": "workspace:*"
   },
   "devDependencies": {
+    "@vibestudio/rpc": "workspace:*",
     "vitest": "^3.2.2"
   }
 }

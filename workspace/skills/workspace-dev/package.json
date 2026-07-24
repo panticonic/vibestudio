@@ -10,6 +10,7 @@
   "dependencies": {
     "@workspace/runtime": "workspace:*",
     "@vibestudio/git": "workspace:*",
-    "@vibestudio/shared": "workspace:*"
+    "@vibestudio/shared": "workspace:*",
+    "svelte": "^5.55.0"
   }
 }

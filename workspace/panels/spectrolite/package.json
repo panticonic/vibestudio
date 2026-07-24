@@ -166,10 +166,13 @@
     "mdast-util-to-markdown": "^2.1.0",
     "mdast-util-mdx-jsx": "^3.0.0",
     "remark-wiki-link": "^2.0.1",
+    "react": "^19.2.0",
     "diff": "^5.2.0",
     "yaml": "^2.8.0"
   },
   "devDependencies": {
-    "@types/mdast": "^4.0.4"
+    "@testing-library/react": "^16.3.2",
+    "@types/mdast": "^4.0.4",
+    "vitest": "^3.2.2"
   }
 }

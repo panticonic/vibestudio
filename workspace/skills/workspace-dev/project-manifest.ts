@@ -1,4 +1,12 @@
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
+import {
+  analyzeModuleImports,
+  definitelyTypedCoordinate,
+  moduleCoordinate,
+  type ModuleImportKind,
+  type ModuleImportSyntax,
+} from "@vibestudio/shared/moduleImports";
+import { parse as parseSvelte } from "svelte/compiler";
 
 export const PROJECT_TYPES = ["panel", "package", "skill", "project", "worker"] as const;
 export type ProjectType = (typeof PROJECT_TYPES)[number];
@@ -11,6 +19,50 @@ export interface ProjectPreflightReport {
   authorityRequestCount: number;
   importedPackages: string[];
   checked: string[];
+}
+
+export interface ProjectDependencyOccurrence {
+  file: string;
+  specifier: string;
+  kind: ModuleImportKind;
+  syntax: ModuleImportSyntax;
+  line: number;
+  column: number;
+}
+
+export interface ProjectDependencyIssue {
+  code: "dependency_missing" | "dependency_wrong_field";
+  coordinate: string;
+  expectedField: "dependencies" | "devDependencies";
+  declaredField: "devDependencies" | null;
+  acceptedCoordinates: string[];
+  occurrences: ProjectDependencyOccurrence[];
+  remediation: string;
+}
+
+export interface ProjectPreflightFailureData {
+  code: "project_preflight_failed";
+  stage: "dependency-contract";
+  projectType: ProjectType;
+  projectName: string;
+  packageName: string;
+  issues: ProjectDependencyIssue[];
+}
+
+export class ProjectPreflightError extends Error {
+  readonly errorData: ProjectPreflightFailureData;
+
+  constructor(errorData: ProjectPreflightFailureData) {
+    const details = errorData.issues
+      .map((issue) => {
+        const first = issue.occurrences[0]!;
+        return `${issue.coordinate} at ${first.file}:${first.line}:${first.column} -> ${issue.expectedField}`;
+      })
+      .join("; ");
+    super(`Project dependency contract failed: ${details}`);
+    this.name = "ProjectPreflightError";
+    this.errorData = errorData;
+  }
 }
 
 export interface BuildProjectManifestInput {
@@ -36,7 +88,9 @@ const PACKAGE_SCOPES: Record<Exclude<ProjectType, "project">, string> = {
 function assertProjectName(name: string): void {
   if (!/^[a-z][a-z0-9-]*$/.test(name)) {
     throw new Error(
-      "Project name must start with a lowercase letter and contain only lowercase letters, numbers, and hyphens."
+      `Project name ${JSON.stringify(name)} is invalid. Use a stable kebab-case identifier matching ` +
+        "`^[a-z][a-z0-9-]*$`, for example `todo-list` or " +
+        "`todo-list-${Date.now().toString(36)}`. Raw ISO timestamps are invalid because they contain uppercase letters and punctuation."
     );
   }
 }
@@ -76,7 +130,6 @@ export function buildProjectManifest(input: BuildProjectManifestInput): Record<s
   if (input.exports) manifest["exports"] = canonicalRecord(input.exports);
   if (executable) {
     manifest["vibestudio"] = {
-      ...(input.projectType === "worker" ? { type: "worker" } : {}),
       title: input.title,
       entry: input.entry,
       ...(input.exposeModules ? { exposeModules: [...input.exposeModules] } : {}),
@@ -119,26 +172,51 @@ function parseManifest(source: string): Record<string, unknown> {
   return asRecord(parsed, "package.json");
 }
 
-function packageCoordinate(specifier: string): string | null {
-  if (specifier.startsWith(".") || specifier.startsWith("/") || specifier.startsWith("node:")) {
-    return null;
-  }
-  const parts = specifier.split("/");
-  return specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]!;
-}
-
-function importedPackages(files: Readonly<Record<string, string | Uint8Array>>): string[] {
-  const imports = new Set<string>();
-  const pattern =
-    /(?:\bfrom\s*|\bimport\s*\(|\brequire\s*\()\s*["']([^"']+)["']|\bimport\s*["']([^"']+)["']/g;
+function dependencyOccurrences(
+  files: Readonly<Record<string, string | Uint8Array>>
+): Array<ProjectDependencyOccurrence & { coordinate: string; testOnly: boolean }> {
+  const imports: Array<ProjectDependencyOccurrence & { coordinate: string; testOnly: boolean }> =
+    [];
   for (const [path, content] of Object.entries(files)) {
     if (content instanceof Uint8Array || path === "package.json") continue;
-    for (const match of content.matchAll(pattern)) {
-      const coordinate = packageCoordinate(match[1] ?? match[2] ?? "");
-      if (coordinate) imports.add(coordinate);
+    let moduleSource: string;
+    if (/\.[cm]?[jt]sx?$/iu.test(path)) {
+      moduleSource = content;
+    } else if (/\.svelte$/iu.test(path)) {
+      const component = parseSvelte(content, { modern: true });
+      // Preserve original offsets and line breaks while exposing only
+      // grammar-owned script regions to the TypeScript/JSX parser.
+      const characters: string[] = content
+        .split("")
+        .map((character) => (character === "\n" || character === "\r" ? character : " "));
+      for (const script of [component.module, component.instance]) {
+        const program = script?.content as { start: number; end: number } | undefined;
+        if (!program) continue;
+        for (let index = program.start; index < program.end; index++) {
+          characters[index] = content.charAt(index);
+        }
+      }
+      moduleSource = characters.join("");
+    } else {
+      continue;
+    }
+    const testOnly = /(^|\/)(?:__tests__\/|[^/]+\.(?:test|spec)\.[^/]+$)/.test(path);
+    for (const reference of analyzeModuleImports(moduleSource)) {
+      const coordinate = moduleCoordinate(reference.specifier);
+      if (!coordinate) continue;
+      imports.push({
+        file: path,
+        specifier: reference.specifier,
+        coordinate,
+        testOnly,
+        kind: reference.kind,
+        syntax: reference.syntax,
+        line: reference.line,
+        column: reference.column,
+      });
     }
   }
-  return [...imports].sort();
+  return imports;
 }
 
 /**
@@ -188,12 +266,11 @@ export function preflightProjectFiles(input: {
   let authorityRequestCount = 0;
   if (input.projectType === "panel" || input.projectType === "worker") {
     const vibestudio = asRecord(manifest["vibestudio"], "package.json vibestudio");
-    if (typeof vibestudio["title"] !== "string") {
-      throw new Error("Executable package.json must declare a Vibestudio title");
+    if (input.projectType === "panel" && typeof vibestudio["title"] !== "string") {
+      throw new Error("Panel package.json must declare a Vibestudio title");
     }
-    assertProjectIdentity(input.name, vibestudio["title"]);
-    if (input.projectType === "worker" && vibestudio["type"] !== "worker") {
-      throw new Error('Worker package.json must declare vibestudio.type: "worker"');
+    if (typeof vibestudio["title"] === "string") {
+      assertProjectIdentity(input.name, vibestudio["title"]);
     }
     entry = typeof vibestudio["entry"] === "string" ? vibestudio["entry"] : null;
     if (!entry || !(entry in input.files)) {
@@ -213,7 +290,10 @@ export function preflightProjectFiles(input: {
   }
   if (input.projectType === "skill") checked.push("skill instructions");
 
-  const imports = importedPackages(input.files);
+  const occurrences = dependencyOccurrences(input.files).filter(
+    (occurrence) => occurrence.coordinate !== expectedName
+  );
+  const imports = [...new Set(occurrences.map((occurrence) => occurrence.coordinate))].sort();
   const dependencies =
     manifest["dependencies"] === undefined
       ? {}
@@ -222,13 +302,73 @@ export function preflightProjectFiles(input: {
     manifest["devDependencies"] === undefined
       ? {}
       : asRecord(manifest["devDependencies"], "package.json devDependencies");
-  const undeclared = imports.filter(
-    (coordinate) => !(coordinate in dependencies) && !(coordinate in devDependencies)
-  );
-  if (undeclared.length > 0) {
-    throw new Error(`Imported package(s) missing from dependencies: ${undeclared.join(", ")}`);
+  const peerDependencies =
+    manifest["peerDependencies"] === undefined
+      ? {}
+      : asRecord(manifest["peerDependencies"], "package.json peerDependencies");
+  const issues = new Map<string, ProjectDependencyIssue>();
+  for (const occurrence of occurrences) {
+    const expectedField =
+      occurrence.testOnly || occurrence.kind === "type" ? "devDependencies" : "dependencies";
+    const acceptedCoordinates = [
+      occurrence.coordinate,
+      ...(occurrence.kind === "type" ? [definitelyTypedCoordinate(occurrence.coordinate)] : []),
+    ];
+    const productionDeclared = acceptedCoordinates.some(
+      (coordinate) => coordinate in dependencies || coordinate in peerDependencies
+    );
+    const developmentDeclared = acceptedCoordinates.some(
+      (coordinate) => coordinate in devDependencies
+    );
+    if (
+      productionDeclared ||
+      ((occurrence.testOnly || occurrence.kind === "type") && developmentDeclared)
+    ) {
+      continue;
+    }
+
+    const code =
+      expectedField === "dependencies" && developmentDeclared
+        ? "dependency_wrong_field"
+        : "dependency_missing";
+    const key = `${code}:${expectedField}:${occurrence.coordinate}`;
+    const existing = issues.get(key);
+    const detail: ProjectDependencyOccurrence = {
+      file: occurrence.file,
+      specifier: occurrence.specifier,
+      kind: occurrence.kind,
+      syntax: occurrence.syntax,
+      line: occurrence.line,
+      column: occurrence.column,
+    };
+    if (existing) {
+      existing.occurrences.push(detail);
+      continue;
+    }
+    issues.set(key, {
+      code,
+      coordinate: occurrence.coordinate,
+      expectedField,
+      declaredField: developmentDeclared ? "devDependencies" : null,
+      acceptedCoordinates,
+      occurrences: [detail],
+      remediation:
+        code === "dependency_wrong_field"
+          ? `Move ${occurrence.coordinate} from devDependencies to dependencies because production source imports it.`
+          : `Declare ${occurrence.coordinate} in ${expectedField}. Internal workspace packages must use workspace:*.`,
+    });
   }
-  checked.push("import dependency closure");
+  if (issues.size > 0) {
+    throw new ProjectPreflightError({
+      code: "project_preflight_failed",
+      stage: "dependency-contract",
+      projectType: input.projectType,
+      projectName: input.name,
+      packageName: expectedName,
+      issues: [...issues.values()],
+    });
+  }
+  checked.push("module dependency contract");
 
   return {
     ok: true,

@@ -115,6 +115,7 @@
     }
   },
   "dependencies": {
+    "@vibestudio/shared": "workspace:*",
     "@workspace/model-catalog": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/agentic-session": "workspace:*",
@@ -122,5 +123,8 @@
     "@workspace/terminal-host-protocol": "workspace:*",
     "ink": "^6.0.0",
     "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.2"
   }
 }

@@ -143,6 +143,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.80.6",
+    "@vibestudio/shared": "workspace:*",
     "@vibestudio/trajectory-identity": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/agentic-do": "workspace:*",
@@ -152,5 +153,9 @@
     "@workspace/harness": "workspace:*",
     "@workspace/pi-core": "workspace:*",
     "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@workspace/agent-loop": "workspace:*",
+    "vitest": "^3.2.2"
   }
 }

@@ -130,5 +130,8 @@
     "@workspace/agentic-protocol": "workspace:*",
     "@workspace/agentic-do": "workspace:*",
     "@workspace/harness": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.2"
   }
 }

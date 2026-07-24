@@ -471,6 +471,20 @@ describe("createProject", () => {
     ).toThrow(/authority/);
     expect(mocks.edit).not.toHaveBeenCalled();
   });
+
+  it("returns the exact invalid project name and a valid generated-name recipe", async () => {
+    const { createProject } = await import("./create-project.js");
+
+    await expect(
+      createProject({
+        projectType: "panel",
+        name: "todo-2026-07-24T20:30:00.000Z",
+      })
+    ).rejects.toThrow(
+      /Project name "todo-2026-07-24T20:30:00\.000Z" is invalid.*Date\.now\(\)\.toString\(36\).*Raw ISO timestamps/u
+    );
+    expect(mocks.edit).not.toHaveBeenCalled();
+  });
 });
 
 describe("forkProject", () => {
@@ -521,7 +535,6 @@ describe("forkProject", () => {
         private: true,
         type: "module",
         vibestudio: {
-          type: "worker",
           entry: "source-worker.ts",
           authority: { requests: [] },
           durable: { classes: [{ className: "SourceWorker" }] },
@@ -570,6 +583,50 @@ describe("forkProject", () => {
     expect(mocks.files.has("workers/new/.env")).toBe(false);
     expect(mocks.files.has("workers/new/debug.log")).toBe(false);
     expect(mocks.files.has("workers/new/node_modules/pkg/index.js")).toBe(false);
+  });
+
+  it("does not textually rewrite a structurally rewritten worker manifest", async () => {
+    addFile(
+      "workers/source/package.json",
+      JSON.stringify({
+        name: "@workspace-workers/source",
+        private: true,
+        type: "module",
+        vibestudio: {
+          title: "Source",
+          entry: "source-worker.ts",
+          authority: { requests: [] },
+          durable: { classes: [{ className: "SourceWorker" }] },
+        },
+      })
+    );
+    addFile(
+      "workers/source/source-worker.ts",
+      'export class SourceWorker { readonly source = "workers/source"; }\n'
+    );
+
+    const { forkProject } = await import("./create-project.js");
+    await forkProject({
+      from: "workers/source",
+      to: "workers/source-copy",
+      title: "Source Copy",
+    });
+
+    expect(JSON.parse(mocks.files.get("workers/source-copy/package.json") as string)).toMatchObject({
+      name: "@workspace-workers/source-copy",
+      vibestudio: {
+        title: "Source Copy",
+        entry: "source-copy-worker.ts",
+        durable: { classes: [{ className: "SourceCopyWorker" }] },
+      },
+    });
+    expect(mocks.files.has("workers/source-copy/source-copy-worker.ts")).toBe(true);
+    expect(mocks.files.get("workers/source-copy/source-copy-worker.ts")).toContain(
+      "class SourceCopyWorker"
+    );
+    expect(mocks.files.get("workers/source-copy/source-copy-worker.ts")).toContain(
+      "workers/source-copy"
+    );
   });
 
   it("rejects an invalid fork identity before repository mutation", async () => {

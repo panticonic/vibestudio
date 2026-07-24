@@ -133,9 +133,14 @@
   "dependencies": {
     "@workspace/runtime": "workspace:*",
     "@workspace/agentic-do": "workspace:*",
+    "@workspace/pi-core": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@workspace-workers/agent-worker": "workspace:*",
     "@workspace/harness": "workspace:*",
     "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@workspace/agent-loop": "workspace:*",
+    "vitest": "^3.2.2"
   }
 }

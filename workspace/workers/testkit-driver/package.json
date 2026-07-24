@@ -1,6 +1,7 @@
 {
-  "name": "testkit-driver",
+  "name": "@workspace-workers/testkit-driver",
   "version": "0.0.0",
+  "private": true,
   "type": "module",
   "vibestudio": {
     "title": "Testkit Driver",

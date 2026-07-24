@@ -111,8 +111,13 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.80.6",
+    "@vibestudio/credential-client": "workspace:*",
     "@workspace/model-catalog": "workspace:*",
     "@workspace/runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@vibestudio/shared": "workspace:*",
+    "vitest": "^3.2.2"
   },
   "overrides": {
     "@anthropic-ai/sdk": "0.97.1",

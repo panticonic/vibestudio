@@ -109,6 +109,7 @@
   },
   "dependencies": {
     "@vibestudio/content-addressing": "workspace:*",
+    "@vibestudio/rpc": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",
     "@workspace/runtime": "workspace:*",
@@ -116,5 +117,8 @@
     "@workspace/harness": "workspace:*",
     "@workspace/channel-policies": "workspace:*",
     "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.2"
   }
 }

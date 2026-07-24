@@ -1000,7 +1000,15 @@ export async function forkProject(options: ForkProjectOptions): Promise<ForkProj
       rewrites.push({ file: rel, description: "Updated skill frontmatter" });
     }
 
-    if (effectiveType === "worker" && rewriteEnabled(options, "workerClassNames")) {
+    // package.json has a typed, structural rewrite above. Never run textual
+    // source rewrites over it: a destination such as `source-copy` still
+    // contains `source`, so replacing the old name again would corrupt the
+    // already-canonical package name and entry metadata.
+    if (
+      rel !== "package.json" &&
+      effectiveType === "worker" &&
+      rewriteEnabled(options, "workerClassNames")
+    ) {
       for (const [oldClass, nextClass] of Object.entries(effectiveClassMap)) {
         if (content.includes(oldClass)) {
           content = content.split(oldClass).join(nextClass);
@@ -1010,11 +1018,11 @@ export async function forkProject(options: ForkProjectOptions): Promise<ForkProj
           });
         }
       }
-      if (content.includes(oldName)) {
-        content = content.split(oldName).join(newName);
+      if (content.includes(from)) {
+        content = content.split(from).join(to);
         rewrites.push({
           file: destRel,
-          description: `Rewrote worker source string ${oldName} -> ${newName}`,
+          description: `Rewrote worker repository path ${from} -> ${to}`,
         });
       }
     }
