@@ -216,7 +216,9 @@ describe("@workspace/agentic-protocol schemas", () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.success ? "" : result.error.issues[0]?.message).toContain("inconsistent");
+    expect(result.success ? "" : result.error.issues[0]?.message).toContain(
+      "Expected 'tool_error' | 'infrastructure_error'"
+    );
   });
 
   it("types terminal invocation payloads by event kind", () => {

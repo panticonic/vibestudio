@@ -17,6 +17,7 @@ import type {
   TrajectoryId,
   TurnId,
 } from "./ids.js";
+import type { AgentToolFailure } from "./tool-failure.js";
 
 export const SEMANTIC_PARTICIPANT_KINDS = ["user", "agent", "system", "external"] as const;
 export const PRINCIPAL_KINDS = [
@@ -358,6 +359,9 @@ type InvocationFailurePayloadBase<Outcome extends InvocationTerminalFailureOutco
   recoverable?: boolean;
   terminalOutcome: Outcome;
   terminalReasonCode?: string;
+  /** Canonical machine-readable failure. Human prose is rendered from this
+   * object; agents and validators branch only on its typed fields. */
+  failure?: AgentToolFailure;
   /** Present when this invocation is a subagent run terminating on the parent
    *  trajectory; `integration` records its semantic disposition. */
   subagent?: { integration?: "integrated" | "conflicted" | "discarded" };
@@ -365,7 +369,7 @@ type InvocationFailurePayloadBase<Outcome extends InvocationTerminalFailureOutco
 
 export type InvocationFailedPayload = InvocationFailurePayloadBase<
   Extract<InvocationOutcome, "tool_error" | "infrastructure_error">
->;
+> & { failure: AgentToolFailure };
 
 export type InvocationCancelledPayload = InvocationFailurePayloadBase<
   Extract<InvocationOutcome, "cancelled" | "stale_dispatch">
@@ -478,9 +482,14 @@ function invocationFailurePayload<Outcome extends InvocationTerminalFailureOutco
 export function invocationFailedPayload(
   outcome: Extract<InvocationOutcome, "tool_error" | "infrastructure_error">,
   reason: string,
-  opts: Omit<InvocationFailedPayload, "protocol" | "terminalOutcome" | "reason"> = {}
+  opts: Omit<InvocationFailedPayload, "protocol" | "terminalOutcome" | "reason">
 ): InvocationFailedPayload {
-  return invocationFailurePayload(outcome, reason, opts);
+  return {
+    protocol: AGENTIC_PROTOCOL_VERSION,
+    reason,
+    ...opts,
+    terminalOutcome: outcome,
+  };
 }
 
 export function invocationCancelledPayload(

@@ -78,6 +78,13 @@ The semantic workspace authority owns contexts, events, work, changes,
 applications, decisions, content lineage, comparisons, command journaling, and
 the durable effect outbox.
 
+Invocation diagnostics are a bounded read projection over those existing
+authorities, not a sidecar ledger. `gad.diagnoseInvocation` joins the exact
+trajectory coordinate to its projected invocation/turn, terminal events,
+causal semantic commands, effect intents, and receipts. Every section has an
+explicit limit and truncation fact; the projection stores nothing and cannot
+change semantic state.
+
 Two narrow host-effect ports consume exact requests and return receipts:
 
 - workspace content observation/materialization;

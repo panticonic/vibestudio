@@ -8,12 +8,14 @@
 
 import {
   AGENTIC_PROTOCOL_VERSION,
+  agentToolFailureFromUnknown,
   invocationCompletedPayload,
   invocationFailedPayload,
   type EventKind,
   type LogEventCausality,
   type ParticipantRef,
 } from "@workspace/agentic-protocol";
+import type { AgentToolFailure } from "@workspace/agentic-protocol";
 import { ids } from "./ids.js";
 import { classifyModelFailure, type ModelFailureInfo } from "./model-errors.js";
 import type {
@@ -291,8 +293,7 @@ export function derivePendingEffects(state: AgentState): EffectDescriptor[] {
   const out: EffectDescriptor[] = [];
   const nextPromptPreparation = Object.values(state.pendingPromptPreparations).sort(
     (a, b) =>
-      a.requestedAtSeq - b.requestedAtSeq ||
-      a.triggerEnvelopeId.localeCompare(b.triggerEnvelopeId)
+      a.requestedAtSeq - b.requestedAtSeq || a.triggerEnvelopeId.localeCompare(b.triggerEnvelopeId)
   )[0];
   if (nextPromptPreparation) out.push(promptArtifactsEffect(state, nextPromptPreparation));
   if (state.inFlightModelCall) out.push(modelCallEffect(state, state.inFlightModelCall));
@@ -367,6 +368,9 @@ export type EffectOutcome =
       terminalOutcome?: "tool_error" | "infrastructure_error";
       /** Stable typed reason preserved from the tool/service boundary. */
       terminalReasonCode?: string;
+      /** Canonical failure envelope preserved unchanged into the terminal
+       * invocation event. */
+      failure?: AgentToolFailure;
     }
   | { kind: "approval"; granted: boolean; resolvedBy: ParticipantRef; reason?: string }
   | { kind: "credential"; resolved: boolean; reason?: string };
@@ -534,6 +538,17 @@ export function outcomeEvents(
                 ...(outcome.terminalReasonCode
                   ? { terminalReasonCode: outcome.terminalReasonCode }
                   : {}),
+                failure:
+                  outcome.failure ??
+                  agentToolFailureFromUnknown(outcome.result, {
+                    operation: descriptor.kind,
+                    stage: "execute",
+                    causal: { invocationId: descriptor.invocationId },
+                    kind:
+                      outcome.terminalOutcome === "infrastructure_error"
+                        ? "infrastructure"
+                        : undefined,
+                  }),
               }
             )
           : invocationCompletedPayload({

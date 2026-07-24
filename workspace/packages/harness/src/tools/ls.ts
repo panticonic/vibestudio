@@ -11,6 +11,7 @@ import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import type { RuntimeFs, Dirent } from "./runtime-fs.js";
+import { AgentToolFailureError, agentToolFailureFromUnknown } from "@workspace/agentic-protocol";
 import { resolveToCwd } from "./path-utils.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead, type TruncationResult } from "./truncate.js";
 
@@ -69,7 +70,22 @@ export function createLsTool(
             details: { diagnostic: "not-found", path: dirPath },
           };
         }
-        throw err;
+        throw new AgentToolFailureError(
+          agentToolFailureFromUnknown(err, {
+            operation: "fs.stat",
+            stage: "resolve-directory",
+            ...(isUnresponsiveRuntimeFs(err)
+              ? {
+                  kind: "infrastructure" as const,
+                  retry: {
+                    policy: "reobserve" as const,
+                    commandIdPolicy: "not-applicable" as const,
+                  },
+                }
+              : {}),
+          }),
+          err
+        );
       }
       if (!stat.isDirectory()) {
         return {
@@ -89,7 +105,22 @@ export function createLsTool(
       try {
         entries = (await fs.readdir(dirPath, { withFileTypes: true })) as Dirent[];
       } catch (e) {
-        throw new Error(`Cannot read directory: ${(e as Error).message}`);
+        throw new AgentToolFailureError(
+          agentToolFailureFromUnknown(e, {
+            operation: "fs.readdir",
+            stage: "list-directory",
+            ...(isUnresponsiveRuntimeFs(e)
+              ? {
+                  kind: "infrastructure" as const,
+                  retry: {
+                    policy: "reobserve" as const,
+                    commandIdPolicy: "not-applicable" as const,
+                  },
+                }
+              : {}),
+          }),
+          e
+        );
       }
 
       // Sort case-insensitively to match upstream.
@@ -139,4 +170,12 @@ export function createLsTool(
       };
     },
   };
+}
+
+function isUnresponsiveRuntimeFs(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "fs_runtime_unresponsive"
+  );
 }

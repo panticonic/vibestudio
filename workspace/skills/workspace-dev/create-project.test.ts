@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { authorityReviewFromPackageJson } from "@vibestudio/unit-host";
 
 const mocks = vi.hoisted(() => {
   const files = new Map<string, string | Uint8Array>();
@@ -88,8 +89,13 @@ function resetRuntimeMocks(): void {
   mocks.commit.mockReset();
   mocks.push.mockReset();
   mocks.status.mockResolvedValue({
+    contextId: "ctx:test",
+    committed: { kind: "event", eventId: "event:committed" },
     workingHead: { kind: "application", applicationId: "application:working" },
+    clean: false,
     mainEventId: "event:main",
+    mainRelation: "ahead",
+    workingCounts: { applications: 1, workUnits: 0, changes: 0 },
   });
   mocks.edit.mockImplementation(
     async (input: {
@@ -117,7 +123,13 @@ function resetRuntimeMocks(): void {
     }
   );
   mocks.commit.mockResolvedValue({ event: { kind: "event", eventId: "event:committed" } });
-  mocks.push.mockResolvedValue({ eventId: "event:committed", mainEventId: "event:committed" });
+  mocks.push.mockResolvedValue({
+    contextId: "ctx:test",
+    eventId: "event:committed",
+    mainEventId: "event:committed",
+    effectId: "effect:published",
+    appliedAt: "2026-07-24T00:00:00.000Z",
+  });
 }
 
 describe("createProject", () => {
@@ -132,9 +144,21 @@ describe("createProject", () => {
       title: "Scratch Notes",
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       created: "projects/scratch-notes",
       files: ["README.md"],
+      preflight: {
+        ok: true,
+        projectType: "project",
+      },
+      publication: {
+        published: true,
+        committedEventId: "event:committed",
+        publishedEventId: "event:committed",
+        mainEventId: "event:committed",
+        effectId: "effect:published",
+        appliedAt: "2026-07-24T00:00:00.000Z",
+      },
     });
     expect(mocks.files.get("projects/scratch-notes/README.md")).toBe(
       "# Scratch Notes\n\nPlain workspace project.\n"
@@ -182,6 +206,7 @@ describe("createProject", () => {
       vibestudio: {
         title: "Hello",
         entry: "index.tsx",
+        authority: { requests: [] },
         exposeModules: expect.arrayContaining([
           "react",
           "react/jsx-runtime",
@@ -190,6 +215,47 @@ describe("createProject", () => {
         ]),
       },
     });
+  });
+
+  it("keeps the built-in default panel deterministic without consulting template files", async () => {
+    addFile("templates/default/template.json", JSON.stringify({ framework: "svelte" }));
+    const { createProject } = await import("./create-project.js");
+
+    await createProject({ projectType: "panel", name: "default-panel", title: "Default Panel" });
+
+    expect(mocks.files.has("panels/default-panel/index.tsx")).toBe(true);
+    expect(mocks.files.has("panels/default-panel/App.svelte")).toBe(false);
+  });
+
+  it("generates every executable template with a publication-valid authority contract", async () => {
+    addFile("templates/svelte/template.json", JSON.stringify({ framework: "svelte" }));
+    const { createProject } = await import("./create-project.js");
+
+    await createProject({ projectType: "panel", name: "react-panel", title: "React Panel" });
+    await createProject({
+      projectType: "panel",
+      name: "svelte-panel",
+      title: "Svelte Panel",
+      template: "svelte",
+    });
+    await createProject({ projectType: "worker", name: "plain-worker", title: "Plain Worker" });
+    await createProject({
+      projectType: "worker",
+      name: "agent-worker",
+      title: "Agent Worker",
+      template: "agentic",
+    });
+
+    for (const [path, packageName] of [
+      ["panels/react-panel/package.json", "@workspace-panels/react-panel"],
+      ["panels/svelte-panel/package.json", "@workspace-panels/svelte-panel"],
+      ["workers/plain-worker/package.json", "@workspace-workers/plain-worker"],
+      ["workers/agent-worker/package.json", "@workspace-workers/agent-worker"],
+    ] as const) {
+      const source = mocks.files.get(path);
+      expect(typeof source).toBe("string");
+      expect(authorityReviewFromPackageJson(source as string, packageName).requests).toEqual([]);
+    }
   });
 
   it("rejects names and titles that would produce invalid generated source", async () => {
@@ -205,12 +271,205 @@ describe("createProject", () => {
   });
 
   it("does not report a scaffold as published when protected publication is refused", async () => {
-    mocks.push.mockRejectedValueOnce(new Error("ApprovalDenied: protected publication refused"));
-    const { createProject } = await import("./create-project.js");
-
-    await expect(createProject({ projectType: "panel", name: "broken" })).rejects.toThrow(
-      /ApprovalDenied: protected publication refused/
+    mocks.push.mockRejectedValueOnce(
+      Object.assign(new Error("Protected publication is not authorized"), {
+        errorData: {
+          code: "Unauthorized",
+          operation: "vcs.push",
+          authorityFailure: { reasonCode: "missing-grant" },
+        },
+      })
     );
+    const { createProject, ScaffoldPublicationError } = await import("./create-project.js");
+
+    const failure = await createProject({ projectType: "panel", name: "broken" }).catch(
+      (error: unknown) => error
+    );
+    expect(failure).toBeInstanceOf(ScaffoldPublicationError);
+    expect((failure as InstanceType<typeof ScaffoldPublicationError>).errorData).toMatchObject({
+      code: "scaffold_publication_failed",
+      stage: "push",
+      created: "panels/broken",
+      files: ["index.tsx", "package.json"],
+      committedEventId: "event:committed",
+      published: false,
+      publicationRequest: {
+        contextId: "ctx:test",
+        expectedCommittedEventId: "event:committed",
+        expectedMainEventId: "event:main",
+        commandId: expect.stringContaining("workspace-dev:publish:ctx:test:"),
+      },
+      vcsError: {
+        code: "Unauthorized",
+        message: "Protected publication is not authorized",
+        errorData: {
+          code: "Unauthorized",
+          operation: "vcs.push",
+          authorityFailure: { reasonCode: "missing-grant" },
+        },
+      },
+      retry: {
+        operation: "vcs.push",
+        statusRequest: { contextId: "ctx:test" },
+        commandIdPolicy: "reobserve-status-and-use-new-command",
+      },
+    });
+  });
+
+  it("recovers an uncertain publication by replaying the exact push command and receipt", async () => {
+    mocks.push.mockRejectedValueOnce(
+      Object.assign(new Error("Host response was lost"), {
+        errorData: { code: "ExternalEffectFailed", effectId: "effect:uncertain" },
+      })
+    );
+    const { createProject, recoverProjectPublication, ScaffoldPublicationError } =
+      await import("./create-project.js");
+    const failure = await createProject({
+      projectType: "panel",
+      name: "recoverable",
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ScaffoldPublicationError);
+    const typedFailure = failure as InstanceType<typeof ScaffoldPublicationError>;
+    const originalRequest = typedFailure.errorData.publicationRequest;
+    mocks.status.mockResolvedValueOnce({
+      contextId: "ctx:test",
+      committed: { kind: "event", eventId: "event:committed" },
+      workingHead: { kind: "event", eventId: "event:committed" },
+      clean: true,
+      mainEventId: "event:main",
+      mainRelation: "ahead",
+      workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+    });
+
+    await expect(recoverProjectPublication(typedFailure)).resolves.toEqual({
+      published: true,
+      committedEventId: "event:committed",
+      publishedEventId: "event:committed",
+      mainEventId: "event:committed",
+      effectId: "effect:published",
+      appliedAt: "2026-07-24T00:00:00.000Z",
+    });
+    expect(mocks.push).toHaveBeenLastCalledWith(originalRequest);
+    expect(mocks.edit).toHaveBeenCalledTimes(1);
+    expect(mocks.commit).toHaveBeenCalledTimes(1);
+  });
+
+  it("reobserves after a known refusal and uses a fresh command identity", async () => {
+    mocks.push.mockRejectedValueOnce(
+      Object.assign(new Error("Main advanced"), {
+        errorData: { code: "RevisionChanged" },
+      })
+    );
+    const { createProject, recoverProjectPublication, ScaffoldPublicationError } =
+      await import("./create-project.js");
+    const failure = (await createProject({
+      projectType: "panel",
+      name: "reobserved",
+    }).catch((error: unknown) => error)) as InstanceType<typeof ScaffoldPublicationError>;
+    mocks.status.mockResolvedValueOnce({
+      contextId: "ctx:test",
+      committed: { kind: "event", eventId: "event:committed" },
+      workingHead: { kind: "event", eventId: "event:committed" },
+      clean: true,
+      mainEventId: "event:new-main",
+      mainRelation: "ahead",
+      workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+    });
+
+    await recoverProjectPublication(failure);
+
+    const recoveredRequest = mocks.push.mock.calls.at(-1)?.[0];
+    expect(recoveredRequest).toMatchObject({
+      expectedCommittedEventId: "event:committed",
+      expectedMainEventId: "event:new-main",
+      commandId: expect.stringContaining("workspace-dev:recover-publication:ctx:test:"),
+    });
+    expect(recoveredRequest.commandId).not.toBe(failure.errorData.publicationRequest.commandId);
+  });
+
+  it("refuses recovery when the context no longer points exactly at the scaffold commit", async () => {
+    mocks.push.mockRejectedValueOnce(
+      Object.assign(new Error("Main advanced"), {
+        errorData: { code: "RevisionChanged" },
+      })
+    );
+    const { createProject, recoverProjectPublication, ScaffoldPublicationRecoveryError } =
+      await import("./create-project.js");
+    const failure = await createProject({
+      projectType: "panel",
+      name: "changed",
+    }).catch((error: unknown) => error);
+    mocks.status.mockResolvedValueOnce({
+      contextId: "ctx:test",
+      committed: { kind: "event", eventId: "event:committed" },
+      workingHead: { kind: "application", applicationId: "application:later" },
+      clean: false,
+      mainEventId: "event:new-main",
+      mainRelation: "diverged",
+      workingCounts: { applications: 1, workUnits: 1, changes: 1 },
+    });
+
+    await expect(
+      recoverProjectPublication(failure as Parameters<typeof recoverProjectPublication>[0])
+    ).rejects.toMatchObject({
+      constructor: ScaffoldPublicationRecoveryError,
+      errorData: {
+        stage: "validate-context",
+        cause: { code: "ContextChanged" },
+        retry: { safeToRerun: false },
+      },
+    });
+    expect(mocks.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops automatic recovery when the publication receipt fails integrity validation", async () => {
+    mocks.push.mockResolvedValueOnce({
+      eventId: "event:different",
+      mainEventId: "event:different",
+      effectId: "effect:invalid",
+      appliedAt: "2026-07-24T00:00:00.000Z",
+    });
+    const {
+      createProject,
+      recoverProjectPublication,
+      ScaffoldPublicationError,
+      ScaffoldPublicationRecoveryError,
+    } = await import("./create-project.js");
+    const failure = await createProject({
+      projectType: "panel",
+      name: "invalid-receipt",
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ScaffoldPublicationError);
+    expect(
+      (failure as InstanceType<typeof ScaffoldPublicationError>).errorData.retry.commandIdPolicy
+    ).toBe("stop-integrity-investigation");
+    await expect(
+      recoverProjectPublication(failure as Parameters<typeof recoverProjectPublication>[0])
+    ).rejects.toBeInstanceOf(ScaffoldPublicationRecoveryError);
+    expect(mocks.push).toHaveBeenCalledTimes(1);
+    expect(mocks.status).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an invalid executable manifest before the first VCS edit", async () => {
+    const { preflightProjectFiles } = await import("./project-manifest.js");
+
+    expect(() =>
+      preflightProjectFiles({
+        projectType: "panel",
+        name: "invalid",
+        files: {
+          "package.json": JSON.stringify({
+            name: "@workspace-panels/invalid",
+            private: true,
+            type: "module",
+            vibestudio: { title: "Invalid", entry: "index.tsx" },
+          }),
+          "index.tsx": "export default function Invalid() { return null; }\n",
+        },
+      })
+    ).toThrow(/authority/);
+    expect(mocks.edit).not.toHaveBeenCalled();
   });
 });
 
@@ -220,15 +479,33 @@ describe("forkProject", () => {
   it("does not report a fork as committed when protected publication is refused", async () => {
     addFile(
       "packages/source/package.json",
-      JSON.stringify({ name: "@workspace/source", exports: { ".": "./index.ts" } })
+      JSON.stringify({
+        name: "@workspace/source",
+        private: true,
+        type: "module",
+        exports: { ".": "./index.ts" },
+      })
     );
     addFile("packages/source/index.ts", "export const source = true;\n");
-    mocks.push.mockRejectedValueOnce(new Error("RevisionChanged: main advanced"));
-    const { forkProject } = await import("./create-project.js");
-
-    await expect(forkProject({ from: "packages/source", to: "packages/new" })).rejects.toThrow(
-      /RevisionChanged: main advanced/
+    mocks.push.mockRejectedValueOnce(
+      Object.assign(new Error("Main advanced"), {
+        errorData: { code: "RevisionChanged", actual: { kind: "event", eventId: "event:new" } },
+      })
     );
+    const { forkProject, ScaffoldPublicationError } = await import("./create-project.js");
+
+    const failure = await forkProject({
+      from: "packages/source",
+      to: "packages/new",
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ScaffoldPublicationError);
+    expect((failure as InstanceType<typeof ScaffoldPublicationError>).errorData).toMatchObject({
+      created: "packages/new",
+      committedEventId: "event:committed",
+      published: false,
+      vcsError: { code: "RevisionChanged" },
+      retry: { commandIdPolicy: "reobserve-status-and-use-new-command" },
+    });
   });
 
   it("rewrites a single-class worker fork and preserves binary files", async () => {
@@ -241,9 +518,12 @@ describe("forkProject", () => {
       "workers/source/package.json",
       JSON.stringify({
         name: "@workspace-workers/source",
+        private: true,
+        type: "module",
         vibestudio: {
           type: "worker",
           entry: "source-worker.ts",
+          authority: { requests: [] },
           durable: { classes: [{ className: "SourceWorker" }] },
         },
       })
@@ -262,6 +542,10 @@ describe("forkProject", () => {
     });
 
     expect(result.committed).toBe(true);
+    expect(result.publication).toMatchObject({
+      published: true,
+      committedEventId: "event:committed",
+    });
     expect(result.files).toContain("new-worker.ts");
     // Managed writes authored the local chain, then one commit + push finished it.
     expect(mocks.commit).toHaveBeenCalledTimes(1);
@@ -286,5 +570,28 @@ describe("forkProject", () => {
     expect(mocks.files.has("workers/new/.env")).toBe(false);
     expect(mocks.files.has("workers/new/debug.log")).toBe(false);
     expect(mocks.files.has("workers/new/node_modules/pkg/index.js")).toBe(false);
+  });
+
+  it("rejects an invalid fork identity before repository mutation", async () => {
+    addFile(
+      "packages/source/package.json",
+      JSON.stringify({
+        name: "@workspace/source",
+        private: true,
+        type: "module",
+        exports: { ".": "./index.ts" },
+      })
+    );
+    addFile("packages/source/index.ts", "export {};\n");
+    const { forkProject } = await import("./create-project.js");
+
+    await expect(
+      forkProject({
+        from: "packages/source",
+        to: "packages/new",
+        title: "unsafe\nfrontmatter",
+      })
+    ).rejects.toThrow(/Project title/);
+    expect(mocks.edit).not.toHaveBeenCalled();
   });
 });

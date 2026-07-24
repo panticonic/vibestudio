@@ -1,4 +1,269 @@
 import { contextId, fs, vcs } from "@workspace/runtime";
+import {
+  PROJECT_TYPES,
+  assertProjectIdentity,
+  preflightProjectFiles,
+  serializeProjectManifest,
+  type ProjectPreflightReport,
+  type ProjectType,
+} from "./project-manifest.js";
+
+export interface ProjectPublication {
+  published: true;
+  committedEventId: string;
+  publishedEventId: string;
+  mainEventId: string;
+  effectId: string;
+  appliedAt: string;
+}
+
+export interface ScaffoldPublicationFailureData {
+  code: "scaffold_publication_failed";
+  stage: "push";
+  created: string;
+  files: string[];
+  committedEventId: string;
+  published: false;
+  publicationRequest: {
+    contextId: string;
+    expectedCommittedEventId: string;
+    expectedMainEventId: string;
+    commandId: string;
+  };
+  vcsError: {
+    code: string;
+    message: string;
+    errorData?: unknown;
+  };
+  retry: {
+    operation: "vcs.push";
+    statusRequest: { contextId: string };
+    commandIdPolicy:
+      | "reuse-identical-only-if-outcome-uncertain"
+      | "reobserve-status-and-use-new-command"
+      | "stop-integrity-investigation";
+  };
+}
+
+export class ScaffoldPublicationError extends Error {
+  readonly errorData: ScaffoldPublicationFailureData;
+
+  constructor(errorData: ScaffoldPublicationFailureData, cause: unknown) {
+    super(
+      `Project ${errorData.created} was committed as ${errorData.committedEventId} ` +
+        `but protected publication failed: ${errorData.vcsError.message}`,
+      { cause }
+    );
+    this.name = "ScaffoldPublicationError";
+    this.errorData = errorData;
+  }
+}
+
+export interface ScaffoldPublicationRecoveryFailureData {
+  code: "scaffold_publication_recovery_failed";
+  stage: "validate-receipt" | "validate-context" | "push";
+  created: string;
+  committedEventId: string;
+  publicationRequest: ScaffoldPublicationFailureData["publicationRequest"];
+  observedStatus?: unknown;
+  cause: { code: string; message: string; errorData?: unknown };
+  retry: { operation: "recoverProjectPublication"; safeToRerun: boolean };
+}
+
+export class ScaffoldPublicationRecoveryError extends Error {
+  readonly errorData: ScaffoldPublicationRecoveryFailureData;
+
+  constructor(errorData: ScaffoldPublicationRecoveryFailureData, cause?: unknown) {
+    super(
+      `Cannot recover publication for ${errorData.created} at ${errorData.stage}: ` +
+        errorData.cause.message,
+      cause === undefined ? undefined : { cause }
+    );
+    this.name = "ScaffoldPublicationRecoveryError";
+    this.errorData = errorData;
+  }
+}
+
+function errorDetail(error: unknown): {
+  code: string;
+  message: string;
+  errorData?: unknown;
+} {
+  const errorData =
+    error && typeof error === "object" && "errorData" in error
+      ? (error as { errorData?: unknown }).errorData
+      : undefined;
+  const code =
+    errorData && typeof errorData === "object" && "code" in errorData
+      ? String((errorData as { code: unknown }).code)
+      : error && typeof error === "object" && "code" in error
+        ? String((error as { code: unknown }).code)
+        : "Unknown";
+  return {
+    code,
+    message: error instanceof Error ? error.message : String(error),
+    ...(errorData === undefined ? {} : { errorData }),
+  };
+}
+
+function publicationFromReceipt(
+  receipt: {
+    eventId: string;
+    mainEventId: string;
+    effectId: string;
+    appliedAt: string;
+  },
+  committedEventId: string
+): ProjectPublication {
+  if (
+    !receipt ||
+    receipt.eventId !== committedEventId ||
+    !receipt.mainEventId ||
+    !receipt.effectId ||
+    !receipt.appliedAt
+  ) {
+    throw Object.assign(
+      new Error("vcs.push returned a receipt that does not prove the recorded commit"),
+      {
+        code: "IntegrityFailure",
+        errorData: {
+          code: "IntegrityFailure",
+          expectedCommittedEventId: committedEventId,
+          receipt,
+        },
+      }
+    );
+  }
+  return {
+    published: true,
+    committedEventId,
+    publishedEventId: receipt.eventId,
+    mainEventId: receipt.mainEventId,
+    effectId: receipt.effectId,
+    appliedAt: receipt.appliedAt,
+  };
+}
+
+function publicationFailureData(
+  input: ScaffoldPublicationFailureData | ScaffoldPublicationError
+): ScaffoldPublicationFailureData {
+  const data = input instanceof ScaffoldPublicationError ? input.errorData : input;
+  if (
+    !data ||
+    data.code !== "scaffold_publication_failed" ||
+    data.stage !== "push" ||
+    data.published !== false ||
+    !data.created ||
+    !data.committedEventId ||
+    data.publicationRequest?.expectedCommittedEventId !== data.committedEventId
+  ) {
+    throw new ScaffoldPublicationRecoveryError({
+      code: "scaffold_publication_recovery_failed",
+      stage: "validate-receipt",
+      created: data?.created ?? "unknown",
+      committedEventId: data?.committedEventId ?? "unknown",
+      publicationRequest: data?.publicationRequest ?? {
+        contextId: "unknown",
+        expectedCommittedEventId: "unknown",
+        expectedMainEventId: "unknown",
+        commandId: "unknown",
+      },
+      cause: { code: "InvalidReceipt", message: "The scaffold failure receipt is malformed" },
+      retry: { operation: "recoverProjectPublication", safeToRerun: false },
+    });
+  }
+  return data;
+}
+
+/**
+ * Finish a scaffold whose semantic commit succeeded but protected publication
+ * did not return a success receipt. This never recreates files or commits.
+ */
+export async function recoverProjectPublication(
+  input: ScaffoldPublicationFailureData | ScaffoldPublicationError
+): Promise<ProjectPublication> {
+  const failure = publicationFailureData(input);
+  if (failure.retry.commandIdPolicy === "stop-integrity-investigation") {
+    throw new ScaffoldPublicationRecoveryError({
+      code: "scaffold_publication_recovery_failed",
+      stage: "validate-receipt",
+      created: failure.created,
+      committedEventId: failure.committedEventId,
+      publicationRequest: failure.publicationRequest,
+      cause: {
+        code: "IntegrityFailure",
+        message: "The original publication receipt was invalid; automatic recovery is unsafe",
+        errorData: failure.vcsError.errorData,
+      },
+      retry: { operation: "recoverProjectPublication", safeToRerun: false },
+    });
+  }
+  let status: Awaited<ReturnType<typeof vcs.status>>;
+  try {
+    status = await vcs.status(failure.retry.statusRequest);
+  } catch (error) {
+    throw new ScaffoldPublicationRecoveryError(
+      {
+        code: "scaffold_publication_recovery_failed",
+        stage: "validate-context",
+        created: failure.created,
+        committedEventId: failure.committedEventId,
+        publicationRequest: failure.publicationRequest,
+        cause: errorDetail(error),
+        retry: { operation: "recoverProjectPublication", safeToRerun: true },
+      },
+      error
+    );
+  }
+  const exactCommit =
+    status.committed.kind === "event" &&
+    status.committed.eventId === failure.committedEventId &&
+    status.workingHead.kind === "event" &&
+    status.workingHead.eventId === failure.committedEventId;
+  if (!status.clean || !exactCommit) {
+    throw new ScaffoldPublicationRecoveryError({
+      code: "scaffold_publication_recovery_failed",
+      stage: "validate-context",
+      created: failure.created,
+      committedEventId: failure.committedEventId,
+      publicationRequest: failure.publicationRequest,
+      observedStatus: status,
+      cause: {
+        code: "ContextChanged",
+        message:
+          "The context is no longer clean at the exact scaffold commit; recovery will not publish a different state",
+      },
+      retry: { operation: "recoverProjectPublication", safeToRerun: false },
+    });
+  }
+
+  const uncertain = failure.retry.commandIdPolicy === "reuse-identical-only-if-outcome-uncertain";
+  const request = uncertain
+    ? failure.publicationRequest
+    : {
+        contextId: failure.publicationRequest.contextId,
+        expectedCommittedEventId: failure.committedEventId,
+        expectedMainEventId: status.mainEventId,
+        commandId: `workspace-dev:recover-publication:${contextId}:${crypto.randomUUID()}`,
+      };
+  try {
+    return publicationFromReceipt(await vcs.push(request), failure.committedEventId);
+  } catch (error) {
+    throw new ScaffoldPublicationRecoveryError(
+      {
+        code: "scaffold_publication_recovery_failed",
+        stage: "push",
+        created: failure.created,
+        committedEventId: failure.committedEventId,
+        publicationRequest: request,
+        observedStatus: status,
+        cause: errorDetail(error),
+        retry: { operation: "recoverProjectPublication", safeToRerun: uncertain },
+      },
+      error
+    );
+  }
+}
 
 // ---------------------------------------------------------------------------
 // writeProjectFiles — one atomic repository lifecycle edit, followed by one
@@ -13,7 +278,7 @@ async function writeProjectFiles(
   dir: string,
   files: Record<string, string | Uint8Array>,
   message: string
-): Promise<void> {
+): Promise<ProjectPublication> {
   const root = dir.replace(/^\/+/, "").replace(/\/+$/, "");
   const command = (operation: string) =>
     `workspace-dev:${operation}:${contextId}:${crypto.randomUUID()}`;
@@ -49,12 +314,41 @@ async function writeProjectFiles(
   if (committed.event.kind !== "event") {
     throw new Error("VCS commit did not return a committed event");
   }
-  await vcs.push({
+  const publicationRequest = {
     contextId,
     expectedCommittedEventId: committed.event.eventId,
     expectedMainEventId: beforeCreate.mainEventId,
     commandId: command("publish"),
-  });
+  };
+  try {
+    const published = await vcs.push(publicationRequest);
+    return publicationFromReceipt(published, committed.event.eventId);
+  } catch (error) {
+    const detail = errorDetail(error);
+    throw new ScaffoldPublicationError(
+      {
+        code: "scaffold_publication_failed",
+        stage: "push",
+        created: root,
+        files: Object.keys(files).sort(),
+        committedEventId: committed.event.eventId,
+        published: false,
+        publicationRequest,
+        vcsError: detail,
+        retry: {
+          operation: "vcs.push",
+          statusRequest: { contextId },
+          commandIdPolicy:
+            detail.code === "ExternalEffectFailed"
+              ? "reuse-identical-only-if-outcome-uncertain"
+              : detail.code === "IntegrityFailure"
+                ? "stop-integrity-investigation"
+                : "reobserve-status-and-use-new-command",
+        },
+      },
+      error
+    );
+  }
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -65,7 +359,7 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-const TYPE_DIRS: Record<string, string> = {
+const TYPE_DIRS: Record<ProjectType, string> = {
   panel: "panels",
   package: "packages",
   skill: "skills",
@@ -73,14 +367,14 @@ const TYPE_DIRS: Record<string, string> = {
   worker: "workers",
 };
 
-const PACKAGE_SCOPES: Record<string, string> = {
+const PACKAGE_SCOPES: Partial<Record<ProjectType, string>> = {
   panel: "@workspace-panels",
   package: "@workspace",
   skill: "@workspace-skills",
   worker: "@workspace-workers",
 };
 
-const SUPPORTED_PROJECT_TYPES = Object.keys(TYPE_DIRS).join(", ");
+const SUPPORTED_PROJECT_TYPES = PROJECT_TYPES.join(", ");
 
 function toPascalCase(str: string): string {
   return str
@@ -94,27 +388,23 @@ export async function createProject(params: {
   name: string;
   title?: string;
   template?: string;
-}): Promise<{ created: string; files: string[] }> {
+}): Promise<{
+  created: string;
+  files: string[];
+  preflight: ProjectPreflightReport;
+  publication: ProjectPublication;
+}> {
   const { projectType, name, title = name, template } = params;
 
-  if (!/^[a-z][a-z0-9-]*$/.test(name)) {
-    throw new Error(
-      "Project name must start with a lowercase letter and contain only lowercase letters, numbers, and hyphens."
-    );
-  }
-  if (!title.trim() || /[`\\\r\n"<>{}&*]|\$\{/.test(title)) {
-    throw new Error(
-      'Project title must be a single non-empty line without code or markup delimiters such as ", <, {, *, backticks, or backslashes.'
-    );
-  }
+  assertProjectIdentity(name, title);
 
-  const typeDir = TYPE_DIRS[projectType];
+  const typeDir = TYPE_DIRS[projectType as ProjectType];
   if (!typeDir)
     throw new Error(
       `Unknown project type: ${projectType}. Must be one of: ${SUPPORTED_PROJECT_TYPES}`
     );
 
-  const scope = PACKAGE_SCOPES[projectType];
+  const canonicalProjectType = projectType as ProjectType;
   const projectPath = `${typeDir}/${name}`;
 
   // Check if already exists
@@ -143,15 +433,6 @@ export async function createProject(params: {
           (await fs.readFile(templateConfigPath, "utf-8")) as string
         );
         if (templateConfig.framework) panelFramework = templateConfig.framework;
-      } else {
-        try {
-          const templateConfig = JSON.parse(
-            (await fs.readFile(`templates/default/template.json`, "utf-8")) as string
-          );
-          if (templateConfig.framework) panelFramework = templateConfig.framework;
-        } catch {
-          // Default template missing — use React defaults
-        }
       }
 
       if (panelFramework !== "react" && panelFramework !== "svelte") {
@@ -161,26 +442,18 @@ export async function createProject(params: {
       }
 
       if (panelFramework === "svelte") {
-        files["package.json"] = JSON.stringify(
-          {
-            name: `${scope}/${name}`,
-            version: "0.1.0",
-            private: true,
-            type: "module",
-            vibestudio: {
-              title,
-              entry: "index.ts",
-              ...(panelTemplate !== "default" ? { template: panelTemplate } : {}),
-            },
-            dependencies: {
-              "@workspace/runtime": "workspace:*",
-              "@workspace/svelte": "workspace:*",
-              svelte: "^5.0.0",
-            },
+        files["package.json"] = serializeProjectManifest({
+          projectType: "panel",
+          name,
+          title,
+          entry: "index.ts",
+          ...(panelTemplate !== "default" ? { template: panelTemplate } : {}),
+          dependencies: {
+            "@workspace/runtime": "workspace:*",
+            "@workspace/svelte": "workspace:*",
+            svelte: "^5.0.0",
           },
-          null,
-          2
-        );
+        });
         files["index.ts"] = `export { default } from "./App.svelte";\n`;
         files["App.svelte"] = `<script>
   import { theme, themeStyle } from "@workspace/svelte";
@@ -222,36 +495,29 @@ export async function createProject(params: {
 `;
       } else {
         // Default: React + Radix
-        files["package.json"] = JSON.stringify(
-          {
-            name: `${scope}/${name}`,
-            version: "0.1.0",
-            private: true,
-            type: "module",
-            vibestudio: {
-              title,
-              entry: "index.tsx",
-              exposeModules: [
-                "react",
-                "react/jsx-runtime",
-                "react/jsx-dev-runtime",
-                "@radix-ui/themes",
-                "@workspace/runtime",
-                "@workspace/react",
-                "@workspace/ui/panel",
-              ],
-              ...(panelTemplate !== "default" ? { template: panelTemplate } : {}),
-            },
-            dependencies: {
-              "@workspace/runtime": "workspace:*",
-              "@workspace/react": "workspace:*",
-              "@workspace/ui": "workspace:*",
-              "@radix-ui/themes": "^3.2.1",
-            },
+        files["package.json"] = serializeProjectManifest({
+          projectType: "panel",
+          name,
+          title,
+          entry: "index.tsx",
+          ...(panelTemplate !== "default" ? { template: panelTemplate } : {}),
+          exposeModules: [
+            "react",
+            "react/jsx-runtime",
+            "react/jsx-dev-runtime",
+            "@radix-ui/themes",
+            "@workspace/runtime",
+            "@workspace/react",
+            "@workspace/ui/panel",
+          ],
+          dependencies: {
+            "@workspace/runtime": "workspace:*",
+            "@workspace/react": "workspace:*",
+            "@workspace/ui": "workspace:*",
+            "@radix-ui/themes": "^3.2.1",
+            react: "^19.0.0",
           },
-          null,
-          2
-        );
+        });
         files["index.tsx"] =
           `import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { usePanelTheme } from "@workspace/react";
@@ -309,33 +575,22 @@ function ${toPascalCase(name)}Content() {
     }
 
     case "package":
-      files["package.json"] = JSON.stringify(
-        {
-          name: `${scope}/${name}`,
-          version: "0.1.0",
-          private: true,
-          type: "module",
-          exports: { ".": "./index.ts" },
-        },
-        null,
-        2
-      );
+      files["package.json"] = serializeProjectManifest({
+        projectType: "package",
+        name,
+        title,
+        exports: { ".": "./index.ts" },
+      });
       files["index.ts"] = `/**\n * ${title}\n */\n\nexport {};\n`;
       break;
 
     case "skill":
-      files["package.json"] = JSON.stringify(
-        {
-          name: `${scope}/${name}`,
-          version: "0.1.0",
-          private: true,
-          type: "module",
-          exports: { ".": "./index.ts" },
-          dependencies: { "@workspace/runtime": "workspace:*" },
-        },
-        null,
-        2
-      );
+      files["package.json"] = serializeProjectManifest({
+        projectType: "skill",
+        name,
+        title,
+        exports: { ".": "./index.ts" },
+      });
       files["index.ts"] = `/**\n * ${title}\n */\n\nexport {};\n`;
       files["SKILL.md"] =
         `---\nname: ${name}\ndescription: ${JSON.stringify(title)}\n---\n\n# ${title}\n`;
@@ -351,28 +606,21 @@ function ${toPascalCase(name)}Content() {
         const className = toPascalCase(name) + "Worker";
         const workerFileName = `${name}-worker`;
 
-        files["package.json"] = JSON.stringify(
-          {
-            name: `${scope}/${name}`,
-            version: "0.1.0",
-            private: true,
-            type: "module",
-            vibestudio: {
-              type: "worker",
-              entry: "index.ts",
-              durable: {
-                classes: [{ className }],
-              },
-            },
-            dependencies: {
-              "@workspace/runtime": "workspace:*",
-              "@workspace/agentic-do": "workspace:*",
-              "@workspace/harness": "workspace:*",
-            },
+        files["package.json"] = serializeProjectManifest({
+          projectType: "worker",
+          name,
+          title,
+          entry: "index.ts",
+          durableClasses: [className],
+          dependencies: {
+            "@workspace/runtime": "workspace:*",
+            "@workspace/agentic-do": "workspace:*",
+            "@workspace/harness": "workspace:*",
           },
-          null,
-          2
-        );
+          devDependencies: {
+            vitest: "^3.2.4",
+          },
+        });
 
         files["index.ts"] = `export { ${className} } from "./${workerFileName}.js";
 export default { fetch(_req: Request) { return new Response("${name} DO service"); } };
@@ -456,18 +704,13 @@ describe("${className}", () => {
 `;
       } else {
         // Default stateless worker template
-        files["package.json"] = JSON.stringify(
-          {
-            name: `${scope}/${name}`,
-            version: "0.1.0",
-            private: true,
-            type: "module",
-            vibestudio: { type: "worker", entry: "index.ts", title },
-            dependencies: { "@workspace/runtime": "workspace:*" },
-          },
-          null,
-          2
-        );
+        files["package.json"] = serializeProjectManifest({
+          projectType: "worker",
+          name,
+          title,
+          entry: "index.ts",
+          dependencies: { "@workspace/runtime": "workspace:*" },
+        });
         files["index.ts"] = `import { createWorkerRuntime } from "@workspace/runtime/worker";
 import type { WorkerEnv, ExecutionContext } from "@workspace/runtime/worker";
 
@@ -482,10 +725,20 @@ export default {
       break;
   }
 
-  // Create the repository, then commit + push it (edit → commit → push).
-  await writeProjectFiles(projectPath, files, `Scaffold ${projectType} ${name}`);
+  const preflight = preflightProjectFiles({
+    projectType: canonicalProjectType,
+    name,
+    files,
+  });
 
-  return { created: projectPath, files: Object.keys(files) };
+  // Create the repository, then commit + push it (edit → commit → push).
+  const publication = await writeProjectFiles(
+    projectPath,
+    files,
+    `Scaffold ${projectType} ${name}`
+  );
+
+  return { created: projectPath, files: Object.keys(files), preflight, publication };
 }
 
 const COPY_SKIP_DIRS = new Set([
@@ -561,10 +814,12 @@ export interface ForkProjectResult {
   source: string;
   created: string;
   files: string[];
+  preflight: ProjectPreflightReport;
   rewrites: Array<{ file: string; description: string }>;
   warnings: string[];
   committed: boolean;
   dryRun: boolean;
+  publication: ProjectPublication | null;
 }
 
 function rewriteEnabled(
@@ -581,9 +836,11 @@ function projectNameFromPath(p: string): string {
   return p.split("/").filter(Boolean).pop() ?? p;
 }
 
-function projectTypeFromPath(p: string): string | null {
+function projectTypeFromPath(p: string): ProjectType | null {
   return (
-    Object.entries(TYPE_DIRS).find(([, dir]) => p === dir || p.startsWith(`${dir}/`))?.[0] ?? null
+    (Object.entries(TYPE_DIRS).find(([, dir]) => p === dir || p.startsWith(`${dir}/`))?.[0] as
+      | ProjectType
+      | undefined) ?? null
   );
 }
 
@@ -656,6 +913,7 @@ export async function forkProject(options: ForkProjectOptions): Promise<ForkProj
   const oldName = projectNameFromPath(from);
   const newName = projectNameFromPath(to);
   const newTitle = options.title ?? newName;
+  assertProjectIdentity(newName, newTitle);
   const files = await listFilesRecursive(from);
   const createdFiles: string[] = [];
   const planned: Record<string, string | Uint8Array> = {};
@@ -671,9 +929,7 @@ export async function forkProject(options: ForkProjectOptions): Promise<ForkProj
     createdFiles.push(destRel);
     if (!isProbablyTextFile(rel)) {
       binaryFiles.push(destRel);
-      if (!options.dryRun) {
-        planned[destRel] = (await fs.readFile(srcPath)) as Uint8Array;
-      }
+      planned[destRel] = (await fs.readFile(srcPath)) as Uint8Array;
       continue;
     }
     let content = await readText(srcPath);
@@ -770,6 +1026,17 @@ export async function forkProject(options: ForkProjectOptions): Promise<ForkProj
     warnings.push(`Binary files will be copied unchanged: ${binaryFiles.join(", ")}`);
   }
 
+  if (!effectiveType) {
+    throw new Error(
+      "Fork destination must identify a canonical project type so the planned repository can be preflighted"
+    );
+  }
+  const preflight = preflightProjectFiles({
+    projectType: effectiveType,
+    name: newName,
+    files: planned,
+  });
+
   try {
     if (await fs.exists("meta/vibestudio.yml")) {
       const meta = await readText("meta/vibestudio.yml");
@@ -791,24 +1058,28 @@ export async function forkProject(options: ForkProjectOptions): Promise<ForkProj
       source: from,
       created: to,
       files: createdFiles,
+      preflight,
       rewrites,
       warnings,
       committed: false,
       dryRun: true,
+      publication: null,
     };
   }
 
   const initialFiles: Record<string, string | Uint8Array> = {};
   for (const [rel, content] of Object.entries(planned)) initialFiles[rel] = content;
-  await writeProjectFiles(to, initialFiles, `Fork ${from} -> ${to}`);
+  const publication = await writeProjectFiles(to, initialFiles, `Fork ${from} -> ${to}`);
   return {
     source: from,
     created: to,
     files: createdFiles,
+    preflight,
     rewrites,
     warnings,
     committed: true,
     dryRun: false,
+    publication,
   };
 }
 

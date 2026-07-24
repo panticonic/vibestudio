@@ -46,7 +46,7 @@ export interface ChannelCallDescriptor {
 export interface ChannelCallTerminalInput {
   descriptor: Pick<
     ChannelCallDescriptor,
-    "channelId" | "caller" | "invocationId" | "transportCallId" | "turnId"
+    "channelId" | "caller" | "invocationId" | "transportCallId" | "turnId" | "method"
   >;
   result: unknown;
   isError: boolean;

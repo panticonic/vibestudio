@@ -6,6 +6,7 @@ import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
   GENESIS_EVENT_HASH,
+  agentToolFailureFromUnknown,
   type AgenticEvent,
 } from "@workspace/agentic-protocol";
 import { GadWorkspaceDO } from "./index.js";
@@ -986,6 +987,34 @@ describe("trajectory projection invariants", () => {
     expect(invocationInspection.rows[0]).toMatchObject({
       invocation_id: invocationId,
       turn_id: turnId,
+    });
+    const diagnostic = instance.diagnoseInvocation({
+      trajectoryId: "trajectory-1",
+      branchId: "main",
+      invocationId,
+    });
+    expect(diagnostic.coordinate).toEqual({
+      trajectoryId: "trajectory-1",
+      branchId: "main",
+      invocationId,
+    });
+    expect(diagnostic.invocation).toMatchObject({
+      invocation_id: invocationId,
+      turn_id: turnId,
+    });
+    expect(diagnostic.turn).toMatchObject({ turn_id: turnId });
+    expect(diagnostic.commands).toEqual([
+      expect.objectContaining({
+        command: expect.objectContaining({ command_id: "command-1" }),
+        effects: expect.any(Array),
+      }),
+    ]);
+    expect(diagnostic.summary).toMatchObject({
+      terminal: false,
+      commandCount: 1,
+      pendingEffectCount: expect.any(Number),
+      cleanupFailureCount: 0,
+      truncated: { events: false, commands: false, effects: false },
     });
   });
 
@@ -2671,6 +2700,10 @@ describe("terminal idempotency guards (§3.13)", () => {
                 reason: "too late",
                 terminalOutcome: "tool_error",
                 terminalReasonCode: "eval_exception",
+                failure: agentToolFailureFromUnknown(
+                  { message: "too late" },
+                  { operation: "eval", stage: "test" }
+                ),
               },
             }),
           },

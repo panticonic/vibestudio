@@ -6579,6 +6579,49 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
+      "id": "direct:workspace/packages/semantic-control-plane/src/index.ts:diagnoseInvocation",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/semantic-control-plane/src/index.ts",
+      "source": "packages/semantic-control-plane",
+      "method": "diagnoseInvocation",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/semantic-control-plane/src/index.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "user"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "capability": "workspace-service:<live-declaration>",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "anyOf(capability(host,rpc:diagnoseInvocation),allOf(capability(user,rpc:diagnoseInvocation),workspace-member),allOf(capability(code,rpc:diagnoseInvocation),workspace-member))",
+      "r3b": {
+        "review": "bounded-read-only-causal-diagnostics",
+        "change": "Adds an open, read-only exact-coordinate projection over existing trajectory, semantic command, effect-intent, and receipt authorities; every collection is bounded and reports truncation, and the method performs no mutation."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
       "id": "direct:workspace/packages/semantic-control-plane/src/index.ts:ensureBlob",
       "rpcPlane": "workspace-do",
       "owner": "workspace/packages/semantic-control-plane/src/index.ts",
@@ -16989,6 +17032,46 @@
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
       "capability": "service:contentTrust.vouch"
+    },
+    {
+      "id": "host:contextIntegrity.explain",
+      "rpcPlane": "host-service",
+      "owner": "contextIntegrity",
+      "method": "explain",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:contextIntegrity.explain"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"all\",\"requirements\":[{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:contextIntegrity.explain\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:contextIntegrity.explain\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]},{\"kind\":\"relationship\",\"name\":\"agent-binding\"}]}",
+      "r3b": {
+        "review": "own-session-verified-lineage-explanation",
+        "change": "Adds a read-only agent-bound explanation of a lineage coordinate already present in the caller's own session. The receiver derives session identity, verifies aggregate content addressing, and returns bounded opaque-cursor pages."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:contextIntegrity.explain"
     },
     {
       "id": "host:contextIntegrity.fact",

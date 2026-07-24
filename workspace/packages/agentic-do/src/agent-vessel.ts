@@ -43,9 +43,11 @@ import {
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
+  agentToolFailureFromUnknown,
   hydrateStoredValueRefs,
   isRespondPolicy,
   participantRefFromActor,
+  renderAgentToolFailure,
   resolveShouldRespond,
   type ActorRef,
   type AgenticEvent,
@@ -1116,7 +1118,23 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             const registry = await this.toolRegistry(channelId, execution);
             const agentTool = registry.get(tool);
             if (!agentTool) {
-              return { result: `unknown tool: ${tool}`, isError: true };
+              const failure = agentToolFailureFromUnknown(
+                Object.assign(new Error(`unknown tool: ${tool}`), { code: "tool_not_found" }),
+                {
+                  operation: `tool.${tool}`,
+                  stage: "resolve",
+                  causal: { invocationId, commandId: execution.commandId },
+                }
+              );
+              return {
+                result: {
+                  protocolContent: [{ type: "text", text: renderAgentToolFailure(failure) }],
+                  details: { failure },
+                },
+                isError: true,
+                terminalReasonCode: failure.code,
+                failure,
+              };
             }
             const params = prepareAgentToolArguments(agentTool, args);
             const result = await agentTool.execute(
@@ -1130,14 +1148,25 @@ export abstract class AgentVesselBase extends DurableObjectBase {
               isError: false,
             };
           } catch (err) {
-            const code =
-              err && typeof err === "object" && typeof (err as { code?: unknown }).code === "string"
-                ? (err as { code: string }).code
-                : undefined;
+            const failure = agentToolFailureFromUnknown(err, {
+              operation: `tool.${tool}`,
+              stage: signal.aborted ? "cancel" : "execute",
+              causal: { invocationId, commandId: execution.commandId },
+              ...(signal.aborted ? { kind: "cancelled" as const } : {}),
+            });
             return {
-              result: err instanceof Error ? err.message : String(err),
+              result: {
+                protocolContent: [
+                  {
+                    type: "text",
+                    text: renderAgentToolFailure(failure),
+                  },
+                ],
+                details: { failure },
+              },
               isError: true,
-              ...(code ? { terminalReasonCode: code } : {}),
+              terminalReasonCode: failure.code,
+              failure,
             };
           }
         },
@@ -3269,6 +3298,24 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     }
     if (status.status === "done" && status.result) {
       const formatted = formatEvalResult(status.result);
+      const failure =
+        status.result.success === true
+          ? undefined
+          : agentToolFailureFromUnknown(
+              {
+                message: status.result.error ?? "eval failed",
+                code: status.result.failureCode,
+                errorData: status.result.errorData,
+              },
+              {
+                operation: "tool.eval",
+                stage: "execute",
+                causal: { invocationId },
+                ...(status.result.failureKind === "infrastructure"
+                  ? { kind: "infrastructure" as const }
+                  : {}),
+              }
+            );
       return {
         result: { protocolContent: formatted.content, details: formatted.details },
         // Preserve the structured diagnostic, but do not lie about its
@@ -3280,6 +3327,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         ...(status.result.failureKind === "infrastructure"
           ? { terminalOutcome: "infrastructure_error" as const }
           : {}),
+        ...(failure ? { terminalReasonCode: failure.code, failure } : {}),
       };
     }
     if (status.status === "cancelled") {
@@ -3349,6 +3397,24 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (!payload.channelId || !payload.result) return;
     await this.assertOwnEvalCaller(payload.channelId);
     const formatted = formatEvalResult(payload.result);
+    const failure =
+      payload.result.success === true
+        ? undefined
+        : agentToolFailureFromUnknown(
+            {
+              message: payload.result.error ?? "eval failed",
+              code: payload.result.failureCode,
+              errorData: payload.result.errorData,
+            },
+            {
+              operation: "tool.eval",
+              stage: "execute",
+              causal: { invocationId: payload.agentInvocationId ?? payload.runId },
+              ...(payload.result.failureKind === "infrastructure"
+                ? { kind: "infrastructure" as const }
+                : {}),
+            }
+          );
     await this.driver.deliverEffectOutcome(
       payload.runId,
       {
@@ -3358,6 +3424,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         ...(payload.result.failureKind === "infrastructure"
           ? { terminalOutcome: "infrastructure_error" as const }
           : {}),
+        ...(failure ? { terminalReasonCode: failure.code, failure } : {}),
       },
       { channelId: payload.channelId }
     );

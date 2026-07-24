@@ -861,17 +861,20 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       return;
     }
 
-    // Mark restored panels as unloaded (they rebuild on focus)
+    // Mark only genuinely unhosted restored panels as unloaded. Tree
+    // reconciliation and shell residency can load a panel while the
+    // authoritative snapshot awaits; resetting a now-live view to `pending`
+    // would split registry readiness from the native renderer that is already
+    // serving the immutable build.
     for (const entry of this.registry.listPanels()) {
       const panel = this.registry.getPanel(entry.panelId);
-      if (panel) {
-        const hasBuildArtifacts = Boolean(panel.artifacts?.htmlPath || panel.artifacts?.bundlePath);
-        if (panel.artifacts?.buildState !== "pending" || hasBuildArtifacts) {
-          this.registry.updateArtifacts(entry.panelId, {
-            buildState: "pending",
-            buildProgress: "Panel unloaded - will rebuild when focused",
-          });
-        }
+      if (!panel || this.getPanelView()?.hasView(entry.panelId)) continue;
+      const hasBuildArtifacts = Boolean(panel.artifacts?.htmlPath || panel.artifacts?.bundlePath);
+      if (panel.artifacts?.buildState !== "pending" || hasBuildArtifacts) {
+        this.registry.updateArtifacts(entry.panelId, {
+          buildState: "pending",
+          buildProgress: "Panel unloaded - will rebuild when focused",
+        });
       }
     }
     this.registry.notifyPanelTreeUpdate();

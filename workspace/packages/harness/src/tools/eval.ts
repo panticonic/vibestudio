@@ -94,6 +94,7 @@ export interface EvalRunResult {
   error?: string;
   failureKind?: "user-code" | "infrastructure" | "cancelled";
   failureCode?: string;
+  errorData?: unknown;
   scopeKeys?: string[];
 }
 
@@ -151,6 +152,15 @@ export function normalizeEvalToolSource(params: {
 export function formatEvalResult(result: EvalRunResult): AgentToolResult<EvalRunResult> {
   const parts: string[] = [];
   if (!result.success) parts.push(`[eval] Error: ${result.error ?? "unknown error"}`);
+  if (!result.success && result.errorData !== undefined) {
+    parts.push(
+      `[eval] Failure data:\n${clampText(
+        safeStringify(result.errorData),
+        MAX_RETURN_CHARS,
+        "$lastReturn"
+      )}`
+    );
+  }
   if (result.console) {
     parts.push(`[eval] Console:\n${clampText(result.console, MAX_CONSOLE_CHARS, "$lastConsole")}`);
   }

@@ -262,10 +262,16 @@ Quick version:
 ```
 eval({ code: `
   import { createProject } from "@workspace-skills/workspace-dev";
-  await createProject({ projectType: "panel", name: "hello", title: "Hello World" });
+  return await createProject({ projectType: "panel", name: "hello", title: "Hello World" });
 `
 })
 ```
+
+Require the returned `preflight.ok` proof and keep the `publication` facts. A structured
+`scaffold_publication_failed` result means creation and commit succeeded but
+protected publication did not; call
+`recoverProjectPublication(error)` from `@workspace-skills/workspace-dev` for
+that committed event instead of running the scaffold again.
 
 Then edit the generated files through the managed tools. Read
 [vibestudio-vcs](../vibestudio-vcs/SKILL.md), build or test the exact working

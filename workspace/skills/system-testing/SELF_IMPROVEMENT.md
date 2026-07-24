@@ -248,6 +248,14 @@ to determine whether the issue is runtime, docs, harness, or expected recovery.
 with tool failures, so use it as the bounded investigation packet before
 drilling into the full raw session state.
 
+For a specific terminal tool call, use
+`gad.diagnoseInvocation({ trajectoryId, branchId, invocationId })` before
+walking the full trajectory. Verify the durable `agent-tool-failure.v1`
+envelope keeps the operation failure primary, cleanup/rollback secondary, and
+records the safe retry policy. If authority depends on a lineage-set, page its
+verified members through `contextIntegrity.explain`; never decode the digest or
+infer members from a count.
+
 For each failed test, inspect **everything** — the conversation, every tool call and its result, harness lifecycle, and participant state. Never hand off only filenames or artifact paths. A useful report must say what the test agent did, where it diverged from the expected marker/behavior, what tool calls completed or errored, and whether the failure looks like runtime, docs, harness, or test validation.
 
 Start with the bounded summary helper:
@@ -571,6 +579,11 @@ For workspace-owned source, publication is a semantic protocol:
 8. Inspect post-publication build and activation projections separately. A
    failed activation must retain the previous runnable artifact while the
    published source remains on `main`.
+
+Fresh scaffolds and forks must return `preflight.ok === true` before their
+publication evidence is accepted. If commit succeeded and publication failed,
+call `recoverProjectPublication` with the recorded scaffold failure and prove
+that recovery authored no second repository edit or commit.
 
 Every semantic mutation has a stable `commandId`. Retry the same ID only for an
 identical request whose response may have been lost. After a freshness failure

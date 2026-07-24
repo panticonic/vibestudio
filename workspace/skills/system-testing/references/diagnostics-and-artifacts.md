@@ -38,6 +38,14 @@ shows explicit cancellation. A failed invocation may be expected negative-test
 evidence, an agent mistake, stale docs, or platform behavior. Inspect the
 arguments and terminal outcome before classifying it.
 
+For one failed call, first use
+`gad.diagnoseInvocation({ trajectoryId, branchId, invocationId })`. Its bounded
+packet joins the exact invocation and turn to terminal events, semantic command
+journal rows, effect intents, and receipts. Inspect
+`invocation.failed.payload.failure`: `causes[0]` must remain primary and cleanup
+or rollback faults must remain secondary. Honor `summary.truncated`; request a
+larger bounded section or the full trajectory only when necessary.
+
 A test may pass after an unexpected tool failure. Preserve that failure in the
 report and rerun set; recovery does not make the underlying platform path
 healthy.
@@ -64,6 +72,9 @@ authoritative surface:
 - joined suspension diagnostics for tool projection/effect mismatches;
 - GAD health/integrity inspection for publication, branch, invocation, and
   semantic graph failures;
+- `contextIntegrity.explain({ key, cursor, limit })` for verified, paged leaf
+  membership when a lineage-set coordinate participates in an authority
+  refusal;
 - server logs for host dispatch, workerd supervision, reconnect, or startup
   behavior.
 

@@ -91,3 +91,11 @@ they remain evidence without becoming product-defect counts.
 
 Never branch a validator on human-readable error prose when a discriminant or
 terminal outcome exists.
+
+New tool-failure scenarios must also verify the durable
+`agent-tool-failure.v1` object on the terminal invocation: stable code/kind,
+operation and stage, causal IDs when available, retry policy, and primary versus
+cleanup ordering. When the scenario creates a scaffold or fork, require
+`preflight.ok === true` before accepting publication evidence. A recovery
+scenario must call `recoverProjectPublication` from the recorded failure and
+prove no second repository edit or commit occurred.

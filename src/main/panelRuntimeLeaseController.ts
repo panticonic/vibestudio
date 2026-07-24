@@ -1,6 +1,11 @@
 import { randomUUID } from "crypto";
 import { createDevLogger } from "@vibestudio/dev-log";
-import type { Panel, PanelSnapshot, PanelTreeSnapshot } from "@vibestudio/shared/types";
+import type {
+  Panel,
+  PanelArtifacts,
+  PanelSnapshot,
+  PanelTreeSnapshot,
+} from "@vibestudio/shared/types";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { PanelManager } from "@vibestudio/shell-core/panelManager";
@@ -226,7 +231,13 @@ export class PanelRuntimeLeaseController {
     const view = this.deps.getPanelView();
     const hostedBefore = new Map<
       string,
-      { source: string; contextId: string; stateArgsJson: string; buildKey: string | null }
+      {
+        source: string;
+        contextId: string;
+        stateArgsJson: string;
+        buildKey: string | null;
+        artifacts: PanelArtifacts;
+      }
     >();
     if (view) {
       for (const { panelId } of this.deps.registry.listPanels()) {
@@ -239,6 +250,7 @@ export class PanelRuntimeLeaseController {
           contextId: current.contextId,
           stateArgsJson: JSON.stringify(current.stateArgs ?? {}),
           buildKey: panel.buildKey ?? null,
+          artifacts: { ...panel.artifacts },
         });
       }
     }
@@ -255,16 +267,23 @@ export class PanelRuntimeLeaseController {
       if (!panel || !view?.hasView(panelId)) continue;
       const current = getCurrentSnapshot(panel);
       const stateArgsJson = JSON.stringify(current.stateArgs ?? {});
+      const executionIdentityUnchanged =
+        current.source === before.source &&
+        current.contextId === before.contextId &&
+        (panel.buildKey ?? null) === before.buildKey;
+      if (executionIdentityUnchanged) {
+        // Tree snapshots carry semantic panel state, but renderer artifacts are
+        // host-local lifecycle state. A structural or state-args update must
+        // not regress a live hosted view back to the server's stale `pending`
+        // projection when its immutable execution identity did not change.
+        this.deps.registry.updateArtifacts(panelId, before.artifacts);
+      }
       if (stateArgsJson !== before.stateArgsJson) {
         this.deps.sendPanelEvent(panelId, "runtime:stateArgsChanged", current.stateArgs ?? {});
       }
       const runtimeImageBecameReady =
         before.buildKey !== (panel.buildKey ?? null) && this.hasCompleteExecutionIdentity(panel);
-      if (
-        current.source === before.source &&
-        current.contextId === before.contextId &&
-        !runtimeImageBecameReady
-      ) {
+      if (executionIdentityUnchanged && !runtimeImageBecameReady) {
         continue;
       }
       if (current.source.startsWith("browser:") || before.source.startsWith("browser:")) continue;

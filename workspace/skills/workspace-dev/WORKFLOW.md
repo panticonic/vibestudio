@@ -52,12 +52,22 @@ authored edits or partial repository loops.
 ```ts
 import { createProject } from "@workspace-skills/workspace-dev";
 
-await createProject({
+const created = await createProject({
   projectType: "panel",
   name: "my-app",
   title: "My App",
 });
+return created;
 ```
+
+Require `created.preflight.ok === true`, then retain `created.publication`: the
+former proves the planned repository was validated before mutation and the
+latter proves the committed event reached protected main. If the eval fails with
+`errorData.code === "scaffold_publication_failed"`, the repository is already
+committed but unpublished. Do not scaffold again. Call
+`recoverProjectPublication(error)` from the same skill. It validates a clean
+context at the exact `committedEventId` and applies the recorded command-ID
+policy without rerunning file generation or commit.
 
 Skip scaffolding for context-local notes. Write inside a repo-shaped path such
 as `projects/tmp-name/note.md`; that work remains private until its semantic

@@ -217,6 +217,8 @@ commands. The test subject must read
 - explicit move/copy operations with stable move identity and copy ancestry;
 - counteraction-based revert without erased history;
 - walkable content, command, and trajectory-invocation causality plus blame;
+- one bounded `gad.diagnoseInvocation` join whose terminal failure preserves
+  primary and cleanup causes and reports any truncation;
 - mixed native-edit/import-boundary blame that keeps exact new intent separate
   from honestly unknown pre-import authorship;
 - typed stale-basis recovery and identical-request command idempotency.

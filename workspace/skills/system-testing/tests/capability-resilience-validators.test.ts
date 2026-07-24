@@ -79,6 +79,29 @@ function scenario(tests: TestCase[], name: string): TestCase {
   return test;
 }
 
+function publication() {
+  return {
+    published: true,
+    committedEventId: "event:committed",
+    publishedEventId: "event:committed",
+    mainEventId: "event:committed",
+    effectId: "effect:published",
+    appliedAt: "2026-07-24T00:00:00.000Z",
+  };
+}
+
+function preflight(projectType: "panel" | "package" | "worker") {
+  return {
+    ok: true,
+    projectType,
+    packageName: `@workspace${projectType === "panel" ? "-panels" : projectType === "worker" ? "-workers" : ""}/test`,
+    entry: projectType === "package" ? null : "index.ts",
+    authorityRequestCount: 0,
+    importedPackages: [],
+    checked: ["package identity"],
+  };
+}
+
 describe("capability and resilience prompts", () => {
   it("state user goals without proof protocols or API choreography", () => {
     const tests = [
@@ -302,7 +325,13 @@ describe("project lifecycle semantic validators", () => {
         execution([
           evalCall(
             "const created = await createProject(input); const opened = await openPanel(created.created); return { ...created, openedPanelId: opened.id };",
-            { created: "panels/new-panel", files: ["index.tsx"], openedPanelId: "panel:1" }
+            {
+              created: "panels/new-panel",
+              files: ["index.tsx"],
+              preflight: preflight("panel"),
+              publication: publication(),
+              openedPanelId: "panel:1",
+            }
           ),
         ])
       ).passed
@@ -318,6 +347,8 @@ describe("project lifecycle semantic validators", () => {
               files: ["index.tsx"],
               committed: true,
               dryRun: false,
+              preflight: preflight("panel"),
+              publication: publication(),
               openedPanelId: "panel:2",
             }
           ),
@@ -336,6 +367,7 @@ describe("project lifecycle semantic validators", () => {
             files: ["index.ts"],
             committed: false,
             dryRun: true,
+            preflight: preflight("worker"),
           }),
         ])
       ).passed
@@ -346,6 +378,8 @@ describe("project lifecycle semantic validators", () => {
       evalCall("return createProject({ projectType: 'package', name: 'new-package' });", {
         created: "packages/new-package",
         files: ["index.ts"],
+        preflight: preflight("package"),
+        publication: publication(),
       }),
       {
         name: "edit",

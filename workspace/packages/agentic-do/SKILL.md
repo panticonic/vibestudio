@@ -15,6 +15,9 @@ Read the local reference that matches the task before editing:
   model credential setup, thinking effort, approval, and response policy.
 - [Subagents](references/subagents.md) for `spawn_subagent`, child task channels,
   child context inspection, semantic integration, and close semantics.
+- [Failures and diagnostics](references/failures-and-diagnostics.md) for the
+  canonical tool-failure envelope, primary/cleanup ordering, bounded invocation
+  diagnostic packets, and paged outside-lineage explanation.
 
 Keep package boundaries explicit. Core runtime mechanics live in this package;
 projection/rendering details can live in sibling packages such as

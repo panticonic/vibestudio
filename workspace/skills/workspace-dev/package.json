@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@workspace/runtime": "workspace:*",
-    "@vibestudio/git": "workspace:*"
+    "@vibestudio/git": "workspace:*",
+    "@vibestudio/shared": "workspace:*"
   }
 }

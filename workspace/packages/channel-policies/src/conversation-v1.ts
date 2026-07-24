@@ -1,6 +1,7 @@
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
+  agentToolFailureFromUnknown,
   invocationAbandonedPayload,
   invocationCancelledPayload,
   invocationCompletedPayload,
@@ -119,6 +120,12 @@ const callEventPayload: ChannelCallEventBuilders = {
         ? invocationFailedPayload(failedOutcome, "method failed", {
             error: result,
             terminalReasonCode: terminalReasonCode ?? "method_failed",
+            failure: agentToolFailureFromUnknown(result, {
+              operation: descriptor.method,
+              stage: "remote-call",
+              causal: { invocationId: descriptor.invocationId },
+              kind: failedOutcome === "infrastructure_error" ? "infrastructure" : undefined,
+            }),
           })
         : invocationCompletedPayload({ result }),
     } as AgenticEvent;

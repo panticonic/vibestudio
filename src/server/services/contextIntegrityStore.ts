@@ -6,11 +6,15 @@ import { openCanonicalSqliteDatabase } from "@vibestudio/sqlite";
 import type { ContextIntegrityFact } from "@vibestudio/rpc";
 import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import {
+  canonicalLineageSet,
   ContextIntegrityLatch,
   isContentAddressedLineageKey,
+  isLineageSetKey,
   parseLineageKey,
+  type CanonicalLineageSet,
   type ContentClass,
   type ContextIntegrityLatchState,
+  type LineageEntry,
 } from "@vibestudio/shared/authority/contextIntegrity";
 import { stateLayout } from "../stateLayout.js";
 import { CONTEXT_INTEGRITY_MIGRATION_PLAN } from "./contextIntegritySchema.js";
@@ -22,9 +26,34 @@ export interface ContextIngestionInput {
   derivedClass?: "internal" | "external";
 }
 
+export interface LineageExplanationPage {
+  key: string;
+  aggregate: boolean;
+  memberCount: number;
+  digestVerified: true;
+  session: {
+    class: "external";
+    firstSeen: string;
+    via: string;
+    count: number;
+  };
+  items: Array<{ key: string; trusted: boolean }>;
+  pageInfo: {
+    offset: number;
+    limit: number;
+    hasMore: boolean;
+    nextCursor: string | null;
+  };
+}
+
 export type ContextIngestionRecorder = (
   ctx: ServiceContext,
   input: ContextIngestionInput
+) => void | Promise<void>;
+
+export type ContextIngestionBatchRecorder = (
+  ctx: ServiceContext,
+  inputs: readonly ContextIngestionInput[]
 ) => void | Promise<void>;
 
 /** Durable server-side half of the session latch plus exact content trust. */
@@ -59,14 +88,37 @@ export class ContextIntegrityStore {
     via: string;
     at?: Date;
   }): ContextIntegrityFact {
+    return this.ingestMany({
+      sessionId: input.sessionId,
+      entries: [input],
+    });
+  }
+
+  ingestMany(input: {
+    sessionId: string;
+    entries: readonly {
+      key: string;
+      class: ContentClass;
+      via: string;
+      at?: Date;
+    }[];
+  }): ContextIntegrityFact {
     if (!input.sessionId.trim()) throw new Error("Context ingestion requires a session id");
-    const current = this.state(input.sessionId);
-    const latch = new ContextIntegrityLatch(current ?? undefined);
-    const next = latch.ingest(input);
-    this.transaction(() =>
-      this.writeState(input.sessionId, next, input.at?.getTime() ?? Date.now())
+    const current = this.state(input.sessionId) ?? {
+      class: "internal" as const,
+      latchEpoch: 0,
+      sources: [],
+    };
+    const prepared = this.prepareIngestion(current, input.entries);
+    const recordedAt = input.entries.reduce(
+      (latest, entry) => Math.max(latest, entry.at?.getTime() ?? 0),
+      Date.now()
     );
-    return latch.fact();
+    this.transaction(() => {
+      if (prepared.lineageSet) this.writeLineageSet(prepared.lineageSet, recordedAt);
+      this.writeState(input.sessionId, prepared.state, recordedAt);
+    });
+    return new ContextIntegrityLatch(prepared.state).fact();
   }
 
   fact(sessionId: string): ContextIntegrityFact {
@@ -95,7 +147,12 @@ export class ContextIntegrityStore {
           externalKeys: [`session:${input.sessionId}`],
         };
     if (!attested || attested.class === "not-applicable") return server;
-    const externalKeys = [...new Set([...server.externalKeys, ...attested.externalKeys])];
+    const compacted = this.compactExternalKeys([...server.externalKeys, ...attested.externalKeys]);
+    const lineageSet = compacted.lineageSet;
+    if (lineageSet) {
+      this.transaction(() => this.writeLineageSet(lineageSet, Date.now()));
+    }
+    const externalKeys = compacted.key ? [compacted.key] : [];
     return {
       class:
         server.class === "external" || attested.class === "external" || externalKeys.length > 0
@@ -149,6 +206,7 @@ export class ContextIntegrityStore {
     const key = parseLineageKey(input.key);
     if (!isContentAddressedLineageKey(key))
       throw coded(`Lineage ${key} is not content-addressed`, "EACCES");
+    if (isLineageSetKey(key)) this.expandLineageKey(key);
     if (!input.decidedBy.trim()) throw new Error("A human decision is required to vouch content");
     const id = `vch_${randomBytes(18).toString("base64url")}`;
     this.db
@@ -212,6 +270,9 @@ export class ContextIntegrityStore {
       .prepare("SELECT 1 FROM vouches WHERE subject_key=? AND revoked_at IS NULL")
       .get(key);
     if (exact) return true;
+    if (isLineageSetKey(key)) {
+      return this.expandLineageKey(key).every((member) => this.isTrusted(member));
+    }
     const rows = this.db
       .prepare("SELECT pattern_kind,pattern_key FROM trust_policies WHERE revoked_at IS NULL")
       .all() as Row[];
@@ -265,6 +326,184 @@ export class ContextIntegrityStore {
     ].sort((left, right) => right.decidedAt.localeCompare(left.decidedAt));
   }
 
+  expandLineageKey(keyValue: string): string[] {
+    const key = parseLineageKey(keyValue);
+    if (!isLineageSetKey(key)) return [key];
+    const row = this.db
+      .prepare("SELECT members_json,member_count FROM lineage_sets WHERE set_key=?")
+      .get(key) as Row | undefined;
+    if (!row) {
+      throw coded(`Unknown aggregate lineage set ${key}`, "EINTEGRITY");
+    }
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(String(row["members_json"]));
+    } catch {
+      throw coded(`Aggregate lineage set ${key} has invalid member JSON`, "EINTEGRITY");
+    }
+    if (!Array.isArray(decoded) || !decoded.every((member) => typeof member === "string")) {
+      throw coded(`Aggregate lineage set ${key} has invalid members`, "EINTEGRITY");
+    }
+    const canonical = canonicalLineageSet(decoded);
+    if (canonical.key !== key || canonical.members.length !== Number(row["member_count"])) {
+      throw coded(`Aggregate lineage set ${key} fails content-address verification`, "EINTEGRITY");
+    }
+    return [...canonical.members];
+  }
+
+  explainLineage(input: {
+    sessionId: string;
+    key?: string;
+    cursor?: string;
+    limit?: number;
+  }): LineageExplanationPage {
+    const state = this.state(input.sessionId);
+    const external = state?.sources.filter((source) => source.class === "external") ?? [];
+    const requestedKey = input.key ?? external[0]?.key;
+    if (!requestedKey) {
+      throw coded(`Session ${input.sessionId} has no outside lineage to explain`, "ENOENT");
+    }
+    const key = parseLineageKey(requestedKey);
+    const source = external.find((candidate) => candidate.key === key);
+    if (!source) {
+      throw coded(`Lineage key ${key} is not present in session ${input.sessionId}`, "EACCES");
+    }
+    const members = this.expandLineageKey(key);
+    const limit = Math.min(Math.max(Math.trunc(input.limit ?? 100), 1), 500);
+    const offset = input.cursor ? decodeLineageCursor(input.cursor, key) : 0;
+    if (offset > members.length) {
+      throw coded(`Lineage cursor is outside aggregate ${key}`, "EINVAL");
+    }
+    const page = members.slice(offset, offset + limit);
+    const nextOffset = offset + page.length;
+    return {
+      key,
+      aggregate: isLineageSetKey(key),
+      memberCount: members.length,
+      digestVerified: true,
+      session: {
+        class: "external",
+        firstSeen: source.firstSeen,
+        via: source.via,
+        count: source.count,
+      },
+      items: page.map((member) => ({ key: member, trusted: this.isTrusted(member) })),
+      pageInfo: {
+        offset,
+        limit,
+        hasMore: nextOffset < members.length,
+        nextCursor: nextOffset < members.length ? encodeLineageCursor(key, nextOffset) : null,
+      },
+    };
+  }
+
+  private prepareIngestion(
+    current: ContextIntegrityLatchState,
+    entries: readonly {
+      key: string;
+      class: ContentClass;
+      via: string;
+      at?: Date;
+    }[]
+  ): { state: ContextIntegrityLatchState; lineageSet: CanonicalLineageSet | null } {
+    const parsed = entries.map((entry) => ({
+      ...entry,
+      key: parseLineageKey(entry.key),
+    }));
+    for (const entry of parsed) {
+      if (isLineageSetKey(entry.key)) this.expandLineageKey(entry.key);
+    }
+    const internalInputs = parsed.filter((entry) => entry.class === "internal");
+    const incomingExternal = parsed.filter((entry) => entry.class === "external");
+    const existingExternal = current.sources.filter((entry) => entry.class === "external");
+    const externalMembers = new Set<string>();
+    for (const entry of existingExternal) {
+      for (const member of this.expandLineageKey(entry.key)) externalMembers.add(member);
+    }
+    for (const entry of incomingExternal) {
+      for (const member of this.expandLineageKey(entry.key)) externalMembers.add(member);
+    }
+
+    const internalLatch = new ContextIntegrityLatch({
+      class: "internal",
+      latchEpoch: current.latchEpoch,
+      sources: current.sources.filter((entry) => entry.class === "internal"),
+    });
+    const internalState = internalLatch.ingestMany(internalInputs);
+    if (externalMembers.size === 0) {
+      return { state: internalState, lineageSet: null };
+    }
+
+    const compacted = this.compactExternalKeys([...externalMembers]);
+    if (!compacted.key) throw new Error("External lineage compaction produced no key");
+    const collidingInternal: LineageEntry[] = [];
+    const sources = internalState.sources.filter((entry) => {
+      const collides =
+        entry.key === compacted.key ||
+        (!isLineageSetKey(entry.key) && externalMembers.has(entry.key));
+      if (collides) collidingInternal.push(entry);
+      return !collides;
+    });
+    if (sources.length >= ContextIntegrityLatch.MAX_DISTINCT_KEYS) sources.shift();
+
+    const firstSeen = [
+      ...existingExternal.map((entry) => entry.firstSeen),
+      ...collidingInternal.map((entry) => entry.firstSeen),
+      ...incomingExternal.map((entry) => (entry.at ?? new Date()).toISOString()),
+    ].sort()[0]!;
+    const previousKey = existingExternal.length === 1 ? String(existingExternal[0]!.key) : null;
+    const changed = previousKey !== compacted.key;
+    const count =
+      existingExternal.reduce((total, entry) => total + entry.count, 0) +
+      collidingInternal.reduce((total, entry) => total + entry.count, 0) +
+      incomingExternal.length;
+    sources.push({
+      key: parseLineageKey(compacted.key),
+      class: "external",
+      firstSeen,
+      via: incomingExternal.at(-1)?.via ?? existingExternal[0]?.via ?? "lineage-set",
+      count,
+    });
+    return {
+      state: {
+        class: "external",
+        latchEpoch: internalState.latchEpoch + (changed ? 1 : 0),
+        sources,
+      },
+      lineageSet: compacted.lineageSet,
+    };
+  }
+
+  private compactExternalKeys(keys: readonly string[]): {
+    key: string | null;
+    lineageSet: CanonicalLineageSet | null;
+  } {
+    const members = new Set<string>();
+    for (const key of keys) {
+      for (const member of this.expandLineageKey(key)) members.add(member);
+    }
+    if (members.size === 0) return { key: null, lineageSet: null };
+    if (members.size === 1) return { key: [...members][0]!, lineageSet: null };
+    const lineageSet = canonicalLineageSet([...members]);
+    return { key: lineageSet.key, lineageSet };
+  }
+
+  private writeLineageSet(lineageSet: CanonicalLineageSet, now: number): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO lineage_sets(set_key,members_json,member_count,created_at)
+         VALUES (?,?,?,?)`
+      )
+      .run(lineageSet.key, JSON.stringify(lineageSet.members), lineageSet.members.length, now);
+    const persisted = this.expandLineageKey(lineageSet.key);
+    if (
+      persisted.length !== lineageSet.members.length ||
+      persisted.some((member, index) => member !== lineageSet.members[index])
+    ) {
+      throw coded(`Aggregate lineage set ${lineageSet.key} has conflicting members`, "EINTEGRITY");
+    }
+  }
+
   private state(sessionId: string): ContextIntegrityLatchState | null {
     const latch = this.db
       .prepare("SELECT * FROM session_latches WHERE session_id=?")
@@ -273,7 +512,7 @@ export class ContextIntegrityStore {
     const rows = this.db
       .prepare("SELECT * FROM session_lineage WHERE session_id=? ORDER BY ordinal")
       .all(sessionId) as Row[];
-    return {
+    const state: ContextIntegrityLatchState = {
       class: String(latch["class"]) as ContentClass,
       latchEpoch: Number(latch["latch_epoch"]),
       sources: rows.map((row) => ({
@@ -284,6 +523,10 @@ export class ContextIntegrityStore {
         count: Number(row["count"]),
       })),
     };
+    for (const source of state.sources) {
+      if (isLineageSetKey(source.key)) this.expandLineageKey(source.key);
+    }
+    return state;
   }
 
   private writeState(sessionId: string, state: ContextIntegrityLatchState, now: number): void {
@@ -350,10 +593,47 @@ export function recordContextIngestionForCaller(
   });
 }
 
+export function recordContextIngestionsForCaller(
+  store: ContextIntegrityStore,
+  caller: VerifiedCaller,
+  inputs: readonly ContextIngestionInput[]
+): void {
+  const sessionId = caller.agentBinding?.channelId;
+  if (!sessionId || inputs.length === 0) return;
+  store.ingestMany({
+    sessionId,
+    entries: inputs.map((input) => {
+      if (input.classification === "external") {
+        return {
+          key: input.key,
+          via: input.via,
+          class: "external" as const,
+        };
+      }
+      const key = parseLineageKey(input.key);
+      return {
+        key,
+        via: input.via,
+        class: store.isTrusted(key)
+          ? ("internal" as const)
+          : input.derivedClass === "internal"
+            ? ("internal" as const)
+            : ("external" as const),
+      };
+    }),
+  });
+}
+
 export function createContextIngestionRecorder(
   store: ContextIntegrityStore
 ): ContextIngestionRecorder {
   return (ctx, input) => recordContextIngestionForCaller(store, ctx.caller, input);
+}
+
+export function createContextIngestionBatchRecorder(
+  store: ContextIntegrityStore
+): ContextIngestionBatchRecorder {
+  return (ctx, inputs) => recordContextIngestionsForCaller(store, ctx.caller, inputs);
 }
 
 type Row = Record<string, SQLOutputValue>;
@@ -365,4 +645,28 @@ function policyMatches(kind: string, pattern: string, key: string): boolean {
 
 function coded(message: string, code: string): Error {
   return Object.assign(new Error(message), { code });
+}
+
+function encodeLineageCursor(key: string, offset: number): string {
+  return Buffer.from(JSON.stringify({ key, offset }), "utf8").toString("base64url");
+}
+
+function decodeLineageCursor(cursor: string, expectedKey: string): number {
+  try {
+    const value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
+      key?: unknown;
+      offset?: unknown;
+    };
+    if (
+      value.key !== expectedKey ||
+      typeof value.offset !== "number" ||
+      !Number.isInteger(value.offset) ||
+      value.offset < 0
+    ) {
+      throw new Error("mismatch");
+    }
+    return value.offset;
+  } catch {
+    throw coded(`Invalid lineage cursor for ${expectedKey}`, "EINVAL");
+  }
 }

@@ -123,6 +123,8 @@ export interface SandboxResult {
   failureKind?: SandboxFailureKind;
   /** Stable machine-readable diagnostic; never inferred from error copy. */
   failureCode?: string;
+  /** Structured guest/service failure data preserved for agent-facing diagnostics. */
+  errorData?: unknown;
   /** Agent-facing panel operation summary, when panel runtime journaling was active. */
   panelJournalFooter?: string;
 }
@@ -150,6 +152,12 @@ function structuredFailureCode(error: unknown): string | undefined {
   if (!errorData || typeof errorData !== "object") return undefined;
   const code = (errorData as Record<string, unknown>)["code"];
   return typeof code === "string" && code.length > 0 ? code : undefined;
+}
+
+function structuredFailureData(error: unknown): unknown | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const errorData = (error as { errorData?: unknown }).errorData;
+  return errorData === undefined ? undefined : safeSerialize(errorData, 8);
 }
 
 async function runInfrastructurePhase<T>(
@@ -1489,6 +1497,7 @@ export async function executeSandbox(
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     const errorStack = err instanceof Error ? err.stack : undefined;
+    const errorData = structuredFailureData(err);
     // Include stack in console output for debugging RPC/OAuth errors
     const consoleEntries = capture.getEntries();
     const debugInfo = errorStack ? `\n[eval] Error stack: ${errorStack}` : "";
@@ -1508,6 +1517,7 @@ export async function executeSandbox(
           : signal?.aborted
             ? "eval_cancelled"
             : (structuredFailureCode(err) ?? "guest_execution_failed"),
+      ...(errorData === undefined ? {} : { errorData }),
     };
   } finally {
     deactivateDeadline?.();

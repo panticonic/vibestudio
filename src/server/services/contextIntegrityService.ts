@@ -35,6 +35,13 @@ export function createContextIntegrityService(deps: {
         });
       },
       fact: (ctx) => deps.store.fact(ownSession(ctx)),
+      explain: (ctx, [input]) =>
+        deps.store.explainLineage({
+          sessionId: ownSession(ctx),
+          ...(input?.key ? { key: input.key } : {}),
+          ...(input?.cursor ? { cursor: input.cursor } : {}),
+          ...(input?.limit ? { limit: input.limit } : {}),
+        }),
     }),
   };
 }

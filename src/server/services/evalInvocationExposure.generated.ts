@@ -2200,6 +2200,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "direct:workspace/packages/semantic-control-plane/src/index.ts:diagnoseInvocation",
+    rpcPlane: "workspace-do",
+    capability: "workspace-service:<live-declaration>",
+    authorityPrincipals: ["code", "host", "user"],
+    owner: "workspace/packages/semantic-control-plane/src/index.ts",
+    source: "packages/semantic-control-plane",
+    method: "diagnoseInvocation",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/packages/semantic-control-plane/src/index.ts",
+    },
+  },
+  {
     id: "direct:workspace/packages/semantic-control-plane/src/index.ts:ensureBlob",
     rpcPlane: "workspace-do",
     capability: "workspace-service:<live-declaration>",
@@ -5613,6 +5627,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:contentTrust.vouch",
+    },
+  },
+  {
+    id: "host:contextIntegrity.explain",
+    rpcPlane: "host-service",
+    capability: "service:contextIntegrity.explain",
+    authorityPrincipals: ["code", "session"],
+    owner: "contextIntegrity",
+    method: "explain",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:contextIntegrity.explain",
     },
   },
   {
@@ -11242,6 +11269,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "contextIntegrity",
+    method: "explain",
+  },
+  {
+    service: "contextIntegrity",
     method: "fact",
   },
   {
@@ -12961,6 +12992,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:build.listRecentBuildEvents",
   "service:build.listSkills",
   "service:build.recompute",
+  "service:contextIntegrity.explain",
   "service:contextIntegrity.fact",
   "service:contextIntegrity.ingest",
   "service:corsApproval.authorize",

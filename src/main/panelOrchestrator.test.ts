@@ -1207,6 +1207,26 @@ describe("PanelOrchestrator.initializePanelTree", () => {
     expect(panelView.createViewForPanel).not.toHaveBeenCalled();
     expect(registry.getPanel(seeded.id)?.artifacts.buildState).toBe("pending");
   });
+
+  it("does not regress a panel that became hosted while the tree initialized", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const seeded = makePanel("panel:tree/seeded", [], {
+      artifacts: {
+        buildState: "ready",
+        htmlPath: "http://localhost/panels/seeded/",
+      },
+    });
+    registry.addPanel(seeded, null, { addAsRoot: true });
+    const { orchestrator, panelView } = createOrchestrator(registry);
+    panelView.hasView.mockImplementation((panelId: string) => panelId === seeded.id);
+
+    await orchestrator.initializePanelTree();
+
+    expect(registry.getPanel(seeded.id)?.artifacts).toEqual({
+      buildState: "ready",
+      htmlPath: "http://localhost/panels/seeded/",
+    });
+  });
 });
 
 describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
@@ -1250,6 +1270,43 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
     expect(repopulate).toHaveBeenCalledOnce();
     expect(registry.getPanel("panel:tree/root")?.title).toBe("New title");
     expect(registry.getPanel("panel:tree/child")).toBeDefined();
+  });
+
+  it("preserves host-local renderer artifacts across semantic tree changes", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    registry.addPanel(
+      makePanel("panel:tree/root", [], {
+        title: "Runtime title",
+        artifacts: {
+          buildState: "ready",
+          htmlPath: "http://localhost/panels/panel:tree/root/",
+        },
+      }),
+      null,
+      { addAsRoot: true }
+    );
+    const { orchestrator, panelView } = createOrchestrator(registry);
+    panelView.hasView.mockImplementation((id: string) => id === "panel:tree/root");
+
+    await orchestrator.applyServerPanelTreeSnapshot(
+      forestSnapshot([
+        makePanel("panel:tree/root", [makePanel("panel:tree/child")], {
+          title: "Authoritative title",
+          artifacts: {
+            buildState: "pending",
+            buildProgress: "Panel unloaded - will rebuild when focused",
+          },
+        }),
+      ])
+    );
+
+    expect(registry.getPanel("panel:tree/root")?.title).toBe("Authoritative title");
+    expect(registry.getPanel("panel:tree/root")?.artifacts).toEqual({
+      buildState: "ready",
+      htmlPath: "http://localhost/panels/panel:tree/root/",
+    });
+    expect(registry.getPanel("panel:tree/child")).toBeDefined();
+    expect(panelView.createViewForPanel).not.toHaveBeenCalled();
   });
 
   it("applies an owner-only server change and re-bands the local forest", async () => {

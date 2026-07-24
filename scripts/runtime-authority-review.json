@@ -1,7 +1,15 @@
 {
   "version": 1,
-  "censusDigest": "sha256:9874a1036a19f58b12b8c3f01e6d63015313b37f1813e32bc8ea050757a97b05",
+  "censusDigest": "sha256:804b486b2e43c347de0ddd0d42e2eb6465ac00cc7d7f80256bd0e272ba94c927",
   "decisions": {
+    "direct:workspace/packages/semantic-control-plane/src/index.ts:diagnoseInvocation": {
+      "review": "bounded-read-only-causal-diagnostics",
+      "change": "Adds an open, read-only exact-coordinate projection over existing trajectory, semantic command, effect-intent, and receipt authorities; every collection is bounded and reports truncation, and the method performs no mutation."
+    },
+    "host:contextIntegrity.explain": {
+      "review": "own-session-verified-lineage-explanation",
+      "change": "Adds a read-only agent-bound explanation of a lineage coordinate already present in the caller's own session. The receiver derives session identity, verifies aggregate content addressing, and returns bounded opaque-cursor pages."
+    },
     "direct:workspace/packages/agentic-do/src/agent-vessel.ts:attachChannel": {
       "review": "host-lifecycle-attachment",
       "change": "Adds a host-only lifecycle operation that attaches an existing exact agent entity to a channel; the channel independently authenticates the subscribing Durable Object identity."

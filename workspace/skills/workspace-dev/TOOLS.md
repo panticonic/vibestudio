@@ -111,7 +111,7 @@ shown in the skill index, such as `read("packages/data-model/SKILL.md")`.
 ```
 eval({ code: `
   import { createProject } from "@workspace-skills/workspace-dev";
-  await createProject({ projectType: "panel", name: "my-app", title: "My App" });
+  return await createProject({ projectType: "panel", name: "my-app", title: "My App" });
 `
 })
 ```
@@ -122,6 +122,39 @@ eval({ code: `
 | `projectType` | string | Yes | One of: `panel`, `package`, `skill`, `project`, `worker` |
 | `name` | string | Yes | Project name (kebab-case) |
 | `title` | string | No | Human-readable title (defaults to name) |
+
+The successful result includes `{ created, files, preflight, publication }`.
+`preflight` is the mutation-free proof that the complete planned repository
+passed the canonical manifest and source checks. Both fresh scaffolds and forks
+must pass it; there is no legacy-fork bypass.
+`publication.published` is `true` and the remaining fields name the exact
+committed/published event, new main, durable effect, and application time.
+
+If protected publication fails after commit, the helper throws
+`ScaffoldPublicationError`; eval shows its `errorData` in the tool details.
+`errorData` contains:
+
+- `code: "scaffold_publication_failed"` and `stage: "push"`;
+- `created`, `files`, `committedEventId`, and `published: false`;
+- the exact original `publicationRequest`;
+- `vcsError.code`, message, and original typed data; and
+- `retry.commandIdPolicy`.
+
+Do not rerun `createProject`, because the repository and commit already exist.
+Use the receipt-driven recovery helper:
+
+```ts
+import { recoverProjectPublication } from "@workspace-skills/workspace-dev";
+return await recoverProjectPublication(scaffoldError);
+```
+
+It calls `vcs.status`, refuses if the context is not clean at the exact recorded
+commit, reuses the original command only for an identical uncertain external
+effect, and otherwise uses a fresh command against the newly observed main.
+`ScaffoldPublicationRecoveryError.errorData` says whether another recovery call
+is safe; it never recreates files or commits. A malformed or mismatched
+publication receipt records `stop-integrity-investigation` and is never
+auto-recovered.
 
 ---
 

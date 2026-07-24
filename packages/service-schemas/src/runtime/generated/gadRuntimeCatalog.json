@@ -4146,6 +4146,189 @@
       "additionalProperties": false
     }
   },
+  "diagnoseInvocation": {
+    "description": "Return one bounded causal packet joining an exact invocation to its turn, terminal events, semantic commands, effect intents, and receipts.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "trajectoryId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "branchId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "invocationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "eventLimit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            },
+            "commandLimit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            },
+            "effectLimit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          "required": [
+            "trajectoryId",
+            "branchId",
+            "invocationId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "generatedAt": {
+          "type": "string"
+        },
+        "coordinate": {
+          "type": "object",
+          "properties": {
+            "trajectoryId": {
+              "type": "string"
+            },
+            "branchId": {
+              "type": "string"
+            },
+            "invocationId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "trajectoryId",
+            "branchId",
+            "invocationId"
+          ],
+          "additionalProperties": false
+        },
+        "invocation": {
+          "type": "object",
+          "additionalProperties": {},
+          "nullable": true
+        },
+        "turn": {
+          "allOf": [
+            {
+              "$ref": "#/properties/invocation"
+            }
+          ],
+          "nullable": true
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/properties/invocation"
+          }
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "$ref": "#/properties/invocation"
+              },
+              "effects": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/properties/invocation"
+                }
+              }
+            },
+            "required": [
+              "command",
+              "effects"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "summary": {
+          "type": "object",
+          "properties": {
+            "terminal": {
+              "type": "boolean"
+            },
+            "eventCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "commandCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "pendingEffectCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "cleanupFailureCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "truncated": {
+              "type": "object",
+              "properties": {
+                "events": {
+                  "type": "boolean"
+                },
+                "commands": {
+                  "type": "boolean"
+                },
+                "effects": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "events",
+                "commands",
+                "effects"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "terminal",
+            "eventCount",
+            "commandCount",
+            "pendingEffectCount",
+            "cleanupFailureCount",
+            "truncated"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "generatedAt",
+        "coordinate",
+        "invocation",
+        "turn",
+        "events",
+        "commands",
+        "summary"
+      ],
+      "additionalProperties": false
+    }
+  },
   "inspectChannelRoster": {
     "description": "Inspect durable participant membership for one channel.",
     "access": {

@@ -52,11 +52,24 @@ function findLifecycleResult(
 }
 
 function createdProject(record: Record<string, unknown>, section: "panels" | "packages") {
+  const publication = record["publication"];
+  const preflight = record["preflight"];
   return (
     typeof record["created"] === "string" &&
     record["created"].startsWith(`${section}/`) &&
     Array.isArray(record["files"]) &&
-    record["files"].length > 0
+    record["files"].length > 0 &&
+    isRecord(preflight) &&
+    preflight["ok"] === true &&
+    preflight["projectType"] === (section === "panels" ? "panel" : "package") &&
+    Array.isArray(preflight["checked"]) &&
+    preflight["checked"].length > 0 &&
+    isRecord(publication) &&
+    publication["published"] === true &&
+    typeof publication["committedEventId"] === "string" &&
+    typeof publication["publishedEventId"] === "string" &&
+    typeof publication["mainEventId"] === "string" &&
+    typeof publication["effectId"] === "string"
   );
 }
 
@@ -100,6 +113,12 @@ function validatePanelFork(result: TestExecutionResult) {
       record["created"].startsWith("panels/") &&
       record["committed"] === true &&
       record["dryRun"] === false &&
+      isRecord(record["preflight"]) &&
+      record["preflight"]["ok"] === true &&
+      record["preflight"]["projectType"] === "panel" &&
+      isRecord(record["publication"]) &&
+      record["publication"]["published"] === true &&
+      typeof record["publication"]["committedEventId"] === "string" &&
       Array.isArray(record["files"]) &&
       record["files"].length > 0
     )
@@ -129,6 +148,9 @@ function validateWorkerForkPlan(result: TestExecutionResult) {
       record["source"] !== record["created"] &&
       record["committed"] === false &&
       record["dryRun"] === true &&
+      isRecord(record["preflight"]) &&
+      record["preflight"]["ok"] === true &&
+      record["preflight"]["projectType"] === "worker" &&
       Array.isArray(record["files"]) &&
       record["files"].length > 0
     )

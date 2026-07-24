@@ -552,6 +552,11 @@ export const METHOD_TIERS = {
     session: "family",
     rationale: "A session may inspect its own monotone ingestion latch",
   },
+  "contextIntegrity.explain": {
+    tier: "open",
+    session: "family",
+    rationale: "A session may inspect bounded verified lineage for its own monotone ingestion latch",
+  },
   "contextIntegrity.ingest": {
     tier: "open",
     session: "family",

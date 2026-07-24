@@ -68,8 +68,8 @@
     },
     {
       "path": "references/typed-recovery.md",
-      "sha256": "d6488e08f359f811916e2ca1f11f7cacd16e341b95a7e3cc3ffd8b46b964be57"
+      "sha256": "6233c96b7827b26543230a204e9b2c0342fb888186b76a60e717e3f688e1fc33"
     }
   ],
-  "packageDigest": "38b3529aec9f2532f51f82c1b1a64e8ec5b5505ea0f90cc452ae611417d043c3"
+  "packageDigest": "6adad15a2adc7bf08246362668f9d5fd42d11488acf333a08d3ec41e6b6df5b6"
 }

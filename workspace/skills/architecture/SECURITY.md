@@ -83,6 +83,21 @@ never the reverse. Ingestion chokepoints advance the latch before bytes become v
 File versions and durable channel messages persist the authoring session's class and
 outside lineage, so copying or paraphrasing content cannot launder its provenance.
 
+Multiple outside leaf sources are represented by one exact content-addressed
+`lineage-set:<sha256>` whose canonical membership is stored and verified by the
+host. This is a bounded representation, not a provenance summary: the host can
+expand every member for diagnostics and trust decisions, successive ingestion
+creates the digest of the exact monotone union, and unknown or nested set
+coordinates fail closed.
+
+Session-bound explanation pages are read through
+`contextIntegrity.explain`. The receiver derives the session from verified
+agent binding, accepts only a set already present in that session, verifies its
+content digest, and returns at most 500 exact leaves per opaque cursor. A
+directory listing remains an ingestion chokepoint because names are observed
+content; aggregation prevents that observation from exhausting the 256-entry
+latch representation without pretending the names were not read.
+
 The host resolves persisted file/message classes; callers never supply trusted
 `contentClass` or `externalKeys`. Missing or unknown provenance fails toward external.
 Standing authority approved before newly ingested outside content cannot be exercised

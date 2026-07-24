@@ -595,6 +595,33 @@ return fs.readFileSync("/tmp/a");`,
     });
   });
 
+  it("preserves structured guest failure data for agent-facing diagnostics", async () => {
+    const result = await executeSandbox(
+      `const error = new Error("publication failed");
+       error.errorData = {
+         code: "scaffold_publication_failed",
+         stage: "push",
+         committedEventId: "event:committed",
+         published: false
+       };
+       throw error;`,
+      { syntax: "typescript" }
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: "publication failed",
+      failureKind: "user-code",
+      failureCode: "scaffold_publication_failed",
+      errorData: {
+        code: "scaffold_publication_failed",
+        stage: "push",
+        committedEventId: "event:committed",
+        published: false,
+      },
+    });
+  });
+
   it("exposes a lazy import loader to runtime helpers during eval", async () => {
     const result = await executeSandbox(
       "const loaded = await globalThis.__vibestudioLoadImport__('lazy-package', 'latest'); return loaded.answer;",

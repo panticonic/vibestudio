@@ -152,6 +152,7 @@ export function createGadClient(rpc: RpcCaller): GadClient {
     inspectPublicationIntegrity: (input) => call("inspectPublicationIntegrity", input ?? {}),
     inspectTurnState: (input) => call("inspectTurnState", input ?? {}),
     inspectInvocationState: (input) => call("inspectInvocationState", input ?? {}),
+    diagnoseInvocation: (input) => call("diagnoseInvocation", input),
     inspectChannelRoster: (input) => call("inspectChannelRoster", input),
     inspectAgentHealth: (input) => call("inspectAgentHealth", input),
     validateGadHashes: (input) => call("validateGadHashes", input),

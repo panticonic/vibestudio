@@ -13,6 +13,7 @@ import type {
   EffectOutcome,
 } from "@workspace/agent-loop";
 import type { AgenticEvent, ParticipantRef } from "@workspace/agentic-protocol";
+import type { AgentToolFailure } from "@workspace/agentic-protocol";
 
 export type EphemeralEmit =
   | {
@@ -121,6 +122,7 @@ export interface LocalToolPort {
         summary?: string;
         isError: boolean;
         terminalReasonCode?: string;
+        failure?: AgentToolFailure;
       }
     // A long-running local tool (the agent's `eval`) defers: it kicks off the work (eval.startRun)
     // and the result arrives out-of-band via `deliverEffectOutcome` (onEvalComplete). The driver

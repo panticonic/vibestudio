@@ -43,3 +43,24 @@ until the response is known.
 
 Known refusals stay structured across RPC, CLI, UI, and agent tools. Never use
 message text as a control-flow protocol.
+
+## Recover a committed scaffold whose publication failed
+
+`createProject` and `forkProject` create one repository, commit the complete
+local chain, and then call the separate protected `vcs.push` boundary. If push
+fails after commit, they throw `ScaffoldPublicationError` with
+`errorData.code === "scaffold_publication_failed"`. Its data includes the
+created path and files, exact committed event, `published: false`, original
+publication request, typed VCS cause, and retry policy.
+
+Do not call the scaffold helper again: the repository and committed event
+already exist. Call
+`recoverProjectPublication(errorOrErrorData)` from
+`@workspace-skills/workspace-dev`. It performs the required `vcs.status`
+observation, refuses unless committed and working heads are the exact clean
+`committedEventId`, validates the returned publication receipt, and never
+recreates source or commits. It uses a new command ID after a known refusal and
+the newly observed main, while reusing the original request only for an
+identical `ExternalEffectFailed` attempt whose outcome is genuinely uncertain.
+A mismatched publication receipt is `IntegrityFailure`: stop automatic
+recovery and preserve the receipt evidence.

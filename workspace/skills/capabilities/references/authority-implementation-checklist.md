@@ -134,3 +134,10 @@ Model-backed failures are evidence about infrastructure, APIs, or guidance. Do n
 make prompts more prescriptive to route around a platform defect, and do not increase
 optional eval or model-stream timeouts. Terminal infrastructure failure must settle
 the invocation and owning turn.
+
+At tool/service boundaries, preserve structured error data and normalize the
+terminal record to `agent-tool-failure.v1`. The original operation failure is
+always the primary cause; cleanup, rollback, and transport failures are
+secondary evidence. Include exact causal IDs and a typed retry policy when
+known. Never make prose parsing, a cleanup throw, or a second error channel the
+control-flow contract.

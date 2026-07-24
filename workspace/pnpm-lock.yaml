@@ -1207,6 +1207,9 @@ importers:
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
+      '@workspace/agentic-protocol':
+        specifier: workspace:*
+        version: link:../agentic-protocol
       '@workspace/pi-core':
         specifier: workspace:*
         version: link:../pi-core
@@ -2078,6 +2081,9 @@ importers:
       '@vibestudio/git':
         specifier: workspace:*
         version: link:../../../packages/git
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime

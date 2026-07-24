@@ -21,6 +21,7 @@ import type { ChannelEvent, ParticipantDescriptor } from "@workspace/harness";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
+  agentToolFailureFromUnknown,
   invocationCompletedPayload,
   invocationFailedPayload,
   type AgenticEvent,
@@ -893,7 +894,17 @@ export class LinkedAgentWorker extends AgentWorkerBase {
                 })
               : invocationFailedPayload(
                   "tool_error",
-                  bounded(event.outputSummary ?? "tool failed", 2_000)
+                  bounded(event.outputSummary ?? "tool failed", 2_000),
+                  {
+                    failure: agentToolFailureFromUnknown(
+                      { message: event.outputSummary ?? "tool failed" },
+                      {
+                        operation: event.toolName ?? "external-tool",
+                        stage: "external-tool",
+                        causal: { invocationId },
+                      }
+                    ),
+                  }
                 ),
             causality: { invocationId, ...this.openTurnCausality() },
             publish: true,

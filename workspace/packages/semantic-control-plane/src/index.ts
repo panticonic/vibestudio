@@ -31,6 +31,8 @@ import type {
   ChannelRosterInspection,
   EnvelopeLineage,
   InvocationStateInspection,
+  InvocationDiagnosticPacket,
+  DiagnoseInvocationInput,
   InspectAgentHealthInput,
   InspectChannelRosterInput,
   InspectInvocationStateInput,
@@ -51,6 +53,8 @@ export type {
   ChannelRosterInspection,
   EnvelopeLineage,
   InvocationStateInspection,
+  InvocationDiagnosticPacket,
+  DiagnoseInvocationInput,
   InspectAgentHealthInput,
   InspectChannelRosterInput,
   InspectInvocationStateInput,
@@ -4230,7 +4234,176 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
+  diagnoseInvocation(input: DiagnoseInvocationInput): InvocationDiagnosticPacket {
+    this.ensureReady();
+    const eventLimit = Math.min(Math.max(input.eventLimit ?? 20, 1), 50);
+    const commandLimit = Math.min(Math.max(input.commandLimit ?? 20, 1), 50);
+    const effectLimit = Math.min(Math.max(input.effectLimit ?? 50, 1), 100);
+    const invocation = this.sql
+      .exec(
+        `SELECT log_id,head,invocation_id,turn_id,transport_call_id,kind,status,
+                terminal_outcome,terminal_reason_code,request_ref_json,result_ref_json,
+                started_event_id,completed_event_id,updated_at
+           FROM trajectory_invocations
+          WHERE log_id = ? AND head = ? AND invocation_id = ?
+          LIMIT 1`,
+        input.trajectoryId,
+        input.branchId,
+        input.invocationId
+      )
+      .toArray()[0] as JsonRecord | undefined;
+    const turn =
+      invocation?.["turn_id"] == null
+        ? undefined
+        : (this.sql
+            .exec(
+              `SELECT * FROM trajectory_turns
+                WHERE log_id = ? AND head = ? AND turn_id = ?
+                LIMIT 1`,
+              input.trajectoryId,
+              input.branchId,
+              String(invocation["turn_id"])
+            )
+            .toArray()[0] as JsonRecord | undefined);
+    const eventRows = this.sql
+      .exec(
+        `SELECT * FROM log_events
+          WHERE log_id = ? AND head = ?
+            AND json_extract(causality_json, '$.invocationId') = ?
+          ORDER BY seq ASC
+          LIMIT ?`,
+        input.trajectoryId,
+        input.branchId,
+        input.invocationId,
+        eventLimit + 1
+      )
+      .toArray() as JsonRecord[];
+    const eventsTruncated = eventRows.length > eventLimit;
+    const events = eventRows
+      .slice(0, eventLimit)
+      .map((row) =>
+        summarizeJsonForInspection(this.trajectoryEventView(this.mapLogEnvelope(row)))
+      ) as JsonRecord[];
+    const commandRows = this.sql
+      .exec(
+        `SELECT command_id,scope_kind,scope_id,method,request_digest,status,result_json,
+                created_at,completed_at
+           FROM vcs_command_journal
+          WHERE cause_log_id = ? AND cause_head = ? AND cause_invocation_id = ?
+          ORDER BY created_at ASC, command_id ASC
+          LIMIT ?`,
+        input.trajectoryId,
+        input.branchId,
+        input.invocationId,
+        commandLimit + 1
+      )
+      .toArray() as JsonRecord[];
+    const commandsTruncated = commandRows.length > commandLimit;
+    let effectsTruncated = false;
+    const commands = commandRows.slice(0, commandLimit).map((command) => {
+      const effects = this.sql
+        .exec(
+          `SELECT effect_id,scope_kind,scope_id,command_id,kind,payload_digest,status,
+                  receipt_digest,created_at,applied_at,payload_json,receipt_json
+             FROM gad_effect_intents
+            WHERE command_id = ? AND scope_kind = ? AND scope_id = ?
+            ORDER BY created_at ASC,effect_id ASC
+            LIMIT ?`,
+          String(command["command_id"]),
+          String(command["scope_kind"]),
+          String(command["scope_id"]),
+          effectLimit + 1
+        )
+        .toArray()
+        .slice(0, effectLimit + 1)
+        .map((effect) => {
+          const {
+            payload_json: payloadJson,
+            receipt_json: receiptJson,
+            ...identity
+          } = effect as JsonRecord;
+          return {
+            ...identity,
+            payload: payloadJson == null ? null : parseJson(String(payloadJson)),
+            receipt: receiptJson == null ? null : parseJson(String(receiptJson)),
+          };
+        }) as JsonRecord[];
+      if (effects.length > effectLimit) effectsTruncated = true;
+      effects.splice(effectLimit);
+      const { result_json: resultJson, ...identity } = command;
+      return {
+        command: {
+          ...identity,
+          result: resultJson == null ? null : parseJson(String(resultJson)),
+        } as JsonRecord,
+        effects,
+      };
+    });
+    const cleanupFailureCount = events.reduce((count, event) => {
+      const payload = event["payload"];
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) return count;
+      const failure = (payload as Record<string, unknown>)["failure"];
+      if (!failure || typeof failure !== "object" || Array.isArray(failure)) return count;
+      const causes = (failure as Record<string, unknown>)["causes"];
+      return (
+        count +
+        (Array.isArray(causes)
+          ? causes.filter(
+              (cause) =>
+                cause &&
+                typeof cause === "object" &&
+                !Array.isArray(cause) &&
+                ["cleanup", "rollback"].includes(String((cause as Record<string, unknown>)["role"]))
+            ).length
+          : 0)
+      );
+    }, 0);
+    return {
+      generatedAt: nowIso(),
+      coordinate: {
+        trajectoryId: input.trajectoryId,
+        branchId: input.branchId,
+        invocationId: input.invocationId,
+      },
+      invocation: invocation ?? null,
+      turn: turn ?? null,
+      events,
+      commands,
+      summary: {
+        terminal: Boolean(
+          invocation &&
+          ["completed", "failed", "cancelled", "abandoned"].includes(String(invocation["status"]))
+        ),
+        eventCount: events.length,
+        commandCount: commands.length,
+        pendingEffectCount: commands.reduce(
+          (count, command) =>
+            count +
+            command.effects.filter((effect) => String(effect["status"]) === "pending").length,
+          0
+        ),
+        cleanupFailureCount,
+        truncated: {
+          events: eventsTruncated,
+          commands: commandsTruncated,
+          effects: effectsTruncated,
+        },
+      },
+    };
+  }
+
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   inspectChannelRoster(input: InspectChannelRosterInput): ChannelRosterInspection {
     this.ensureReady();
     const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);

@@ -386,6 +386,26 @@ advance the receiving session's latch before bytes become visible. Never accept 
 caller-supplied `contentClass` or `externalKeys`, and never copy content through a new
 file or message to make it appear internal.
 
+The host represents two or more exact outside sources as one
+`lineage-set:<sha256>` coordinate. Its digest covers the canonical sorted leaf
+keys, and the content-trust store retains and verifies that exact member list.
+Successive ingestion grows one aggregate set monotonically, so listing a large
+multi-source tree does not consume one latch slot per source. Treat a lineage
+set as an opaque content-addressed fact: workspace code must not invent one,
+nest sets, parse its digest as members, or replace it with a lossy domain/count
+summary. Host trust and diagnostics expand it through the canonical store;
+unknown or digest-mismatched sets fail closed. An exact vouch may name the set,
+and applies only to that exact membership.
+
+A bound agent can inspect only lineage already present in its own session with
+`contextIntegrity.explain({ key?, cursor?, limit? })`. The host verifies the
+set digest before returning a bounded page of exact leaf coordinates and trust
+decisions. The cursor is opaque and bound to the set; pagination is a
+presentation bound, not truncation of the stored lineage. Directory listing is
+an observation and may ingest provenance for returned names, but it must not
+fail merely because a large exact tree has more than 256 leaf sources—the host
+stores their canonical monotone union as one set coordinate.
+
 If an otherwise valid standing grant is refused after outside content entered the
 session, use the authority preflight/approval explanation. The outside lineage is a
 fact to preserve, not an error to erase.

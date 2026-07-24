@@ -116,6 +116,26 @@ describe("formatEvalResult (shared by the eval tool's execute + the agent's defe
     expect(text).toContain("[scope] (empty)");
   });
 
+  it("renders structured failure data and preserves it on tool details", () => {
+    const result: EvalRunResult = {
+      success: false,
+      console: "",
+      error: "publication failed",
+      failureCode: "scaffold_publication_failed",
+      errorData: {
+        code: "scaffold_publication_failed",
+        committedEventId: "event:committed",
+        published: false,
+      },
+    };
+    const out = formatEvalResult(result);
+    const text = textOf(out);
+
+    expect(text).toContain("[eval] Failure data:");
+    expect(text).toContain('"committedEventId": "event:committed"');
+    expect(out.details).toBe(result);
+  });
+
   it("uses 'unknown error' when a failure has no error string", () => {
     const text = textOf(formatEvalResult({ success: false, console: "" }));
     expect(text).toContain("[eval] Error: unknown error");

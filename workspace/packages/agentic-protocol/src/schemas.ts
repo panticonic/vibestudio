@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { agentToolFailureSchema } from "./tool-failure.js";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
@@ -205,11 +206,19 @@ const subagentTerminalSchema = z
   .object({ integration: z.enum(["integrated", "conflicted", "discarded"]).optional() })
   .strict();
 
-const invocationFailurePayloadSchema = failurePayloadSchema
+const invocationTerminalFailurePayloadSchema = failurePayloadSchema
   .extend({
     terminalOutcome: invocationOutcomeSchema.exclude(["success"]),
     terminalReasonCode: z.string().optional(),
+    failure: agentToolFailureSchema.optional(),
     subagent: subagentTerminalSchema.optional(),
+  })
+  .strict();
+
+const invocationFailurePayloadSchema = invocationTerminalFailurePayloadSchema
+  .extend({
+    terminalOutcome: z.enum(["tool_error", "infrastructure_error"]),
+    failure: agentToolFailureSchema,
   })
   .strict();
 
@@ -606,8 +615,14 @@ export const eventKindSchemas = {
   "invocation.output": eventSchema("invocation.output", invocationOutputPayloadSchema),
   "invocation.completed": eventSchema("invocation.completed", invocationCompletedPayloadSchema),
   "invocation.failed": eventSchema("invocation.failed", invocationFailurePayloadSchema),
-  "invocation.cancelled": eventSchema("invocation.cancelled", invocationFailurePayloadSchema),
-  "invocation.abandoned": eventSchema("invocation.abandoned", invocationFailurePayloadSchema),
+  "invocation.cancelled": eventSchema(
+    "invocation.cancelled",
+    invocationTerminalFailurePayloadSchema
+  ),
+  "invocation.abandoned": eventSchema(
+    "invocation.abandoned",
+    invocationTerminalFailurePayloadSchema
+  ),
   "approval.requested": eventSchema("approval.requested", approvalRequestedPayloadSchema),
   "approval.resolved": eventSchema("approval.resolved", approvalResolvedPayloadSchema),
   "ui.inline_rendered": eventSchema("ui.inline_rendered", uiInlineRenderedPayloadSchema),

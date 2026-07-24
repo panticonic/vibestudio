@@ -14,6 +14,7 @@ import type {
   SubagentProgressUpdate,
   UsagePayload,
 } from "./events.js";
+import type { AgentToolFailure } from "./tool-failure.js";
 import type { ApprovalId, InvocationId, MessageId, TurnId } from "./ids.js";
 import type { InvocationOutcome, MessageOutcome, MessageTier } from "./constants.js";
 
@@ -102,6 +103,7 @@ export interface ProjectedInvocation {
   terminalReason?: string;
   terminalOutcome?: InvocationOutcome;
   terminalReasonCode?: string;
+  failure?: AgentToolFailure;
   /** Present when this invocation is a subagent run. The spawn fields are folded
    *  from `invocation.started`; `integration` from the terminal envelope. */
   subagent?: {
@@ -638,6 +640,7 @@ export function applyInvocationEvent(
         "terminalOutcome" in payload ? payload.terminalOutcome : existing.terminalOutcome,
       terminalReasonCode:
         "terminalReasonCode" in payload ? payload.terminalReasonCode : existing.terminalReasonCode,
+      failure: "failure" in payload ? payload.failure : existing.failure,
       ...("subagent" in payload && payload.subagent
         ? { subagent: { ...existing.subagent, ...payload.subagent } }
         : {}),

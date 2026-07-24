@@ -362,10 +362,19 @@ no `imports` parameter needed:
 ```
 eval({ code: `
   import { createProject } from "@workspace-skills/workspace-dev";
-  await createProject({ projectType: "panel", name: "my-app", title: "My App" });
+  return await createProject({ projectType: "panel", name: "my-app", title: "My App" });
 `
 })
 ```
+
+Guest/service exceptions with structured `errorData` retain that data in the
+eval result details and display a bounded failure-data preview. For
+`scaffold_publication_failed`, pass the error or its data to
+`recoverProjectPublication` from `@workspace-skills/workspace-dev`; do not infer
+recovery from the error string or rerun creation. Failed tool invocations also
+persist one `agent-tool-failure.v1` object in the terminal trajectory event.
+Branch on its code, kind, stage, retry policy, and ordered causes rather than
+the rendered eval text.
 
 The first import triggers an on-demand build from the eval caller's current
 context working state (a few seconds). Subsequent imports of that state use the

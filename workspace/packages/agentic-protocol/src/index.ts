@@ -36,6 +36,22 @@ export type {
 export { messageDisplayText, summarizeMessageBlocks } from "./message-content.js";
 export type { MessageContentSummary } from "./message-content.js";
 
+export {
+  AGENT_TOOL_FAILURE_KINDS,
+  AGENT_TOOL_FAILURE_PROTOCOL,
+  AGENT_TOOL_RETRY_POLICIES,
+  AgentToolFailureError,
+  agentToolFailureFromUnknown,
+  agentToolFailureSchema,
+  isAgentToolFailure,
+  renderAgentToolFailure,
+} from "./tool-failure.js";
+export type {
+  AgentToolFailure,
+  AgentToolFailureKind,
+  AgentToolRetryPolicy,
+} from "./tool-failure.js";
+
 export type {
   ApprovalId,
   BlockId,

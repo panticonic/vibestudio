@@ -214,6 +214,7 @@ describe("agentic.conversation.v1", () => {
       invocationId: "inv-1",
       transportCallId: "transport-1",
       turnId: "turn-1",
+      method: "eval",
     };
     expect(
       builders.terminal({ descriptor, result: 2, isError: false, createdAt })

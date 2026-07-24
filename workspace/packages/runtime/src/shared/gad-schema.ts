@@ -160,6 +160,47 @@ export const InvocationStateInspectionSchema = z
   .strict();
 export type InvocationStateInspection = z.infer<typeof InvocationStateInspectionSchema>;
 
+export const InvocationDiagnosticPacketSchema = z
+  .object({
+    generatedAt: z.string(),
+    coordinate: z
+      .object({
+        trajectoryId: z.string(),
+        branchId: z.string(),
+        invocationId: z.string(),
+      })
+      .strict(),
+    invocation: GadJsonRecordSchema.nullable(),
+    turn: GadJsonRecordSchema.nullable(),
+    events: z.array(GadJsonRecordSchema),
+    commands: z.array(
+      z
+        .object({
+          command: GadJsonRecordSchema,
+          effects: z.array(GadJsonRecordSchema),
+        })
+        .strict()
+    ),
+    summary: z
+      .object({
+        terminal: z.boolean(),
+        eventCount: z.number().int().nonnegative(),
+        commandCount: z.number().int().nonnegative(),
+        pendingEffectCount: z.number().int().nonnegative(),
+        cleanupFailureCount: z.number().int().nonnegative(),
+        truncated: z
+          .object({
+            events: z.boolean(),
+            commands: z.boolean(),
+            effects: z.boolean(),
+          })
+          .strict(),
+      })
+      .strict(),
+  })
+  .strict();
+export type InvocationDiagnosticPacket = z.infer<typeof InvocationDiagnosticPacketSchema>;
+
 export const ChannelRosterInspectionSchema = z
   .object({
     summary: z
@@ -318,6 +359,18 @@ export const InspectInvocationStateInputSchema = z
   })
   .strict();
 export type InspectInvocationStateInput = z.infer<typeof InspectInvocationStateInputSchema>;
+
+export const DiagnoseInvocationInputSchema = z
+  .object({
+    trajectoryId: z.string().min(1),
+    branchId: z.string().min(1),
+    invocationId: z.string().min(1),
+    eventLimit: z.number().int().min(1).max(50).optional(),
+    commandLimit: z.number().int().min(1).max(50).optional(),
+    effectLimit: z.number().int().min(1).max(100).optional(),
+  })
+  .strict();
+export type DiagnoseInvocationInput = z.infer<typeof DiagnoseInvocationInputSchema>;
 
 export const InspectChannelRosterInputSchema = z
   .object({ channelId: z.string(), limit: optionalLimit })
@@ -550,6 +603,13 @@ export const gadMethods = defineServiceMethods({
     description: "Inspect projected and journaled invocation lifecycle state.",
     args: z.tuple([InspectInvocationStateInputSchema.optional()]),
     returns: InvocationStateInspectionSchema,
+    access: readAccess,
+  },
+  diagnoseInvocation: {
+    description:
+      "Return one bounded causal packet joining an exact invocation to its turn, terminal events, semantic commands, effect intents, and receipts.",
+    args: z.tuple([DiagnoseInvocationInputSchema]),
+    returns: InvocationDiagnosticPacketSchema,
     access: readAccess,
   },
   inspectChannelRoster: {

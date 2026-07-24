@@ -35,6 +35,7 @@ export const GAD_RUNTIME_METHOD_NAMES = [
   "inspectPublicationIntegrity",
   "inspectTurnState",
   "inspectInvocationState",
+  "diagnoseInvocation",
   "inspectChannelRoster",
   "inspectAgentHealth",
   "validateGadHashes",

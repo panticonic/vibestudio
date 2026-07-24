@@ -80,10 +80,26 @@ Create a project via eval with the `imports` parameter:
 ```
 eval({ code: `
   import { createProject } from "@workspace-skills/workspace-dev";
-  await createProject({ projectType: "panel", name: "my-app", title: "My App" });
+  return await createProject({ projectType: "panel", name: "my-app", title: "My App" });
 `
 })
 ```
+
+Success returns `{ created, files, preflight, publication }`.
+`preflight.ok === true` proves that the complete planned repository passed the
+same canonical project-type, package identity, executable entry, strict
+authority-manifest, skill-instruction, and imported-dependency checks used for
+forks before the first VCS edit. `publication` then names the exact
+`committedEventId`, `publishedEventId`, `mainEventId`, `effectId`, and
+`appliedAt`. If repository creation and commit succeed but
+protected publication fails, the helper throws `ScaffoldPublicationError`.
+Eval preserves its structured `errorData`, including
+`code: "scaffold_publication_failed"`, `published: false`, the exact committed
+event and original push request, the nested typed VCS error, and its command-ID
+retry policy. Do not call `createProject` again. Pass the error or its
+`errorData` to `recoverProjectPublication`; it verifies the context is clean at
+that exact commit and either replays the identical uncertain command or
+reobserves main and uses a fresh command after a known refusal.
 
 Edit the generated files with the `edit`/`write` tools — each edit is recorded as
 authored intent on the context's exact working head and projected to disk.

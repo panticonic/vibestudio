@@ -457,9 +457,64 @@
   },
   "contextIntegrity": {
     "service": {
-      "principals": ["code"]
+      "principals": [
+        "code"
+      ]
     },
     "methods": {
+      "explain": {
+        "authority": {
+          "requirement": {
+            "kind": "all",
+            "requirements": [
+              {
+                "kind": "any",
+                "requirements": [
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "code",
+                        "capability": "service:contextIntegrity.explain"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "session",
+                        "capability": "service:contextIntegrity.explain"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "kind": "relationship",
+                "name": "agent-binding"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:contextIntegrity.explain"
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
       "fact": {
         "authority": {
           "requirement": {
