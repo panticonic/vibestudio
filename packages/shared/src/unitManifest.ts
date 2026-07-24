@@ -42,18 +42,6 @@ export function isTerminalWorker(vibestudio: Record<string, unknown> | undefined
   return workerTerminalConfig(vibestudio) !== null;
 }
 
-/**
- * A persistent (resident, non-hibernating) worker. Vibestudio runs workerd
- * locally, so keeping a DO resident costs only host memory — used by terminal
- * session workers that hold a live Ink render tree that cannot be cheaply
- * rebuilt on every hibernation.
- */
-export function isPersistentWorker(
-  vibestudio: Record<string, unknown> | undefined | null
-): boolean {
-  return vibestudio?.["persistent"] === true;
-}
-
 export const APP_CAPABILITIES_BY_TARGET = {
   electron: [
     "native-menus",
