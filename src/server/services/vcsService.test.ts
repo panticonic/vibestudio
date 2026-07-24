@@ -55,13 +55,16 @@ function service(options?: {
         references: readonly { kind: string; value: unknown }[]
       ) => boolean | Promise<boolean>);
   semanticCall?: (method: string, request: { input: unknown }) => unknown | Promise<unknown>;
+  testPolicyForContext?: (
+    contextId: string
+  ) => import("@vibestudio/rpc").AgentExecutionTestPolicy | null;
 }) {
   const semanticCall = vi.fn(async (method: string, request: { input: unknown }) => {
     if (options && "failure" in options) throw options.failure;
     if (options?.semanticCall) return options.semanticCall(method, request);
     return options?.result ?? { contextId: "context:own" };
   });
-  const semanticPublishCall = vi.fn(async (input: unknown) => {
+  const semanticPublishCall = vi.fn(async (input: unknown, ..._authorityEnvelope: unknown[]) => {
     if (options && "failure" in options) throw options.failure;
     if (options?.semanticCall) return options.semanticCall("vcsPush", { input });
     return options?.result ?? { contextId: "context:own" };
@@ -84,6 +87,9 @@ function service(options?: {
           : null,
     },
     listOwnedContexts: async () => ({ contexts: options?.owned ?? [] }),
+    ...(options?.testPolicyForContext
+      ? { testPolicyForContext: options.testPolicyForContext }
+      : {}),
   });
   return { definition, semanticCall, semanticPublishCall };
 }
@@ -255,6 +261,96 @@ describe("canonical vcsService", () => {
       },
     ]);
     expect(semanticPublishCall).toHaveBeenCalledOnce();
+  });
+
+  it("carries an owned context's narrower case policy into protected publication", async () => {
+    const orchestrator = {
+      policyId: "test:run",
+      kind: "orchestrator" as const,
+    };
+    const casePolicy = {
+      policyId: "test:run:case:panel",
+      kind: "case" as const,
+      orchestratorPolicyId: orchestrator.policyId,
+      case: {
+        testId: "panel",
+        authority: [],
+        userland: [],
+        unexpectedPrompts: "fail" as const,
+      },
+    };
+    const ctx = workerContext();
+    ctx.caller = {
+      ...ctx.caller,
+      testPolicy: orchestrator,
+      executionSession: { testPolicy: orchestrator } as never,
+    };
+    const { definition, semanticPublishCall } = service({
+      context: "context:own",
+      owned: [
+        {
+          contextId: "context:cleanup",
+          kind: "lifecycle",
+          ownerEntityId: ctx.caller.runtime.id,
+        },
+      ],
+      testPolicyForContext: (contextId) => (contextId === "context:cleanup" ? casePolicy : null),
+    });
+
+    await definition.handler(ctx, "push", [
+      {
+        contextId: "context:cleanup",
+        commandId: "command:cleanup-push",
+        expectedCommittedEventId: "event:next",
+        expectedMainEventId: "event:main",
+      },
+    ]);
+
+    expect(semanticPublishCall.mock.calls[0]![2]).toMatchObject({
+      testPolicy: casePolicy,
+      executionSession: { testPolicy: casePolicy },
+    });
+  });
+
+  it("rejects an unrelated resident test policy", async () => {
+    const ctx = workerContext();
+    ctx.caller = {
+      ...ctx.caller,
+      testPolicy: { policyId: "test:other", kind: "orchestrator" },
+    };
+    const { definition, semanticPublishCall } = service({
+      context: "context:own",
+      owned: [
+        {
+          contextId: "context:cleanup",
+          kind: "lifecycle",
+          ownerEntityId: ctx.caller.runtime.id,
+        },
+      ],
+      testPolicyForContext: () => ({
+        policyId: "test:run:case:panel",
+        kind: "case",
+        orchestratorPolicyId: "test:run",
+        case: {
+          testId: "panel",
+          authority: [],
+          userland: [],
+          unexpectedPrompts: "fail",
+        },
+      }),
+    });
+
+    await expect(
+      definition.handler(ctx, "push", [
+        {
+          contextId: "context:cleanup",
+          commandId: "command:cleanup-push",
+          expectedCommittedEventId: "event:next",
+          expectedMainEventId: "event:main",
+        },
+      ])
+    ).rejects.toThrow(/unrelated to caller policy/);
+    expect(semanticPublishCall).not.toHaveBeenCalled();
   });
 
   it("allows an exactly attributed agent to request publication of its own context", async () => {

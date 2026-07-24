@@ -9,7 +9,11 @@
  * state hash as ancestry.
  */
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
-import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import {
+  ServiceError,
+  type ServiceContext,
+  type VerifiedCaller,
+} from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler, mapServiceHandlers } from "@vibestudio/shared/serviceHandlers";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
@@ -36,6 +40,9 @@ export interface VcsServiceDeps {
       ownerEntityId?: string | null;
     }>;
   }>;
+  testPolicyForContext?: (
+    contextId: string
+  ) => import("@vibestudio/rpc").AgentExecutionTestPolicy | null;
 }
 
 type CausalRequest<T> = {
@@ -101,6 +108,51 @@ function callerContextAuthorities(ctx: ServiceContext, deps: VcsServiceDeps): st
 
 function privileged(ctx: ServiceContext, deps: VcsServiceDeps): boolean {
   return isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability });
+}
+
+/**
+ * A system-test case policy is resident authority on its exact semantic
+ * context. Once ordinary context authorization has proved that the caller may
+ * mutate that context, host-owned effects from the mutation must retain the
+ * narrower resident case policy instead of falling back to the orchestrator's
+ * broad identity and waiting for interactive consent.
+ */
+function callerForContext(
+  ctx: ServiceContext,
+  deps: VcsServiceDeps,
+  contextId: string
+): VerifiedCaller {
+  const resident = deps.testPolicyForContext?.(contextId) ?? null;
+  if (!resident) return ctx.caller;
+  const callerPolicy = ctx.caller.testPolicy ?? ctx.caller.executionSession?.testPolicy ?? null;
+  if (callerPolicy?.policyId === resident.policyId) return ctx.caller;
+  if (
+    callerPolicy &&
+    !(
+      callerPolicy.kind === "orchestrator" &&
+      resident.kind === "case" &&
+      resident.orchestratorPolicyId === callerPolicy.policyId
+    )
+  ) {
+    throw new ServiceError(
+      "vcs",
+      "authorize",
+      `Context test policy ${resident.policyId} is unrelated to caller policy ${callerPolicy.policyId}`,
+      "EACCES"
+    );
+  }
+  return {
+    ...ctx.caller,
+    testPolicy: resident,
+    ...(ctx.caller.executionSession
+      ? {
+          executionSession: {
+            ...ctx.caller.executionSession,
+            testPolicy: resident,
+          },
+        }
+      : {}),
+  };
 }
 
 function isCallerTrajectoryRoot(
@@ -214,21 +266,26 @@ function ingressFor(ctx: ServiceContext): CausalRequest<never>["ingress"] {
 }
 
 export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
-  const invoke = async <T>(ctx: ServiceContext, method: string, input: unknown): Promise<T> => {
+  const invoke = async <T>(
+    ctx: ServiceContext,
+    method: string,
+    input: unknown,
+    effectCaller: VerifiedCaller = ctx.caller
+  ): Promise<T> => {
     const ingress = ingressFor(ctx);
     if (method === "vcsPush") {
       return ctx.signal
         ? deps.workspaceVcs.semanticPublishCall<T>(
             input,
             ingress.causalParent,
-            ctx.caller,
+            effectCaller,
             ingress.contextIntegrity,
             ctx.signal
           )
         : deps.workspaceVcs.semanticPublishCall<T>(
             input,
             ingress.causalParent,
-            ctx.caller,
+            effectCaller,
             ingress.contextIntegrity
           );
     }
@@ -291,7 +348,11 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     }
 
     const dispatchMethod = `vcs${method.charAt(0).toUpperCase()}${method.slice(1)}`;
-    return invoke(ctx, dispatchMethod, parsed.input);
+    const effectCaller =
+      method === "push" && primaryContextId !== null
+        ? callerForContext(ctx, deps, primaryContextId)
+        : ctx.caller;
+    return invoke(ctx, dispatchMethod, parsed.input, effectCaller);
   };
 
   const handlers = mapServiceHandlers(vcsMethods, (method, ctx, args) =>

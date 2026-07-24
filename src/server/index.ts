@@ -1791,6 +1791,8 @@ async function main() {
             });
             return { contexts };
           },
+          testPolicyForContext: (contextId) =>
+            agentExecutionSessions.testPolicyForContext(contextId),
         });
       },
     });
