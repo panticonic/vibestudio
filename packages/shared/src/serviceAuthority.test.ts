@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { methodTier } from "./authority/tierTable.js";
 import { resolveMethodTierPolicy, type MethodTierPolicy } from "./serviceAuthority.js";
 
 const declared: MethodTierPolicy = {
@@ -25,5 +26,14 @@ describe("resolveMethodTierPolicy", () => {
     expect(() => resolveMethodTierPolicy("missing.call", undefined, null)).toThrow(
       /no reviewed tier decision/
     );
+  });
+});
+
+describe("extension caller sessions", () => {
+  it("admits temporary execution sessions to public installed-extension surfaces", () => {
+    expect(methodTier("extensions.list")?.session).toBe("family");
+    expect(methodTier("extensions.invoke")?.session).toBe("family");
+    expect(methodTier("extensions.invokeStream")?.session).toBe("family");
+    expect(methodTier("extensions.invokeProvider")?.session).toBe("codeOnly");
   });
 });
