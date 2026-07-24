@@ -187,8 +187,13 @@ export function authorizeVerifiedCaller(
         : null,
     ].filter((mismatch): mismatch is string => mismatch !== null);
     if (mismatches.length > 0) {
+      const harnessDetail = mismatches.includes("harness")
+        ? `; expected harness ${executionSession.harness.principal}, resolved ${
+            code ?? "no code principal"
+          }`
+        : "";
       throw new Error(
-        `Host execution-session fact does not match the live invocation (${mismatches.join(", ")})`
+        `Host execution-session fact does not match the live invocation (${mismatches.join(", ")})${harnessDetail}`
       );
     }
   }
