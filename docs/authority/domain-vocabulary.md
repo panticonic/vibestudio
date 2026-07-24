@@ -303,7 +303,7 @@ domain padlocked.
 | `user-approval.revoke` | manage | revoking consent is a human act |
 | `permissions.list` / `permissions.read` / `permissions.revoke` | manage | the policy surface belongs to the user |
 | `governance.read` / `governance.list` | see | mission governance is human-only |
-| `mission.requestReview/edit/pause/resume/retire` (and `missions.*`) | manage | charter changes require human review; approval itself is a human queue decision, not an RPC capability |
+| `mission.approve/edit/pause/resume/retire` (and `missions.*`) | manage | charter changes require human review |
 | `content.trust.policy.manage` / `content.trust.vouch` | manage | trust policy must not be self-modifiable |
 | `security.audit.read` / `audit.query` | see | audit is the user's record of the agent, not vice versa |
 | `credentials.audit` | see | as above |
