@@ -11,6 +11,7 @@ import {
   Button,
   Flex,
   Popover,
+  Progress,
   ScrollArea,
   Spinner,
   Text,
@@ -281,6 +282,9 @@ function ModelRow({
             {providerLabel}
             {label ? ` · ${label}` : ""}
           </Text>
+          {availability.state === "downloading" ? (
+            <Progress value={Math.round(availability.progress * 100)} size="1" mt="1" />
+          ) : null}
         </Box>
         <ModelChips model={model} />
       </Flex>
@@ -317,7 +321,7 @@ function ProviderSetupRow({
         </Flex>
         <Flex align="center" gap="2">
           <Button size="1" variant="soft" onClick={() => onSelect(best.ref)}>
-            Connect
+            Choose
           </Button>
           <Button size="1" variant="ghost" color="gray" onClick={() => setExpanded((v) => !v)}>
             {expanded ? "Hide" : "Show"}

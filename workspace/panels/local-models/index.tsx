@@ -115,8 +115,13 @@ interface LocalModelEntry {
   contextWindow: number;
   toolsCapable: boolean;
   fit: { fit: string; estTokensPerSec: number | null; notes: string[] };
-  state: "ready" | "startable" | "downloading" | "error";
-  downloadProgress: number | null;
+  state: "ready" | "startable" | "not-installed" | "starting" | "downloading" | "error";
+  download: {
+    progress: number;
+    phase: "active" | "queued" | "paused";
+    receivedBytes: number;
+    totalBytes: number | null;
+  } | null;
   errorMessage: string | null;
 }
 
@@ -310,6 +315,9 @@ export default function LocalModelsPanel() {
       (c) => c.displayName.toLowerCase().includes(q) || c.hfRepo.toLowerCase().includes(q)
     );
   }, [catalog, installedSlugs, query]);
+  const fallbackJob = status?.downloads.find((job) => job.slug === "lfm2.5-1.2b") ?? null;
+  const fallbackDownload = fallbackJob && !fallbackJob.error ? fallbackJob : null;
+  const fallbackFailure = fallbackJob?.error ?? null;
 
   return (
     <Theme appearance={theme} {...appTheme}>
@@ -391,41 +399,90 @@ export default function LocalModelsPanel() {
           )}
 
           {/* ── fallback card ───────────────────────────────────────────── */}
-          {/* Lazy floor (design §5): the fallback is loaded on demand, never
-              kept warm. The card reflects three states — warm (serving now),
-              ready (downloaded, loads instantly on first use), and cold
-              (installs on first use). */}
+          {/* The fallback is loaded on demand, but installation is always an
+              explicit user action. */}
           <Card size="2">
-            <Flex justify="between" align="center" gap="3" wrap="wrap">
-              <Flex align="center" gap="3">
-                {status?.fallback.warm ? (
-                  <CheckCircledIcon color="var(--green-9)" width={22} height={22} />
-                ) : status?.fallback.ready ? (
-                  <CheckCircledIcon color="var(--gray-8)" width={22} height={22} />
-                ) : (
-                  <DownloadIcon color="var(--gray-8)" width={22} height={22} />
-                )}
+            <Flex direction="column" gap="3">
+              <Flex justify="between" align="center" gap="3" wrap="wrap">
+                <Flex align="center" gap="3">
+                  {status?.fallback.warm ? (
+                    <CheckCircledIcon color="var(--green-9)" width={22} height={22} />
+                  ) : status?.fallback.ready ? (
+                    <CheckCircledIcon color="var(--gray-8)" width={22} height={22} />
+                  ) : (
+                    <DownloadIcon color="var(--gray-8)" width={22} height={22} />
+                  )}
+                  <Box>
+                    <Text size="2" weight="medium" as="p">
+                      {status?.fallback.warm
+                        ? "Fallback model — loaded"
+                        : status?.fallback.ready
+                          ? "Fallback model — ready on demand"
+                          : fallbackDownload
+                            ? "Fallback model — downloading"
+                            : fallbackFailure
+                              ? "Fallback model — download failed"
+                              : "Fallback model — not installed"}
+                    </Text>
+                    <Text size="1" color="gray" as="p">
+                      {status?.fallback.modelRef ?? "local:lfm2.5-1.2b"}
+                      {status?.fallback.warm
+                        ? " · serving now · answers with zero cloud providers"
+                        : status?.fallback.ready
+                          ? " · CPU · loads on first use, no cloud needed"
+                          : fallbackDownload
+                            ? " · keep this panel open or continue working while it downloads"
+                            : fallbackFailure
+                              ? ` · ${fallbackFailure}`
+                              : " · approximately 700 MB · runs privately on this device"}
+                    </Text>
+                  </Box>
+                </Flex>
+                <Flex gap="2" align="center">
+                  {status && serverBadge(status.servers.utility)}
+                  {status && !status.fallback.ready && !fallbackDownload ? (
+                    <Button
+                      size="1"
+                      disabled={busy !== null}
+                      onClick={() =>
+                        act("install-fallback", () =>
+                          invoke("installModel", [status.fallback.modelRef])
+                        )
+                      }
+                    >
+                      <DownloadIcon /> {fallbackFailure ? "Retry download" : "Download & install"}
+                    </Button>
+                  ) : null}
+                </Flex>
+              </Flex>
+              {fallbackDownload ? (
                 <Box>
-                  <Text size="2" weight="medium" as="p">
-                    {status?.fallback.warm
-                      ? "Fallback model — loaded"
-                      : status?.fallback.ready
-                        ? "Fallback model — ready on demand"
-                        : "Fallback model — installs on demand"}
-                  </Text>
-                  <Text size="1" color="gray" as="p">
-                    {status?.fallback.modelRef ?? "local:lfm2.5-1.2b"}
-                    {status?.fallback.warm
-                      ? " · serving now · answers with zero cloud providers"
-                      : status?.fallback.ready
-                        ? " · CPU · loads on first use, no cloud needed"
-                        : ` · ${status?.fallback.reason ?? "downloads on first use"}`}
-                  </Text>
+                  <Flex justify="between" gap="2">
+                    <Text size="1" weight="medium">
+                      {fallbackDownload.phase === "paused"
+                        ? "Download paused"
+                        : fallbackDownload.phase === "queued"
+                          ? "Waiting to download"
+                          : "Downloading model"}
+                    </Text>
+                    <Text size="1" color="gray">
+                      {formatBytes(fallbackDownload.receivedBytes)}
+                      {fallbackDownload.totalBytes
+                        ? ` / ${formatBytes(fallbackDownload.totalBytes)}`
+                        : ""}
+                    </Text>
+                  </Flex>
+                  <Progress
+                    value={
+                      fallbackDownload.totalBytes
+                        ? (fallbackDownload.receivedBytes / fallbackDownload.totalBytes) * 100
+                        : 0
+                    }
+                    size="2"
+                    mt="1"
+                  />
                 </Box>
-              </Flex>
-              <Flex gap="2" align="center">
-                {status && serverBadge(status.servers.utility)}
-              </Flex>
+              ) : null}
             </Flex>
           </Card>
 
@@ -458,7 +515,7 @@ export default function LocalModelsPanel() {
                           </Text>
                         )}
                       </Box>
-                      {job.phase === "active" ? (
+                      {job.error ? null : job.phase === "active" ? (
                         <IconButton
                           size="1"
                           variant="soft"
@@ -502,7 +559,7 @@ export default function LocalModelsPanel() {
             </Flex>
             {models.length === 0 ? (
               <Text size="2" color="gray">
-                No models yet — the fallback model installs automatically; add more below.
+                No models installed yet. Install the fallback above or add another model below.
               </Text>
             ) : (
               <Table.Root size="1">
@@ -546,12 +603,20 @@ export default function LocalModelsPanel() {
                             loads on use
                           </Badge>
                         )}
+                        {model.state === "not-installed" && (
+                          <Badge color="gray" variant="soft">
+                            not installed
+                          </Badge>
+                        )}
+                        {model.state === "starting" && (
+                          <Badge color="amber" variant="soft">
+                            preparing runtime
+                          </Badge>
+                        )}
                         {model.state === "downloading" && (
                           <Badge color="blue" variant="soft">
                             downloading{" "}
-                            {model.downloadProgress !== null
-                              ? `${Math.round(model.downloadProgress * 100)}%`
-                              : ""}
+                            {model.download ? `${Math.round(model.download.progress * 100)}%` : ""}
                           </Badge>
                         )}
                         {model.state === "error" && (
@@ -575,6 +640,22 @@ export default function LocalModelsPanel() {
                                 }
                               >
                                 <RocketIcon />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          {model.state === "not-installed" && (
+                            <Tooltip content="Download and install">
+                              <IconButton
+                                size="1"
+                                variant="soft"
+                                disabled={busy !== null}
+                                onClick={() =>
+                                  act("install", () =>
+                                    invoke("installModel", [`local:${model.slug}`])
+                                  )
+                                }
+                              >
+                                <DownloadIcon />
                               </IconButton>
                             </Tooltip>
                           )}
