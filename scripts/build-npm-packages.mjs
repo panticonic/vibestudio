@@ -25,6 +25,11 @@ const rootPkg = readJson(path.join(repoRoot, "package.json"));
 const VERSION = rootPkg.version;
 const PUBLIC_APP_PACKAGE_NAME = "@panticonic/vibestudio";
 const PUBLIC_SERVER_PACKAGE_NAME = "@panticonic/vibestudio-server";
+export const SERVER_RUNTIME_ARTIFACTS = [
+  "dist/server.mjs",
+  "dist/internal-do.bundle.mjs",
+  "dist/host-build-fingerprint.json",
+];
 
 // Workspace source dirs staged into the packaged template (the initial
 // workspace a fresh install ships with). This is a subset of the canonical
@@ -84,7 +89,7 @@ async function main() {
 }
 
 function assertBuilt() {
-  const required = ["dist/server.mjs", "dist/main.cjs", "dist/cli/client.mjs"];
+  const required = [...SERVER_RUNTIME_ARTIFACTS, "dist/main.cjs", "dist/cli/client.mjs"];
   const missing = required.filter((p) => !fs.existsSync(path.join(repoRoot, p)));
   if (missing.length) {
     throw new Error(`Run \`pnpm build\` first — missing: ${missing.join(", ")}`);
@@ -109,8 +114,9 @@ function stageServer() {
   mkdirp(root);
 
   // Server runtime files (see paths.ts / internalDoLoader.ts / headlessHostManager.ts).
-  copyFile("dist/server.mjs", path.join(root, "dist/server.mjs"));
-  copyFile("dist/internal-do.bundle.mjs", path.join(root, "dist/internal-do.bundle.mjs"));
+  for (const artifact of SERVER_RUNTIME_ARTIFACTS) {
+    copyFile(artifact, path.join(root, artifact));
+  }
   copyTree(path.join(repoRoot, "dist/cli"), path.join(root, "dist/cli"), defaultSkip);
   copyTree(
     path.join(repoRoot, "dist/headless-host"),

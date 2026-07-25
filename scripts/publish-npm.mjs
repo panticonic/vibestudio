@@ -94,6 +94,12 @@ async function main() {
     }
   }
 
+  if (options.installSmoke) {
+    for (const entry of publishQueue) {
+      await runStagedInstallSmoke(entry);
+    }
+  }
+
   if (options.dryRunOnly) {
     console.log("\n[publish-npm] Dry-run complete. No packages were published.");
     return;
@@ -130,7 +136,7 @@ async function main() {
 
   if (options.installSmoke) {
     for (const entry of manifests) {
-      await runInstallSmoke(entry);
+      await runInstallSmoke(entry, `${entry.pkg.name}@${entry.version}`, "Registry install smoke");
     }
   }
 }
@@ -202,7 +208,7 @@ Options:
   --skip-stage              Reuse dist-packages/
   --skip-dry-run            Publish without npm publish --dry-run
   --dry-run-only            Build/stage/check only; do not publish
-  --skip-install-smoke      Skip the default post-publish npm install smoke checks
+  --skip-install-smoke      Skip the default staged and registry install smoke checks
   --tag <tag>               npm dist-tag. Default: latest
 
 Common reruns:
@@ -304,13 +310,34 @@ function ensureTokenAuth() {
   return whoami.stdout.trim();
 }
 
-async function runInstallSmoke(entry) {
+async function runStagedInstallSmoke(entry) {
+  const packDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-npm-pack-"));
+  try {
+    run("npm", ["pack", "--silent", "--pack-destination", packDirectory], {
+      cwd: entry.pkg.dir,
+    });
+    const tarballs = fs
+      .readdirSync(packDirectory)
+      .filter((name) => name.endsWith(".tgz"))
+      .map((name) => path.join(packDirectory, name));
+    if (tarballs.length !== 1) {
+      throw new Error(
+        `Expected one staged tarball for ${entry.pkg.name}; found ${tarballs.length}`
+      );
+    }
+    await runInstallSmoke(entry, tarballs[0], "Staged install smoke");
+  } finally {
+    fs.rmSync(packDirectory, { recursive: true, force: true });
+  }
+}
+
+async function runInstallSmoke(entry, packageSpec, label) {
   const prefix = `${entry.pkg.smokePrefix}-${entry.version}`;
   const launchDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-npm-launch-"));
-  console.log(`\n[publish-npm] Install smoke ${entry.pkg.name}@${entry.version}`);
+  console.log(`\n[publish-npm] ${label} ${entry.pkg.name}@${entry.version}`);
   try {
     fs.rmSync(prefix, { recursive: true, force: true });
-    run("npm", ["install", "-g", "--prefix", prefix, `${entry.pkg.name}@${entry.version}`], {
+    run("npm", ["install", "-g", "--prefix", prefix, packageSpec], {
       cwd: launchDirectory,
     });
     run(path.join(prefix, "bin", "vibestudio"), ["--version"], { cwd: launchDirectory });
@@ -389,7 +416,9 @@ function run(command, args, options) {
     env: npmEnv(),
   });
   if (result.error) throw result.error;
-  if (result.status !== 0) process.exit(result.status ?? 1);
+  if (result.status !== 0) {
+    throw new Error(`Command failed (${result.status ?? 1}): ${command} ${args.join(" ")}`);
+  }
 }
 
 function capture(command, args, options) {

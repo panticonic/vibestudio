@@ -5,10 +5,22 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import {
   assertPassthroughScriptsStaged,
+  SERVER_RUNTIME_ARTIFACTS,
   stageNpmUpdateLauncherFiles,
 } from "../scripts/build-npm-packages.mjs";
 
 describe("npm CLI packaging", () => {
+  it("stages every standalone server boot artifact", () => {
+    expect(SERVER_RUNTIME_ARTIFACTS).toEqual([
+      "dist/server.mjs",
+      "dist/internal-do.bundle.mjs",
+      "dist/host-build-fingerprint.json",
+    ]);
+    for (const relative of SERVER_RUNTIME_ARTIFACTS) {
+      expect(fs.existsSync(path.resolve(relative))).toBe(true);
+    }
+  });
+
   it("stages the passthrough script tree into both published packages", () => {
     const buildScript = fs.readFileSync(path.resolve("scripts/build-npm-packages.mjs"), "utf8");
     const copies = buildScript.match(
