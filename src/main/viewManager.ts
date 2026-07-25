@@ -401,12 +401,20 @@ export class ViewManager {
 
     this.installShellKeyForwarding(this.shellView.webContents);
 
-    // Update shell and panel bounds when window resizes
-    this.window.on("resize", () => {
+    // Update shell and panel bounds whenever the native content surface changes.
+    // Maximize/full-screen transitions are separate native events on some
+    // platforms and can otherwise leave the bootstrap view at its initial
+    // 1200x600 bounds while the window itself has grown to fill the display.
+    const syncWindowBounds = () => {
       this.updateShellBounds();
       this.updateHostChromeBounds();
       this.refreshActivePanelSlots();
-    });
+    };
+    this.window.on("resize", syncWindowBounds);
+    this.window.on("maximize", syncWindowBounds);
+    this.window.on("unmaximize", syncWindowBounds);
+    this.window.on("enter-full-screen", syncWindowBounds);
+    this.window.on("leave-full-screen", syncWindowBounds);
 
     // Track window visibility for protected view management
     this.window.on("hide", () => this.handleWindowVisibility(false));
