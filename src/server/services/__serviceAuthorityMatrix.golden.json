@@ -6648,6 +6648,14 @@
           "sensitivity": "write"
         }
       },
+      "listDirectory": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
       "listFiles": {
         "authority": {
           "inherits": true

@@ -2136,6 +2136,12 @@ export const METHOD_TIERS = {
     rationale:
       "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
   },
+  "vcs.listDirectory": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+  },
   "vcs.listFiles": {
     tier: "open",
     session: "family",
