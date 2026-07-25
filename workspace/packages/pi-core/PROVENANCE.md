@@ -1,8 +1,8 @@
 # Provenance
 
-Vendored subset of `@earendil-works/pi-agent-core` **v0.80.6**, copied as
+Vendored subset of `@earendil-works/pi-agent-core` **v0.82.0**, copied as
 TypeScript **sources** from https://github.com/earendil-works/pi at tag
-`v0.80.6` (`packages/agent/src/`), per WS1.1 of the unified-log plan.
+`v0.82.0` (`packages/agent/src/`), per WS1.1 of the unified-log plan.
 
 Vendoring is fully reproducible: run `./vendor.sh [tag]`. The script clones
 the tag, copies the kept subset, and applies the only transformations we
@@ -25,7 +25,7 @@ Vendored (under `src/vendor/`):
 - `types` — top-level agent types (AgentMessage, AgentTool, AgentEvent, ThinkingLevel, …)
 - `harness/types` — Result, errors, SessionStorage/SessionRepo/SessionTreeEntry, Skill, PromptTemplate, ExecutionEnv, harness event/option types
 - `harness/compaction/*` — pure compaction + branch summarization
-- `harness/session/{session,memory-repo,memory-storage,repo-utils,uuid}` — session tree, buildSessionContext, in-memory repo/storage
+- `harness/session/{session,memory-repo,memory-storage,repo-utils}` — session tree, buildSessionContext, in-memory repo/storage
 - `harness/messages` — message constructors
 - `harness/{system-prompt,skills,prompt-templates}`
 - `harness/utils/{shell-output,truncate}`
@@ -36,4 +36,7 @@ Intentionally excluded (replaced by `@workspace/agent-loop`):
 - Jsonl/file-backed session repos
 - the extension/hook-bus runtime, `proxy.ts`, `node.ts`
 
-`@earendil-works/pi-ai` remains an external dependency (unchanged).
+`@earendil-works/pi-ai` remains an external dependency at the matching `0.82.0`
+release. Vibestudio's workerd transport-liveness changes are maintained separately
+as the package-manager patch declared in the root and workspace manifests; they are
+not mixed into this vendored agent-core subset.

@@ -430,6 +430,11 @@ export class HeadlessRunner {
     } catch (err) {
       diagnostics["buildProvenanceFailure"] = systemTestFailure("diagnostic:build-provenance", err);
     }
+    try {
+      diagnostics["durableWork"] = await rpc.call("main", "durableWork.inspect", []);
+    } catch (err) {
+      diagnostics["durableWorkFailure"] = systemTestFailure("diagnostic:durable-work", err);
+    }
     if (channelId) {
       try {
         diagnostics["agentHealth"] = await gad.inspectAgentHealth({

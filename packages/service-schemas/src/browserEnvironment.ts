@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import {
+  defineServiceMethods,
+  selectedPreparedAuthorityRequirement,
+} from "@vibestudio/shared/typedServiceClient";
 import {
   BrowserImportDataTypeSchema,
   BrowserImportSourceSchema,
@@ -21,7 +24,7 @@ function brokerAuthority(method: string) {
       leaves: [
         {
           capability,
-          requirement: { kind: "selected" as const, principals: ["code" as const] },
+          requirement: selectedPreparedAuthorityRequirement(["code"]),
           tier: "gated" as const,
         },
       ],

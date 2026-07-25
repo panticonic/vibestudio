@@ -17,7 +17,7 @@ export interface RuntimeEntityCleanupDeps {
   tokenManager: Pick<TokenManager, "revokeToken">;
   connectionGrants?: Pick<ConnectionGrantService, "revokeForPrincipal">;
   entityTitleService?: Pick<EntityTitleService, "clear">;
-  getWorkerdManager(): Pick<WorkerdManager, "stopWorker" | "destroyDOEntity"> | null;
+  getWorkerdManager(): Pick<WorkerdManager, "stopWorker" | "retireDOEntity"> | null;
   getFsService(): FsService | null;
   getWebhookIngress(): {
     internal?: { revokeForCaller?: (callerId: string) => Promise<number> };
@@ -35,28 +35,51 @@ export async function cleanupRuntimeEntity(
   record: EntityRecord,
   deps: RuntimeEntityCleanupDeps
 ): Promise<void> {
+  const failures: unknown[] = [];
+  const attempt = async (fn: () => unknown | Promise<unknown>): Promise<void> => {
+    try {
+      await fn();
+    } catch (error) {
+      failures.push(error);
+    }
+  };
+
   if (record.kind === "panel") {
-    deps.panelRuntimeCoordinator?.retireRuntimeEntity(record.id);
+    await attempt(() => deps.panelRuntimeCoordinator?.retireRuntimeEntity(record.id));
   }
-  await deps.egressProxy.dropCaller(record.id).catch(() => {});
-  await bestEffort(() => deps.approvalQueue.cancelForCaller(record.id));
-  await bestEffort(() => deps.credentialSessionGrantStore.dropForCaller(record.id));
-  await bestEffort(() => deps.connectionGrants?.revokeForPrincipal(record.id));
-  await bestEffort(() => deps.getFsService()?.closeHandlesForCaller(record.id));
-  await bestEffort(() => deps.getWebhookIngress()?.internal?.revokeForCaller?.(record.id));
-  await bestEffort(() => deps.tokenManager.revokeToken(record.id));
-  await bestEffort(() => deps.entityTitleService?.clear(record.id));
+  await attempt(() => deps.egressProxy.dropCaller(record.id));
+  await attempt(() => deps.approvalQueue.cancelForCaller(record.id));
+  await attempt(() => deps.credentialSessionGrantStore.dropForCaller(record.id));
+  await attempt(() => deps.connectionGrants?.revokeForPrincipal(record.id));
+  await attempt(() => deps.getFsService()?.closeHandlesForCaller(record.id));
+  await attempt(() => deps.getWebhookIngress()?.internal?.revokeForCaller?.(record.id));
+  await attempt(() => deps.tokenManager.revokeToken(record.id));
+  await attempt(() => deps.entityTitleService?.clear(record.id));
   const workerdManager = deps.getWorkerdManager();
   if (record.kind === "worker") {
-    await workerdManager?.stopWorker(record.id).catch(() => {});
+    await attempt(() => workerdManager?.stopWorker(record.id));
   }
   if (record.kind === "do") {
-    await workerdManager?.destroyDOEntity(record.id).catch(() => {});
+    const { className, key: objectKey } = record;
+    if (!className || !objectKey) {
+      failures.push(new Error(`Durable Object entity ${record.id} has no class or object key`));
+    } else {
+      await attempt(() =>
+        workerdManager?.retireDOEntity({
+          source: record.source.repoPath,
+          className,
+          objectKey,
+        })
+      );
+    }
   }
-}
 
-async function bestEffort(fn: () => unknown | Promise<unknown>): Promise<void> {
-  await Promise.resolve()
-    .then(fn)
-    .catch(() => {});
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      `Runtime entity cleanup failed for ${record.id} (${failures.length} step${
+        failures.length === 1 ? "" : "s"
+      })`
+    );
+  }
 }

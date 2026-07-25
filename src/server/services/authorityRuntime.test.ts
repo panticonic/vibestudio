@@ -439,6 +439,25 @@ describe("authority runtime", () => {
     ).toMatchObject({ allowed: false, code: "approval-required" });
   });
 
+  it("classifies framework probes before product class method families", () => {
+    const attestation = attestDirectRpc({
+      caller: createHostCaller("main"),
+      source: "vibestudio/internal",
+      className: "BrowserDataDO",
+      objectKey: "environment-1",
+      method: "durableWorkCapabilities",
+      workspaceId: "ws-1",
+      workspaceMember: true,
+      sessionId: "host:durableWorkCapabilities",
+      now: 100,
+    });
+
+    expect(attestation).toMatchObject({
+      effect: { kind: "runtime-intrinsic" },
+      capability: "rpc:durableWorkCapabilities",
+    });
+  });
+
   it("keeps exact code identity while withholding a live provider grant", () => {
     const attestation = attestDirectRpc({
       caller: createVerifiedCaller("@workspace-extensions/other", "extension", {

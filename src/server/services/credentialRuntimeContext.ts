@@ -88,6 +88,26 @@ export async function resolvePanelSlotForCredentialEntity(
   return slotId;
 }
 
+/**
+ * Resolve a panel runtime entity directly to its stable slot.
+ *
+ * Callers that already know they have a panel entity must use this path instead
+ * of building the full credential runtime index. The authoritative entity→slot
+ * mapping is sufficient, and avoids re-entering panel-tree enumeration from an
+ * in-flight panel RPC.
+ */
+export async function resolveDirectCredentialPanelSlot(
+  entityId: string,
+  runtimeInspector: CredentialRuntimeInspector | undefined
+): Promise<string | null> {
+  if (!runtimeInspector?.resolvePanelSlotByEntity) return null;
+  try {
+    return await runtimeInspector.resolvePanelSlotByEntity(entityId);
+  } catch {
+    return null;
+  }
+}
+
 async function safeListActiveCredentialEntities(
   runtimeInspector: CredentialRuntimeInspector | undefined
 ): Promise<EntityRecord[]> {

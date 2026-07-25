@@ -86,9 +86,8 @@ remain alive under caller cancellation or durable state respectively.
 
 Every ordinary in-process agent tool also has a runtime-owned 30-second
 wall-clock boundary, including tool-registry and host-RPC work before the
-tool's own implementation settles. A tool may declare a different positive,
-finite `executionTimeoutMs` when its public contract needs a longer bounded
-operation. A timeout returns an `agent-tool-failure.v1` terminal with
+tool's own implementation settles. A timeout returns an
+`agent-tool-failure.v1` terminal with
 `code: "tool_execution_timeout"`, the exact `tool.<name>` operation,
 invocation/command causality, and `{ tool, timeoutMs, elapsedMs }` evidence.
 It also aborts the tool's child signal. Never encode intentionally unbounded
@@ -240,7 +239,7 @@ auto-recovered.
 
 Execute TypeScript/JavaScript code server-side in your own notebook sandbox (a
 per-agent EvalDO). It runs even when no panel is open. The same live heap is
-retained for 30 minutes after the latest cell; every cell renews the lease.
+retained while the kernel activation remains resident; no idle request pins it.
 After an unavoidable restart, `[kernel] Restarted` reports exact restored and
 lost scope keys. In eval, `rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`,
 `db`, `help` (and, in agent eval, `chat`) are injected free variables; reach

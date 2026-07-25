@@ -46,7 +46,11 @@ function selfMessage(id: string, content: string, extra: Partial<ChatMessage> = 
 }
 
 const participants: Record<string, Participant<ChatParticipantMetadata>> = {
-  "agent:alice": { id: "agent:alice", metadata: { name: "Alice", type: "agent", handle: "alice" } },
+  "agent:alice": {
+    id: "agent:alice",
+    ref: { kind: "agent", id: "agent:alice", participantId: "agent:alice" },
+    metadata: { name: "Alice", type: "agent", handle: "alice" },
+  },
 };
 
 function makeContext(
@@ -223,6 +227,30 @@ describe("Outbox", () => {
   it("queued steers get the 'Lands this turn' lane treatment when the agent is busy", () => {
     renderOutbox(makeContext([selfMessage("a", "steer it")], { agentBusy: true }));
     expect(screen.getByText("Lands this turn")).toBeTruthy();
+  });
+
+  it("an idle optimistic send is reported as awaiting delivery", () => {
+    renderOutbox(makeContext([selfMessage("a", "please read this")], { agentBusy: false }));
+    expect(screen.getByText("Awaiting delivery")).toBeTruthy();
+    expect(screen.queryByText("Lands this turn")).toBeNull();
+  });
+
+  it("an acknowledged idle send distinguishes delivery from agent read", () => {
+    renderOutbox(
+      makeContext(
+        [
+          selfMessage("a", "please read this", {
+            receipts: {
+              byParticipant: { "agent:alice": "received" },
+              aggregate: "pending",
+            },
+          }),
+        ],
+        { agentBusy: false }
+      )
+    );
+    expect(screen.getByText("Delivered · awaiting agent")).toBeTruthy();
+    expect(screen.queryByText("Awaiting delivery")).toBeNull();
   });
 
   it("inline edit calls editPendingMessage with the new text", () => {

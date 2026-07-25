@@ -11,7 +11,10 @@ import {
   requirementForPrincipals,
   scopeCovers,
 } from "@vibestudio/shared/authorization";
-import { productDirectMethodCapability } from "@vibestudio/shared/authority/directMethodEffects";
+import {
+  isHostIntrinsicDirectMethod,
+  productDirectMethodCapability,
+} from "@vibestudio/shared/authority/directMethodEffects";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { getProductBootManifest } from "../internalDOs/productBootManifest.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
@@ -359,7 +362,10 @@ export function attestDirectRpc(input: {
   const now = input.now ?? Date.now();
   const audience = directAuthorityAudience(input.source, input.className, input.objectKey);
   const resourceKey = audience;
-  const productCapability = productDirectMethodCapability(input.className, input.method);
+  const hostIntrinsic = isHostIntrinsicDirectMethod(input.method);
+  const productCapability = hostIntrinsic
+    ? null
+    : productDirectMethodCapability(input.className, input.method);
   const capability =
     input.capability ?? productCapability ?? directAuthorityCapability(input.method);
   const { context, grants, locks } = authorizeVerifiedCaller(input.caller, {
@@ -383,9 +389,11 @@ export function attestDirectRpc(input: {
     method: input.method,
     effect:
       input.effect ??
-      (productCapability
-        ? { kind: "semantic", capability: productCapability }
-        : { kind: "runtime-intrinsic" }),
+      (hostIntrinsic
+        ? { kind: "runtime-intrinsic" }
+        : productCapability
+          ? { kind: "semantic", capability: productCapability }
+          : { kind: "runtime-intrinsic" }),
     capability,
     resourceKey,
     issuedAt: now,

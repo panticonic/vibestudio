@@ -407,6 +407,39 @@ describe("PanelOrchestrator.ensureLoaded", () => {
     expect(emit).not.toHaveBeenCalledWith("navigate-to-panel", expect.anything());
   });
 
+  it("keeps a preparing native host detached so the shell loading surface remains visible", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/preparing", [], {
+      buildKey: null,
+      executionDigest: null,
+      artifacts: { buildState: "pending", buildProgress: "Preparing panel runtime..." },
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+
+    const { orchestrator, panelView } = createOrchestrator(registry);
+    let hosted = false;
+    panelView.createViewForPanel.mockImplementationOnce(async () => {
+      hosted = true;
+    });
+    panelView.hasView.mockImplementation((panelId: string) => panelId === panel.id && hosted);
+
+    await expect(orchestrator.ensureLoaded(panel.id)).resolves.toMatchObject({
+      status: "loaded",
+      loaded: true,
+    });
+
+    expect(panelView.createViewForPanel).toHaveBeenCalledWith(
+      panel.id,
+      "about:blank",
+      panel.snapshot.contextId
+    );
+    expect(registry.getPanel(panel.id)?.artifacts).toMatchObject({
+      buildState: "building",
+      buildProgress: "Preparing panel runtime...",
+    });
+    expect(registry.getPanel(panel.id)?.artifacts.htmlPath).toBeUndefined();
+  });
+
   it("repairs a missing runtime lease for an existing native view and registers CDP", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/panel-1");

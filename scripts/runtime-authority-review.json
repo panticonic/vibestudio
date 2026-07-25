@@ -1,7 +1,19 @@
 {
   "version": 1,
-  "censusDigest": "sha256:a60a32088e31b2253b4ce569cd688d33def0cf349153eec972cd75b7673a8aab",
+  "censusDigest": "sha256:d7f1c2878c2a20740571e1af92e99e32d9be970b5956a3a662d06ccd7da37f82",
   "decisions": {
+    "host:eval.dispose": {
+      "review": "owner-scoped-finite-eval-release",
+      "change": "Adds explicit release for an EvalDO whose immutable first activation declared it finite. The receiver derives the exact object from the verified owner and subkey, rejects persistent scopes, erases the finite object's durable records and loaded runtime, and retires it through the normal sealed lifecycle and cleanup reaper. Closing this owned finite resource is open and cannot address another caller's eval state."
+    },
+    "host:durableWork.inspect": {
+      "review": "bounded-payload-free-scheduler-diagnostics",
+      "change": "Adds an open, read-only bounded inspection of host durable-work counters and phase timings. It exposes no work payloads, transcript content, credentials, or mutation authority."
+    },
+    "host:vcs.listDirectory": {
+      "review": "bounded-semantic-immediate-child-read",
+      "change": "Adds an open, read-only immediate-child directory projection over the caller's existing semantic VCS read authority. Work is bounded by returned visible entries and does not enumerate descendant file content."
+    },
     "host:permissions.safetyStatus": {
       "review": "bounded-live-authority-safety-read",
       "change": "Adds the permission inventory's bounded read of workspace and per-agent authority locks; the ordinary permissions.read capability and workspace membership checks remain in force."
@@ -46,17 +58,85 @@
       "review": "host-locked-membership-initialization",
       "change": "Adds host-only atomic initialization of an immutable exact-participant channel boundary; user and code callers cannot create, replace, or widen the locked membership policy."
     },
-    "direct:src/server/internalDOs/evalDO.ts:acquireKernelLease": {
-      "review": "host-only-eval-kernel-residency-refresh",
-      "change": "Adds a host-only, gated code-execution authority that creates or refreshes the exact EvalDO incarnation's bounded idle residency lease. The receiver validates the lease identity and duration, and no user or code principal may invoke it directly."
+    "direct:src/server/internalDOs/workspaceDO.ts:alarmAdoptWorker": {
+      "review": "host-only-alarm-worker-generation-adoption",
+      "change": "Adds the explicit host scheduler generation boundary. It atomically fences prior scheduler claims and installs one exact active worker identity; elapsed time cannot transfer alarm ownership."
     },
-    "direct:src/server/internalDOs/evalDO.ts:attachKernelLeaseHolder": {
-      "review": "host-only-eval-kernel-holder-claim",
-      "change": "Adds a host-only, gated code-execution authority that atomically claims the single held-request slot for an already-active exact kernel lease. It cannot create, widen, or extend a lease."
+    "direct:src/server/internalDOs/workspaceDO.ts:alarmClaimDue": {
+      "review": "host-only-generation-fenced-alarm-claim",
+      "change": "Replaces the unfenced due-alarm listing path with a bounded host-only atomic claim carrying an adopted worker identity and claim generation. Claims never expire by elapsed time."
     },
-    "direct:src/server/internalDOs/evalDO.ts:holdKernelLease": {
-      "review": "host-only-bounded-eval-kernel-hold",
-      "change": "Adds a host-only, gated code-execution authority whose request remains held only for the exact attached lease and settles on expiry, release, or replacement. It exposes no scope data and cannot outlive the receiver-owned lease deadline."
+    "direct:src/server/internalDOs/workspaceDO.ts:alarmListScheduled": {
+      "review": "host-only-bounded-alarm-census",
+      "change": "Replaces the prior due-alarm execution feed with a read-only startup census of exact scheduled Durable Object targets. It exposes no alarm payload and grants no claim or execution authority."
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:durableWorkOwnerList": {
+      "review": "host-only-bounded-durable-owner-scan",
+      "change": "Adds the host recovery driver's bounded read of registered durable-work owners; owner-local state remains readiness authority."
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:durableWorkOwnerRegister": {
+      "review": "host-only-durable-owner-registration",
+      "change": "Adds idempotent host registration of an exact active Durable Object and its enumerated work queues for recovery scanning."
+    },
+    "direct:workspace/packages/runtime/src/worker/durable-base.ts:durableWorkCapabilities": {
+      "review": "host-only-static-work-capability-read",
+      "change": "Exposes only the receiver's fixed supported durable-work queue names to the host activation hook; it reads no semantic or user data."
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:adoptDurableWorkWorker": {
+      "review": "host-only-durable-worker-generation-adoption",
+      "change": "Installs the exact host durable-work worker generation on one concrete agent vessel and releases only claims owned by the positively superseded generation. No user or code principal is admitted, and elapsed time cannot transfer ownership."
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:adoptDurableWorkWorker": {
+      "review": "host-only-durable-worker-generation-adoption",
+      "change": "Installs the exact host durable-work worker generation on one concrete channel and releases only claims owned by the positively superseded generation. No user or code principal is admitted, and elapsed time cannot transfer ownership."
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:acceptChannelBatch": {
+      "review": "host-only-incarnation-fenced-inbox-admission",
+      "change": "Adds bounded all-or-nothing local admission of an exact channel batch addressed to the active vessel incarnation; it performs no remote execution."
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:claimReadyWork": {
+      "review": "host-only-agent-work-claim",
+      "change": "Adds bounded generation-fenced claims over the exact vessel's local inbox and effect projections; no code or user principal is admitted."
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:durableWorkStatus": {
+      "review": "host-only-agent-readiness-summary",
+      "change": "Adds a bounded host read of queue readiness and next recovery time without exposing descriptors or transcript content."
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:executeEffectClaim": {
+      "review": "host-only-held-agent-effect",
+      "change": "Executes only an already generation-fenced effect claim on the exact vessel; live authority is re-evaluated by the narrow executor ports."
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:executeInboxClaim": {
+      "review": "host-only-held-agent-transition",
+      "change": "Executes only an already generation-fenced local inbox transition on the exact vessel, with GAD retaining semantic ordering authority."
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:failReadyWork": {
+      "review": "host-only-agent-claim-failure",
+      "change": "Records retry state only when worker identity and worker generation match the exact local claim."
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:settleReadyWork": {
+      "review": "host-only-agent-claim-settlement",
+      "change": "Settles only the exact worker and generation; stale hosts cannot mutate a newer inbox or effect claim."
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:claimReadyWork": {
+      "review": "host-only-channel-work-claim",
+      "change": "Adds bounded generation-fenced claims over exact recipient-incarnation batches and channel recovery items."
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:durableWorkStatus": {
+      "review": "host-only-channel-readiness-summary",
+      "change": "Adds a bounded host read of channel work readiness and recovery time without exposing message payloads."
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:executeChannelMaintenanceClaim": {
+      "review": "host-only-held-channel-recovery",
+      "change": "Moves exact invite-index, call-deadline, and fork recovery items out of alarm activations and executes only an existing generation-fenced claim."
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:failReadyWork": {
+      "review": "host-only-channel-claim-failure",
+      "change": "Records bounded retry state only for the exact channel worker and worker generation."
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:settleReadyWork": {
+      "review": "host-only-channel-claim-settlement",
+      "change": "Requires exact worker/generation settlement and a complete gap-free per-row acknowledgement for recipient batches."
     }
   }
 }

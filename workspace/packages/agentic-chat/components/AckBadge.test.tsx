@@ -13,9 +13,21 @@ function renderWithTheme(ui: React.ReactElement) {
 }
 
 const participants: Record<string, Participant<ChatParticipantMetadata>> = {
-  "agent:alice": { id: "agent:alice", metadata: { name: "Alice", type: "agent", handle: "alice" } },
-  "agent:bob": { id: "agent:bob", metadata: { name: "Bob", type: "agent", handle: "bob" } },
-  "agent:carol": { id: "agent:carol", metadata: { name: "Carol", type: "agent", handle: "carol" } },
+  "agent:alice": {
+    id: "agent:alice",
+    ref: { kind: "agent", id: "agent:alice", participantId: "agent:alice" },
+    metadata: { name: "Alice", type: "agent", handle: "alice" },
+  },
+  "agent:bob": {
+    id: "agent:bob",
+    ref: { kind: "agent", id: "agent:bob", participantId: "agent:bob" },
+    metadata: { name: "Bob", type: "agent", handle: "bob" },
+  },
+  "agent:carol": {
+    id: "agent:carol",
+    ref: { kind: "agent", id: "agent:carol", participantId: "agent:carol" },
+    metadata: { name: "Carol", type: "agent", handle: "carol" },
+  },
 };
 
 function receipts(

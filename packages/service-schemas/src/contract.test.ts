@@ -19,6 +19,7 @@ import { contextIntegrityMethods } from "./contextIntegrity.js";
 import { corsApprovalMethods } from "./corsApproval.js";
 import { ConnectCredentialSpecSchema, credentialsMethods } from "./credentials.js";
 import { docsMethods } from "./docs.js";
+import { durableWorkMethods } from "./durableWork.js";
 import { eventsMethods } from "./events.js";
 import { extensionsMethods } from "./extensions.js";
 import { externalOpenMethods } from "./externalOpen.js";
@@ -31,6 +32,7 @@ import { menuMethods } from "./menu.js";
 import { mirrorMethods } from "./mirror.js";
 import { missionMethods } from "./mission.js";
 import { notificationMethods } from "./notification.js";
+import { onboardingStatusMethods } from "./onboardingStatus.js";
 import { paletteMethods } from "./palette.js";
 import { panelMethods } from "./panel.js";
 import { panelLogMethods } from "./panelLog.js";
@@ -88,6 +90,7 @@ const serviceTables: ServiceTable[] = [
   { service: "corsApproval", file: "corsApproval.ts", methods: corsApprovalMethods },
   { service: "credentials", file: "credentials.ts", methods: credentialsMethods },
   { service: "docs", file: "docs.ts", methods: docsMethods },
+  { service: "durableWork", file: "durableWork.ts", methods: durableWorkMethods },
   { service: "events", file: "events.ts", methods: eventsMethods },
   { service: "extensions", file: "extensions.ts", methods: extensionsMethods },
   { service: "externalOpen", file: "externalOpen.ts", methods: externalOpenMethods },
@@ -100,6 +103,7 @@ const serviceTables: ServiceTable[] = [
   { service: "mirror", file: "mirror.ts", methods: mirrorMethods },
   { service: "mission", file: "mission.ts", methods: missionMethods },
   { service: "notification", file: "notification.ts", methods: notificationMethods },
+  { service: "onboardingStatus", file: "onboardingStatus.ts", methods: onboardingStatusMethods },
   { service: "palette", file: "palette.ts", methods: paletteMethods },
   { service: "panel", file: "panel.ts", methods: panelMethods },
   { service: "panelLog", file: "panelLog.ts", methods: panelLogMethods },
@@ -273,7 +277,6 @@ describe("service schema contracts", () => {
       kernel: {
         incarnationId: "kernel-2",
         startedAt: 10,
-        idleExpiresAt: 30 * 60 * 1_000 + 10,
         event: {
           kind: "restarted" as const,
           recovery: {

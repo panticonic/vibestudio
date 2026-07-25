@@ -8,7 +8,10 @@
 import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import type { OpenExternalOptions, OpenExternalResult } from "@vibestudio/shared/externalOpen";
-import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import {
+  defineServiceMethods,
+  fixedPreparedAuthorityRequirement,
+} from "@vibestudio/shared/typedServiceClient";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 
 export const EXTERNAL_OPEN_CAPABILITY = "external.open" as const;
@@ -59,7 +62,9 @@ export const externalOpenMethods = defineServiceMethods({
         leaves: [
           {
             capability: EXTERNAL_OPEN_CAPABILITY,
-            requirement: { kind: "selected", principals: ["code"] },
+            requirement: fixedPreparedAuthorityRequirement(
+              requirementForPrincipals(["code"], EXTERNAL_OPEN_CAPABILITY)
+            ),
             tier: "gated",
           },
         ],

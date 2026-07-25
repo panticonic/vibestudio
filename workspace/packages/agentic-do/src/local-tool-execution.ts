@@ -32,10 +32,7 @@ export async function executeLocalToolWithDeadline(
     onProgress?: (chunk: unknown) => void;
   }
 ): Promise<AgentToolResult<unknown>> {
-  const timeoutMs = tool.executionTimeoutMs ?? DEFAULT_LOCAL_TOOL_EXECUTION_TIMEOUT_MS;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
-    throw new Error(`${tool.name} declares an invalid executionTimeoutMs: ${String(timeoutMs)}`);
-  }
+  const timeoutMs = DEFAULT_LOCAL_TOOL_EXECUTION_TIMEOUT_MS;
 
   const startedAt = Date.now();
   const controller = new AbortController();

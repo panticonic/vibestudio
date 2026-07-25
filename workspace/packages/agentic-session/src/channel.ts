@@ -13,6 +13,9 @@ import { launchAgentIntoChannel, retireAgentEntity } from "@workspace/agentic-co
 import type { ChannelConfig } from "@workspace/pubsub";
 import type { AgentExecutionTestPolicySpec } from "@vibestudio/shared/authority/testPolicy";
 
+const CHANNEL_SOURCE = "workers/pubsub-channel";
+const CHANNEL_CLASS = "PubSubChannel";
+
 /** Recommended channel config for headless sessions: full-auto approval (level 2). */
 export function getRecommendedChannelConfig(): Partial<ChannelConfig> {
   return {
@@ -111,6 +114,49 @@ export async function createHeadlessAgentContext(opts: {
     throw new Error("runtime.createContext did not return a contextId for headless isolation");
   }
   return contextId;
+}
+
+/**
+ * Bind the channel's runtime lifecycle to the same context as its agent.
+ *
+ * Service discovery only resolves an address; it cannot infer ownership from
+ * later subscribe metadata. Creating the concrete channel entity first makes
+ * context teardown retire both sides of an isolated conversation.
+ */
+export async function createHeadlessChannel(opts: {
+  rpcCall: (target: string, method: string, args: unknown[]) => Promise<unknown>;
+  channelId: string;
+  contextId: string;
+}): Promise<{ id: string; targetId: string; contextId: string }> {
+  const value = await opts.rpcCall("main", "runtime.createEntity", [
+    {
+      kind: "do",
+      source: CHANNEL_SOURCE,
+      className: CHANNEL_CLASS,
+      key: opts.channelId,
+      contextId: opts.contextId,
+    },
+  ]);
+  const handle = value as {
+    id?: unknown;
+    targetId?: unknown;
+    contextId?: unknown;
+  } | null;
+  if (
+    !handle ||
+    typeof handle.id !== "string" ||
+    typeof handle.targetId !== "string" ||
+    handle.contextId !== opts.contextId
+  ) {
+    throw new Error(
+      `Headless channel ${opts.channelId} was not activated in context ${opts.contextId}`
+    );
+  }
+  return {
+    id: handle.id,
+    targetId: handle.targetId,
+    contextId: opts.contextId,
+  };
 }
 
 export async function retireHeadlessAgent(opts: {

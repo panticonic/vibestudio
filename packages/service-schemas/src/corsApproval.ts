@@ -6,7 +6,10 @@
 
 import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
-import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import {
+  defineServiceMethods,
+  fixedPreparedAuthorityRequirement,
+} from "@vibestudio/shared/typedServiceClient";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 
 export const CORS_RESPONSE_CAPABILITY = "network.response.read" as const;
@@ -66,7 +69,9 @@ export const corsApprovalMethods = defineServiceMethods({
         leaves: [
           {
             capability: CORS_RESPONSE_CAPABILITY,
-            requirement: { kind: "selected", principals: ["code"] },
+            requirement: fixedPreparedAuthorityRequirement(
+              requirementForPrincipals(["code"], CORS_RESPONSE_CAPABILITY)
+            ),
             tier: "gated",
           },
         ],

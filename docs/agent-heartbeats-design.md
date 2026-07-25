@@ -1,5 +1,18 @@
 # Agent Heartbeats
 
+## Landed scheduling amendment (2026-07-25)
+
+Heartbeat cadence still uses the agent alarm multiplexer, but an alarm is only
+a time-domain scheduler. Due agent transitions are exposed as local durable
+work and a disposable receipt; the host `DurableWorkDriver` claims and executes
+them under a generation-fenced lease.
+
+Heartbeat implementations must not execute a model/tool chain, drain the agent
+inbox or effect outbox, publish subagent progress, or wait for the driver inside
+`alarm()`. Scheduled model resumes and internal wakes join `agent-inbox`;
+effect retry-at and expired leases join `agent-effect`. The alarm owns the
+deadline, the durable row owns readiness, and the host owns execution lifetime.
+
 ## Motivation
 
 vibestudio has three related but distinct scheduling needs:
@@ -50,13 +63,14 @@ avoid:
    turn queue it will enqueue into. The server should not synthesize agent
    prompts directly.
 
-3. **Use `setAlarmAt` for per-DO cadence.**
+3. **Use `setAlarmAt` for per-DO cadence, never execution.**
    Absolute deadlines match the server-driven alarm driver and avoid
    accumulated delay math. Heartbeats must not call `setAlarmAt` directly from
    `AgentWorkerBase` subclasses, though: agent DOs already use the single DO
-   alarm for effect-outbox redrive and scheduled model resumes. A heartbeat
+   alarm for effect-outbox recovery and scheduled model resumes. A heartbeat
    loop must register its deadline with a shared per-DO alarm multiplexer that
-   owns the one physical alarm slot.
+   owns the one physical alarm slot. Due work is handed to the host through a
+   disposable receipt and generation-fenced durable claim.
 
 4. **Approval-gate unattended declarations.**
    Editing `meta/vibestudio.yml` to add or change a heartbeat is an unattended

@@ -33,6 +33,7 @@ import {
   rpcErrorDataOf,
   rpcErrorKindOf,
   rpcMethodAuthority,
+  rpc,
   type ConnectionlessRpcClient,
   type RpcClient,
   type RpcEnvelope,
@@ -69,6 +70,11 @@ import {
 import type { RuntimeFs } from "../types.js";
 import type { PanelHandle } from "../core/index.js";
 import {
+  DURABLE_WORK_READY_HEADER,
+  encodeDurableWorkReady,
+  type DurableWorkQueue,
+} from "@vibestudio/shared/durableWork";
+import {
   migrateDurableObjectSchema,
   type DurableObjectSchemaBaseline,
   type DurableObjectSchemaMigration,
@@ -86,7 +92,12 @@ interface RpcInvocationContext {
   callerPanelId: string | null;
   requestId: string | null;
   idempotencyKey: string | null;
+  readyQueues: Set<DurableWorkQueue>;
 }
+
+const DURABLE_WORK_READY_GENERATION_PREFIX = "durable-work-ready-generation:";
+const DURABLE_WORK_ACK_GENERATION_PREFIX = "durable-work-ack-generation:";
+const DURABLE_WORK_WORKER_KEY = "durable-work-active-worker";
 
 // ---------------------------------------------------------------------------
 // Console bridge — forwards DO console.* output to the server terminal.
@@ -428,10 +439,13 @@ export abstract class DurableObjectBase {
       });
       // Expose ONLY this DO's `@rpc`-marked methods (opt-in / default-deny). Private/protected helpers
       // and all framework plumbing (`dispatchInboundEnvelope`, state KV, panel/alarm helpers) are
-      // unreachable over the open relay; a forgotten `@rpc` fails loud ("not exposed"). The
-      // base-prototype boundary remains as a backstop.
+      // unreachable over the open relay; a forgotten `@rpc` fails loud ("not exposed").
       connectionless.client.exposeAll(
-        collectExposableMethods(this, rpcExposedMethodNames(this), DurableObjectBase.prototype)
+        // The framework base itself contains intentionally public, @rpc-marked
+        // lifecycle/capability methods. The decorator allow-list is the security
+        // boundary; stopping before DurableObjectBase would make those methods
+        // impossible to call on every subclass.
+        collectExposableMethods(this, rpcExposedMethodNames(this), Object.prototype)
       );
       this._connectionless = connectionless;
       // Bridge DO `console.*` to the server terminal. Installed lazily on
@@ -777,6 +791,8 @@ export abstract class DurableObjectBase {
   /** Override in subclasses for timed callbacks. Return the one exact next wake. */
   async alarm(): Promise<DoAlarmSchedule | null> {
     this.ensureReady();
+    const queues = this.pendingDurableWorkReadyQueues();
+    if (queues.length > 0) this.emitWorkReadyHint(...queues);
     return null;
   }
 
@@ -882,7 +898,7 @@ export abstract class DurableObjectBase {
                 })()
               : await this.resumeAfterRestart(args[0] as LifecycleResumeInput);
           return new Response(JSON.stringify(result ?? null), {
-            headers: { "Content-Type": "application/json" },
+            headers: this.workReadyHeaders(),
           });
         });
       }
@@ -908,7 +924,7 @@ export abstract class DurableObjectBase {
           }
           const nextAlarm = await this.alarm();
           return new Response(JSON.stringify({ nextAlarm }), {
-            headers: { "Content-Type": "application/json" },
+            headers: this.workReadyHeaders(),
           });
         });
       }
@@ -935,10 +951,11 @@ export abstract class DurableObjectBase {
           args,
         },
       });
-      const responseEnvelope = await this.dispatchInboundEnvelope(
+      const dispatched = await this.dispatchInboundEnvelope(
         envelope,
         directAuthorityAcceptedAt(request)
       );
+      const responseEnvelope = dispatched.result;
       const responseMessage = responseEnvelope?.message;
       if (responseMessage?.type === "response" && "error" in responseMessage) {
         if (responseMessage.error.startsWith('Method "')) {
@@ -971,7 +988,7 @@ export abstract class DurableObjectBase {
           ? (responseMessage.result ?? null)
           : null;
       return new Response(JSON.stringify(result), {
-        headers: { "Content-Type": "application/json" },
+        headers: this.workReadyHeaders(dispatched.readyQueues),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1062,13 +1079,14 @@ export abstract class DurableObjectBase {
       });
     }
     if (message.type === "stream-request") {
-      const responseEnvelope = await this.dispatchInboundEnvelope(
+      const dispatched = await this.dispatchInboundEnvelope(
         {
           ...envelope,
           message: { ...message, type: "request" } satisfies RpcRequest,
         },
         authorityAcceptedAt
       );
+      const responseEnvelope = dispatched.result;
       const responseMessage = responseEnvelope?.message;
       if (responseMessage?.type === "response" && "result" in responseMessage) {
         if (responseMessage.result instanceof Response) return responseMessage.result;
@@ -1101,9 +1119,10 @@ export abstract class DurableObjectBase {
         { status: 500, headers: { "Content-Type": "application/json" } }
       );
     }
-    const responseEnvelope = await this.dispatchInboundEnvelope(envelope, authorityAcceptedAt);
+    const dispatched = await this.dispatchInboundEnvelope(envelope, authorityAcceptedAt);
+    const responseEnvelope = dispatched.result;
     return new Response(JSON.stringify(responseEnvelope ?? {}), {
-      headers: { "Content-Type": "application/json" },
+      headers: this.workReadyHeaders(dispatched.readyQueues),
     });
   }
 
@@ -1172,7 +1191,7 @@ export abstract class DurableObjectBase {
   private async dispatchInboundEnvelope(
     envelope: RpcEnvelope,
     authorityAcceptedAt: number
-  ): Promise<RpcEnvelope | null> {
+  ): Promise<{ result: RpcEnvelope | null; readyQueues: DurableWorkQueue[] }> {
     const connectionless = this.connectionlessClient();
     // An unattributed method-path call carries a synthetic empty caller; surface
     // it as a null caller context (matching the pre-convergence behavior) rather
@@ -1241,6 +1260,7 @@ export abstract class DurableObjectBase {
         callerPanelId: caller?.callerPanelId ?? null,
         requestId: null,
         idempotencyKey: null,
+        readyQueues: new Set(),
       },
       callback
     );
@@ -1251,24 +1271,137 @@ export abstract class DurableObjectBase {
     message: RpcRequest,
     envelope: RpcEnvelope,
     callback: () => Promise<T>
-  ): Promise<T> {
-    return this._invocationContext.run(
-      {
-        verifiedCaller: caller,
-        callerId: caller?.callerId ?? null,
-        callerKind: caller?.callerKind ?? null,
-        callerPanelId: caller?.callerPanelId ?? null,
-        requestId: message?.requestId ?? null,
-        idempotencyKey: envelope.delivery.idempotencyKey ?? null,
-      },
-      async () => {
-        const result = await callback();
-        const nextAlarm = this.nextAlarmAfterRequest();
-        if (nextAlarm === null) this.deleteAlarm();
-        else if (nextAlarm !== undefined) this.setAlarmAt(nextAlarm.wakeAt);
-        return result;
+  ): Promise<{ result: T; readyQueues: DurableWorkQueue[] }> {
+    const context: RpcInvocationContext = {
+      verifiedCaller: caller,
+      callerId: caller?.callerId ?? null,
+      callerKind: caller?.callerKind ?? null,
+      callerPanelId: caller?.callerPanelId ?? null,
+      requestId: message?.requestId ?? null,
+      idempotencyKey: envelope.delivery.idempotencyKey ?? null,
+      readyQueues: new Set(),
+    };
+    const result = await this._invocationContext.run(context, async () => {
+      const result = await callback();
+      const nextAlarm = this.nextAlarmAfterRequest();
+      if (nextAlarm === null) this.deleteAlarm();
+      else if (nextAlarm !== undefined) this.setAlarmAt(nextAlarm.wakeAt);
+      return result;
+    });
+    return { result, readyQueues: [...context.readyQueues] };
+  }
+
+  /**
+   * Advance authoritative queue readiness and attach an opportunistic response
+   * hint when a response exists. Every caller follows the same durable path;
+   * transport topology can affect latency, never correctness.
+   */
+  protected markWorkReady(...queues: DurableWorkQueue[]): void {
+    const unique = [...new Set(queues)];
+    this.emitWorkReadyHint(...unique);
+    this.ctx.storage.transactionSync(() => {
+      for (const queue of unique) {
+        const key = `${DURABLE_WORK_READY_GENERATION_PREFIX}${queue}`;
+        const current = Number(this.getStateValue(key) ?? 0);
+        if (!Number.isSafeInteger(current) || current < 0) {
+          throw new Error(`Invalid durable work ready generation for ${queue}`);
+        }
+        this.setStateValue(key, String(current + 1));
       }
+    });
+  }
+
+  /**
+   * Attach readiness already recorded in durable state to the current
+   * response. Re-delivery must not manufacture another generation: one
+   * committed transition remains one unacknowledged transition until drained.
+   */
+  private emitWorkReadyHint(...queues: DurableWorkQueue[]): void {
+    const context = this._invocationContext.current();
+    for (const queue of new Set(queues)) context?.readyQueues.add(queue);
+  }
+
+  /** Immediate alarm edge while any ready generation remains unacknowledged. */
+  protected nextDurableWorkReadyEdgeAt(): number | null {
+    return this.pendingDurableWorkReadyQueues().length > 0 ? Date.now() : null;
+  }
+
+  private pendingDurableWorkReadyQueues(): DurableWorkQueue[] {
+    return this.durableWorkQueues().filter((queue) => {
+      const ready = Number(
+        this.getStateValue(`${DURABLE_WORK_READY_GENERATION_PREFIX}${queue}`) ?? 0
+      );
+      const acknowledged = Number(
+        this.getStateValue(`${DURABLE_WORK_ACK_GENERATION_PREFIX}${queue}`) ?? 0
+      );
+      if (
+        !Number.isSafeInteger(ready) ||
+        ready < 0 ||
+        !Number.isSafeInteger(acknowledged) ||
+        acknowledged < 0 ||
+        acknowledged > ready
+      ) {
+        throw new Error(`Invalid durable work generations for ${queue}`);
+      }
+      return ready > acknowledged;
+    });
+  }
+
+  protected acknowledgeDurableWorkReady(queue: DurableWorkQueue): void {
+    const ready = this.getStateValue(`${DURABLE_WORK_READY_GENERATION_PREFIX}${queue}`) ?? "0";
+    this.setStateValue(`${DURABLE_WORK_ACK_GENERATION_PREFIX}${queue}`, ready);
+  }
+
+  /** Queue capabilities are registered by the host before entity activation
+   * becomes observable. Subclasses declare only queues they own locally. */
+  protected durableWorkQueues(): readonly DurableWorkQueue[] {
+    return [];
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
+  durableWorkCapabilities(): DurableWorkQueue[] {
+    return [...this.durableWorkQueues()];
+  }
+
+  /**
+   * Claim methods call this before selecting rows, so an immediate response
+   * hint and a registry recovery scan have identical fencing semantics.
+   */
+  protected adoptDurableWorkWorkerGeneration(workerId: string): {
+    adopted: boolean;
+    previousWorkerId: string | null;
+  } {
+    if (typeof workerId !== "string" || workerId.length < 8 || workerId.length > 512) {
+      throw new Error("adoptDurableWorkWorker: invalid worker identity");
+    }
+    return this.ctx.storage.transactionSync(() => {
+      const previousWorkerId = this.getStateValue(DURABLE_WORK_WORKER_KEY);
+      if (previousWorkerId === workerId) {
+        return { adopted: false, previousWorkerId };
+      }
+      this.releaseDurableWorkClaims(previousWorkerId, workerId);
+      this.setStateValue(DURABLE_WORK_WORKER_KEY, workerId);
+      return { adopted: true, previousWorkerId };
+    });
+  }
+
+  protected releaseDurableWorkClaims(
+    _previousWorkerId: string | null,
+    _nextWorkerId: string
+  ): void {}
+
+  private workReadyHeaders(queues?: Iterable<DurableWorkQueue>): Headers {
+    const headers = new Headers({ "Content-Type": "application/json" });
+    const encoded = encodeDurableWorkReady(
+      queues ?? this._invocationContext.current()?.readyQueues ?? []
     );
+    if (encoded) headers.set(DURABLE_WORK_READY_HEADER, encoded);
+    return headers;
   }
 
   private get activeVerifiedCaller(): AttestedCaller | null {

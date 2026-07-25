@@ -149,11 +149,13 @@ export class SystemTestRunnerDO extends DurableObjectBase {
     const runId = `system-test-runner:${kind}:${crypto.randomUUID()}`;
     const subKey = `system-test-${kind}`;
     const scopeKey = `$systemTestUtility:${kind}`;
-    await this.rpc.call("main", "eval.startRun", [
-      {
-        runId,
-        subKey,
-        code: `
+    try {
+      await this.rpc.call("main", "eval.startRun", [
+        {
+          runId,
+          subKey,
+          lifecycle: "finite",
+          code: `
           ${code}
           const serialized = JSON.stringify(utilityValue);
           scope[${JSON.stringify(scopeKey)}] = serialized;
@@ -163,26 +165,33 @@ export class SystemTestRunnerDO extends DurableObjectBase {
             length: serialized.length,
           };
         `,
-        syntax: "typescript",
-      },
-    ]);
-    for (;;) {
-      const status = await this.rpc.call<EvalRunStatus>("main", "eval.getRun", [{ runId, subKey }]);
-      if (status.status === "done") {
-        if (!status.result?.success) {
-          throw new Error(status.result?.error ?? `system-test ${kind} eval failed`);
+          syntax: "typescript",
+        },
+      ]);
+      for (;;) {
+        const status = await this.rpc.call<EvalRunStatus>("main", "eval.getRun", [
+          { runId, subKey },
+        ]);
+        if (status.status === "done") {
+          if (!status.result?.success) {
+            throw new Error(status.result?.error ?? `system-test ${kind} eval failed`);
+          }
+          const stored = parseStoredSystemTestRecord(status.result.returnValue);
+          try {
+            return await this.readStoredSystemTestRecord(subKey, stored);
+          } finally {
+            await this.rpc.call("main", "eval.deleteScopeValue", [
+              { subKey, key: stored.scopeKey },
+            ]);
+          }
         }
-        const stored = parseStoredSystemTestRecord(status.result.returnValue);
-        try {
-          return await this.readStoredSystemTestRecord(subKey, stored);
-        } finally {
-          await this.rpc.call("main", "eval.deleteScopeValue", [{ subKey, key: stored.scopeKey }]);
+        if (status.status === "cancelled" || status.status === "unknown") {
+          throw new Error(`system-test ${kind} eval ended with status ${status.status}`);
         }
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      if (status.status === "cancelled" || status.status === "unknown") {
-        throw new Error(`system-test ${kind} eval ended with status ${status.status}`);
-      }
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    } finally {
+      await this.rpc.call("main", "eval.dispose", [{ subKey }]);
     }
   }
 
@@ -232,6 +241,7 @@ export class SystemTestRunnerDO extends DurableObjectBase {
       {
         runId: systemTestEvalRunId(options.runId),
         subKey: options.runId,
+        lifecycle: "finite",
         code: systemTestEvalCode(options),
         syntax: "typescript",
       },
@@ -333,6 +343,7 @@ export class SystemTestRunnerDO extends DurableObjectBase {
       "eval.deleteScopeValue",
       [{ subKey: runId, key: systemTestRecordScopeKey(runId) }]
     );
+    await this.rpc.call("main", "eval.dispose", [{ subKey: runId }]);
     return { released: released.existed };
   }
 

@@ -251,7 +251,6 @@ export class ServiceContainer {
         }),
       };
       log.info(`All ${order.length} services started`);
-      log.info("Startup report", this.startupReport);
     } catch (error) {
       startupAborted = true;
       this.startupReport = null;

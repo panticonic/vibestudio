@@ -36,9 +36,52 @@ export type AuthorityResourceDerivation =
       transform?: "url-origin" | "external-url-scope";
     };
 
+declare const fixedPreparedAuthorityRequirementBrand: unique symbol;
+declare const selectedPreparedAuthorityRequirementBrand: unique symbol;
+
+export type FixedPreparedAuthorityRequirement = AuthorityRequirement & {
+  readonly [fixedPreparedAuthorityRequirementBrand]: true;
+};
+
+/**
+ * Use only when host state determines the actual principals or relationship
+ * constraints. The authority preparer must then return a complete
+ * `requirement`, including at least one capability leaf. If only the
+ * resource/presentation varies, declare a fixed prepared requirement instead.
+ */
+export interface SelectedPreparedAuthorityRequirement {
+  kind: "selected";
+  principals: readonly PrincipalKind[];
+  readonly [selectedPreparedAuthorityRequirementBrand]: true;
+}
+
 export type PreparedAuthorityRequirement =
-  | AuthorityRequirement
-  | { kind: "selected"; principals: readonly PrincipalKind[] };
+  | FixedPreparedAuthorityRequirement
+  | SelectedPreparedAuthorityRequirement;
+
+/** Mark a prepared leaf whose authority is completely declared in the schema. */
+export function fixedPreparedAuthorityRequirement(
+  requirement: AuthorityRequirement
+): FixedPreparedAuthorityRequirement {
+  return requirement as FixedPreparedAuthorityRequirement;
+}
+
+/**
+ * Declare that a preparer must select the complete authority requirement.
+ * The corresponding resolver output must be built with
+ * `selectedPreparedAuthoritySelection`, which validates its capability leaves.
+ */
+export function selectedPreparedAuthorityRequirement(
+  principals: readonly PrincipalKind[]
+): SelectedPreparedAuthorityRequirement {
+  if (principals.length === 0) {
+    throw new Error("Selected prepared authority must admit at least one principal family");
+  }
+  return {
+    kind: "selected",
+    principals: [...new Set(principals)],
+  } as unknown as SelectedPreparedAuthorityRequirement;
+}
 
 export type PreparedAuthoritySelector =
   | { capability: string; capabilityPrefix?: never }

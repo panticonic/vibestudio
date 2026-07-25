@@ -4,7 +4,10 @@ import { browserUrlFromPanelSource } from "@vibestudio/shared/panelChrome";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import {
+  defineServiceMethods,
+  fixedPreparedAuthorityRequirement,
+} from "@vibestudio/shared/typedServiceClient";
 import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type {
   PanelAccessPermissionDeps,
@@ -154,7 +157,9 @@ function cdpBoundaryAuthority(method: string) {
       leaves: [
         {
           capability: "context.boundary",
-          requirement: requirementForPrincipals(["code", "user", "host"], "context.boundary"),
+          requirement: fixedPreparedAuthorityRequirement(
+            requirementForPrincipals(["code", "user", "host"], "context.boundary")
+          ),
           tier: { selectedFrom: ["gated", "critical"] as const },
         },
       ],

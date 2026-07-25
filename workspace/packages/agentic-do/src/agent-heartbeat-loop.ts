@@ -43,7 +43,7 @@
 
 import type { SqlStorage } from "@workspace/runtime/worker";
 import type { AgentTurnContextPolicy } from "@workspace/agent-loop";
-import { assertExactSqlTableSchema } from "./sql-table-schema.js";
+import { assertExactSqlTableSchema } from "@workspace/runtime/worker";
 
 export type HeartbeatStatus = "running" | "paused" | "stopped";
 

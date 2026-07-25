@@ -40,9 +40,9 @@ export const participantMetadataSchema = z
     replay: z.boolean().optional(),
     sinceId: z.number().int().nonnegative().optional(),
     replayMessageLimit: z.number().int().positive().max(MAX_CHANNEL_REPLAY_PAGE_LIMIT).optional(),
-    // Opt-in: this participant handles the STRUCTURED `onChannelEnvelope` delivery
-    // (set by agent vessels). DO participants that omit it (RPC-style clients like
-    // the eval's connectViaRpc) receive only the subscription stream.
+    // Opt-in: this participant accepts host-dispatched structured delivery
+    // batches (set by agent vessels). DO participants that omit it (RPC-style
+    // clients like the eval's connectViaRpc) receive only the subscription stream.
     receivesChannelEnvelopes: z.boolean().optional(),
   })
   .passthrough();
@@ -67,7 +67,7 @@ export interface ParticipantInfo {
 
 /**
  * THE participant-capability discriminator. An "agent vessel" implements `onMethodCall` (synchronous
- * DO method dispatch) AND opts into structured `onChannelEnvelope` delivery — both marked by the
+ * DO method dispatch) AND opts into structured batch delivery — both marked by the
  * `receivesChannelEnvelopes` flag SubscriptionManager sets at subscribe. Everything else — panels
  * (WS `rpc`) and RPC-style *connectionless DO* clients (the eval's `connectViaRpc` / HeadlessSession,
  * whose participant id is just the host DO's id) — settles method calls the RPC way: the broadcast
@@ -114,6 +114,7 @@ export interface ChannelConfig {
 /** Presence event payload stored in messages table. */
 export interface PresencePayload {
   action: "join" | "leave" | "update";
+  ref: import("@workspace/agentic-protocol").ParticipantRef;
   metadata: Record<string, unknown>;
   leaveReason?: "graceful" | "disconnect" | "replaced";
 }

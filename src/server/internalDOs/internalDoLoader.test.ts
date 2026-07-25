@@ -12,6 +12,7 @@ function bundle(content = "export class GadWorkspaceDO {};"): InternalDOBundle {
 describe("internalDOExecutionIdentity", () => {
   it("seals exact bundle bytes, class entrypoint, and reviewed authority", () => {
     const gad = internalDOExecutionIdentity(bundle(), "GadWorkspaceDO");
+    const evalDo = internalDOExecutionIdentity(bundle(), "EvalDO");
     const workspace = internalDOExecutionIdentity(bundle(), "WorkspaceDO");
 
     expect(gad).toMatchObject({
@@ -23,7 +24,16 @@ describe("internalDOExecutionIdentity", () => {
       executionDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
     expect(gad.authorityRequests).toEqual([]);
+    expect(evalDo.authorityRequests).toEqual([
+      {
+        capability: "external.open",
+        resource: { kind: "prefix", prefix: "" },
+        tier: "gated",
+        evidence: "intentional-broad",
+      },
+    ]);
     expect(workspace.executionDigest).not.toBe(gad.executionDigest);
+    expect(evalDo.executionDigest).not.toBe(gad.executionDigest);
   });
 
   it("rejects mismatched bytes and unreviewed internal exports", () => {

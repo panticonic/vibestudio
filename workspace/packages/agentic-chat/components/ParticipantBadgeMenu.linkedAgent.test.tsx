@@ -17,6 +17,7 @@ function participant(
 ): Participant<ChatParticipantMetadata> {
   return {
     id: "do:linked:1",
+    ref: { kind: "agent", id: "do:linked:1", participantId: "do:linked:1" },
     metadata: {
       name: "Claude Code",
       type: "agent",
@@ -33,6 +34,7 @@ describe("ParticipantBadgeMenu — linked agent", () => {
         <ParticipantBadgeMenu
           participant={{
             id: "user:usr_alice",
+            ref: { kind: "user", id: "user:usr_alice", participantId: "user:usr_alice" },
             metadata: { name: "Workspace member", type: "user" },
           }}
           profile={{

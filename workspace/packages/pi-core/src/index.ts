@@ -1,5 +1,5 @@
 /**
- * @workspace/pi-core — vendored subset of @earendil-works/pi-agent-core v0.80.6.
+ * @workspace/pi-core — vendored subset of @earendil-works/pi-agent-core v0.82.0.
  *
  * This barrel mirrors the upstream `dist/index.js`, restricted to the vendored
  * modules (see PROVENANCE.md). Intentionally NOT exported: agent.ts (Agent),
@@ -49,7 +49,7 @@ export type {
 export * from "./vendor/harness/session/session.js";
 export * from "./vendor/harness/session/memory-repo.js";
 export * from "./vendor/harness/session/repo-utils.js";
-export { uuidv7 } from "./vendor/harness/session/uuid.js";
+export { uuidv7 } from "@earendil-works/pi-ai";
 
 // Message constructors (compaction/branch-summary/custom messages)
 export * from "./vendor/harness/messages.js";

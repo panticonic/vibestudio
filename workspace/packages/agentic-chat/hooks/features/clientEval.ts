@@ -164,7 +164,7 @@ function executionSignal(
 
 export function buildClientEvalMethod(
   dependencies: ClientEvalDependencies
-): MethodDefinition<z.ZodTypeAny, ClientEvalMethodResult> {
+): MethodDefinition<typeof clientEvalParameters, ClientEvalMethodResult> {
   return {
     description: `Execute TypeScript/JavaScript inside the panel that invited you.
 

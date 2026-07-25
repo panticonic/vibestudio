@@ -701,6 +701,12 @@ export const METHOD_TIERS = {
     rationale:
       "P-discovery: capability discovery and introspection; §2 default {code, session} family",
   },
+  "durableWork.inspect": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Payload-free bounded scheduler health and timing diagnostics; no work content or mutation is exposed",
+  },
   "eval.cancel": {
     tier: "open",
     session: "family",
@@ -710,6 +716,12 @@ export const METHOD_TIERS = {
     tier: "open",
     session: "family",
     rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+  },
+  "eval.dispose": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Owned-resource release: the host admits disposal only when this caller declared the isolated EvalDO finite at its immutable first activation",
   },
   "eval.getRun": {
     tier: "open",

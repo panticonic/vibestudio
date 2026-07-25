@@ -414,11 +414,12 @@ describe("createServerSupervisor", () => {
   });
 
   it("qualifies tool selection against the full agent tool surface with the target last", async () => {
-    let requestBody: {
+    type ProbeRequestBody = {
       tools?: Array<{ function?: { name?: string } }>;
       tool_choice?: string;
       max_tokens?: number;
-    } | null = null;
+    };
+    const request = { body: null as ProbeRequestBody | null };
     const harness = makeHarness({
       fetch: vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -432,7 +433,7 @@ describe("createServerSupervisor", () => {
           });
         }
         if (url.includes("/v1/chat/completions")) {
-          requestBody = JSON.parse(String(init?.body)) as typeof requestBody;
+          request.body = JSON.parse(String(init?.body)) as ProbeRequestBody;
           return runtimeProbeResponse();
         }
         if (url.includes("/apply-template")) {
@@ -444,10 +445,13 @@ describe("createServerSupervisor", () => {
 
     await harness.supervisor.validateModel(FALLBACK_MODEL.slug);
 
-    expect(requestBody?.tools).toHaveLength(39);
-    expect(requestBody?.tools?.at(-1)?.function?.name).toBe("vibestudio_runtime_probe");
-    expect(requestBody?.tool_choice).toBe("required");
-    expect(requestBody?.max_tokens).toBeUndefined();
+    expect(request.body).not.toBeNull();
+    if (request.body === null) throw new Error("runtime probe request was not captured");
+    const body = request.body;
+    expect(body.tools).toHaveLength(39);
+    expect(body.tools?.at(-1)?.function?.name).toBe("vibestudio_runtime_probe");
+    expect(body.tool_choice).toBe("required");
+    expect(body.max_tokens).toBeUndefined();
   });
 
   it("runs isolated add-time validation from an attached workspace", async () => {
@@ -547,7 +551,7 @@ describe("createServerSupervisor", () => {
   });
 
   it("refreshes a warm router before loading a model added after startup", async () => {
-    const fetch = vi.fn(async () => new Response("ok", { status: 200 }));
+    const fetch = vi.fn(async (_input: RequestInfo | URL) => new Response("ok", { status: 200 }));
     const harness = makeHarness({ fetch });
     harness.models.set("toy", modelRecord("toy"));
 

@@ -51,9 +51,9 @@ target. The boundary is exact:
 - `await page.close()` disconnects only that automation client. It does not
   close, unload, navigate, or otherwise mutate the panel.
 - Eval is a notebook kernel, not an invocation sandbox. A page stored in
-  `scope` remains the same live object across cells for 30 minutes after the
-  latest cell. Every cell renews that idle lease. Call `page.close()` explicitly
-  when finished.
+  `scope` remains the same live object across cells while the kernel activation
+  remains resident; no idle request pins that activation. Call `page.close()`
+  explicitly when finished.
 - Durable scope persistence is a recovery snapshot, not the live heap. A page
   or other class instance cannot be reconstructed after kernel restart; retain
   stable identity alongside it and reacquire only after `[kernel] Restarted`

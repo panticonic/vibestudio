@@ -6,7 +6,10 @@ import {
   EXTERNAL_OPEN_CAPABILITY,
   externalOpenMethods,
 } from "@vibestudio/service-schemas/externalOpen";
-import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import {
+  fixedPreparedAuthoritySelection,
+  type ServiceDefinition,
+} from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import {
@@ -62,7 +65,7 @@ export function createExternalOpenService(deps: ExternalOpenServiceDeps): Servic
           requesterKind(ctx.caller.runtime.kind)
         );
         return [
-          {
+          fixedPreparedAuthoritySelection({
             capability: EXTERNAL_OPEN_CAPABILITY,
             resourceKey: resource.key,
             challenge: {
@@ -79,7 +82,7 @@ export function createExternalOpenService(deps: ExternalOpenServiceDeps): Servic
               },
               details: externalOpenDetails(url, options),
             },
-          },
+          }),
         ];
       },
     },

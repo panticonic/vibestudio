@@ -355,21 +355,23 @@ export class TestRunner {
         collectToolFailures(execution),
         test.expectedToolFailures
       );
-      try {
-        execution.diagnostics = await testRunner.collectDiagnostics({
-          channelId: session?.channelId,
-        });
-      } catch (diagnosticErr) {
-        execution.diagnostics = {
-          generatedAt: new Date().toISOString(),
-          diagnosticCollectionFailure: systemTestFailure("diagnostic:collection", diagnosticErr),
-        };
-      }
       outcome = {
         result: { passed: false, reason: `Error: ${execution.error}` },
         execution,
       };
     } finally {
+      if (outcome && !outcome.execution.diagnostics) {
+        try {
+          outcome.execution.diagnostics = await testRunner.collectDiagnostics({
+            channelId: session?.channelId,
+          });
+        } catch (diagnosticErr) {
+          outcome.execution.diagnostics = {
+            generatedAt: new Date().toISOString(),
+            diagnosticCollectionFailure: systemTestFailure("diagnostic:collection", diagnosticErr),
+          };
+        }
+      }
       try {
         if (session) {
           // Remote retirement is part of a test's terminal state. Passing turns

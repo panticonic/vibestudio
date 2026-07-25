@@ -62,6 +62,7 @@ import {
 import {
   buildCredentialRuntimeIndex,
   findNearestCredentialPanelEntity,
+  resolveDirectCredentialPanelSlot,
   resolvePanelSlotForCredentialEntity,
   type CredentialRuntimeInspector,
 } from "./credentialRuntimeContext.js";
@@ -622,7 +623,8 @@ export function createCredentialConnectionCoordinator(
 
   async function resolveBrowserHandoffTarget(
     ctx: ServiceContext,
-    handoffTarget?: { callerId: string; callerKind: BrowserHandoffCallerKind }
+    handoffTarget?: { callerId: string; callerKind: BrowserHandoffCallerKind },
+    browser: "internal" | "external" = "external"
   ): Promise<BrowserHandoffResolution> {
     const targetCallerId = handoffTarget?.callerId ?? ctx.caller.runtime.id;
     const targetCallerKind = handoffTarget?.callerKind ?? ctx.caller.runtime.kind;
@@ -668,7 +670,12 @@ export function createCredentialConnectionCoordinator(
       );
     }
     if (targetCallerKind === "panel") {
-      return resolvePanelBrowserHandoffTarget(targetCallerId, diagnosticsBase, targetCallerId);
+      const parentPanelId =
+        browser === "internal"
+          ? ((await resolveDirectCredentialPanelSlot(targetCallerId, runtimeInspector)) ??
+            (!runtimeInspector ? targetCallerId : undefined))
+          : undefined;
+      return resolvePanelBrowserHandoffTarget(targetCallerId, diagnosticsBase, parentPanelId);
     }
     if (!handoffTarget && (targetCallerKind === "worker" || targetCallerKind === "do")) {
       return resolveRuntimeParentBrowserHandoffTarget(ctx, diagnosticsBase);
@@ -707,7 +714,7 @@ export function createCredentialConnectionCoordinator(
       BrowserHandoffDiagnostics,
       "ownerLookup" | "deliveryCallerId" | "deliveryCallerKind" | "deliveryConnectionId"
     >,
-    parentPanelId: string
+    parentPanelId?: string
   ): BrowserHandoffResolution {
     const resolved = (
       target: BrowserHandoffTarget,
@@ -2187,7 +2194,11 @@ export function createCredentialConnectionCoordinator(
           `${redirectStrategy} OAuth requires an external browser`
         );
       }
-      const browserResolution = await resolveBrowserHandoffTarget(ctx, explicitHandoffTarget);
+      const browserResolution = await resolveBrowserHandoffTarget(
+        ctx,
+        explicitHandoffTarget,
+        openMode
+      );
       const browserTarget = browserResolution.target;
       if (!browserTarget) {
         throw new OAuthConnectionError(
@@ -2223,6 +2234,7 @@ export function createCredentialConnectionCoordinator(
           parentPanelId: browserTarget.parentPanelId,
           callerId: ctx.caller.runtime.id,
           callerKind: ctx.caller.runtime.kind,
+          transactionId: tx.id,
         });
       } else {
         browserDelivery = emitToBrowserTarget(browserTarget, "external-open:open", openPayload);

@@ -47,7 +47,7 @@ import { encodeUniversalKey } from "./doDispatch.js";
 import { assertPresent } from "../lintHelpers";
 import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.js";
 import type { WorkerdProgramSources } from "./workerdProgramLoader.js";
-import { destroyWorkerdConnections } from "./workerdRpcRelay.js";
+import { destroyWorkerdConnections, getWorkerdConnectionDispatcher } from "./workerdRpcRelay.js";
 
 const log = createDevLogger("WorkerdManager");
 /** uniqueKey of the single static namespace that hosts all userland DO facets.
@@ -1122,13 +1122,50 @@ export class WorkerdManager {
     log.info(`Worker entity "${callerId}" stopped`);
   }
 
+  private async abortUserlandDOFacet(ref: DORef): Promise<void> {
+    if (!this.process || this.process.exitCode !== null || !this.port) return;
+    const key = encodeUniversalKey(ref);
+    const response = await fetch(
+      `http://127.0.0.1:${this.port}/_u/${encodeURIComponent(key)}/__vibestudio_retire`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.deps.getWorkerdGatewayToken()}`,
+          "X-Vibestudio-Dispatch-Secret": this.dispatchSecret,
+          "X-Vibestudio-Lifecycle-Secret": this.loaderSecret,
+        },
+        dispatcher: getWorkerdConnectionDispatcher(),
+      } as RequestInit
+    );
+    if (!response.ok) {
+      throw new Error(
+        `Failed to retire userland DO facet ${ref.source}:${ref.className}/${ref.objectKey} ` +
+          `(${response.status}): ${await response.text()}`
+      );
+    }
+  }
+
   /**
-   * Idempotent DO-entity teardown invoked by the runtime-service retire hook.
-   * The concrete-instance row lives in WorkspaceDO (durable); workerd does
-   * its own lazy GC of the DO instance, so this is a best-effort cleanup of
-   * Node-side resources keyed by the targetId.
+   * Idempotent DO runtime teardown invoked by the runtime-service retire hook.
+   * Aborting the live facet releases its object-owned loaded module graph while
+   * deliberately preserving durable storage for a later reattach. Full context
+   * destruction separately reclaims that storage through destroyDO().
    */
-  async destroyDOEntity(targetId: string): Promise<void> {
+  async retireDOEntity(ref: DORef): Promise<void> {
+    const targetId = canonicalEntityId({
+      kind: "do",
+      source: ref.source,
+      className: ref.className,
+      key: ref.objectKey,
+    });
+    let abortError: unknown;
+    if (!isInternalDOSource(ref.source)) {
+      try {
+        await this.abortUserlandDOFacet(ref);
+      } catch (error) {
+        abortError = error;
+      }
+    }
     this.revokeWorkerBearer(targetId);
     this.deps.fsService.closeHandlesForCaller(targetId);
     await this.deps.cleanupWebhookSubscriptions?.(targetId);
@@ -1136,6 +1173,7 @@ export class WorkerdManager {
     for (const [key, objectBuild] of Array.from(this.doObjectBuilds.entries())) {
       if (objectBuild.imageId === targetId) this.doObjectBuilds.delete(key);
     }
+    if (abortError) throw abortError;
   }
 
   /**

@@ -2453,88 +2453,6 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
-      "id": "direct:src/server/internalDOs/evalDO.ts:acquireKernelLease",
-      "rpcPlane": "workspace-do",
-      "owner": "src/server/internalDOs/evalDO.ts",
-      "source": "product/eval",
-      "method": "acquireKernelLease",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "src/server/internalDOs/evalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-delegation"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared direct-RPC scenarios retain their current behavior",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "capability(host,rpc:acquireKernelLease)",
-      "r3b": {
-        "review": "host-only-eval-kernel-residency-refresh",
-        "change": "Adds a host-only, gated code-execution authority that creates or refreshes the exact EvalDO incarnation's bounded idle residency lease. The receiver validates the lease identity and duration, and no user or code principal may invoke it directly."
-      },
-      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
-    },
-    {
-      "id": "direct:src/server/internalDOs/evalDO.ts:attachKernelLeaseHolder",
-      "rpcPlane": "workspace-do",
-      "owner": "src/server/internalDOs/evalDO.ts",
-      "source": "product/eval",
-      "method": "attachKernelLeaseHolder",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "src/server/internalDOs/evalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-delegation"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared direct-RPC scenarios retain their current behavior",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "capability(host,rpc:attachKernelLeaseHolder)",
-      "r3b": {
-        "review": "host-only-eval-kernel-holder-claim",
-        "change": "Adds a host-only, gated code-execution authority that atomically claims the single held-request slot for an already-active exact kernel lease. It cannot create, widen, or extend a lease."
-      },
-      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
-    },
-    {
       "id": "direct:src/server/internalDOs/evalDO.ts:cancel",
       "rpcPlane": "workspace-do",
       "owner": "src/server/internalDOs/evalDO.ts",
@@ -2610,6 +2528,47 @@
         "next-dispatch-revocation"
       ],
       "r3aRequirement": "capability(host,rpc:deleteScopeValue)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
+      "id": "direct:src/server/internalDOs/evalDO.ts:dispose",
+      "rpcPlane": "workspace-do",
+      "owner": "src/server/internalDOs/evalDO.ts",
+      "source": "product/eval",
+      "method": "dispose",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "src/server/internalDOs/evalDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "destructive",
+      "tier": "gated",
+      "capability": "runtime.code-execution.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:dispose)",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -2736,47 +2695,6 @@
       "r3b": {
         "review": "unchanged-parity",
         "change": null
-      },
-      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
-    },
-    {
-      "id": "direct:src/server/internalDOs/evalDO.ts:holdKernelLease",
-      "rpcPlane": "workspace-do",
-      "owner": "src/server/internalDOs/evalDO.ts",
-      "source": "product/eval",
-      "method": "holdKernelLease",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "src/server/internalDOs/evalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-delegation"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared direct-RPC scenarios retain their current behavior",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "capability(host,rpc:holdKernelLease)",
-      "r3b": {
-        "review": "host-only-bounded-eval-kernel-hold",
-        "change": "Adds a host-only, gated code-execution authority whose request remains held only for the exact attached lease and settles on expiry, release, or replacement. It exposes no scope data and cannot outlive the receiver-owned lease deadline."
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
@@ -3109,6 +3027,88 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
+      "id": "direct:src/server/internalDOs/workspaceDO.ts:alarmAdoptWorker",
+      "rpcPlane": "workspace-do",
+      "owner": "src/server/internalDOs/workspaceDO.ts",
+      "source": "product/bootstrap",
+      "method": "alarmAdoptWorker",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "src/server/internalDOs/workspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:alarmAdoptWorker)",
+      "r3b": {
+        "review": "host-only-alarm-worker-generation-adoption",
+        "change": "Adds the explicit host scheduler generation boundary. It atomically fences prior scheduler claims and installs one exact active worker identity; elapsed time cannot transfer alarm ownership."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
+      "id": "direct:src/server/internalDOs/workspaceDO.ts:alarmClaimDue",
+      "rpcPlane": "workspace-do",
+      "owner": "src/server/internalDOs/workspaceDO.ts",
+      "source": "product/bootstrap",
+      "method": "alarmClaimDue",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "src/server/internalDOs/workspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:alarmClaimDue)",
+      "r3b": {
+        "review": "host-only-generation-fenced-alarm-claim",
+        "change": "Replaces the unfenced due-alarm listing path with a bounded host-only atomic claim carrying an adopted worker identity and claim generation. Claims never expire by elapsed time."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
       "id": "direct:src/server/internalDOs/workspaceDO.ts:alarmClear",
       "rpcPlane": "workspace-do",
       "owner": "src/server/internalDOs/workspaceDO.ts",
@@ -3150,11 +3150,11 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
-      "id": "direct:src/server/internalDOs/workspaceDO.ts:alarmListDue",
+      "id": "direct:src/server/internalDOs/workspaceDO.ts:alarmListScheduled",
       "rpcPlane": "workspace-do",
       "owner": "src/server/internalDOs/workspaceDO.ts",
       "source": "product/bootstrap",
-      "method": "alarmListDue",
+      "method": "alarmListScheduled",
       "resourceDerivation": {
         "kind": "direct-target",
         "owner": "src/server/internalDOs/workspaceDO.ts"
@@ -3183,10 +3183,10 @@
         "exact-resource-scope",
         "next-dispatch-revocation"
       ],
-      "r3aRequirement": "capability(host,rpc:alarmListDue)",
+      "r3aRequirement": "capability(host,rpc:alarmListScheduled)",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "host-only-bounded-alarm-census",
+        "change": "Replaces the prior due-alarm execution feed with a read-only startup census of exact scheduled Durable Object targets. It exposes no alarm payload and grants no claim or execution authority."
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
@@ -3433,6 +3433,88 @@
       "r3b": {
         "review": "unchanged-parity",
         "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
+      "id": "direct:src/server/internalDOs/workspaceDO.ts:durableWorkOwnerList",
+      "rpcPlane": "workspace-do",
+      "owner": "src/server/internalDOs/workspaceDO.ts",
+      "source": "product/bootstrap",
+      "method": "durableWorkOwnerList",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "src/server/internalDOs/workspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "gated",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:durableWorkOwnerList)",
+      "r3b": {
+        "review": "host-only-bounded-durable-owner-scan",
+        "change": "Adds the host recovery driver's bounded read of registered durable-work owners; owner-local state remains readiness authority."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
+      "id": "direct:src/server/internalDOs/workspaceDO.ts:durableWorkOwnerRegister",
+      "rpcPlane": "workspace-do",
+      "owner": "src/server/internalDOs/workspaceDO.ts",
+      "source": "product/bootstrap",
+      "method": "durableWorkOwnerRegister",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "src/server/internalDOs/workspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:durableWorkOwnerRegister)",
+      "r3b": {
+        "review": "host-only-durable-owner-registration",
+        "change": "Adds idempotent host registration of an exact active Durable Object and its enumerated work queues for recovery scanning."
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
@@ -5446,6 +5528,88 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
+      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:acceptChannelBatch",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
+      "source": "packages/agentic-do",
+      "method": "acceptChannelBatch",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:acceptChannelBatch",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:acceptChannelBatch)",
+      "r3b": {
+        "review": "host-only-incarnation-fenced-inbox-admission",
+        "change": "Adds bounded all-or-nothing local admission of an exact channel batch addressed to the active vessel incarnation; it performs no remote execution."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
+      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:adoptDurableWorkWorker",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
+      "source": "packages/agentic-do",
+      "method": "adoptDurableWorkWorker",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:adoptDurableWorkWorker",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:adoptDurableWorkWorker)",
+      "r3b": {
+        "review": "host-only-durable-worker-generation-adoption",
+        "change": "Installs the exact host durable-work worker generation on one concrete agent vessel and releases only claims owned by the positively superseded generation. No user or code principal is admitted, and elapsed time cannot transfer ownership."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
       "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:attachChannel",
       "rpcPlane": "workspace-do",
       "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
@@ -5570,6 +5734,47 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
+      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:claimReadyWork",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
+      "source": "packages/agentic-do",
+      "method": "claimReadyWork",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:claimReadyWork",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:claimReadyWork)",
+      "r3b": {
+        "review": "host-only-agent-work-claim",
+        "change": "Adds bounded generation-fenced claims over the exact vessel's local inbox and effect projections; no code or user principal is admitted."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
       "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:deliverEffectOutcome",
       "rpcPlane": "workspace-do",
       "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
@@ -5608,6 +5813,170 @@
       "r3b": {
         "review": "unchanged-parity",
         "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
+      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:durableWorkStatus",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
+      "source": "packages/agentic-do",
+      "method": "durableWorkStatus",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "capability": "rpc:durableWorkStatus",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:durableWorkStatus)",
+      "r3b": {
+        "review": "host-only-agent-readiness-summary",
+        "change": "Adds a bounded host read of queue readiness and next recovery time without exposing descriptors or transcript content."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
+      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:executeEffectClaim",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
+      "source": "packages/agentic-do",
+      "method": "executeEffectClaim",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:executeEffectClaim",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:executeEffectClaim)",
+      "r3b": {
+        "review": "host-only-held-agent-effect",
+        "change": "Executes only an already generation-fenced effect claim on the exact vessel; live authority is re-evaluated by the narrow executor ports."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
+      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:executeInboxClaim",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
+      "source": "packages/agentic-do",
+      "method": "executeInboxClaim",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:executeInboxClaim",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:executeInboxClaim)",
+      "r3b": {
+        "review": "host-only-held-agent-transition",
+        "change": "Executes only an already generation-fenced local inbox transition on the exact vessel, with GAD retaining semantic ordering authority."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
+      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:failReadyWork",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
+      "source": "packages/agentic-do",
+      "method": "failReadyWork",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:failReadyWork",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:failReadyWork)",
+      "r3b": {
+        "review": "host-only-agent-claim-failure",
+        "change": "Records retry state only when worker identity and worker generation match the exact local claim."
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
@@ -5865,47 +6234,6 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
-      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onChannelEnvelope",
-      "rpcPlane": "workspace-do",
-      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
-      "source": "packages/agentic-do",
-      "method": "onChannelEnvelope",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
-      },
-      "authorityPrincipals": [
-        "code"
-      ],
-      "sensitivity": "write",
-      "tier": "open",
-      "capability": "rpc:onChannelEnvelope",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-delegation"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared direct-RPC scenarios retain their current behavior",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "allOf(capability(code,rpc:onChannelEnvelope),workspace-member)",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
-    },
-    {
       "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onEvalComplete",
       "rpcPlane": "workspace-do",
       "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
@@ -6153,6 +6481,47 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
+      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:settleReadyWork",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
+      "source": "packages/agentic-do",
+      "method": "settleReadyWork",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:settleReadyWork",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:settleReadyWork)",
+      "r3b": {
+        "review": "host-only-agent-claim-settlement",
+        "change": "Settles only the exact worker and generation; stale hosts cannot mutate a newer inbox or effect claim."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
       "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:subscribeChannel",
       "rpcPlane": "workspace-do",
       "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
@@ -6232,6 +6601,47 @@
       "r3b": {
         "review": "unchanged-parity",
         "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
+      "id": "direct:workspace/packages/runtime/src/worker/durable-base.ts:durableWorkCapabilities",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/runtime/src/worker/durable-base.ts",
+      "source": "packages/runtime",
+      "method": "durableWorkCapabilities",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/runtime/src/worker/durable-base.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "capability": "rpc:durableWorkCapabilities",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:durableWorkCapabilities)",
+      "r3b": {
+        "review": "host-only-static-work-capability-read",
+        "change": "Exposes only the receiver's fixed supported durable-work queue names to the host activation hook; it reads no semantic or user data."
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
@@ -10596,6 +11006,47 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
+      "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:adoptDurableWorkWorker",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/pubsub-channel/channel-do.ts",
+      "source": "workers/pubsub-channel",
+      "method": "adoptDurableWorkWorker",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/pubsub-channel/channel-do.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:adoptDurableWorkWorker",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:adoptDurableWorkWorker)",
+      "r3b": {
+        "review": "host-only-durable-worker-generation-adoption",
+        "change": "Installs the exact host durable-work worker generation on one concrete channel and releases only claims owned by the positively superseded generation. No user or code principal is admitted, and elapsed time cannot transfer ownership."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
       "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:appendSeed",
       "rpcPlane": "workspace-do",
       "owner": "workspace/workers/pubsub-channel/channel-do.ts",
@@ -10806,6 +11257,88 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
+      "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:claimReadyWork",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/pubsub-channel/channel-do.ts",
+      "source": "workers/pubsub-channel",
+      "method": "claimReadyWork",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/pubsub-channel/channel-do.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:claimReadyWork",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:claimReadyWork)",
+      "r3b": {
+        "review": "host-only-channel-work-claim",
+        "change": "Adds bounded generation-fenced claims over exact recipient-incarnation batches and channel recovery items."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
+      "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:durableWorkStatus",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/pubsub-channel/channel-do.ts",
+      "source": "workers/pubsub-channel",
+      "method": "durableWorkStatus",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/pubsub-channel/channel-do.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "capability": "rpc:durableWorkStatus",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:durableWorkStatus)",
+      "r3b": {
+        "review": "host-only-channel-readiness-summary",
+        "change": "Adds a bounded host read of channel work readiness and recovery time without exposing message payloads."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
       "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:error",
       "rpcPlane": "workspace-do",
       "owner": "workspace/workers/pubsub-channel/channel-do.ts",
@@ -10843,6 +11376,88 @@
       "r3b": {
         "review": "unchanged-parity",
         "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
+      "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:executeChannelMaintenanceClaim",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/pubsub-channel/channel-do.ts",
+      "source": "workers/pubsub-channel",
+      "method": "executeChannelMaintenanceClaim",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/pubsub-channel/channel-do.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:executeChannelMaintenanceClaim",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:executeChannelMaintenanceClaim)",
+      "r3b": {
+        "review": "host-only-held-channel-recovery",
+        "change": "Moves exact invite-index, call-deadline, and fork recovery items out of alarm activations and executes only an existing generation-fenced claim."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
+      "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:failReadyWork",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/pubsub-channel/channel-do.ts",
+      "source": "workers/pubsub-channel",
+      "method": "failReadyWork",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/pubsub-channel/channel-do.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:failReadyWork",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:failReadyWork)",
+      "r3b": {
+        "review": "host-only-channel-claim-failure",
+        "change": "Records bounded retry state only for the exact channel worker and worker generation."
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
@@ -11985,6 +12600,47 @@
       "r3b": {
         "review": "unchanged-parity",
         "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
+      "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:settleReadyWork",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/pubsub-channel/channel-do.ts",
+      "source": "workers/pubsub-channel",
+      "method": "settleReadyWork",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/pubsub-channel/channel-do.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:settleReadyWork",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:settleReadyWork)",
+      "r3b": {
+        "review": "host-only-channel-claim-settlement",
+        "change": "Requires exact worker/generation settlement and a complete gap-free per-row acknowledgement for recipient batches."
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
@@ -17460,7 +18116,8 @@
         "resolver": "corsApproval.authorize.target"
       },
       "authorityPrincipals": [
-        "code"
+        "code",
+        "session"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -17479,7 +18136,7 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"code\"]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"network.response.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"network.response.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
         "review": "schema-owned-prepared-leaf",
         "change": null
@@ -18438,6 +19095,47 @@
       "capability": "service:docs.search"
     },
     {
+      "id": "host:durableWork.inspect",
+      "rpcPlane": "host-service",
+      "owner": "durableWork",
+      "method": "inspect",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:durableWork.inspect"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:durableWork.inspect),allOf(capability(user,service:durableWork.inspect),workspace-member),allOf(capability(code,service:durableWork.inspect),workspace-member))",
+      "r3b": {
+        "review": "bounded-payload-free-scheduler-diagnostics",
+        "change": "Adds an open, read-only bounded inspection of host durable-work counters and phase timings. It exposes no work payloads, transcript content, credentials, or mutation authority."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:durableWork.inspect"
+    },
+    {
       "id": "host:eval.cancel",
       "rpcPlane": "host-service",
       "owner": "eval",
@@ -18518,6 +19216,47 @@
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
       "capability": "service:eval.deleteScopeValue"
+    },
+    {
+      "id": "host:eval.dispose",
+      "rpcPlane": "host-service",
+      "owner": "eval",
+      "method": "dispose",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:eval.dispose"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:eval.dispose),allOf(capability(user,service:eval.dispose),workspace-member),allOf(capability(code,service:eval.dispose),workspace-member))",
+      "r3b": {
+        "review": "owner-scoped-finite-eval-release",
+        "change": "Adds explicit release for an EvalDO whose immutable first activation declared it finite. The receiver derives the exact object from the verified owner and subkey, rejects persistent scopes, erases the finite object's durable records and loaded runtime, and retires it through the normal sealed lifecycle and cleanup reaper. Closing this owned finite resource is open and cannot address another caller's eval state."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:eval.dispose"
     },
     {
       "id": "host:eval.getRun",
@@ -19310,7 +20049,8 @@
         "resolver": "externalOpen.openExternal.target"
       },
       "authorityPrincipals": [
-        "code"
+        "code",
+        "session"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -19329,7 +20069,7 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"code\"]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"external.open\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"external.open\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
         "review": "schema-owned-prepared-leaf",
         "change": null
@@ -30224,6 +30964,47 @@
       "capability": "service:vcs.integrate"
     },
     {
+      "id": "host:vcs.listDirectory",
+      "rpcPlane": "host-service",
+      "owner": "vcs",
+      "method": "listDirectory",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:vcs.listDirectory"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:vcs.listDirectory),allOf(capability(user,service:vcs.listDirectory),workspace-member),allOf(capability(code,service:vcs.listDirectory),workspace-member))",
+      "r3b": {
+        "review": "bounded-semantic-immediate-child-read",
+        "change": "Adds an open, read-only immediate-child directory projection over the caller's existing semantic VCS read authority. Work is bounded by returned visible entries and does not enumerate descendant file content."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:vcs.listDirectory"
+    },
+    {
       "id": "host:vcs.listFiles",
       "rpcPlane": "host-service",
       "owner": "vcs",
@@ -31608,7 +32389,8 @@
         "resolver": "workerdInspector.getEndpoint.target"
       },
       "authorityPrincipals": [
-        "code"
+        "code",
+        "session"
       ],
       "sensitivity": "admin",
       "authenticatedFacts": [
@@ -31627,7 +32409,7 @@
         "exact-prepared-resource",
         "registered-preparer"
       ],
-      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"code\"]}",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"runtime.inspect\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"runtime.inspect\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
         "review": "schema-owned-prepared-leaf",
         "change": null

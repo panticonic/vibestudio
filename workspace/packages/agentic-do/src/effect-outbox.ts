@@ -5,9 +5,8 @@
  * directions.
  */
 
-import type { SqlStorage } from "@workspace/runtime/worker";
+import { assertExactSqlTableSchema, type SqlStorage } from "@workspace/runtime/worker";
 import type { EffectDescriptor, EffectKind } from "@workspace/agent-loop";
-import { assertExactSqlTableSchema } from "./sql-table-schema.js";
 
 export interface OutboxRow {
   effectId: string;
@@ -18,7 +17,10 @@ export interface OutboxRow {
   descriptor: EffectDescriptor;
   attempts: number;
   nextAttemptAt: number | null;
-  leaseExpiresAt: number | null;
+  leaseOwner: string | null;
+  leaseGeneration: number;
+  disposition: "ready" | "leased" | "parked" | "retrying";
+  lastAttemptAt: number | null;
   createdAt: number;
 }
 
@@ -52,8 +54,12 @@ export function ensureOutboxSchema(sql: SqlStorage): void {
       descriptor_json  TEXT NOT NULL,
       attempts         INTEGER NOT NULL DEFAULT 0,
       next_attempt_at  INTEGER,
-      lease_expires_at INTEGER,
+      lease_owner      TEXT,
+      lease_generation INTEGER NOT NULL DEFAULT 0,
       created_at       INTEGER NOT NULL,
+      last_attempt_at  INTEGER,
+      disposition      TEXT NOT NULL DEFAULT 'ready'
+        CHECK (disposition IN ('ready', 'leased', 'parked', 'retrying')),
       PRIMARY KEY (branch_id, effect_id)
     )
   `);
@@ -68,8 +74,11 @@ export function ensureOutboxSchema(sql: SqlStorage): void {
       ["descriptor_json", "TEXT", true],
       ["attempts", "INTEGER", true, "0"],
       ["next_attempt_at", "INTEGER", false],
-      ["lease_expires_at", "INTEGER", false],
+      ["lease_owner", "TEXT", false],
+      ["lease_generation", "INTEGER", true, "0"],
       ["created_at", "INTEGER", true],
+      ["last_attempt_at", "INTEGER", false],
+      ["disposition", "TEXT", true, "'ready'"],
     ],
     primaryKey: ["branch_id", "effect_id"],
   });
@@ -107,24 +116,6 @@ export function maxAttempts(kind: EffectKind, mutating = false): number {
   }
 }
 
-export function leaseMs(kind: EffectKind): number {
-  switch (kind) {
-    case "prompt_artifacts":
-      return 60 * 1000;
-    case "model_call":
-      return 10 * 60 * 1000;
-    case "local_tool":
-      return 2 * 60 * 1000;
-    case "channel_call":
-    case "http_call":
-      return 60 * 1000;
-    case "credential_wait":
-      return 60 * 1000;
-    case "publish_envelope":
-      return 30 * 1000;
-  }
-}
-
 export function backoffMs(attempts: number): number {
   return Math.min(30_000, 500 * 2 ** attempts);
 }
@@ -139,9 +130,28 @@ function mapRow(row: Record<string, unknown>): OutboxRow {
     descriptor: JSON.parse(String(row["descriptor_json"])) as EffectDescriptor,
     attempts: Number(row["attempts"] ?? 0),
     nextAttemptAt: row["next_attempt_at"] == null ? null : Number(row["next_attempt_at"]),
-    leaseExpiresAt: row["lease_expires_at"] == null ? null : Number(row["lease_expires_at"]),
+    leaseOwner: row["lease_owner"] == null ? null : String(row["lease_owner"]),
+    leaseGeneration: Number(row["lease_generation"] ?? 0),
+    disposition: String(row["disposition"] ?? "ready") as OutboxRow["disposition"],
+    lastAttemptAt: row["last_attempt_at"] == null ? null : Number(row["last_attempt_at"]),
     createdAt: Number(row["created_at"] ?? 0),
   };
+}
+
+function compareDispatchOrder(left: OutboxRow, right: OutboxRow): number {
+  const leftDescriptor = left.descriptor;
+  const rightDescriptor = right.descriptor;
+  if (
+    leftDescriptor.kind === "local_tool" &&
+    rightDescriptor.kind === "local_tool" &&
+    leftDescriptor.turnId === rightDescriptor.turnId
+  ) {
+    const sequence = leftDescriptor.invocationSeq - rightDescriptor.invocationSeq;
+    if (sequence !== 0) return sequence;
+  }
+  if (left.createdAt !== right.createdAt) return left.createdAt - right.createdAt;
+  const branch = left.branchId.localeCompare(right.branchId);
+  return branch !== 0 ? branch : left.effectId.localeCompare(right.effectId);
 }
 
 /**
@@ -154,9 +164,11 @@ export function inspectEffectOutbox(sql: SqlStorage): OutboxRow[] {
     .exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'effect_outbox'`)
     .toArray();
   if (tables.length === 0) return [];
-  return (sql.exec(`SELECT * FROM effect_outbox`).toArray() as Record<string, unknown>[]).map(
-    mapRow
-  );
+  return (
+    sql
+      .exec(`SELECT * FROM effect_outbox ORDER BY created_at, branch_id, effect_id`)
+      .toArray() as Record<string, unknown>[]
+  ).map(mapRow);
 }
 
 export class EffectOutbox {
@@ -168,8 +180,9 @@ export class EffectOutbox {
     this.sql.exec(
       `INSERT OR IGNORE INTO effect_outbox (
          effect_id, branch_id, channel_id, kind, idempotency_key,
-         descriptor_json, attempts, next_attempt_at, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+         descriptor_json, attempts, next_attempt_at, lease_generation,
+         created_at, disposition
+       ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, ?, 'ready')`,
       descriptor.effectId,
       branchId,
       descriptor.channelId,
@@ -237,44 +250,26 @@ export class EffectOutbox {
     return inspectEffectOutbox(this.sql);
   }
 
-  /** Rows due for dispatch: unleased (or expired lease) and past nextAttemptAt. */
+  /** Rows due for dispatch in the active host generation. Leased rows remain
+   * owned until settlement, explicit failure, or dispatcher-generation adoption. */
   due(now: number): OutboxRow[] {
     return (
       this.sql
         .exec(
           `SELECT * FROM effect_outbox
            WHERE (next_attempt_at IS NULL OR next_attempt_at <= ?)
-             AND (lease_expires_at IS NULL OR lease_expires_at <= ?)`,
-          now,
+             AND disposition IN ('ready', 'retrying', 'parked')
+           ORDER BY created_at, branch_id, effect_id`,
           now
         )
         .toArray() as Record<string, unknown>[]
     ).map(mapRow);
   }
 
-  lease(branchId: string, effectId: string, now: number): void {
-    const row = this.get(branchId, effectId);
-    if (!row) return;
-    // Take the row in-flight AND clear next_attempt_at: it still holds the (now-past) dispatch time,
-    // and once dispatched the NEXT attempt time is owned by the outcome — deferRedrive's backstop,
-    // recordFailure's backoff, or a racing nudge (which re-sets it to a fresh `now`). Leaving the stale
-    // past value here makes deferRedrive's "keep an earlier wake" clause preserve an already-due time,
-    // so a DEFERRED effect (channel_call/http_call/credential_wait) re-dispatches on every alarm tick
-    // (~50ms) until its result arrives — a hot redrive loop instead of the intended ~60s backstop.
-    this.sql.exec(
-      `UPDATE effect_outbox
-       SET lease_expires_at = ?, next_attempt_at = NULL
-       WHERE branch_id = ? AND effect_id = ?`,
-      now + leaseMs(row.kind),
-      branchId,
-      effectId
-    );
-  }
-
   releaseLease(branchId: string, effectId: string): void {
     this.sql.exec(
       `UPDATE effect_outbox
-       SET lease_expires_at = NULL
+       SET lease_owner = NULL, disposition = 'ready'
        WHERE branch_id = ? AND effect_id = ?`,
       branchId,
       effectId
@@ -297,8 +292,9 @@ export class EffectOutbox {
     this.sql.exec(
       `UPDATE effect_outbox
        SET attempts = ?,
-           lease_expires_at = NULL,
-           next_attempt_at = ?
+           lease_owner = NULL,
+           next_attempt_at = ?,
+           disposition = 'retrying'
        WHERE branch_id = ? AND effect_id = ?`,
       attempts,
       now + delay,
@@ -308,22 +304,89 @@ export class EffectOutbox {
     return this.get(branchId, effectId);
   }
 
-  /**
-   * Earliest wake-relevant instant across rows (alarm scheduling). Leased
-   * (in-flight) rows become due at lease expiry — that IS orphan recovery
-   * for work lost to eviction or a hung stream; unleased rows at their
-   * next_attempt_at (0 = now). Lease-awareness keeps the alarm quiet while
-   * work is genuinely running instead of hot-polling it.
-   */
-  earliestDueAt(): number | null {
+  claimReady(input: {
+    workerId: string;
+    now: number;
+    limit: number;
+  }): OutboxRow[] {
+    const candidates = this.due(input.now);
+    const dueKeys = new Set(candidates.map((row) => `${row.branchId}\u0000${row.effectId}`));
+    const unresolved = this.all();
+    const selected: OutboxRow[] = [];
+    for (const channelId of [...new Set(unresolved.map((row) => row.channelId))]) {
+      const rows = unresolved
+        .filter((row) => row.channelId === channelId)
+        .sort(compareDispatchOrder);
+      selected.push(
+        ...rows.filter(
+          (row) =>
+            (row.kind === "publish_envelope" ||
+              row.kind === "channel_call" ||
+              row.kind === "http_call") &&
+            dueKeys.has(`${row.branchId}\u0000${row.effectId}`)
+        )
+      );
+      const semantic = rows.filter(
+        (row) =>
+          row.kind !== "publish_envelope" && row.kind !== "channel_call" && row.kind !== "http_call"
+      );
+      const first = semantic[0];
+      if (!first) continue;
+      if (first.descriptor.kind === "local_tool" && first.descriptor.executionMode === "parallel") {
+        for (const row of semantic) {
+          if (row.descriptor.kind !== "local_tool" || row.descriptor.executionMode !== "parallel") {
+            break;
+          }
+          if (dueKeys.has(`${row.branchId}\u0000${row.effectId}`)) selected.push(row);
+        }
+      } else if (dueKeys.has(`${first.branchId}\u0000${first.effectId}`)) {
+        selected.push(first);
+      }
+    }
+    const claimed: OutboxRow[] = [];
+    for (const row of selected.slice(0, input.limit)) {
+      const updated = (
+        this.sql
+          .exec(
+            `UPDATE effect_outbox
+                SET lease_owner = ?,
+                    lease_generation = lease_generation + 1,
+                    next_attempt_at = NULL,
+                    last_attempt_at = ?,
+                    disposition = 'leased'
+              WHERE branch_id = ?
+                AND effect_id = ?
+                AND disposition IN ('ready', 'retrying', 'parked')
+            RETURNING *`,
+            input.workerId,
+            input.now,
+            row.branchId,
+            row.effectId
+          )
+          .toArray() as Record<string, unknown>[]
+      )[0];
+      if (updated) claimed.push(mapRow(updated));
+    }
+    return claimed;
+  }
+
+  isClaim(branchId: string, effectId: string, generation: number, workerId?: string): boolean {
+    const row = this.get(branchId, effectId);
+    return (
+      row?.disposition === "leased" &&
+      row.leaseGeneration === generation &&
+      (workerId === undefined || row.leaseOwner === workerId)
+    );
+  }
+
+  earliestRecoveryAt(): number | null {
     const row = this.sql
       .exec(
         `SELECT MIN(
-           CASE WHEN lease_expires_at IS NOT NULL
-                THEN lease_expires_at
-                ELSE COALESCE(next_attempt_at, 0)
-           END
-         ) AS due FROM effect_outbox`
+           next_attempt_at
+         ) AS due
+           FROM effect_outbox
+          WHERE disposition IN ('retrying', 'parked')`
       )
       .toArray()[0];
     const value = row?.["due"];

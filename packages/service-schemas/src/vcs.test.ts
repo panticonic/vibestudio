@@ -26,6 +26,8 @@ import {
   vcsInspectResultSchema,
   vcsInspectedNodeSchema,
   vcsIntegrateInputSchema,
+  vcsListDirectoryInputSchema,
+  vcsListDirectoryResultSchema,
   vcsListFilesInputSchema,
   vcsMethods,
   vcsMoveInputSchema,
@@ -88,6 +90,7 @@ const expectedMethods = [
   "importSnapshot",
   "inspect",
   "integrate",
+  "listDirectory",
   "listFiles",
   "move",
   "neighbors",
@@ -99,7 +102,7 @@ const expectedMethods = [
 ] as const;
 
 describe("minimal semantic VCS surface", () => {
-  it("has exactly the eighteen plan methods", () => {
+  it("has exactly the nineteen plan methods", () => {
     expect(Object.keys(vcsMethods).sort()).toEqual([...expectedMethods].sort());
 
     for (const removed of [
@@ -1102,6 +1105,40 @@ describe("walkable bounded reads", () => {
     expect(
       vcsListFilesInputSchema.parse({ state: event, repositoryId: "repository:1", limit: 100 })
     ).toBeTruthy();
+  });
+
+  it("lists only immediate semantic directory entries with attached name lineage", () => {
+    expect(
+      vcsListDirectoryInputSchema.parse({
+        state: event,
+        path: "packages/runtime",
+        limit: 100,
+      })
+    ).toMatchObject({ path: "packages/runtime" });
+    expect(
+      vcsListDirectoryResultSchema.parse({
+        state: event,
+        path: "packages/runtime",
+        entries: [
+          {
+            name: "src",
+            path: "packages/runtime/src",
+            kind: "directory",
+            identity: "directory:runtime:src",
+            repositoryId: "repository:runtime",
+            repositoryRoot: false,
+            fileId: null,
+            lineage: {
+              authoredChangeId: "change:src-witness",
+              authoredByWorkUnitId: "work:src-witness",
+              contentClass: "internal",
+              externalKeys: [],
+            },
+          },
+        ],
+        nextCursor: null,
+      })
+    ).toMatchObject({ entries: [{ name: "src", kind: "directory" }] });
   });
 });
 

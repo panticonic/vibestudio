@@ -6,7 +6,13 @@
  */
 
 import { z } from "zod";
-import type { FieldDefinition, FieldValue } from "@vibestudio/types";
+import {
+  FieldConditionSchema,
+  FieldValueSchema,
+  FieldWarningSchema,
+  type FieldDefinition,
+  type FieldValue,
+} from "@vibestudio/types";
 
 const SandboxSourceSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("code"), code: z.string() }).strict(),
@@ -60,32 +66,11 @@ export const MethodAdvertisementSchema = z.object({
   streaming: z.boolean().optional(),
 });
 
-// Primitive field value type (for conditions and warnings)
-const PrimitiveFieldValueSchema = z.union([z.string(), z.number(), z.boolean()]);
-
-// Field value type (primitives + string arrays for multiSelect)
-const FieldValueSchema = z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]);
-
-// Condition for field visibility/enabled state (uses primitives only)
-// Note: "contains" is for checking if an array field (multiSelect) contains a specific value
-const FieldConditionSchema = z.object({
-  field: z.string(),
-  operator: z.enum(["eq", "neq", "gt", "gte", "lt", "lte", "in", "contains"]),
-  value: z.union([PrimitiveFieldValueSchema, z.array(PrimitiveFieldValueSchema)]),
-});
-
 // Slider notch for discrete labeled stops
 const SliderNotchSchema = z.object({
   value: z.number(),
   label: z.string(),
   description: z.string().optional(),
-});
-
-// Warning to display for specific values (uses primitives only)
-const FieldWarningSchema = z.object({
-  when: z.union([PrimitiveFieldValueSchema, z.array(PrimitiveFieldValueSchema)]),
-  message: z.string(),
-  severity: z.enum(["info", "warning", "danger"]).optional(),
 });
 
 /**
@@ -222,7 +207,7 @@ export interface FeedbackCustomArgs {
 export const FeedbackFormArgsSchema = z.object({
   title: z.string(),
   fields: z.array(FieldDefinitionSchema),
-  values: z.record(z.union([z.string(), z.number(), z.boolean(), z.array(z.string())])).optional(),
+  values: z.record(FieldValueSchema).optional(),
   submitLabel: z.string().optional(),
   cancelLabel: z.string().optional(),
   severity: z.enum(["info", "warning", "danger"]).optional(), // Affects styling/icon

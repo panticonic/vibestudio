@@ -9,6 +9,7 @@ function record(kind: EntityRecord["kind"], id = `${kind}:one`): EntityRecord {
     source: { repoPath: `${kind}s/example`, effectiveVersion: "v1" },
     contextId: "ctx-one",
     key: "one",
+    ...(kind === "do" ? { className: "ExampleDO" } : {}),
     createdAt: 1,
     status: "retired",
     cleanupComplete: false,
@@ -45,7 +46,7 @@ function deps() {
     },
     workerdManager: {
       stopWorker: vi.fn(async () => {}),
-      destroyDOEntity: vi.fn(async () => {}),
+      retireDOEntity: vi.fn(async () => {}),
     },
   };
 }
@@ -74,7 +75,7 @@ describe("cleanupRuntimeEntity", () => {
     expect(d.webhookIngress.internal.revokeForCaller).toHaveBeenCalledWith("panel:one");
     expect(d.tokenManager.revokeToken).toHaveBeenCalledWith("panel:one");
     expect(d.workerdManager.stopWorker).not.toHaveBeenCalled();
-    expect(d.workerdManager.destroyDOEntity).not.toHaveBeenCalled();
+    expect(d.workerdManager.retireDOEntity).not.toHaveBeenCalled();
   });
 
   it("also stops worker and DO runtime resources by entity kind", async () => {
@@ -104,10 +105,14 @@ describe("cleanupRuntimeEntity", () => {
       getWebhookIngress: () => doDeps.webhookIngress,
       getWorkerdManager: () => doDeps.workerdManager as never,
     });
-    expect(doDeps.workerdManager.destroyDOEntity).toHaveBeenCalledWith("do:one");
+    expect(doDeps.workerdManager.retireDOEntity).toHaveBeenCalledWith({
+      source: "dos/example",
+      className: "ExampleDO",
+      objectKey: "one",
+    });
   });
 
-  it("continues best-effort cleanup when one cleanup step throws", async () => {
+  it("attempts every cleanup step and reports failures to the durable reaper", async () => {
     const d = deps();
     d.fsService.closeHandlesForCaller.mockImplementation(() => {
       throw new Error("fs cleanup failed");
@@ -126,10 +131,61 @@ describe("cleanupRuntimeEntity", () => {
         getWebhookIngress: () => d.webhookIngress,
         getWorkerdManager: () => d.workerdManager as never,
       })
-    ).resolves.toBeUndefined();
+    ).rejects.toMatchObject({
+      name: "AggregateError",
+      errors: [
+        expect.objectContaining({ message: "fs cleanup failed" }),
+        expect.objectContaining({ message: "webhook failed" }),
+      ],
+    });
 
     expect(d.fsService.closeHandlesForCaller).toHaveBeenCalledWith("panel:one");
     expect(d.webhookIngress.internal.revokeForCaller).toHaveBeenCalledWith("panel:one");
     expect(d.tokenManager.revokeToken).toHaveBeenCalledWith("panel:one");
+  });
+
+  it("reports a failed facet retirement instead of losing the live userland object", async () => {
+    const d = deps();
+    d.workerdManager.retireDOEntity.mockRejectedValue(new Error("facet abort failed"));
+
+    await expect(
+      cleanupRuntimeEntity(record("do", "do:one"), {
+        panelRuntimeCoordinator: d.panelRuntimeCoordinator as never,
+        egressProxy: d.egressProxy,
+        approvalQueue: d.approvalQueue,
+        credentialSessionGrantStore: d.credentialSessionGrantStore,
+        tokenManager: d.tokenManager,
+        connectionGrants: d.connectionGrants,
+        getFsService: () => d.fsService as never,
+        getWebhookIngress: () => d.webhookIngress,
+        getWorkerdManager: () => d.workerdManager as never,
+      })
+    ).rejects.toThrow("Runtime entity cleanup failed for do:one");
+
+    expect(d.workerdManager.retireDOEntity).toHaveBeenCalledOnce();
+  });
+
+  it("reports an incomplete Durable Object identity instead of silently skipping retirement", async () => {
+    const d = deps();
+    const incomplete = {
+      ...record("do", "do:incomplete"),
+      className: undefined,
+    } as EntityRecord;
+
+    await expect(
+      cleanupRuntimeEntity(incomplete, {
+        panelRuntimeCoordinator: d.panelRuntimeCoordinator as never,
+        egressProxy: d.egressProxy,
+        approvalQueue: d.approvalQueue,
+        credentialSessionGrantStore: d.credentialSessionGrantStore,
+        tokenManager: d.tokenManager,
+        connectionGrants: d.connectionGrants,
+        getFsService: () => d.fsService as never,
+        getWebhookIngress: () => d.webhookIngress,
+        getWorkerdManager: () => d.workerdManager as never,
+      })
+    ).rejects.toThrow("Runtime entity cleanup failed for do:incomplete");
+
+    expect(d.workerdManager.retireDOEntity).not.toHaveBeenCalled();
   });
 });

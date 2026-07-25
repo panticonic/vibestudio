@@ -95,10 +95,10 @@ function service(options?: {
 }
 
 describe("canonical vcsService", () => {
-  it("exposes exactly the 18 public semantic methods", () => {
+  it("exposes exactly the 19 public semantic methods", () => {
     const { definition } = service();
     expect(Object.keys(definition.methods).sort()).toEqual(Object.keys(vcsMethods).sort());
-    expect(Object.keys(definition.methods)).toHaveLength(18);
+    expect(Object.keys(definition.methods)).toHaveLength(19);
   });
 
   it("forwards only input and the exact per-call causal edge", async () => {

@@ -13,6 +13,35 @@ metadata, P6 no coexistence machinery.
 
 ---
 
+## Landed execution-lifetime amendment (2026-07-25)
+
+The pure fold, deterministic effect descriptors, GAD authority, and projection
+rules in this document remain binding. The alarm-owned execution lifetime
+described in §2 is superseded by
+`docs/agentic-hot-path-work-dispatch-plan.md`.
+
+- GAD owns the trajectory transition. `effect_outbox` and
+  `agent_inbox_queue` are reconstructible local projections.
+- The host `DurableWorkDriver` is the sole immediate execution owner. It claims
+  `agent-inbox` and `agent-effect` rows with a worker id, monotonically
+  increasing lease generation, and expiry.
+- A host-held `executeInboxClaim` or `executeEffectClaim` performs the claimed
+  transition. Settlement and failure must match the exact worker and
+  generation.
+- Channel intake is `acceptChannelBatch`, addressed to an exact vessel
+  incarnation. Exact duplicates are accepted; any mismatched duplicate rejects
+  and rolls back the whole bounded batch.
+- Scheduled model resumes and subagent-progress publications are internal inbox
+  transitions on the same claim path.
+- Agent alarms perform local due/retry reconciliation and re-emit
+  disposable work-ready receipts. They never drain an inbox, execute an effect,
+  publish progress, call a model/tool/channel, or await the work driver.
+- Recovery scans registered durable owners and asks each owner to derive
+  readiness from local state. Neither the receipt nor registry is authority.
+
+Read later references to “the driver alarm”, “alarm dispatch”, or “one alarm
+shared by the outbox” through this amendment.
+
 ## 0. Foundation surfaces this work builds on (and nothing else)
 
 From Stage 0 (`docs/stage0-unified-log-spec.md`):
@@ -622,7 +651,8 @@ CREATE TABLE IF NOT EXISTS effect_outbox (
   descriptor_json  TEXT NOT NULL,         -- denormalized copy of the descriptor (cache, never authority)
   attempts         INTEGER NOT NULL DEFAULT 0,
   next_attempt_at  INTEGER,               -- ms epoch; backoff / credential expiry deadline
-  lease_expires_at INTEGER,               -- ms epoch; held while an executor is running in-memory
+  lease_owner      TEXT,
+  lease_generation INTEGER NOT NULL DEFAULT 0,
   created_at       INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_effect_outbox_due ON effect_outbox(next_attempt_at);
@@ -639,10 +669,10 @@ construction in both directions.
 Retry: on executor failure, `attempts += 1`, `next_attempt_at = now +
 min(30s, 500ms * 2^attempts)`; when `attempts >= maxAttempts(kind)` (model 3,
 local_tool 1 for mutating / 3 for reads, channel/http 5, credential —
-deadline-only), the driver calls `step` with `effect-failed` (F-rule). Leases:
-`lease_expires_at = now + leaseMs(kind)` set when an executor starts; the
-alarm sweep treats an expired lease as a crashed attempt (attempts += 1,
-redispatch).
+deadline-only), the driver calls `step` with `effect-failed` (F-rule).
+Ownership is generation-fenced and has no wall-clock expiry. A positively
+identified replacement host generation adopts the queue and releases claims
+owned by the superseded generation.
 
 This ONE table replaces eight: `agent_turn_runs`,
 `agent_turn_resume_attempts`, `agent_pending_steering`, `agent_turn_outbox`,
@@ -689,9 +719,9 @@ async function reconcileOutbox(loop: LoopInstance): Promise<void> {
   // 3. Descriptor drift check (debug assert, not control flow):
   //    stableJson(row.descriptor_json) must equal stableJson(expected descriptor).
 
-  // 4. Dispatch everything due and unleased.
-  await loop.dispatchDue();         // for each row: next_attempt_at <= now && lease free
-  loop.scheduleAlarmForEarliest();  // min(next_attempt_at, lease_expires_at) across rows
+  // 4. Announce everything due and unclaimed to the host work driver.
+  loop.markReady();                 // next_attempt_at <= now && disposition != leased
+  loop.scheduleAlarmForEarliest();  // min(next_attempt_at) across scheduled retries
 }
 ```
 

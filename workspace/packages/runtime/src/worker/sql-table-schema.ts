@@ -1,4 +1,4 @@
-import type { SqlStorage } from "@workspace/runtime/worker";
+import type { SqlStorage } from "./durable-base.js";
 
 export type SqlTableColumn = readonly [
   name: string,
@@ -13,12 +13,7 @@ export interface ExactSqlTableSchema {
   primaryKey: readonly string[];
 }
 
-/**
- * Assert that an existing SQLite table is exactly the table this source knows
- * how to operate. Pre-release state is intentionally not migrated in place:
- * CREATE TABLE IF NOT EXISTS creates fresh state, while this assertion makes a
- * stale same-name table fail before any component reads or mutates it.
- */
+/** Fail closed on stale pre-release storage instead of silently adopting it. */
 export function assertExactSqlTableSchema(sql: SqlStorage, expected: ExactSqlTableSchema): void {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(expected.table)) {
     throw new Error(`Invalid SQLite table name: ${JSON.stringify(expected.table)}`);
@@ -49,8 +44,7 @@ export function assertExactSqlTableSchema(sql: SqlStorage, expected: ExactSqlTab
   const primaryKeyMatches =
     primaryKey.length === expected.primaryKey.length &&
     primaryKey.every((name, index) => name === expected.primaryKey[index]);
-
   if (!columnsMatch || !primaryKeyMatches) {
-    throw new Error(`Unsupported ${expected.table} schema; delete this pre-release agent state`);
+    throw new Error(`Unsupported ${expected.table} schema; delete this pre-release state`);
   }
 }

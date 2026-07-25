@@ -139,7 +139,10 @@ describe("client_eval", () => {
       })),
     });
 
-    const result = await definition.execute({ code: "return callMain('x')" }, context());
+    const result = await definition.execute(
+      { code: "return callMain('x')", syntax: "tsx" },
+      context()
+    );
 
     expect(result).toMatchObject({ details: { success: false } });
     expect(result.content).toEqual(

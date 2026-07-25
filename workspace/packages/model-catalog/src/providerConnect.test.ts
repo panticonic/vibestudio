@@ -5,6 +5,7 @@ import {
   listProviderConnectPresets,
   modelIsConnectable,
   toCredentialConnectRequest as toSharedCredentialConnectRequest,
+  toPanelConnectRequest,
 } from "@vibestudio/shared/providerConnect";
 
 import { toCredentialConnectRequest } from "./providerConnect";
@@ -45,6 +46,17 @@ describe("provider connect presets", () => {
       callbackPath: "/auth/callback",
     });
     expect(request?.browser).toBe("internal");
+  });
+
+  it("defaults panel OAuth to the system browser while preserving an explicit workspace browser", () => {
+    expect(toPanelConnectRequest("openai-codex")).toMatchObject({
+      browser: "external",
+      redirect: { type: "client-loopback" },
+    });
+    expect(toPanelConnectRequest("openai-codex", { browser: "internal" })).toMatchObject({
+      browser: "internal",
+      redirect: { type: "loopback" },
+    });
   });
 
   it("exports the presets from the shared package path", () => {

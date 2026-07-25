@@ -1,5 +1,5 @@
 import type { AgentExecutionSessionFact, AgentExecutionTestPolicy } from "@vibestudio/rpc";
-import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { VerifiedCaller, VerifiedCodeIdentity } from "@vibestudio/shared/serviceDispatcher";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 
 /**
@@ -43,8 +43,13 @@ export function resolveLiveExecutionCaller(input: {
   activeEntity: EntityRecord | null;
   executionSession: AgentExecutionSessionFact | null;
   contextTestPolicy: AgentExecutionTestPolicy | null;
+  /**
+   * Re-evaluate exact-version approval at request time. Egress registrations
+   * outlive individual calls, so this fact must not be frozen at registration.
+   */
+  isCodeApproved?: (code: VerifiedCodeIdentity) => boolean;
 }): VerifiedCaller | null {
-  const { registered, activeEntity, executionSession, contextTestPolicy } = input;
+  const { registered, activeEntity, executionSession, contextTestPolicy, isCodeApproved } = input;
   const agentBinding = activeEntity?.agentBinding;
 
   if (
@@ -68,10 +73,13 @@ export function resolveLiveExecutionCaller(input: {
     testPolicy: _registeredTestPolicy,
     ...stable
   } = registered;
-  return {
+  const resolved: VerifiedCaller = {
     ...stable,
     ...(agentBinding ? { agentBinding } : {}),
     ...(executionSession ? { executionSession } : {}),
     ...(testPolicy ? { testPolicy } : {}),
   };
+  return resolved.code && (resolved.codeApproved || isCodeApproved?.(resolved.code))
+    ? { ...resolved, codeApproved: true }
+    : resolved;
 }

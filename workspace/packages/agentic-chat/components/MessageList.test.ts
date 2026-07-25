@@ -395,7 +395,7 @@ describe("MessageList typing indicators (roster-based)", () => {
     const callMethod = vi.fn(async (_participantId: string, method: string) => {
       if (method === "getAgentSettings") {
         return {
-          model: { value: "local:lfm2.5-230m" },
+          model: { value: "local:lfm2.5-350m" },
           thinkingLevel: { value: "low" },
           approvalLevel: { value: 1 },
           respondPolicy: { value: "mentioned" },
@@ -445,7 +445,7 @@ describe("MessageList typing indicators (roster-based)", () => {
     await waitFor(() => expect(onNewConversation).toHaveBeenCalledTimes(1));
     expect(onNewConversation).toHaveBeenCalledWith({
       agentConfig: {
-        model: "local:lfm2.5-230m",
+        model: "local:lfm2.5-350m",
         thinkingLevel: "low",
         approvalLevel: 1,
         respondPolicy: "mentioned",

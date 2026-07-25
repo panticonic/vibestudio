@@ -47,6 +47,25 @@ export interface ServerHostTargetChangeEvent {
   payload: unknown;
 }
 
+const HOST_DIRECT_EVENT_NAMES = ["external-open:open", "browser-panel:open"] as const;
+
+/**
+ * Bind connection-addressed events whose side effects are owned by Electron
+ * main. Direct EventService delivery bypasses the response-owned event watch,
+ * so these handlers must live on the authenticated ServerClient transport.
+ */
+export function bindHostDirectServerEvents(
+  client: Pick<ServerClient, "onDirectEvent">,
+  handleEvent: (event: EventName, payload: unknown) => void
+): () => void {
+  const releases = HOST_DIRECT_EVENT_NAMES.map((event) =>
+    client.onDirectEvent(event, (payload) => handleEvent(event, payload))
+  );
+  return () => {
+    for (const release of releases.reverse()) release();
+  };
+}
+
 /** Parse the one notification shape that asks the desktop host for OS-level attention. */
 export function notificationAttention(
   event: EventName,
@@ -189,9 +208,54 @@ export function createServerEventBridge(
     }
 
     if (bareEvent === "browser-panel:open") {
-      deps.warn(
-        "[browserPanel] Ignoring browser-panel:open; panel creation must go through authenticated panelTree RPC"
-      );
+      const request = payload as {
+        url?: unknown;
+        parentPanelId?: unknown;
+        transactionId?: unknown;
+      };
+      const client = deps.getServerClient();
+      if (!client || typeof request.url !== "string" || typeof request.parentPanelId !== "string") {
+        const message = !client
+          ? "The workspace server connection is unavailable"
+          : "The OAuth browser handoff was malformed";
+        deps.warn(`[browserPanel] OAuth panel creation failed: ${message}`);
+        deps.notifyError?.("Sign-in could not continue", message);
+        if (client && typeof request.transactionId === "string") {
+          void credentialsClientFor(client)
+            .cancelOAuth({ transactionId: request.transactionId })
+            .catch((error: unknown) => {
+              deps.warn(
+                `[browserPanel] OAuth cancellation failed: ${
+                  error instanceof Error ? error.message : String(error)
+                }`
+              );
+            });
+        }
+        return;
+      }
+      void client
+        .call("panelTree", "create", [
+          request.url,
+          { parentId: request.parentPanelId, focus: true },
+        ])
+        .catch(async (error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          deps.warn(`[browserPanel] OAuth panel creation failed: ${message}`);
+          deps.notifyError?.("Sign-in could not continue", message);
+          if (typeof request.transactionId === "string") {
+            try {
+              await credentialsClientFor(client).cancelOAuth({
+                transactionId: request.transactionId,
+              });
+            } catch (cancelError) {
+              deps.warn(
+                `[browserPanel] OAuth cancellation failed: ${
+                  cancelError instanceof Error ? cancelError.message : String(cancelError)
+                }`
+              );
+            }
+          }
+        });
       return;
     }
 

@@ -1,4 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@workspace/runtime", () => ({
+  browserData: {
+    listImportJobs: vi.fn(async () => []),
+  },
+}));
 
 import type { TestExecutionResult } from "../types.js";
 import { agenticRuntimeTests } from "./agentic-runtime.js";
@@ -8,7 +14,7 @@ import { cdpGadDiagnosticTests } from "./cdp-gad-diagnostics.js";
 import { credentialTests } from "./credentials.js";
 import { docsDiscoveryTests } from "./docs-discovery.js";
 import { docsProbeTests } from "./docs-probes.js";
-import { finalMessageHasAll } from "./_helpers.js";
+import { agentMessageHasAll, finalMessageHasAll } from "./_helpers.js";
 import { interactionSurfaceTests } from "./interaction-surfaces.js";
 import { gitInteropTests } from "./git-interop.js";
 import { harnessToolTests } from "./harness-tools.js";
@@ -355,6 +361,44 @@ describe("semantic system-test validators", () => {
     ).toEqual({ passed: true });
   });
 
+  it("accepts the bounded channel-health inspector as canonical channel history evidence", () => {
+    const test = agenticRuntimeTests.find(
+      (candidate) => candidate.name === "channel-envelope-inspection-bounded"
+    )!;
+    expect(
+      test.validate(
+        execution("The bounded channel health report found no history.", [
+          {
+            name: "eval",
+            arguments: {
+              code: 'await gad.inspectAgentHealth({ channelId: "fake", limit: 10 });',
+            },
+            execution: { status: "complete", isError: false },
+          },
+        ])
+      )
+    ).toEqual({ passed: true });
+  });
+
+  it("accepts agent.describe as canonical agent debug-state evidence", () => {
+    const test = agenticRuntimeTests.find(
+      (candidate) => candidate.name === "agent-debug-state-method"
+    )!;
+    expect(
+      test.validate(
+        execution("The agent exposes debug state through its available description.", [
+          {
+            name: "eval",
+            arguments: {
+              code: "return await agent.describe();",
+            },
+            execution: { status: "complete", isError: false },
+          },
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+  });
+
   it("requires a real completed tool before accepting a natural no-stall response", () => {
     const test = agenticRuntimeTests.find(
       (candidate) => candidate.name === "turn-no-silent-stall-after-tool"
@@ -399,5 +443,24 @@ describe("semantic system-test validators", () => {
     expect(finalMessageHasAll(execution("skill headless ok"), ["SKILL_HEADLESS_OK"]).passed).toBe(
       false
     );
+  });
+
+  it("validates delivered transcript messages without conflating separate messages", () => {
+    const result = execution("The requested action was delivered.");
+    result.messages.splice(1, 0, {
+      id: "delivered-action",
+      kind: "message",
+      senderId: "agent",
+      complete: true,
+      content:
+        '<ActionButton message="Follow-up acknowledged">Open follow-up</ActionButton> MDX_ACTION_OK',
+    });
+    expect(agentMessageHasAll(result, ["MDX_ACTION_OK", "ActionButton"])).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+
+    result.messages[1]!.content = "<ActionButton>Open follow-up</ActionButton>";
+    expect(agentMessageHasAll(result, ["MDX_ACTION_OK", "ActionButton"]).passed).toBe(false);
   });
 });

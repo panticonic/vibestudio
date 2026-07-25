@@ -11,7 +11,17 @@
       "requests": []
     },
     "EvalDO": {
-      "requests": []
+      "requests": [
+        {
+          "capability": "external.open",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        }
+      ]
     },
     "GadWorkspaceDO": {
       "requests": []

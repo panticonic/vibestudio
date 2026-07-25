@@ -18,6 +18,7 @@ import { SEMANTIC_CONTROL_PLANE } from "../internalDOs/controlPlane.js";
 import type { WorkerdManager, WorkerdWorkspaceProvider } from "../workerdManager.js";
 import type { DORef } from "../workerdRpcRelay.js";
 import type { RpcServer } from "../rpcServer.js";
+import { isHostIntrinsicDirectMethod } from "@vibestudio/shared/authority/directMethodEffects";
 
 export interface WorkerdGatewayBootstrapConfig {
   getPort(): number | null;
@@ -127,12 +128,12 @@ export function createHostDoAuthorityAttester(input: {
     }
     const service = matches[0];
     if (!service) return attestDirectRpc(facts);
-    const methodAuthority = input.manager.resolveDoRpcMethodAuthority(
-      ref.source,
-      ref.className,
-      ref.objectKey,
-      method
-    );
+    const methodAuthority = isHostIntrinsicDirectMethod(method)
+      ? {
+          effect: { kind: "runtime-intrinsic" } as const,
+          access: { tier: "open" as const, sensitivity: "read" as const },
+        }
+      : input.manager.resolveDoRpcMethodAuthority(ref.source, ref.className, ref.objectKey, method);
     if (!methodAuthority) {
       throw new Error(
         `Live workspace service ${ref.source}:${ref.className}.${method} has no exact build-catalog declaration`

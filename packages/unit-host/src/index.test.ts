@@ -75,7 +75,7 @@ describe("UnitRegistry", () => {
       activeDependencyEvs: { "@workspace/runtime": "ev" },
     });
     expect(
-      JSON.parse(fs.readFileSync(path.join(root, "units", "extension", "registry.json"), "utf8")),
+      JSON.parse(fs.readFileSync(path.join(root, "units", "extension", "registry.json"), "utf8"))
     ).toMatchObject({ unitKind: "extension" });
   });
 
@@ -89,15 +89,17 @@ describe("UnitRegistry", () => {
   });
 
   it("builds pending registry entries with shared install-state defaults", () => {
-    expect(createPendingUnitRegistryEntry({
-      unitKind: "app",
-      name: "@workspace-apps/shell",
-      version: "1.0.0",
-      sourceRepo: "workspace/apps/shell",
-      ref: "main",
-      building: true,
-      installedAt: 10,
-    })).toMatchObject({
+    expect(
+      createPendingUnitRegistryEntry({
+        unitKind: "app",
+        name: "@workspace-apps/shell",
+        version: "1.0.0",
+        sourceRepo: "workspace/apps/shell",
+        ref: "main",
+        building: true,
+        installedAt: 10,
+      })
+    ).toMatchObject({
       unitKind: "app",
       name: "@workspace-apps/shell",
       source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
@@ -113,17 +115,19 @@ describe("UnitRegistry", () => {
   });
 
   it("builds shared batch approval entry bases with normalized source identity", () => {
-    expect(createUnitBatchEntryBase({
-      unitKind: "app",
-      name: "@workspace-apps/shell",
-      displayName: "Workspace Shell",
-      version: "1.0.0",
-      sourceRepo: "/workspace/apps/shell",
-      ref: "main",
-      effectiveVersion: "ev-app",
-      dependencyEvs: { "@workspace/runtime": "ev-runtime" },
-      externalDeps: { react: "19.0.0" },
-    })).toEqual({
+    expect(
+      createUnitBatchEntryBase({
+        unitKind: "app",
+        name: "@workspace-apps/shell",
+        displayName: "Workspace Shell",
+        version: "1.0.0",
+        sourceRepo: "/workspace/apps/shell",
+        ref: "main",
+        effectiveVersion: "ev-app",
+        dependencyEvs: { "@workspace/runtime": "ev-runtime" },
+        externalDeps: { react: "19.0.0" },
+      })
+    ).toEqual({
       unitKind: "app",
       unitName: "@workspace-apps/shell",
       displayName: "Workspace Shell",
@@ -136,16 +140,18 @@ describe("UnitRegistry", () => {
   });
 
   it("builds shared unit identities with normalized source and sorted capabilities", () => {
-    expect(createUnitBuildIdentity({
-      unitKind: "app",
-      name: "@workspace-apps/shell",
-      sourceRepo: "/workspace/apps/shell",
-      ref: "main",
-      effectiveVersion: "ev-app",
-      dependencyEvs: { "@workspace/runtime": "ev-runtime" },
-      externalDeps: { react: "19.0.0" },
-      capabilities: ["z", "a"],
-    })).toEqual({
+    expect(
+      createUnitBuildIdentity({
+        unitKind: "app",
+        name: "@workspace-apps/shell",
+        sourceRepo: "/workspace/apps/shell",
+        ref: "main",
+        effectiveVersion: "ev-app",
+        dependencyEvs: { "@workspace/runtime": "ev-runtime" },
+        externalDeps: { react: "19.0.0" },
+        capabilities: ["z", "a"],
+      })
+    ).toEqual({
       unitKind: "app",
       name: "@workspace-apps/shell",
       source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
@@ -157,14 +163,19 @@ describe("UnitRegistry", () => {
   });
 
   it("builds registry-entry identities through the shared identity normalizer", () => {
-    expect(unitBuildIdentityFromRegistryEntry(entry({
-      unitKind: "app",
-      name: "@workspace-apps/shell",
-      source: { kind: "workspace-repo", repo: "/workspace/apps/shell", ref: "main" },
-      activeEv: "ev-app",
-      activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
-      activeExternalDeps: { react: "19.0.0" },
-    }), ["z", "a"])).toEqual({
+    expect(
+      unitBuildIdentityFromRegistryEntry(
+        entry({
+          unitKind: "app",
+          name: "@workspace-apps/shell",
+          source: { kind: "workspace-repo", repo: "/workspace/apps/shell", ref: "main" },
+          activeEv: "ev-app",
+          activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
+          activeExternalDeps: { react: "19.0.0" },
+        }),
+        ["z", "a"]
+      )
+    ).toEqual({
       unitKind: "app",
       name: "@workspace-apps/shell",
       source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
@@ -188,7 +199,7 @@ describe("UnitRegistry", () => {
       collectTransitiveUnitDependencyEvs(nodes, nodes[0]!, (name) => {
         lookups.push(name);
         return name === "missing" ? null : `ev-${name}`;
-      }),
+      })
     ).toEqual({
       "pkg-a": "ev-pkg-a",
       "pkg-b": "ev-pkg-b",
@@ -209,7 +220,9 @@ describe("UnitRegistry", () => {
 
     expect(findUnitGraphNode(nodes, descriptor, "@workspace-apps/shell")).toBe(nodes[0]);
     expect(findUnitGraphNode(nodes, descriptor, "workspace/apps/shell")).toBe(nodes[0]);
-    expect(() => findUnitGraphNode(nodes, descriptor, "@workspace-extensions/rn")).toThrow(/Unknown app unit/);
+    expect(() => findUnitGraphNode(nodes, descriptor, "@workspace-extensions/rn")).toThrow(
+      /Unknown app unit/
+    );
   });
 });
 
@@ -242,15 +255,21 @@ describe("FileUnitIdentityApprovalStore", () => {
 
 describe("workspace unit summaries", () => {
   it("maps registry entries to shared workspace status rows", () => {
-    expect(unitWorkspaceStatus("extension", entry({
-      activeEv: "ev",
-      activeBundleKey: "bundle",
-      activeRuntimeDepsKey: "runtime",
-      status: "running",
-    }), {
-      source: "extensions/display",
-      displayName: "Display Name",
-    })).toEqual({
+    expect(
+      unitWorkspaceStatus(
+        "extension",
+        entry({
+          activeEv: "ev",
+          activeBundleKey: "bundle",
+          activeRuntimeDepsKey: "runtime",
+          status: "running",
+        }),
+        {
+          source: "extensions/display",
+          displayName: "Display Name",
+        }
+      )
+    ).toEqual({
       name: "@workspace-extensions/a",
       kind: "extension",
       source: "extensions/display",
@@ -266,12 +285,18 @@ describe("workspace unit summaries", () => {
   });
 
   it("maps registry entries to shared fallback log rows", () => {
-    expect(unitWorkspaceLogRecord("app", "workspace-1", entry({
-      unitKind: "app",
-      name: "@workspace-apps/shell",
-      status: "error",
-      lastError: "boom",
-    }))).toEqual({
+    expect(
+      unitWorkspaceLogRecord(
+        "app",
+        "workspace-1",
+        entry({
+          unitKind: "app",
+          name: "@workspace-apps/shell",
+          status: "error",
+          lastError: "boom",
+        })
+      )
+    ).toEqual({
       workspaceId: "workspace-1",
       unitName: "@workspace-apps/shell",
       kind: "app",
@@ -283,7 +308,9 @@ describe("workspace unit summaries", () => {
 });
 
 describe("UnitTrustResolver", () => {
-  function identity(overrides: Partial<UnitBuildIdentity<"extension">> = {}): UnitBuildIdentity<"extension"> {
+  function identity(
+    overrides: Partial<UnitBuildIdentity<"extension">> = {}
+  ): UnitBuildIdentity<"extension"> {
     return {
       unitKind: "extension",
       name: "@workspace-extensions/a",
@@ -312,52 +339,60 @@ describe("UnitTrustResolver", () => {
     const resolver = new UnitTrustResolver<UnitRegistryEntryBase>();
     const candidate = identity();
 
-    expect(resolver.resolve({
-      identity: candidate,
-      entry: entry({
-        activeBundleKey: "bundle",
-        activeEv: "ev",
-        activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
-        activeExternalDeps: { leftpad: "1.0.0" },
-        status: "running",
-      }),
-    }).decision).toBe("user-approved");
-    expect(resolver.resolve({
-      identity: candidate,
-      entry: entry({
-        activeBundleKey: "bundle",
-        activeEv: "ev-old",
-        activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
-        activeExternalDeps: { leftpad: "1.0.0" },
-        status: "running",
-      }),
-    }).decision).toBe("needs-approval");
-    expect(resolver.resolve({
-      identity: candidate,
-      entry: entry({
-        activeBundleKey: null,
-        activeEv: "ev",
-        activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
-        activeExternalDeps: { leftpad: "1.0.0" },
-        status: "pending-approval",
-      }),
-    }).decision).toBe("needs-approval");
+    expect(
+      resolver.resolve({
+        identity: candidate,
+        entry: entry({
+          activeBundleKey: "bundle",
+          activeEv: "ev",
+          activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
+          activeExternalDeps: { leftpad: "1.0.0" },
+          status: "running",
+        }),
+      }).decision
+    ).toBe("user-approved");
+    expect(
+      resolver.resolve({
+        identity: candidate,
+        entry: entry({
+          activeBundleKey: "bundle",
+          activeEv: "ev-old",
+          activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
+          activeExternalDeps: { leftpad: "1.0.0" },
+          status: "running",
+        }),
+      }).decision
+    ).toBe("needs-approval");
+    expect(
+      resolver.resolve({
+        identity: candidate,
+        entry: entry({
+          activeBundleKey: null,
+          activeEv: "ev",
+          activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
+          activeExternalDeps: { leftpad: "1.0.0" },
+          status: "pending-approval",
+        }),
+      }).decision
+    ).toBe("needs-approval");
   });
 
   it("does not reuse approval when the candidate identity is incomplete", () => {
     const resolver = new UnitTrustResolver<UnitRegistryEntryBase>();
     const candidate = identity({ effectiveVersion: null });
 
-    expect(resolver.resolve({
-      identity: candidate,
-      entry: entry({
-        activeBundleKey: "bundle",
-        activeEv: "ev",
-        activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
-        activeExternalDeps: { leftpad: "1.0.0" },
-        status: "running",
-      }),
-    }).decision).toBe("needs-approval");
+    expect(
+      resolver.resolve({
+        identity: candidate,
+        entry: entry({
+          activeBundleKey: "bundle",
+          activeEv: "ev",
+          activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
+          activeExternalDeps: { leftpad: "1.0.0" },
+          status: "running",
+        }),
+      }).decision
+    ).toBe("needs-approval");
   });
 
   it("does not reuse approval across capability identity drift", () => {
@@ -365,32 +400,38 @@ describe("UnitTrustResolver", () => {
       entryIdentity: (approved) => unitBuildIdentityFromRegistryEntry(approved),
     });
 
-    expect(resolver.resolve({
-      identity: identity({ capabilities: ["notifications"] }),
-      entry: entry({
-        activeBundleKey: "bundle",
-        activeEv: "ev",
-        activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
-        activeExternalDeps: { leftpad: "1.0.0" },
-        status: "running",
-      }),
-    }).decision).toBe("needs-approval");
+    expect(
+      resolver.resolve({
+        identity: identity({ capabilities: ["notifications"] }),
+        entry: entry({
+          activeBundleKey: "bundle",
+          activeEv: "ev",
+          activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
+          activeExternalDeps: { leftpad: "1.0.0" },
+          status: "running",
+        }),
+      }).decision
+    ).toBe("needs-approval");
   });
 
   it("returns preapproved for exact preapproved identity keys", () => {
     const resolver = new UnitTrustResolver<UnitRegistryEntryBase>();
     const candidate = identity();
 
-    expect(resolver.resolve({
-      identity: candidate,
-      entry: null,
-      preapprovedIdentityKeys: new Set([canonicalUnitBuildIdentity(candidate)]),
-    }).decision).toBe("preapproved");
-    expect(resolver.resolve({
-      identity: identity({ effectiveVersion: "ev-next" }),
-      entry: null,
-      preapprovedIdentityKeys: new Set([canonicalUnitBuildIdentity(candidate)]),
-    }).decision).toBe("needs-approval");
+    expect(
+      resolver.resolve({
+        identity: candidate,
+        entry: null,
+        preapprovedIdentityKeys: new Set([canonicalUnitBuildIdentity(candidate)]),
+      }).decision
+    ).toBe("preapproved");
+    expect(
+      resolver.resolve({
+        identity: identity({ effectiveVersion: "ev-next" }),
+        entry: null,
+        preapprovedIdentityKeys: new Set([canonicalUnitBuildIdentity(candidate)]),
+      }).decision
+    ).toBe("needs-approval");
   });
 });
 
@@ -401,21 +442,26 @@ describe("UnitHost", () => {
   type TestDecl = UnitDeclaration;
   type TestApproval = { name: string; ref: string };
 
-  function makeHarness(opts: {
-    active?: boolean;
-    extraNode?: TestNode;
-  } = {}) {
+  function makeHarness(
+    opts: {
+      active?: boolean;
+      extraNode?: TestNode;
+      applyTrusted?: (node: TestNode) => Promise<void>;
+    } = {}
+  ) {
     const root = tempRoot();
     const registry = new UnitRegistry<UnitRegistryEntryBase>({
       statePath: root,
       unitKind: "extension",
     });
     if (opts.active) {
-      registry.upsert(entry({
-        activeBundleKey: "bundle",
-        activeEv: "ev",
-        status: "running",
-      }));
+      registry.upsert(
+        entry({
+          activeBundleKey: "bundle",
+          activeEv: "ev",
+          status: "running",
+        })
+      );
     }
     const node: TestNode = {
       name: "@workspace-extensions/a",
@@ -443,7 +489,7 @@ describe("UnitHost", () => {
       registry,
       resolveNode: (source) => {
         const match = nodes.find(
-          (candidate) => source === candidate.relativePath || source === candidate.name,
+          (candidate) => source === candidate.relativePath || source === candidate.name
         );
         if (!match) throw new Error("missing");
         return match;
@@ -457,13 +503,15 @@ describe("UnitHost", () => {
         externalDeps: {},
       }),
       trustResolver: undefined,
-      makePendingEntry: (n, decl, building) => entry({
-        name: n.name,
-        source: { kind: "workspace-repo", repo: n.relativePath, ref: decl.ref },
-        status: building ? "building" : "pending-approval",
-      }),
+      makePendingEntry: (n, decl, building) =>
+        entry({
+          name: n.name,
+          source: { kind: "workspace-repo", repo: n.relativePath, ref: decl.ref },
+          status: building ? "building" : "pending-approval",
+        }),
       applyTrusted: async (n) => {
         applied.push(n.name);
+        await opts.applyTrusted?.(n);
       },
       removeUndeclared: async (candidate) => {
         removed.push(candidate.name);
@@ -529,19 +577,54 @@ describe("UnitHost", () => {
     expect(prompted).toEqual([]);
   });
 
+  it("bounds background apply concurrency without changing declaration order", async () => {
+    const second: TestNode = {
+      name: "@workspace-extensions/b",
+      relativePath: "extensions/b",
+      version: "1.0.0",
+    };
+    let active = 0;
+    let maxActive = 0;
+    const releases: Array<() => void> = [];
+    const { host, applied, node } = makeHarness({
+      extraNode: second,
+      applyTrusted: async () => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise<void>((resolve) => releases.push(resolve));
+        active -= 1;
+      },
+    });
+    const declarations = [
+      { source: node.relativePath, ref: "main" },
+      { source: second.relativePath, ref: "main" },
+    ];
+    host.acceptPreapprovedTrust(host.approvalForDeclarations(declarations).identityKeys);
+
+    const reconcile = host.reconcileDeclared(declarations, { maxConcurrentApplies: 1 });
+    await vi.waitFor(() => expect(applied).toEqual([node.name]));
+    releases.shift()?.();
+    await vi.waitFor(() => expect(applied).toEqual([node.name, second.name]));
+    releases.shift()?.();
+    await reconcile;
+
+    expect(maxActive).toBe(1);
+  });
+
   it("honors removeUndeclared while applying trusted declarations", async () => {
     const { host, registry, removed, node } = makeHarness({ active: true });
-    registry.upsert(entry({
-      name: "@workspace-extensions/old",
-      source: { kind: "workspace-repo", repo: "extensions/old", ref: "main" },
-      activeBundleKey: "old-bundle",
-      status: "running",
-    }));
-
-    await host.reconcileDeclared(
-      [{ source: node.relativePath, ref: "main" }],
-      { removeUndeclared: true },
+    registry.upsert(
+      entry({
+        name: "@workspace-extensions/old",
+        source: { kind: "workspace-repo", repo: "extensions/old", ref: "main" },
+        activeBundleKey: "old-bundle",
+        status: "running",
+      })
     );
+
+    await host.reconcileDeclared([{ source: node.relativePath, ref: "main" }], {
+      removeUndeclared: true,
+    });
     expect(removed).toEqual(["@workspace-extensions/old"]);
     expect(registry.get("@workspace-extensions/old")).toBeNull();
   });
@@ -549,10 +632,12 @@ describe("UnitHost", () => {
   it("collects approval entries for untrusted declarations", () => {
     const { host, node } = makeHarness();
 
-    expect(host.approvalForDeclarations([
-      { source: node.relativePath, ref: "main" },
-      { source: "extensions/missing", ref: "main" },
-    ])).toEqual({
+    expect(
+      host.approvalForDeclarations([
+        { source: node.relativePath, ref: "main" },
+        { source: "extensions/missing", ref: "main" },
+      ])
+    ).toEqual({
       entries: [{ name: node.name, ref: "main" }],
       identityKeys: [expect.any(String)],
     });
@@ -561,22 +646,27 @@ describe("UnitHost", () => {
   it("does not collect approval entries for already approved declarations", () => {
     const { host, node } = makeHarness({ active: true });
 
-    expect(host.approvalForDeclarations([
-      { source: node.relativePath, ref: "main" },
-    ])).toEqual({ entries: [], identityKeys: [] });
+    expect(host.approvalForDeclarations([{ source: node.relativePath, ref: "main" }])).toEqual({
+      entries: [],
+      identityKeys: [],
+    });
   });
 
   it("resolves declaration trust through the host identity pipeline", () => {
     const { host, node } = makeHarness({ active: true });
 
-    expect(host.trustForDeclaration(node, {
-      source: node.relativePath,
-      ref: "main",
-    })).toMatchObject({ decision: "user-approved" });
-    expect(host.trustForDeclaration(node, {
-      source: node.relativePath,
-      ref: "feature",
-    })).toMatchObject({ decision: "needs-approval" });
+    expect(
+      host.trustForDeclaration(node, {
+        source: node.relativePath,
+        ref: "main",
+      })
+    ).toMatchObject({ decision: "user-approved" });
+    expect(
+      host.trustForDeclaration(node, {
+        source: node.relativePath,
+        ref: "feature",
+      })
+    ).toMatchObject({ decision: "needs-approval" });
   });
 
   it("applies runtime declarations through the shared trust/build/activate flow", async () => {
@@ -660,54 +750,66 @@ describe("UnitHost", () => {
     });
 
     expect(host.activeSourceMatches(active, "workspace/extensions/a", "main")).toBe(true);
-    expect(host.needsBuildRefresh(active, {
-      sourceRepo: "extensions/a",
-      ref: "main",
-      effectiveVersion: "ev",
-      dependencyEvs: { dep: "ev-dep" },
-      externalDeps: { leftpad: "1.0.0" },
-      runtimeDepsKey: "runtime-key",
-    })).toBe(false);
-    expect(host.needsBuildRefresh(active, {
-      sourceRepo: "extensions/a",
-      ref: "feature",
-      effectiveVersion: "ev",
-      dependencyEvs: { dep: "ev-dep" },
-      externalDeps: { leftpad: "1.0.0" },
-      runtimeDepsKey: "runtime-key",
-    })).toBe(true);
-    expect(host.needsBuildRefresh(active, {
-      sourceRepo: "extensions/a",
-      ref: "main",
-      effectiveVersion: "ev-next",
-      dependencyEvs: { dep: "ev-dep" },
-      externalDeps: { leftpad: "1.0.0" },
-      runtimeDepsKey: "runtime-key",
-    })).toBe(true);
-    expect(host.needsBuildRefresh(active, {
-      sourceRepo: "extensions/a",
-      ref: "main",
-      effectiveVersion: "ev",
-      dependencyEvs: { dep: "ev-next" },
-      externalDeps: { leftpad: "1.0.0" },
-      runtimeDepsKey: "runtime-key",
-    })).toBe(true);
-    expect(host.needsBuildRefresh(active, {
-      sourceRepo: "extensions/a",
-      ref: "main",
-      effectiveVersion: "ev",
-      dependencyEvs: { dep: "ev-dep" },
-      externalDeps: { leftpad: "2.0.0" },
-      runtimeDepsKey: "runtime-key",
-    })).toBe(true);
-    expect(host.needsBuildRefresh(active, {
-      sourceRepo: "extensions/a",
-      ref: "main",
-      effectiveVersion: "ev",
-      dependencyEvs: { dep: "ev-dep" },
-      externalDeps: { leftpad: "1.0.0" },
-      runtimeDepsKey: "runtime-next",
-    })).toBe(true);
+    expect(
+      host.needsBuildRefresh(active, {
+        sourceRepo: "extensions/a",
+        ref: "main",
+        effectiveVersion: "ev",
+        dependencyEvs: { dep: "ev-dep" },
+        externalDeps: { leftpad: "1.0.0" },
+        runtimeDepsKey: "runtime-key",
+      })
+    ).toBe(false);
+    expect(
+      host.needsBuildRefresh(active, {
+        sourceRepo: "extensions/a",
+        ref: "feature",
+        effectiveVersion: "ev",
+        dependencyEvs: { dep: "ev-dep" },
+        externalDeps: { leftpad: "1.0.0" },
+        runtimeDepsKey: "runtime-key",
+      })
+    ).toBe(true);
+    expect(
+      host.needsBuildRefresh(active, {
+        sourceRepo: "extensions/a",
+        ref: "main",
+        effectiveVersion: "ev-next",
+        dependencyEvs: { dep: "ev-dep" },
+        externalDeps: { leftpad: "1.0.0" },
+        runtimeDepsKey: "runtime-key",
+      })
+    ).toBe(true);
+    expect(
+      host.needsBuildRefresh(active, {
+        sourceRepo: "extensions/a",
+        ref: "main",
+        effectiveVersion: "ev",
+        dependencyEvs: { dep: "ev-next" },
+        externalDeps: { leftpad: "1.0.0" },
+        runtimeDepsKey: "runtime-key",
+      })
+    ).toBe(true);
+    expect(
+      host.needsBuildRefresh(active, {
+        sourceRepo: "extensions/a",
+        ref: "main",
+        effectiveVersion: "ev",
+        dependencyEvs: { dep: "ev-dep" },
+        externalDeps: { leftpad: "2.0.0" },
+        runtimeDepsKey: "runtime-key",
+      })
+    ).toBe(true);
+    expect(
+      host.needsBuildRefresh(active, {
+        sourceRepo: "extensions/a",
+        ref: "main",
+        effectiveVersion: "ev",
+        dependencyEvs: { dep: "ev-dep" },
+        externalDeps: { leftpad: "1.0.0" },
+        runtimeDepsKey: "runtime-next",
+      })
+    ).toBe(true);
   });
 
   it("finds installed units by normalized repo path", () => {
@@ -740,18 +842,19 @@ describe("UnitHost", () => {
       version: "1.0.0",
     };
     const { host, registry, removed } = makeHarness({ active: true, extraNode });
-    registry.upsert(entry({
-      name: extraNode.name,
-      source: { kind: "workspace-repo", repo: extraNode.relativePath, ref: "main" },
-      activeBundleKey: "bundle-b",
-      activeEv: "ev",
-      status: "running",
-    }));
-
-    await host.reconcileDeclared(
-      [{ source: "extensions/a", ref: "main" }],
-      { removeUndeclared: false },
+    registry.upsert(
+      entry({
+        name: extraNode.name,
+        source: { kind: "workspace-repo", repo: extraNode.relativePath, ref: "main" },
+        activeBundleKey: "bundle-b",
+        activeEv: "ev",
+        status: "running",
+      })
     );
+
+    await host.reconcileDeclared([{ source: "extensions/a", ref: "main" }], {
+      removeUndeclared: false,
+    });
     await host.whenSettled();
 
     expect(removed).toEqual([]);

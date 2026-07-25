@@ -81,10 +81,23 @@ const FS_CONSTANTS = {
 } as const;
 
 export const DEFAULT_RPC_FS_TIMEOUT_MS = 15_000;
+export const DEFAULT_RPC_FS_SLOW_PENDING_MS = 5_000;
+
+export interface RpcFsTelemetry {
+  method: string;
+  phase: "pending" | "settled";
+  elapsedMs: number;
+  timeoutMs: number;
+  outcome?: "ok" | "error" | "timeout";
+}
 
 export interface RpcFsOptions {
   /** Test/embedding override; production filesystem RPC is always bounded. */
   timeoutMs?: number;
+  /** Emit a diagnostic while an operation remains unsettled. */
+  slowPendingMs?: number;
+  /** Structured observer for transport latency and outcomes. */
+  onTelemetry?: (event: RpcFsTelemetry) => void;
 }
 
 export class RpcFsTimeoutError extends Error {
@@ -120,12 +133,34 @@ export class RpcFsTimeoutError extends Error {
 export function createRpcFs(rpc: Pick<RpcClient, "call">, options: RpcFsOptions = {}): RuntimeFs {
   const timeoutMs = options.timeoutMs ?? DEFAULT_RPC_FS_TIMEOUT_MS;
   function call<T>(method: string, ...args: unknown[]): Promise<T> {
+    const startedAt = Date.now();
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let slowTimer: ReturnType<typeof setTimeout> | undefined;
+    let reportedPending = false;
+    const report = (event: RpcFsTelemetry): void => {
+      try {
+        options.onTelemetry?.(event);
+      } catch (error) {
+        console.warn("[rpc-fs] telemetry observer failed", error);
+      }
+      if (!options.onTelemetry) {
+        console.warn(`[rpc-fs] ${JSON.stringify(event)}`);
+      }
+    };
     const invocation = rpc.call<T>("main", `fs.${method}`, [...args], {
       signal: controller.signal,
     });
     invocation.catch(() => {});
+    slowTimer = setTimeout(() => {
+      reportedPending = true;
+      report({
+        method,
+        phase: "pending",
+        elapsedMs: Date.now() - startedAt,
+        timeoutMs,
+      });
+    }, options.slowPendingMs ?? DEFAULT_RPC_FS_SLOW_PENDING_MS);
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         const error = new RpcFsTimeoutError(method, timeoutMs);
@@ -133,9 +168,38 @@ export function createRpcFs(rpc: Pick<RpcClient, "call">, options: RpcFsOptions 
         reject(error);
       }, timeoutMs);
     });
-    return Promise.race([invocation, deadline]).finally(() => {
-      if (timer) clearTimeout(timer);
-    });
+    return Promise.race([invocation, deadline])
+      .then(
+        (value) => {
+          if (reportedPending || options.onTelemetry) {
+            report({
+              method,
+              phase: "settled",
+              elapsedMs: Date.now() - startedAt,
+              timeoutMs,
+              outcome: "ok",
+            });
+          }
+          return value;
+        },
+        (error: unknown) => {
+          const outcome = error instanceof RpcFsTimeoutError ? "timeout" : "error";
+          if (reportedPending || options.onTelemetry || outcome === "timeout") {
+            report({
+              method,
+              phase: "settled",
+              elapsedMs: Date.now() - startedAt,
+              timeoutMs,
+              outcome,
+            });
+          }
+          throw error;
+        }
+      )
+      .finally(() => {
+        if (timer) clearTimeout(timer);
+        if (slowTimer) clearTimeout(slowTimer);
+      });
   }
   return {
     constants: FS_CONSTANTS,

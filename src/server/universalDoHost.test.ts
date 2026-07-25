@@ -103,6 +103,7 @@ function doBuild(source: string, ev: string, bundle = COUNTER_DO): BuildResult {
 interface Harness {
   manager: WorkerdManager;
   gateway: Server;
+  codeFetches: Map<string, number>;
   dispatch: (
     ref: { source: string; className: string; objectKey: string },
     method: string
@@ -167,6 +168,7 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
   };
   const manager = new WorkerdManager(deps);
   manager.bindWorkspaceProvider(provider);
+  const codeFetches = new Map<string, number>();
 
   const gateway = createServer((req, res) => {
     const url = req.url ?? "";
@@ -194,6 +196,8 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
         res.end(JSON.stringify({ version: v }));
         return;
       }
+      const objectKey = new URL(url, "http://gateway").searchParams.get("objectKey") ?? "";
+      codeFetches.set(objectKey, (codeFetches.get(objectKey) ?? 0) + 1);
       void manager.getDoCode(source, className).then((code) => {
         if (!code) {
           res.writeHead(404);
@@ -230,7 +234,7 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
     return ((await res.json()) as { result: unknown }).result;
   };
 
-  return { manager, gateway, dispatch };
+  return { manager, gateway, codeFetches, dispatch };
 }
 
 let active: Harness | null = null;
@@ -245,7 +249,7 @@ afterEach(async () => {
 describe("UniversalDO facet host (real workerd)", () => {
   it("loads a userland DO as a facet and persists per-key storage with no restart", async () => {
     active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
-    const { manager, dispatch } = active;
+    const { manager, codeFetches, dispatch } = active;
 
     // Registering the first userland DO class brings workerd up once.
     await manager.ensureDOClass("workers/counter", "CounterDO");
@@ -259,11 +263,19 @@ describe("UniversalDO facet host (real workerd)", () => {
       key: "k1",
     });
     expect(await dispatch(ref1, "incr")).toMatchObject({ count: 2 });
+    expect(codeFetches.get("k1")).toBe(1);
 
     // A different object key is an isolated facet (its own storage).
     const ref2 = { source: "workers/counter", className: "CounterDO", objectKey: "k2" };
     expect(await dispatch(ref2, "incr")).toMatchObject({ count: 1, key: "k2" });
     expect(await dispatch(ref1, "get")).toMatchObject({ count: 2 });
+
+    // Runtime retirement aborts the live facet (and releases its loaded module
+    // graph) without deleting durable storage. A later reattach starts a fresh
+    // facet incarnation over the same state.
+    await manager.retireDOEntity(ref1);
+    expect(await dispatch(ref1, "get")).toMatchObject({ count: 2, key: "k1" });
+    expect(codeFetches.get("k1")).toBe(2);
 
     // Registering the class never restarted workerd.
     expect(manager.getBootGeneration()).toBe(boot);

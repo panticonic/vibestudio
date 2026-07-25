@@ -42,6 +42,7 @@
     "./deviceCredentials": "./src/deviceCredentials.ts",
     "./directRpcEnforcement": "./src/directRpcEnforcement.ts",
     "./doDispatcher": "./src/doDispatcher.ts",
+    "./durableWork": "./src/durableWork.ts",
     "./events": "./src/events.ts",
     "./eventsService": "./src/eventsService.ts",
     "./execution/*": "./src/execution/*.ts",

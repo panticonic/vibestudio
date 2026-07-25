@@ -117,82 +117,6 @@ describe("EvalDO cancellation + forced recovery", () => {
     ).not.toHaveProperty("event");
   });
 
-  it("holds one notebook kernel across cells until its refreshed idle lease expires", async () => {
-    vi.useFakeTimers();
-    try {
-      const { instance } = await createTestDO(EvalDO);
-      const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
-      Object.defineProperty(instance, "rpc", {
-        value: { call: lifecycleCall },
-        configurable: true,
-      });
-      const first = instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 1_000 });
-      await instance.attachKernelLeaseHolder("kernel-1");
-      const held = instance.holdKernelLease("kernel-1");
-
-      await vi.advanceTimersByTimeAsync(750);
-      const refreshed = instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 1_000 });
-      expect(refreshed.expiresAt).toBeGreaterThan(first.expiresAt);
-
-      await vi.advanceTimersByTimeAsync(750);
-      let settled = false;
-      void held.then(() => {
-        settled = true;
-      });
-      await Promise.resolve();
-      expect(settled).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(250);
-      await expect(held).resolves.toEqual({ leaseId: "kernel-1", reason: "expired" });
-      expect(lifecycleCall).toHaveBeenNthCalledWith(
-        1,
-        "main",
-        "workspace-state.lifecycleLeaseUpsert",
-        [
-          expect.objectContaining({
-            detail: {
-              kind: "eval-kernel",
-              leaseId: "kernel-1",
-            },
-          }),
-        ]
-      );
-      expect(lifecycleCall).toHaveBeenNthCalledWith(
-        2,
-        "main",
-        "workspace-state.lifecycleLeaseClear",
-        [expect.any(Object)]
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("releases the inter-cell kernel hold during planned lifecycle shutdown", async () => {
-    const { instance } = await createTestDO(EvalDO);
-    const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
-    Object.defineProperty(instance, "rpc", {
-      value: { call: lifecycleCall },
-      configurable: true,
-    });
-    instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 60_000 });
-    await instance.attachKernelLeaseHolder("kernel-1");
-    const held = instance.holdKernelLease("kernel-1");
-
-    await expect(
-      instance.releaseForLifecycle({
-        epoch: "e1",
-        mode: "suspend",
-        reason: "test",
-        deadlineMs: 1_000,
-      })
-    ).resolves.toEqual({ status: "ready" });
-    await expect(held).resolves.toEqual({ leaseId: "kernel-1", reason: "released" });
-    expect(lifecycleCall).toHaveBeenLastCalledWith("main", "workspace-state.lifecycleLeaseClear", [
-      expect.any(Object),
-    ]);
-  });
-
   it("runs startRun in the DO lifetime and delivers its terminal result directly to its agent", async () => {
     const { instance } = await createTestDO(EvalDO);
     const call = vi.fn(() => Promise.resolve(undefined));
@@ -794,6 +718,39 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'after'`).toArray()[0]).toMatchObject({
       status: "done",
     });
+  });
+
+  it("dispose erases terminal jobs and releases every loaded kernel reference", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    seedPendingRun(sql, "finite");
+    sql.exec(
+      `INSERT INTO run_progress (run_id, progress, updated_at) VALUES (?, ?, ?)`,
+      "finite",
+      JSON.stringify({ running: true }),
+      Date.now()
+    );
+    setPriv(instance, "engine", { loaded: true });
+    setPriv(instance, "runtimeSupport", { loaded: true });
+    setPriv(instance, "portableHelpers", { loaded: true });
+    setPriv(instance, "hostedRuntimeIdentity", {
+      contextId: "ctx",
+      gatewayToken: "secret",
+    });
+    setPriv(instance, "moduleMap", { package: { loaded: true } });
+    priv<Record<string, unknown>>(instance, "isolateModuleMap")["package"] = { loaded: true };
+
+    await expect(instance.dispose()).resolves.toEqual({ ok: true });
+
+    expect(sql.exec(`SELECT COUNT(*) AS count FROM runs`).toArray()[0]).toMatchObject({ count: 0 });
+    expect(sql.exec(`SELECT COUNT(*) AS count FROM run_progress`).toArray()[0]).toMatchObject({
+      count: 0,
+    });
+    expect(priv(instance, "engine")).toBeNull();
+    expect(priv(instance, "runtimeSupport")).toBeNull();
+    expect(priv(instance, "portableHelpers")).toBeNull();
+    expect(priv(instance, "hostedRuntimeIdentity")).toBeNull();
+    expect(priv(instance, "moduleMap")).toEqual({});
+    expect(Object.keys(priv(instance, "isolateModuleMap"))).toEqual(["node:async_hooks"]);
   });
 
   it("keeps orphaned and replacement runs in distinct immutable execution contexts", async () => {

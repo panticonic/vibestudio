@@ -186,6 +186,16 @@ describe("SemanticWorkspace derived integration prerequisites", () => {
             repoPath: "packages/fixture",
             files: [
               {
+                path: "foo/child.ts",
+                contentHash: importedContentHash,
+                mode: 0o644,
+              },
+              {
+                path: "foo0",
+                contentHash: importedContentHash,
+                mode: 0o644,
+              },
+              {
                 path: "src/index.ts",
                 contentHash: importedContentHash,
                 mode: 0o644,
@@ -237,6 +247,65 @@ describe("SemanticWorkspace derived integration prerequisites", () => {
     if (repository?.presence !== "present") throw new Error("fixture repository is absent");
     const fileId = store.facts.pageManifest(repository.fileManifestId, { limit: 1 }).values[0]!
       .fileId;
+    const rootListing = await semantic.dispatch("listDirectory", {
+      ingress,
+      input: {
+        state: { kind: "event", eventId: imported.eventId },
+        path: "",
+        limit: 500,
+      },
+    });
+    expect(rootListing).toMatchObject({
+      kind: "complete",
+      result: {
+        entries: [
+          { name: "packages", kind: "directory", repositoryRoot: false },
+          { name: "projects", kind: "directory", repositoryRoot: false },
+        ],
+      },
+    });
+    const repositoryListing = await semantic.dispatch("listDirectory", {
+      ingress,
+      input: {
+        state: { kind: "event", eventId: imported.eventId },
+        path: "packages/fixture",
+        limit: 500,
+      },
+    });
+    expect(repositoryListing).toMatchObject({
+      kind: "complete",
+      result: {
+        entries: [
+          {
+            name: "foo",
+            path: "packages/fixture/foo",
+            kind: "directory",
+            repositoryId,
+            repositoryRoot: false,
+            fileId: null,
+          },
+          {
+            name: "foo0",
+            path: "packages/fixture/foo0",
+            kind: "file",
+            repositoryId,
+            repositoryRoot: false,
+          },
+          {
+            name: "src",
+            path: "packages/fixture/src",
+            kind: "directory",
+            repositoryId,
+            repositoryRoot: false,
+            fileId: null,
+            lineage: {
+              contentClass: "external",
+              externalKeys: ["repo:fixture://integration@fixture:v1"],
+            },
+          },
+        ],
+      },
+    });
     await expectListReadLineageParity(
       semantic,
       { kind: "event", eventId: imported.eventId },

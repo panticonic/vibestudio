@@ -650,9 +650,11 @@ function diagnosticNoticeFromMessage(message: ProjectedMessage): DiagnosticNotic
           ? "Model usage limit reached"
           : metadata.failureCode === "context_overflow_terminal"
             ? "Context window exceeded"
-            : metadata.severity === "error"
-              ? "Message failed"
-              : "No assistant response",
+            : metadata.failureCode === "request_invalid_terminal"
+              ? "Invalid model request"
+              : metadata.severity === "error"
+                ? "Message failed"
+                : "No assistant response",
     detail: content,
     reason: metadata.reason,
     recoverable: metadata.recoverable,

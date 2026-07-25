@@ -15,10 +15,17 @@ const MAX_TIMER_MS = 2_000_000_000;
 const FAILURE_RETRY_MIN_MS = 1_000;
 const FAILURE_RETRY_MAX_MS = 30_000;
 
+type AlarmClaim = LifecycleKey & {
+  wakeAt: number;
+  dispatchGeneration: number;
+  testPolicy?: AgentExecutionTestPolicy;
+};
+
 export interface AlarmDriverDeps {
   doDispatch: AlarmDoDispatcher;
   workspaceId: string;
   concurrency?: number;
+  workerId?: string;
   isAuthorityPaused?: (ref: DORef) => boolean;
 }
 
@@ -36,6 +43,8 @@ export class AlarmDriver {
   private readonly deps: AlarmDriverDeps;
   private readonly workspaceRef: DORef;
   private readonly concurrency: number;
+  private readonly workerId: string;
+  private adopted = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   /** Admission is closed until start() runs after runtime restoration. */
   private stopped = true;
@@ -51,6 +60,10 @@ export class AlarmDriver {
   private consecutiveFailures = 0;
   /** Transport attempts currently owned by this scheduler activation. */
   private readonly activeDispatches = new Set<AbortController>();
+  /** Per-target lane occupancy. A target is never admitted twice concurrently. */
+  private readonly activeTargets = new Map<string, LifecycleKey>();
+  /** Dispatch and acknowledgement boundaries that quiesce must observe. */
+  private readonly activeLanes = new Set<Promise<void>>();
 
   constructor(deps: AlarmDriverDeps) {
     this.deps = deps;
@@ -60,11 +73,16 @@ export class AlarmDriver {
       objectKey: deps.workspaceId,
     };
     this.concurrency = deps.concurrency ?? 8;
+    this.workerId = deps.workerId ?? `alarm-driver:${crypto.randomUUID()}`;
+    if (!Number.isSafeInteger(this.concurrency) || this.concurrency < 1) {
+      throw new Error("AlarmDriver concurrency must be a positive integer");
+    }
   }
 
   /** Load durable alarms and arm the timer. Idempotent; call on boot. */
   start(): void {
     this.stopped = false;
+    this.adopted = false;
     this.requestRefresh();
   }
 
@@ -91,6 +109,7 @@ export class AlarmDriver {
   async quiesce(): Promise<void> {
     this.stop();
     await this.driving;
+    await Promise.allSettled([...this.activeLanes]);
   }
 
   /** Re-evaluate the next wake time. Call after any alarm set/clear. */
@@ -139,9 +158,19 @@ export class AlarmDriver {
 
   private async refreshTimer(): Promise<void> {
     if (this.stopped) return;
+    if (!(await this.ensureAdopted())) return;
+    if (this.activeLanes.size >= this.concurrency) {
+      if (this.timer) {
+        clearTimeout(this.timer);
+        this.timer = null;
+      }
+      return;
+    }
     let next: number | null = null;
     try {
-      next = await this.dispatchWorkspace<number | null>("alarmNextWakeAt");
+      next = await this.dispatchWorkspace<number | null>("alarmNextWakeAt", Date.now(), [
+        ...this.activeTargets.values(),
+      ]);
     } catch (err) {
       // The durable row remains intact. Recovery uses the driver's one owned
       // timer, never a detached retry or recursive zero-delay reschedule.
@@ -163,96 +192,114 @@ export class AlarmDriver {
     }, delay);
   }
 
-  /** Returns true only when every due outcome was durably acknowledged. */
+  /** Claims due rows and admits their dispatch lanes without awaiting them. */
   private async fireOnce(): Promise<boolean> {
     if (this.stopped) return false;
-    let due: Array<LifecycleKey & { wakeAt: number; testPolicy?: AgentExecutionTestPolicy }> = [];
+    if (!(await this.ensureAdopted())) return false;
+    const available = this.concurrency - this.activeLanes.size;
+    if (available <= 0) return true;
+    let due: AlarmClaim[] = [];
     try {
-      due = await this.dispatchWorkspace<
-        Array<LifecycleKey & { wakeAt: number; testPolicy?: AgentExecutionTestPolicy }>
-      >("alarmListDue", Date.now());
+      due = await this.dispatchWorkspace<AlarmClaim[]>("alarmClaimDue", {
+        now: Date.now(),
+        workerId: this.workerId,
+        limit: available,
+        exclude: [...this.activeTargets.values()],
+      });
     } catch (err) {
-      log.warn("alarmListDue failed:", err);
-      // Listing never acknowledges consumption. Keep the row and retry it
+      log.warn("alarmClaimDue failed:", err);
+      // Claim failure never acknowledges consumption. Keep the row and retry it
       // through the driver's one bounded timer; never turn its
       // past wakeAt into a setTimeout(0) transport storm.
       this.armFailureRetry("fire");
       return false;
     }
     this.consecutiveFailures = 0;
-    try {
-      await this.runPool(due, async (target) => {
-        const ref = {
-          source: target.source,
-          className: target.className,
-          objectKey: target.objectKey,
-        };
-        if (this.deps.isAuthorityPaused?.(ref)) {
-          // Preserve the durable wake without spinning or admitting fresh
-          // agent work. Resuming the agent causes its normal event path to
-          // schedule an immediate wake.
-          await this.dispatchWorkspace("alarmSet", {
-            source: target.source,
-            className: target.className,
-            objectKey: target.objectKey,
-            wakeAt: Date.now() + 60_000,
-          });
-          log.info(
-            `state=paused authority lock deferred ${target.source}:${target.className}/${target.objectKey}`
-          );
-          return;
-        }
-        let result: Awaited<ReturnType<AlarmDoDispatcher["dispatchAlarm"]>>;
-        const controller = new AbortController();
-        this.activeDispatches.add(controller);
-        try {
-          result = await this.deps.doDispatch.dispatchAlarm(
-            ref,
-            controller.signal,
-            target.testPolicy
-          );
-          if (!isDoAlarmDispatchResult(result)) {
-            throw new Error(
-              `Invalid alarm dispatch result for ${target.source}:${target.className}`
-            );
-          }
-        } catch (err) {
-          if (this.stopped && controller.signal.aborted) return;
-          // The original due row remains until this replacement succeeds.
-          // Re-arm with a short backoff; a destroyed DO keeps its cheap retry
-          // row until entity cleanup instead of losing its only wake.
-          log.warn(
-            `alarm dispatch failed for ${target.source}:${target.className}/${target.objectKey}; re-arming:`,
-            err
-          );
-          await this.dispatchWorkspace("alarmSet", {
-            source: target.source,
-            className: target.className,
-            objectKey: target.objectKey,
-            wakeAt: Date.now() + 5_000,
-          });
-          return;
-        } finally {
-          this.activeDispatches.delete(controller);
-        }
-        // Persist the successful handler outcome outside the dispatch catch.
-        // An acknowledgement failure is a storage failure, not a second
-        // handler failure; the outer retry keeps the original due row intact.
-        if (result.nextAlarm) {
-          await this.dispatchWorkspace("alarmSet", {
-            ...ref,
-            ...result.nextAlarm,
-          });
-        } else {
-          await this.dispatchWorkspace("alarmClear", ref);
-        }
-      });
-    } catch (err) {
-      log.warn("alarm outcome acknowledgement failed; durable due rows remain pending:", err);
-      this.armFailureRetry("fire");
-      return false;
-    }
+    for (const target of due) this.startLane(target);
     return true;
+  }
+
+  private startLane(target: AlarmClaim): void {
+    const key = this.targetKey(target);
+    if (this.activeTargets.has(key)) {
+      throw new Error(`alarmClaimDue returned active target ${key}`);
+    }
+    this.activeTargets.set(key, target);
+    const lane = this.runLane(target);
+    this.activeLanes.add(lane);
+    void lane.finally(() => {
+      this.activeLanes.delete(lane);
+      this.activeTargets.delete(key);
+      if (!this.stopped) this.requestRefresh();
+    });
+  }
+
+  private async runLane(target: AlarmClaim): Promise<void> {
+    const ref = {
+      source: target.source,
+      className: target.className,
+      objectKey: target.objectKey,
+    };
+    const claim = {
+      dispatchOwner: this.workerId,
+      dispatchGeneration: target.dispatchGeneration,
+    };
+    try {
+      if (this.deps.isAuthorityPaused?.(ref)) {
+        await this.dispatchWorkspace("alarmSet", {
+          ...ref,
+          ...claim,
+          wakeAt: Date.now() + 60_000,
+        });
+        log.info(
+          `state=paused authority lock deferred ${target.source}:${target.className}/${target.objectKey}`
+        );
+        return;
+      }
+      let result: Awaited<ReturnType<AlarmDoDispatcher["dispatchAlarm"]>>;
+      const controller = new AbortController();
+      this.activeDispatches.add(controller);
+      try {
+        result = await this.deps.doDispatch.dispatchAlarm(
+          ref,
+          controller.signal,
+          target.testPolicy
+        );
+        if (!isDoAlarmDispatchResult(result)) {
+          throw new Error(`Invalid alarm dispatch result for ${target.source}:${target.className}`);
+        }
+      } catch (err) {
+        if (this.stopped && controller.signal.aborted) return;
+        log.warn(
+          `alarm dispatch failed for ${target.source}:${target.className}/${target.objectKey}; re-arming:`,
+          err
+        );
+        await this.dispatchWorkspace("alarmSet", {
+          ...ref,
+          ...claim,
+          wakeAt: Date.now() + 5_000,
+        });
+        return;
+      } finally {
+        this.activeDispatches.delete(controller);
+      }
+      if (result.nextAlarm) {
+        await this.dispatchWorkspace("alarmSet", {
+          ...ref,
+          ...claim,
+          ...result.nextAlarm,
+        });
+      } else {
+        await this.dispatchWorkspace("alarmClear", { ...ref, ...claim });
+      }
+    } catch (err) {
+      // Acknowledgement failure leaves the durable claim intact. Only explicit
+      // adoption by the next scheduler generation can release it.
+      log.warn(
+        `alarm outcome acknowledgement failed for ${target.source}:${target.className}/${target.objectKey}; durable claim remains pending:`,
+        err
+      );
+    }
   }
 
   private armFailureRetry(operation: "refresh" | "fire"): void {
@@ -272,20 +319,25 @@ export class AlarmDriver {
     }, delay);
   }
 
+  private async ensureAdopted(): Promise<boolean> {
+    if (this.adopted) return true;
+    try {
+      await this.dispatchWorkspace("alarmAdoptWorker", this.workerId);
+      if (this.stopped) return false;
+      this.adopted = true;
+      return true;
+    } catch (error) {
+      log.warn("alarm scheduler generation adoption failed:", error);
+      this.armFailureRetry("refresh");
+      return false;
+    }
+  }
+
   private dispatchWorkspace<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
     return this.deps.doDispatch.dispatch(this.workspaceRef, method, ...args) as Promise<T>;
   }
 
-  private async runPool<T>(items: T[], fn: (item: T) => Promise<void>): Promise<void> {
-    let next = 0;
-    const workers = Array.from({ length: Math.min(this.concurrency, items.length) }, async () => {
-      for (;;) {
-        const index = next++;
-        const item = items[index];
-        if (item === undefined) return;
-        await fn(item);
-      }
-    });
-    await Promise.all(workers);
+  private targetKey(key: LifecycleKey): string {
+    return `${key.source}\u0000${key.className}\u0000${key.objectKey}`;
   }
 }

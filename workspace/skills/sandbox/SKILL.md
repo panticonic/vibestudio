@@ -45,7 +45,7 @@ possible. The execution modes differ in presentation:
 
 | Tool              | Where it runs          | Rendering                          | Lifecycle                                      | Response                             |
 | ----------------- | ---------------------- | ---------------------------------- | ---------------------------------------------- | ------------------------------------ |
-| `eval`            | server-side (`EvalDO`) | imperative (run + return)          | 30-minute live heap + durable exact scope/`db` | immediate (result to agent)          |
+| `eval`            | server-side (`EvalDO`) | imperative (run + return)          | activation-resident heap + durable exact scope/`db` | immediate (result to agent)          |
 | `inline_ui`       | panel                  | component (render React)           | persistent (in chat history)                   | none (fire-and-forget)               |
 | `load_action_bar` | panel                  | component from file (render React) | persistent (top of current panel)              | immediate tool result                |
 | `feedback_custom` | panel                  | component (render React)           | transient                                      | deferred (blocks until user submits) |

@@ -1,10 +1,13 @@
-import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import {
+  selectedPreparedAuthoritySelection,
+  type ServiceDefinition,
+} from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   BROWSER_ENVIRONMENT_BROKER_AUTHORITY_PREFIX,
   browserEnvironmentMethods,
 } from "@vibestudio/service-schemas/browserEnvironment";
-import { allOf, relationship } from "@vibestudio/shared/authorization";
+import { allOf, relationship, requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type { BrowserCookieProjectionApi } from "./browserCookieProjection.js";
 import type { BrowserDownloadManager } from "./browserDownloadManager.js";
 import type { BrowserImportHostProvider } from "./browserImportHostProvider.js";
@@ -22,17 +25,17 @@ export function createBrowserEnvironmentService(deps: {
         if (!ctx.caller.code && !ctx.caller.executionSession) return [];
         const capability = `service:browserEnvironment.${method}`;
         return [
-          {
+          selectedPreparedAuthoritySelection({
             capability,
             resourceKey: capability,
             requirement: allOf(
-              relationship("workspace-member"),
+              requirementForPrincipals(["code"], capability),
               relationship(
                 "code-source",
                 deps.browserDataBrokerRepoPath ?? "__no_browser_data_broker_declared__"
               )
             ),
-          },
+          }),
         ];
       },
     ])

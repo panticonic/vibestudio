@@ -113,50 +113,6 @@ function awaitEffectBoundary<T>(
   });
 }
 
-function compareLocalToolOrder(left: OutboxRow, right: OutboxRow): number {
-  const leftDescriptor = left.descriptor;
-  const rightDescriptor = right.descriptor;
-  if (leftDescriptor.kind !== "local_tool" || rightDescriptor.kind !== "local_tool") return 0;
-  const leftSeq = leftDescriptor.invocationSeq ?? Number.MAX_SAFE_INTEGER;
-  const rightSeq = rightDescriptor.invocationSeq ?? Number.MAX_SAFE_INTEGER;
-  if (leftSeq !== rightSeq) return leftSeq - rightSeq;
-  if (left.createdAt !== right.createdAt) return left.createdAt - right.createdAt;
-  return left.effectId.localeCompare(right.effectId);
-}
-
-/**
- * Select one durable local-tool execution wave.
- *
- * Parallel calls may share a wave until the first sequential barrier. A
- * sequential call starts only after every earlier local invocation has a
- * terminal outcome, and no later call can cross it while it is leased,
- * deferred, backing off, or awaiting recovery. Because invocationSeq is the
- * folded trajectory sequence, the same wave boundaries are reconstructed
- * after eviction instead of depending on isolate-local promises.
- */
-function localToolDispatchIsOrdered(
-  candidate: OutboxRow,
-  unresolved: readonly OutboxRow[]
-): boolean {
-  const descriptor = candidate.descriptor;
-  if (descriptor.kind !== "local_tool") return true;
-  const peers = unresolved.filter((row) => {
-    const peer = row.descriptor;
-    return (
-      row.branchId === candidate.branchId &&
-      peer.kind === "local_tool" &&
-      peer.turnId === descriptor.turnId &&
-      row.effectId !== candidate.effectId
-    );
-  });
-  const earlier = peers.filter((row) => compareLocalToolOrder(row, candidate) < 0);
-  if (descriptor.executionMode !== "parallel") return earlier.length === 0;
-  return !earlier.some((row) => {
-    const peer = row.descriptor;
-    return peer.kind === "local_tool" && peer.executionMode !== "parallel";
-  });
-}
-
 export interface DriverDeps {
   sql: SqlStorage;
   gad: GadPort;
@@ -167,6 +123,7 @@ export interface DriverDeps {
   onEphemeral(emit: EphemeralEmit): void;
   now(): number;
   scheduleAlarm(atMs: number): void;
+  notifyWorkReady?(): void;
   /** Live fan-out for GAD-created channel publication rows. The trajectory log
    *  append is authoritative; this only wakes channel subscribers in-process. */
   broadcastStoredEnvelopes?(channelId: string, envelopeIds: string[]): Promise<void>;
@@ -698,23 +655,18 @@ export class AgentLoopDriver {
     if (!inFlight) return false;
     const row = this.outbox.get(loop.logId, ids.modelEffect(inFlight.messageId));
     if (!row) return false;
-    // A queued/backing-off row is not an orphan; let the pump dispatch/retry it.
-    if (row.leaseExpiresAt === null) return true;
-    // A leased row that has not expired is still owned by the outbox lease. This
-    // covers the restart window after credential-use approval is deferred but
-    // before deferRedrive parks the row with a backstop.
-    if (row.leaseExpiresAt > this.deps.now()) return true;
-    // A leased row with a live AbortController is running in this isolate.
-    return this.currentDispatchByRow.has(this.rowKey(row));
+    // A queued row or an explicit host-generation claim is a concrete path
+    // forward. A subsequent host generation releases the old claim through
+    // adoption; wall-clock age never changes its meaning.
+    return row.disposition === "leased" || row.disposition === "ready";
   }
 
   /**
    * Hibernation-first execution discipline: inbound interactions (channel
    * deliveries, method calls, outcome callbacks) only JOURNAL (bounded
    * appends), reconcile the outbox, and arm the alarm. The DO alarm is the
-   * single effect pump — no inbound RPC ever blocks on effect latency (a
-   * model stream can outlive any request/connection), and work orphaned by
-   * eviction or a hung stream becomes due again exactly at lease expiry.
+   * host work driver is the single effect pump. A generation transition, not
+   * elapsed time, is what releases work orphaned by a dead host.
    */
   async handleIncoming(channelId: string, incoming: Incoming): Promise<void> {
     if (
@@ -1168,7 +1120,7 @@ export class AgentLoopDriver {
   }
 
   nextWakeAt(): number | null {
-    const outboxDue = this.outbox.earliestDueAt();
+    const outboxDue = this.outbox.earliestRecoveryAt();
     const resumeDue = this.earliestScheduledModelResumeAt();
     const candidates = [outboxDue, resumeDue].filter(
       (value): value is number => typeof value === "number"
@@ -1182,60 +1134,46 @@ export class AgentLoopDriver {
     return this.outbox.forBranch(logIdForChannel(channelId)).length > 0;
   }
 
-  private startDueDispatches(
-    selection: "all" | "prelude" | "long" = "all"
-  ): Array<Promise<void>> {
-    const now = this.deps.now();
-    const work: Array<Promise<void>> = [];
-    const unresolved = this.outbox.all();
-    for (const row of this.outbox
-      .due(now)
-      .filter((candidate) => localToolDispatchIsOrdered(candidate, unresolved))
-      .filter((candidate) => {
-        if (selection === "all") return true;
-        const prelude =
-          candidate.kind === "prompt_artifacts" || candidate.kind === "publish_envelope";
-        return selection === "prelude" ? prelude : !prelude;
-      })) {
-      // A credential wait past its own expiresAt is a failure, not a
-      // dispatch. (Before expiry, a due row is just the periodic redrive —
-      // the executor idempotently re-publishes the card + interest.)
-      if (row.kind === "credential_wait") {
-        const expiresAt = Date.parse(
-          (row.descriptor as import("@workspace/agent-loop").CredentialWaitEffect).expiresAt
+  /** Test harness for the host-owned claim/held-execution loop. Production
+   * calls one claimed effect through executeClaimedEffect. */
+  async dispatchReadyEffectsForTest(): Promise<void> {
+    const { completion } = this.beginReadyEffectDispatchForTest();
+    await completion;
+  }
+
+  beginReadyEffectDispatchForTest(): { completion: Promise<void> } {
+    const completion = (async () => {
+      for (;;) {
+        const claims = this.outbox.claimReady({
+          workerId: "agent-loop-driver:test-host",
+          now: this.deps.now(),
+          limit: 64,
+        });
+        if (claims.length === 0) return;
+        await Promise.all(
+          claims.map((row) =>
+            this.executeClaimedEffect(
+              outboxExternalId(row.branchId, row.effectId),
+              row.leaseGeneration
+            )
+          )
         );
-        if (Number.isFinite(expiresAt) && expiresAt <= now) {
-          this.outbox.lease(row.branchId, row.effectId, now);
-          work.push(this.failEffect(row, { message: "credential wait expired" }));
-          continue;
-        }
       }
-      // Lease synchronously before the first await. Durable Objects may accept
-      // another alarm/RPC event while this dispatch is awaiting I/O; that event
-      // can run a concurrent pump for a different channel, but cannot snapshot
-      // and execute this same row.
-      this.outbox.lease(row.branchId, row.effectId, now);
-      work.push(this.dispatchRow(row));
+    })();
+    return { completion };
+  }
+
+  async executeClaimedEffect(itemId: string, generation: number): Promise<void> {
+    const parsed = parseOutboxExternalId(itemId);
+    if (!parsed) throw new Error("executeClaimedEffect: invalid effect identity");
+    const row = this.outbox.get(parsed.branchId, parsed.effectId);
+    if (!row || !this.outbox.isClaim(row.branchId, row.effectId, generation)) {
+      throw new Error("executeClaimedEffect: stale claim");
     }
-    return work;
+    await this.dispatchRow(row, generation);
   }
 
-  private hasDuePrelude(): boolean {
-    const now = this.deps.now();
-    const unresolved = this.outbox.all();
-    return this.outbox.due(now).some(
-      (candidate) =>
-        (candidate.kind === "prompt_artifacts" || candidate.kind === "publish_envelope") &&
-        localToolDispatchIsOrdered(candidate, unresolved)
-    );
-  }
-
-  async dispatchDue(): Promise<void> {
-    const work = this.startDueDispatches();
-    await Promise.all(work);
-  }
-
-  private async dispatchRow(row: OutboxRow): Promise<void> {
+  private async dispatchRow(row: OutboxRow, claimGeneration?: number): Promise<void> {
     if (this.activationReleased) return;
     if (this.retiredChannels.has(row.channelId)) return;
     // Interrupt closes admission before it journals the marker. A concurrently
@@ -1248,14 +1186,10 @@ export class AgentLoopDriver {
     // here never reaches the executor's own slow-call watchdog.
     const dispatchProgress = { phase: "load-loop", startedAt: Date.now() };
     const rowKey = this.rowKey(row);
-    const stale = this.currentDispatchByRow.get(rowKey);
-    if (stale) {
-      console.warn("[agent-loop-driver] superseding wedged effect dispatch:", {
-        kind: row.kind,
-        effectId: row.effectId,
-        channelId: row.channelId,
-      });
-      stale.controller.abort(new Error("effect lease expired; superseded by redispatch"));
+    if (this.currentDispatchByRow.has(rowKey)) {
+      throw new Error(
+        `Invariant violation: effect ${row.effectId} is already executing in this activation`
+      );
     }
     const controller = new AbortController();
     let resolveSettled!: () => void;
@@ -1284,19 +1218,9 @@ export class AgentLoopDriver {
         effectId: row.effectId,
         channelId: row.channelId,
       });
-      // Keep a live model call's lease fresh: a single generation can
-      // legitimately outlast leaseMs(model_call), and letting the lease lapse
-      // restarts the whole generation from scratch (the redispatch treadmill —
-      // a >10-min response can then NEVER complete). Renewal is bound to this
-      // isolate's timer, so eviction still recovers via expiry exactly as
-      // designed. Other kinds keep expiry-driven semantics (channel_call
-      // redelivery) untouched.
-      if (row.kind === "model_call") {
-        this.outbox.lease(row.branchId, row.effectId, this.deps.now());
-      }
     }, 30_000);
     try {
-      await this.dispatchRowInner(row, dispatchProgress, controller);
+      await this.dispatchRowInner(row, dispatchProgress, controller, claimGeneration);
     } finally {
       clearInterval(slowTimer);
       this.activeDispatches.delete(active);
@@ -1310,11 +1234,11 @@ export class AgentLoopDriver {
   private async dispatchRowInner(
     row: OutboxRow,
     dispatchProgress: { phase: string; startedAt: number },
-    controller: AbortController
+    controller: AbortController,
+    claimGeneration?: number
   ): Promise<void> {
     const loop = await this.loopForBranch(row.branchId, row.channelId);
     if (!loop) return;
-    this.outbox.lease(row.branchId, row.effectId, this.deps.now());
     const executor = this.deps.executorOverride?.(row.descriptor) ?? executorFor(row.descriptor);
     // Storage boundary, read side: effects re-derived from a RELOADED fold
     // carry journaled blob refs for spilled fields (tool args, http request).
@@ -1356,10 +1280,16 @@ export class AgentLoopDriver {
       // Recording the abort as a model/tool outcome would turn process
       // replacement into user-visible authorship and lose resumability.
       if (this.activationReleased && controller.signal.aborted) return;
-      // A superseded run must not touch the row: a lease-expiry redispatch owns
-      // it now, and a late aborted terminal racing the live run's appends is a
-      // second writer on the same log (GadAppendError[replay-mismatch] class).
+      // A superseded run must not touch the row: a replacement worker
+      // generation owns it now, and a late aborted terminal racing the live
+      // run's appends is a second writer on the same log.
       if (this.currentDispatchByRow.get(this.rowKey(row))?.controller !== controller) return;
+      if (
+        claimGeneration !== undefined &&
+        !this.outbox.isClaim(row.branchId, row.effectId, claimGeneration)
+      ) {
+        return;
+      }
       // EXECUTION failed → retry/backoff path. (applyOutcome errors below are
       // driver-level crashes and must propagate so the reconcile heals them.)
       const message = err instanceof Error ? err.message : String(err);
@@ -1446,6 +1376,12 @@ export class AgentLoopDriver {
     // Superseded run (see catch above): the live redispatch owns the row —
     // discard this outcome instead of racing its appends.
     if (this.currentDispatchByRow.get(this.rowKey(row))?.controller !== controller) return;
+    if (
+      claimGeneration !== undefined &&
+      !this.outbox.isClaim(row.branchId, row.effectId, claimGeneration)
+    ) {
+      return;
+    }
     if ((outcome as { deferred?: boolean }).deferred) {
       // Result arrives out-of-band. Keep an earlier wake if the result raced
       // this deferred ack; otherwise redrive later as a backstop.
@@ -1487,7 +1423,8 @@ export class AgentLoopDriver {
     const now = this.deps.now();
     this.deps.sql.exec(
       `UPDATE effect_outbox
-       SET lease_expires_at = NULL,
+       SET lease_owner = NULL,
+           disposition = 'parked',
            next_attempt_at = CASE
              WHEN next_attempt_at IS NOT NULL AND next_attempt_at <= ? THEN next_attempt_at
              ELSE ?
@@ -1504,7 +1441,8 @@ export class AgentLoopDriver {
   private nudgeRedrive(row: OutboxRow): void {
     this.deps.sql.exec(
       `UPDATE effect_outbox
-       SET lease_expires_at = NULL,
+       SET lease_owner = NULL,
+           disposition = 'ready',
            next_attempt_at = ?
        WHERE branch_id = ? AND effect_id = ?`,
       this.deps.now(),
@@ -1828,8 +1766,8 @@ export class AgentLoopDriver {
   /**
    * A host wake hint says at least one authority acquisition owned by this
    * vessel changed state. The outbox remains the continuation: make parked
-   * HTTP effects immediately eligible for exact redrive, while ordinary lease
-   * and reconciliation rules still prevent duplicate execution.
+   * HTTP effects immediately eligible for exact redrive, while
+   * generation-fenced claims still prevent duplicate execution.
    */
   nudgeAuthorityRedrive(): void {
     const now = this.deps.now();
@@ -1837,7 +1775,7 @@ export class AgentLoopDriver {
       `UPDATE effect_outbox
        SET next_attempt_at = ?
        WHERE kind = 'http_call'
-         AND lease_expires_at IS NULL
+         AND disposition != 'leased'
          AND (next_attempt_at IS NULL OR next_attempt_at > ?)`,
       now,
       now
@@ -1993,55 +1931,35 @@ export class AgentLoopDriver {
     return active.length;
   }
 
-  async alarm(): Promise<void> {
-    const { completion } = await this.beginAlarmDispatch();
-    await completion;
+  /** Alarm-side recovery is deliberately local and bounded. It announces
+   * durable rows; the host driver owns every execution. */
+  async reconcileForRecovery(): Promise<void> {
+    if (
+      this.outbox.due(this.deps.now()).length > 0 ||
+      this.scheduledModelResumeRowsDue(this.deps.now()).length > 0
+    ) {
+      this.deps.notifyWorkReady?.();
+    }
   }
 
-  /**
-   * Perform the bounded, durability-critical half of an alarm and return the
-   * activation-owned I/O as a separately awaitable task.
-   *
-   * The alarm request must not own provider/model latency: workerd cannot
-   * deliver lifecycle prepare to the same Durable Object while that alarm
-   * event remains active. Rows are reconciled and leased before this method
-   * returns, so detaching `completion` introduces no unleased crash window.
-   * Durable Objects remain active while its I/O is pending; the completion's
-   * final schedule preserves ordinary lease-expiry recovery if the activation
-   * disappears or an executor ignores cancellation.
-   */
-  async beginAlarmDispatch(): Promise<{ completion: Promise<void> }> {
-    await this.processScheduledModelResumes();
-    for (const loop of this.loops.values()) {
-      await this.reconcile(loop);
-    }
-    // Own the bounded prelude inside the alarm request. Detached continuations
-    // are appropriate for model/tool latency, but not for the short durable
-    // steps that expose those effects: Workerd may freeze a continuation once
-    // its event returns. Drain preparation and receipt initiation first.
-    for (;;) {
-      const prelude = this.startDueDispatches("prelude");
-      if (prelude.length === 0) break;
-      await Promise.all(prelude);
-    }
-    const initialWork = this.startDueDispatches("long");
-    this.scheduleEarliest();
-    const completion = (async () => {
-      let work = initialWork;
-      while (work.length > 0) {
-        await Promise.all(work);
-        if (this.activationReleased) return;
-        if (this.hasDuePrelude()) return;
-        // Outcomes can journal the next deterministic effect in the same
-        // durable chain (prompt artifacts → model, model → tool, tool →
-        // continuation). Drain those newly due rows without waiting for an
-        // arbitrary second alarm tick; leased/deferred rows are excluded.
-        // Short follow-up work gets a fresh alarm owner; do not start it from
-        // this detached long-effect continuation.
-        work = this.startDueDispatches("long");
-      }
-    })().finally(() => this.scheduleEarliest());
-    return { completion };
+  scheduledResumeTransitionsDue(now: number): ScheduledModelResumeRow[] {
+    return this.scheduledModelResumeRowsDue(now);
+  }
+
+  async executeScheduledResume(channelId: string, messageId: string): Promise<void> {
+    const row = this.scheduledModelResumeRowsDue(this.deps.now()).find(
+      (candidate) => candidate.channelId === channelId && candidate.messageId === messageId
+    );
+    if (!row) throw new Error("executeScheduledResume: transition is not due");
+    await this.handleIncoming(row.channelId, {
+      type: "command",
+      command: {
+        kind: "resumeAfterReset",
+        messageId: row.messageId,
+        resetAt: new Date(row.resetAtMs).toISOString(),
+      },
+    });
+    this.deleteScheduledModelResume(row);
   }
 
   async scheduleResumeAtReset(
@@ -2081,7 +1999,7 @@ export class AgentLoopDriver {
    * journal effects and arm this alarm; they never detach correctness-critical
    * work into an isolate-local continuation. */
   private requestPump(): void {
-    this.deps.scheduleAlarm(this.deps.now() + 1);
+    this.deps.notifyWorkReady?.();
   }
 
   private earliestScheduledModelResumeAt(): number | null {
@@ -2111,28 +2029,6 @@ export class AgentLoopDriver {
       row.channelId,
       row.messageId
     );
-  }
-
-  private async processScheduledModelResumes(): Promise<void> {
-    const rows = this.scheduledModelResumeRowsDue(this.deps.now());
-    for (const row of rows) {
-      try {
-        await this.handleIncoming(row.channelId, {
-          type: "command",
-          command: {
-            kind: "resumeAfterReset",
-            messageId: row.messageId,
-            resetAt: new Date(row.resetAtMs).toISOString(),
-          },
-        });
-        this.deleteScheduledModelResume(row);
-      } catch (err) {
-        console.warn(
-          "[agent-loop-driver] scheduled model resume failed:",
-          err instanceof Error ? err.message : String(err)
-        );
-      }
-    }
   }
 
   /**

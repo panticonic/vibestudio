@@ -230,6 +230,8 @@ export interface EventPayloads {
     parentPanelId: string;
     callerId: string;
     callerKind: CallerKind;
+    /** OAuth transaction to cancel if the authenticated panel creation fails. */
+    transactionId?: string;
   };
   "browser-import-progress": {
     requestId: string;

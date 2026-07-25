@@ -43,6 +43,17 @@ const WORKSPACE_GRAPH_DELETE = new Set([
   "purgeRevokedUserChannelIndexes",
 ]);
 
+const HOST_INTRINSIC_DO_METHODS = new Set(["durableWorkCapabilities"]);
+
+/**
+ * Framework protocol methods invoked only by the host. They are implemented
+ * by the runtime base class rather than each workspace worker, so they do not
+ * appear in a worker package's source-derived public RPC catalog.
+ */
+export function isHostIntrinsicDirectMethod(method: string): boolean {
+  return HOST_INTRINSIC_DO_METHODS.has(method);
+}
+
 /**
  * Product-sealed direct receivers that are not workspace-service providers.
  * Workspace-built providers are resolved from their live service declaration

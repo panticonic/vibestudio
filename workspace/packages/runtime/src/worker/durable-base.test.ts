@@ -4,6 +4,7 @@ import { rpc } from "@vibestudio/rpc";
 import { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "@vibestudio/rpc/internal";
 import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import type { DoAlarmDispatchResult, DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
+import { DURABLE_WORK_READY_HEADER } from "@vibestudio/shared/durableWork";
 import initSqlJs from "sql.js";
 import { DurableObjectBase, type DurableObjectSchemaMigration } from "./durable-base.js";
 import { createTestDO, createTestDirectAuthority } from "./durable-test-utils.js";
@@ -122,6 +123,40 @@ class LifecycleProbeDO extends DurableObjectBase {
   })
   callerKind(): string | null {
     return this.caller?.callerKind ?? null;
+  }
+}
+
+class WorkReadyProbeDO extends DurableObjectBase {
+  protected createTables(): void {}
+
+  protected override durableWorkQueues(): readonly ["agent-inbox", "agent-effect"] {
+    return ["agent-inbox", "agent-effect"];
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  enqueue(): { committed: true } {
+    this.markWorkReady("agent-inbox", "agent-inbox", "agent-effect");
+    return { committed: true };
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  drain(queue: "agent-inbox" | "agent-effect"): { drained: true } {
+    this.acknowledgeDurableWorkReady(queue);
+    return { drained: true };
+  }
+
+  override async resumeAfterRestart(): Promise<void> {
+    this.markWorkReady("agent-inbox");
   }
 }
 
@@ -721,6 +756,77 @@ describe("DurableObjectBase lifecycle routing", () => {
         },
       },
     });
+  });
+});
+
+describe("DurableObjectBase work-ready receipts", () => {
+  it("exposes framework @rpc capability methods on subclasses", async () => {
+    const { instance } = await createTestDO(WorkReadyProbeDO);
+    const fetchable = instance as unknown as { fetch(request: Request): Promise<Response> };
+    const response = await fetchable.fetch(
+      new Request("http://test/test-key/durableWorkCapabilities", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          args: [],
+          __instanceToken: "token",
+          __instanceId: "do:workers/probe:WorkReadyProbeDO:test-key",
+          __caller: authenticatedTestCaller("durableWorkCapabilities"),
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(["agent-inbox", "agent-effect"]);
+  });
+
+  it("re-emits one unacknowledged generation without manufacturing new work", async () => {
+    const { instance, sql } = await createTestDO(WorkReadyProbeDO);
+    const fetchable = instance as unknown as { fetch(request: Request): Promise<Response> };
+    const request = (method: string, args: unknown[]) =>
+      fetchable.fetch(
+        new Request(`http://test/test-key/${method}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            args,
+            __instanceToken: "token",
+            __instanceId: "do:workers/probe:WorkReadyProbeDO:test-key",
+            __caller: authenticatedTestCaller(method),
+          }),
+        })
+      );
+
+    const ordinary = await request("enqueue", []);
+    await expect(ordinary.json()).resolves.toEqual({ committed: true });
+    expect(ordinary.headers.get(DURABLE_WORK_READY_HEADER)).toBe("agent-effect,agent-inbox");
+
+    const firstAlarm = await request("__alarm", []);
+    expect(firstAlarm.headers.get(DURABLE_WORK_READY_HEADER)).toBe("agent-effect,agent-inbox");
+    const secondAlarm = await request("__alarm", []);
+    expect(secondAlarm.headers.get(DURABLE_WORK_READY_HEADER)).toBe("agent-effect,agent-inbox");
+    expect(
+      sql
+        .exec(
+          `SELECT key, value FROM state
+            WHERE key LIKE 'durable-work-ready-generation:%'
+            ORDER BY key`
+        )
+        .toArray()
+    ).toEqual([
+      { key: "durable-work-ready-generation:agent-effect", value: "1" },
+      { key: "durable-work-ready-generation:agent-inbox", value: "1" },
+    ]);
+
+    await request("drain", ["agent-inbox"]);
+    await request("drain", ["agent-effect"]);
+    const drainedAlarm = await request("__alarm", []);
+    expect(drainedAlarm.headers.get(DURABLE_WORK_READY_HEADER)).toBeNull();
+
+    const resume = await request("__lifecycle/resume", [
+      { epoch: "e1", previousGeneration: null, currentGeneration: 1, reason: "planned" },
+    ]);
+    expect(resume.headers.get(DURABLE_WORK_READY_HEADER)).toBe("agent-inbox");
   });
 });
 

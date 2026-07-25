@@ -65,7 +65,7 @@ function createHarness(
     retryStartGate?: Promise<void>;
     rejectFirstGetRun?: boolean;
     retryGetRunGate?: Promise<void>;
-    kernelLeaseError?: Error;
+    finiteEvalEntityIds?: ReadonlySet<string>;
   } = {}
 ) {
   const calls: Array<{ ref: unknown; method: string; args: unknown[] }> = [];
@@ -89,7 +89,31 @@ function createHarness(
         return undefined;
       }
       if (method === "entityResolve") {
-        // No lineage in the mock → resolveParentPanel walk ends with no parent.
+        const id = String(args[0]);
+        if (id.startsWith(`do:${INTERNAL_DO_SOURCE}:EvalDO:`) && contexts[id]) {
+          return {
+            id,
+            kind: "do",
+            source: { repoPath: INTERNAL_DO_SOURCE, effectiveVersion: "test" },
+            contextId: contexts[id],
+            className: "EvalDO",
+            key: id.slice(id.lastIndexOf(":") + 1),
+            createdAt: 0,
+            status: "active",
+            cleanupComplete: true,
+            ...(options.finiteEvalEntityIds?.has(id)
+              ? {
+                  stateArgs: {
+                    ownerPrincipalId: "session:default",
+                    subKey: "finite",
+                    agentExecutionAdmission: { v: 1, ownerId: "session:default" },
+                    lifecycle: "finite",
+                  },
+                }
+              : {}),
+          } satisfies EntityRecord;
+        }
+        // No other lineage in the mock → resolveParentPanel walk ends with no parent.
         return null;
       }
       if (method === "slotResolveByEntity") {
@@ -100,6 +124,9 @@ function createHarness(
         return { success: true, console: "", scopeKeys: [] };
       }
       if (method === "reset") {
+        return { ok: true };
+      }
+      if (method === "dispose") {
         return { ok: true };
       }
       if (method === "cancel") {
@@ -148,6 +175,33 @@ function createHarness(
     resolveActive(id: string) {
       const contextId = contexts[id];
       if (contextId == null || !id.startsWith("do:")) return null;
+      if (id.startsWith(`do:${INTERNAL_DO_SOURCE}:EvalDO:`)) {
+        const finite = options.finiteEvalEntityIds?.has(id) === true;
+        return {
+          id,
+          kind: "do",
+          source: {
+            repoPath: INTERNAL_DO_SOURCE,
+            effectiveVersion: EVAL_EXECUTION_IDENTITY.effectiveVersion,
+          },
+          contextId,
+          className: "EvalDO",
+          key: id.slice(id.lastIndexOf(":") + 1),
+          activeBuildKey: EVAL_EXECUTION_IDENTITY.buildKey,
+          activeExecutionDigest: EVAL_EXECUTION_IDENTITY.executionDigest,
+          activeAuthority: { requests: EVAL_EXECUTION_IDENTITY.authorityRequests },
+          parentId: "session:default",
+          stateArgs: {
+            ownerPrincipalId: "session:default",
+            subKey: finite ? "finite" : "default",
+            agentExecutionAdmission: { v: 1, ownerId: "session:default" },
+            ...(finite ? { lifecycle: "finite" } : {}),
+          },
+          createdAt: 0,
+          status: "active",
+          cleanupComplete: true,
+        } as EntityRecord;
+      }
       return {
         id,
         kind: "do",
@@ -170,47 +224,21 @@ function createHarness(
   } as unknown as EntityCache;
   const entityStore = new WorkspaceEntityStore({ doDispatch, workspaceId: "ws_1", entityCache });
   const executionSessions = new AgentExecutionSessionRegistry();
+  const retireEntity = vi.fn(async () => {});
   const service = createEvalService({
     doDispatch,
     entityStore,
+    retireEntity,
     tokenManager: {
       ensureToken: (callerId: string) => `tok:${callerId}`,
     } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
     workspaceId: "ws_1",
     executionSessions,
-    kernelLeases: {
-      touch: async () => {
-        if (options.kernelLeaseError) throw options.kernelLeaseError;
-      },
-    },
   });
-  return { service, calls, executionSessions };
+  return { service, calls, executionSessions, retireEntity };
 }
 
 describe("createEvalService", () => {
-  it("closes admission when kernel residency cannot be established", async () => {
-    const ownerId = "session:default";
-    const subKey = "default";
-    const { service, executionSessions } = createHarness(
-      { [ownerId]: "ctx_1" },
-      { kernelLeaseError: new Error("kernel lease unavailable") }
-    );
-
-    await expect(
-      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "run", [
-        {
-          ownerId,
-          contextId: "ctx_1",
-          subKey,
-          code: "return 1;",
-        },
-      ])
-    ).rejects.toThrow("kernel lease unavailable");
-
-    const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${evalKey(ownerId, subKey)}`;
-    expect(executionSessions.resolve(runtimeId)).toBeNull();
-  });
-
   it("runs CLI eval as the selected session owner and context", async () => {
     const { service, calls } = createHarness({ "session:default": "ctx_1" });
 
@@ -377,12 +405,12 @@ describe("createEvalService", () => {
     const service = createEvalService({
       doDispatch,
       entityStore,
+      retireEntity: vi.fn(async () => {}),
       tokenManager: {
         ensureToken: (id: string) => `tok:${id}`,
       } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
       workspaceId: "ws",
       executionSessions: new AgentExecutionSessionRegistry(),
-      kernelLeases: { touch: async () => undefined },
     });
 
     await service.handler(
@@ -628,6 +656,98 @@ describe("createEvalService", () => {
     });
   });
 
+  it("disposes a finite eval kernel through its runtime lifecycle owner", async () => {
+    const ownerId = "session:default";
+    const contexts: Record<string, string | null> = { [ownerId]: "ctx_1" };
+    const objectKey = evalKey(ownerId, "finite");
+    const entityId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`;
+    contexts[entityId] = "ctx_1";
+    const { service, calls, retireEntity } = createHarness(contexts, {
+      finiteEvalEntityIds: new Set([entityId]),
+    });
+
+    await expect(
+      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "dispose", [
+        {
+          ownerId,
+          contextId: "ctx_1",
+          subKey: "finite",
+        },
+      ])
+    ).resolves.toEqual({ ok: true });
+
+    expect(calls.find((call) => call.method === "dispose")).toMatchObject({
+      ref: { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey },
+      args: [],
+    });
+    expect(retireEntity).toHaveBeenCalledWith(entityId);
+  });
+
+  it("refuses to dispose a persistent eval scope", async () => {
+    const ownerId = "session:default";
+    const contexts: Record<string, string | null> = { [ownerId]: "ctx_1" };
+    const objectKey = evalKey(ownerId, "default");
+    contexts[`do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`] = "ctx_1";
+    const { service, retireEntity } = createHarness(contexts);
+
+    await expect(
+      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "dispose", [
+        { ownerId, contextId: "ctx_1" },
+      ])
+    ).rejects.toMatchObject({ code: "EACCES", errorKind: "access" });
+    expect(retireEntity).not.toHaveBeenCalled();
+  });
+
+  it("refuses to reclassify a persistent eval scope as finite", async () => {
+    const ownerId = "session:default";
+    const objectKey = evalKey(ownerId, "default");
+    const entityId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`;
+    const { service, calls } = createHarness({
+      [ownerId]: "ctx_1",
+      [entityId]: "ctx_1",
+    });
+
+    await expect(
+      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "run", [
+        {
+          ownerId,
+          contextId: "ctx_1",
+          subKey: "default",
+          lifecycle: "finite",
+          code: "return 1;",
+        },
+      ])
+    ).rejects.toMatchObject({ code: "EINVAL", errorKind: "application" });
+    expect(calls.some((call) => call.method === "entityActivate")).toBe(false);
+    expect(calls.some((call) => call.method === "entityAdvanceExecution")).toBe(false);
+  });
+
+  it("refuses to reuse a finite eval scope as a persistent notebook", async () => {
+    const ownerId = "session:default";
+    const objectKey = evalKey(ownerId, "finite");
+    const entityId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`;
+    const { service, calls } = createHarness(
+      {
+        [ownerId]: "ctx_1",
+        [entityId]: "ctx_1",
+      },
+      { finiteEvalEntityIds: new Set([entityId]) }
+    );
+
+    await expect(
+      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "run", [
+        {
+          ownerId,
+          contextId: "ctx_1",
+          subKey: "finite",
+          code: "return 1;",
+        },
+      ])
+    ).rejects.toMatchObject({ code: "EINVAL", errorKind: "application" });
+    expect(calls.some((call) => call.method === "entityActivate")).toBe(false);
+    expect(calls.some((call) => call.method === "entityAdvanceExecution")).toBe(false);
+  });
+
   it("cancel: routes to the owner's EvalDO by (owner, subKey) and forwards the runId", async () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
     const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
@@ -725,6 +845,7 @@ function createHeldFailHarness(opts: {
   const service = createEvalService({
     doDispatch,
     entityStore,
+    retireEntity: vi.fn(async () => {}),
     tokenManager: {
       ensureToken: (id: string) => `tok:${id}`,
     } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
@@ -732,7 +853,6 @@ function createHeldFailHarness(opts: {
     executionSessions: new AgentExecutionSessionRegistry(),
     recoverUnresponsiveSandbox,
     watchdogGraceMs: 1,
-    kernelLeases: { touch: async () => undefined },
   });
   return { service, calls, ownerId, recoverUnresponsiveSandbox };
 }

@@ -42,7 +42,7 @@ import type {
   MethodCallHandle,
   MethodResultChunk,
   MethodResultValue,
-  MethodDefinition,
+  MethodDefinitionLike,
   MethodAdvertisement,
   JsonSchema,
   MethodExecutionContext,
@@ -56,6 +56,7 @@ import {
   type MessageBlockInput,
   type MessageId,
   type MessageTier,
+  type ParticipantRef,
 } from "@workspace/agentic-protocol";
 import { AgenticError } from "./protocol-types.js";
 import { ErrorMessageSchema, SignalMessageSchema } from "./protocol.js";
@@ -67,10 +68,44 @@ import type { PubSubClient } from "./client.js";
 import type { RecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
 import { iterateChannelReplayAfterPages } from "./channel-replay.js";
 import { readChannelSubscriptionRecords } from "@vibestudio/service-schemas/channel";
+import { Validator } from "@cfworker/json-schema";
+import { draft7MetaSchema } from "./json-schema-draft-07.js";
 
 const DEFAULT_CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 const METHOD_START_REDRIVE_BASE_DELAY_MS = 100;
 const METHOD_START_REDRIVE_MAX_DELAY_MS = 5_000;
+
+const methodSchemaValidator = new Validator(draft7MetaSchema, "7", false);
+
+/**
+ * Method advertisements cross the model-tool boundary, whose schemas use JSON
+ * Schema semantics. OpenAPI 3.0 represents exclusive numeric bounds as a
+ * boolean plus `minimum`; JSON Schema draft 7 represents the bound itself as a
+ * number. Emitting the OpenAPI form makes otherwise-valid client methods fail
+ * strict provider validation before inference begins.
+ */
+function methodJsonSchema(schema: z.ZodTypeAny): JsonSchema {
+  const converted = convertZodToJsonSchema(schema, {
+    target: "jsonSchema7",
+  }) as JsonSchema;
+  const { $schema: _dialect, ...advertised } = converted;
+  return advertised;
+}
+
+function assertValidMethodSchema(
+  methodName: string,
+  field: "parameters" | "returns",
+  schema: JsonSchema
+): void {
+  const result = methodSchemaValidator.validate(schema);
+  if (result.valid) return;
+  const details = result.errors
+    .map((error) => `${error.instanceLocation || "schema"} ${error.error}`)
+    .join("; ");
+  throw new Error(
+    `Invalid JSON Schema advertised for method ${JSON.stringify(methodName)} ${field}: ${details}`
+  );
+}
 
 /**
  * A remote access/application rejection proves the channel refused the start.
@@ -163,6 +198,7 @@ type PresenceAction = "join" | "leave" | "update";
 
 interface PresencePayload {
   action?: PresenceAction;
+  ref: ParticipantRef;
   metadata?: Record<string, unknown>;
   leaveReason?: LeaveReason;
 }
@@ -191,7 +227,7 @@ export interface RpcConnectOptions<T extends ParticipantMetadata = ParticipantMe
   type?: string;
   handle?: string;
   replayMode?: "collect" | "stream" | "skip";
-  methods?: Record<string, MethodDefinition>;
+  methods?: Record<string, MethodDefinitionLike>;
   /**
    * The sole automatic recovery owner. Without a coordinator this client is a
    * one-generation response resource and remains disconnected after terminal
@@ -250,7 +286,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
 
   // Convert MethodDefinitions to MethodAdvertisements
   function toMethodAdvertisements(
-    methods: Record<string, MethodDefinition>
+    methods: Record<string, MethodDefinitionLike>
   ): MethodAdvertisement[] {
     return Object.entries(methods)
       .filter(([, def]) => !def.internal)
@@ -258,16 +294,14 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
         const parameters =
           def.parameters && typeof def.parameters === "object" && !("_def" in def.parameters)
             ? (def.parameters as JsonSchema)
-            : (convertZodToJsonSchema(def.parameters as z.ZodTypeAny, {
-                target: "openApi3",
-              }) as JsonSchema);
+            : methodJsonSchema(def.parameters as z.ZodTypeAny);
         const returns = def.returns
           ? def.returns && typeof def.returns === "object" && !("_def" in def.returns)
             ? (def.returns as JsonSchema)
-            : (convertZodToJsonSchema(def.returns as z.ZodTypeAny, {
-                target: "openApi3",
-              }) as JsonSchema)
+            : methodJsonSchema(def.returns as z.ZodTypeAny)
           : undefined;
+        assertValidMethodSchema(methodName, "parameters", parameters);
+        if (returns) assertValidMethodSchema(methodName, "returns", returns);
         return {
           name: methodName,
           description: def.description,
@@ -353,7 +387,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   const MAX_ROSTER_OP_IDS = 1000;
 
   // Method auto-execution
-  const registeredMethods: Record<string, MethodDefinition> = { ...(providedMethods ?? {}) };
+  const registeredMethods: Record<string, MethodDefinitionLike> = { ...(providedMethods ?? {}) };
 
   // Track AbortControllers (+ start time) for methods we're executing, keyed by callId. When a caller
   // cancels, we abort the controller so the handler sees signal.aborted; duplicate durable delivery
@@ -664,10 +698,14 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
           const presenceAction = payload?.action;
 
           if (presenceAction === "join" || presenceAction === "update") {
-            if (payload?.metadata) {
+            if (payload?.metadata && payload.ref) {
               currentRoster = {
                 ...currentRoster,
-                [msg.senderId!]: { id: msg.senderId!, metadata: payload.metadata as T },
+                [msg.senderId!]: {
+                  id: msg.senderId!,
+                  ref: payload.ref,
+                  metadata: payload.metadata as T,
+                },
               };
             }
           } else if (presenceAction === "leave") {
@@ -754,7 +792,11 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     if (snapshot.kind !== "roster-snapshot") return;
     currentRoster = {};
     for (const participant of snapshot.participants) {
-      currentRoster[participant.id] = { id: participant.id, metadata: participant.metadata as T };
+      currentRoster[participant.id] = {
+        id: participant.id,
+        ref: participant.ref,
+        metadata: participant.metadata as T,
+      };
     }
     for (const handler of rosterHandlers) {
       handler({ participants: currentRoster, ts: snapshot.ts });

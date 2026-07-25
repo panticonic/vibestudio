@@ -28,6 +28,14 @@ export const evalRunArgsSchema = z
     contextId: z.string().optional(),
     /** Logical sub-context name (default "default") — lets one owner keep multiple eval scopes. */
     subKey: z.string().optional(),
+    /**
+     * Declare that this eval scope is an owned finite resource. Finite scopes may
+     * be disposed without an interactive destructive-data confirmation after
+     * their result has been copied out. The declaration is bound immutably to
+     * the EvalDO entity on first activation; a persistent scope cannot later be
+     * reclassified as finite.
+     */
+    lifecycle: z.literal("finite").optional(),
     /** Inline code to execute (provide either `code` or `path`). */
     code: z.string().optional(),
     /** Context-relative TS/TSX file to execute instead of inline code. */
@@ -80,8 +88,6 @@ export const evalKernelStatusSchema = z
     /** Exact in-memory notebook incarnation that produced this result. */
     incarnationId: z.string().min(1),
     startedAt: z.number().int().nonnegative(),
-    /** Current 30-minute idle residency deadline, refreshed before each cell. */
-    idleExpiresAt: z.number().int().nonnegative().optional(),
     /** First-result-only lifecycle event for this incarnation. */
     event: z
       .object({
@@ -240,7 +246,7 @@ export const evalMethods = defineServiceMethods({
     args: z.tuple([evalRunArgsSchema]),
     returns: evalRunResultSchema,
     description:
-      "Run TypeScript/JS in the caller's per-owner EvalDO notebook (30-minute live heap plus exact cold scope recovery and synchronous in-DO SQLite `db`). Kernel restarts report exact restored/lost keys. Set reset:true to atomically clear scope/db before this run. Owner is the verified caller; fs is scoped to the owner's context.",
+      "Run TypeScript/JS in the caller's per-owner EvalDO notebook (activation-resident live heap plus exact cold scope recovery and synchronous in-DO SQLite `db`). Kernel restarts report exact restored/lost keys. Set reset:true to atomically clear scope/db before this run. Owner is the verified caller; fs is scoped to the owner's context.",
     access: { sensitivity: "write" },
   },
   reset: {
@@ -248,6 +254,13 @@ export const evalMethods = defineServiceMethods({
     returns: z.object({ ok: z.boolean() }).strict(),
     description:
       "Reset the eval context: wipe the live/durable scope and user `db` tables while preserving kernel infrastructure. The owner's existing eval data is cleared.",
+    access: { sensitivity: "destructive" },
+  },
+  dispose: {
+    args: z.union([z.tuple([]), z.tuple([evalResetArgsSchema])]),
+    returns: z.object({ ok: z.boolean() }).strict(),
+    description:
+      "Permanently release one owner-scoped eval kernel and erase its scope, run records, loaded modules, runtime image, and entity registration. Use this for explicitly finite eval scopes; ordinary notebooks remain durable until disposed.",
     access: { sensitivity: "destructive" },
   },
   startRun: {

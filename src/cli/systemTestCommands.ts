@@ -167,11 +167,30 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
     };
     let driver = null;
     let driverRetired = false;
+    let driverResourcesReleased = false;
     let cancellationCleanup = null;
     const retireDriver = async () => {
       if (!driver || driverRetired) return;
       driverRetired = true;
       await services.runtime.retireEntity({ id: driver.id });
+    };
+    const releaseDriverResources = async () => {
+      if (!driver || driverResourcesReleased) return;
+      driverResourcesReleased = true;
+      const failures = [];
+      try {
+        await rpc.call(driver.targetId, "releaseSystemTestRunResult", [progressKey]);
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await retireDriver();
+      } catch (error) {
+        failures.push(error);
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "System-test driver cleanup failed");
+      }
     };
     try {
       driver = await services.runtime.createEntity({
@@ -199,8 +218,7 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
             runs[progressKey] = cancelledRecord;
             scope.systemTestRuns = runs;
           }
-          await rpc.call(driver.targetId, "releaseSystemTestRunResult", [progressKey]);
-          await retireDriver();
+          await releaseDriverResources();
         })();
         cancellationCleanup = cleanup;
         await cleanup;
@@ -233,7 +251,7 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
             : {};
           runs[progressKey] = record;
           scope.systemTestRuns = runs;
-          await rpc.call(driver.targetId, "releaseSystemTestRunResult", [progressKey]);
+          await releaseDriverResources();
           return record.summary;
         }
         throw new Error(
@@ -254,11 +272,27 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
       throw error;
     } finally {
       // EvalDO starts registered cancellation cleanup before aborting ordinary
-      // execution. Let that cleanup retain the driver until its nested eval has
-      // settled; racing the ordinary finally would revoke the driver's sealed
-      // runtime identity while cancelSystemTestRun is still using it.
-      if (cancellationCleanup) await cancellationCleanup;
-      else await retireDriver();
+      // execution. Let it settle first, then unconditionally release both the
+      // finite inner EvalDO and its driver. Validation errors, transport errors,
+      // and successful runs therefore share one exact terminal path.
+      let cancellationFailure = null;
+      if (cancellationCleanup) {
+        try {
+          await cancellationCleanup;
+        } catch (error) {
+          cancellationFailure = error;
+        }
+      }
+      let releaseFailure = null;
+      try {
+        await releaseDriverResources();
+      } catch (error) {
+        releaseFailure = error;
+      }
+      if (cancellationFailure || releaseFailure) {
+        const failures = [cancellationFailure, releaseFailure].filter(Boolean);
+        throw new AggregateError(failures, "System-test terminal cleanup failed");
+      }
     }
   `;
 }
@@ -639,6 +673,37 @@ function truncatedReturn(value: unknown): {
     : null;
 }
 
+/**
+ * Build an owner-scoped deterministic pager for a persisted diagnostic value.
+ * This deliberately does not read `$lastLargeReturn`: that shared recovery slot
+ * can be replaced by another diagnostic eval between the truncation envelope
+ * and the first page read.
+ */
+export function systemTestJsonPageExpression(
+  expression: string,
+  start: number,
+  end: number,
+  pageKey: string
+): string {
+  return `(() => {
+    const pageKey = ${JSON.stringify(pageKey)};
+    if (!Object.prototype.hasOwnProperty.call(scope, pageKey)) {
+      const value = (${expression});
+      scope[pageKey] = JSON.stringify(value, null, 2);
+    }
+    const source = scope[pageKey];
+    if (typeof source !== "string") {
+      throw new Error("Cached system-test diagnostic is not text");
+    }
+    const chunk = source.slice(${start}, ${end});
+    return {
+      length: source.length,
+      encoding: "plain-string",
+      chunk,
+    };
+  })()`;
+}
+
 async function expandTruncatedReturn(
   scope: SessionScope,
   stored: StoredSystemTestRun | null,
@@ -750,8 +815,12 @@ async function expandTruncatedReturn(
     (!pageCode && reportedLength !== truncated.originalChars) ||
     text.length !== reportedLength
   ) {
+    const expected =
+      !pageCode && reportedLength !== truncated.originalChars
+        ? `${truncated.originalChars} advertised / ${reportedLength ?? "unknown"} paged`
+        : String(reportedLength ?? truncated.originalChars);
     throw new CliError(
-      `large system-test result is incomplete (expected ${reportedLength ?? truncated.originalChars} chars, received ${text.length})`
+      `large system-test result is incomplete (expected ${expected} chars, received ${text.length})`
     );
   }
   try {
@@ -767,13 +836,12 @@ async function inspect(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const testName = typeof inv.flags["test"] === "string" ? inv.flags["test"] : undefined;
+    const inspectExpression = `inspectSystemTestRun(record, ${
+      testName ? `{ testName: ${JSON.stringify(testName)} }` : "{}"
+    })`;
     const { runId, stored, value } = await readPersisted(
       inv,
-      (id) =>
-        readCode(
-          id,
-          `inspectSystemTestRun(record, ${testName ? `{ testName: ${JSON.stringify(testName)} }` : "{}"})`
-        ),
+      (id) => readCode(id, inspectExpression),
       (progress) => {
         const live = progress["liveInspection"] as Record<string, unknown> | undefined;
         if (!live) return undefined;
@@ -783,7 +851,9 @@ async function inspect(inv: ParsedInvocation): Promise<number> {
         const trajectories = live["trajectories"] as Record<string, unknown> | undefined;
         const row = trajectories?.[testName] as Record<string, unknown> | undefined;
         return row?.["bounded"];
-      }
+      },
+      (id, start, end, pageKey) =>
+        readCode(id, systemTestJsonPageExpression(inspectExpression, start, end, pageKey))
     );
     const artifact = writeSystemTestArtifact(
       runId,
@@ -831,26 +901,7 @@ async function trajectory(inv: ParsedInvocation): Promise<number> {
       },
       full
         ? (id, start, end, pageKey) =>
-            readCode(
-              id,
-              `(() => {
-                const pageKey = ${JSON.stringify(pageKey)};
-                if (!Object.prototype.hasOwnProperty.call(scope, pageKey)) {
-                  const value = ${trajectoryExpression};
-                  scope[pageKey] = JSON.stringify(value, null, 2);
-                }
-                const source = scope[pageKey];
-                if (typeof source !== "string") {
-                  throw new Error("Cached system-test trajectory is not text");
-                }
-                const chunk = source.slice(${start}, ${end});
-                return {
-                  length: source.length,
-                  encoding: "plain-string",
-                  chunk,
-                };
-              })()`
-            )
+            readCode(id, systemTestJsonPageExpression(trajectoryExpression, start, end, pageKey))
         : undefined
     );
     const artifact = writeSystemTestArtifact(

@@ -3,8 +3,15 @@ import { z } from "zod";
 import {
   createTypedServiceClient,
   defineServiceMethods,
+  fixedPreparedAuthorityRequirement,
   preparedAuthoritySelectorKey,
+  selectedPreparedAuthorityRequirement,
 } from "./typedServiceClient.js";
+import {
+  fixedPreparedAuthoritySelection,
+  selectedPreparedAuthoritySelection,
+} from "./serviceDefinition.js";
+import { relationship, requirementForPrincipals } from "./authorization.js";
 
 const methods = defineServiceMethods({
   ping: { args: z.tuple([]), returns: z.literal("pong") },
@@ -94,5 +101,50 @@ describe("preparedAuthoritySelectorKey", () => {
         capabilityPrefix: "workspace:",
       } as never)
     ).toThrow(/exactly one/);
+  });
+});
+
+describe("prepared authority constructors", () => {
+  it("separates fixed resource selection from complete dynamic authority selection", () => {
+    const fixedRequirement = requirementForPrincipals(["code"], "external.open");
+    expect(fixedPreparedAuthorityRequirement(fixedRequirement)).toBe(fixedRequirement);
+    expect(
+      fixedPreparedAuthoritySelection({
+        capability: "external.open",
+        resourceKey: "origin:https://example.com",
+      })
+    ).not.toHaveProperty("requirement");
+
+    expect(
+      selectedPreparedAuthoritySelection({
+        capability: "workspace-service:demo",
+        resourceKey: "do:demo",
+        requirement: {
+          kind: "all",
+          requirements: [
+            requirementForPrincipals(["code"], "workspace-service:demo"),
+            relationship("code-source", "workers/demo"),
+          ],
+        },
+      })
+    ).toHaveProperty("requirement");
+  });
+
+  it("rejects incomplete or mismatched dynamic selections at construction", () => {
+    expect(() =>
+      selectedPreparedAuthoritySelection({
+        capability: "workspace-service:demo",
+        resourceKey: "do:demo",
+        requirement: relationship("code-source", "workers/demo"),
+      })
+    ).toThrow(/has no capability leaf/);
+    expect(() =>
+      selectedPreparedAuthoritySelection({
+        capability: "workspace-service:demo",
+        resourceKey: "do:demo",
+        requirement: requirementForPrincipals(["code"], "workspace-service:other"),
+      })
+    ).toThrow(/contains capability 'workspace-service:other'/);
+    expect(() => selectedPreparedAuthorityRequirement([])).toThrow(/at least one principal/);
   });
 });

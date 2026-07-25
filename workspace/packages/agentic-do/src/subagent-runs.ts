@@ -12,7 +12,7 @@
 
 import type { SqlStorage } from "@workspace/runtime/worker";
 import type { AgenticEvent } from "@workspace/agentic-protocol";
-import { assertExactSqlTableSchema } from "./sql-table-schema.js";
+import { assertExactSqlTableSchema } from "@workspace/runtime/worker";
 
 export type SubagentRunStatus =
   | "starting"
@@ -546,6 +546,13 @@ export class SubagentRunStore {
         )
         .toArray() as unknown as SubagentProgressOutboxSqlRow[]
     ).map(toProgressOutboxEntry);
+  }
+
+  getProgress(sequence: number): SubagentProgressOutboxEntry | null {
+    const row = this.sql
+      .exec(`SELECT * FROM subagent_progress_outbox WHERE sequence = ?`, sequence)
+      .toArray()[0] as unknown as SubagentProgressOutboxSqlRow | undefined;
+    return row ? toProgressOutboxEntry(row) : null;
   }
 
   nextProgressWakeAt(): number | null {

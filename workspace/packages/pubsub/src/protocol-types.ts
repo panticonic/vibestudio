@@ -463,6 +463,7 @@ export interface MethodResultWithAttachments<T> {
 /**
  * Definition for a method this client provides.
  * Methods are registered at connection time via ConnectOptions.methods.
+ * Parameters and returns are Zod schemas for local execution.
  */
 export interface MethodDefinition<TArgs extends z.ZodTypeAny = z.ZodTypeAny, TResult = unknown> {
   /** Human-readable description */
@@ -480,8 +481,22 @@ export interface MethodDefinition<TArgs extends z.ZodTypeAny = z.ZodTypeAny, TRe
    *  and won't be exposed as AI model tools. */
   internal?: boolean;
   /** Execute the method. Automatically called when method is invoked. */
-  execute: (args: z.infer<TArgs>, context: MethodExecutionContext) => Promise<TResult>;
+  execute(args: z.infer<TArgs>, context: MethodExecutionContext): Promise<TResult>;
 }
+
+/** Definition for a method whose parameter contract is already JSON Schema. */
+export interface JsonSchemaMethodDefinition<TResult = unknown> {
+  description?: string;
+  parameters: JsonSchema;
+  returns?: JsonSchema;
+  streaming?: boolean;
+  menu?: boolean;
+  internal?: boolean;
+  execute(args: unknown, context: MethodExecutionContext): Promise<TResult>;
+}
+
+/** Method definitions accepted by transports that advertise or execute methods. */
+export type MethodDefinitionLike = MethodDefinition | JsonSchemaMethodDefinition;
 
 /**
  * Options for connecting to an agentic messaging channel.
@@ -515,7 +530,7 @@ export interface AgenticConnectOptions<
   channelConfig?: ChannelConfig;
 
   /** Methods this participant provides. Automatically executed when called. */
-  methods?: Record<string, MethodDefinition>;
+  methods?: Record<string, MethodDefinitionLike>;
 
   /** Enable auto-reconnection. Pass true for defaults, or a config object. */
   reconnect?: boolean | { delayMs?: number; maxDelayMs?: number; maxAttempts?: number };

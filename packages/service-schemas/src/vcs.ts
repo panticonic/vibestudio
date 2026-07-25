@@ -1495,6 +1495,55 @@ export const vcsReadFileResultSchema = z
   .nullable();
 export type VcsReadFileResult = z.infer<typeof vcsReadFileResultSchema>;
 
+const vcsVisibleEntryLineageSchema = z
+  .object({
+    authoredChangeId: id("Exact semantic change witnessing this visible name.").nullable(),
+    authoredByWorkUnitId: id("Work unit witnessing this visible name."),
+    contentClass: z.enum(["internal", "external"]),
+    externalKeys: z.array(z.string().min(1)).max(256),
+  })
+  .strict();
+
+export const vcsListDirectoryInputSchema = z
+  .object({
+    state: vcsStateNodeRefSchema,
+    path: z
+      .string()
+      .refine((value) => value === "" || semanticVcsPathAdmission(value).admissible, {
+        message:
+          `Expected an admissible canonical workspace-relative directory path of at most ` +
+          `${SEMANTIC_VCS_MAX_PATH_UTF8_BYTES} UTF-8 bytes`,
+      }),
+    cursor: cursor.optional(),
+    limit: pageLimit,
+  })
+  .strict();
+export type VcsListDirectoryInput = z.infer<typeof vcsListDirectoryInputSchema>;
+
+export const vcsVisibleDirectoryEntrySchema = z
+  .object({
+    name: z.string().min(1).refine((value) => !value.includes("/")),
+    path: z.string().min(1),
+    kind: z.enum(["file", "directory"]),
+    identity: id("Stable semantic identity of the visible entry."),
+    repositoryId: id("Containing or witnessed repository identity.").nullable(),
+    repositoryRoot: z.boolean(),
+    fileId: id("Stable file identity when the entry is a file.").nullable(),
+    lineage: vcsVisibleEntryLineageSchema,
+  })
+  .strict();
+
+export const vcsListDirectoryResultSchema = z
+  .object({
+    state: vcsStateNodeRefSchema,
+    path: z.string(),
+    entries: z.array(vcsVisibleDirectoryEntrySchema).max(500),
+    nextCursor: cursor.nullable(),
+  })
+  .strict()
+  .nullable();
+export type VcsListDirectoryResult = z.infer<typeof vcsListDirectoryResultSchema>;
+
 export const vcsListFilesInputSchema = z
   .object({
     state: vcsStateNodeRefSchema,
@@ -1953,6 +2002,17 @@ export const vcsMethods = defineVcsMethods({
     ],
     errors: [...READ_ERRORS, ...methodErrors("ExternalEffectFailed")],
     seeAlso: ["vcs.listFiles", "vcs.blame"],
+  },
+  listDirectory: {
+    description:
+      "Page immediate visible children of one workspace directory with stable identities and attached name provenance.",
+    args: z.tuple([vcsListDirectoryInputSchema]),
+    returns: vcsListDirectoryResultSchema,
+    access: READ_ACCESS,
+    operationClass: "read",
+    references: [ref("state-node", "basis", "state")],
+    errors: READ_ERRORS,
+    seeAlso: ["vcs.readFile", "vcs.listFiles", "vcs.resolveRepository"],
   },
   listFiles: {
     description: "Page the exact path-to-file manifest of one repository at one semantic state.",

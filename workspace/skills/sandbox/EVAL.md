@@ -8,9 +8,9 @@ sent back.
 
 **Eval does not need a connected panel.** It keeps working even if the
 chat/editor panel — or the user — disconnects. It is a notebook kernel: the
-same live heap remains resident for 30 minutes after the latest cell, and every
-cell renews that idle lease. The in-DO SQLite `db` and exact serializable scope
-snapshot survive unavoidable kernel restarts.
+same live heap remains available while its EvalDO activation is resident, but
+no held request pins an idle kernel. The in-DO SQLite `db` and exact
+serializable scope snapshot survive unavoidable kernel restarts.
 
 ## Eval Perspective
 
@@ -140,7 +140,7 @@ same live binding rather than shadowing it.
 | `services`                         | Convenience namespace for server services. If the service name is also a rich runtime binding (`workers`, `vcs`, `fs`, `credentials`, `blobstore`, …), `services.<name>` is that ergonomic runtime client, not the raw service catalog. Raw catalog methods are always reachable with `rpc.call("main", "<svc>.<method>", [...])`; non-colliding services are also reachable as `services.<svc>.<method>(...)`. Access is still gated server-side by each method's policy. Use `help()` to list services and `help("workers")` to inspect a runtime binding. |
 | `fs`                               | Context-scoped filesystem — the EvalDO resolves your context, so you do NOT pass a contextId: `await fs.readdir("/")`, `await fs.readFile("src/index.ts", "utf-8")`                                                                                                                                                                                                                                                                                                                                                                                          |
 | `ctx`                              | `{ contextId, objectKey }` for the current eval session                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `scope`                            | Live notebook scope (see below); `scope.x = …` retains object identity across cells while the 30-minute kernel lease is active                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `scope`                            | Live notebook scope (see below); `scope.x = …` retains object identity across cells while the current kernel activation remains resident                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `scopes`                           | Management API for the serialized scope layer (see below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `db`                               | Synchronous in-DO SQLite (see below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `chat`                             | The full chat API for the current channel — `publish`/`send`, custom-message cards, `registerMessageType`, `callMethod`, etc. (agent eval only; see below)                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -506,9 +506,9 @@ and never pass host absolute paths such as `/home/user/.../workspace/...`.
 The EvalDO's in-memory backing map remains authoritative while that kernel is
 warm: objects are not serialized and reconstructed between ordinary calls.
 Functions, class instances, handles, and open connections therefore retain
-identity and behavior across cells. Before each cell, the host renews one held
-kernel request; it expires 30 minutes after the latest cell. There is no
-heartbeat, polling loop, or cell-end disconnect.
+identity and behavior across cells while the activation remains resident. No
+heartbeat, polling loop, held idle request, or time-based residency claim is
+used.
 
 After each cell, EvalDO also writes an exact recovery snapshot to its
 SQLite `repl_scopes` table. That snapshot is not the active heap and does not
@@ -566,9 +566,8 @@ scope.panel ??= getPanelHandle(scope.panelId);
 scope.page ??= await scope.panel.cdp.page();
 ```
 
-There is no cell-end collection step. The 30-minute idle lease is a usability
-window, not durable storage, so code needing recovery must still retain stable
-data.
+There is no cell-end collection step or promised idle window. Code needing
+recovery must retain stable data rather than depending on activation residency.
 
 ### Resetting scope
 

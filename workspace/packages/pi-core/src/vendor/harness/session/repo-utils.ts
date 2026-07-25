@@ -1,4 +1,5 @@
-// @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.80.6; see PROVENANCE.md and vendor.sh
+// @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.82.0; see PROVENANCE.md and vendor.sh
+import { uuidv7 } from "@earendil-works/pi-ai";
 import {
 	type FileError,
 	type Result,
@@ -8,7 +9,6 @@ import {
 	type SessionTreeEntry,
 } from "../types.js";
 import { Session } from "./session.js";
-import { uuidv7 } from "./uuid.js";
 
 export function createSessionId(): string {
 	return uuidv7();
@@ -48,5 +48,5 @@ export async function getEntriesToFork(
 		}
 		effectiveLeafId = target.parentId;
 	}
-	return storage.getPathToRoot(effectiveLeafId);
+	return storage.getPathToRootOrCompaction(effectiveLeafId);
 }

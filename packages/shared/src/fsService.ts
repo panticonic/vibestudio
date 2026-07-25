@@ -33,6 +33,8 @@ import type {
   VcsEditInput,
   VcsInspectInput,
   VcsInspectResult,
+  VcsListDirectoryInput,
+  VcsListDirectoryResult,
   VcsListFilesInput,
   VcsListFilesResult,
   VcsMoveInput,
@@ -40,6 +42,8 @@ import type {
   VcsNeighborsResult,
   VcsReadFileInput,
   VcsReadFileResult,
+  VcsResolveRepositoryInput,
+  VcsResolveRepositoryResult,
   VcsStateNodeRef,
   VcsStatusInput,
   VcsStatusResult,
@@ -115,6 +119,41 @@ function ingestionDescriptorsForDirectoryListing(
     for (const descriptor of ingestionDescriptorsForVcsRead(file)) {
       retainStrongestIngestionDescriptor(descriptors, descriptor);
     }
+  }
+  return [...descriptors.values()];
+}
+
+function ingestionDescriptorsForVisibleEntries(
+  entries: NonNullable<VcsListDirectoryResult>["entries"]
+): ContextIngestionDescriptor[] {
+  const descriptors = new Map<string, ContextIngestionDescriptor>();
+  for (const entry of entries) {
+    const lineage = entry.lineage;
+    if (lineage.contentClass === "external") {
+      if (lineage.externalKeys.length === 0) {
+        throw codedError(
+          "EINTEGRITY",
+          `External visible entry ${entry.identity} has no persisted outside-source lineage`
+        );
+      }
+      for (const key of lineage.externalKeys) {
+        retainStrongestIngestionDescriptor(descriptors, {
+          key,
+          derivedClass: "external",
+        });
+      }
+      continue;
+    }
+    if (lineage.externalKeys.length > 0) {
+      throw codedError(
+        "EINTEGRITY",
+        `Internal visible entry ${entry.identity} carries outside-source lineage`
+      );
+    }
+    retainStrongestIngestionDescriptor(descriptors, {
+      key: `entry:${encodeURIComponent(entry.identity)}@${lineage.authoredChangeId ?? lineage.authoredByWorkUnitId}`,
+      derivedClass: "internal",
+    });
   }
   return [...descriptors.values()];
 }
@@ -363,12 +402,16 @@ async function resolveFsFilePath(
 async function canonicalContextRelativePath(
   scope: FsCallScope,
   userPath: string,
-  options: { preserveLeaf?: boolean } = {}
+  options: { preserveLeaf?: boolean; directory?: boolean } = {}
 ): Promise<string> {
   const preserveLeaf = options.preserveLeaf ?? false;
-  const resolved = await resolveFsFilePath(scope, userPath, {
-    leafMode: preserveLeaf ? "entry" : "follow",
-  });
+  const resolved = options.directory
+    ? await resolveFsPath(scope, userPath, {
+        leafMode: preserveLeaf ? "entry" : "follow",
+      })
+    : await resolveFsFilePath(scope, userPath, {
+        leafMode: preserveLeaf ? "entry" : "follow",
+      });
   if (scope.unrestricted) return resolved;
 
   const realRoot = await fs.realpath(scope.root);
@@ -510,7 +553,9 @@ export interface FsVcsBridge {
   status(input: VcsStatusInput): Promise<VcsStatusResult>;
   inspect(input: VcsInspectInput): Promise<VcsInspectResult>;
   neighbors(input: VcsNeighborsInput): Promise<VcsNeighborsResult>;
+  resolveRepository(input: VcsResolveRepositoryInput): Promise<VcsResolveRepositoryResult>;
   readFile(input: VcsReadFileInput): Promise<VcsReadFileResult>;
+  listDirectory(input: VcsListDirectoryInput): Promise<VcsListDirectoryResult>;
   listFiles(input: VcsListFilesInput): Promise<VcsListFilesResult>;
   /**
    * Ensure the context's complete authority-published projection exists before
@@ -552,58 +597,59 @@ async function mapWithBoundedConcurrency<Input, Output>(
   return outputs;
 }
 
-function sameStateNode(left: VcsStateNodeRef, right: VcsStateNodeRef): boolean {
-  return (
-    left.kind === right.kind &&
-    (left.kind === "event"
-      ? right.kind === "event" && left.eventId === right.eventId
-      : right.kind === "application" && left.applicationId === right.applicationId)
-  );
+async function listAllDirectoryEntries(
+  bridge: FsVcsBridge,
+  state: VcsStateNodeRef,
+  path: string
+): Promise<NonNullable<VcsListDirectoryResult>["entries"]> {
+  const entries: NonNullable<VcsListDirectoryResult>["entries"] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await bridge.listDirectory({
+      state,
+      path,
+      limit: 500,
+      ...(cursor ? { cursor } : {}),
+    });
+    if (!page) return [];
+    entries.push(...page.entries);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor);
+  return entries;
 }
 
-/** Resolve a context through the public graph instead of a second revision API. */
+/** Resolve the bounded repository catalog from canonical visible entries. */
 async function managedWorkspaceSnapshot(
   bridge: FsVcsBridge,
   contextId: string
 ): Promise<ManagedWorkspaceSnapshot> {
   const { workingHead: state } = await bridge.status({ contextId });
-  const repositoryRefs = new Map<
-    string,
-    Extract<VcsNeighborsResult["edges"][number]["to"], { kind: "repository" }>
-  >();
-  let cursor: string | undefined;
-  do {
-    const page = await bridge.neighbors({
-      root: state,
-      limit: 500,
-      ...(cursor ? { cursor } : {}),
-    });
-    for (const edge of page.edges) {
-      for (const node of [edge.from, edge.to]) {
-        if (node.kind === "repository" && sameStateNode(node.state, state)) {
-          repositoryRefs.set(node.repositoryId, node);
-        }
-      }
+  const roots = await listAllDirectoryEntries(bridge, state, "");
+  const repositories: ManagedWorkspaceRepository[] = [];
+  const containers: string[] = [];
+  for (const entry of roots) {
+    if (entry.kind !== "directory" || !entry.repositoryId) continue;
+    if (entry.repositoryRoot) {
+      repositories.push({
+        repositoryId: entry.repositoryId,
+        repoPath: entry.path as RepoPath,
+      });
+    } else {
+      containers.push(entry.path);
     }
-    cursor = page.nextCursor ?? undefined;
-  } while (cursor);
-
-  const repositories = (
-    await mapWithBoundedConcurrency(
-      [...repositoryRefs.values()],
-      SEMANTIC_READ_CONCURRENCY,
-      async (ref): Promise<ManagedWorkspaceRepository | null> => {
-        const inspected = await bridge.inspect({ node: ref, edgeLimit: 1 });
-        if (inspected.node.kind !== "repository" || inspected.node.value.kind !== "present") {
-          return null;
-        }
-        return {
-          repositoryId: ref.repositoryId,
-          repoPath: inspected.node.value.repoPath as RepoPath,
-        };
-      }
-    )
-  ).filter((repository): repository is ManagedWorkspaceRepository => repository !== null);
+  }
+  const nested = await mapWithBoundedConcurrency(
+    containers,
+    SEMANTIC_READ_CONCURRENCY,
+    (container) => listAllDirectoryEntries(bridge, state, container)
+  );
+  for (const entry of nested.flat()) {
+    if (entry.kind !== "directory" || !entry.repositoryRoot || !entry.repositoryId) continue;
+    repositories.push({
+      repositoryId: entry.repositoryId,
+      repoPath: entry.path as RepoPath,
+    });
+  }
   repositories.sort((left, right) => left.repoPath.localeCompare(right.repoPath));
   return { state, repositories };
 }
@@ -718,19 +764,13 @@ async function managedWorkspaceFilesMatching(
     candidates,
     SEMANTIC_READ_CONCURRENCY,
     async (candidate) => {
-      const file = await managedFile(
-        bridge,
-        snapshot,
-        candidate.repositoryId,
-        candidate.path
-      );
+      const file = await managedFile(bridge, snapshot, candidate.repositoryId, candidate.path);
       return file ? { ...candidate, ...file } : null;
     }
   );
   return files.filter(
-    (
-      file
-    ): file is ManagedWorkspaceRepository & VcsListFilesResult["files"][number] => file !== null
+    (file): file is ManagedWorkspaceRepository & VcsListFilesResult["files"][number] =>
+      file !== null
   );
 }
 
@@ -739,45 +779,49 @@ async function managedWorkspaceFilesForPaths(
   snapshot: ManagedWorkspaceSnapshot,
   workspacePaths: ReadonlySet<string>
 ): Promise<Array<ManagedWorkspaceRepository & VcsListFilesResult["files"][number]>> {
-  const files = new Map<string, ManagedWorkspaceRepository & VcsListFilesResult["files"][number]>();
-  for (const repository of snapshot.repositories) {
-    const prefixes = new Set<string>();
-    for (const workspacePath of workspacePaths) {
-      if (
-        workspacePath === repository.repoPath ||
-        repository.repoPath.startsWith(`${workspacePath}/`)
-      ) {
-        prefixes.clear();
-        prefixes.add("");
-        break;
-      }
-      if (workspacePath.startsWith(`${repository.repoPath}/`)) {
-        prefixes.add(workspacePath.slice(repository.repoPath.length + 1));
-      }
-    }
-    if (prefixes.size === 0) continue;
-
-    for (const prefix of prefixes) {
-      let cursor: string | undefined;
-      do {
-        const page = await bridge.listFiles({
-          state: snapshot.state,
-          repositoryId: repository.repositoryId,
-          ...(prefix ? { prefix } : {}),
-          limit: 500,
-          ...(cursor ? { cursor } : {}),
-        });
-        for (const file of page.files) {
-          files.set(`${repository.repositoryId}\u0000${file.fileId}`, {
-            ...repository,
-            ...file,
-          });
+  const perRepository = await mapWithBoundedConcurrency(
+    snapshot.repositories,
+    SEMANTIC_READ_CONCURRENCY,
+    async (repository) => {
+      const prefixes = new Set<string>();
+      for (const workspacePath of workspacePaths) {
+        if (
+          workspacePath === repository.repoPath ||
+          repository.repoPath.startsWith(`${workspacePath}/`)
+        ) {
+          prefixes.clear();
+          prefixes.add("");
+          break;
         }
-        cursor = page.nextCursor ?? undefined;
-      } while (cursor);
+        if (workspacePath.startsWith(`${repository.repoPath}/`)) {
+          prefixes.add(workspacePath.slice(repository.repoPath.length + 1));
+        }
+      }
+
+      const files = new Map<
+        string,
+        ManagedWorkspaceRepository & VcsListFilesResult["files"][number]
+      >();
+      for (const prefix of prefixes) {
+        let cursor: string | undefined;
+        do {
+          const page = await bridge.listFiles({
+            state: snapshot.state,
+            repositoryId: repository.repositoryId,
+            ...(prefix ? { prefix } : {}),
+            limit: 500,
+            ...(cursor ? { cursor } : {}),
+          });
+          for (const file of page.files) {
+            files.set(file.fileId, { ...repository, ...file });
+          }
+          cursor = page.nextCursor ?? undefined;
+        } while (cursor);
+      }
+      return [...files.values()];
     }
-  }
-  return [...files.values()];
+  );
+  return perRepository.flat();
 }
 
 /**
@@ -791,6 +835,14 @@ async function managedWorkspaceFilesForPaths(
 export type FsContextAuthority =
   | { kind: "semantic"; bridge: FsVcsBridge }
   | { kind: "scratch-only" };
+
+export interface FsCallTelemetry {
+  method: string;
+  phase: "scope" | "materialize" | "operation";
+  durationMs: number;
+  contextId?: string;
+  materializationScope?: "all" | number;
+}
 
 export interface FsServiceOptions {
   contextAuthority: FsContextAuthority;
@@ -815,6 +867,10 @@ export interface FsServiceOptions {
       derivedClass: "internal" | "external";
     }[]
   ) => void | Promise<void>;
+  /** Structured phase timings for diagnosing filesystem transport stalls. */
+  onTelemetry?: (event: FsCallTelemetry) => void;
+  /** Default logging threshold when no telemetry sink is installed. */
+  slowPhaseMs?: number;
 }
 
 /**
@@ -1270,6 +1326,8 @@ export class FsService {
   private readonly contextAuthority: FsContextAuthority;
   private readonly recordContextIngestion?: FsServiceOptions["recordContextIngestion"];
   private readonly recordContextIngestionBatch?: FsServiceOptions["recordContextIngestionBatch"];
+  private readonly onTelemetry?: FsServiceOptions["onTelemetry"];
+  private readonly slowPhaseMs: number;
 
   /** handleId → TrackedHandle */
   private readonly openHandles = new Map<number, TrackedHandle>();
@@ -1288,6 +1346,19 @@ export class FsService {
     this.contextAuthority = opts.contextAuthority;
     this.recordContextIngestion = opts.recordContextIngestion;
     this.recordContextIngestionBatch = opts.recordContextIngestionBatch;
+    this.onTelemetry = opts.onTelemetry;
+    this.slowPhaseMs = opts.slowPhaseMs ?? 1_000;
+  }
+
+  private emitTelemetry(event: FsCallTelemetry): void {
+    try {
+      this.onTelemetry?.(event);
+    } catch (error) {
+      console.warn("[fs.telemetry] observer failed", error);
+    }
+    if (!this.onTelemetry && event.durationMs >= this.slowPhaseMs) {
+      console.warn(`[fs.telemetry] ${JSON.stringify(event)}`);
+    }
   }
 
   private semanticBridge(scope: FsCallScope): FsVcsBridge | null {
@@ -1312,10 +1383,7 @@ export class FsService {
     ) {
       throw new Error("Managed file reads require non-empty glob patterns");
     }
-    const scope = await this.resolveContextRoot(
-      ctx,
-      options ? [options.explicitContextId] : []
-    );
+    const scope = await this.resolveContextRoot(ctx, options ? [options.explicitContextId] : []);
     const bridge = this.semanticBridge(scope);
     if (!bridge || !scope.contextId) {
       throw codedError(
@@ -1324,6 +1392,41 @@ export class FsService {
       );
     }
     const snapshot = await managedWorkspaceSnapshot(bridge, scope.contextId);
+    const pointCandidates = managedRepoRootFileCandidates(snapshot, patterns);
+    if (pointCandidates) {
+      const resolved = (
+        await mapWithBoundedConcurrency(
+          pointCandidates,
+          SEMANTIC_READ_CONCURRENCY,
+          async (candidate) => {
+            const result = await bridge.readFile({
+              state: snapshot.state,
+              repositoryId: candidate.repositoryId,
+              file: { kind: "path", path: candidate.path },
+            });
+            if (!result) return null;
+            return {
+              path: `/${candidate.repoPath}/${candidate.path}`,
+              content:
+                result.content.kind === "text"
+                  ? result.content.text
+                  : Buffer.from(result.content.base64, "base64").toString("utf8"),
+              ingestion: ingestionDescriptorsForVcsRead(result),
+            };
+          }
+        )
+      )
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+        .sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
+      const ingestion = new Map<string, ContextIngestionDescriptor>();
+      for (const file of resolved) {
+        for (const descriptor of file.ingestion) {
+          retainStrongestIngestionDescriptor(ingestion, descriptor);
+        }
+      }
+      await this.recordProjectedIngestion(ctx, "fs-managed-corpus-read", [...ingestion.values()]);
+      return resolved.map(({ path, content }) => ({ path, content }));
+    }
     const files = (await managedWorkspaceFilesMatching(bridge, snapshot, patterns)).sort(
       (left, right) =>
         compareUtf16CodeUnits(`${left.repoPath}/${left.path}`, `${right.repoPath}/${right.path}`)
@@ -1739,11 +1842,15 @@ export class FsService {
       wsRel: string,
       exposeToCaller = false
     ): Promise<FsVcsContent | null> => {
-      const snapshot = await managedWorkspaceSnapshot(bridge, contextId);
+      const { workingHead: state } = await bridge.status({ contextId });
       const routed = router.route(wsRel);
-      const repository = managedRepository(snapshot, routed.repoPath);
+      const repository = await bridge.resolveRepository({
+        state,
+        repoPath: routed.repoPath,
+      });
+      if (!repository) return null;
       const result = await bridge.readFile({
-        state: snapshot.state,
+        state,
         repositoryId: repository.repositoryId,
         file: { kind: "path", path: routed.repoRelPath },
       });
@@ -1758,6 +1865,59 @@ export class FsService {
     };
 
     switch (method) {
+      case "readdir": {
+        const opts = args[1] as { withFileTypes?: boolean; recursive?: boolean } | undefined;
+        if (opts?.recursive) return { handled: false };
+        const rel = (
+          await canonicalContextRelativePath(scope, args[0] as string, { directory: true })
+        ).replace(/\/+$/u, "");
+        if (rel !== "" && scopeForPath(rel) === null) return { handled: false };
+        const { workingHead: state } = await bridge.status({ contextId });
+        const entries: NonNullable<VcsListDirectoryResult>["entries"] = [];
+        let cursor: string | undefined;
+        do {
+          const page = await bridge.listDirectory({
+            state,
+            path: rel,
+            limit: 500,
+            ...(cursor ? { cursor } : {}),
+          });
+          if (!page) {
+            throw codedError("ENOENT", `readdir: managed directory not found: ${String(args[0])}`);
+          }
+          entries.push(...page.entries);
+          cursor = page.nextCursor ?? undefined;
+        } while (cursor);
+        await this.recordProjectedIngestion(
+          ctx,
+          "fs-readdir",
+          ingestionDescriptorsForVisibleEntries(entries)
+        );
+        const scratchEntries =
+          rel === ""
+            ? (await fs.readdir(scope.root, { withFileTypes: true })).filter(
+                (entry) => !WORKSPACE_SOURCE_ROOTS.has(entry.name)
+              )
+            : [];
+        const visibleNames = new Set(entries.map((entry) => entry.name));
+        const orderedScratch = scratchEntries
+          .filter((entry) => !visibleNames.has(entry.name))
+          .sort((left, right) => compareUtf16CodeUnits(left.name, right.name));
+        return {
+          handled: true,
+          result: opts?.withFileTypes
+            ? [
+                ...entries.map((entry) => ({
+                  name: entry.name,
+                  _isFile: entry.kind === "file",
+                  _isDirectory: entry.kind === "directory",
+                  _isSymbolicLink: false,
+                })),
+                ...orderedScratch.map((entry) => serializeDirent(entry)),
+              ]
+            : [...entries.map((entry) => entry.name), ...orderedScratch.map((entry) => entry.name)],
+        };
+      }
       case "readFile": {
         const userPath = args[0] as string;
         const rel = await relOf(userPath);
@@ -2218,7 +2378,15 @@ export class FsService {
     if (repos !== "all" && !(await bridge.isTracked(wsRel.replace(/\/+$/, "")))) {
       return;
     }
+    const materializeStartedAt = Date.now();
     await bridge.ensureMaterialized(scope.contextId, repos);
+    this.emitTelemetry({
+      method,
+      phase: "materialize",
+      durationMs: Date.now() - materializeStartedAt,
+      contextId: scope.contextId,
+      materializationScope: repos === "all" ? "all" : repos.length,
+    });
     const repo = taxonomyRepoForPath(wsRel.replace(/\/+$/, ""));
     if (repo && !(await bridge.isMaterialized(scope.contextId, repo))) {
       console.warn(
@@ -2236,7 +2404,14 @@ export class FsService {
   async handleCall(ctx: ServiceContext, method: string, rawArgs: unknown[]): Promise<unknown> {
     // Clone args so shift() in resolveContextRoot doesn't mutate the original
     const args = [...rawArgs];
+    const scopeStartedAt = Date.now();
     const scope = await this.resolveContextRoot(ctx, args);
+    this.emitTelemetry({
+      method,
+      phase: "scope",
+      durationMs: Date.now() - scopeStartedAt,
+      ...(scope.contextId ? { contextId: scope.contextId } : {}),
+    });
     const { panelId } = scope;
     const bridge = this.semanticBridge(scope);
     this.assertScratchOnlyCall(scope, method, args);
@@ -2311,33 +2486,43 @@ export class FsService {
 
       // ----- Directory operations -----
       case "readdir": {
-        const p = await resolveFsPath(scope, args[0] as string);
-        const opts = args[1] as { withFileTypes?: boolean; recursive?: boolean } | undefined;
-        const recursive = opts?.recursive ?? false;
-        if (opts?.withFileTypes) {
-          const entries = await fs.readdir(p, { withFileTypes: true, recursive });
+        const operationStartedAt = Date.now();
+        try {
+          const p = await resolveFsPath(scope, args[0] as string);
+          const opts = args[1] as { withFileTypes?: boolean; recursive?: boolean } | undefined;
+          const recursive = opts?.recursive ?? false;
+          if (opts?.withFileTypes) {
+            const entries = await fs.readdir(p, { withFileTypes: true, recursive });
+            const ingestion = await this.ingestionForProjectedPaths(
+              bridge,
+              scope,
+              ctx,
+              entries.map((entry) => path.join(entry.parentPath, entry.name))
+            );
+            await this.recordProjectedIngestion(ctx, "fs-readdir", ingestion);
+            // For recursive listings, report names relative to the listed
+            // directory (Node's Dirent.name is just the basename).
+            return entries.map((d) =>
+              serializeDirent(d, recursive ? relativeDirentName(p, d) : d.name)
+            );
+          }
+          const entries = await fs.readdir(p, recursive ? { recursive } : undefined);
           const ingestion = await this.ingestionForProjectedPaths(
             bridge,
             scope,
             ctx,
-            entries.map((entry) => path.join(entry.parentPath, entry.name))
+            entries.map((entry) => path.join(p, entry))
           );
           await this.recordProjectedIngestion(ctx, "fs-readdir", ingestion);
-          // For recursive listings, report names relative to the listed
-          // directory (Node's Dirent.name is just the basename).
-          return entries.map((d) =>
-            serializeDirent(d, recursive ? relativeDirentName(p, d) : d.name)
-          );
+          return entries;
+        } finally {
+          this.emitTelemetry({
+            method,
+            phase: "operation",
+            durationMs: Date.now() - operationStartedAt,
+            ...(scope.contextId ? { contextId: scope.contextId } : {}),
+          });
         }
-        const entries = await fs.readdir(p, recursive ? { recursive } : undefined);
-        const ingestion = await this.ingestionForProjectedPaths(
-          bridge,
-          scope,
-          ctx,
-          entries.map((entry) => path.join(p, entry))
-        );
-        await this.recordProjectedIngestion(ctx, "fs-readdir", ingestion);
-        return entries;
       }
 
       case "grep": {

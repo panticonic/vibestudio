@@ -16,6 +16,11 @@ interface DurableObjectCodePayload extends WorkerLoaderWorkerCode {
   wasmModules?: Record<string, string>;
 }
 
+interface LoadedFacetClass {
+  version: string;
+  class: DurableObjectClass;
+}
+
 type EgressExports = Cloudflare.Exports & {
   EgressGateway(options: { props: EgressProps }): Fetcher;
 };
@@ -44,6 +49,76 @@ function decodeKey(encoded: string): { source: string; className: string; userKe
 }
 
 export class UniversalDO extends DurableObject<UniversalDoEnv> {
+  private loadedFacet: LoadedFacetClass | null = null;
+  private loadedFacetFlight: { version: string; promise: Promise<LoadedFacetClass> } | null = null;
+
+  private async loadFacetClass(args: {
+    source: string;
+    className: string;
+    userKey: string;
+    version: string;
+    loaderHeaders: HeadersInit;
+    egressIdentity: string;
+  }): Promise<LoadedFacetClass> {
+    if (this.loadedFacet?.version === args.version) return this.loadedFacet;
+    if (this.loadedFacetFlight?.version === args.version) return this.loadedFacetFlight.promise;
+
+    if (this.loadedFacet) {
+      this.ctx.facets.abort("do", new Error("Runtime image advanced"));
+      this.loadedFacet = null;
+    }
+
+    const promise = (async (): Promise<LoadedFacetClass> => {
+      const identity = `${args.source}:${args.className}`;
+      const codeResponse = await this.env.GATEWAY.fetch(
+        new Request(
+          `http://gateway/_docode/${encodeURIComponent(args.source)}/${encodeURIComponent(args.className)}` +
+            `?objectKey=${encodeURIComponent(args.userKey)}`,
+          { headers: args.loaderHeaders }
+        )
+      );
+      if (!codeResponse.ok) {
+        throw new Error(
+          `universal-do: code fetch failed for ${identity}/${args.userKey}@${args.version} ` +
+            `(${codeResponse.status})`
+        );
+      }
+      const code = (await codeResponse.json()) as DurableObjectCodePayload;
+      const modules = { ...code.modules };
+      if (code.wasmModules) {
+        for (const [name, encodedModule] of Object.entries(code.wasmModules)) {
+          const binary = atob(encodedModule);
+          const bytes = new Uint8Array(binary.length);
+          for (let index = 0; index < binary.length; index++) {
+            bytes[index] = binary.charCodeAt(index);
+          }
+          modules[name] = { wasm: bytes.buffer };
+        }
+      }
+      const worker = this.env.LOADER.load({
+        compatibilityDate: code.compatibilityDate,
+        compatibilityFlags: code.compatibilityFlags,
+        mainModule: code.mainModule,
+        modules,
+        env: code.env,
+        globalOutbound: egressBinding(this.ctx, args.egressIdentity),
+      });
+      return {
+        version: args.version,
+        class: worker.getDurableObjectClass(args.className),
+      };
+    })();
+    const flight = { version: args.version, promise };
+    this.loadedFacetFlight = flight;
+    try {
+      const loaded = await promise;
+      this.loadedFacet = loaded;
+      return loaded;
+    } finally {
+      if (this.loadedFacetFlight === flight) this.loadedFacetFlight = null;
+    }
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
@@ -56,8 +131,18 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
       return new Response("universal-do: bad key", { status: 400 });
     }
 
+    if (parts[1] === "__vibestudio_retire") {
+      if (request.headers.get("X-Vibestudio-Lifecycle-Secret") !== this.env.WORKERD_LOADER_SECRET) {
+        return new Response("Forbidden", { status: 403 });
+      }
+      this.ctx.facets.abort("do", new Error("Runtime entity retired"));
+      this.loadedFacet = null;
+      this.loadedFacetFlight = null;
+      return new Response(null, { status: 204 });
+    }
+
     const identity = `${source}:${className}`;
-    const egressIdentity = `do:${source}:${className}:${userKey}`;
+    const egressIdentity = `do:${identity}:${userKey}`;
     const loaderHeaders = { "X-Vibestudio-Loader-Secret": this.env.WORKERD_LOADER_SECRET };
     const versionResponse = await this.env.GATEWAY.fetch(
       new Request(
@@ -82,46 +167,18 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     }
     const { version } = (await versionResponse.json()) as { version: string };
 
+    const loaded = await this.loadFacetClass({
+      source,
+      className,
+      userKey,
+      version,
+      loaderHeaders,
+      egressIdentity,
+    });
+
     // One logical DO per host object means one constant facet name. Keeping it
     // stable also makes clone/delete operations portable across host objects.
-    const facet = this.ctx.facets.get("do", async () => {
-      // Egress authority is object- and build-specific. Sharing a loaded module
-      // graph would also share its globalOutbound binding and let the first
-      // object lend its identity to every sibling on that version.
-      const worker = this.env.LOADER.get(`${identity}/${userKey}@${version}`, async () => {
-        const codeResponse = await this.env.GATEWAY.fetch(
-          new Request(
-            `http://gateway/_docode/${encodeURIComponent(source)}/${encodeURIComponent(className)}` +
-              `?objectKey=${encodeURIComponent(userKey)}`,
-            { headers: loaderHeaders }
-          )
-        );
-        if (!codeResponse.ok) {
-          throw new Error(`universal-do: code fetch failed (${codeResponse.status})`);
-        }
-        const code = (await codeResponse.json()) as DurableObjectCodePayload;
-        const modules = { ...code.modules };
-        if (code.wasmModules) {
-          for (const [name, encodedModule] of Object.entries(code.wasmModules)) {
-            const binary = atob(encodedModule);
-            const bytes = new Uint8Array(binary.length);
-            for (let index = 0; index < binary.length; index++) {
-              bytes[index] = binary.charCodeAt(index);
-            }
-            modules[name] = { wasm: bytes.buffer };
-          }
-        }
-        return {
-          compatibilityDate: code.compatibilityDate,
-          compatibilityFlags: code.compatibilityFlags,
-          mainModule: code.mainModule,
-          modules,
-          env: code.env,
-          globalOutbound: egressBinding(this.ctx, egressIdentity),
-        };
-      });
-      return { class: worker.getDurableObjectClass(className) };
-    });
+    const facet = this.ctx.facets.get("do", () => ({ class: loaded.class }));
 
     const innerRest = parts.slice(1);
     const innerUrl = new URL(

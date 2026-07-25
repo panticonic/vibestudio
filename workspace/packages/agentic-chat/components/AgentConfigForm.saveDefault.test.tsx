@@ -89,7 +89,7 @@ describe("AgentConfigForm — save as defaults", () => {
     expect(onSaveAsDefault).not.toHaveBeenCalled();
   });
 
-  it("renders and selects extended effort levels advertised by the model", () => {
+  it("renders and selects extended effort levels with a discrete slider", () => {
     const { onChange } = renderForm({
       catalog: extendedThinkingCatalog,
       value: {
@@ -99,7 +99,14 @@ describe("AgentConfigForm — save as defaults", () => {
       },
     });
 
-    fireEvent.click(screen.getByRole("radio", { name: "Max" }));
+    const slider = screen.getByRole("slider", { name: "Effort" });
+    expect(slider.getAttribute("min")).toBe("0");
+    expect(slider.getAttribute("max")).toBe("5");
+    expect((slider as HTMLInputElement).value).toBe("4");
+    expect(slider.getAttribute("aria-valuetext")).toBe("Extra high");
+    expect(screen.getByText("Max")).toBeTruthy();
+
+    fireEvent.change(slider, { target: { value: "5" } });
     expect(onChange).toHaveBeenCalledWith({
       model: "prov:model-thinking",
       thinkingLevel: "max",

@@ -628,7 +628,10 @@ export class PanelRuntimeLeaseController {
     if (!panel) return;
     this.deps.registry.updateArtifacts(panelId, {
       ...panel.artifacts,
-      htmlPath: "about:blank",
+      // The blank native view is only a runtime host. Keep it detached from the
+      // shell's native slot until real panel content has loaded; otherwise it
+      // covers the shell's loading surface with an opaque black page.
+      htmlPath: undefined,
       buildState: "building",
       buildProgress: "Preparing panel runtime...",
       error: undefined,

@@ -54,6 +54,7 @@ import {
 import { z } from "zod";
 import {
   createHeadlessAgentContext,
+  createHeadlessChannel,
   destroyHeadlessAgentContext,
   getRecommendedChannelConfig,
   retireHeadlessAgent,
@@ -101,6 +102,14 @@ export interface SessionSnapshot {
   /** Durable provider/model requests and aggregate usage captured from the agent journal. */
   modelExecutionEvidence?: unknown;
   modelExecutionEvidenceError?: string;
+  /** Payload-free orchestration timings from context creation through prompt publication. */
+  hotPathTrace?: readonly SessionHotPathTrace[];
+}
+
+export interface SessionHotPathTrace {
+  phase: string;
+  startedAt: number;
+  durationMs?: number;
 }
 
 export type SessionCleanupPhase =
@@ -241,6 +250,7 @@ export class HeadlessSession {
   private _registeredMethodNames: string[] = [];
   private _modelExecutionEvidence: unknown;
   private _modelExecutionEvidenceError: string | undefined;
+  private readonly _hotPathTrace: SessionHotPathTrace[] = [];
   private _disposed = false;
   private _consumeAbort: AbortController | null = null;
   /**
@@ -258,6 +268,7 @@ export class HeadlessSession {
 
   private constructor(config: HeadlessSessionConfig) {
     this._config = config;
+    this._hotPathTrace.push({ phase: "session.created", startedAt: Date.now() });
     this._clientId = config.config.clientId;
 
     this._connection = new ConnectionManager({
@@ -336,18 +347,36 @@ export class HeadlessSession {
     } as ChannelConfig;
 
     const ownsAgentContext = !config.contextId;
+    const contextStartedAt = Date.now();
     const agentContextId =
       config.contextId ??
       (await createHeadlessAgentContext({
         rpcCall: config.rpcCall,
         ...(config.testPolicy ? { testPolicy: config.testPolicy } : {}),
       }));
+    session._hotPathTrace.push({
+      phase: config.contextId ? "context.reused" : "context.created",
+      startedAt: contextStartedAt,
+      durationMs: Date.now() - contextStartedAt,
+    });
     try {
+      const channelStartedAt = Date.now();
+      await createHeadlessChannel({
+        rpcCall: config.rpcCall,
+        channelId,
+        contextId: agentContextId,
+      });
+      session._hotPathTrace.push({
+        phase: "channel.activated",
+        startedAt: channelStartedAt,
+        durationMs: Date.now() - channelStartedAt,
+      });
       await session.connect(channelId, {
         channelConfig,
         contextId: agentContextId,
         methods,
       });
+      const subscriptionStartedAt = Date.now();
       const subscription = await subscribeHeadlessAgent({
         rpcCall: config.rpcCall,
         source: config.source,
@@ -356,6 +385,11 @@ export class HeadlessSession {
         channelId,
         contextId: agentContextId,
         extraConfig: config.extraConfig,
+      });
+      session._hotPathTrace.push({
+        phase: "agent.subscribed",
+        startedAt: subscriptionStartedAt,
+        durationMs: Date.now() - subscriptionStartedAt,
       });
       session._agentEntityId = subscription.entityId;
       session._agentTargetId = subscription.targetId;
@@ -608,6 +642,7 @@ export class HeadlessSession {
       methods?: Record<string, MethodDefinition>;
     }
   ): Promise<void> {
+    const startedAt = Date.now();
     const methods = options?.methods ?? this.buildDefaultMethods();
     this._registeredMethodNames = Object.keys(methods).sort();
 
@@ -627,6 +662,11 @@ export class HeadlessSession {
     // Message stream → snapshot derivation
     this._consumeAbort = new AbortController();
     void this.consumeChannelMessages(this._consumeAbort.signal);
+    this._hotPathTrace.push({
+      phase: "channel.connected",
+      startedAt,
+      durationMs: Date.now() - startedAt,
+    });
   }
 
   private async consumeChannelMessages(signal: AbortSignal): Promise<void> {
@@ -719,7 +759,13 @@ export class HeadlessSession {
     }
   ): Promise<string> {
     if (!this._client) throw new Error("Not connected");
+    const startedAt = Date.now();
     const result = await this._client.send(text, options);
+    this._hotPathTrace.push({
+      phase: "prompt.published",
+      startedAt,
+      durationMs: Date.now() - startedAt,
+    });
     return result.messageId;
   }
 
@@ -1006,6 +1052,7 @@ export class HeadlessSession {
       connected: this._connection.connected,
       duration: now - this._createdAt,
       title: this._title,
+      hotPathTrace: [...this._hotPathTrace],
       ...(this._modelExecutionEvidence !== undefined
         ? { modelExecutionEvidence: this._modelExecutionEvidence }
         : {}),

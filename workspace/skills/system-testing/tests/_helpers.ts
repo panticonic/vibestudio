@@ -98,6 +98,40 @@ export function finalMessageHasAll(
   };
 }
 
+/**
+ * Check whether one completed, user-visible agent message contains every token.
+ * This is intentionally message-scoped: transcript delivery tests must not
+ * synthesize evidence by combining unrelated messages.
+ */
+export function agentMessageHasAll(
+  result: TestExecutionResult,
+  tokens: readonly string[]
+): { passed: boolean; reason?: string } {
+  const selfSenderId = result.messages[0]?.senderId;
+  const messages = result.messages.filter(
+    (message) =>
+      message.senderId !== selfSenderId &&
+      message.kind === "message" &&
+      message.complete &&
+      message.contentType !== "thinking" &&
+      message.contentType !== "typing" &&
+      message.contentType !== "invocation" &&
+      !message.pending
+  );
+  const found = messages.some((message) => {
+    const normalized = normalizeMarkerText(message.content ?? "");
+    return tokens.every((token) => normalized.includes(normalizeMarkerText(token)));
+  });
+  return {
+    passed: found,
+    reason: found
+      ? undefined
+      : `No delivered agent message contained ${tokens.join(", ")}. Messages: ${messages
+          .map((message) => (message.content ?? "").slice(0, 200))
+          .join(" | ")}`,
+  };
+}
+
 export function finalMessageHasAny(
   result: TestExecutionResult,
   tokens: readonly string[]

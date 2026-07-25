@@ -49,6 +49,34 @@ describe("FeedbackFormArgsSchema", () => {
     expect(parsed.data.fields[0]?.variant).toBe("cards");
   });
 
+  it("accepts cross-field warning conditions advertised to agents", () => {
+    const parsed = FeedbackFormArgsSchema.safeParse({
+      title: "Choose access",
+      fields: [
+        {
+          key: "accessLevel",
+          label: "Access",
+          type: "select",
+          options: [{ value: "broad", label: "Broad" }],
+        },
+        {
+          key: "acknowledgement",
+          label: "Acknowledgement",
+          type: "boolean",
+          warnings: [
+            {
+              when: { field: "accessLevel", operator: "eq", value: "broad" },
+              message: "Broad access grants extensive repository permissions.",
+              severity: "warning",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
   it("rejects timeout arguments", () => {
     const parsed = FeedbackFormArgsSchema.safeParse({
       ...baseFeedbackForm,

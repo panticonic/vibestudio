@@ -81,12 +81,12 @@ export class SubscriptionManager {
       contextId: opts.contextId,
       ...opts.descriptor.metadata,
     };
-    // This DO participant (an agent vessel) consumes the channel's STRUCTURED
-    // `onChannelEnvelope` delivery. RPC-style clients (connectViaRpc — e.g. the
-    // eval running system tests) do NOT set this and receive only the
-    // subscription stream, so the channel won't push onChannelEnvelope
-    // to them (they have no handler for it).
+    // This DO participant (an agent vessel) consumes host-claimed structured
+    // delivery batches. RPC-style clients (connectViaRpc — e.g. the eval
+    // running system tests) do NOT set this and receive only the subscription
+    // stream.
     metadata["receivesChannelEnvelopes"] = true;
+    metadata["incarnation"] = this.identity.sessionId;
     if (opts.config && typeof opts.config === "object") {
       metadata["channelConfig"] = opts.config;
     }

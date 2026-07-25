@@ -137,6 +137,43 @@ function makeProjectedReadBridge(root: string): FsVcsBridge {
         hasMoreEdges: false,
       };
     },
+    resolveRepository: async ({ state: requestedState, repoPath }) =>
+      repoPaths.includes(repoPath)
+        ? {
+            state: requestedState,
+            repositoryId: `repository:${repoPath}`,
+            repoPath,
+          }
+        : null,
+    listDirectory: async ({ state: requestedState, path: directoryPath }) => {
+      const prefix = directoryPath ? `${directoryPath}/` : "";
+      const entries = new Map<string, (typeof repoPaths)[number]>();
+      for (const repoPath of repoPaths) {
+        if (!repoPath.startsWith(prefix)) continue;
+        const name = repoPath.slice(prefix.length).split("/")[0]!;
+        entries.set(name, repoPath);
+      }
+      return {
+        state: requestedState,
+        path: directoryPath,
+        entries: [...entries.entries()].map(([name, repoPath]) => ({
+          name,
+          path: prefix + name,
+          kind: "directory" as const,
+          identity: `directory:${prefix}${name}`,
+          repositoryId: `repository:${repoPath}`,
+          repositoryRoot: prefix + name === repoPath,
+          fileId: null,
+          lineage: {
+            authoredChangeId: null,
+            authoredByWorkUnitId: `work:${repoPath}`,
+            contentClass: "internal" as const,
+            externalKeys: [],
+          },
+        })),
+        nextCursor: null,
+      };
+    },
     readFile: async (input) => {
       const filePath =
         input.file.kind === "path" ? input.file.path : input.file.fileId.split("/").at(-1)!;
@@ -293,6 +330,87 @@ function makeCanonicalSemanticBridge(
         },
         edges: [],
         hasMoreEdges: false,
+      };
+    },
+    resolveRepository: async ({ state, repoPath }) =>
+      repositoryPaths.includes(repoPath)
+        ? { state, repositoryId: `repository:${repoPath}`, repoPath }
+        : null,
+    listDirectory: async ({ state, path: directoryPath }) => {
+      const contextId = contextFromState(state);
+      const prefix = directoryPath ? `${directoryPath}/` : "";
+      const containingRepo = [...repositoryPaths]
+        .filter(
+          (repoPath) =>
+            directoryPath === repoPath || directoryPath.startsWith(`${repoPath}/`)
+        )
+        .sort((left, right) => right.length - left.length)[0];
+      if (containingRepo) {
+        const repoRelative =
+          directoryPath === containingRepo
+            ? ""
+            : directoryPath.slice(containingRepo.length + 1);
+        const filePrefix = `${contextId}/${containingRepo}/${repoRelative ? `${repoRelative}/` : ""}`;
+        const visible = new Map<string, { filePath: string; file: boolean }>();
+        for (const key of files.keys()) {
+          if (!key.startsWith(filePrefix)) continue;
+          const filePath = key.slice(`${contextId}/${containingRepo}/`.length);
+          const remainder = key.slice(filePrefix.length);
+          const name = remainder.split("/")[0]!;
+          visible.set(name, { filePath, file: !remainder.includes("/") });
+        }
+        if (visible.size === 0 && directoryPath !== containingRepo) return null;
+        return {
+          state,
+          path: directoryPath,
+          entries: [...visible.entries()].map(([name, visibleEntry]) => ({
+            name,
+            path: `${prefix}${name}`,
+            kind: visibleEntry.file ? ("file" as const) : ("directory" as const),
+            identity: visibleEntry.file
+              ? `file:${containingRepo}/${visibleEntry.filePath}`
+              : `directory:${prefix}${name}`,
+            repositoryId: `repository:${containingRepo}`,
+            repositoryRoot: false,
+            fileId: visibleEntry.file
+              ? `file:${containingRepo}/${visibleEntry.filePath}`
+              : null,
+            lineage: {
+              authoredChangeId: `change:${containingRepo}/${visibleEntry.filePath}`,
+              authoredByWorkUnitId: `work:${containingRepo}/${visibleEntry.filePath}`,
+              contentClass: lineage.contentClass,
+              externalKeys: lineage.externalKeys,
+            },
+          })),
+          nextCursor: null,
+        };
+      }
+      const entries = new Map<string, string>();
+      for (const repoPath of repositoryPaths) {
+        if (!repoPath.startsWith(prefix)) continue;
+        const name = repoPath.slice(prefix.length).split("/")[0]!;
+        entries.set(name, repoPath);
+      }
+      if (entries.size === 0 && directoryPath !== "") return null;
+      return {
+        state,
+        path: directoryPath,
+        entries: [...entries.entries()].map(([name, repoPath]) => ({
+          name,
+          path: `${prefix}${name}`,
+          kind: "directory" as const,
+          identity: `directory:${prefix}${name}`,
+          repositoryId: `repository:${repoPath}`,
+          repositoryRoot: `${prefix}${name}` === repoPath,
+          fileId: null,
+          lineage: {
+            authoredChangeId: null,
+            authoredByWorkUnitId: `work:${repoPath}`,
+            contentClass: lineage.contentClass,
+            externalKeys: lineage.externalKeys,
+          },
+        })),
+        nextCursor: null,
       };
     },
     listFiles: async ({ state, repositoryId }) => {
@@ -488,6 +606,30 @@ describe("FsService", () => {
 
   afterEach(() => {
     rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("reports scope and directory-operation phases without exposing path contents", async () => {
+    const telemetry: Array<{ method: string; phase: string; contextId?: string }> = [];
+    const observed = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+      contextAuthority: { kind: "scratch-only" },
+      onTelemetry: (event) => telemetry.push(event),
+    });
+    const ctx = makeWorkerCtx("do:src:class:telemetry");
+    registerContext(ctx.caller.runtime.id, "do", "ctx-telemetry");
+    mkdirSync(path.join(tmpRoot, "ctx-telemetry", ".tmp"), { recursive: true });
+    writeFileSync(path.join(tmpRoot, "ctx-telemetry", ".tmp", "entry.txt"), "ready");
+
+    await expect(observed.handleCall(ctx, "readdir", [".tmp"])).resolves.toEqual(["entry.txt"]);
+
+    expect(telemetry).toEqual([
+      expect.objectContaining({ method: "readdir", phase: "scope", contextId: "ctx-telemetry" }),
+      expect.objectContaining({
+        method: "readdir",
+        phase: "operation",
+        contextId: "ctx-telemetry",
+      }),
+    ]);
+    expect(JSON.stringify(telemetry)).not.toContain("entry.txt");
   });
 
   // ─── Error code preservation (ENOENT) ─────────────────────────────────────
@@ -943,7 +1085,7 @@ describe("FsService", () => {
       registerContext(ctx.caller.runtime.id, "do", "ctx-rdr-flat");
       setupTree("ctx-rdr-flat");
       const names = (await service.handleCall(ctx, "readdir", ["/"])) as string[];
-      expect(names.sort()).toEqual(["sub", "top.txt"]);
+      expect(names.sort()).toEqual(["skills", "sub", "top.txt"]);
     });
   });
 
@@ -1330,7 +1472,7 @@ describe("FsService", () => {
 
     it("bounds semantic receiver fan-out while reading a multi-repository corpus", async () => {
       const repositoryPaths = Array.from({ length: 20 }, (_, index) => `skills/skill-${index}`);
-      const { bridge, files } = makeCanonicalSemanticBridge(repositoryPaths);
+      const { bridge, files, readCalls } = makeCanonicalSemanticBridge(repositoryPaths);
       const contextId = "ctx-bounded-semantic-read";
       for (const repoPath of repositoryPaths) {
         files.set(`${contextId}/${repoPath}/SKILL.md`, {
@@ -1371,8 +1513,47 @@ describe("FsService", () => {
       expect(corpus).toHaveLength(repositoryPaths.length);
       expect(maxActiveCalls).toBeGreaterThan(1);
       expect(maxActiveCalls).toBeLessThanOrEqual(8);
-      expect(listedPrefixes).toHaveLength(repositoryPaths.length);
-      expect(listedPrefixes.every((prefix) => prefix === "SKILL.md")).toBe(true);
+      expect(corpus).toHaveLength(repositoryPaths.length);
+      expect(readCalls).toHaveLength(repositoryPaths.length);
+      expect(listedPrefixes).toEqual([]);
+    });
+
+    it("lists only visible repository names without enumerating descendant files", async () => {
+      const repositoryPaths = Array.from({ length: 20 }, (_, index) => `skills/skill-${index}`);
+      const { bridge, files } = makeCanonicalSemanticBridge(repositoryPaths);
+      const contextId = "ctx-bounded-listing-lineage";
+      for (const repoPath of repositoryPaths) {
+        files.set(`${contextId}/${repoPath}/SKILL.md`, {
+          kind: "text",
+          text: `---\nname: ${repoPath}\n---\n`,
+        });
+      }
+      mkdirSync(path.join(tmpRoot, contextId, "skills"), { recursive: true });
+
+      let activeCalls = 0;
+      let maxActiveCalls = 0;
+      const listFiles = bridge.listFiles.bind(bridge);
+      bridge.listFiles = async (input) => {
+        activeCalls += 1;
+        maxActiveCalls = Math.max(maxActiveCalls, activeCalls);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        try {
+          return await listFiles(input);
+        } finally {
+          activeCalls -= 1;
+        }
+      };
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+        recordContextIngestion: vi.fn(),
+        recordContextIngestionBatch: vi.fn(),
+      });
+      const agent = makeAgentCtx("bounded-listing-lineage", contextId);
+      registerContext(agent.caller.runtime.id, "do", contextId);
+
+      await expect(svc.handleCall(agent, "readdir", ["/"])).resolves.toEqual(["skills"]);
+
+      expect(maxActiveCalls).toBe(0);
     });
 
     it("discovers managed metadata from semantic state without materializing the workspace", async () => {
@@ -1479,15 +1660,19 @@ describe("FsService", () => {
 
     it("attributes directory names to bounded outside sources without reading file bodies", async () => {
       const { bridge, readCalls } = makeMockBridge();
-      const listFiles = bridge.listFiles.bind(bridge);
-      bridge.listFiles = async (input) => {
-        const listed = await listFiles(input);
+      const listDirectory = bridge.listDirectory.bind(bridge);
+      bridge.listDirectory = async (input) => {
+        const listed = await listDirectory(input);
+        if (!listed) return null;
         return {
           ...listed,
-          files: listed.files.map((file, index) => ({
-            ...file,
-            contentClass: "external" as const,
-            externalKeys: [`repo:github.com/acme/source-${index}@abc123`],
+          entries: listed.entries.map((entry, index) => ({
+            ...entry,
+            lineage: {
+              ...entry.lineage,
+              contentClass: "external" as const,
+              externalKeys: [`repo:github.com/acme/source-${index}@abc123`],
+            },
           })),
         };
       };
@@ -1551,21 +1736,25 @@ describe("FsService", () => {
       mkdirSync(projectedRoot, { recursive: true });
       writeFileSync(path.join(projectedRoot, "a.txt"), "a");
       writeFileSync(path.join(projectedRoot, "b.txt"), "b");
-      const listFiles = bridge.listFiles.bind(bridge);
-      bridge.listFiles = async (input) => {
-        const listed = await listFiles(input);
-        const internalFile = listed.files[1]!;
+      const listDirectory = bridge.listDirectory.bind(bridge);
+      bridge.listDirectory = async (input) => {
+        const listed = await listDirectory(input);
+        if (!listed) return null;
+        const internalFile = listed.entries[1]!;
         const sharedKey =
-          `file:${encodeURIComponent(listed.repositoryId)}/` +
-          `${encodeURIComponent(internalFile.fileId)}@${internalFile.authoredChangeId}`;
+          `entry:${encodeURIComponent(internalFile.identity)}@` +
+          `${internalFile.lineage.authoredChangeId ?? internalFile.lineage.authoredByWorkUnitId}`;
         return {
           ...listed,
-          files: listed.files.map((file, index) =>
+          entries: listed.entries.map((file, index) =>
             index === 0
               ? {
                   ...file,
-                  contentClass: "external" as const,
-                  externalKeys: [sharedKey],
+                  lineage: {
+                    ...file.lineage,
+                    contentClass: "external" as const,
+                    externalKeys: [sharedKey],
+                  },
                 }
               : file
           ),
@@ -2190,7 +2379,7 @@ describe("FsService", () => {
       expect(calls).toEqual([]);
     });
 
-    it("a read demands ONLY the target path's repo (minimal scope, not 'all')", async () => {
+    it("a semantic directory read does not demand a disk projection", async () => {
       mkdirSync(path.join(tmpRoot, "ctx-s", "packages", "lib"), { recursive: true });
       writeFileSync(path.join(tmpRoot, "ctx-s", "packages", "lib", "x.ts"), "x\n");
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
@@ -2202,11 +2391,10 @@ describe("FsService", () => {
 
       await svc.handleCall(ctx, "readdir", ["/packages/lib"]);
 
-      // Exactly the one repo was demanded — never "all".
-      expect(calls).toEqual([{ contextId: "ctx-s", repos: ["packages/lib"] }]);
+      expect(calls).toEqual([]);
     });
 
-    it("a read whose repo stays unmaterialized surfaces a natural ENOENT (not silent-partial)", async () => {
+    it("an existing empty semantic repository lists without a disk projection", async () => {
       // A bridge that declines to materialize — simulates a non-existent repo
       // (nothing to project) or a consumer/path that slipped past demand. Every
       // context may read any repo (no read confinement), so an existing repo is
@@ -2222,7 +2410,7 @@ describe("FsService", () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-s2");
 
-      await expect(svc.handleCall(ctx, "readdir", ["/packages/lib"])).rejects.toThrow(/ENOENT/);
+      await expect(svc.handleCall(ctx, "readdir", ["/packages/lib"])).resolves.toEqual([]);
     });
 
     it("a root grep demands 'all' (the only legitimate blanket case)", async () => {

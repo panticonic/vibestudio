@@ -335,6 +335,24 @@ describe("internal storage DOs under workerd", () => {
     }
   });
 
+  it("activates and reads a fresh BrowserDataDO through real host authority", async () => {
+    const harness = await createWorkerdHarness();
+    manager = harness.manager;
+    await manager.registerAllDOClasses([
+      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+    ]);
+    const doDispatch = createDODispatch(manager, harness.tokenManager);
+    const ref = {
+      source: INTERNAL_DO_SOURCE,
+      className: "BrowserDataDO",
+      objectKey: "fresh-browser-environment",
+    };
+
+    await expect(doDispatch.dispatch(ref, "durableWorkCapabilities")).resolves.toEqual([]);
+    await expect(doDispatch.dispatch(ref, "listImportJobs")).resolves.toEqual([]);
+    await expect(doDispatch.dispatch(ref, "getBookmarks", "/")).resolves.toEqual([]);
+  }, 30_000);
+
   // Manual empirical probe (~37s; opt-in via `.only` or removing `.skip`) behind
   // the unbounded-eval.run design: real workerd does NOT cap a DO `fetch` handler
   // the way it caps a regular Worker (~30s). Held 35s here and returned cleanly,
@@ -380,7 +398,7 @@ describe("internal storage DOs under workerd", () => {
     expect(elapsed).toBeGreaterThanOrEqual(34_000);
   }, 90_000);
 
-  it.skip("PROBE: does a DO run background work + I/O after its request returns?", async () => {
+  it("measures whether a DO runs waitUntil work and I/O after its request returns", async () => {
     const probeBuild = await bundleWorker(
       "workers/lifecycle-probe",
       "src/server/testFixtures/lifecycleProbeWorker.ts",
@@ -391,6 +409,7 @@ describe("internal storage DOs under workerd", () => {
         if (source === "workers/lifecycle-probe") return probeBuild;
         throw new Error(`unexpected build source ${source}`);
       },
+      mainRpc: async () => [],
     });
     manager = harness.manager;
     await manager.registerAllDOClasses([
@@ -412,9 +431,59 @@ describe("internal storage DOs under workerd", () => {
     const ranAt = result["ran_at"] ? Number(result["ran_at"]) : null;
     const deltaMs = ranAt != null && !Number.isNaN(startedAt) ? ranAt - startedAt : null;
     console.log("BG-PROBE RESULT:", JSON.stringify({ probeRet, result, deltaMs }));
-    // No hard assertion — this is an exploratory probe; the console line is the finding.
-    expect(result["started_at"]).toBeDefined();
+    expect(probeRet).toEqual({ hasWaitUntil: true });
+    expect(deltaMs).toBeGreaterThanOrEqual(2_800);
+    expect(deltaMs).toBeLessThan(6_000);
+    expect(result["bg_io"]).toBe("ok");
   }, 40_000);
+
+  it("admits ordinary, alarm, lifecycle, and a second held call during a held DO call", async () => {
+    const probeBuild = await bundleWorker(
+      "workers/lifecycle-probe",
+      "src/server/testFixtures/lifecycleProbeWorker.ts",
+      "lifecycle-probe-held-admission"
+    );
+    const harness = await createWorkerdHarness({
+      getBuild: async (source: string) => {
+        if (source === "workers/lifecycle-probe") return probeBuild;
+        throw new Error(`unexpected build source ${source}`);
+      },
+    });
+    manager = harness.manager;
+    const doDispatch = createDODispatch(manager, harness.tokenManager);
+    await manager.registerAllDOClasses([
+      { source: "workers/lifecycle-probe", className: "LifecycleProbeDO" },
+    ]);
+    const ref = {
+      source: "workers/lifecycle-probe",
+      className: "LifecycleProbeDO",
+      objectKey: "held-admission-probe",
+    };
+    await harness.callDurableObject(ref, "currentBootGeneration");
+
+    const first = doDispatch.dispatchHeld(ref, "heldSqlProbe", "first", 2_000);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const admissionStartedAt = Date.now();
+    const [ordinary, alarm, prepare, second] = await Promise.all([
+      doDispatch.dispatch(ref, "currentBootGeneration"),
+      doDispatch.dispatchAlarm(ref),
+      doDispatch.dispatchLifecycle(ref, "prepare", {
+        epoch: "held-admission",
+        mode: "suspend",
+        reason: "probe",
+        deadlineMs: 1_000,
+      }),
+      doDispatch.dispatchHeld(ref, "heldSqlProbe", "second", 250),
+    ]);
+    const admissionMs = Date.now() - admissionStartedAt;
+
+    expect(ordinary).toBe("1");
+    expect(alarm).toEqual({ nextAlarm: null });
+    expect(prepare).toEqual({ status: "ready" });
+    expect(second).toEqual({ label: "second", ok: true });
+    expect(admissionMs).toBeLessThan(1_000);
+    await expect(first).resolves.toEqual({ label: "first", ok: true });
+  }, 30_000);
 
   it.skip("PROBE: how long does ctx.waitUntil keep a DO alive in the background?", async () => {
     const probeBuild = await bundleWorker(
@@ -727,7 +796,9 @@ describe("internal storage DOs under workerd", () => {
       expect(events.some((e) => e.kind === "alarm")).toBe(true);
 
       // The alarm fired once and was drained — no longer pending.
-      await expect(doDispatch.dispatch(workspaceRef, "alarmNextWakeAt")).resolves.toBeNull();
+      await expect(
+        doDispatch.dispatch(workspaceRef, "alarmNextWakeAt", Date.now())
+      ).resolves.toBeNull();
     } finally {
       alarmDriver.stop();
     }

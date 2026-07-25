@@ -1728,7 +1728,9 @@ function resolvePreparedRequirement(
     throw new ServiceError(
       service,
       method,
-      `Authority preparer omitted the selected requirement for '${selection.capability}'`
+      `Authority preparer omitted the selected requirement for '${selection.capability}'. ` +
+        `Declare a fixed requirement when only the resource or presentation varies; ` +
+        `otherwise return the complete host-selected requirement from the preparer.`
     );
   }
   const allowedPrincipals = new Set(declaration.principals);

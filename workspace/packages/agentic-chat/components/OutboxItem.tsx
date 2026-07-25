@@ -79,14 +79,31 @@ export const OutboxItem = React.memo(function OutboxItem({
 
   const hasAttachments = (msg.attachments?.length ?? 0) > 0;
   const aggregate = msg.receipts?.aggregate ?? "pending";
+  const receiptStates = Object.values(msg.receipts?.byParticipant ?? {});
+  const recipientHasReceived = receiptStates.some(
+    (state) => state === "received" || state === "read"
+  );
   const laneIsAfterTurn = lane === "after-turn";
+  const laneIsSteer = lane === "steer";
+  const laneLabel = laneIsAfterTurn
+    ? "After this turn"
+    : laneIsSteer
+      ? "Lands this turn"
+      : recipientHasReceived
+        ? "Delivered · awaiting agent"
+        : "Awaiting delivery";
 
   return (
     <Box
       role="listitem"
-      className={["outbox-item", laneIsAfterTurn ? "outbox-item-after-turn" : "outbox-item-steer"]
-        .filter(Boolean)
-        .join(" ")}
+      className={[
+        "outbox-item",
+        laneIsAfterTurn
+          ? "outbox-item-after-turn"
+          : laneIsSteer
+            ? "outbox-item-steer"
+            : "outbox-item-send",
+      ].join(" ")}
       data-lane={lane}
     >
       <Flex gap="2" align="start">
@@ -97,11 +114,11 @@ export const OutboxItem = React.memo(function OutboxItem({
               <Badge
                 size="1"
                 variant="soft"
-                color={laneIsAfterTurn ? "gray" : "iris"}
+                color={laneIsAfterTurn || !laneIsSteer ? "gray" : "iris"}
                 className="outbox-lane-badge"
               >
-                {laneIsAfterTurn ? <TimerIcon /> : <LightningBoltIcon />}
-                <Text size="1">{laneIsAfterTurn ? "After this turn" : "Lands this turn"}</Text>
+                {laneIsSteer ? <LightningBoltIcon /> : <TimerIcon />}
+                <Text size="1">{laneLabel}</Text>
               </Badge>
               {/* Editable-until-read micro-state: an unlock/clock glyph that
                   resolves into the read check the instant any recipient reads. */}

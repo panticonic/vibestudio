@@ -142,7 +142,7 @@
     }
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.80.6",
+    "@earendil-works/pi-ai": "^0.82.0",
     "@vibestudio/shared": "workspace:*",
     "@vibestudio/trajectory-identity": "workspace:*",
     "@workspace/runtime": "workspace:*",

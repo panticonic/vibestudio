@@ -31,6 +31,7 @@ export function createTestExecutionSession(input: {
     bindingId?: string;
   } | null;
   mode?: "interactive" | "mission" | "test";
+  testPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicy;
 }): import("@vibestudio/rpc").AgentExecutionSessionFact {
   const now = Date.now();
   const repoPath = input.repoPath ?? "tests/harness";
@@ -52,6 +53,7 @@ export function createTestExecutionSession(input: {
             bindingId: input.agentBinding?.bindingId ?? "binding:test",
           },
     taskRef: `task:${input.runtimeId}`,
+    ...(input.testPolicy ? { testPolicy: input.testPolicy } : {}),
     harness: {
       principal:
         input.harnessPrincipal ?? (`code:${repoPath}@${TEST_DIGEST}` as `code:${string}`),

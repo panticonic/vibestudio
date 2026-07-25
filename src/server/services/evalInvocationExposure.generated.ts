@@ -800,34 +800,6 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "direct:src/server/internalDOs/evalDO.ts:acquireKernelLease",
-    rpcPlane: "workspace-do",
-    capability: "runtime.code-execution.manage",
-    authorityPrincipals: ["host"],
-    owner: "src/server/internalDOs/evalDO.ts",
-    source: "product/eval",
-    method: "acquireKernelLease",
-    sensitivity: "write",
-    resourceDerivation: {
-      kind: "direct-target",
-      owner: "src/server/internalDOs/evalDO.ts",
-    },
-  },
-  {
-    id: "direct:src/server/internalDOs/evalDO.ts:attachKernelLeaseHolder",
-    rpcPlane: "workspace-do",
-    capability: "runtime.code-execution.manage",
-    authorityPrincipals: ["host"],
-    owner: "src/server/internalDOs/evalDO.ts",
-    source: "product/eval",
-    method: "attachKernelLeaseHolder",
-    sensitivity: "write",
-    resourceDerivation: {
-      kind: "direct-target",
-      owner: "src/server/internalDOs/evalDO.ts",
-    },
-  },
-  {
     id: "direct:src/server/internalDOs/evalDO.ts:cancel",
     rpcPlane: "workspace-do",
     capability: "runtime.code-execution.manage",
@@ -849,6 +821,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     owner: "src/server/internalDOs/evalDO.ts",
     source: "product/eval",
     method: "deleteScopeValue",
+    sensitivity: "destructive",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "src/server/internalDOs/evalDO.ts",
+    },
+  },
+  {
+    id: "direct:src/server/internalDOs/evalDO.ts:dispose",
+    rpcPlane: "workspace-do",
+    capability: "runtime.code-execution.manage",
+    authorityPrincipals: ["host"],
+    owner: "src/server/internalDOs/evalDO.ts",
+    source: "product/eval",
+    method: "dispose",
     sensitivity: "destructive",
     resourceDerivation: {
       kind: "direct-target",
@@ -892,20 +878,6 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     source: "product/eval",
     method: "getRun",
     sensitivity: "read",
-    resourceDerivation: {
-      kind: "direct-target",
-      owner: "src/server/internalDOs/evalDO.ts",
-    },
-  },
-  {
-    id: "direct:src/server/internalDOs/evalDO.ts:holdKernelLease",
-    rpcPlane: "workspace-do",
-    capability: "runtime.code-execution.manage",
-    authorityPrincipals: ["host"],
-    owner: "src/server/internalDOs/evalDO.ts",
-    source: "product/eval",
-    method: "holdKernelLease",
-    sensitivity: "write",
     resourceDerivation: {
       kind: "direct-target",
       owner: "src/server/internalDOs/evalDO.ts",
@@ -1024,6 +996,34 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "direct:src/server/internalDOs/workspaceDO.ts:alarmAdoptWorker",
+    rpcPlane: "workspace-do",
+    capability: "workspace.runtime-state.manage",
+    authorityPrincipals: ["host"],
+    owner: "src/server/internalDOs/workspaceDO.ts",
+    source: "product/bootstrap",
+    method: "alarmAdoptWorker",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "src/server/internalDOs/workspaceDO.ts",
+    },
+  },
+  {
+    id: "direct:src/server/internalDOs/workspaceDO.ts:alarmClaimDue",
+    rpcPlane: "workspace-do",
+    capability: "workspace.runtime-state.manage",
+    authorityPrincipals: ["host"],
+    owner: "src/server/internalDOs/workspaceDO.ts",
+    source: "product/bootstrap",
+    method: "alarmClaimDue",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "src/server/internalDOs/workspaceDO.ts",
+    },
+  },
+  {
     id: "direct:src/server/internalDOs/workspaceDO.ts:alarmClear",
     rpcPlane: "workspace-do",
     capability: "workspace.runtime-state.manage",
@@ -1038,13 +1038,13 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "direct:src/server/internalDOs/workspaceDO.ts:alarmListDue",
+    id: "direct:src/server/internalDOs/workspaceDO.ts:alarmListScheduled",
     rpcPlane: "workspace-do",
     capability: "workspace.runtime-state.manage",
     authorityPrincipals: ["host"],
     owner: "src/server/internalDOs/workspaceDO.ts",
     source: "product/bootstrap",
-    method: "alarmListDue",
+    method: "alarmListScheduled",
     sensitivity: "read",
     resourceDerivation: {
       kind: "direct-target",
@@ -1129,6 +1129,34 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     owner: "src/server/internalDOs/workspaceDO.ts",
     source: "product/bootstrap",
     method: "contextEdgeUpsert",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "src/server/internalDOs/workspaceDO.ts",
+    },
+  },
+  {
+    id: "direct:src/server/internalDOs/workspaceDO.ts:durableWorkOwnerList",
+    rpcPlane: "workspace-do",
+    capability: "workspace.runtime-state.manage",
+    authorityPrincipals: ["host"],
+    owner: "src/server/internalDOs/workspaceDO.ts",
+    source: "product/bootstrap",
+    method: "durableWorkOwnerList",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "src/server/internalDOs/workspaceDO.ts",
+    },
+  },
+  {
+    id: "direct:src/server/internalDOs/workspaceDO.ts:durableWorkOwnerRegister",
+    rpcPlane: "workspace-do",
+    capability: "workspace.runtime-state.manage",
+    authorityPrincipals: ["host"],
+    owner: "src/server/internalDOs/workspaceDO.ts",
+    source: "product/bootstrap",
+    method: "durableWorkOwnerRegister",
     sensitivity: "write",
     resourceDerivation: {
       kind: "direct-target",
@@ -1822,6 +1850,34 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:acceptChannelBatch",
+    rpcPlane: "workspace-do",
+    capability: "rpc:acceptChannelBatch",
+    authorityPrincipals: ["host"],
+    owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    source: "packages/agentic-do",
+    method: "acceptChannelBatch",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    },
+  },
+  {
+    id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:adoptDurableWorkWorker",
+    rpcPlane: "workspace-do",
+    capability: "rpc:adoptDurableWorkWorker",
+    authorityPrincipals: ["host"],
+    owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    source: "packages/agentic-do",
+    method: "adoptDurableWorkWorker",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    },
+  },
+  {
     id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:attachChannel",
     rpcPlane: "workspace-do",
     capability: "rpc:attachChannel",
@@ -1864,6 +1920,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:claimReadyWork",
+    rpcPlane: "workspace-do",
+    capability: "rpc:claimReadyWork",
+    authorityPrincipals: ["host"],
+    owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    source: "packages/agentic-do",
+    method: "claimReadyWork",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    },
+  },
+  {
     id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:deliverEffectOutcome",
     rpcPlane: "workspace-do",
     capability: "rpc:deliverEffectOutcome",
@@ -1871,6 +1941,62 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
     source: "packages/agentic-do",
     method: "deliverEffectOutcome",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    },
+  },
+  {
+    id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:durableWorkStatus",
+    rpcPlane: "workspace-do",
+    capability: "rpc:durableWorkStatus",
+    authorityPrincipals: ["host"],
+    owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    source: "packages/agentic-do",
+    method: "durableWorkStatus",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    },
+  },
+  {
+    id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:executeEffectClaim",
+    rpcPlane: "workspace-do",
+    capability: "rpc:executeEffectClaim",
+    authorityPrincipals: ["host"],
+    owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    source: "packages/agentic-do",
+    method: "executeEffectClaim",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    },
+  },
+  {
+    id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:executeInboxClaim",
+    rpcPlane: "workspace-do",
+    capability: "rpc:executeInboxClaim",
+    authorityPrincipals: ["host"],
+    owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    source: "packages/agentic-do",
+    method: "executeInboxClaim",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    },
+  },
+  {
+    id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:failReadyWork",
+    rpcPlane: "workspace-do",
+    capability: "rpc:failReadyWork",
+    authorityPrincipals: ["host"],
+    owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    source: "packages/agentic-do",
+    method: "failReadyWork",
     sensitivity: "write",
     resourceDerivation: {
       kind: "direct-target",
@@ -1962,20 +2088,6 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onChannelEnvelope",
-    rpcPlane: "workspace-do",
-    capability: "rpc:onChannelEnvelope",
-    authorityPrincipals: ["code"],
-    owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
-    source: "packages/agentic-do",
-    method: "onChannelEnvelope",
-    sensitivity: "write",
-    resourceDerivation: {
-      kind: "direct-target",
-      owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
-    },
-  },
-  {
     id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onEvalComplete",
     rpcPlane: "workspace-do",
     capability: "rpc:onEvalComplete",
@@ -2060,6 +2172,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:settleReadyWork",
+    rpcPlane: "workspace-do",
+    capability: "rpc:settleReadyWork",
+    authorityPrincipals: ["host"],
+    owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    source: "packages/agentic-do",
+    method: "settleReadyWork",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    },
+  },
+  {
     id: "direct:workspace/packages/agentic-do/src/agent-vessel.ts:subscribeChannel",
     rpcPlane: "workspace-do",
     capability: "rpc:subscribeChannel",
@@ -2085,6 +2211,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "direct-target",
       owner: "workspace/packages/agentic-do/src/agent-vessel.ts",
+    },
+  },
+  {
+    id: "direct:workspace/packages/runtime/src/worker/durable-base.ts:durableWorkCapabilities",
+    rpcPlane: "workspace-do",
+    capability: "rpc:durableWorkCapabilities",
+    authorityPrincipals: ["host"],
+    owner: "workspace/packages/runtime/src/worker/durable-base.ts",
+    source: "packages/runtime",
+    method: "durableWorkCapabilities",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/packages/runtime/src/worker/durable-base.ts",
     },
   },
   {
@@ -3530,6 +3670,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "direct:workspace/workers/pubsub-channel/channel-do.ts:adoptDurableWorkWorker",
+    rpcPlane: "workspace-do",
+    capability: "rpc:adoptDurableWorkWorker",
+    authorityPrincipals: ["host"],
+    owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    source: "workers/pubsub-channel",
+    method: "adoptDurableWorkWorker",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    },
+  },
+  {
     id: "direct:workspace/workers/pubsub-channel/channel-do.ts:appendSeed",
     rpcPlane: "workspace-do",
     capability: "workspace-service:<live-declaration>",
@@ -3600,6 +3754,34 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "direct:workspace/workers/pubsub-channel/channel-do.ts:claimReadyWork",
+    rpcPlane: "workspace-do",
+    capability: "rpc:claimReadyWork",
+    authorityPrincipals: ["host"],
+    owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    source: "workers/pubsub-channel",
+    method: "claimReadyWork",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    },
+  },
+  {
+    id: "direct:workspace/workers/pubsub-channel/channel-do.ts:durableWorkStatus",
+    rpcPlane: "workspace-do",
+    capability: "rpc:durableWorkStatus",
+    authorityPrincipals: ["host"],
+    owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    source: "workers/pubsub-channel",
+    method: "durableWorkStatus",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    },
+  },
+  {
     id: "direct:workspace/workers/pubsub-channel/channel-do.ts:error",
     rpcPlane: "workspace-do",
     capability: "workspace-service:<live-declaration>",
@@ -3607,6 +3789,34 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     owner: "workspace/workers/pubsub-channel/channel-do.ts",
     source: "workers/pubsub-channel",
     method: "error",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    },
+  },
+  {
+    id: "direct:workspace/workers/pubsub-channel/channel-do.ts:executeChannelMaintenanceClaim",
+    rpcPlane: "workspace-do",
+    capability: "rpc:executeChannelMaintenanceClaim",
+    authorityPrincipals: ["host"],
+    owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    source: "workers/pubsub-channel",
+    method: "executeChannelMaintenanceClaim",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    },
+  },
+  {
+    id: "direct:workspace/workers/pubsub-channel/channel-do.ts:failReadyWork",
+    rpcPlane: "workspace-do",
+    capability: "rpc:failReadyWork",
+    authorityPrincipals: ["host"],
+    owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    source: "workers/pubsub-channel",
+    method: "failReadyWork",
     sensitivity: "write",
     resourceDerivation: {
       kind: "direct-target",
@@ -3985,6 +4195,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     owner: "workspace/workers/pubsub-channel/channel-do.ts",
     source: "workers/pubsub-channel",
     method: "sendSignal",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    },
+  },
+  {
+    id: "direct:workspace/workers/pubsub-channel/channel-do.ts:settleReadyWork",
+    rpcPlane: "workspace-do",
+    capability: "rpc:settleReadyWork",
+    authorityPrincipals: ["host"],
+    owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    source: "workers/pubsub-channel",
+    method: "settleReadyWork",
     sensitivity: "write",
     resourceDerivation: {
       kind: "direct-target",
@@ -5768,7 +5992,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     id: "host:corsApproval.authorize#capability:network.response.read",
     rpcPlane: "host-service",
     capability: "network.response.read",
-    authorityPrincipals: ["code"],
+    authorityPrincipals: ["code", "session"],
     owner: "corsApproval",
     method: "authorize",
     sensitivity: "write",
@@ -6079,6 +6303,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:durableWork.inspect",
+    rpcPlane: "host-service",
+    capability: "service:durableWork.inspect",
+    authorityPrincipals: ["user", "host", "code"],
+    owner: "durableWork",
+    method: "inspect",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:durableWork.inspect",
+    },
+  },
+  {
     id: "host:eval.cancel",
     rpcPlane: "host-service",
     capability: "service:eval.cancel",
@@ -6102,6 +6339,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:eval.deleteScopeValue",
+    },
+  },
+  {
+    id: "host:eval.dispose",
+    rpcPlane: "host-service",
+    capability: "service:eval.dispose",
+    authorityPrincipals: ["code", "user", "host"],
+    owner: "eval",
+    method: "dispose",
+    sensitivity: "destructive",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:eval.dispose",
     },
   },
   {
@@ -6355,7 +6605,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     id: "host:externalOpen.openExternal#capability:external.open",
     rpcPlane: "host-service",
     capability: "external.open",
-    authorityPrincipals: ["code"],
+    authorityPrincipals: ["code", "session"],
     owner: "externalOpen",
     method: "openExternal",
     sensitivity: "write",
@@ -9849,6 +10099,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:vcs.listDirectory",
+    rpcPlane: "host-service",
+    capability: "service:vcs.listDirectory",
+    authorityPrincipals: ["user", "code", "host"],
+    owner: "vcs",
+    method: "listDirectory",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:vcs.listDirectory",
+    },
+  },
+  {
     id: "host:vcs.listFiles",
     rpcPlane: "host-service",
     capability: "service:vcs.listFiles",
@@ -10294,7 +10557,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     id: "host:workerdInspector.getEndpoint#capability:runtime.inspect",
     rpcPlane: "host-service",
     capability: "runtime.inspect",
-    authorityPrincipals: ["code"],
+    authorityPrincipals: ["code", "session"],
     owner: "workerdInspector",
     method: "getEndpoint",
     sensitivity: "admin",
@@ -11520,12 +11783,20 @@ export const EVAL_SERVER_HOST_METHODS = [
     method: "search",
   },
   {
+    service: "durableWork",
+    method: "inspect",
+  },
+  {
     service: "eval",
     method: "cancel",
   },
   {
     service: "eval",
     method: "deleteScopeValue",
+  },
+  {
+    service: "eval",
+    method: "dispose",
   },
   {
     service: "eval",
@@ -12321,6 +12592,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "vcs",
+    method: "listDirectory",
+  },
+  {
+    service: "vcs",
     method: "listFiles",
   },
   {
@@ -12670,10 +12945,6 @@ export const EVAL_DIRECT_SURFACE_REACHABILITY = {
     },
     {
       source: "packages/agentic-do",
-      method: "onChannelEnvelope",
-    },
-    {
-      source: "packages/agentic-do",
       method: "onEvalComplete",
     },
     {
@@ -12725,10 +12996,6 @@ export const EVAL_DIRECT_SURFACE_REACHABILITY = {
     {
       source: "packages/agentic-do",
       method: "onAuthorityChanged",
-    },
-    {
-      source: "packages/agentic-do",
-      method: "onChannelEnvelope",
     },
     {
       source: "packages/agentic-do",
@@ -12786,10 +13053,6 @@ export const EVAL_DIRECT_SURFACE_REACHABILITY = {
     },
     {
       source: "packages/agentic-do",
-      method: "onChannelEnvelope",
-    },
-    {
-      source: "packages/agentic-do",
       method: "onEvalComplete",
     },
     {
@@ -12841,10 +13104,6 @@ export const EVAL_DIRECT_SURFACE_REACHABILITY = {
     {
       source: "packages/agentic-do",
       method: "onAuthorityChanged",
-    },
-    {
-      source: "packages/agentic-do",
-      method: "onChannelEnvelope",
     },
     {
       source: "packages/agentic-do",
@@ -12902,10 +13161,6 @@ export const EVAL_DIRECT_SURFACE_REACHABILITY = {
     },
     {
       source: "packages/agentic-do",
-      method: "onChannelEnvelope",
-    },
-    {
-      source: "packages/agentic-do",
       method: "onEvalComplete",
     },
     {
@@ -12957,10 +13212,6 @@ export const EVAL_DIRECT_SURFACE_REACHABILITY = {
     {
       source: "packages/agentic-do",
       method: "onAuthorityChanged",
-    },
-    {
-      source: "packages/agentic-do",
-      method: "onChannelEnvelope",
     },
     {
       source: "packages/agentic-do",
@@ -13018,10 +13269,6 @@ export const EVAL_DIRECT_SURFACE_REACHABILITY = {
     },
     {
       source: "packages/agentic-do",
-      method: "onChannelEnvelope",
-    },
-    {
-      source: "packages/agentic-do",
       method: "onEvalComplete",
     },
     {
@@ -13068,7 +13315,6 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "rpc:getModelExecutionEvidence",
   "rpc:initFromTrajectoryFork",
   "rpc:interruptChannel",
-  "rpc:onChannelEnvelope",
   "rpc:onEvalComplete",
   "rpc:onEvalProgress",
   "rpc:onGmailPushNotification",
@@ -13196,8 +13442,10 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:docs.listServices",
   "service:docs.listSurfaces",
   "service:docs.search",
+  "service:durableWork.inspect",
   "service:eval.cancel",
   "service:eval.deleteScopeValue",
+  "service:eval.dispose",
   "service:eval.getRun",
   "service:eval.readScopeTextPage",
   "service:eval.reset",
@@ -13422,6 +13670,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:vcs.importSnapshot",
   "service:vcs.inspect",
   "service:vcs.integrate",
+  "service:vcs.listDirectory",
   "service:vcs.listFiles",
   "service:vcs.move",
   "service:vcs.neighbors",

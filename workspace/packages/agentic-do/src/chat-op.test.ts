@@ -8,15 +8,17 @@
  * machinery, and relays the result. These tests cover the auth gate, the card
  * dispatch, message-type publishing, and the result-awaiting callMethod relay.
  */
+import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import type { LifecyclePrepareInput, LifecycleResumeInput } from "@workspace/runtime/worker";
 import { ids } from "@workspace/agent-loop";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
-import type { RpcClient } from "@vibestudio/rpc";
+import { rpc, type RpcClient } from "@vibestudio/rpc";
 import { AGENTIC_EVENT_PAYLOAD_KIND, type AgenticEvent } from "@workspace/agentic-protocol";
 import { sha256HexSyncText } from "@vibestudio/content-addressing";
 import type { ChannelEvent, ParticipantDescriptor } from "@workspace/harness";
+import type { RpcChannelMessage } from "@workspace/pubsub";
 import { AgentVesselBase } from "./agent-vessel.js";
 import type { ChannelClient } from "./channel-client.js";
 import type { AgentLoopDriver } from "./agent-loop-driver.js";
@@ -38,6 +40,44 @@ const TEST_AGENT_ENV = {
   WORKER_SOURCE: "test",
   WORKER_CLASS_NAME: "TestAgent",
 } as const;
+
+async function withAlarmGateway<T>(run: (gatewayUrl: string) => Promise<T>): Promise<T> {
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const envelope = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+      from: string;
+      target: string;
+      message: { requestId: string };
+    };
+    response.setHeader("Content-Type", "application/json");
+    response.end(
+      JSON.stringify({
+        from: envelope.target,
+        target: envelope.from,
+        delivery: { caller: { callerId: "main", callerKind: "server" } },
+        provenance: [],
+        message: {
+          type: "response",
+          requestId: envelope.message.requestId,
+          result: undefined,
+        },
+      })
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("test server did not bind TCP");
+
+  try {
+    return await run(`http://127.0.0.1:${address.port}`);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve()))
+    );
+  }
+}
 
 const WEATHER_TYPE = {
   typeId: "weather",
@@ -73,6 +113,36 @@ class TestVessel extends AgentVesselBase {
   readonly operationLog: string[] = [];
   lifecycleRegistrations = 0;
   lifecycleClears = 0;
+
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  markWorkReadyForTest(...queues: Array<"agent-inbox" | "agent-effect">): void {
+    this.markWorkReady(...queues);
+  }
+
+  durableWorkWakeEdgesForTest(): Array<{ queue: string; requestedAt: number }> {
+    return (
+      this.sql
+        .exec(
+          `SELECT key, value
+             FROM state
+            WHERE key LIKE 'durable-work-ready-edge:%'
+            ORDER BY key`
+        )
+        .toArray() as Record<string, unknown>[]
+    ).map((row) => ({
+      queue: String(row["key"]).slice("durable-work-ready-edge:".length),
+      requestedAt: Number(row["value"]),
+    }));
+  }
+
+  nextAlarmScheduleForTest(): { wakeAt: number } | null {
+    return this.nextAgentAlarmSchedule();
+  }
 
   protected override async registerLifecycleRelease(): Promise<void> {
     this.lifecycleRegistrations += 1;
@@ -290,11 +360,75 @@ class TestVessel extends AgentVesselBase {
     return Number(
       this.sql
         .exec(
-          `SELECT COUNT(*) AS count FROM channel_envelope_inbox WHERE channel_id = ?`,
+          `SELECT COUNT(*) AS count
+             FROM agent_inbox_queue
+            WHERE channel_id = ? AND disposition NOT LIKE 'terminal-%'`,
           channelId
         )
         .toArray()[0]?.["count"] ?? 0
     );
+  }
+
+  private envelopeSequence = 0;
+
+  acceptBatchForTest(
+    rows: Array<{ deliveryKey: string; channelSeq: number; envelope: RpcChannelMessage }>,
+    targetIncarnation?: string
+  ) {
+    this.ensureIdentity();
+    return this.acceptChannelBatch({
+      channelId: CHANNEL,
+      channelRef: {
+        source: "workers/pubsub-channel",
+        className: "PubSubChannel",
+        objectKey: CHANNEL,
+      },
+      sourceIncarnation: "channel-test-session",
+      targetIncarnation: targetIncarnation ?? this.identity.sessionId!,
+      rows,
+    });
+  }
+
+  acceptEnvelopeForTest(envelope: RpcChannelMessage): void {
+    this.ensureIdentity();
+    const channelSeq = ++this.envelopeSequence;
+    try {
+      this.acceptChannelBatch({
+        channelId: CHANNEL,
+        channelRef: {
+          source: "workers/pubsub-channel",
+          className: "PubSubChannel",
+          objectKey: CHANNEL,
+        },
+        sourceIncarnation: "channel-test-session",
+        targetIncarnation: this.identity.sessionId!,
+        rows: [{ deliveryKey: `test:${channelSeq}`, channelSeq, envelope }],
+      });
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        error.message !== "markWorkReady requires an active Durable Object request"
+      ) {
+        throw error;
+      }
+    }
+  }
+
+  async deliverEnvelopeForTest(envelope: RpcChannelMessage): Promise<void> {
+    this.acceptEnvelopeForTest(envelope);
+    const [claim] = this.claimReadyWork("agent-inbox", {
+      workerId: "test-worker",
+      now: Date.now(),
+      limit: 1,
+    });
+    if (!claim) throw new Error("test envelope was not claimable");
+    await this.executeInboxClaim({ itemId: claim.itemId, generation: claim.generation });
+    this.settleReadyWork("agent-inbox", {
+      workerId: "test-worker",
+      itemId: claim.itemId,
+      generation: claim.generation,
+      outcome: { processed: true },
+    });
   }
 
   installLifecycleDriverForTest() {
@@ -365,6 +499,53 @@ class LazyPromptProbe extends TestVessel {
   }
 }
 
+class LocalModelActivationProbe extends TestVessel {
+  entryAtActivation: string | null = null;
+  readonly localModelCalls: string[] = [];
+
+  protected override get rpc(): RpcClient {
+    const base = super.rpc;
+    return new Proxy(base, {
+      get: (target, property, receiver) => {
+        if (property === "call") {
+          return async (targetId: string, method: string, args: unknown[], options?: unknown) => {
+            if (
+              targetId === "main" &&
+              method === "extensions.invoke" &&
+              args[0] === "@workspace-extensions/local-models" &&
+              args[1] === "listModels"
+            ) {
+              this.localModelCalls.push("listModels");
+              return [
+                {
+                  slug: "lfm2.5-350m",
+                  displayName: "LFM2.5 350M",
+                  baseUrl: "http://127.0.0.1:33931/v1",
+                  contextWindow: 32_768,
+                  maxTokens: 32_768,
+                  toolsCapable: true,
+                },
+              ];
+            }
+            return target.call(targetId, method, args, options as never);
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  }
+
+  protected override get driver(): AgentLoopDriver {
+    return {
+      activateChannel: (channelId: string) => {
+        this.entryAtActivation = this.getStateValue(`agent:localModelEntry:${channelId}`);
+      },
+      wake: vi.fn(async () => {}),
+    } as unknown as AgentLoopDriver;
+  }
+}
+
 async function makeVessel(): Promise<TestVessel> {
   const { instance } = await createTestDO(TestVessel, TEST_AGENT_ENV);
   // Register a subscription row so the card path has a participant id, without
@@ -387,7 +568,107 @@ async function expectedEvalCaller(): Promise<string> {
   return `do:vibestudio/internal:EvalDO:${key}`;
 }
 
+describe("AgentVesselBase structured batch admission", () => {
+  const ready = (count: number): RpcChannelMessage => ({
+    kind: "control",
+    type: "ready",
+    ready: { totalCount: count, envelopeCount: count },
+  });
+
+  it("accepts exact duplicates and rolls back the whole batch on a mismatched duplicate", async () => {
+    const { instance } = await createTestDO(TestVessel, TEST_AGENT_ENV);
+    await instance.registerSubscriptionForTest(CHANNEL);
+    const first = [
+      { deliveryKey: "delivery-1", channelSeq: 1, envelope: ready(1) },
+      { deliveryKey: "delivery-2", channelSeq: 2, envelope: ready(2) },
+    ];
+
+    expect(instance.acceptBatchForTest(first).perRow).toEqual([
+      { deliveryKey: "delivery-1", disposition: "accepted" },
+      { deliveryKey: "delivery-2", disposition: "accepted" },
+    ]);
+    expect(instance.acceptBatchForTest(first).perRow).toEqual([
+      { deliveryKey: "delivery-1", disposition: "duplicate-match" },
+      { deliveryKey: "delivery-2", disposition: "duplicate-match" },
+    ]);
+
+    expect(() =>
+      instance.acceptBatchForTest([
+        { deliveryKey: "delivery-new", channelSeq: 1, envelope: ready(3) },
+        { deliveryKey: "delivery-2", channelSeq: 2, envelope: ready(99) },
+      ])
+    ).toThrow("mismatched duplicate delivery-2");
+    expect(instance.queuedEnvelopeCountForTest()).toBe(2);
+  });
+
+  it("rejects a batch addressed to a retired vessel incarnation", async () => {
+    const { instance } = await createTestDO(TestVessel, TEST_AGENT_ENV);
+    await instance.registerSubscriptionForTest(CHANNEL);
+
+    expect(() =>
+      instance.acceptBatchForTest(
+        [{ deliveryKey: "delivery-1", channelSeq: 1, envelope: ready(1) }],
+        "retired-incarnation"
+      )
+    ).toThrow("target incarnation retired");
+    expect(instance.queuedEnvelopeCountForTest()).toBe(0);
+  });
+});
+
+describe("AgentVesselBase durable work wake edges", () => {
+  it("persists a one-shot immediate host wake for work exposed by a DO-to-DO callback", async () => {
+    await withAlarmGateway(async (gatewayUrl) => {
+      const { instance: vessel, callAs } = await createTestDO(TestVessel, {
+        ...TEST_AGENT_ENV,
+        GATEWAY_URL: gatewayUrl,
+      });
+
+      await callAs("do", "markWorkReadyForTest", "agent-effect", "agent-effect");
+
+      const [edge] = vessel.durableWorkWakeEdgesForTest();
+      expect(edge).toMatchObject({ queue: "agent-effect" });
+      expect(vessel.nextAlarmScheduleForTest()?.wakeAt).toBe(edge!.requestedAt);
+
+      await vessel.alarm();
+      expect(vessel.durableWorkWakeEdgesForTest()).toEqual([]);
+    });
+  });
+
+  it("uses the response-carried hint alone when the host owns the request", async () => {
+    await withAlarmGateway(async (gatewayUrl) => {
+      const { instance: vessel, call } = await createTestDO(TestVessel, {
+        ...TEST_AGENT_ENV,
+        GATEWAY_URL: gatewayUrl,
+      });
+
+      await call("markWorkReadyForTest", "agent-effect");
+
+      expect(vessel.durableWorkWakeEdgesForTest()).toEqual([]);
+    });
+  });
+});
+
 describe("AgentVesselBase channel ready wake policy", () => {
+  it("materializes an installed local model before activating its loop", async () => {
+    const { instance } = await createTestDO(LocalModelActivationProbe, {
+      ...TEST_AGENT_ENV,
+      STATE_ARGS: { agentConfig: { model: "local:lfm2.5-350m" } },
+    });
+
+    await instance.subscribeChannel({
+      channelId: CHANNEL,
+      contextId: "ctx-1",
+      replay: false,
+    });
+
+    expect(instance.localModelCalls).toEqual(["listModels"]);
+    expect(JSON.parse(instance.entryAtActivation ?? "null")).toMatchObject({
+      slug: "lfm2.5-350m",
+      contextWindow: 32_768,
+      toolsCapable: true,
+    });
+  });
+
   it("does not materialize prompt artifacts for an idle subscription", async () => {
     const { instance } = await createTestDO(LazyPromptProbe, TEST_AGENT_ENV);
 
@@ -431,13 +712,11 @@ describe("AgentVesselBase channel ready wake policy", () => {
     instance.callerKindForTest = "do";
     instance.callerIdForTest = "do:workers/pubsub-channel:PubSubChannel:chan-1";
 
-    await instance.onChannelEnvelope(CHANNEL, {
+    await instance.deliverEnvelopeForTest({
       kind: "control",
       type: "ready",
       ready: { totalCount: 0, envelopeCount: 0 },
     });
-    await instance.alarm();
-
     expect(instance.wakeSpy).toHaveBeenCalledWith(CHANNEL);
   });
 
@@ -447,13 +726,11 @@ describe("AgentVesselBase channel ready wake policy", () => {
     instance.callerKindForTest = "do";
     instance.callerIdForTest = "do:workers/pubsub-channel:PubSubChannel:chan-1";
 
-    await instance.onChannelEnvelope(CHANNEL, {
+    await instance.deliverEnvelopeForTest({
       kind: "control",
       type: "ready",
       ready: { totalCount: 0, envelopeCount: 0 },
     });
-    await instance.alarm();
-
     expect(instance.wakeSpy).not.toHaveBeenCalled();
   });
 });
@@ -511,7 +788,7 @@ describe("AgentVesselBase lifecycle release", () => {
     instance.callerKindForTest = "do";
     instance.callerIdForTest = "do:workers/pubsub-channel:PubSubChannel:chan-1";
 
-    await instance.onChannelEnvelope(CHANNEL, {
+    instance.acceptEnvelopeForTest({
       kind: "control",
       type: "ready",
       ready: { totalCount: 0, envelopeCount: 0 },
@@ -521,11 +798,13 @@ describe("AgentVesselBase lifecycle release", () => {
     await instance.unsubscribeChannel(CHANNEL);
     expect(instance.queuedEnvelopeCountForTest()).toBe(0);
 
-    await instance.onChannelEnvelope(CHANNEL, {
-      kind: "control",
-      type: "ready",
-      ready: { totalCount: 0, envelopeCount: 0 },
-    });
+    expect(() =>
+      instance.acceptEnvelopeForTest({
+        kind: "control",
+        type: "ready",
+        ready: { totalCount: 0, envelopeCount: 0 },
+      })
+    ).toThrow("channel is not subscribed");
     expect(instance.queuedEnvelopeCountForTest()).toBe(0);
   });
 
@@ -545,11 +824,13 @@ describe("AgentVesselBase lifecycle release", () => {
     ).subscriptions;
     vi.spyOn(subscriptions, "unsubscribeFromChannel").mockImplementation(async () => {
       expect(subscriptions.getParticipantId(CHANNEL)).toBeNull();
-      await instance.onChannelEnvelope(CHANNEL, {
-        kind: "control",
-        type: "ready",
-        ready: { totalCount: 0, envelopeCount: 0 },
-      });
+      expect(() =>
+        instance.acceptEnvelopeForTest({
+          kind: "control",
+          type: "ready",
+          ready: { totalCount: 0, envelopeCount: 0 },
+        })
+      ).toThrow("channel is not subscribed");
     });
 
     await instance.unsubscribeChannel(CHANNEL);
@@ -1213,10 +1494,28 @@ class SubagentSpawnProbe extends TestVessel {
       }
     ).closeSubagent(runId, discard);
   }
-  async drainSubagentProgressForTest(now = Date.now()) {
-    return (
-      this as unknown as { drainSubagentProgress(at: number): Promise<void> }
-    ).drainSubagentProgress(now);
+  async dispatchSubagentProgressForTest(now = Date.now()) {
+    const [claim] = this.claimReadyWork("agent-inbox", {
+      workerId: "test-worker",
+      now,
+      limit: 1,
+    });
+    if (!claim) return;
+    try {
+      await this.executeInboxClaim({ itemId: claim.itemId, generation: claim.generation });
+      this.settleReadyWork("agent-inbox", {
+        workerId: "test-worker",
+        itemId: claim.itemId,
+        generation: claim.generation,
+        outcome: { processed: true },
+      });
+    } catch (error) {
+      this.failReadyWork("agent-inbox", {
+        workerId: "test-worker",
+        itemId: claim.itemId,
+        generation: claim.generation,
+      });
+    }
   }
   subagentProgressDiagnosticsForTest() {
     return this.subagentRuns.progressDiagnostics();
@@ -2100,7 +2399,7 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       senderId: "participant-child",
       ts: Date.now(),
     });
-    await probe.drainSubagentProgressForTest();
+    await probe.dispatchSubagentProgressForTest();
 
     const progress = probe.channelStub.published.find(
       (p) => p.event.kind === "invocation.progress" && p.event.causality?.invocationId === "inv-1"
@@ -2151,20 +2450,20 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       senderId: "participant-child",
       ts: Date.now(),
     });
-    await probe.drainSubagentProgressForTest();
+    await probe.dispatchSubagentProgressForTest();
     expect(probe.channelStub.published).not.toContainEqual(
       expect.objectContaining({ idempotencyKey: firstKey })
     );
     expect(probe.subagentProgressDiagnosticsForTest()).toMatchObject({
       pending: 2,
-      failures: [{ idempotencyKey: firstKey, attempts: 1 }],
+      failures: [],
     });
 
     probe.channelPublishFailures.delete(firstKey);
-    await probe.drainSubagentProgressForTest(Date.now() + 1_000);
-    // The second event was blocked behind the first when this batch began. A
-    // subsequent alarm drains it, preserving source order across hibernation.
-    await probe.drainSubagentProgressForTest(Date.now() + 1_000);
+    await probe.dispatchSubagentProgressForTest(Date.now() + 1_000);
+    // The second event was blocked behind the first when this claim began. A
+    // subsequent host claim drains it, preserving source order across hibernation.
+    await probe.dispatchSubagentProgressForTest(Date.now() + 1_000);
     const progress = probe.channelStub.published.filter(
       (entry) =>
         entry.event.causality?.invocationId === ("inv-1" as never) &&

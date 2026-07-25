@@ -220,7 +220,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private readonly projector: DiskProjector;
   private readonly materializer: ContextMaterializer;
   private readonly locks = new Map<string, Promise<unknown>>();
+  private readonly semanticContextInitializations = new Map<string, Promise<VcsStateNodeRef>>();
   private readonly contextInitializations = new Map<string, Promise<VcsStateNodeRef>>();
+  /** Exact materialization receipt verified during this host generation. An
+   * absent entry (including after restart) requires one disk integrity scan. */
+  private readonly verifiedProjectionStates = new Map<string, string>();
   private ensureFreshInFlight: Promise<{ stateHash: string }> | null = null;
 
   constructor(private readonly deps: WorkspaceVcsDeps) {
@@ -506,10 +510,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     switch (effect.kind) {
       case "observe-content":
         return this.observeContent(effect);
-      case "materialize-context":
-        return (await this.materializer.materialize(
-          effect.payload as unknown as ContextMaterializationCommand
-        )) as unknown as Record<string, unknown>;
+      case "materialize-context": {
+        const command = effect.payload as unknown as ContextMaterializationCommand;
+        const receipt = await this.materializer.materialize(command);
+        await this.rememberVerifiedProjection(command.contextId);
+        return receipt as unknown as Record<string, unknown>;
+      }
       case "publish-main":
         if (!publicationGateContext) {
           throw new Error("protected publication has no verified gate context");
@@ -647,6 +653,27 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   // Context lifecycle
   // -----------------------------------------------------------------------
 
+  /**
+   * Ensure only the durable semantic coordinate exists.
+   *
+   * Runtime activation needs this authority boundary, but it does not need an
+   * editable checkout. Filesystem consumers continue through ensureContext(),
+   * which materializes the disposable projection on first use.
+   */
+  async ensureSemanticContext(contextId: string): Promise<VcsStateNodeRef> {
+    const active = this.semanticContextInitializations.get(contextId);
+    if (active) return active;
+    const initialization = this.locked(`context-lifecycle:${contextId}`, () =>
+      this.dispatchEnsureContext(contextId, "deferred")
+    ).finally(() => {
+      if (this.semanticContextInitializations.get(contextId) === initialization) {
+        this.semanticContextInitializations.delete(contextId);
+      }
+    });
+    this.semanticContextInitializations.set(contextId, initialization);
+    return initialization;
+  }
+
   async ensureContext(contextId: string): Promise<VcsStateNodeRef> {
     const active = this.contextInitializations.get(contextId);
     if (active) return active;
@@ -662,8 +689,31 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private async ensureContextOnce(contextId: string): Promise<VcsStateNodeRef> {
+    const working = await this.dispatchEnsureContext(contextId, "required");
+    const materialized = await this.materializer.materializationState(contextId);
+    const materializedKey = materialized ? canonicalJson(materialized) : null;
+    const targetMatches =
+      materialized && canonicalJson(materialized.targetState) === canonicalJson(working);
+    const alreadyVerified =
+      materializedKey !== null && this.verifiedProjectionStates.get(contextId) === materializedKey;
+    if (
+      !targetMatches ||
+      (!alreadyVerified && !(await this.materializer.projectionMatches(materialized)))
+    ) {
+      await this.repairContextMaterialization(contextId);
+    } else if (materializedKey !== null && !alreadyVerified) {
+      this.verifiedProjectionStates.set(contextId, materializedKey);
+    }
+    return working;
+  }
+
+  private async dispatchEnsureContext(
+    contextId: string,
+    projection: "required" | "deferred"
+  ): Promise<VcsStateNodeRef> {
     this.projector.contextDir(contextId);
-    const commandId = `ensure-context:${sha256HexSyncText(
+    const operation = projection === "required" ? "ensure-context" : "ensure-context-coordinate";
+    const commandId = `${operation}:${sha256HexSyncText(
       canonicalJson({
         workspaceId: this.deps.workspaceId,
         contextId,
@@ -672,19 +722,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const result = await this.gad().call<SemanticDispatchResult>("vcsEnsureContext", {
       contextId,
       commandId,
+      ...(projection === "deferred" ? { projection } : {}),
       ingress: { causalParent: null },
     });
     const context = await this.drainSemanticResult<{
       working: { ref: VcsStateNodeRef };
     }>(result);
-    const materialized = await this.materializer.materializationState(contextId);
-    if (
-      !materialized ||
-      canonicalJson(materialized.targetState) !== canonicalJson(context.working.ref) ||
-      !(await this.materializer.projectionMatches(materialized))
-    ) {
-      await this.repairContextMaterialization(contextId);
-    }
     return context.working.ref;
   }
 
@@ -695,6 +738,16 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       { contextId, materializedState: current?.targetState ?? null }
     );
     await this.materializer.materialize(command);
+    await this.rememberVerifiedProjection(contextId);
+  }
+
+  private async rememberVerifiedProjection(contextId: string): Promise<void> {
+    const state = await this.materializer.materializationState(contextId);
+    if (!state) {
+      this.verifiedProjectionStates.delete(contextId);
+      return;
+    }
+    this.verifiedProjectionStates.set(contextId, canonicalJson(state));
   }
 
   async activateWorkspaceFromSource(): Promise<{
@@ -849,6 +902,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       // recoverable: semantic failure can rematerialize, while semantic
       // success can never be followed by a stale projection resurrection.
       await this.materializer.drop(contextId);
+      this.verifiedProjectionStates.delete(contextId);
       await this.gad().call("vcsDropContext", { contextId });
     });
   }

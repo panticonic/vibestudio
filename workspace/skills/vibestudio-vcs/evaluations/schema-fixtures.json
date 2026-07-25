@@ -282,6 +282,18 @@
       ]
     },
     {
+      "name": "list-immediate-directory",
+      "method": "listDirectory",
+      "valid": true,
+      "args": [
+        {
+          "state": { "kind": "event", "eventId": "event:1" },
+          "path": "projects/app/src",
+          "limit": 100
+        }
+      ]
+    },
+    {
       "name": "list-repository-files",
       "method": "listFiles",
       "valid": true,

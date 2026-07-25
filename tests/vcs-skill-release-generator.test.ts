@@ -18,7 +18,7 @@ describe("VCS skill release generator", () => {
   it("derives exactly the small public contract from the sole registry", () => {
     const contract = buildPublicContract();
     expect(Object.keys(contract.methods)).toEqual(Object.keys(vcsMethods));
-    expect(Object.keys(contract.methods)).toHaveLength(18);
+    expect(Object.keys(contract.methods)).toHaveLength(19);
     expect(contract.methods.move.description).toContain("stable file or repository identities");
     expect(contract.methods.copy.description).toContain("immediate coordinate provenance");
     expect(contract.methods.commit.description).toContain("complete local application chain");

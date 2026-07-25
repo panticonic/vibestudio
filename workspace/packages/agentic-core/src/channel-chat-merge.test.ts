@@ -841,6 +841,60 @@ describe("chatMessagesFromChannelView", () => {
     ]);
   });
 
+  it("replaces typing with a visible diagnostic for terminal tool-schema failures", () => {
+    const turnId = brandId<TurnId>("turn-invalid-tool-schema");
+    const messageId = brandId<MessageId>("msg-invalid-tool-schema");
+    const reason =
+      "Codex error: Invalid schema for function 'client_eval': True is not of type 'number'.";
+    const opened: AgenticEvent<"turn.opened"> = {
+      kind: "turn.opened",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const failed: AgenticEvent<"message.failed"> = {
+      kind: "message.failed",
+      actor: agent,
+      turnId,
+      causality: { messageId },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason,
+        recoverable: false,
+        code: "request_invalid_terminal",
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const closed: AgenticEvent<"turn.closed"> = {
+      kind: "turn.closed",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, reason: "work_failed" },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+
+    const state = [opened, failed, closed]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+    const messages = chatMessagesFromChannelView(state);
+
+    expect(messages).toEqual([
+      expect.objectContaining({
+        id: "diagnostic:msg-invalid-tool-schema",
+        contentType: "diagnostic",
+        complete: true,
+        diagnostic: expect.objectContaining({
+          title: "Invalid model request",
+          failureCode: "request_invalid_terminal",
+          detail: reason,
+          recoverable: false,
+        }),
+      }),
+    ]);
+    expect(messages.some((message) => message.contentType === "typing")).toBe(false);
+  });
+
   it("projects exhausted model retries with a specific title and code", () => {
     const messageId = brandId<MessageId>("diag-model-retries");
     const detail =

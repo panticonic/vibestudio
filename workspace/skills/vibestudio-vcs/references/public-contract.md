@@ -32,6 +32,7 @@ mutation except `push` advances an exact context working head; `commit` and
 | `vcs.blame` | `read` | Trace an exact bounded file range through immediate content-coordinate mappings. | `Unauthorized`, `InvalidReference`, `ScopeTooLarge`, `IntegrityFailure` |
 | `vcs.resolveRepository` | `read` | Resolve one canonical repository path at one exact semantic state. | `Unauthorized`, `InvalidReference`, `ScopeTooLarge`, `IntegrityFailure` |
 | `vcs.readFile` | `read` | Read one file from an exact semantic state. | `Unauthorized`, `InvalidReference`, `ScopeTooLarge`, `IntegrityFailure`, `ExternalEffectFailed` |
+| `vcs.listDirectory` | `read` | Page immediate visible children of one workspace directory with stable identities and attached name provenance. | `Unauthorized`, `InvalidReference`, `ScopeTooLarge`, `IntegrityFailure` |
 | `vcs.listFiles` | `read` | Page the exact path-to-file manifest of one repository at one semantic state. | `Unauthorized`, `InvalidReference`, `ScopeTooLarge`, `IntegrityFailure` |
 
 ## Typed error codes

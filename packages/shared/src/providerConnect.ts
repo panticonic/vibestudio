@@ -243,7 +243,13 @@ export function toPanelConnectRequest(
   providerId: string,
   opts?: { browser?: "internal" | "external" }
 ): ConnectCredentialRequest | null {
-  return toCredentialConnectRequest(providerId, opts);
+  return toCredentialConnectRequest(providerId, {
+    ...opts,
+    // A panel's primary OAuth path is the system browser. Internal/workspace
+    // browsing remains an explicit user choice because it creates another
+    // workspace panel and uses that panel's isolated browser session.
+    browser: opts?.browser ?? "external",
+  });
 }
 
 /**

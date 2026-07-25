@@ -1,6 +1,9 @@
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import { describe, expect, it, vi } from "vitest";
 import { EventService } from "@vibestudio/shared/eventsService";
+import internalDoExecutionCatalog from "../internalDOs/internalDoExecutionCatalog.json";
 import { createExternalOpenService } from "./externalOpenService.js";
 
 const panelCaller = () =>
@@ -33,6 +36,84 @@ describe("externalOpenService", () => {
         }),
       ]
     );
+  });
+
+  it("preflights the prepared destination without requiring a receiver-selected requirement", async () => {
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(createExternalOpenService({ eventService: new EventService() }));
+    dispatcher.markInitialized();
+    const caller = createVerifiedCaller("panel-1", "panel", {
+      callerId: "panel-1",
+      callerKind: "panel",
+      repoPath: "panels/example",
+      effectiveVersion: "version-1",
+      executionDigest: "a".repeat(64),
+      requested: [
+        {
+          capability: "external.open",
+          resource: { kind: "prefix", prefix: "" },
+        },
+      ],
+    });
+
+    await expect(
+      dispatcher.preflightAuthority({ caller }, "externalOpen", "openExternal", [
+        "https://example.com/settings",
+      ])
+    ).resolves.toMatchObject({
+      decision: "allowed",
+      leaves: [
+        {
+          capability: "service:externalOpen.openExternal",
+          resourceKey: "external.open",
+          status: "granted",
+        },
+        {
+          capability: "external.open",
+          resourceKey: "https://example.com",
+          status: "granted",
+        },
+      ],
+    });
+  });
+
+  it("preflights GitHub from the product EvalDO authority envelope", async () => {
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(createExternalOpenService({ eventService: new EventService() }));
+    dispatcher.markInitialized();
+    const evalAuthority = parseUnitAuthorityManifest(
+      internalDoExecutionCatalog.classes.EvalDO,
+      "EvalDO authority"
+    );
+    const runtimeId = "do:vibestudio/internal:EvalDO:agent-channel";
+    const caller = createVerifiedCaller(runtimeId, "do", {
+      callerId: runtimeId,
+      callerKind: "do",
+      repoPath: "vibestudio/internal",
+      effectiveVersion: "version-1",
+      executionDigest: "b".repeat(64),
+      requested: evalAuthority.requests,
+    });
+
+    await expect(
+      dispatcher.preflightAuthority({ caller }, "externalOpen", "openExternal", [
+        "https://github.com/settings/personal-access-tokens/new",
+      ])
+    ).resolves.toMatchObject({
+      decision: "allowed",
+      leaves: [
+        {
+          capability: "service:externalOpen.openExternal",
+          resourceKey: "external.open",
+          status: "granted",
+        },
+        {
+          capability: "external.open",
+          resourceKey: "https://github.com",
+          status: "granted",
+        },
+      ],
+    });
   });
 
   it("does not add an approval leaf for a host/user transport", async () => {

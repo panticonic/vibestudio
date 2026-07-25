@@ -189,6 +189,7 @@ import { RemoteCdpHostProviderSocket } from "./remoteCdpHostProviderSocket.js";
 import { HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT } from "@vibestudio/shared/hostTargetLaunchGate";
 import { resolveGatewayRouteUrl } from "@vibestudio/shared/appArtifacts";
 import {
+  bindHostDirectServerEvents,
   createServerEventBridge,
   notificationAttention,
   type ServerHostTargetChangeEvent,
@@ -2175,6 +2176,7 @@ app.on("ready", async () => {
       throw error;
     }
     serverClientRef = serverSession.serverClient;
+    bindHostDirectServerEvents(serverClientRef, handleServerEvent);
     await serverEventSubscriptions.retainAll([
       "build:complete",
       "apps:available",

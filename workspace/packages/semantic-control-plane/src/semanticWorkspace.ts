@@ -15,6 +15,8 @@ import {
   type VcsImportSnapshotInput,
   type VcsInspectInput,
   type VcsIntegrateInput,
+  type VcsListDirectoryInput,
+  type VcsListDirectoryResult,
   type VcsListFilesInput,
   type VcsMethodName,
   type VcsMoveInput,
@@ -1113,6 +1115,11 @@ export class SemanticWorkspace {
         };
       case "readFile":
         return this.readFile(parsed as VcsReadFileInput, request);
+      case "listDirectory":
+        return {
+          kind: "complete",
+          result: this.listDirectory(parsed as VcsListDirectoryInput),
+        };
       case "listFiles":
         return { kind: "complete", result: this.listFiles(parsed as VcsListFilesInput, request) };
     }
@@ -1254,13 +1261,38 @@ export class SemanticWorkspace {
     input: { contextId: string; commandId: string },
     ingress: SemanticDispatchRequest["ingress"]
   ): SemanticDispatchResult {
+    return this.ensureContextWithProjection(input, ingress, "required");
+  }
+
+  /**
+   * Establish the durable context frontier without requesting disposable host
+   * projection bytes. Runtime entities use this attachment boundary; the first
+   * filesystem consumer later calls the projected ensure path above.
+   */
+  ensureContextCoordinate(
+    input: { contextId: string; commandId: string },
+    ingress: SemanticDispatchRequest["ingress"]
+  ): SemanticDispatchResult {
+    return this.ensureContextWithProjection(input, ingress, "deferred");
+  }
+
+  private ensureContextWithProjection(
+    input: { contextId: string; commandId: string },
+    ingress: SemanticDispatchRequest["ingress"],
+    projection: "required" | "deferred"
+  ): SemanticDispatchResult {
     return this.deps.transaction(() => {
       const existing = this.deps.store.beginCommand({
         scopeKind: "context",
         scopeId: input.contextId,
         commandId: input.commandId,
-        method: "ensure-context",
-        requestDigest: compactId("ensure-context-request", input),
+        method: projection === "required" ? "ensure-context" : "ensure-context-coordinate",
+        requestDigest: compactId(
+          projection === "required"
+            ? "ensure-context-request"
+            : "ensure-context-coordinate-request",
+          input
+        ),
         cause: causalCommandRef(ingress),
       });
       if (existing) {
@@ -1287,7 +1319,7 @@ export class SemanticWorkspace {
       const existingContext = this.deps.store.context(input.contextId);
       const context =
         existingContext ?? this.deps.store.ensureContext(input.contextId, input.commandId);
-      if (existingContext) {
+      if (existingContext || projection === "deferred") {
         this.deps.store.finishCommand({
           scopeKind: "context",
           scopeId: input.contextId,
@@ -1393,6 +1425,7 @@ export class SemanticWorkspace {
       blame: true,
       resolveRepository: true,
       readFile: true,
+      listDirectory: true,
       listFiles: true,
     };
   }
@@ -3374,6 +3407,280 @@ export class SemanticWorkspace {
     };
   }
 
+  private repositoryLineages(
+    repositoryIds: readonly string[]
+  ): Map<
+    string,
+    {
+      authoredChangeId: null;
+      authoredByWorkUnitId: string;
+      contentClass: "internal" | "external";
+      externalKeys: string[];
+    }
+  > {
+    if (repositoryIds.length === 0) return new Map();
+    const rows = this.deps.sql
+      .exec(
+        `SELECT repository.repository_id, repository.created_work_unit_id,
+                work.content_class, work.external_lineage_json
+           FROM vcs_repositories repository
+           JOIN gad_work_units work
+             ON work.work_unit_id = repository.created_work_unit_id
+           JOIN json_each(?) selected
+             ON CAST(selected.value AS TEXT) = repository.repository_id`,
+        canonicalJson([...new Set(repositoryIds)])
+      )
+      .toArray() as Row[];
+    const result = new Map<
+      string,
+      {
+        authoredChangeId: null;
+        authoredByWorkUnitId: string;
+        contentClass: "internal" | "external";
+        externalKeys: string[];
+      }
+    >();
+    for (const row of rows) {
+      const repositoryId = String(row["repository_id"]);
+      const contentClass = row["content_class"];
+      const externalKeys = JSON.parse(String(row["external_lineage_json"]));
+      if (
+        (contentClass !== "internal" && contentClass !== "external") ||
+        !Array.isArray(externalKeys) ||
+        !externalKeys.every((key) => typeof key === "string")
+      ) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `Repository ${repositoryId} has invalid persisted authoring lineage`
+        );
+      }
+      result.set(repositoryId, {
+        authoredChangeId: null,
+        authoredByWorkUnitId: String(row["created_work_unit_id"]),
+        contentClass,
+        externalKeys,
+      });
+    }
+    return result;
+  }
+
+  /**
+   * Return only names visible at one directory boundary.
+   *
+   * Repository paths come from the workspace's lexical live-path index. File
+   * names come from the repository manifest radix. When a manifest child is a
+   * directory, the first live file below that child is its exact existence
+   * witness and the radix cursor jumps to the lexical successor of the whole
+   * subtree. Consequently listing a directory performs work proportional to
+   * visible children, never to descendant files.
+   */
+  private listDirectory(input: VcsListDirectoryInput): VcsListDirectoryResult {
+    const state = asState(input.state);
+    const root = this.deps.store.stateRoot(state);
+    const normalizedPath = input.path.replace(/^\/+|\/+$/gu, "");
+    if (normalizedPath !== input.path) {
+      throw new SemanticVcsError("InvalidReference", "Directory path is not canonical");
+    }
+    const cursorBasis = { state: input.state, path: normalizedPath };
+    const cursorPosition = parseSemanticCursor(
+      input.cursor,
+      "list-directory",
+      cursorBasis
+    );
+    const afterName = cursorPosition?.["name"];
+    const afterKind = cursorPosition?.["kind"];
+    if (
+      (afterName !== undefined && typeof afterName !== "string") ||
+      (afterKind !== undefined && afterKind !== "file" && afterKind !== "directory")
+    ) {
+      throw new SemanticVcsError("InvalidReference", "Invalid list-directory cursor position");
+    }
+
+    const repositories: PresentRepositoryState[] = [];
+    let afterRepoPath: string | undefined;
+    do {
+      const page = this.deps.store.facts.page(root, "live-path", {
+        ...(afterRepoPath ? { afterKey: afterRepoPath } : {}),
+        limit: 500,
+      });
+      for (const { key: repoPath, value: repositoryId } of page.values) {
+        const repository = this.deps.store.facts.member(root, repositoryId);
+        if (
+          !repository ||
+          repository.presence !== "present" ||
+          repository.repoPath !== repoPath
+        ) {
+          throw new SemanticVcsError(
+            "IntegrityFailure",
+            `Live repository path ${repoPath} has no exact present member`
+          );
+        }
+        repositories.push(repository);
+      }
+      afterRepoPath = page.next ?? undefined;
+    } while (afterRepoPath);
+
+    const containingRepository = repositories
+      .filter(
+        (repository) =>
+          normalizedPath === repository.repoPath ||
+          normalizedPath.startsWith(`${repository.repoPath}/`)
+      )
+      .sort((left, right) => right.repoPath.length - left.repoPath.length)[0];
+
+    type VisibleCandidate = {
+      name: string;
+      path: string;
+      kind: "file" | "directory";
+      identity: string;
+      repositoryId: string;
+      repositoryRoot: boolean;
+      fileId: string | null;
+      witnessFileId?: string;
+    };
+    let candidates: VisibleCandidate[] = [];
+
+    if (containingRepository) {
+      const relativeDirectory =
+        normalizedPath === containingRepository.repoPath
+          ? ""
+          : normalizedPath.slice(containingRepository.repoPath.length + 1);
+      const prefix = relativeDirectory ? `${relativeDirectory}/` : "";
+      let afterPath =
+        typeof afterName === "string"
+          ? afterKind === "directory"
+            ? undefined
+            : `${prefix}${afterName}`
+          : undefined;
+      let atOrAfterPath =
+        typeof afterName === "string" && afterKind === "directory"
+          ? `${prefix}${afterName}0`
+          : undefined;
+      while (candidates.length <= input.limit) {
+        const page = this.deps.store.facts.pageManifest(
+          containingRepository.fileManifestId,
+          {
+            ...(afterPath ? { afterPath } : {}),
+            ...(atOrAfterPath ? { atOrAfterPath } : {}),
+            ...(prefix ? { prefix } : {}),
+            limit: 1,
+          }
+        );
+        const manifestEntry = page.values[0];
+        if (!manifestEntry) break;
+        const remainder = manifestEntry.path.slice(prefix.length);
+        const slash = remainder.indexOf("/");
+        const name = slash === -1 ? remainder : remainder.slice(0, slash);
+        const entryPath = normalizedPath ? `${normalizedPath}/${name}` : name;
+        const isDirectory = slash !== -1;
+        candidates.push({
+          name,
+          path: entryPath,
+          kind: isDirectory ? "directory" : "file",
+          identity: isDirectory
+            ? compactId("directory", {
+                repositoryId: containingRepository.repositoryId,
+                path: manifestEntry.path.slice(0, prefix.length + name.length),
+              })
+            : `file:${manifestEntry.fileId}`,
+          repositoryId: containingRepository.repositoryId,
+          repositoryRoot: false,
+          fileId: isDirectory ? null : manifestEntry.fileId,
+          witnessFileId: manifestEntry.fileId,
+        });
+        if (isDirectory) {
+          afterPath = undefined;
+          atOrAfterPath = `${prefix}${name}0`;
+        } else {
+          afterPath = manifestEntry.path;
+          atOrAfterPath = undefined;
+        }
+      }
+    } else {
+      const prefix = normalizedPath ? `${normalizedPath}/` : "";
+      const grouped = new Map<string, PresentRepositoryState>();
+      for (const repository of repositories) {
+        if (!repository.repoPath.startsWith(prefix)) continue;
+        const remainder = repository.repoPath.slice(prefix.length);
+        const name = remainder.split("/")[0];
+        if (!name || (afterName !== undefined && compareUtf16CodeUnits(name, afterName) <= 0)) {
+          continue;
+        }
+        if (!grouped.has(name)) grouped.set(name, repository);
+      }
+      candidates = [...grouped.entries()]
+        .sort(([left], [right]) => compareUtf16CodeUnits(left, right))
+        .slice(0, input.limit + 1)
+        .map(([name, repository]) => {
+          const entryPath = normalizedPath ? `${normalizedPath}/${name}` : name;
+          return {
+            name,
+            path: entryPath,
+            kind: "directory",
+            identity: compactId("directory", { path: entryPath }),
+            repositoryId: repository.repositoryId,
+            repositoryRoot: entryPath === repository.repoPath,
+            fileId: null,
+          };
+        });
+      if (candidates.length === 0 && normalizedPath !== "") return null;
+    }
+
+    if (candidates.length === 0 && containingRepository && normalizedPath !== containingRepository.repoPath) {
+      return null;
+    }
+    const fileWitnesses = candidates.flatMap((candidate) =>
+      candidate.witnessFileId ? [candidate.witnessFileId] : []
+    );
+    const fileLineages = this.fileLineagesAt(state, fileWitnesses);
+    const repositoryLineages = this.repositoryLineages(
+      candidates
+        .filter((candidate) => !candidate.witnessFileId)
+        .map((candidate) => candidate.repositoryId)
+    );
+    const page = candidates.slice(0, input.limit);
+    const entries = page.map((candidate) => {
+      const fileLineage = candidate.witnessFileId
+        ? fileLineages.get(candidate.witnessFileId)
+        : undefined;
+      const lineage = fileLineage ?? repositoryLineages.get(candidate.repositoryId);
+      if (!lineage) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `Visible entry ${candidate.path} has no authoring lineage`
+        );
+      }
+      return {
+        name: candidate.name,
+        path: candidate.path,
+        kind: candidate.kind,
+        identity: candidate.identity,
+        repositoryId: candidate.repositoryId,
+        repositoryRoot: candidate.repositoryRoot,
+        fileId: candidate.fileId,
+        lineage: {
+          authoredChangeId: fileLineage?.authoredChangeId ?? null,
+          authoredByWorkUnitId: lineage.authoredByWorkUnitId,
+          contentClass: lineage.contentClass,
+          externalKeys: lineage.externalKeys,
+        },
+      };
+    });
+    const last = page.at(-1);
+    return {
+      state: input.state,
+      path: normalizedPath,
+      entries,
+      nextCursor:
+        candidates.length > input.limit && last
+          ? semanticCursor("list-directory", cursorBasis, {
+              name: last.name,
+              kind: last.kind,
+            })
+          : null,
+    };
+  }
+
   private fileLineageAt(
     state: StateNodeRef,
     fileId: string
@@ -3383,38 +3690,121 @@ export class SemanticWorkspace {
     contentClass: "internal" | "external";
     externalKeys: string[];
   } {
-    const provenance = this.latestAppliedChangeForFile(state, fileId);
-    if (!provenance) {
+    const lineage = this.fileLineagesAt(state, [fileId]).get(fileId);
+    if (!lineage) {
       throw new SemanticVcsError("IntegrityFailure", `File ${fileId} has no authoring work unit`);
     }
-    const workUnit = this.deps.sql
+    return lineage;
+  }
+
+  /**
+   * Resolve the latest exact authoring work unit for a page of files in one
+   * ancestry query. The former per-file loop repeated the complete
+   * first-parent walk and two SQL lookups for every listed file, turning a
+   * directory-name provenance check into hundreds of serialized semantic
+   * calls. This query preserves the same ordering rule as
+   * `latestAppliedChangeForFile`: newest application, then newest applied
+   * change within that application.
+   */
+  private fileLineagesAt(
+    state: StateNodeRef,
+    fileIds: readonly string[]
+  ): Map<
+    string,
+    {
+      authoredChangeId: string;
+      authoredByWorkUnitId: string;
+      contentClass: "internal" | "external";
+      externalKeys: string[];
+    }
+  > {
+    if (fileIds.length === 0) return new Map();
+    const applications = this.firstParentLineage(state).applicationIds;
+    const rows = this.deps.sql
       .exec(
-        `SELECT content_class, external_lineage_json FROM gad_work_units WHERE work_unit_id = ?`,
-        provenance.workUnitId
+        `WITH selected_applications AS (
+           SELECT CAST(key AS INTEGER) AS application_ordinal,
+                  CAST(value AS TEXT) AS application_id
+             FROM json_each(?)
+         ),
+         selected_files AS (
+           SELECT CAST(value AS TEXT) AS file_id FROM json_each(?)
+         ),
+         candidates AS (
+           SELECT coordinate.file_id, applied.applied_change_id, applied.ordinal,
+                  selected.application_ordinal, change.change_id, change.work_unit_id,
+                  work.content_class, work.external_lineage_json
+             FROM selected_applications selected
+             JOIN gad_applied_changes applied
+               ON applied.application_id = selected.application_id
+             JOIN gad_changes change ON change.change_id = applied.change_id
+             JOIN gad_work_units work ON work.work_unit_id = change.work_unit_id
+             JOIN gad_change_coordinates coordinate ON coordinate.change_id = change.change_id
+             JOIN selected_files file ON file.file_id = coordinate.file_id
+           UNION
+           SELECT CAST(json_extract(predicate.predicate_json, '$.fileId') AS TEXT),
+                  applied.applied_change_id, applied.ordinal,
+                  selected.application_ordinal, change.change_id, change.work_unit_id,
+                  work.content_class, work.external_lineage_json
+             FROM selected_applications selected
+             JOIN gad_applied_changes applied
+               ON applied.application_id = selected.application_id
+             JOIN gad_changes change ON change.change_id = applied.change_id
+             JOIN gad_work_units work ON work.work_unit_id = change.work_unit_id
+             JOIN gad_applied_change_predicates predicate
+               ON predicate.applied_change_id = applied.applied_change_id
+             JOIN selected_files file
+               ON file.file_id =
+                  CAST(json_extract(predicate.predicate_json, '$.fileId') AS TEXT)
+         ),
+         ranked AS (
+           SELECT *,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY file_id
+                    ORDER BY application_ordinal DESC, ordinal DESC
+                  ) AS lineage_rank
+             FROM candidates
+         )
+         SELECT file_id, change_id, work_unit_id, content_class, external_lineage_json
+           FROM ranked
+          WHERE lineage_rank = 1`,
+        canonicalJson(applications),
+        canonicalJson([...new Set(fileIds)])
       )
-      .toArray()[0] as Row | undefined;
-    if (
-      !workUnit ||
-      (workUnit["content_class"] !== "internal" && workUnit["content_class"] !== "external")
-    ) {
-      throw new SemanticVcsError(
-        "IntegrityFailure",
-        `File ${fileId} has no valid persisted content class`
-      );
+      .toArray() as Row[];
+    const result = new Map<
+      string,
+      {
+        authoredChangeId: string;
+        authoredByWorkUnitId: string;
+        contentClass: "internal" | "external";
+        externalKeys: string[];
+      }
+    >();
+    for (const row of rows) {
+      const fileId = String(row["file_id"]);
+      const contentClass = row["content_class"];
+      if (contentClass !== "internal" && contentClass !== "external") {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `File ${fileId} has no valid persisted content class`
+        );
+      }
+      const externalKeys = JSON.parse(String(row["external_lineage_json"]));
+      if (!Array.isArray(externalKeys) || !externalKeys.every((key) => typeof key === "string")) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `File ${fileId} has invalid persisted external lineage`
+        );
+      }
+      result.set(fileId, {
+        authoredChangeId: String(row["change_id"]),
+        authoredByWorkUnitId: String(row["work_unit_id"]),
+        contentClass,
+        externalKeys,
+      });
     }
-    const externalKeys = JSON.parse(String(workUnit["external_lineage_json"]));
-    if (!Array.isArray(externalKeys) || !externalKeys.every((key) => typeof key === "string")) {
-      throw new SemanticVcsError(
-        "IntegrityFailure",
-        `File ${fileId} has invalid persisted external lineage`
-      );
-    }
-    return {
-      authoredChangeId: provenance.changeId,
-      authoredByWorkUnitId: provenance.workUnitId,
-      contentClass: workUnit["content_class"] as "internal" | "external",
-      externalKeys: externalKeys as string[],
-    };
+    return result;
   }
 
   private listFiles(input: VcsListFilesInput, request: SemanticDispatchRequest): Row {
@@ -3434,20 +3824,33 @@ export class SemanticWorkspace {
       afterPath,
       limit: input.limit,
     });
-    const files = page.values
+    const states = page.values
       .filter((value) => !input.prefix || value.path.startsWith(input.prefix))
       .map(({ fileId }) => this.deps.store.facts.file(root, fileId)?.state)
-      .filter((state): state is PlacedFileState => state?.presence === "placed")
-      .map((state) => ({
+      .filter((state): state is PlacedFileState => state?.presence === "placed");
+    const lineages = this.fileLineagesAt(
+      asState(input.state),
+      states.map((state) => state.fileId)
+    );
+    const files = states.map((state) => {
+      const lineage = lineages.get(state.fileId);
+      if (!lineage) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `File ${state.fileId} has no authoring work unit`
+        );
+      }
+      return {
         fileId: state.fileId,
         path: state.path,
         contentHash: state.contentHash,
-        ...this.fileLineageAt(asState(input.state), state.fileId),
+        ...lineage,
         mode: state.mode,
         contentKind: state.contentKind,
         byteLength: state.byteLength,
         coordinateExtent: state.coordinateExtent,
-      }));
+      };
+    });
     return {
       state: input.state,
       repositoryId: input.repositoryId,

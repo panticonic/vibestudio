@@ -1,4 +1,5 @@
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
+import { fixedPreparedAuthorityRequirement } from "@vibestudio/shared/typedServiceClient";
 import type { PrincipalKind } from "@vibestudio/shared/authorization";
 
 export const CONTEXT_BOUNDARY_CAPABILITY = "context.boundary" as const;
@@ -22,9 +23,11 @@ export function contextBoundaryAuthority(input: {
       leaves: [
         {
           capability: CONTEXT_BOUNDARY_CAPABILITY,
-          requirement: requirementForPrincipals(
-            ["host", "user", "code"],
-            CONTEXT_BOUNDARY_CAPABILITY
+          requirement: fixedPreparedAuthorityRequirement(
+            requirementForPrincipals(
+              ["host", "user", "code"],
+              CONTEXT_BOUNDARY_CAPABILITY
+            )
           ),
           tier: input.tier,
         },

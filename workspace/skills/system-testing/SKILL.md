@@ -242,7 +242,7 @@ model, so a provider failure remains visible instead of silently changing the
 experiment. An explicit model override is only for model-specific diagnosis.
 
 One named agent session owns one EvalDO notebook: its live heap is retained for
-30 minutes after the latest cell and its exact durable scope is cold-recovered, so eval work is
+while its kernel activation remains resident and its exact durable scope is cold-recovered, so eval work is
 intentionally FIFO. Concurrent CLI `inspect` and `trajectory` requests wait on
 that same admission queue and inherit caller cancellation; they do not fail
 merely because another read is active and they have no fixed wait deadline.

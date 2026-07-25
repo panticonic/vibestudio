@@ -145,6 +145,8 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         class_name TEXT NOT NULL,
         object_key TEXT NOT NULL,
         wake_at INTEGER NOT NULL,
+        dispatch_generation INTEGER NOT NULL DEFAULT 0,
+        dispatch_owner TEXT,
         PRIMARY KEY (source, class_name, object_key)
       )
     `);
@@ -154,6 +156,16 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         class_name TEXT NOT NULL,
         object_key TEXT NOT NULL,
         test_policy_json TEXT NOT NULL,
+        PRIMARY KEY (source, class_name, object_key)
+      )
+    `);
+    sql.exec(`
+      CREATE TABLE IF NOT EXISTS durable_work_owners (
+        source TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        object_key TEXT NOT NULL,
+        queues_json TEXT NOT NULL,
+        registered_at INTEGER NOT NULL,
         PRIMARY KEY (source, class_name, object_key)
       )
     `);

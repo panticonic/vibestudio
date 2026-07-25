@@ -22,6 +22,14 @@ export default defineConfig({
         replacement: path.resolve(__dirname, "node_modules/react-dom/$1"),
       },
       {
+        find: /^@testing-library\/react$/,
+        replacement: path.resolve(__dirname, "node_modules/@testing-library/react/dist/index.js"),
+      },
+      {
+        find: /^@testing-library\/react\/(.+)$/,
+        replacement: path.resolve(__dirname, "node_modules/@testing-library/react/$1"),
+      },
+      {
         find: /^react-native$/,
         replacement: path.resolve(__dirname, "tests/stubs/reactNative.ts"),
       },
@@ -95,6 +103,8 @@ export default defineConfig({
           /node_modules\/\.pnpm\/@radix-ui\+/,
           /node_modules\/\.pnpm\/radix-ui@/,
           /node_modules\/\.pnpm\/jotai@/,
+          /node_modules\/@testing-library\/react/,
+          /node_modules\/react-dom/,
           /node_modules\/use-stick-to-bottom/,
         ],
       },

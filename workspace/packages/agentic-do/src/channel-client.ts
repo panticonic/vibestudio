@@ -260,9 +260,9 @@ export class ChannelClient {
           if (record.kind === "subscribed") {
             throw new Error("Channel subscription sent more than one ACK");
           }
-          // Agent vessels receive live data through onChannelEnvelope. Draining
-          // this response owns their exact session lifetime; it is not a second
-          // semantic delivery path.
+          // Agent vessels receive live data through host-claimed durable
+          // batches. Draining this response owns their exact session lifetime;
+          // it is not a second semantic delivery path.
         }
       } catch (error) {
         // An acknowledged release/leave aborts the local response body after
@@ -309,12 +309,14 @@ export class ChannelClient {
   async getParticipants(): Promise<
     Array<{
       participantId: string;
+      ref: import("@workspace/agentic-protocol").ParticipantRef;
       metadata: Record<string, unknown>;
     }>
   > {
     return this.call("getParticipants") as Promise<
       Array<{
         participantId: string;
+        ref: import("@workspace/agentic-protocol").ParticipantRef;
         metadata: Record<string, unknown>;
       }>
     >;

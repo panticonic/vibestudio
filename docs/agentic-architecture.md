@@ -1,46 +1,44 @@
-# Agentic Architecture: Channels, Workers, and In-Process Pi
+# Agentic Architecture: Channels, Durable Work, and In-Process Pi
 
-> ⚠️ **Table-level detail predates the Unified Log rework.** The topology and
-> event flow below still hold, but persistence is migrating to the unified
-> log model (`docs/stage0-unified-log-spec.md`, `docs/ws1-agent-loop-spec.md`,
-> `docs/ws2-channel-spec.md`): storage of record is `log_heads`/`log_events`
-> with `trajectory_*` projections in
-> `workspace/packages/semantic-control-plane/src/index.ts`.
-> Read the `pi_sessions`/`delivery_cursor`/`pending_calls` DO-table detail as
-> historical; the specs win where they disagree.
+> **Landed model (2026-07-25).** GAD is semantic authority; channel and agent
+> SQLite queues are reconstructible durable projections; alarms schedule
+> deadlines and recovery only; and the host `DurableWorkDriver` owns long
+> execution. Historical detail later in this document does not override
+> `docs/agentic-hot-path-work-dispatch-plan.md`.
 
 ## Overview
 
-Vibestudio's agentic system is a 2-layer server-side architecture. Pi
+Vibestudio's agentic system is a three-part server-side architecture. Pi
 (`@mariozechner/pi-coding-agent`) runs **in-process** inside each agent
 worker DO — there is no harness child process layer.
 
 ```
-Panel (browser)          Channel DO (workerd)     Worker DO (workerd, embeds Pi)
-     │                        │                        │
-     │── user message ───────►│── onChannelEvent ──────►│
-     │                        │                        │── runner.runTurn(content) ──┐
-     │                        │                        │                              │
-     │                        │                        │  Pi AgentSession streams     │
-     │                        │                        │  events in-process           │
-     │                        │                        │                              │
-     │                        │◄── persisted trajectory events ◄─────────────┘
-     │◄── channel log event ──│   (message.started/delta/completed,
-     │                        │    invocation.*, turn.*)
-     │                        │                        │
-     │── method-result ──────►│── persisted event ─────►│── resolve continuation Promise
-     │                        │                        │
+Panel          Channel DO             Host driver             Agent vessel / GAD
+  │ publish        │                       │                         │
+  │───────────────►│ append log + queue    │                         │
+  │                │── work-ready hint ───►│                         │
+  │                │◄── claim batch ───────│                         │
+  │                │                       │── acceptChannelBatch ──►│ local inbox commit
+  │                │◄── exact settlement ──│                         │
+  │                │                       │── claim inbox/effect ──►│ fold + Pi/tool execution
+  │                │                       │                         │── append outcome to GAD
+  │◄── log event ──│◄───────────────────────────────────────────────│
 ```
 
 - **Channel DO** — workspace-authored service. Forkable
   history, `this.sql`-backed message storage, participant roster, ephemeral and
   persisted message routing. Enforces participant handle uniqueness so the
   channel-tools extension can use bare method names without collision.
-- **Worker DO** — `workspace/packages/agentic-do/src/agent-worker-base.ts`.
-  Owns one `PiRunner` per channel; Pi's `AgentSession` runs in-process.
-  `PiRunner` converts Pi lifecycle events into canonical
-  `agentic.trajectory.v1` events, appends them to GAD, and publishes selected
-  events to the channel log for transcript consumers.
+- **Agent vessel DO** —
+  `workspace/packages/agentic-do/src/agent-vessel.ts`. Owns folded loop state
+  per subscribed channel and executes host-held inbox/effect claims. The pure
+  loop derives deterministic intentions; Pi remains in-process.
+- **Host durable-work driver** —
+  `src/server/services/durableWorkDriver.ts`. Consumes disposable receipts,
+  scans the owner registry for recovery, and drives bounded,
+  generation-fenced claims outside alarm activations.
+- **GAD** — owns trajectory order, head CAS, intentions, and terminal events.
+  Local inbox and effect rows are projections.
 
 ## Key design principle: trajectory events are the transcript source
 
@@ -60,12 +58,12 @@ transcript.
 ### Channel event flow
 
 1. User/panel messages are published as durable `message.completed` events.
-2. `AgentWorkerBase.shouldProcess()` accepts client-originated
-   `message.completed` events and turns them into `PiRunner` input.
-3. `PiRunner` listens to Pi `message_start`, `message_update`, `message_end`,
-   tool, and turn lifecycle events.
-4. `PiRunner.appendTrajectoryEvents()` writes canonical trajectory events to
-   GAD and asks GAD to publish selected events to the channel.
+2. `acceptChannelBatch` atomically admits incarnation-addressed structured
+   delivery; the host claims one inbox transition per channel lane.
+3. `AgentLoopDriver` folds the trajectory and executes claimed Pi model, tool,
+   and turn transitions.
+4. The driver appends canonical trajectory outcomes to GAD; selected events
+   publish to the channel from that authoritative append.
 5. `useChannelMessages()` subscribes to replay + live channel events and
    reduces them into `ChatMessage[]`.
 
@@ -74,19 +72,20 @@ transcript.
 **DurableObjectBase** — generic DO foundation (~150 lines).
 Location: `workspace/packages/runtime/src/worker/durable-base.ts`
 
-**AgentWorkerBase** — Pi-native agent base extending DurableObjectBase.
-Location: `workspace/packages/agentic-do/src/agent-worker-base.ts`
+**AgentVesselBase** — event-sourced Pi-native agent base extending
+DurableObjectBase.
+Location: `workspace/packages/agentic-do/src/agent-vessel.ts`
 
 ### Customization hooks (Pi-native)
 
-| Hook                          | Default                                                                  | Purpose                                                                                   |
-| ----------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| Hook                          | Default                                                                      | Purpose                                                                                   |
+| ----------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `getDefaultModel()`           | subclass override required; `AiChatWorker` uses `"openai-codex:gpt-5.6-sol"` | Default model id in `provider:model` format; subscription config can override per channel |
-| `getDefaultThinkingLevel()`   | `"medium"`                                                               | Default Pi thinking level; state/config can override per channel                          |
-| `getApprovalLevel(channelId)` | `2` (full auto)                                                          | 0 = ask all, 1 = auto safe tools, 2 = full auto                                           |
-| `shouldProcess(event)`        | Panel messages only                                                      | Filter incoming channel events                                                            |
-| `buildTurnInput(event)`       | Extract content                                                          | Transform to TurnInput                                                                    |
-| `getParticipantInfo()`        | Generic agent                                                            | Channel identity + advertised methods                                                     |
+| `getDefaultThinkingLevel()`   | `"medium"`                                                                   | Default Pi thinking level; state/config can override per channel                          |
+| `getApprovalLevel(channelId)` | `2` (full auto)                                                              | 0 = ask all, 1 = auto safe tools, 2 = full auto                                           |
+| `shouldProcess(event)`        | Panel messages only                                                          | Filter incoming channel events                                                            |
+| `buildTurnInput(event)`       | Extract content                                                              | Transform to TurnInput                                                                    |
+| `getParticipantInfo()`        | Generic agent                                                                | Channel identity + advertised methods                                                     |
 
 The final prompt is composed from the Vibestudio base prompt,
 `workspace/meta/AGENTS.md`, the generated skill index, and optional
@@ -96,18 +95,17 @@ cross-repo workflow skills or skills that are themselves reusable code packages.
 
 ### Durable Object SQL Tables
 
-| Table             | Purpose                                                               |
-| ----------------- | --------------------------------------------------------------------- |
-| `state`           | Key-value store (approval level per channel, fork metadata)           |
-| `subscriptions`   | Channel subscriptions + participant ID                                |
-| `pi_sessions`     | Per-channel Pi session JSONL file path (for restart resume)           |
-| `delivery_cursor` | Last-processed channel event id (dedup + gap detection)               |
-| `pending_calls`   | Promise continuations for tool callMethod and UI feedback_form awaits |
+| Table               | Purpose                                                         |
+| ------------------- | --------------------------------------------------------------- |
+| `state`             | Key-value configuration and operational metadata                |
+| `subscriptions`     | Channel membership and exact vessel incarnation                 |
+| `agent_inbox_queue` | Incarnation-fenced channel and internal transitions with leases |
+| `effect_outbox`     | Deterministic effect projection with owner/generation/expiry    |
+| `subagent_runs`     | Durable subagent supervision index                              |
 
-That's it. Pi tracks turn state, message state, and session branching itself
-inside `AgentSession`. The previous architecture's `harnesses`, `active_turns`,
-`in_flight_turns`, `queued_turns`, `checkpoints`, and `turn_map` tables are
-gone.
+Conversation and turn authority does not live in those tables; it is folded
+from GAD. Successful progress never waits for an alarm floor, stale sweep,
+lease expiry, or recovery scan.
 
 ## Where State Lives
 
@@ -208,16 +206,16 @@ Vibestudio-bound.
 
 ## Package map
 
-| Package                      | Location                              | Contents                                                                                    |
-| ---------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Package                      | Location                              | Contents                                                                                      |
+| ---------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------- |
 | Workspace agent runtime      | `workspace/packages/harness/`         | `PiRunner`, `VibestudioExtensionUIContext`, three extension factories, channel boundary types |
-| Channel client package       | workspace package                     | Panel-side channel client and protocol types                                                |
-| `@workspace/runtime`         | `workspace/packages/runtime/`         | DurableObjectBase, HttpRpcBridge                                                            |
-| `@workspace/agentic-do`      | `workspace/packages/agentic-do/`      | AgentWorkerBase, ChannelClient, ContinuationStore, SubscriptionManager                      |
-| `@workspace/agentic-core`    | `workspace/packages/agentic-core/`    | Derived UI types, channel-view to chat projection, ConnectionManager                        |
-| `@workspace/agentic-chat`    | `workspace/packages/agentic-chat/`    | useChannelMessages, useChatCore, useAgenticChat                                             |
-| `@workspace/agentic-session` | `workspace/packages/agentic-session/` | HeadlessSession (Pi-native programmatic interface)                                          |
-| Workers                      | `workspace/workers/`                  | AiChatWorker, TestAgentWorker (both extend AgentWorkerBase)                                 |
+| Channel client package       | workspace package                     | Panel-side channel client and protocol types                                                  |
+| `@workspace/runtime`         | `workspace/packages/runtime/`         | DurableObjectBase, HttpRpcBridge                                                              |
+| `@workspace/agentic-do`      | `workspace/packages/agentic-do/`      | AgentWorkerBase, ChannelClient, ContinuationStore, SubscriptionManager                        |
+| `@workspace/agentic-core`    | `workspace/packages/agentic-core/`    | Derived UI types, channel-view to chat projection, ConnectionManager                          |
+| `@workspace/agentic-chat`    | `workspace/packages/agentic-chat/`    | useChannelMessages, useChatCore, useAgenticChat                                               |
+| `@workspace/agentic-session` | `workspace/packages/agentic-session/` | HeadlessSession (Pi-native programmatic interface)                                            |
+| Workers                      | `workspace/workers/`                  | AiChatWorker, TestAgentWorker (both extend AgentWorkerBase)                                   |
 
 ## Further reading
 

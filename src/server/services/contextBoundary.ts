@@ -1,5 +1,8 @@
 import type { PendingCapabilityApproval } from "@vibestudio/shared/approvals";
-import type { PreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
+import {
+  fixedPreparedAuthoritySelection,
+  type PreparedAuthoritySelection,
+} from "@vibestudio/shared/serviceDefinition";
 import type {
   AuthorityChallengePresentation,
   VerifiedCaller,
@@ -237,7 +240,7 @@ export function prepareContextBoundarySelection(
     });
   }
 
-  return {
+  return fixedPreparedAuthoritySelection({
     capability: CONTEXT_BOUNDARY_CAPABILITY,
     resourceKey: contextBoundaryResourceKey(targetContextId, subjectId),
     authorizingCaller: subjectCaller,
@@ -257,5 +260,5 @@ export function prepareContextBoundarySelection(
       details,
       ...(action.signal ? { signal: action.signal } : {}),
     },
-  };
+  });
 }

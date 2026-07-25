@@ -40,7 +40,9 @@ export interface WorkspaceCapabilityCatalogEntry {
     description?: string;
     access?: Record<string, unknown>;
   }[];
-  target: { kind: "durable-object"; className: string } | { kind: "worker"; routePath: string };
+  target:
+    | { kind: "durable-object"; className: string; defaultObjectKey: string | null }
+    | { kind: "worker"; routePath: string };
 }
 
 const RUNTIME_TARGET_CALLERS: Record<RuntimeSurfaceTarget, CallerKind[]> = {
@@ -103,18 +105,41 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
     const callers = RUNTIME_TARGET_CALLERS[target];
     for (const [name, entry] of Object.entries(surface.exports)) {
       const runtimeId = `runtime:${target}.${name}`;
-      const schemaDefinition = entry.schemaRef ? definitionsByName.get(entry.schemaRef) : undefined;
-      const projectedMembers = (entry.members ?? []).filter(
-        (member) => schemaDefinition?.methods[member]
-      );
-      const documentedMembers = (entry.members ?? []).filter(
-        (member) => projectedMembers.includes(member) || entry.methodCatalog?.[member]
+      const schemaDefinition =
+        typeof entry.schemaRef === "string" ? definitionsByName.get(entry.schemaRef) : undefined;
+      let directMethod: MethodSchema | undefined;
+      let directMethodName: string | undefined;
+      if (entry.kind === "callable") {
+        if (!schemaDefinition) {
+          throw new Error(
+            `${runtimeId} declares callable schema ${entry.schemaRef}.${entry.schemaMethod}, ` +
+              `but service ${entry.schemaRef} is not registered`
+          );
+        }
+        directMethodName = entry.schemaMethod;
+        directMethod = schemaDefinition.methods[entry.schemaMethod];
+        if (!directMethod) {
+          throw new Error(
+            `${runtimeId} declares callable schema ${entry.schemaRef}.${entry.schemaMethod}, but that service method is not registered`
+          );
+        }
+      }
+      const directSerialized = directMethod ? serializeMethod(directMethod) : undefined;
+      const members = entry.kind === "namespace" ? entry.members : [];
+      const methodCatalog = entry.kind === "namespace" ? entry.methodCatalog : undefined;
+      const projectedMembers = members.filter((member) => schemaDefinition?.methods[member]);
+      const documentedMembers = members.filter(
+        (member) => projectedMembers.includes(member) || methodCatalog?.[member]
       );
       const schemaHint =
         documentedMembers.length > 0
           ? `Typed member docs: ${documentedMembers.map((member) => `docs_open("${runtimeId}.${member}")`).join(", ")}.`
           : "";
-      const description = [entry.description, schemaHint].filter(Boolean).join(" ");
+      const description = [
+        ...new Set([entry.description, directSerialized?.description, schemaHint]),
+      ]
+        .filter(Boolean)
+        .join(" ");
       entries.push({
         id: runtimeId,
         surface: "runtime",
@@ -126,7 +151,14 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
         // those names as catalog children while get(id) returns null makes the
         // discovery contract self-contradictory.
         ...(documentedMembers.length > 0 ? { members: documentedMembers } : {}),
-        access: { callers },
+        access: directMethod
+          ? runtimeMethodAccess(deps, schemaDefinition!, directMethodName!, directMethod, callers)
+          : { callers },
+        ...(directSerialized?.argsSchema ? { argsSchema: directSerialized.argsSchema } : {}),
+        ...(directSerialized?.returnsSchema
+          ? { returnsSchema: directSerialized.returnsSchema }
+          : {}),
+        ...(directSerialized?.examples ? { examples: directSerialized.examples } : {}),
       });
       // A schemaRef is an implementation-only bridge from an ergonomic runtime
       // namespace to the Zod contract used by its wire transport. Project the
@@ -134,7 +166,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
       // without advertising the raw service or teaching agents to call it.
       for (const member of documentedMembers) {
         const method = schemaDefinition?.methods[member];
-        const generated = entry.methodCatalog?.[member];
+        const generated = methodCatalog?.[member];
         const serialized = method ? serializeMethod(method) : generated;
         if (!serialized) continue;
         entries.push({
@@ -145,7 +177,9 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
           title: `${name}.${member}`,
           ...(generated?.signature ? { signature: generated.signature } : {}),
           ...(serialized.description ? { description: serialized.description } : {}),
-          access: { ...(serialized.access ?? {}), callers },
+          access: method
+            ? runtimeMethodAccess(deps, schemaDefinition!, member, method, callers)
+            : { ...(serialized.access ?? {}), callers },
           ...(serialized.argsSchema ? { argsSchema: serialized.argsSchema } : {}),
           ...(serialized.returnsSchema ? { returnsSchema: serialized.returnsSchema } : {}),
           ...(serialized.examples ? { examples: serialized.examples } : {}),
@@ -205,6 +239,28 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
   }
 
   return entries;
+}
+
+function runtimeMethodAccess(
+  deps: BuildCatalogDeps,
+  definition: ServiceDefinition,
+  methodName: string,
+  method: MethodSchema,
+  callers: CallerKind[]
+): Record<string, unknown> {
+  const qualifiedMethod = `${definition.name}.${methodName}`;
+  const reviewedTier = resolveMethodTierPolicy(
+    qualifiedMethod,
+    method.tier,
+    (deps.tierLookup ?? methodTier)(qualifiedMethod)
+  );
+  return {
+    ...(method.access ?? {}),
+    principals: authorityPrincipals(method, definition),
+    tier: reviewedTier.tier,
+    sessionAdmission: reviewedTier.session,
+    callers,
+  };
 }
 
 /**

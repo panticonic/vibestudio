@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { rpcMethodAuthority } from "@vibestudio/rpc";
 import { DurableObjectBase, rpc, type AlarmSchedule } from "./index.js";
 import { createTestDO, createTestDirectAuthority } from "./test-utils.js";
 
@@ -40,6 +41,18 @@ describe("DurableObjectBase alarm dispatch", () => {
     });
 
     expect(instance.runtimeId()).toBe("do:workers/alarm-probe:AlarmProbeDO:object-7");
+  });
+
+  it("exposes the host-only durable-work capability probe from the framework base", async () => {
+    const { instance, call } = await createTestDO(AlarmProbeDO);
+
+    await expect(call("durableWorkCapabilities")).resolves.toEqual([]);
+    expect(rpcMethodAuthority(instance, "durableWorkCapabilities")).toMatchObject({
+      principals: ["host"],
+      effect: { kind: "runtime-intrinsic" },
+      tier: "open",
+      sensitivity: "read",
+    });
   });
 
   it("returns the handler's explicit next schedule without RPC or a concurrency gate", async () => {

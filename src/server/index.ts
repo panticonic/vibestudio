@@ -19,7 +19,7 @@ import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/service-schemas/gitInterop";
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
-import { createHostCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createHostCaller, type VerifiedCodeIdentity } from "@vibestudio/shared/serviceDispatcher";
 import { parseDoTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 import { isCallerKind } from "@vibestudio/shared/principalKinds";
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
@@ -786,6 +786,19 @@ async function main() {
   });
   const { UnitVersionApprovalStore } = await import("./services/unitVersionApprovalStore.js");
   const unitVersionApprovalStore = new UnitVersionApprovalStore({ statePath });
+  const isCodeApproved = (code: VerifiedCodeIdentity): boolean => {
+    if (code.repoPath === "vibestudio/internal") return true;
+    if (code.callerKind === "app" || code.callerKind === "extension") return true;
+    const evalOwner = code.evalOrigin ? entityCache.resolveActive(code.evalOrigin.ownerId) : null;
+    if (evalOwner?.kind === "app") return true;
+    const approvedEntity = evalOwner ?? entityCache.resolveActive(code.callerId);
+    if (!approvedEntity?.activeAuthority) return false;
+    return unitVersionApprovalStore.has({
+      repoPath: code.repoPath,
+      effectiveVersion: code.effectiveVersion,
+      authority: approvedEntity.activeAuthority,
+    });
+  };
   const { ServerUnitApprovalCoordinator } = await import("./unitApprovalCoordinator.js");
   const unitApprovalCoordinator = new ServerUnitApprovalCoordinator({
     approvalQueue,
@@ -1202,7 +1215,13 @@ async function main() {
         }
         const reconcileAll = () =>
           extensionHost
-            .reconcileDeclared(declared, { trigger })
+            .reconcileDeclared(declared, {
+              trigger,
+              // Startup reconciliation is opportunistic background work.
+              // Keep one compiler busy without saturating the machine while
+              // the focused panel is building and booting.
+              ...(trigger === "startup" ? { maxConcurrentApplies: 1 } : {}),
+            })
             .then(() => extensionHost.whenReconciled())
             .then(() => import("@vibestudio/workspace/extensionRegistry"))
             .then(({ writeExtensionRegistry }) => {
@@ -2141,7 +2160,7 @@ async function main() {
       null;
     container.registerManaged({
       name: "eval",
-      dependencies: ["workerdWorkspace", "workerdManager", "doDispatch"],
+      dependencies: ["workerdWorkspace", "workerdManager", "doDispatch", "runtime"],
       async start(resolve) {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
@@ -2149,9 +2168,13 @@ async function main() {
         const workerdManager = assertPresent(
           resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
         );
+        const runtime = assertPresent(
+          resolve<import("./services/runtimeService.js").RuntimeServiceResult>("runtime")
+        );
         evalDefinition = createEvalService({
           doDispatch,
           entityStore: ensureEntityStore(doDispatch),
+          retireEntity: (id) => runtime.internal.retireEntity(id),
           tokenManager,
           workspaceId,
           executionSessions: agentExecutionSessions,
@@ -2178,6 +2201,7 @@ async function main() {
   // Server-driven DO alarms (workerd lacks SQLite/facet alarms). Created as a
   // managed service below; the workspace-state `onAlarmChanged` hook pokes it.
   let alarmDriverInstance: import("./services/alarmDriver.js").AlarmDriver | null = null;
+  let durableWorkDispatch: import("./doDispatch.js").DODispatch | null = null;
 
   // Slot-tree change fan-out: the workspace-state service pokes this after any
   // mutating slot.* method; the panel-tree bridge subscribes (registerSlotStateListener)
@@ -2323,7 +2347,7 @@ async function main() {
           // GAD-owned semantic context lifecycle for runtime entities.
           semanticContexts: {
             ensureContext: async (contextId) => {
-              await workspaceVcs.ensureContext(contextId);
+              await workspaceVcs.ensureSemanticContext(contextId);
             },
             dropContext: (contextId) => workspaceVcs.dropContext(contextId),
             forkContext: async (sourceContextId, targetContextId) => {
@@ -2332,6 +2356,28 @@ async function main() {
           },
           hooks: {
             prepareDurableObject: (args) => workerdManager.ensureDurableObjectEntity(args),
+            onDurableObjectActivated: async (record) => {
+              if (!record.className) return;
+              const owner = {
+                source: record.source.repoPath,
+                className: record.className,
+                objectKey: record.key,
+              };
+              const queues = (await doDispatch.dispatch(
+                owner,
+                "durableWorkCapabilities"
+              )) as import("@vibestudio/shared/durableWork").DurableWorkQueue[];
+              if (queues.length === 0) return;
+              await doDispatch.dispatch(
+                {
+                  source: (await import("./internalDOs/internalDoLoader.js")).INTERNAL_DO_SOURCE,
+                  className: "WorkspaceDO",
+                  objectKey: workspaceId,
+                },
+                "durableWorkOwnerRegister",
+                { ...owner, queues }
+              );
+            },
             prepareWorker: (args) => workerdManager.startWorker(args),
             // Server-internal DO-storage primitives for cloneContext/destroyContext.
             // cloneDO/destroyDO are NOT exposed to userland — only the runtime
@@ -2690,7 +2736,7 @@ async function main() {
         resolveWorkspaceDirectAuthority: async ({ source, className, objectKey, method }) => {
           const { PRODUCT_WORKSPACE_SERVICES } =
             await import("@vibestudio/shared/productWorkspaceServices.mjs");
-          const { productDirectMethodCapability } =
+          const { isHostIntrinsicDirectMethod, productDirectMethodCapability } =
             await import("@vibestudio/shared/authority/directMethodEffects");
           const authoritiesFrom = async (
             declarations: import("@vibestudio/workspace/singletonRegistry").WorkspaceDeclarations
@@ -2714,8 +2760,10 @@ async function main() {
                   )
                 : undefined;
             const productCapability = productDirectMethodCapability(className, method);
+            const hostIntrinsic = isHostIntrinsicDirectMethod(method);
             if (
               !catalogMethod &&
+              !hostIntrinsic &&
               !PRODUCT_WORKSPACE_SERVICES.some((service) => matches.includes(service))
             ) {
               throw new Error(
@@ -2727,7 +2775,7 @@ async function main() {
                 ? catalogMethod.effect.capability
                 : (productCapability ?? undefined);
             const methodEffect =
-              catalogMethod?.effect ??
+              (hostIntrinsic ? ({ kind: "runtime-intrinsic" } as const) : catalogMethod?.effect) ??
               (productCapability
                 ? ({ kind: "semantic", capability: productCapability } as const)
                 : ({ kind: "workspace-service" } as const));
@@ -2790,21 +2838,7 @@ async function main() {
           extensionHostForGateway?.resolveActiveInvocation(extensionName, requestId) ?? null,
         resolveExtensionCodeIdentity: (extensionName) =>
           extensionHostForGateway?.resolveCodeIdentity(extensionName) ?? null,
-        isCodeApproved: (code) => {
-          if (code.repoPath === "vibestudio/internal") return true;
-          if (code.callerKind === "app" || code.callerKind === "extension") return true;
-          const evalOwner = code.evalOrigin
-            ? entityCache.resolveActive(code.evalOrigin.ownerId)
-            : null;
-          if (evalOwner?.kind === "app") return true;
-          const approvedEntity = evalOwner ?? entityCache.resolveActive(code.callerId);
-          if (!approvedEntity?.activeAuthority) return false;
-          return unitVersionApprovalStore.has({
-            repoPath: code.repoPath,
-            effectiveVersion: code.effectiveVersion,
-            authority: approvedEntity.activeAuthority,
-          });
-        },
+        isCodeApproved,
       });
       server.initHandlers();
       rpcServerForGateway = server;
@@ -3283,6 +3317,7 @@ async function main() {
   // entity cache — without a record its principal kind is unknown and every
   // call 403s. Service resolution activates on demand (workersRpc below);
   // Server-dispatched semantic control-plane objects activate explicitly.
+  const durableWorkRegistrationCache = new Set<string>();
   const activateDurableObjectEntity = async (
     doDispatch: import("./doDispatch.js").DODispatch,
     workerdManagerInst: import("./workerdManager.js").WorkerdManager,
@@ -3296,6 +3331,27 @@ async function main() {
   ): Promise<void> => {
     const { source, className, objectKey, buildRef } = ref;
     const targetId = canonicalEntityId({ kind: "do", source, className, key: objectKey });
+    const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
+    const workspaceDORef: import("@vibestudio/shared/doDispatcher").DORef = {
+      source: INTERNAL_DO_SOURCE,
+      className: "WorkspaceDO",
+      objectKey: workspaceId,
+    };
+    const registerDurableWorkOwner = async (): Promise<void> => {
+      if (durableWorkRegistrationCache.has(targetId)) return;
+      const owner = { source, className, objectKey };
+      const queues = (await doDispatch.dispatch(
+        owner,
+        "durableWorkCapabilities"
+      )) as import("@vibestudio/shared/durableWork").DurableWorkQueue[];
+      if (queues.length > 0) {
+        await doDispatch.dispatch(workspaceDORef, "durableWorkOwnerRegister", {
+          ...owner,
+          queues,
+        });
+      }
+      durableWorkRegistrationCache.add(targetId);
+    };
     const active = entityCache.resolveActive(targetId);
     if (active?.activeBuildKey && active.activeExecutionDigest && active.activeAuthority) {
       if (ref.contextId && active.contextId !== ref.contextId) {
@@ -3304,14 +3360,9 @@ async function main() {
         );
       }
       await workerdManagerInst.restoreDurableObjectEntity(active);
+      await registerDurableWorkOwner();
       return;
     }
-    const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
-    const workspaceDORef: import("@vibestudio/shared/doDispatcher").DORef = {
-      source: INTERNAL_DO_SOURCE,
-      className: "WorkspaceDO",
-      objectKey: workspaceId,
-    };
     const existing = (await doDispatch.dispatch(
       workspaceDORef,
       "entityResolve",
@@ -3325,6 +3376,7 @@ async function main() {
       }
       if (existing.activeBuildKey && existing.activeExecutionDigest && existing.activeAuthority) {
         entityCache._onActivate(existing);
+        await registerDurableWorkOwner();
         return;
       }
     }
@@ -3352,6 +3404,7 @@ async function main() {
       )
     )) as EntityRecord;
     entityCache._onActivate(record);
+    await registerDurableWorkOwner();
   };
 
   {
@@ -3436,7 +3489,9 @@ async function main() {
       status: (input) => callSemantic("vcsStatus", input),
       inspect: (input) => callSemantic("vcsInspect", input),
       neighbors: (input) => callSemantic("vcsNeighbors", input),
+      resolveRepository: (input) => callSemantic("vcsResolveRepository", input),
       readFile: (input) => callSemantic("vcsReadFile", input),
+      listDirectory: (input) => callSemantic("vcsListDirectory", input),
       listFiles: (input) => callSemantic("vcsListFiles", input),
       ensureMaterialized: (contextId, repos) =>
         workspaceVcs.materializeContextRepos(contextId, repos),
@@ -3485,6 +3540,7 @@ async function main() {
         contextTestPolicy: activeEntity
           ? agentExecutionSessions.testPolicyForContext(activeEntity.contextId)
           : null,
+        isCodeApproved,
       });
     },
     onManagerStarted: (manager) => {
@@ -3566,6 +3622,47 @@ async function main() {
       },
       async stop(instance: import("./services/lifecycleDriver.js").LifecycleDriver | null) {
         instance?.stop();
+      },
+    });
+  }
+
+  const { createDurableWorkService } = await import("./services/durableWorkService.js");
+  {
+    container.registerManaged({
+      name: "durableWorkDriver",
+      dependencies: ["workerdWorkspace", "doDispatch"],
+      async start(resolve) {
+        const doDispatch = assertPresent(
+          resolve<import("./doDispatch.js").DODispatch>("doDispatch")
+        );
+        const { DurableWorkDriver, createDurableWorkHandlers, createDurableWorkOwnerScanner } =
+          await import("./services/durableWorkDriver.js");
+        const workspaceOwner: import("@vibestudio/shared/doDispatcher").DORef = {
+          source: (await import("./internalDOs/internalDoLoader.js")).INTERNAL_DO_SOURCE,
+          className: "WorkspaceDO",
+          objectKey: workspaceId,
+        };
+        const workerId = `durable-work-driver:${serverBootId}:${randomUUID()}`;
+        const driver = new DurableWorkDriver({
+          handlers: createDurableWorkHandlers(doDispatch),
+          scanReadyOwners: createDurableWorkOwnerScanner(doDispatch, workspaceOwner, workerId),
+          workerId,
+        });
+        doDispatch.setWorkReadyObserver((hint) => driver.notify(hint));
+        durableWorkDispatch = doDispatch;
+        return driver;
+      },
+      async stop(instance: import("./services/durableWorkDriver.js").DurableWorkDriver | null) {
+        durableWorkDispatch?.setWorkReadyObserver(null);
+        await instance?.quiesce();
+        durableWorkDispatch = null;
+      },
+      getServiceDefinition() {
+        return createDurableWorkService(
+          container.get<import("./services/durableWorkDriver.js").DurableWorkDriver>(
+            "durableWorkDriver"
+          )
+        );
       },
     });
   }
@@ -4198,15 +4295,16 @@ async function main() {
         },
         workspaceServicesForCaller: async (ctx) => {
           const contextId = entityCache.resolveContext(ctx.caller.runtime.id);
-          const services = contextId
+          const declarations = contextId
             ? buildWorkspaceDeclarations(
                 await readWorkspaceConfigFromState(
                   workspaceVcs,
                   workspaceId,
                   await workspaceVcs.resolveContextState(contextId)
                 )
-              ).services
-            : workspaceDecls.services;
+              )
+            : workspaceDecls;
+          const services = declarations.services;
           const buildSystem =
             container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
           if (!buildSystem)
@@ -4238,6 +4336,15 @@ async function main() {
                   : [];
                 return {
                   declaration,
+                  ...(declaration.durableObject
+                    ? {
+                        defaultObjectKey:
+                          declarations.singletons.find(
+                            declaration.source,
+                            declaration.durableObject.className
+                          )?.key ?? null,
+                      }
+                    : {}),
                   providerEffectiveVersion: build.metadata.ev,
                   methods,
                 };
@@ -4250,6 +4357,15 @@ async function main() {
                 // the build system rather than inventing a stale method roster.
                 return {
                   declaration,
+                  ...(declaration.durableObject
+                    ? {
+                        defaultObjectKey:
+                          declarations.singletons.find(
+                            declaration.source,
+                            declaration.durableObject.className
+                          )?.key ?? null,
+                      }
+                    : {}),
                   providerBuildError: error instanceof Error ? error.message : String(error),
                   methods: [],
                 };
@@ -4591,6 +4707,17 @@ async function main() {
   if (workerdPort) {
     rpcServerInstance.setWorkerdUrl(`http://127.0.0.1:${workerdPort}`);
   }
+  // Relay routing follows the workerd process generation. Never leave the
+  // prior loopback port looking authoritative during replacement, and publish
+  // the new port only after WorkerdManager declares that generation ready.
+  workerdManager.onRestartBegin(() => rpcServerInstance.setWorkerdUrl(null));
+  workerdManager.onRestartReady(() => {
+    const restartedPort = workerdManager.getPort();
+    if (!restartedPort) {
+      throw new Error("workerd restart reported ready without a relay port");
+    }
+    rpcServerInstance.setWorkerdUrl(`http://127.0.0.1:${restartedPort}`);
+  });
   rpcServerInstance.setWorkerdGatewayToken(workerdGatewayToken);
   rpcServerInstance.setWorkerdDispatchSecret(workerdManager.getDispatchSecret());
   rpcServerInstance.setWorkerInstanceResolver((targetId) =>
@@ -4678,19 +4805,23 @@ async function main() {
     restoreRuntimes: async (records) => {
       const manager = container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
       type RuntimeTarget = { source: string; className: string; objectKey: string };
-      const [lifecycle, alarms, recurring, heartbeats] = await Promise.all([
+      const [lifecycle, alarms, recurring, heartbeats, durableWorkOwners] = await Promise.all([
         dispatchWorkspaceDO<RuntimeTarget[]>("lifecycleListResumeTargets"),
-        dispatchWorkspaceDO<Array<RuntimeTarget & { wakeAt: number }>>(
-          "alarmListDue",
-          Number.MAX_SAFE_INTEGER
-        ),
+        dispatchWorkspaceDO<RuntimeTarget[]>("alarmListScheduled"),
         dispatchWorkspaceDO<RuntimeTarget[]>("recurringList"),
         dispatchWorkspaceDO<RuntimeTarget[]>("heartbeatList"),
+        dispatchWorkspaceDO<import("@vibestudio/shared/durableWork").DurableWorkReadyHint[]>(
+          "durableWorkOwnerList"
+        ),
       ]);
       const required = new Set(
-        [...lifecycle, ...alarms, ...recurring, ...heartbeats].map(
-          (target) => `${target.source}\0${target.className}\0${target.objectKey}`
-        )
+        [
+          ...lifecycle,
+          ...alarms,
+          ...recurring,
+          ...heartbeats,
+          ...durableWorkOwners.map((entry) => entry.owner),
+        ].map((target) => `${target.source}\0${target.className}\0${target.objectKey}`)
       );
       const activeKeys = new Set(
         records
@@ -4726,6 +4857,16 @@ async function main() {
     container.get<import("./services/alarmDriver.js").AlarmDriver>("alarmDriver").start();
   } catch (err) {
     console.warn("[Bootstrap] alarm re-arm skipped:", err);
+  }
+  try {
+    const durableWorkDriver =
+      container.get<import("./services/durableWorkDriver.js").DurableWorkDriver>(
+        "durableWorkDriver"
+      );
+    durableWorkDriver.start();
+    void durableWorkDriver.recoverNow();
+  } catch (err) {
+    console.warn("[Bootstrap] durable work recovery skipped:", err);
   }
 
   // Re-register bootstrap entries that don't have DO rows.

@@ -29,7 +29,33 @@ describe("browserEnvironment authority", () => {
         requirement: {
           kind: "all",
           requirements: [
-            { kind: "relationship", name: "workspace-member" },
+            {
+              kind: "any",
+              requirements: [
+                {
+                  kind: "all",
+                  requirements: [
+                    {
+                      kind: "capability",
+                      principal: "code",
+                      capability: "service:browserEnvironment.startImportRead",
+                    },
+                    { kind: "relationship", name: "workspace-member" },
+                  ],
+                },
+                {
+                  kind: "all",
+                  requirements: [
+                    {
+                      kind: "capability",
+                      principal: "session",
+                      capability: "service:browserEnvironment.startImportRead",
+                    },
+                    { kind: "relationship", name: "workspace-member" },
+                  ],
+                },
+              ],
+            },
             {
               kind: "relationship",
               name: "code-source",

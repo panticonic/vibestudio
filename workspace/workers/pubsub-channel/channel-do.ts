@@ -17,6 +17,7 @@
 /// <reference path="./workerd.d.ts" />
 import {
   createDurableObjectServiceClient,
+  assertExactSqlTableSchema,
   rpc,
   DurableObjectBase,
   type DurableObjectContext,
@@ -38,15 +39,23 @@ import type {
   RpcChannelMessage,
 } from "@workspace/pubsub";
 
-const PUBSUB_CHANNEL_SCHEMA_BASELINE = 115;
+const PUBSUB_CHANNEL_SCHEMA_BASELINE = 118;
 const STRUCTURED_DELIVERY_RETRY_MS = 1_000;
 const STRUCTURED_DELIVERY_MAX_RETRY_MS = 30_000;
+const STRUCTURED_DELIVERY_BATCH_SIZE = 32;
 import type {
   DeleteChannelInviteInput,
   DeleteChannelMembershipInput,
   PutChannelMembershipInput,
 } from "@vibestudio/shared/channelInvites";
 import type { DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
+import type {
+  ClaimRequest,
+  ClaimSettlement,
+  DurableWorkQueue,
+  SettleRequest,
+  WorkClaim,
+} from "@vibestudio/shared/durableWork";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
@@ -76,14 +85,8 @@ import {
   broadcast,
   buildChannelEvent,
   channelEventToRpcSignal,
-  queueDoEnvelope,
-  STRUCTURED_DELIVERY_TIMEOUT_MS,
   type BroadcastDeps,
   type StructuredDeliveryEnvelope,
-  closeDeliveryChain,
-  cleanupDeliveryChain,
-  releaseDeliveryChain,
-  reopenDeliveryChain,
 } from "./broadcast.js";
 import { ChannelLog, type ChannelReplayContext, type MessageTypeDefinition } from "./log-store.js";
 import { PolicyHost, policyViewFromLogEnvelope } from "./policy-host.js";
@@ -110,11 +113,6 @@ const REPLAY_LIMIT = 50;
 /** Dedup keys are a latency cache; the durable dedupe is the `ik:{key}`
  *  envelope id in the log lineage. */
 const DEDUP_TTL_MS = 5 * 60 * 1000;
-/** A pending call is eligible for at-least-once redelivery after its initial
- * delivery has had a short opportunity to settle. */
-const PENDING_REDELIVERY_STALE_MS = 10_000;
-const PENDING_REDELIVERY_INTERVAL_MS = 15_000;
-const PENDING_REDELIVERY_SWEPT_AT_KEY = "pendingRedeliverySweptAt";
 const INVITE_INDEX_RETRY_MS = 5_000;
 const INVITE_INDEX_REVISION_KEY = "inviteIndexRevision";
 
@@ -127,6 +125,7 @@ const GAD_WORKSPACE_SERVICE_PROTOCOL = "vibestudio.gad.workspace.v1";
 /** Signal contentType for the ephemeral fork.head_changed lineage badge. */
 const FORK_HEAD_CHANGED_SIGNAL = "fork.head_changed";
 const FORK_OP_RECONCILE_MS = 5_000;
+type ChannelMaintenanceKind = "invite-index" | "call-deadline" | "fork-reconcile";
 
 /** Ordered fork-op phases; a resume skips everything at or below the recorded
  * phase. `rollback-pending` remains retryable until owned context cleanup is
@@ -302,6 +301,26 @@ interface AgentInspectionResult {
   };
 }
 
+interface ChannelDeliveryBatch {
+  channelId: string;
+  channelRef: { source: string; className: string; objectKey: string };
+  sourceIncarnation: string;
+  targetIncarnation: string;
+  rows: Array<{
+    deliveryKey: string;
+    channelSeq: number;
+    envelope: RpcChannelMessage;
+  }>;
+}
+
+interface ChannelDeliveryBatchOutcome {
+  perRow: Array<{
+    deliveryKey: string;
+    disposition: "accepted" | "duplicate-match";
+  }>;
+  highestContiguousCommittedSeq: number;
+}
+
 /** A durable channel membership record (WP7 §3) — separate from the ephemeral
  *  `participants` roster row. Survives reconnects and offline stretches. */
 interface ChannelMember {
@@ -387,7 +406,8 @@ export class PubSubChannel extends DurableObjectBase {
         handle TEXT,
         do_source TEXT,
         do_class TEXT,
-        do_object_key TEXT
+        do_object_key TEXT,
+        participant_incarnation TEXT
       )
     `);
     this.sql.exec(
@@ -422,24 +442,94 @@ export class PubSubChannel extends DurableObjectBase {
       )
     `);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_dedup_keys_created ON dedup_keys(created_at)`);
-    // Structured DO callbacks are a durable transport outbox. Invoking a
-    // recipient inline from publish creates a re-entrancy cycle when that
-    // recipient immediately publishes an acknowledgement back to this channel.
-    // The alarm owns delivery after the publication request has committed.
+    // Structured callbacks are host-claimed durable work. The channel owns
+    // ordering and settlement; neither publish nor the channel alarm calls a
+    // participant.
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS structured_delivery_outbox (
-        participant_id TEXT NOT NULL,
+      CREATE TABLE IF NOT EXISTS channel_delivery_queue (
+        target_participant_id TEXT NOT NULL,
+        target_incarnation TEXT NOT NULL,
+        channel_seq INTEGER NOT NULL,
         delivery_key TEXT NOT NULL,
         envelope_json TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
         attempts INTEGER NOT NULL DEFAULT 0,
         next_attempt_at INTEGER NOT NULL,
+        lease_owner TEXT,
+        lease_generation INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
-        PRIMARY KEY (participant_id, delivery_key)
+        last_attempt_at INTEGER,
+        disposition TEXT NOT NULL DEFAULT 'ready'
+          CHECK (disposition IN (
+            'ready', 'leased', 'parked', 'retrying',
+            'terminal-departed', 'terminal-retired', 'terminal-integrity'
+          )),
+        PRIMARY KEY (target_participant_id, target_incarnation, delivery_key)
       )
     `);
+    assertExactSqlTableSchema(this.sql, {
+      table: "channel_delivery_queue",
+      columns: [
+        ["target_participant_id", "TEXT", true],
+        ["target_incarnation", "TEXT", true],
+        ["channel_seq", "INTEGER", true],
+        ["delivery_key", "TEXT", true],
+        ["envelope_json", "TEXT", true],
+        ["idempotency_key", "TEXT", true],
+        ["attempts", "INTEGER", true, "0"],
+        ["next_attempt_at", "INTEGER", true],
+        ["lease_owner", "TEXT", false],
+        ["lease_generation", "INTEGER", true, "0"],
+        ["created_at", "INTEGER", true],
+        ["last_attempt_at", "INTEGER", false],
+        ["disposition", "TEXT", true, "'ready'"],
+      ],
+      primaryKey: ["target_participant_id", "target_incarnation", "delivery_key"],
+    });
     this.sql.exec(`
-      CREATE INDEX IF NOT EXISTS idx_structured_delivery_due
-        ON structured_delivery_outbox(next_attempt_at, created_at)
+      CREATE INDEX IF NOT EXISTS idx_channel_delivery_claim
+        ON channel_delivery_queue(
+          disposition, next_attempt_at, target_participant_id,
+          target_incarnation, channel_seq
+        )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS channel_maintenance_queue (
+        item_id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL
+          CHECK (kind IN ('invite-index', 'call-deadline', 'fork-reconcile')),
+        target_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at INTEGER NOT NULL,
+        lease_owner TEXT,
+        lease_generation INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        last_attempt_at INTEGER,
+        disposition TEXT NOT NULL DEFAULT 'ready'
+          CHECK (disposition IN ('ready', 'leased', 'retrying'))
+      )
+    `);
+    assertExactSqlTableSchema(this.sql, {
+      table: "channel_maintenance_queue",
+      columns: [
+        ["item_id", "TEXT", false],
+        ["kind", "TEXT", true],
+        ["target_id", "TEXT", true],
+        ["idempotency_key", "TEXT", true],
+        ["attempts", "INTEGER", true, "0"],
+        ["next_attempt_at", "INTEGER", true],
+        ["lease_owner", "TEXT", false],
+        ["lease_generation", "INTEGER", true, "0"],
+        ["created_at", "INTEGER", true],
+        ["last_attempt_at", "INTEGER", false],
+        ["disposition", "TEXT", true, "'ready'"],
+      ],
+      primaryKey: ["item_id"],
+    });
+    this.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_channel_maintenance_claim
+        ON channel_maintenance_queue(disposition, next_attempt_at, created_at)
     `);
     // Fork-operation journal (single-writer: this parent channel DO). The op's
     // durability lives HERE — the row is written BEFORE any host/DO call, and its
@@ -521,7 +611,7 @@ export class PubSubChannel extends DurableObjectBase {
   protected override schemaProductionBaseline() {
     return {
       version: PUBSUB_CHANNEL_SCHEMA_BASELINE,
-      name: "pubsub-channel-v115",
+      name: "pubsub-channel-v118",
     } as const;
   }
 
@@ -530,7 +620,6 @@ export class PubSubChannel extends DurableObjectBase {
   private get broadcastDeps(): BroadcastDeps {
     return {
       sql: this.sql,
-      rpc: this.rpc,
       objectKey: this.objectKey,
       deliverParticipant: (participantId, payload) =>
         this.deliverParticipantPayload(participantId, payload),
@@ -539,106 +628,733 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
+  protected override durableWorkQueues(): readonly DurableWorkQueue[] {
+    return ["channel-delivery"];
+  }
+
+  protected override releaseDurableWorkClaims(
+    previousWorkerId: string | null,
+    _nextWorkerId: string
+  ): void {
+    if (!previousWorkerId) return;
+    const now = Date.now();
+    for (const table of ["channel_delivery_queue", "channel_maintenance_queue"] as const) {
+      this.sql.exec(
+        `UPDATE ${table}
+            SET disposition = 'ready',
+                lease_owner = NULL,
+                next_attempt_at = ?
+          WHERE disposition = 'leased' AND lease_owner = ?`,
+        now,
+        previousWorkerId
+      );
+    }
+  }
+
   private enqueueStructuredDelivery(
     participantId: string,
     envelope: StructuredDeliveryEnvelope
   ): void {
+    const incarnation = this.sql
+      .exec(
+        `SELECT participant_incarnation
+           FROM participants
+          WHERE id = ? AND transport = 'do'`,
+        participantId
+      )
+      .toArray()[0]?.["participant_incarnation"];
+    if (typeof incarnation !== "string" || incarnation.length === 0) {
+      throw new Error(`Structured participant ${participantId} has no active incarnation`);
+    }
     const identity =
       envelope.kind === "log"
         ? `${envelope.phase}:${envelope.event.id}:${envelope.event.messageId}`
         : `signal:${envelope.messageId}`;
     const now = Date.now();
-    this.sql.exec(
-      `INSERT OR IGNORE INTO structured_delivery_outbox
-         (participant_id, delivery_key, envelope_json, attempts, next_attempt_at, created_at)
-       VALUES (?, ?, ?, 0, ?, ?)`,
-      participantId,
-      identity,
-      JSON.stringify(envelope),
-      now,
-      now
-    );
+    this.ctx.storage.transactionSync(() => {
+      const channelSeq = Number(this.getStateValue("channelDeliverySequence") ?? 0) + 1;
+      this.setStateValue("channelDeliverySequence", String(channelSeq));
+      this.sql.exec(
+        `INSERT OR IGNORE INTO channel_delivery_queue (
+           target_participant_id, target_incarnation, channel_seq, delivery_key,
+           envelope_json, idempotency_key, attempts, next_attempt_at,
+           lease_generation, created_at, disposition
+         ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, ?, 'ready')`,
+        participantId,
+        incarnation,
+        channelSeq,
+        identity,
+        JSON.stringify(envelope),
+        `channel-delivery:${this.objectKey}:${participantId}:${incarnation}:${identity}`,
+        now,
+        now
+      );
+    });
+    this.markWorkReady("channel-delivery");
   }
 
-  private nextStructuredDeliveryAt(): number | null {
+  private nextStructuredDeliveryRecoveryAt(): number | null {
     const value = this.sql
       .exec(
         `SELECT MIN(next_attempt_at) AS due
-           FROM structured_delivery_outbox`
+           FROM channel_delivery_queue
+          WHERE disposition = 'retrying'`
       )
       .toArray()[0]?.["due"];
     return typeof value === "number" ? value : null;
   }
 
-  private async drainStructuredDeliveryOutbox(): Promise<void> {
-    const now = Date.now();
-    const rows = this.sql
+  private materializeDueMaintenance(now: number): void {
+    const insert = (
+      itemId: string,
+      kind: ChannelMaintenanceKind,
+      targetId: string,
+      createdAt: number
+    ) => {
+      this.sql.exec(
+        `INSERT OR IGNORE INTO channel_maintenance_queue (
+           item_id, kind, target_id, idempotency_key, attempts,
+           next_attempt_at, lease_generation, created_at, disposition
+         ) VALUES (?, ?, ?, ?, 0, ?, 0, ?, 'ready')`,
+        itemId,
+        kind,
+        targetId,
+        `channel-maintenance:${this.objectKey}:${itemId}`,
+        now,
+        createdAt
+      );
+    };
+    for (const row of this.sql
       .exec(
-        `SELECT participant_id, delivery_key, envelope_json, attempts
-           FROM structured_delivery_outbox
-          WHERE next_attempt_at <= ?
-          ORDER BY created_at, participant_id, delivery_key
-          LIMIT 100`,
+        `SELECT user_id, op_id, updated_at
+           FROM invite_index_ops
+          WHERE updated_at + ? <= ?`,
+        INVITE_INDEX_RETRY_MS,
         now
       )
-      .toArray();
-    for (const row of rows) {
-      const participantId = String(row["participant_id"]);
-      const deliveryKey = String(row["delivery_key"]);
-      const participantPresent =
-        this.sql
-          .exec(`SELECT 1 FROM participants WHERE id = ?`, participantId)
-          .toArray().length > 0;
-      if (!participantPresent) {
-        this.sql.exec(
-          `UPDATE structured_delivery_outbox
-              SET next_attempt_at = ?
-            WHERE participant_id = ? AND delivery_key = ?`,
-          now + STRUCTURED_DELIVERY_RETRY_MS,
-          participantId,
-          deliveryKey
-        );
-        continue;
+      .toArray()) {
+      insert(
+        `maintenance:invite-index:${String(row["op_id"])}`,
+        "invite-index",
+        String(row["user_id"]),
+        Number(row["updated_at"])
+      );
+    }
+    for (const row of this.sql
+      .exec(
+        `SELECT transport_call_id, deadline_at
+           FROM pending_calls
+          WHERE deadline_at IS NOT NULL AND deadline_at <= ?`,
+        now
+      )
+      .toArray()) {
+      insert(
+        `maintenance:call-deadline:${String(row["transport_call_id"])}`,
+        "call-deadline",
+        String(row["transport_call_id"]),
+        Number(row["deadline_at"])
+      );
+    }
+    for (const row of this.sql
+      .exec(
+        `SELECT fork_id, updated_at
+           FROM fork_ops
+          WHERE phase NOT IN ('done', 'rolledback')
+            AND updated_at + ? <= ?`,
+        FORK_OP_RECONCILE_MS,
+        now
+      )
+      .toArray()) {
+      insert(
+        `maintenance:fork-reconcile:${String(row["fork_id"])}`,
+        "fork-reconcile",
+        String(row["fork_id"]),
+        Number(row["updated_at"])
+      );
+    }
+  }
+
+  private hasReadyMaintenance(now: number): boolean {
+    const queued =
+      this.sql
+        .exec(
+          `SELECT 1
+             FROM channel_maintenance_queue
+            WHERE disposition IN ('ready', 'retrying') AND next_attempt_at <= ?
+            LIMIT 1`,
+          now
+        )
+        .toArray().length > 0;
+    if (queued) return true;
+    const inviteDue =
+      this.sql
+        .exec(
+          `SELECT 1 FROM invite_index_ops
+            WHERE updated_at + ? <= ?
+              AND NOT EXISTS (
+                SELECT 1 FROM channel_maintenance_queue AS queued
+                 WHERE queued.item_id = 'maintenance:invite-index:' || invite_index_ops.op_id
+              )
+            LIMIT 1`,
+          INVITE_INDEX_RETRY_MS,
+          now
+        )
+        .toArray().length > 0;
+    if (inviteDue) return true;
+    const callDue =
+      this.sql
+        .exec(
+          `SELECT 1 FROM pending_calls
+            WHERE deadline_at IS NOT NULL AND deadline_at <= ?
+              AND NOT EXISTS (
+                SELECT 1 FROM channel_maintenance_queue AS queued
+                 WHERE queued.item_id =
+                   'maintenance:call-deadline:' || pending_calls.transport_call_id
+              )
+            LIMIT 1`,
+          now
+        )
+        .toArray().length > 0;
+    if (callDue) return true;
+    return (
+      this.sql
+        .exec(
+          `SELECT 1 FROM fork_ops
+            WHERE phase NOT IN ('done', 'rolledback')
+              AND updated_at + ? <= ?
+              AND NOT EXISTS (
+                SELECT 1 FROM channel_maintenance_queue AS queued
+                 WHERE queued.item_id =
+                   'maintenance:fork-reconcile:' || fork_ops.fork_id
+              )
+            LIMIT 1`,
+          FORK_OP_RECONCILE_MS,
+          now
+        )
+        .toArray().length > 0
+    );
+  }
+
+  private nextMaintenanceRecoveryAt(): number | null {
+    const value = this.sql
+      .exec(
+        `SELECT MIN(next_attempt_at) AS due
+           FROM channel_maintenance_queue
+          WHERE disposition = 'retrying'`
+      )
+      .toArray()[0]?.["due"];
+    return typeof value === "number" ? value : null;
+  }
+
+  /** Adopt this concrete channel's durable queues for one server generation. */
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  adoptDurableWorkWorker(
+    workerId: string
+  ): { adopted: boolean; previousWorkerId: string | null } {
+    return this.adoptDurableWorkWorkerGeneration(workerId);
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async executeChannelMaintenanceClaim(input: {
+    itemId: string;
+    generation: number;
+  }): Promise<{ processed: true }> {
+    const row = this.sql
+      .exec(
+        `SELECT kind, target_id
+           FROM channel_maintenance_queue
+          WHERE item_id = ?
+            AND lease_generation = ?
+            AND disposition = 'leased'`,
+        input.itemId,
+        input.generation
+      )
+      .toArray()[0];
+    if (!row) throw new Error("executeChannelMaintenanceClaim: stale claim");
+    const kind = String(row["kind"]) as ChannelMaintenanceKind;
+    const targetId = String(row["target_id"]);
+    if (kind === "invite-index") {
+      if (!(await this.flushInviteIndexOp(targetId))) {
+        throw new Error(`invite-index maintenance failed for ${targetId}`);
       }
-      try {
-        const envelope = JSON.parse(String(row["envelope_json"])) as RpcChannelMessage;
-        await this.rpc.call(participantId, "onChannelEnvelope", [this.objectKey, envelope], {
-          timeoutMs: STRUCTURED_DELIVERY_TIMEOUT_MS,
-        });
+    } else if (kind === "call-deadline") {
+      await this.timeoutMethodCall(targetId, "Channel method deadline expired");
+    } else if (kind === "fork-reconcile") {
+      const op = this.getForkOpRow(targetId);
+      if (op?.["phase"] === "rollback-pending") await this.rollbackForkOp(targetId);
+      else if (op && op["phase"] !== "done" && op["phase"] !== "rolledback") {
+        await this.runForkOp(targetId);
+      }
+    } else {
+      throw new Error(`executeChannelMaintenanceClaim: unknown kind ${kind}`);
+    }
+    return { processed: true };
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  claimReadyWork(queue: DurableWorkQueue, input: ClaimRequest): WorkClaim[] {
+    if (queue !== "channel-delivery") return [];
+    if (!input.workerId || input.limit < 1) {
+      throw new Error("claimReadyWork: invalid claim request");
+    }
+    this.adoptDurableWorkWorkerGeneration(input.workerId);
+    const claims = this.ctx.storage.transactionSync(() => {
+      this.materializeDueMaintenance(input.now);
+      const claims: WorkClaim[] = [];
+      const maintenance = this.sql
+        .exec(
+          `SELECT *
+             FROM channel_maintenance_queue
+            WHERE disposition IN ('ready', 'retrying') AND next_attempt_at <= ?
+            ORDER BY created_at, item_id
+            LIMIT ?`,
+          input.now,
+          Math.min(input.limit, 1)
+        )
+        .toArray();
+      for (const row of maintenance) {
+        const itemId = String(row["item_id"]);
+        const generation = Number(row["lease_generation"] ?? 0) + 1;
         this.sql.exec(
-          `DELETE FROM structured_delivery_outbox
-            WHERE participant_id = ? AND delivery_key = ?`,
-          participantId,
-          deliveryKey
+          `UPDATE channel_maintenance_queue
+              SET disposition = 'leased',
+                  lease_owner = ?,
+                  lease_generation = ?,
+                  last_attempt_at = ?
+            WHERE item_id = ?`,
+          input.workerId,
+          generation,
+          input.now,
+          itemId
         );
-      } catch (error) {
-        const code = (error as { code?: string }).code;
-        if (code === "DO_NOT_CREATED") {
+        claims.push({
+          itemId,
+          generation,
+          idempotencyKey: String(row["idempotency_key"]),
+          createdAt: Number(row["created_at"]),
+          attempt: Number(row["attempts"] ?? 0) + 1,
+          payload: {
+            workKind: "channel-maintenance",
+            // Channel control-plane operations can call out and re-enter local
+            // state. Serialize them with each other while preserving
+            // independent per-participant delivery lanes.
+            laneKey: `channel-maintenance\u0000${this.objectKey}`,
+            kind: String(row["kind"]),
+            targetId: String(row["target_id"]),
+          },
+        });
+      }
+      const remaining = input.limit - claims.length;
+      if (remaining < 1) return claims;
+      const candidates = this.sql
+        .exec(
+          `SELECT *
+             FROM channel_delivery_queue
+            WHERE disposition IN ('ready', 'retrying') AND next_attempt_at <= ?
+            ORDER BY created_at, target_participant_id, target_incarnation, channel_seq
+            LIMIT ?`,
+          input.now,
+          Math.min(remaining * STRUCTURED_DELIVERY_BATCH_SIZE, 1_000)
+        )
+        .toArray();
+      const groups = new Map<string, typeof candidates>();
+      for (const row of candidates) {
+        const key = `${String(row["target_participant_id"])}\u0000${String(
+          row["target_incarnation"]
+        )}`;
+        const group = groups.get(key) ?? [];
+        if (group.length < STRUCTURED_DELIVERY_BATCH_SIZE) group.push(row);
+        groups.set(key, group);
+      }
+      for (const rows of groups.values()) {
+        if (claims.length >= input.limit || rows.length === 0) break;
+        const participantId = String(rows[0]!["target_participant_id"]);
+        const incarnation = String(rows[0]!["target_incarnation"]);
+        const currentIncarnation = this.sql
+          .exec(
+            `SELECT participant_incarnation FROM participants WHERE id = ? AND transport = 'do'`,
+            participantId
+          )
+          .toArray()[0]?.["participant_incarnation"];
+        if (currentIncarnation !== incarnation) {
+          const disposition =
+            typeof currentIncarnation === "string" ? "terminal-retired" : "terminal-departed";
           this.sql.exec(
-            `DELETE FROM structured_delivery_outbox
-              WHERE participant_id = ? AND delivery_key = ?`,
+            `UPDATE channel_delivery_queue
+                SET disposition = ?, lease_owner = NULL
+              WHERE target_participant_id = ? AND target_incarnation = ?
+                AND disposition NOT LIKE 'terminal-%'`,
+            disposition,
             participantId,
-            deliveryKey
+            incarnation
           );
           continue;
         }
-        const attempts = Number(row["attempts"] ?? 0) + 1;
-        const retryMs = Math.min(
-          STRUCTURED_DELIVERY_RETRY_MS * 2 ** Math.min(attempts - 1, 5),
-          STRUCTURED_DELIVERY_MAX_RETRY_MS
-        );
-        this.sql.exec(
-          `UPDATE structured_delivery_outbox
-              SET attempts = ?, next_attempt_at = ?
-            WHERE participant_id = ? AND delivery_key = ?`,
-          attempts,
-          Date.now() + retryMs,
-          participantId,
-          deliveryKey
-        );
-        console.error(`[Channel] delivery failed for ${participantId}:`, error);
+        const target = parseDOParticipantId(participantId);
+        if (!target) {
+          this.sql.exec(
+            `UPDATE channel_delivery_queue
+                SET disposition = 'terminal-integrity',
+                    lease_owner = NULL
+              WHERE target_participant_id = ? AND target_incarnation = ?`,
+            participantId,
+            incarnation
+          );
+          continue;
+        }
+        const generation = Math.max(...rows.map((row) => Number(row["lease_generation"] ?? 0))) + 1;
+        for (const row of rows) {
+          this.sql.exec(
+            `UPDATE channel_delivery_queue
+                SET disposition = 'leased',
+                    lease_owner = ?,
+                    lease_generation = ?,
+                    last_attempt_at = ?
+              WHERE target_participant_id = ?
+                AND target_incarnation = ?
+                AND delivery_key = ?`,
+            input.workerId,
+            generation,
+            input.now,
+            participantId,
+            incarnation,
+            String(row["delivery_key"])
+          );
+        }
+        const batch: ChannelDeliveryBatch = {
+          channelId: this.objectKey,
+          channelRef: {
+            source: String(this.env["WORKER_SOURCE"]),
+            className: String(this.env["WORKER_CLASS_NAME"]),
+            objectKey: this.objectKey,
+          },
+          sourceIncarnation: String(this.env["WORKERD_SESSION_ID"]),
+          targetIncarnation: incarnation,
+          rows: rows.map((row) => ({
+            deliveryKey: String(row["delivery_key"]),
+            channelSeq: Number(row["channel_seq"]),
+            envelope: JSON.parse(String(row["envelope_json"])) as RpcChannelMessage,
+          })),
+        };
+        claims.push({
+          itemId: JSON.stringify([participantId, incarnation, generation]),
+          generation,
+          idempotencyKey: `channel-delivery-batch:${this.objectKey}:${participantId}:${incarnation}:${generation}`,
+          createdAt: Math.min(...rows.map((row) => Number(row["created_at"]))),
+          attempt: Math.max(...rows.map((row) => Number(row["attempts"] ?? 0))) + 1,
+          payload: {
+            laneKey: `${participantId}\u0000${incarnation}`,
+            target,
+            batch,
+          },
+        });
       }
+      return claims;
+    });
+    if (!this.durableWorkStatus().readyQueues.includes("channel-delivery")) {
+      this.acknowledgeDurableWorkReady("channel-delivery");
     }
+    return claims;
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  settleReadyWork(
+    queue: DurableWorkQueue,
+    request: SettleRequest<ChannelDeliveryBatchOutcome | { processed: true }>
+  ): ClaimSettlement {
+    if (queue !== "channel-delivery") return "stale";
+    if (request.itemId.startsWith("maintenance:")) {
+      return this.ctx.storage.transactionSync(() => {
+        const row = this.sql
+          .exec(
+            `SELECT lease_owner, lease_generation, disposition
+               FROM channel_maintenance_queue
+              WHERE item_id = ?`,
+            request.itemId
+          )
+          .toArray()[0];
+        if (!row) return "duplicate";
+        if (
+          row["lease_owner"] !== request.workerId ||
+          Number(row["lease_generation"]) !== request.generation ||
+          row["disposition"] !== "leased"
+        ) {
+          return "stale";
+        }
+        this.sql.exec(`DELETE FROM channel_maintenance_queue WHERE item_id = ?`, request.itemId);
+        return "accepted";
+      });
+    }
+    const parsed = JSON.parse(request.itemId) as unknown;
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length !== 3 ||
+      typeof parsed[0] !== "string" ||
+      typeof parsed[1] !== "string" ||
+      parsed[2] !== request.generation
+    ) {
+      throw new Error("settleReadyWork: invalid channel batch identity");
+    }
+    const [participantId, incarnation] = parsed;
+    if (
+      !request.outcome ||
+      typeof request.outcome !== "object" ||
+      !Array.isArray((request.outcome as ChannelDeliveryBatchOutcome).perRow)
+    ) {
+      throw new Error("settleReadyWork: invalid channel batch outcome");
+    }
+    const outcome = request.outcome as ChannelDeliveryBatchOutcome;
+    return this.ctx.storage.transactionSync(() => {
+      const leased = this.sql
+        .exec(
+          `SELECT channel_seq
+             FROM channel_delivery_queue
+            WHERE target_participant_id = ?
+              AND target_incarnation = ?
+              AND lease_owner = ?
+              AND lease_generation = ?
+              AND disposition = 'leased'`,
+          participantId,
+          incarnation,
+          request.workerId,
+          request.generation
+        )
+        .toArray();
+      if (leased.length === 0) {
+        const newer = this.sql
+          .exec(
+            `SELECT 1 FROM channel_delivery_queue
+              WHERE target_participant_id = ?
+                AND target_incarnation = ?
+                AND lease_generation > ?
+              LIMIT 1`,
+            participantId,
+            incarnation,
+            request.generation
+          )
+          .toArray();
+        return newer.length > 0 ? "stale" : "duplicate";
+      }
+      const highest = outcome.highestContiguousCommittedSeq;
+      if (!Number.isSafeInteger(highest)) {
+        throw new Error("settleReadyWork: invalid contiguous sequence");
+      }
+      const releasable = this.sql
+        .exec(
+          `SELECT delivery_key, channel_seq
+             FROM channel_delivery_queue
+            WHERE target_participant_id = ?
+              AND target_incarnation = ?
+              AND lease_owner = ?
+              AND lease_generation = ?
+            ORDER BY channel_seq`,
+          participantId,
+          incarnation,
+          request.workerId,
+          request.generation
+        )
+        .toArray();
+      const leasedKeys = new Set(releasable.map((row) => String(row["delivery_key"])));
+      const acceptedKeys = new Set<string>();
+      for (const row of outcome.perRow) {
+        if (
+          (row.disposition !== "accepted" && row.disposition !== "duplicate-match") ||
+          !leasedKeys.has(row.deliveryKey) ||
+          acceptedKeys.has(row.deliveryKey)
+        ) {
+          throw new Error("settleReadyWork: invalid per-row acknowledgement");
+        }
+        acceptedKeys.add(row.deliveryKey);
+      }
+      const highestLeased = Math.max(...releasable.map((row) => Number(row["channel_seq"])));
+      if (highest !== highestLeased || acceptedKeys.size !== leasedKeys.size) {
+        throw new Error("settleReadyWork: acknowledgement does not cover the leased batch");
+      }
+      for (const row of releasable) {
+        const seq = Number(row["channel_seq"]);
+        if (seq <= highest && !acceptedKeys.has(String(row["delivery_key"]))) {
+          throw new Error("settleReadyWork: acknowledgement has a gap");
+        }
+      }
+      this.sql.exec(
+        `DELETE FROM channel_delivery_queue
+          WHERE target_participant_id = ?
+            AND target_incarnation = ?
+            AND lease_owner = ?
+            AND lease_generation = ?
+            AND channel_seq <= ?`,
+        participantId,
+        incarnation,
+        request.workerId,
+        request.generation,
+        highest
+      );
+      this.sql.exec(
+        `UPDATE channel_delivery_queue
+            SET disposition = 'ready',
+                lease_owner = NULL,
+                next_attempt_at = ?
+          WHERE target_participant_id = ?
+            AND target_incarnation = ?
+            AND lease_owner = ?
+            AND lease_generation = ?`,
+        Date.now(),
+        participantId,
+        incarnation,
+        request.workerId,
+        request.generation
+      );
+      return "accepted";
+    });
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  failReadyWork(
+    queue: DurableWorkQueue,
+    request: { workerId: string; itemId: string; generation: number }
+  ): { retryAt: number } | "stale" {
+    if (queue !== "channel-delivery") return "stale";
+    if (request.itemId.startsWith("maintenance:")) {
+      return this.ctx.storage.transactionSync(() => {
+        const row = this.sql
+          .exec(
+            `SELECT attempts
+               FROM channel_maintenance_queue
+              WHERE item_id = ?
+                AND lease_owner = ?
+                AND lease_generation = ?
+                AND disposition = 'leased'`,
+            request.itemId,
+            request.workerId,
+            request.generation
+          )
+          .toArray()[0];
+        if (!row) return "stale";
+        const attempts = Number(row["attempts"] ?? 0) + 1;
+        const retryAt =
+          Date.now() +
+          Math.min(
+            STRUCTURED_DELIVERY_RETRY_MS * 2 ** Math.min(attempts - 1, 5),
+            STRUCTURED_DELIVERY_MAX_RETRY_MS
+          );
+        this.sql.exec(
+          `UPDATE channel_maintenance_queue
+              SET attempts = ?,
+                  disposition = 'retrying',
+                  next_attempt_at = ?,
+                  lease_owner = NULL
+            WHERE item_id = ?
+              AND lease_owner = ?
+              AND lease_generation = ?`,
+          attempts,
+          retryAt,
+          request.itemId,
+          request.workerId,
+          request.generation
+        );
+        return { retryAt };
+      });
+    }
+    const parsed = JSON.parse(request.itemId) as [string, string, number];
+    const [participantId, incarnation, generation] = parsed;
+    if (generation !== request.generation) return "stale";
+    return this.ctx.storage.transactionSync(() => {
+      const rows = this.sql
+        .exec(
+          `SELECT attempts
+             FROM channel_delivery_queue
+            WHERE target_participant_id = ?
+              AND target_incarnation = ?
+              AND lease_owner = ?
+              AND lease_generation = ?
+              AND disposition = 'leased'`,
+          participantId,
+          incarnation,
+          request.workerId,
+          request.generation
+        )
+        .toArray();
+      if (rows.length === 0) return "stale";
+      const attempts = Math.max(...rows.map((row) => Number(row["attempts"] ?? 0))) + 1;
+      const delay = Math.min(
+        STRUCTURED_DELIVERY_RETRY_MS * 2 ** Math.min(attempts - 1, 5),
+        STRUCTURED_DELIVERY_MAX_RETRY_MS
+      );
+      const retryAt = Date.now() + delay;
+      this.sql.exec(
+        `UPDATE channel_delivery_queue
+            SET attempts = ?,
+                disposition = 'retrying',
+                next_attempt_at = ?,
+                lease_owner = NULL
+          WHERE target_participant_id = ?
+            AND target_incarnation = ?
+            AND lease_owner = ?
+            AND lease_generation = ?`,
+        attempts,
+        retryAt,
+        participantId,
+        incarnation,
+        request.workerId,
+        request.generation
+      );
+      return { retryAt };
+    });
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
+  durableWorkStatus(): { readyQueues: DurableWorkQueue[]; nextRecoveryAt: number | null } {
+    const now = Date.now();
+    const deliveryReady =
+      this.sql
+        .exec(
+          `SELECT 1
+             FROM channel_delivery_queue
+            WHERE disposition IN ('ready', 'retrying') AND next_attempt_at <= ?
+            LIMIT 1`,
+          now
+        )
+        .toArray().length > 0;
+    const ready = deliveryReady || this.hasReadyMaintenance(now);
+    const recoveryTimes = [
+      this.nextStructuredDeliveryRecoveryAt(),
+      this.nextMaintenanceRecoveryAt(),
+      this.nextDurableWorkReadyEdgeAt(),
+    ].filter((value): value is number => typeof value === "number");
+    return {
+      readyQueues: ready ? ["channel-delivery"] : [],
+      nextRecoveryAt: recoveryTimes.length > 0 ? Math.min(...recoveryTimes) : null,
+    };
   }
 
   private get channelLog(): ChannelLog {
@@ -823,9 +1539,12 @@ export class PubSubChannel extends DurableObjectBase {
       .exec(`SELECT id, metadata FROM participants ORDER BY id ASC`)
       .toArray()) {
       try {
+        const id = row["id"] as string;
+        const metadata = JSON.parse(row["metadata"] as string) as Record<string, unknown>;
         participants.push({
-          id: row["id"] as string,
-          metadata: JSON.parse(row["metadata"] as string),
+          id,
+          ref: participantRefFromMetadata(id, metadata),
+          metadata,
         });
       } catch {
         /* ignore corrupt participant metadata */
@@ -1051,6 +1770,7 @@ export class PubSubChannel extends DurableObjectBase {
     const publicMetadata = publicParticipantMetadata(metadata) ?? {};
     const payload: PresencePayload = {
       action,
+      ref: participantRefFromMetadata(senderId, publicMetadata),
       metadata: publicMetadata,
       ...(leaveReason ? { leaveReason } : {}),
     };
@@ -1072,6 +1792,7 @@ export class PubSubChannel extends DurableObjectBase {
   ): void {
     const payload: PresencePayload = {
       action,
+      ref: participantRefFromMetadata(senderId, metadata),
       metadata,
       ...(leaveReason ? { leaveReason } : {}),
     };
@@ -1148,7 +1869,12 @@ export class PubSubChannel extends DurableObjectBase {
 
   /** Durable per-channel human presence, including offline members who have no
    * roster row. Status is server-derived from real activity and session count. */
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async getChannelPresence(): Promise<{ entries: ChannelPresenceEntry[]; generatedAt: number }> {
     const generatedAt = Date.now();
     const entries = new Map<string, ChannelPresenceEntry>();
@@ -1208,7 +1934,12 @@ export class PubSubChannel extends DurableObjectBase {
    * Subscribe a participant to this channel. Inserts the participant first,
    * then builds replay, so an initial roster snapshot includes the subscriber.
    */
-  @rpc({ principals: ["user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async subscribe(participantId: string, metadata: Record<string, unknown>): Promise<Response> {
     const doRef = parseDOParticipantId(participantId);
     const transport = doRef ? "do" : "rpc";
@@ -1301,7 +2032,13 @@ export class PubSubChannel extends DurableObjectBase {
       if (!active || active.id !== participantId || active.kind !== "do") {
         throw new Error(`subscribe: Durable Object participant ${participantId} is not active`);
       }
-      reopenDeliveryChain(this.objectKey, participantId);
+    }
+    const participantIncarnation =
+      typeof metadata["incarnation"] === "string" && metadata["incarnation"].length > 0
+        ? metadata["incarnation"]
+        : null;
+    if (doRef && participantIsAgentVessel(metadata) && !participantIncarnation) {
+      throw new Error(`subscribe: Durable Object participant ${participantId} has no incarnation`);
     }
 
     // Active response resources are the one source of subscription lifetime.
@@ -1335,8 +2072,8 @@ export class PubSubChannel extends DurableObjectBase {
           this.sql.exec(
             `INSERT INTO participants (
                id, metadata, transport, last_active_at, presence_status, handle,
-               do_source, do_class, do_object_key
-             ) VALUES (?, ?, 'rpc', ?, 'online', NULL, NULL, NULL, NULL)
+               do_source, do_class, do_object_key, participant_incarnation
+             ) VALUES (?, ?, 'rpc', ?, 'online', NULL, NULL, NULL, NULL, NULL)
              ON CONFLICT(id) DO UPDATE SET
                metadata = excluded.metadata,
                transport = excluded.transport,
@@ -1350,26 +2087,42 @@ export class PubSubChannel extends DurableObjectBase {
           this.sql.exec(`DELETE FROM presence_last_seen WHERE participant_id = ?`, participantId);
         });
       } else {
-        this.sql.exec(
-          `INSERT INTO participants (
-             id, metadata, transport, last_active_at, presence_status, handle,
-             do_source, do_class, do_object_key
-           ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET
-             metadata = excluded.metadata,
-             transport = excluded.transport,
-             handle = excluded.handle,
-             do_source = excluded.do_source,
-             do_class = excluded.do_class,
-             do_object_key = excluded.do_object_key`,
-          participantId,
-          JSON.stringify(storedMetadata),
-          transport === "do" ? "do" : "rpc",
-          handle,
-          doRef?.source ?? null,
-          doRef?.className ?? null,
-          doRef?.objectKey ?? null
-        );
+        this.ctx.storage.transactionSync(() => {
+          if (doRef) {
+            this.sql.exec(
+              `UPDATE channel_delivery_queue
+                  SET disposition = 'terminal-retired',
+                      lease_owner = NULL
+                WHERE target_participant_id = ?
+                  AND target_incarnation != ?
+                  AND disposition NOT LIKE 'terminal-%'`,
+              participantId,
+              participantIncarnation
+            );
+          }
+          this.sql.exec(
+            `INSERT INTO participants (
+               id, metadata, transport, last_active_at, presence_status, handle,
+               do_source, do_class, do_object_key, participant_incarnation
+             ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               metadata = excluded.metadata,
+               transport = excluded.transport,
+               handle = excluded.handle,
+               do_source = excluded.do_source,
+               do_class = excluded.do_class,
+               do_object_key = excluded.do_object_key,
+               participant_incarnation = excluded.participant_incarnation`,
+            participantId,
+            JSON.stringify(storedMetadata),
+            transport === "do" ? "do" : "rpc",
+            handle,
+            doRef?.source ?? null,
+            doRef?.className ?? null,
+            doRef?.objectKey ?? null,
+            participantIncarnation
+          );
+        });
       }
     } catch (err) {
       if (handle && err instanceof Error && /unique/iu.test(err.message)) {
@@ -1406,7 +2159,12 @@ export class PubSubChannel extends DurableObjectBase {
     });
   }
 
-  @rpc({ principals: ["host", "user"], effect: { kind: "semantic", capability: "channel.admin" }, tier: "gated", sensitivity: "admin" })
+  @rpc({
+    principals: ["host", "user"],
+    effect: { kind: "semantic", capability: "channel.admin" },
+    tier: "gated",
+    sensitivity: "admin",
+  })
   async adminUnsubscribeParticipant(participantId: string): Promise<void> {
     await this.unsubscribeParticipant(participantId, "graceful");
   }
@@ -1417,7 +2175,12 @@ export class PubSubChannel extends DurableObjectBase {
    * can prove that accepted structured deliveries were drained before retiring
    * the participant runtime.
    */
-  @rpc({ principals: ["user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async unsubscribe(participantId: string): Promise<void> {
     this.assertParticipantCaller(participantId, "unsubscribe");
     await this.unsubscribeParticipant(participantId, "graceful");
@@ -1428,7 +2191,12 @@ export class PubSubChannel extends DurableObjectBase {
    * stream and cancels structured callbacks into that activation, but retains
    * semantic membership for the replacement activation to reconstruct.
    */
-  @rpc({ principals: ["user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async releaseSubscription(participantId: string): Promise<void> {
     this.assertParticipantCaller(participantId, "releaseSubscription");
     const caller = this.caller;
@@ -1437,10 +2205,6 @@ export class PubSubChannel extends DurableObjectBase {
       throw new Error("releaseSubscription: authenticated delivery identity is required");
     }
     this.closeSubscriptionStream(participantId, deliveryId);
-    const metadata = this.getSenderMetadata(participantId);
-    if (metadata && participantIsAgentVessel(metadata)) {
-      await releaseDeliveryChain(this.objectKey, participantId);
-    }
   }
 
   private async unsubscribeParticipant(
@@ -1463,21 +2227,20 @@ export class PubSubChannel extends DurableObjectBase {
     if (this.participantSubscriptionCount(participantId) > 0) return;
     if (!participantExists) return;
 
-    // A participant row is also the authority anchor for structured delivery.
-    // Drain its accepted delivery lane before deleting that anchor or retiring
-    // the runtime can turn a legitimate late envelope into EACCES.
-    await closeDeliveryChain(this.objectKey, participantId);
     this.ctx.storage.transactionSync(() => {
       if (isUserParticipantId(participantId)) {
         this.recordOfflinePresence(participantId, Date.now());
       }
       this.sql.exec(`DELETE FROM participants WHERE id = ?`, participantId);
       this.sql.exec(
-        `DELETE FROM structured_delivery_outbox WHERE participant_id = ?`,
+        `UPDATE channel_delivery_queue
+            SET disposition = 'terminal-departed',
+                lease_owner = NULL
+          WHERE target_participant_id = ?
+            AND disposition NOT LIKE 'terminal-%'`,
         participantId
       );
     });
-    cleanupDeliveryChain(this.objectKey, participantId);
     await this.calls.failPendingCallsTargeting(participantId, leaveReason);
     await this.publishPresenceEvent(
       participantId,
@@ -1504,7 +2267,12 @@ export class PubSubChannel extends DurableObjectBase {
    * GAD validates agentic payloads at append-time inside the txn; policies
    * annotate (never mutate) the envelope.
    */
-  @rpc({ principals: ["code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async publish(
     participantId: string,
     type: string,
@@ -1568,7 +2336,12 @@ export class PubSubChannel extends DurableObjectBase {
    * role assistant for an agent), carrying the same addressing fields
    * (`to`/`mentions`) a participant's message would.
    */
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async sendAsCaller(
     text: string,
     opts?: {
@@ -1621,7 +2394,12 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Policy fold state (replaces getConversationState — WS2 §4.4). */
-  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async getPolicyState(name?: string): Promise<{
     policy: string;
     version: number;
@@ -1671,7 +2449,12 @@ export class PubSubChannel extends DurableObjectBase {
    * Broadcast envelopes that were durably appended to GAD outside this DO
    * (trajectory publication fan-out). Folds each into the policy caches.
    */
-  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async broadcastStoredEnvelopes(envelopeIds: string[]): Promise<{ broadcasted: number }> {
     let broadcasted = 0;
     for (const envelopeId of envelopeIds) {
@@ -1686,7 +2469,12 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Mark a message as errored (durable `error` channel event). */
-  @rpc({ principals: ["code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async error(
     participantId: string,
     messageId: string,
@@ -1707,7 +2495,12 @@ export class PubSubChannel extends DurableObjectBase {
     broadcast(this.broadcastDeps, event, { kind: "log", phase: "live" }, participantId);
   }
 
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async getReplayAfter(request: ChannelReplayAfterRequest) {
     return this.channelLog.replayAfter(request, this.currentReplayContext());
   }
@@ -1715,13 +2508,23 @@ export class PubSubChannel extends DurableObjectBase {
   /** Return one durable envelope by its stable envelope id, or null when that
    * id belongs to another log (for example a VCS commit id). This is a pure,
    * lineage-aware lookup used by panels, agents, and diagnostic evals. */
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async getEnvelope(envelopeId: string): Promise<ChannelEvent | null> {
     return this.channelLog.getEventByEnvelopeId(envelopeId);
   }
 
   /** Send a non-durable signal message. */
-  @rpc({ principals: ["code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async sendSignal(participantId: string, content: string, contentType?: string): Promise<void> {
     this.assertParticipantCaller(participantId, "sendSignal");
     this.markParticipantActive(participantId);
@@ -1745,14 +2548,24 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Replace a participant's metadata entirely. */
-  @rpc({ principals: ["code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async updateMetadata(participantId: string, metadata: Record<string, unknown>): Promise<void> {
     this.assertParticipantCaller(participantId, "updateMetadata");
     this.markParticipantActive(participantId);
     await this.updateParticipantMetadata(participantId, metadata);
   }
 
-  @rpc({ principals: ["host", "user"], effect: { kind: "semantic", capability: "channel.admin" }, tier: "gated", sensitivity: "admin" })
+  @rpc({
+    principals: ["host", "user"],
+    effect: { kind: "semantic", capability: "channel.admin" },
+    tier: "gated",
+    sensitivity: "admin",
+  })
   async adminUpdateParticipantMetadata(
     participantId: string,
     metadata: Record<string, unknown>
@@ -1777,14 +2590,24 @@ export class PubSubChannel extends DurableObjectBase {
     await this.publishPresenceEvent(participantId, "update", stored);
   }
 
-  @rpc({ principals: ["code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async setTypingState(participantId: string, typing: boolean): Promise<void> {
     this.assertParticipantCaller(participantId, "setTypingState");
     if (typing) this.markParticipantActive(participantId);
     this.setParticipantTypingState(participantId, typing);
   }
 
-  @rpc({ principals: ["host", "user"], effect: { kind: "semantic", capability: "channel.admin" }, tier: "gated", sensitivity: "admin" })
+  @rpc({
+    principals: ["host", "user"],
+    effect: { kind: "semantic", capability: "channel.admin" },
+    tier: "gated",
+    sensitivity: "admin",
+  })
   async adminSetParticipantTypingState(participantId: string, typing: boolean): Promise<void> {
     this.setParticipantTypingState(participantId, typing);
   }
@@ -1804,10 +2627,16 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Get all participants with DO identity when available. */
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async getParticipants(): Promise<
     Array<{
       participantId: string;
+      ref: ParticipantRef;
       metadata: Record<string, unknown>;
       transport: string;
       doRef?: { source: string; className: string; objectKey: string };
@@ -1818,14 +2647,17 @@ export class PubSubChannel extends DurableObjectBase {
       .toArray();
     return rows.map((row) => {
       const participantId = row["id"] as string;
+      const metadata = JSON.parse(row["metadata"] as string) as Record<string, unknown>;
       const entry: {
         participantId: string;
+        ref: ParticipantRef;
         metadata: Record<string, unknown>;
         transport: string;
         doRef?: { source: string; className: string; objectKey: string };
       } = {
         participantId,
-        metadata: JSON.parse(row["metadata"] as string),
+        ref: participantRefFromMetadata(participantId, metadata),
+        metadata,
         transport: row["transport"] as string,
       };
       if (row["do_source"] && row["do_class"] && row["do_object_key"]) {
@@ -1859,7 +2691,12 @@ export class PubSubChannel extends DurableObjectBase {
    * host-verified `userId` (WP4). Idempotent: re-adding refreshes the handle
    * snapshot without a second invite.
    */
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async addMember(input: { userId: string }): Promise<ChannelMember & { alreadyMember: boolean }> {
     const targetUserId = requireBareUserId(input?.userId, "addMember");
     const memberId = toUserMemberId(targetUserId);
@@ -1964,7 +2801,12 @@ export class PubSubChannel extends DurableObjectBase {
 
   /** Remove a member from this channel (WP7 §3, §10.3 — a user may remove
    *  themselves; mutual trust means anyone may, no ACL). History stays visible. */
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "semantic", capability: "channel.members.remove" }, tier: "critical", sensitivity: "destructive" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "semantic", capability: "channel.members.remove" },
+    tier: "critical",
+    sensitivity: "destructive",
+  })
   async removeMember(input: { userId: string }): Promise<{ removed: boolean }> {
     const userId = requireBareUserId(input?.userId, "removeMember");
     const memberId = toUserMemberId(userId);
@@ -1991,7 +2833,12 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** List this channel's durable members (WP7 §3). Ordered by add time. */
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async listMembers(): Promise<{ members: ChannelMember[] }> {
     const rows = this.sql
       .exec(
@@ -2018,7 +2865,12 @@ export class PubSubChannel extends DurableObjectBase {
    * identity is host-verified and the indexed lookup is exact; no client-supplied
    * user id and no channel enumeration participate in discovery.
    */
-  @rpc({ principals: ["user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async listInvitesForMe(): Promise<{ invites: ChannelInvite[] }> {
     const caller = this.caller;
     if (!caller?.userId) throw new Error("listInvitesForMe requires an authenticated user");
@@ -2030,7 +2882,12 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Remove the calling user's invite from the canonical workspace inbox. */
-  @rpc({ principals: ["user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async acknowledgeInvite(): Promise<{ acknowledged: boolean }> {
     const caller = this.caller;
     if (!caller?.userId) throw new Error("acknowledgeInvite requires an authenticated user");
@@ -2149,20 +3006,22 @@ export class PubSubChannel extends DurableObjectBase {
     }
   }
 
-  private async flushInviteIndexOps(): Promise<void> {
-    const memberIds = this.sql
-      .exec(`SELECT user_id FROM invite_index_ops ORDER BY updated_at ASC`)
-      .toArray()
-      .map((row) => String(row["user_id"]));
-    await Promise.all(memberIds.map((memberId) => this.flushInviteIndexOp(memberId)));
-  }
-
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async getContextId(): Promise<string | null> {
     return this.getStateValue("contextId");
   }
 
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async getConfig(): Promise<ChannelConfig | null> {
     return this.getChannelConfig();
   }
@@ -2172,7 +3031,12 @@ export class PubSubChannel extends DurableObjectBase {
    * immutable participant set. Repeated identical initialization is safe;
    * any drift is a programming error rather than an implicit policy update.
    */
-  @rpc({ principals: ["host"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async initializeLockedChannel(
     contextId: string,
     config: ChannelConfig & { membershipPolicy: LockedChannelMembershipPolicy }
@@ -2207,7 +3071,12 @@ export class PubSubChannel extends DurableObjectBase {
     return normalizedConfig;
   }
 
-  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async updateConfig(config: Partial<ChannelConfig>): Promise<ChannelConfig> {
     if ("membershipPolicy" in config) {
       throw new Error(
@@ -2227,7 +3096,12 @@ export class PubSubChannel extends DurableObjectBase {
     return newConfig;
   }
 
-  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async getReplayBefore(beforeSeq: number, limit?: number) {
     return this.channelLog.replayBefore(beforeSeq, limit ?? 100, this.currentReplayContext());
   }
@@ -2235,17 +3109,32 @@ export class PubSubChannel extends DurableObjectBase {
   // Registry reads: direct passthrough to GAD's channel_message_types
   // projection (hydrated — published `source` payloads are blob-spilled).
 
-  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async getMessageTypes(): Promise<MessageTypeDefinition[]> {
     return this.channelLog.listMessageTypes();
   }
 
-  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async getMessageType(typeId: string): Promise<MessageTypeDefinition | null> {
     return this.channelLog.getMessageType(typeId);
   }
 
-  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async getMessageSender(participantId: string, messageId: string): Promise<string | null> {
     this.assertParticipantCaller(participantId, "getMessageSender");
     const replay = await this.channelLog.replayInitial(500, this.currentReplayContext());
@@ -2262,7 +3151,12 @@ export class PubSubChannel extends DurableObjectBase {
     return null;
   }
 
-  @rpc({ principals: ["host", "user"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async adminInspectSchema() {
     const tableNames = [
       "participants",
@@ -2301,7 +3195,12 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async adminInspectLog(
     opts: {
       afterId?: number;
@@ -2328,12 +3227,22 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async adminInspectEnvelope(envelopeId: string) {
     return { rows: await this.channelLog.inspectEnvelope(envelopeId) };
   }
 
-  @rpc({ principals: ["host", "user"], effect: { kind: "semantic", capability: "channel.admin" }, tier: "gated", sensitivity: "admin" })
+  @rpc({
+    principals: ["host", "user"],
+    effect: { kind: "semantic", capability: "channel.admin" },
+    tier: "gated",
+    sensitivity: "admin",
+  })
   async adminReconstructTranscript(opts: { rootLimit?: number; beforeSeq?: number } = {}) {
     const envelope =
       opts.beforeSeq != null
@@ -2348,7 +3257,12 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async adminInspectAgent(
     participantId: string,
     methodName = "getDebugState"
@@ -2356,7 +3270,12 @@ export class PubSubChannel extends DurableObjectBase {
     return this.inspectAgentReadOnly(participantId, methodName);
   }
 
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async inspectAgent(
     participantId: string,
     methodName = "getDebugState"
@@ -2468,7 +3387,12 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "user"], effect: { kind: "semantic", capability: "channel.admin" }, tier: "gated", sensitivity: "admin" })
+  @rpc({
+    principals: ["host", "user"],
+    effect: { kind: "semantic", capability: "channel.admin" },
+    tier: "gated",
+    sensitivity: "admin",
+  })
   async adminValidateLog(opts: { rootLimit?: number } = {}) {
     const issues: Array<{ code: string; message: string; rowId?: number }> = [];
     const schema = await this.adminInspectSchema();
@@ -2507,7 +3431,12 @@ export class PubSubChannel extends DurableObjectBase {
 
   // ── Method calls (calls.ts — pending_calls is a declared cache) ──────────
 
-  @rpc({ principals: ["code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async callMethod(
     callerPid: string,
     targetPid: string,
@@ -2521,7 +3450,12 @@ export class PubSubChannel extends DurableObjectBase {
     await this.calls.callMethod(callerPid, targetPid, callId, method, args, opts);
   }
 
-  @rpc({ principals: ["code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async submitMethodResult(
     participantId: string,
     transportCallId: string,
@@ -2584,7 +3518,12 @@ export class PubSubChannel extends DurableObjectBase {
     return { id };
   }
 
-  @rpc({ principals: ["code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async submitMethodProgress(
     participantId: string,
     transportCallId: string,
@@ -2639,13 +3578,23 @@ export class PubSubChannel extends DurableObjectBase {
    * caller before appending the terminal. Server-driven expiry remains the
    * separate `timeoutMethodCall` authority below.
    */
-  @rpc({ principals: ["user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async cancelMethodCall(participantId: string, callId: string): Promise<void> {
     this.assertParticipantCaller(participantId, "cancelMethodCall");
     await this.calls.cancelMethodCall(callId, "cancelled", participantId);
   }
 
-  @rpc({ principals: ["host"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async timeoutMethodCall(callId: string, reason?: string): Promise<void> {
     const pending = await this.calls.cancelMethodCall(callId, reason ?? "timed out");
     if (!pending) return;
@@ -2738,19 +3687,6 @@ export class PubSubChannel extends DurableObjectBase {
     return typeof oldest === "number" ? oldest + INVITE_INDEX_RETRY_MS : null;
   }
 
-  private nextPendingRedeliveryAt(): number | null {
-    const oldest = this.sql
-      .exec(`SELECT MIN(created_at) AS created_at FROM pending_calls`)
-      .toArray()[0]?.["created_at"];
-    if (typeof oldest !== "number") return null;
-    const firstEligible = oldest + PENDING_REDELIVERY_STALE_MS;
-    const lastSwept = Number(this.getStateValue(PENDING_REDELIVERY_SWEPT_AT_KEY) ?? 0);
-    return Math.max(
-      firstEligible,
-      lastSwept > 0 ? lastSwept + PENDING_REDELIVERY_INTERVAL_MS : firstEligible
-    );
-  }
-
   private nextForkOpReconcileAt(): number | null {
     const oldest = this.sql
       .exec(
@@ -2769,9 +3705,10 @@ export class PubSubChannel extends DurableObjectBase {
       this.nextPresenceRetentionSweepAt(),
       this.nextInviteIndexSyncAt(),
       this.calls.nextCallDeadlineAt(),
-      this.nextPendingRedeliveryAt(),
       this.nextForkOpReconcileAt(),
-      this.nextStructuredDeliveryAt(),
+      this.nextStructuredDeliveryRecoveryAt(),
+      this.nextMaintenanceRecoveryAt(),
+      this.nextDurableWorkReadyEdgeAt(),
     ].filter((value): value is number => typeof value === "number");
     return sources.length === 0 ? null : { wakeAt: Math.max(Math.min(...sources), now + 100) };
   }
@@ -2793,52 +3730,11 @@ export class PubSubChannel extends DurableObjectBase {
     // publish succeeds is still swept).
     this.sql.exec(`DELETE FROM dedup_keys WHERE created_at < ?`, Date.now() - DEDUP_TTL_MS);
 
-    await this.flushInviteIndexOps();
-    await this.calls.timeoutExpiredPendingCalls(async (pending, message) => {
-      await this.publishMethodCallFeedback(
-        pending.targetId,
-        pending.transportCallId,
-        pending.method,
-        message
-      );
-    });
-    try {
-      await this.calls.reconcilePendingCalls();
-    } catch (error) {
-      console.warn("[Channel] pending-call reconciliation failed:", error);
+    if (this.durableWorkStatus().readyQueues.length > 0) {
+      this.markWorkReady("channel-delivery");
     }
-    try {
-      const count = Number(
-        this.sql.exec(`SELECT COUNT(*) AS count FROM pending_calls`).toArray()[0]?.["count"] ?? 0
-      );
-      if (count > 0) {
-        await this.redeliverStalePendingCalls();
-        this.setStateValue(PENDING_REDELIVERY_SWEPT_AT_KEY, String(Date.now()));
-      } else {
-        this.setStateValue(PENDING_REDELIVERY_SWEPT_AT_KEY, "0");
-      }
-    } catch (error) {
-      console.warn("[Channel] pending-call redelivery failed:", error);
-    }
-    await this.reconcileForkOps();
-    await this.drainStructuredDeliveryOutbox();
 
     return this.nextAlarmSchedule();
-  }
-
-  private async redeliverStalePendingCalls(): Promise<void> {
-    const targets = this.sql
-      .exec(
-        `SELECT DISTINCT target_id FROM pending_calls WHERE created_at <= ?`,
-        Date.now() - PENDING_REDELIVERY_STALE_MS
-      )
-      .toArray()
-      .map((row) => String(row["target_id"]));
-    for (const targetId of targets) {
-      if (this.participantSubscriptionCount(targetId) > 0) {
-        await this.calls.redeliverPendingCallsTo(targetId);
-      }
-    }
   }
 
   private advancePresenceStatuses(): void {
@@ -2875,7 +3771,12 @@ export class PubSubChannel extends DurableObjectBase {
    * provenance at task-channel creation (B1, WS-5) — until that lands a task
    * channel reads as `root`/`fork`.
    */
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async getProvenance(): Promise<ChannelProvenance> {
     return this.computeProvenance();
   }
@@ -2886,7 +3787,12 @@ export class PubSubChannel extends DurableObjectBase {
    * {@link getProvenance} reports `kind:"task"` instead of `root`. Durable state
    * keys, mirroring how fork provenance is stamped at `postClone`.
    */
-  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async recordTaskProvenance(args: {
     parentChannelId: string;
     parentContextId: string;
@@ -2945,7 +3851,12 @@ export class PubSubChannel extends DurableObjectBase {
     return { source: svc.source, className: svc.className, objectKey: svc.objectKey };
   }
 
-  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async fork(opts: ForkOpts): Promise<ForkResult> {
     const forkId = opts.operationId;
     if (typeof forkId !== "string" || forkId.length < 8) {
@@ -3259,7 +4170,12 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Rename a direct child fork (durable `channel.fork_renamed` on this log). */
-  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async renameFork(forkId: string, label: string): Promise<void> {
     const event: AgenticEvent<"channel.fork_renamed"> = {
       kind: "channel.fork_renamed",
@@ -3276,7 +4192,12 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Archive a direct child fork (durable `channel.fork_archived` latch). */
-  @rpc({ principals: ["host", "code"], effect: { kind: "semantic", capability: "channel.archive" }, tier: "critical", sensitivity: "destructive" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "semantic", capability: "channel.archive" },
+    tier: "critical",
+    sensitivity: "destructive",
+  })
   async archiveFork(forkId: string): Promise<void> {
     const event: AgenticEvent<"channel.fork_archived"> = {
       kind: "channel.fork_archived",
@@ -3301,7 +4222,12 @@ export class PubSubChannel extends DurableObjectBase {
    * shows SIBLING forks by reading the PARENT channel's `listForks` (WS-8
    * deferred this for lack of a cheap getForks RPC).
    */
-  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async listForks(): Promise<{ forks: ForkProjection[] }> {
     const PAGE = 500;
     let view = createInitialChannelViewState();
@@ -3356,29 +4282,6 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  /** Resume every stale, non-terminal fork saga from its durable phase. Each
-   * step uses stable fork-derived identities, so alarm delivery is safe under
-   * at-least-once execution. */
-  private async reconcileForkOps(): Promise<void> {
-    const rows = this.sql
-      .exec(
-        `SELECT fork_id FROM fork_ops
-          WHERE phase NOT IN ('done', 'rolledback') AND updated_at <= ?`,
-        Date.now() - FORK_OP_RECONCILE_MS
-      )
-      .toArray();
-    for (const row of rows) {
-      const forkId = String(row["fork_id"]);
-      try {
-        const op = this.getForkOpRow(forkId);
-        if (op?.["phase"] === "rollback-pending") await this.rollbackForkOp(forkId);
-        else await this.runForkOp(forkId);
-      } catch (error) {
-        console.warn(`[Channel] fork op ${forkId} reconciliation failed:`, error);
-      }
-    }
-  }
-
   // ── appendSeed — fork opening message ──────────────────────────────────────
 
   /**
@@ -3386,7 +4289,12 @@ export class PubSubChannel extends DurableObjectBase {
    * plumbing: the pending fork marker only makes the operation one-shot and
    * crash-resumable for the matching fork id.
    */
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async appendSeed(
     forkOpRef: { forkId: string },
     envelope: ForkSeed
@@ -3461,7 +4369,12 @@ export class PubSubChannel extends DurableObjectBase {
    * fork (WS2 §4.5). Also lands the clone's fork provenance + pending seed
    * marker from the parent fork op (`forkInit`).
    */
-  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async postClone(
     parentChannelId: string,
     forkPointId: number,
@@ -3543,7 +4456,12 @@ export class PubSubChannel extends DurableObjectBase {
   // root; the root fans out to its lineage subscribers. Badges reconcile from
   // durable state on open (§H) — a missed signal is not durable.
 
-  @rpc({ principals: ["code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async subscribeLineage(
     participantId: string,
     metadata: Record<string, unknown> = {}
@@ -3563,14 +4481,24 @@ export class PubSubChannel extends DurableObjectBase {
     return { ok: true };
   }
 
-  @rpc({ principals: ["code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async unsubscribeLineage(participantId: string): Promise<void> {
     this.assertParticipantCaller(participantId, "unsubscribeLineage");
     this.sql.exec(`DELETE FROM lineage_subscribers WHERE id = ?`, participantId);
   }
 
   /** Relay point for a head advance reported up the chain from a descendant. */
-  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async reportLineageHead(report: { channelId: string; headSeq: number }): Promise<void> {
     await this.relayLineageHead(report.channelId, report.headSeq);
   }
@@ -3623,7 +4551,12 @@ export class PubSubChannel extends DurableObjectBase {
 
   // ── State introspection ─────────────────────────────────────────────────
 
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   override async getState(): Promise<Record<string, unknown>> {
     const replay = await this.channelLog.replayInitial(1, this.currentReplayContext());
     const participants = this.sql.exec(`SELECT * FROM participants`).toArray();

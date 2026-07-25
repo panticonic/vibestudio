@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@cfworker/json-schema": "^4.1.1",
     "@workspace/agentic-protocol": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shell-core": "workspace:*",

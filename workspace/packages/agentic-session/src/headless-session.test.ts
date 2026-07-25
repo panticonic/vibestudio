@@ -542,9 +542,16 @@ describe("HeadlessSession", () => {
         (this as unknown as { _channelId: string; _client: unknown })._channelId = channelId;
         (this as unknown as { _client: unknown })._client = { close: vi.fn() };
       });
-    const rpcCall = vi.fn(async (target: string, method: string) => {
+    const rpcCall = vi.fn(async (target: string, method: string, args: unknown[]) => {
       order.push(`rpc:${target}:${method}`);
       if (target === "main" && method === "runtime.createEntity") {
+        if ((args[0] as { source?: string }).source === "workers/pubsub-channel") {
+          return {
+            id: "channel-entity",
+            targetId: "channel-target",
+            contextId: "ctx-1",
+          };
+        }
         return { id: "entity-1", targetId: "agent-target", contextId: "ctx-1" };
       }
       if (target === "agent-target" && method === "subscribeChannel") {
@@ -570,6 +577,7 @@ describe("HeadlessSession", () => {
     }
 
     expect(order).toEqual([
+      "rpc:main:runtime.createEntity",
       "connect:headless-1:set_title",
       "rpc:main:runtime.createEntity",
       "rpc:agent-target:subscribeChannel",
@@ -711,6 +719,19 @@ describe("HeadlessSession", () => {
       }
       if (target === "main" && method === "runtime.createEntity") {
         expect(args[0]).toHaveProperty("contextId", "ctx-isolated");
+        if ((args[0] as { source?: string }).source === "workers/pubsub-channel") {
+          expect(args[0]).toMatchObject({
+            kind: "do",
+            source: "workers/pubsub-channel",
+            className: "PubSubChannel",
+            key: "headless-1",
+          });
+          return {
+            id: "channel-entity",
+            targetId: "channel-target",
+            contextId: "ctx-isolated",
+          };
+        }
         return { id: "entity-1", targetId: "agent-target", contextId: "ctx-isolated" };
       }
       if (target === "agent-target" && method === "subscribeChannel") {
@@ -737,6 +758,7 @@ describe("HeadlessSession", () => {
 
     expect(order).toEqual([
       "rpc:main:runtime.createContext",
+      "rpc:main:runtime.createEntity",
       "connect:headless-1:ctx-isolated",
       "rpc:main:runtime.createEntity",
       "rpc:agent-target:subscribeChannel",

@@ -6,13 +6,12 @@ import {
   executeLocalToolWithDeadline,
 } from "./local-tool-execution.js";
 
-function tool(execute: AgentTool["execute"], executionTimeoutMs?: number): AgentTool {
+function tool(execute: AgentTool["execute"]): AgentTool {
   return {
     name: "probe",
     label: "probe",
     description: "probe",
     parameters: { type: "object" } as never,
-    ...(executionTimeoutMs === undefined ? {} : { executionTimeoutMs }),
     execute,
   };
 }
@@ -26,7 +25,7 @@ describe("executeLocalToolWithDeadline", () => {
         tool(async (_id, _params, signal) => {
           observedSignal = signal;
           return await new Promise(() => {});
-        }, 25),
+        }),
         {
           invocationId: "call-1",
           params: {},
@@ -35,10 +34,14 @@ describe("executeLocalToolWithDeadline", () => {
       );
       const rejected = expect(execution).rejects.toMatchObject({
         code: "tool_execution_timeout",
-        errorData: { tool: "probe", timeoutMs: 25, elapsedMs: 25 },
+        errorData: {
+          tool: "probe",
+          timeoutMs: DEFAULT_LOCAL_TOOL_EXECUTION_TIMEOUT_MS,
+          elapsedMs: DEFAULT_LOCAL_TOOL_EXECUTION_TIMEOUT_MS,
+        },
       } satisfies Partial<LocalToolExecutionTimeoutError>);
 
-      await vi.advanceTimersByTimeAsync(25);
+      await vi.advanceTimersByTimeAsync(DEFAULT_LOCAL_TOOL_EXECUTION_TIMEOUT_MS);
       await rejected;
       expect(observedSignal?.aborted).toBe(true);
       expect(observedSignal?.reason).toBeInstanceOf(LocalToolExecutionTimeoutError);
@@ -65,18 +68,5 @@ describe("executeLocalToolWithDeadline", () => {
     ).resolves.toMatchObject({ details: null });
     expect(DEFAULT_LOCAL_TOOL_EXECUTION_TIMEOUT_MS).toBe(30_000);
     expect(onProgress).toHaveBeenCalledOnce();
-  });
-
-  it("rejects invalid unbounded declarations", async () => {
-    await expect(
-      executeLocalToolWithDeadline(
-        tool(async () => ({ content: [], details: null }), Number.POSITIVE_INFINITY),
-        {
-          invocationId: "call-3",
-          params: {},
-          parentSignal: new AbortController().signal,
-        }
-      )
-    ).rejects.toThrow("invalid executionTimeoutMs");
   });
 });

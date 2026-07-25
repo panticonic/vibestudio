@@ -12,10 +12,31 @@ export interface RuntimeSurfaceMethodDoc {
   examples?: Array<{ args: unknown[]; returns?: unknown }>;
 }
 
-export interface RuntimeSurfaceEntry {
-  kind: "value" | "namespace";
+interface RuntimeSurfaceEntryBase {
   description?: string;
-  members?: string[];
+}
+
+/** An opaque runtime value whose contract is owned by the runtime package. */
+export interface RuntimeSurfaceValueEntry extends RuntimeSurfaceEntryBase {
+  kind: "value";
+  schemaRef?: never;
+  schemaMethod?: never;
+  members?: never;
+  methodCatalog?: never;
+}
+
+/** A direct callable whose complete contract comes from one service method. */
+export interface RuntimeSurfaceCallableEntry extends RuntimeSurfaceEntryBase {
+  kind: "callable";
+  schemaRef: string;
+  schemaMethod: string;
+  members?: never;
+  methodCatalog?: never;
+}
+
+export interface RuntimeSurfaceNamespaceEntry extends RuntimeSurfaceEntryBase {
+  kind: "namespace";
+  members: string[];
   /**
    * Optional link to the RPC service whose typed method schemas back this
    * runtime export (e.g. the `gad` runtime namespace → the `gad` service). Lets
@@ -23,10 +44,16 @@ export interface RuntimeSurfaceEntry {
    * runtime surface. Best-effort: most runtime exports have no Zod counterpart.
    */
   schemaRef?: string;
+  schemaMethod?: never;
   /** Pre-serialized public member schemas for runtime-owned APIs whose source
    * contract lives above the host/shared dependency boundary. */
   methodCatalog?: Record<string, RuntimeSurfaceMethodDoc>;
 }
+
+export type RuntimeSurfaceEntry =
+  | RuntimeSurfaceValueEntry
+  | RuntimeSurfaceCallableEntry
+  | RuntimeSurfaceNamespaceEntry;
 
 export interface RuntimeSurface {
   target: RuntimeSurfaceTarget;
@@ -34,11 +61,23 @@ export interface RuntimeSurface {
   exports: Record<string, RuntimeSurfaceEntry>;
 }
 
-export function valueEntry(description?: string, schemaRef?: string): RuntimeSurfaceEntry {
+export function valueEntry(description?: string): RuntimeSurfaceValueEntry {
   return {
     kind: "value",
     ...(description ? { description } : {}),
-    ...(schemaRef ? { schemaRef } : {}),
+  };
+}
+
+export function callableEntry(
+  schemaRef: string,
+  schemaMethod: string,
+  description?: string
+): RuntimeSurfaceCallableEntry {
+  return {
+    kind: "callable",
+    schemaRef,
+    schemaMethod,
+    ...(description ? { description } : {}),
   };
 }
 
@@ -47,7 +86,7 @@ export function namespaceEntry(
   description?: string,
   schemaRef?: string,
   methodCatalog?: Record<string, RuntimeSurfaceMethodDoc>
-): RuntimeSurfaceEntry {
+): RuntimeSurfaceNamespaceEntry {
   return {
     kind: "namespace",
     members,

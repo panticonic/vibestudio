@@ -22,6 +22,7 @@ const WORKSPACE_TABLES = [
   "lifecycle_leases",
   "lifecycle_ops",
   "do_alarms",
+  "durable_work_owners",
   "recurring_jobs",
 ];
 const CURRENT_SCHEMA_VERSION = WorkspaceDO.schemaVersion;
@@ -88,33 +89,11 @@ function activateAlarmKey(
 }
 
 describe("WorkspaceDO exact pre-release schema", () => {
-  it("migrates the v24 production schema to the preparing lifecycle without losing rows", async () => {
-    const first = await createTestDO(WorkspaceDOTestable);
-    const existing = first.instance.entityActivate(panelInput());
-    first.db.run(`DROP TABLE do_alarm_test_policies`);
-    first.db.run(`DELETE FROM _vibestudio_schema_migrations`);
-    first.db.run(
-      `INSERT INTO _vibestudio_schema_migrations (version, name, applied_at)
-       VALUES (24, 'fresh-install:workspace-state-v24', 1)`
+  it("requires a fresh database for the v28 generation-claim schema", async () => {
+    const db = await createDbAtSchemaVersion(27);
+    await expect(createTestDO(WorkspaceDOTestable, undefined, { db })).rejects.toThrow(
+      /predates production baseline 28/u
     );
-    first.db.run(`UPDATE state SET value = '24' WHERE key = 'schema_version'`);
-
-    const migrated = await createTestDO(WorkspaceDOTestable, undefined, { db: first.db });
-    expect(migrated.instance.entityResolve(existing.id)).toMatchObject({
-      id: existing.id,
-      status: "active",
-    });
-    expect(
-      first.db.exec(`SELECT version, name FROM _vibestudio_schema_migrations ORDER BY version`)[0]!
-        .values
-    ).toEqual([
-      [24, "fresh-install:workspace-state-v24"],
-      [25, "introduce-preparing-panel-lifecycle"],
-      [26, "persist-test-authority-with-owned-alarms"],
-    ]);
-    expect(
-      first.db.exec(`SELECT value FROM state WHERE key = 'schema_version'`)[0]!.values
-    ).toEqual([["26"]]);
   });
 
   it("creates one exact fresh schema containing the complete execution identity", async () => {
@@ -132,6 +111,19 @@ describe("WorkspaceDO exact pre-release schema", () => {
     ).toEqual(
       expect.arrayContaining(["active_build_key", "active_execution_digest", "active_authority"])
     );
+    expect(
+      sql
+        .exec(`PRAGMA table_info(do_alarms)`)
+        .toArray()
+        .map((column) => column["name"])
+    ).toEqual([
+      "source",
+      "class_name",
+      "object_key",
+      "wake_at",
+      "dispatch_generation",
+      "dispatch_owner",
+    ]);
     expect(sql.exec(`SELECT value FROM state WHERE key = 'schema_version'`).one()).toEqual({
       value: String(CURRENT_SCHEMA_VERSION),
     });
@@ -917,6 +909,7 @@ describe("WorkspaceDO lifecycle registry", () => {
   let instance: WorkspaceDO;
   beforeEach(async () => {
     ({ instance } = await createTestDO(WorkspaceDOTestable));
+    instance.alarmAdoptWorker("driver-1");
   });
 
   it("upserts, refreshes, lists, and clears active-work leases", () => {
@@ -932,7 +925,26 @@ describe("WorkspaceDO lifecycle registry", () => {
     expect(instance.lifecycleListLeases()).toEqual([]);
   });
 
-  it("lists due alarms without consuming them and acknowledges explicitly", () => {
+  it("registers work capability only for an active owner and removes it on retirement", () => {
+    const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
+    expect(() => instance.durableWorkOwnerRegister({ ...key, queues: ["agent-inbox"] })).toThrow(
+      /is not active/u
+    );
+
+    const entity = instance.entityActivate(doInput());
+    instance.durableWorkOwnerRegister({
+      ...key,
+      queues: ["agent-effect", "agent-inbox", "agent-inbox"],
+    });
+    expect(instance.durableWorkOwnerList()).toEqual([
+      { owner: key, queues: ["agent-effect", "agent-inbox"] },
+    ]);
+
+    instance.entityRetire(entity.id);
+    expect(instance.durableWorkOwnerList()).toEqual([]);
+  });
+
+  it("claims due alarms durably and acknowledges the exact generation", () => {
     const a = { source: "workers/poller", className: "PollerDO", objectKey: "p-1" };
     const b = { source: "workers/poller", className: "PollerDO", objectKey: "p-2" };
     activateAlarmKey(instance, a);
@@ -943,18 +955,34 @@ describe("WorkspaceDO lifecycle registry", () => {
     // Replace a's wake time.
     instance.alarmSet({ ...a, wakeAt: 1_000 });
 
-    expect(instance.alarmNextWakeAt()).toBe(1_000);
+    expect(instance.alarmNextWakeAt(0)).toBe(1_000);
 
-    // Listing does not consume the row; explicit outcome acknowledgement does.
-    expect(instance.alarmListDue(1_500)).toEqual([{ ...a, wakeAt: 1_000 }]);
-    expect(instance.alarmNextWakeAt()).toBe(1_000);
-    instance.alarmClear(a);
-    expect(instance.alarmNextWakeAt()).toBe(2_000);
+    const claims = instance.alarmClaimDue({
+      now: 1_500,
+      workerId: "driver-1",
+      limit: 8,
+    });
+    expect(claims).toEqual([{ ...a, wakeAt: 1_000, dispatchGeneration: 1 }]);
+    expect(instance.alarmNextWakeAt(1_500)).toBe(2_000);
+    expect(
+      instance.alarmClear({
+        ...a,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: claims[0]!.dispatchGeneration,
+      })
+    ).toBe("accepted");
+    expect(instance.alarmNextWakeAt(1_500)).toBe(2_000);
 
     // Clearing removes a pending alarm.
     instance.alarmClear(b);
-    expect(instance.alarmNextWakeAt()).toBeNull();
-    expect(instance.alarmListDue(10_000)).toEqual([]);
+    expect(instance.alarmNextWakeAt(1_500)).toBeNull();
+    expect(
+      instance.alarmClaimDue({
+        now: 10_000,
+        workerId: "driver-1",
+        limit: 8,
+      })
+    ).toEqual([]);
   });
 
   it("retains host-attested test authority with a derived alarm until acknowledgement", () => {
@@ -970,9 +998,87 @@ describe("WorkspaceDO lifecycle registry", () => {
     // but it must not detach the authority of the durable work it is advancing.
     instance.alarmSet({ ...key, wakeAt: 2_000 });
 
-    expect(instance.alarmListDue(2_000)).toEqual([{ ...key, wakeAt: 2_000, testPolicy }]);
-    instance.alarmClear(key);
-    expect(instance.alarmListDue(2_000)).toEqual([]);
+    const [claim] = instance.alarmClaimDue({
+      now: 2_000,
+      workerId: "driver-1",
+      limit: 1,
+    });
+    expect(claim).toEqual({ ...key, wakeAt: 2_000, dispatchGeneration: 1, testPolicy });
+    instance.alarmClear({
+      ...key,
+      dispatchOwner: "driver-1",
+      dispatchGeneration: claim!.dispatchGeneration,
+    });
+    expect(
+      instance.alarmClaimDue({
+        now: 2_000,
+        workerId: "driver-1",
+        limit: 1,
+      })
+    ).toEqual([]);
+  });
+
+  it("releases a prior claim only when a new scheduler generation is adopted", () => {
+    const key = { source: "workers/poller", className: "PollerDO", objectKey: "reclaim" };
+    activateAlarmKey(instance, key);
+    instance.alarmSet({ ...key, wakeAt: 1_000 });
+
+    const [first] = instance.alarmClaimDue({
+      now: 1_000,
+      workerId: "driver-1",
+      limit: 1,
+    });
+    expect(instance.alarmNextWakeAt(1_000)).toBeNull();
+    expect(() =>
+      instance.alarmClaimDue({
+        now: 1_000_000,
+        workerId: "driver-2",
+        limit: 1,
+      })
+    ).toThrow(/worker generation is not active/u);
+
+    instance.alarmAdoptWorker("driver-2");
+    const [second] = instance.alarmClaimDue({
+      now: 1_000_000,
+      workerId: "driver-2",
+      limit: 1,
+    });
+    expect(second!.dispatchGeneration).toBe(first!.dispatchGeneration + 1);
+    expect(
+      instance.alarmClear({
+        ...key,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: first!.dispatchGeneration,
+      })
+    ).toBe("stale");
+    expect(
+      instance.alarmClear({
+        ...key,
+        dispatchOwner: "driver-2",
+        dispatchGeneration: second!.dispatchGeneration,
+      })
+    ).toBe("accepted");
+  });
+
+  it("fences an active handler when a concurrent request replaces its wake", () => {
+    const key = { source: "workers/poller", className: "PollerDO", objectKey: "replace" };
+    activateAlarmKey(instance, key);
+    instance.alarmSet({ ...key, wakeAt: 1_000 });
+    const [claim] = instance.alarmClaimDue({
+      now: 1_000,
+      workerId: "driver-1",
+      limit: 1,
+    });
+
+    instance.alarmSet({ ...key, wakeAt: 1_100 });
+    expect(
+      instance.alarmClear({
+        ...key,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: claim!.dispatchGeneration,
+      })
+    ).toBe("stale");
+    expect(instance.alarmNextWakeAt(1_000)).toBe(1_100);
   });
 
   it("opens an epoch and snapshots live leases into prepare and resume ops", () => {
@@ -1040,9 +1146,21 @@ describe("WorkspaceDO lifecycle registry", () => {
     instance.alarmSet({ ...key, wakeAt: 1_000 });
 
     instance.entityRetire(rec.id);
-    expect(instance.alarmListDue(1_000)).toEqual([]);
+    expect(
+      instance.alarmClaimDue({
+        now: 1_000,
+        workerId: "driver-1",
+        limit: 1,
+      })
+    ).toEqual([]);
     expect(() => instance.alarmSet({ ...key, wakeAt: 2_000 })).toThrow(/is not active/u);
-    expect(instance.alarmListDue(2_000)).toEqual([]);
+    expect(
+      instance.alarmClaimDue({
+        now: 2_000,
+        workerId: "driver-1",
+        limit: 1,
+      })
+    ).toEqual([]);
   });
 
   it("rejects scheduling when no matching active DO exists", () => {
@@ -1054,11 +1172,12 @@ describe("WorkspaceDO lifecycle registry", () => {
         wakeAt: 1_000,
       })
     ).toThrow(/is not active/u);
-    expect(instance.alarmNextWakeAt()).toBeNull();
+    expect(instance.alarmNextWakeAt(0)).toBeNull();
   });
 
   it("repairs a persisted retired-entity alarm during startup", async () => {
     const first = await createTestDO(WorkspaceDOTestable);
+    first.instance.alarmAdoptWorker("driver-1");
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
     const rec = first.instance.entityActivate(doInput());
     first.instance.entityRetire(rec.id);
@@ -1071,10 +1190,23 @@ describe("WorkspaceDO lifecycle registry", () => {
       key.objectKey,
       2_000
     );
-    expect(first.instance.alarmListDue(2_000)).toEqual([{ ...key, wakeAt: 2_000 }]);
+    expect(
+      first.instance.alarmClaimDue({
+        now: 2_000,
+        workerId: "driver-1",
+        limit: 1,
+      })
+    ).toEqual([{ ...key, wakeAt: 2_000, dispatchGeneration: 1 }]);
 
     const restarted = await createTestDO(WorkspaceDOTestable, undefined, { db: first.db });
-    expect(restarted.instance.alarmListDue(2_000)).toEqual([]);
+    restarted.instance.alarmAdoptWorker("driver-2");
+    expect(
+      restarted.instance.alarmClaimDue({
+        now: 2_000,
+        workerId: "driver-2",
+        limit: 1,
+      })
+    ).toEqual([]);
   });
 });
 

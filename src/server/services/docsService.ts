@@ -19,6 +19,8 @@ import type { WorkspaceServiceDecl } from "@vibestudio/workspace-contracts/types
 
 export interface LiveWorkspaceServiceDoc {
   declaration: WorkspaceServiceDecl;
+  /** Null means the Durable Object service is a factory requiring an object key. */
+  defaultObjectKey?: string | null;
   providerEffectiveVersion?: string;
   /** A provider build may be temporarily invalid while an agent is editing it. */
   providerBuildError?: string;
@@ -92,7 +94,11 @@ export function createDocsService(deps: {
         ...(live.providerBuildError ? { providerBuildError: live.providerBuildError } : {}),
         methods: live.methods,
         target: service.durableObject
-          ? { kind: "durable-object" as const, className: service.durableObject.className }
+          ? {
+              kind: "durable-object" as const,
+              className: service.durableObject.className,
+              defaultObjectKey: live.defaultObjectKey ?? null,
+            }
           : { kind: "worker" as const, routePath: service.worker.routePath },
       };
     });

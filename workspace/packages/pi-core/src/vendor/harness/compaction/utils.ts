@@ -1,5 +1,5 @@
-// @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.80.6; see PROVENANCE.md and vendor.sh
-import type { Message } from "@earendil-works/pi-ai";
+// @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.82.0; see PROVENANCE.md and vendor.sh
+import { contentText, type Message } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "../../types.js";
 
 /** File paths touched by a session branch or compaction range. */
@@ -94,23 +94,14 @@ export function serializeConversation(messages: Message[]): string {
 
 	for (const msg of messages) {
 		if (msg.role === "user") {
-			const content =
-				typeof msg.content === "string"
-					? msg.content
-					: msg.content
-							.filter((c): c is { type: "text"; text: string } => c.type === "text")
-							.map((c) => c.text)
-							.join("");
+			const content = contentText(msg.content, "");
 			if (content) parts.push(`[User]: ${content}`);
 		} else if (msg.role === "assistant") {
-			const textParts: string[] = [];
 			const thinkingParts: string[] = [];
 			const toolCalls: string[] = [];
 
 			for (const block of msg.content) {
-				if (block.type === "text") {
-					textParts.push(block.text);
-				} else if (block.type === "thinking") {
+				if (block.type === "thinking") {
 					thinkingParts.push(block.thinking);
 				} else if (block.type === "toolCall") {
 					const args = block.arguments as Record<string, unknown>;
@@ -124,17 +115,14 @@ export function serializeConversation(messages: Message[]): string {
 			if (thinkingParts.length > 0) {
 				parts.push(`[Assistant thinking]: ${thinkingParts.join("\n")}`);
 			}
-			if (textParts.length > 0) {
-				parts.push(`[Assistant]: ${textParts.join("\n")}`);
+			if (msg.content.some((block) => block.type === "text")) {
+				parts.push(`[Assistant]: ${contentText(msg.content)}`);
 			}
 			if (toolCalls.length > 0) {
 				parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
 			}
 		} else if (msg.role === "toolResult") {
-			const content = msg.content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
-				.join("");
+			const content = contentText(msg.content, "");
 			if (content) {
 				parts.push(`[Tool result]: ${truncateForSummary(content, TOOL_RESULT_MAX_CHARS)}`);
 			}

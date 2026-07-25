@@ -230,7 +230,7 @@ export function FormRenderer({
 
     const isEnabled = isFieldEnabled(field, effectiveValues);
     const currentValue = effectiveValues[field.key] ?? field.default;
-    const warning = getFieldWarning(field, currentValue as FieldValue);
+    const warning = getFieldWarning(field, effectiveValues);
     const freeTextKey = getFreeTextKey(field);
     const freeTextValue = values[freeTextKey] ?? effectiveValues[freeTextKey];
     const showFreeText = isFreeTextSelected(field, currentValue as FieldValue | undefined);

@@ -235,8 +235,8 @@ type RelayCallMeta = {
 type RelayCallerScope = {
   /** Exact caller stamped at transport admission (never re-resolved by runtime id). */
   authenticatedCaller: VerifiedCaller;
-  /** Host-resolved parent caller used for chained extension attribution. */
-  invocationCaller: VerifiedCaller;
+  /** Host-resolved initiator whose verified account subject authorizes the operation. */
+  authorizingCaller: VerifiedCaller;
 };
 
 type ResolvedExtensionParent = {
@@ -1018,7 +1018,7 @@ export class RpcServer {
     const parent = this.resolveExtensionParentCaller(client, message);
     return {
       authenticatedCaller: client.caller,
-      invocationCaller: parent?.authorizingCaller ?? client.caller,
+      authorizingCaller: parent?.authorizingCaller ?? client.caller,
     };
   }
 
@@ -1075,7 +1075,7 @@ export class RpcServer {
   }
 
   /** Set the base URL for the workerd process (for HTTP relay to workers/DOs). */
-  setWorkerdUrl(url: string): void {
+  setWorkerdUrl(url: string | null): void {
     this.workerdUrl = url;
   }
 
@@ -2682,7 +2682,7 @@ export class RpcServer {
       },
       {
         authenticatedCaller,
-        invocationCaller,
+        authorizingCaller: invocationCaller,
       }
     );
   }
@@ -3275,8 +3275,11 @@ export class RpcServer {
       const attributedCaller =
         callerKind === "server"
           ? createHostCaller(callerId, "server", SYSTEM_SUBJECT)
-          : relayCallerScope?.invocationCaller.subject
-            ? relayCallerScope.invocationCaller
+          : relayCallerScope?.authorizingCaller.subject
+            ? {
+                ...transportCaller,
+                subject: relayCallerScope.authorizingCaller.subject,
+              }
             : transportCaller;
       const authenticatedCaller = authenticatedCallerOf(attributedCaller);
       const authorization = await this.directDOAuthorization({

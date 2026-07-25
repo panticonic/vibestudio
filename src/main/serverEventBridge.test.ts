@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
-import { createServerEventBridge, notificationAttention } from "./serverEventBridge.js";
+import {
+  bindHostDirectServerEvents,
+  createServerEventBridge,
+  notificationAttention,
+} from "./serverEventBridge.js";
 
 function createHarness(
   opts: {
@@ -23,7 +27,7 @@ function createHarness(
     applyAppAvailable: vi.fn(async () => {}),
   };
   const serverClient = {
-    call: vi.fn(async () => undefined),
+    call: vi.fn(async (_service: string, _method: string, _args: unknown[]) => undefined),
   };
   const warn = vi.fn();
   const onAppHostTargetChanged = vi.fn();
@@ -51,6 +55,37 @@ function createHarness(
 }
 
 describe("createServerEventBridge", () => {
+  it("binds host-owned OAuth handoffs on the direct server event channel", () => {
+    const listeners = new Map<string, (payload: unknown) => void>();
+    const releases = [vi.fn(), vi.fn()];
+    const client = {
+      onDirectEvent: vi.fn((event: string, listener: (payload: unknown) => void) => {
+        listeners.set(event, listener);
+        return releases[listeners.size - 1]!;
+      }),
+    };
+    const handle = vi.fn();
+
+    const release = bindHostDirectServerEvents(client as never, handle);
+    listeners.get("external-open:open")?.({ url: "https://auth.example.test" });
+    listeners.get("browser-panel:open")?.({
+      url: "https://auth.example.test",
+      parentPanelId: "panel:tree/slot-a",
+    });
+
+    expect(handle).toHaveBeenNthCalledWith(1, "external-open:open", {
+      url: "https://auth.example.test",
+    });
+    expect(handle).toHaveBeenNthCalledWith(2, "browser-panel:open", {
+      url: "https://auth.example.test",
+      parentPanelId: "panel:tree/slot-a",
+    });
+
+    release();
+    expect(releases[0]).toHaveBeenCalledOnce();
+    expect(releases[1]).toHaveBeenCalledOnce();
+  });
+
   it("normalizes build completion into orchestrator state updates instead of emitting raw events", () => {
     const { handle, eventService, panelOrchestrator } = createHarness();
 
@@ -171,19 +206,48 @@ describe("createServerEventBridge", () => {
     expect(eventService.emit).not.toHaveBeenCalled();
   });
 
-  it("rejects browser-panel open events instead of proxying panel creation", async () => {
-    const { handle, eventService, warn } = createHarness();
+  it("opens OAuth browser panels through authenticated panelTree RPC", async () => {
+    const { handle, eventService, serverClient, warn } = createHarness();
 
     handle("browser-panel:open", {
       url: "https://example.com/",
       parentPanelId: "panel:tree/slot-a",
+      transactionId: "oauth-1",
     });
-    await Promise.resolve();
-
-    expect(warn).toHaveBeenCalledWith(
-      "[browserPanel] Ignoring browser-panel:open; panel creation must go through authenticated panelTree RPC"
+    await vi.waitFor(() =>
+      expect(serverClient.call).toHaveBeenCalledWith("panelTree", "create", [
+        "https://example.com/",
+        { parentId: "panel:tree/slot-a", focus: true },
+      ])
     );
+
+    expect(warn).not.toHaveBeenCalled();
     expect(eventService.emit).not.toHaveBeenCalled();
+  });
+
+  it("cancels OAuth when authenticated browser-panel creation fails", async () => {
+    const { handle, serverClient, warn } = createHarness();
+    serverClient.call.mockImplementation(async (service: string, method: string) => {
+      if (service === "panelTree" && method === "create") {
+        throw new Error("panel host unavailable");
+      }
+      return undefined;
+    });
+
+    handle("browser-panel:open", {
+      url: "https://example.com/",
+      parentPanelId: "panel:tree/slot-a",
+      transactionId: "oauth-1",
+    });
+
+    await vi.waitFor(() =>
+      expect(serverClient.call).toHaveBeenCalledWith("credentials", "cancelOAuth", [
+        { transactionId: "oauth-1" },
+      ])
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "[browserPanel] OAuth panel creation failed: panel host unavailable"
+    );
   });
 
   it("applies app availability locally and still forwards the app event to shell UI", async () => {

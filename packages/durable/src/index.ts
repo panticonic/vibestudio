@@ -5,6 +5,7 @@ import {
   rpcErrorDataOf,
   rpcErrorKindOf,
   rpcMethodAuthority,
+  rpc,
   type AuthenticatedCaller,
   type AuthorizationContext,
   type ConnectionlessRpcClient,
@@ -27,6 +28,7 @@ import {
   type EventIntakeRule,
   type HostControlDenial,
 } from "@vibestudio/shared/directRpcEnforcement";
+import type { DurableWorkQueue } from "@vibestudio/shared/durableWork";
 import {
   migrateDurableObjectSchema,
   type DurableObjectSchemaBaseline,
@@ -300,9 +302,10 @@ export abstract class DurableObjectBase {
       });
       // Expose ONLY this DO's `@rpc`-marked methods (opt-in / default-deny). Private/protected helpers
       // and all framework plumbing (`dispatchInboundEnvelope`, state-KV, alarms) are unreachable over
-      // the open relay; a forgotten `@rpc` fails loud ("not exposed"). Boundary = backstop.
+      // the open relay; a forgotten `@rpc` fails loud ("not exposed"). The decorator allow-list is
+      // the boundary, including the framework methods declared on this base.
       connectionless.client.exposeAll(
-        collectExposableMethods(this, rpcExposedMethodNames(this), DurableObjectBase.prototype)
+        collectExposableMethods(this, rpcExposedMethodNames(this), Object.prototype)
       );
       this.connectionless = connectionless;
     }
@@ -810,6 +813,21 @@ export abstract class DurableObjectBase {
 
   async webSocketError(_ws: WebSocket, _error: unknown): Promise<void> {
     this.ensureReady();
+  }
+
+  /** Framework queue capabilities are probed by the host during activation. */
+  protected durableWorkQueues(): readonly DurableWorkQueue[] {
+    return [];
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
+  durableWorkCapabilities(): DurableWorkQueue[] {
+    return [...this.durableWorkQueues()];
   }
 
   protected resetRpcClients(): void {

@@ -44,7 +44,10 @@ function channelInspectionIsBounded(result: Parameters<typeof findLastAgentMessa
       return false;
     }
     const code = typeof call.arguments?.["code"] === "string" ? call.arguments["code"] : "";
-    return /inspectChannelEnvelopes/.test(code) && /\blimit\s*:\s*[1-9]\d*\b/.test(code);
+    const boundedChannelInspector =
+      /inspectChannelEnvelopes/.test(code) || /inspectAgentHealth/.test(code);
+    const positiveLimit = /\b(?:envelopeLimit|limit)\s*:\s*[1-9]\d*\b/.test(code);
+    return boundedChannelInspector && positiveLimit;
   });
   if (!boundedCall) {
     return {
@@ -135,7 +138,7 @@ export const agenticRuntimeTests: TestCase[] = [
     validate: (result) =>
       semanticEval(
         result,
-        [/(?:debugState|getDebugState|debug state)/iu],
+        [/(?:debugState|getDebugState|debug state|agent\.describe)/iu],
         [/debug/iu, /available|unavailable|exposed|not exposed/iu]
       ),
   },

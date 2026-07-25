@@ -46,6 +46,12 @@ export interface DoDispatcher {
 /** Long-running dispatch capability needed only by eval execution. */
 export interface HeldDoDispatcher extends DoDispatcher {
   dispatchHeld(ref: DORef, method: string, ...args: unknown[]): Promise<unknown>;
+  dispatchHeldWithSignal(
+    ref: DORef,
+    signal: AbortSignal,
+    method: string,
+    ...args: unknown[]
+  ): Promise<unknown>;
 }
 
 /** Lifecycle capability needed only by the lifecycle driver. */

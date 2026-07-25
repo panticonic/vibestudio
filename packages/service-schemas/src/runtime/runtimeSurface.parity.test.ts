@@ -44,6 +44,18 @@ describe("runtime surface schemaRef parity", () => {
     expect(workspace.description).toContain("workers.list()");
   });
 
+  it("links the direct openExternal helper to its typed approval-gated contract", () => {
+    const openExternal = portableExports["openExternal"];
+    if (!openExternal) throw new Error("missing openExternal runtime surface");
+    expect(openExternal.kind).toBe("callable");
+    if (openExternal.kind !== "callable") throw new Error("openExternal must be callable");
+    expect(openExternal.schemaRef).toBe("externalOpen");
+    expect(openExternal.schemaMethod).toBe("openExternal");
+    expect(openExternal.description).toContain("server-side eval");
+    expect(openExternal.description).toContain("panel/client eval");
+    expect(openExternal.description).toContain("owns the approval prompt");
+  });
+
   it("carries generated typed docs for every GAD runtime method", () => {
     const gad = portableExports["gad"];
     if (!gad) throw new Error("missing GAD runtime surface");

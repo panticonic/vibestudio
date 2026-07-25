@@ -92,6 +92,31 @@ export class LifecycleProbeDO extends DurableObjectBase {
     return { requestedMs: ms, ok: true };
   }
 
+  @rpc({
+    principals: ["host", "user", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async heldSqlProbe(label: string, ms: number): Promise<{ label: string; ok: true }> {
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS held_probe (
+        label TEXT PRIMARY KEY,
+        started_at INTEGER NOT NULL,
+        finished_at INTEGER
+      )
+    `);
+    this.sql.exec(
+      `INSERT OR REPLACE INTO held_probe (label, started_at, finished_at)
+       VALUES (?, ?, NULL)`,
+      label,
+      Date.now()
+    );
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    this.sql.exec(`UPDATE held_probe SET finished_at = ? WHERE label = ?`, Date.now(), label);
+    return { label, ok: true };
+  }
+
   /**
    * Decisive probe: after this method RETURNS (request ends), does background work
    * run on its own, and does network I/O work in it? Schedules a task (via

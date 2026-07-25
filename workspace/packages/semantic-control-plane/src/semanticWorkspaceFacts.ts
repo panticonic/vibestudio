@@ -529,8 +529,15 @@ export class SemanticWorkspaceFacts {
 
   pageManifest(
     fileManifestId: string,
-    input: { afterPath?: string; limit: number }
+    input: { afterPath?: string; atOrAfterPath?: string; prefix?: string; limit: number }
   ): { values: Array<{ path: string; fileId: string }>; total: number; next: string | null } {
+    if (input.afterPath !== undefined && input.atOrAfterPath !== undefined) {
+      throw new SemanticWorkspaceFactsError(
+        "InvalidRoot",
+        "Manifest page cannot combine exclusive and inclusive lower bounds",
+        [fileManifestId]
+      );
+    }
     const manifest = this.manifest(fileManifestId);
     const page = this.pageRadix(
       "manifest-path",
@@ -539,6 +546,8 @@ export class SemanticWorkspaceFacts {
       manifest.entryCount,
       {
         ...(input.afterPath ? { afterKey: input.afterPath } : {}),
+        ...(input.atOrAfterPath ? { atOrAfterKey: input.atOrAfterPath } : {}),
+        ...(input.prefix ? { keyPrefix: input.prefix } : {}),
         limit: input.limit,
       }
     );
@@ -931,10 +940,15 @@ export class SemanticWorkspaceFacts {
     routeStrategy: PersistentRadixRouteStrategy,
     rootNodeId: string,
     total: number,
-    input: { afterKey?: string; keyPrefix?: string; limit: number }
+    input: { afterKey?: string; atOrAfterKey?: string; keyPrefix?: string; limit: number }
   ): { values: Array<{ key: string; value: string }>; total: number; next: string | null } {
     const limit = Math.max(1, Math.trunc(input.limit));
-    const afterRoute = input.afterKey ? persistentRadixRoute(routeStrategy, input.afterKey) : null;
+    if (input.afterKey !== undefined && input.atOrAfterKey !== undefined) {
+      this.invalidNode(rootNodeId, "page cannot combine exclusive and inclusive lower bounds");
+    }
+    const lowerKey = input.afterKey ?? input.atOrAfterKey;
+    const lowerRoute = lowerKey ? persistentRadixRoute(routeStrategy, lowerKey) : null;
+    const lowerInclusive = input.atOrAfterKey !== undefined;
     if (input.keyPrefix && routeStrategy !== "utf16") {
       this.invalidNode(rootNodeId, "prefix paging requires a lexical radix");
     }
@@ -953,11 +967,13 @@ export class SemanticWorkspaceFacts {
       if (node!.shape.kind === "leaf") {
         for (const entry of node!.shape.entries) {
           if (input.keyPrefix && !entry.key.startsWith(input.keyPrefix)) continue;
+          const lowerComparison =
+            lowerKey === undefined ? 1 : compareUtf16CodeUnits(entry.key, lowerKey);
           if (
-            afterRoute &&
-            (entry.keyDigest < afterRoute ||
-              (entry.keyDigest === afterRoute &&
-                compareUtf16CodeUnits(entry.key, input.afterKey!) <= 0))
+            lowerRoute &&
+            (entry.keyDigest < lowerRoute ||
+              (entry.keyDigest === lowerRoute &&
+                (lowerInclusive ? lowerComparison < 0 : lowerComparison <= 0)))
           ) {
             continue;
           }
@@ -975,7 +991,7 @@ export class SemanticWorkspaceFacts {
         ) {
           continue;
         }
-        if (afterRoute && childPrefix < afterRoute.slice(0, childPrefix.length)) continue;
+        if (lowerRoute && childPrefix < lowerRoute.slice(0, childPrefix.length)) continue;
         walk(child.childNodeId, childPrefix);
         if (values.length > limit) return;
       }

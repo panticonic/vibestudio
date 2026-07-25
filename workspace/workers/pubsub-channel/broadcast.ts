@@ -8,42 +8,21 @@
  */
 
 import type { SqlStorage } from "@workspace/runtime/worker";
-import type { RpcClient } from "@vibestudio/rpc";
 import type { ChannelEvent } from "@workspace/harness";
 import { participantIsAgentVessel, type BroadcastEnvelope } from "./types.js";
 import type { RpcChannelMessage, RpcSignalMessage } from "@workspace/pubsub";
-import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 
-export type StructuredDeliveryEnvelope = Extract<
-  RpcChannelMessage,
-  { kind: "log" | "signal" }
->;
-
-/** Structured envelopes are small control-plane deliveries, never
- * long-running methods. A wedged recipient must release the channel alarm so
- * the durable outbox can retry and other participants can continue. */
-export const STRUCTURED_DELIVERY_TIMEOUT_MS = 15_000;
+export type StructuredDeliveryEnvelope = Extract<RpcChannelMessage, { kind: "log" | "signal" }>;
 
 export interface BroadcastDeps {
   sql: SqlStorage;
-  rpc: Pick<RpcClient, "call">;
   objectKey: string;
   deliverParticipant(participantId: string, payload: unknown): Promise<void> | void;
   enqueueDoEnvelope(participantId: string, envelope: StructuredDeliveryEnvelope): void;
 }
 
-/** Delivery chains for ordered DO delivery. Resets on hibernation — safe because
- *  agent DOs handle ordering via their own checkpoints. */
-const deliveryChains = new Map<string, Promise<void>>();
-const closingDeliveryChains = new Set<string>();
-const activeDeliveryControllers = new Map<string, AbortController>();
-
-function deliveryKey(channelId: string, participantId: string): string {
-  return `${channelId}\u0000${participantId}`;
-}
-
 /**
- * True if a DO participant is an agent vessel (opted into structured `onChannelEnvelope` delivery).
+ * True if a DO participant is an agent vessel (opted into host-driven structured batch delivery).
  * RPC-style DO clients omit the flag and receive only the subscription stream.
  * Parses the stored metadata JSON and delegates to the one canonical
  * discriminator (`participantIsAgentVessel`).
@@ -55,103 +34,6 @@ function participantReceivesChannelEnvelopes(metadataJson: unknown): boolean {
   } catch {
     return false;
   }
-}
-
-/**
- * Stop accepting new deliveries and await the participant's ordered lane.
- * Membership/context teardown must not race an already accepted envelope.
- */
-export async function closeDeliveryChain(
-  channelId: string,
-  participantId: string
-): Promise<void> {
-  const key = deliveryKey(channelId, participantId);
-  closingDeliveryChains.add(key);
-  const pending = deliveryChains.get(key);
-  if (pending) await pending;
-  if (deliveryChains.get(key) === pending) deliveryChains.delete(key);
-}
-
-/**
- * Release the transport resources owned by one live activation while retaining
- * its durable channel membership. Unlike closeDeliveryChain(), this cancels
- * the active callback instead of draining it: lifecycle preparation can be
- * invoked by the same recipient, so waiting for that callback would create a
- * cross-DO reentrancy cycle.
- *
- * The lane stays closed until the replacement activation subscribes.
- */
-export async function releaseDeliveryChain(
-  channelId: string,
-  participantId: string
-): Promise<void> {
-  const key = deliveryKey(channelId, participantId);
-  closingDeliveryChains.add(key);
-  activeDeliveryControllers.get(key)?.abort(
-    new Error(`Participant activation released: ${participantId}`)
-  );
-  const pending = deliveryChains.get(key);
-  if (!pending) {
-    deliveryChains.delete(key);
-    activeDeliveryControllers.delete(key);
-    return;
-  }
-  // Cancellation is advisory. A transport may not observe AbortSignal until
-  // its old workerd generation disappears, so lifecycle release must not wait
-  // for the callback it is trying to terminate. Keep the ordered lane promise
-  // installed: if a replacement reopens before the old request rejects, its
-  // first delivery stays ordered behind that terminal instead of racing it.
-  void pending
-    .finally(() => {
-      if (deliveryChains.get(key) === pending) deliveryChains.delete(key);
-    })
-    .catch(() => {});
-}
-
-/** Re-open a transport lane when a replacement activation subscribes. */
-export function reopenDeliveryChain(channelId: string, participantId: string): void {
-  closingDeliveryChains.delete(deliveryKey(channelId, participantId));
-}
-
-/** Clean up delivery state after the participant row has been deleted. */
-export function cleanupDeliveryChain(channelId: string, participantId: string): void {
-  const key = deliveryKey(channelId, participantId);
-  activeDeliveryControllers.get(key)?.abort(
-    new Error(`Participant delivery state removed: ${participantId}`)
-  );
-  activeDeliveryControllers.delete(key);
-  deliveryChains.delete(key);
-  closingDeliveryChains.delete(key);
-}
-
-/** Queue an ordered structured envelope delivery to a DO participant. */
-export function queueDoEnvelope(
-  deps: BroadcastDeps,
-  participantId: string,
-  envelope: RpcChannelMessage,
-  onFatalDelivery?: (err: { code?: string }) => boolean | void
-): Promise<void> {
-  const key = deliveryKey(deps.objectKey, participantId);
-  if (closingDeliveryChains.has(key)) return Promise.resolve();
-  return serializeByKey(deliveryChains, key, async () => {
-    if (closingDeliveryChains.has(key)) return;
-    const controller = new AbortController();
-    activeDeliveryControllers.set(key, controller);
-    try {
-      await deps.rpc.call(participantId, "onChannelEnvelope", [deps.objectKey, envelope], {
-        signal: controller.signal,
-        timeoutMs: STRUCTURED_DELIVERY_TIMEOUT_MS,
-      });
-    } catch (err) {
-      if (controller.signal.aborted) return;
-      const handled = onFatalDelivery?.(err as { code?: string });
-      if (!handled) console.error(`[Channel] delivery failed for ${participantId}:`, err);
-    } finally {
-      if (activeDeliveryControllers.get(key) === controller) {
-        activeDeliveryControllers.delete(key);
-      }
-    }
-  });
 }
 
 // ── Broadcast ────────────────────────────────────────────────────────────────
@@ -167,9 +49,7 @@ export function broadcast(
   senderId: string,
   structuredPublisherId = senderId
 ): void {
-  const participants = deps.sql
-    .exec(`SELECT id, transport, metadata FROM participants`)
-    .toArray();
+  const participants = deps.sql.exec(`SELECT id, transport, metadata FROM participants`).toArray();
 
   const msg =
     envelope.kind === "log"
@@ -185,10 +65,7 @@ export function broadcast(
 
     // Agent vessels receive one structured delivery RPC per participant. Every
     // other session receives bytes on the stream that owns its lifetime.
-    if (
-      p["transport"] === "do" &&
-      participantReceivesChannelEnvelopes(p["metadata"])
-    ) {
+    if (p["transport"] === "do" && participantReceivesChannelEnvelopes(p["metadata"])) {
       // A structured publisher has already accepted and journaled this event
       // in its own turn. Calling back into that same Durable Object before the
       // publish RPC can return creates a causal cycle: the recipient cannot

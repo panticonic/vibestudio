@@ -10,10 +10,14 @@
 import { z } from "zod";
 import type { PrincipalKind } from "@vibestudio/rpc";
 import { PRODUCT_WORKSPACE_SERVICES } from "@vibestudio/shared/productWorkspaceServices.mjs";
-import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import {
+  selectedPreparedAuthoritySelection,
+  type ServiceDefinition,
+} from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
+import { selectedPreparedAuthorityRequirement } from "@vibestudio/shared/typedServiceClient";
 import type { WorkspaceDeclarations } from "@vibestudio/workspace/singletonRegistry";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
@@ -119,17 +123,17 @@ export function createWorkerService(deps: {
   const dynamicWorkspaceServiceLeaf = {
     capabilityPrefix: "workspace-service:",
     tier: "gated" as const,
-    requirement: {
-      kind: "selected" as const,
-      principals: ["host", "user", "code", "session", "mission"] as const,
-    },
+    requirement: selectedPreparedAuthorityRequirement([
+      "host",
+      "user",
+      "code",
+      "session",
+      "mission",
+    ]),
   };
   const reviewedInternalTargetLeaf = {
     capability: "service:workers.resolveDurableObject",
-    requirement: {
-      kind: "selected" as const,
-      principals: ["code"] as const,
-    },
+    requirement: selectedPreparedAuthorityRequirement(["code"]),
   };
   const preparedResolutionAuthority = (method: "resolveService" | "resolveDurableObject") => {
     const capability = `service:workers.${method}`;
@@ -208,7 +212,7 @@ export function createWorkerService(deps: {
         const resourceKey =
           service.kind === "durable-object" ? service.targetId : service.routeBasePath;
         return [
-          {
+          selectedPreparedAuthoritySelection({
             capability,
             resourceKey,
             requirement: requirementForPrincipals(service.authority.principals, capability),
@@ -237,7 +241,7 @@ export function createWorkerService(deps: {
                   : []),
               ],
             },
-          },
+          }),
         ];
       },
       "workers.resolveDurableObject.target": async (ctx, [source, className, objectKey]) => {
@@ -264,11 +268,13 @@ export function createWorkerService(deps: {
             });
           }
         }
-        return scoped.authority.map(({ capability, principals }) => ({
-          capability,
-          resourceKey: targetId,
-          requirement: requirementForPrincipals(principals, capability),
-        }));
+        return scoped.authority.map(({ capability, principals }) =>
+          selectedPreparedAuthoritySelection({
+            capability,
+            resourceKey: targetId,
+            requirement: requirementForPrincipals(principals, capability),
+          })
+        );
       },
     },
     handler: defineServiceHandler("workers", methods, {

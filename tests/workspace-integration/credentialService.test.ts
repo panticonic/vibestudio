@@ -2072,11 +2072,33 @@ describe("credentialService", () => {
   it("credentials.connect can open OAuth in an internal browser panel for a worker-requested panel handoff", async () => {
     const emit = vi.fn();
     const eventService = targetedOpenEventService(emit);
+    const resolvePanelSlotByEntity = vi.fn(async (entityId: string) =>
+      entityId === "panel:runtime-test" ? "panel:tree/slot-test" : null
+    );
+    const listPanels = vi.fn(async () => {
+      throw new Error("direct panel handoff must not enumerate the panel tree");
+    });
     const service = createCredentialService({
       credentialStore: new MemoryCredentialStore() as never,
       eventService: eventService as never,
       connectionLookup: authorizingShellLookup(),
       approvalQueue: approvingQueue() as never,
+      runtimeInspector: {
+        listActiveEntities: () => [
+          {
+            id: "panel:runtime-test",
+            kind: "panel",
+            source: { repoPath: "/repo", effectiveVersion: "hash-1" },
+            contextId: "ctx-test",
+            key: "test",
+            createdAt: Date.now(),
+            status: "active",
+            cleanupComplete: true,
+          },
+        ],
+        resolvePanelSlotByEntity,
+        listPanels,
+      },
     });
     vi.stubGlobal(
       "fetch",
@@ -2113,7 +2135,7 @@ describe("credentialService", () => {
             redirect: { type: "loopback" },
           },
           handoffTarget: {
-            callerId: "panel-test",
+            callerId: "panel:runtime-test",
             callerKind: "panel",
           },
         },
@@ -2126,12 +2148,15 @@ describe("credentialService", () => {
         "owner-conn",
         "browser-panel:open",
         expect.objectContaining({
-          parentPanelId: "panel-test",
+          parentPanelId: "panel:tree/slot-test",
           callerId: "worker:test",
           callerKind: "worker",
+          transactionId: expect.any(String),
         })
       )
     );
+    expect(resolvePanelSlotByEntity).toHaveBeenCalledWith("panel:runtime-test");
+    expect(listPanels).not.toHaveBeenCalled();
     const authorizeUrl = new URL(emit.mock.calls[0]![1].url);
     await deliverOAuthCallback(
       authorizeUrl.searchParams.get("redirect_uri")!,
@@ -2310,11 +2335,22 @@ describe("credentialService", () => {
     const store = new MemoryCredentialStore();
     const emit = vi.fn();
     const eventService = targetedOpenEventService(emit);
+    const resolvePanelSlotByEntity = vi.fn(async () => {
+      throw new Error("external browser handoff must not resolve panel slots");
+    });
+    const listPanels = vi.fn(async () => {
+      throw new Error("external browser handoff must not enumerate the panel tree");
+    });
     const service = createCredentialService({
       credentialStore: store as never,
       eventService: eventService as never,
       connectionLookup: authorizingShellLookup(),
       approvalQueue: approvingQueue() as never,
+      runtimeInspector: {
+        listActiveEntities: vi.fn(() => []),
+        resolvePanelSlotByEntity,
+        listPanels,
+      },
     });
     vi.stubGlobal(
       "fetch",
@@ -2415,6 +2451,8 @@ describe("credentialService", () => {
 
     await expect(pending).resolves.toMatchObject({ label: "Example OAuth" });
     expect((await store.loadUrlBound((await pending).id))?.accessToken).toBe("token");
+    expect(resolvePanelSlotByEntity).not.toHaveBeenCalled();
+    expect(listPanels).not.toHaveBeenCalled();
   });
 
   it("supports authenticated app-scheme OAuth callbacks from the mobile app handoff", async () => {

@@ -5,7 +5,7 @@ import { GadWorkspaceDO } from "../../semantic-control-plane/src/index.js";
 import { EffectOutbox } from "./effect-outbox.js";
 import type { EffectDescriptor } from "@workspace/agent-loop";
 
-describe("EffectOutbox.lease — deferred-effect redrive", () => {
+describe("EffectOutbox host-generation claims", () => {
   it("rejects an obsolete globally keyed outbox instead of replacing it", async () => {
     const sql = (await createInMemorySql()) as unknown as SqlStorage;
     sql.exec(`
@@ -18,17 +18,16 @@ describe("EffectOutbox.lease — deferred-effect redrive", () => {
         descriptor_json TEXT NOT NULL,
         attempts INTEGER NOT NULL DEFAULT 0,
         next_attempt_at INTEGER,
-        lease_expires_at INTEGER,
         created_at INTEGER NOT NULL
       )
     `);
 
     expect(() => new EffectOutbox(sql)).toThrow(
-      "Unsupported effect_outbox schema; delete this pre-release agent state"
+      "Unsupported effect_outbox schema; delete this pre-release state"
     );
   });
 
-  it("clears next_attempt_at on lease so a deferred effect backstops instead of hot-looping", async () => {
+  it("keeps a claimed deferred effect unavailable regardless of elapsed wall time", async () => {
     const host = await createTestDO(GadWorkspaceDO, { __objectKey: "outbox-lease-host" });
     const outbox = new EffectOutbox(host.sql as never);
     const now = 1_700_000_000_000;
@@ -49,22 +48,26 @@ describe("EffectOutbox.lease — deferred-effect redrive", () => {
     outbox.insert("branch-1", descriptor, now);
     expect(outbox.get("branch-1", "eff-1")?.nextAttemptAt).toBe(now);
 
-    // Taking the row in-flight clears next_attempt_at (the now-stale dispatch time) and leases it.
-    outbox.lease("branch-1", "eff-1", now + 5);
+    const claims = outbox.claimReady({
+      workerId: "worker-generation-1",
+      now: now + 5,
+      limit: 1,
+    });
+    expect(claims).toHaveLength(1);
     const leased = outbox.get("branch-1", "eff-1");
     expect(leased?.nextAttemptAt).toBeNull();
-    expect(leased?.leaseExpiresAt).not.toBeNull();
-    expect(outbox.due(now + 10).some((r) => r.effectId === "eff-1")).toBe(false); // leased ⇒ not due
+    expect(leased?.disposition).toBe("leased");
+    expect(leased?.leaseOwner).toBe("worker-generation-1");
+    expect(outbox.due(now + 10_000_000).some((r) => r.effectId === "eff-1")).toBe(false);
 
-    // The driver's deferRedrive (mirrored here) releases the lease + applies its backstop. Because
-    // lease() cleared next_attempt_at, the CASE falls through to the backstop — a FUTURE time —
-    // instead of preserving the past dispatch time. That is the fix: the deferred effect is NOT due
-    // again until the backstop, rather than re-dispatching on every alarm tick (~50ms).
+    // A concrete deferred outcome releases ownership and schedules its explicit
+    // protocol backstop. Time controls that future retry, never the live claim.
     const deferAt = now + 8;
     const backstopMs = 60_000;
     host.sql.exec(
       `UPDATE effect_outbox
-       SET lease_expires_at = NULL,
+       SET lease_owner = NULL,
+           disposition = 'parked',
            next_attempt_at = CASE
              WHEN next_attempt_at IS NOT NULL AND next_attempt_at <= ? THEN next_attempt_at
              ELSE ?
@@ -77,5 +80,34 @@ describe("EffectOutbox.lease — deferred-effect redrive", () => {
     );
     expect(outbox.get("branch-1", "eff-1")?.nextAttemptAt).toBe(deferAt + backstopMs);
     expect(outbox.due(deferAt + 10).some((r) => r.effectId === "eff-1")).toBe(false); // backstopped
+  });
+
+  it("orders local-tool barriers by numeric invocation sequence, not lexical effect id", async () => {
+    const host = await createTestDO(GadWorkspaceDO, { __objectKey: "outbox-order-host" });
+    const outbox = new EffectOutbox(host.sql as never);
+    const descriptor = (invocationSeq: number): EffectDescriptor => ({
+      kind: "local_tool",
+      effectId: `effect-${invocationSeq}`,
+      channelId: "channel-1",
+      idempotencyKey: `tool-${invocationSeq}`,
+      invocationId: `tool-${invocationSeq}`,
+      turnId: "turn-1",
+      invocationSeq,
+      executionMode: "sequential",
+      tool: `tool-${invocationSeq}`,
+      args: {},
+    });
+    outbox.insert("branch-1", descriptor(10), 0);
+    outbox.insert("branch-1", descriptor(2), 0);
+    host.sql.exec(`UPDATE effect_outbox SET created_at = 1`);
+
+    const claims = outbox.claimReady({
+      workerId: "worker-generation-1",
+      now: 2,
+      limit: 1,
+    });
+    expect(claims.map((row) => row.descriptor)).toEqual([
+      expect.objectContaining({ kind: "local_tool", invocationSeq: 2 }),
+    ]);
   });
 });

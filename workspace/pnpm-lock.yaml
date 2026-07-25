@@ -7,13 +7,13 @@ settings:
 overrides:
   react: 19.0.0
   react-dom: 19.0.0
-  '@earendil-works/pi-ai': 0.80.6
+  '@earendil-works/pi-ai': 0.82.0
   protobufjs: ^7.5.5
 
 patchedDependencies:
-  '@earendil-works/pi-ai@0.80.6':
-    hash: c4a17f70c78dd2fd8cfa3286e2f7d8f421e85955577f4501b89b4fe26bfb0092
-    path: packages/harness/patches/@earendil-works__pi-ai@0.80.6.patch
+  '@earendil-works/pi-ai@0.82.0':
+    hash: 41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830
+    path: packages/harness/patches/@earendil-works__pi-ai@0.82.0.patch
   re2@1.24.0:
     hash: a4a166273fe3817fd493cfc042f1d966f4ada60f1234330cd306e798259b549b
     path: ../patches/re2@1.24.0.patch
@@ -368,6 +368,10 @@ importers:
         version: 5.9.3
 
   ../packages/types:
+    dependencies:
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
     devDependencies:
       typescript:
         specifier: ^5.9.3
@@ -1045,8 +1049,8 @@ importers:
   packages/agentic-do:
     dependencies:
       '@earendil-works/pi-ai':
-        specifier: 0.80.6
-        version: 0.80.6(patch_hash=c4a17f70c78dd2fd8cfa3286e2f7d8f421e85955577f4501b89b4fe26bfb0092)(ws@8.21.0)(zod@3.25.76)
+        specifier: 0.82.0
+        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.0)(zod@3.25.76)
       '@sinclair/typebox':
         specifier: ^0.27.8
         version: 0.27.10
@@ -1190,8 +1194,8 @@ importers:
   packages/harness:
     dependencies:
       '@earendil-works/pi-ai':
-        specifier: 0.80.6
-        version: 0.80.6(patch_hash=c4a17f70c78dd2fd8cfa3286e2f7d8f421e85955577f4501b89b4fe26bfb0092)(ws@8.21.0)(zod@3.25.76)
+        specifier: 0.82.0
+        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.0)(zod@3.25.76)
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -1365,8 +1369,8 @@ importers:
   packages/pi-core:
     dependencies:
       '@earendil-works/pi-ai':
-        specifier: 0.80.6
-        version: 0.80.6(patch_hash=c4a17f70c78dd2fd8cfa3286e2f7d8f421e85955577f4501b89b4fe26bfb0092)(ws@8.21.0)(zod@3.25.76)
+        specifier: 0.82.0
+        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.0)(zod@3.25.76)
       ignore:
         specifier: 7.0.5
         version: 7.0.5
@@ -1383,6 +1387,9 @@ importers:
 
   packages/pubsub:
     dependencies:
+      '@cfworker/json-schema':
+        specifier: ^4.1.1
+        version: 4.1.1
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
@@ -2288,8 +2295,8 @@ importers:
   workers/gmail-agent:
     dependencies:
       '@earendil-works/pi-ai':
-        specifier: 0.80.6
-        version: 0.80.6(patch_hash=c4a17f70c78dd2fd8cfa3286e2f7d8f421e85955577f4501b89b4fe26bfb0092)(ws@8.21.0)(zod@3.25.76)
+        specifier: 0.82.0
+        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.0)(zod@3.25.76)
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
@@ -2365,8 +2372,8 @@ importers:
   workers/model-settings:
     dependencies:
       '@earendil-works/pi-ai':
-        specifier: 0.80.6
-        version: 0.80.6(patch_hash=c4a17f70c78dd2fd8cfa3286e2f7d8f421e85955577f4501b89b4fe26bfb0092)(ws@8.21.0)(zod@3.25.76)
+        specifier: 0.82.0
+        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.0)(zod@3.25.76)
       '@vibestudio/credential-client':
         specifier: workspace:*
         version: link:../../../packages/credential-client
@@ -2967,6 +2974,9 @@ packages:
   '@braintree/sanitize-url@7.1.2':
     resolution: {integrity: sha512-jigsZK+sMF/cuiB7sERuo9V7N9jx+dhmHHnQyDSVdpZwVutaBu7WvNYqMDLSgFgfB30n452TP3vjDAvFC973mA==}
 
+  '@cfworker/json-schema@4.1.1':
+    resolution: {integrity: sha512-gAmrUZSGtKc3AiBL71iNWxDsyUC5uMaKKGdvzYsBoTW/xi42JQHl7eKV2OYzCUqvc+D2RCcf7EXY2iCyFIk6og==}
+
   '@chevrotain/types@11.1.2':
     resolution: {integrity: sha512-U+HFai5+zmJCkK86QsaJtoITlboZHBqrVketcO2ROv865xfCMSFpELQoz1GkX5GzME8pTa+3kbKrZHQtI0gdbw==}
 
@@ -2992,8 +3002,8 @@ packages:
     peerDependencies:
       react: 19.0.0
 
-  '@earendil-works/pi-ai@0.80.6':
-    resolution: {integrity: sha512-7xfLk8sANBp+bpPEbjoOZTbPxsa+++b1JXAoSJsNa3vbs9AHHEclmvg54XLQcxH+fuwaeti/g2jeIfJ+mVYLpA==}
+  '@earendil-works/pi-ai@0.82.0':
+    resolution: {integrity: sha512-8MvW9+zno13sXDuT2kFMnWeTNUufUhPeZDRVO+igGoBRCDWgn7Xh2FkRQI1mRuet6QhF4ENQuLYdIAOyG6BhNw==}
     engines: {node: '>=22.19.0'}
     hasBin: true
 
@@ -8699,6 +8709,8 @@ snapshots:
 
   '@braintree/sanitize-url@7.1.2': {}
 
+  '@cfworker/json-schema@4.1.1': {}
+
   '@chevrotain/types@11.1.2': {}
 
   '@dnd-kit/accessibility@3.1.1(react@19.0.0)':
@@ -8726,7 +8738,7 @@ snapshots:
       react: 19.0.0
       tslib: 2.8.1
 
-  '@earendil-works/pi-ai@0.80.6(patch_hash=c4a17f70c78dd2fd8cfa3286e2f7d8f421e85955577f4501b89b4fe26bfb0092)(ws@8.21.0)(zod@3.25.76)':
+  '@earendil-works/pi-ai@0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.0)(zod@3.25.76)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@3.25.76)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0

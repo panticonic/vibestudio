@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { connectViaRpc } from "./rpc-client.js";
 import type { PubSubClient } from "./client.js";
+import type { MethodExecutionContext } from "./protocol-types.js";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   agentToolFailureFromUnknown,
@@ -224,7 +225,11 @@ async function emitReplayAndReady(
       phase: "replay",
       id: 100 + participants.indexOf(p),
       type: "presence",
-      payload: { action: "join", metadata: { name: p.name, type: p.type } },
+      payload: {
+        action: "join",
+        ref: { kind: p.type, id: p.id, participantId: p.id },
+        metadata: { name: p.name, type: p.type },
+      },
       senderId: p.id,
       ts: Date.now(),
     });
@@ -290,6 +295,77 @@ describe("connectViaRpc", () => {
       await emitReplayAndReady(emit, []);
       await client.ready();
       await client.close();
+    });
+
+    it("advertises Zod methods as provider-valid JSON Schema", async () => {
+      const client = connectViaRpc({
+        rpc: mockRpc as any,
+        channel: CHANNEL,
+        methods: {
+          client_eval: {
+            parameters: z.object({
+              timeoutMs: z.number().int().positive().optional(),
+            }),
+            returns: z.object({ success: z.boolean() }),
+            execute: vi.fn().mockResolvedValue({ success: true }),
+          },
+        },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const subscribeCall = mockRpc.stream.mock.calls.find((call) => call[1] === "subscribe");
+      const metadata = subscribeCall?.[2]?.[1] as
+        | {
+            methods?: Array<{
+              parameters: Record<string, unknown>;
+              returns?: Record<string, unknown>;
+            }>;
+          }
+        | undefined;
+      const advertisement = metadata?.methods?.[0];
+
+      expect(advertisement?.parameters).not.toHaveProperty("$schema");
+      expect(advertisement?.parameters).toMatchObject({
+        type: "object",
+        properties: {
+          timeoutMs: {
+            type: "integer",
+            exclusiveMinimum: 0,
+          },
+        },
+      });
+      expect(advertisement?.returns).not.toHaveProperty("$schema");
+
+      await emitReplayAndReady(emit, []);
+      await client.ready();
+      await client.close();
+    });
+
+    it("rejects malformed explicit method schemas before subscribing", () => {
+      expect(() =>
+        connectViaRpc({
+          rpc: mockRpc as any,
+          channel: CHANNEL,
+          methods: {
+            client_eval: {
+              parameters: {
+                type: "object",
+                properties: {
+                  timeoutMs: {
+                    type: "integer",
+                    exclusiveMinimum: true,
+                  },
+                },
+              },
+              execute: vi.fn().mockResolvedValue({ success: true }),
+            },
+          },
+        })
+      ).toThrow(
+        /Invalid JSON Schema advertised for method "client_eval" parameters:.*exclusiveMinimum.*number/
+      );
+      expect(mockRpc.stream).not.toHaveBeenCalled();
     });
 
     it("does not settle cooperative close before self-leave is acknowledged", async () => {
@@ -378,7 +454,15 @@ describe("connectViaRpc", () => {
                 {
                   kind: "roster-snapshot",
                   participants: [
-                    { id: "user:usr_alice", metadata: { kind: "user", type: "user" } },
+                    {
+                      id: "user:usr_alice",
+                      ref: {
+                        kind: "user",
+                        id: "user:usr_alice",
+                        participantId: "user:usr_alice",
+                      },
+                      metadata: { kind: "user", type: "user" },
+                    },
                   ],
                   ts: Date.now(),
                 },
@@ -432,7 +516,11 @@ describe("connectViaRpc", () => {
                   id: 101,
                   messageId: "presence-101",
                   type: "presence",
-                  payload: { action: "join", metadata: { name: "Claude", type: "agent" } },
+                  payload: {
+                    action: "join",
+                    ref: { kind: "agent", id: "agent-1", participantId: "agent-1" },
+                    metadata: { name: "Claude", type: "agent" },
+                  },
                   senderId: "agent-1",
                   ts: Date.now(),
                 },
@@ -535,7 +623,13 @@ describe("connectViaRpc", () => {
               snapshots: [
                 {
                   kind: "roster-snapshot",
-                  participants: [{ id: "agent-1", metadata: { name: "Agent", type: "agent" } }],
+                  participants: [
+                    {
+                      id: "agent-1",
+                      ref: { kind: "agent", id: "agent-1", participantId: "agent-1" },
+                      metadata: { name: "Agent", type: "agent" },
+                    },
+                  ],
                   ts: Date.now(),
                 },
               ],
@@ -1931,7 +2025,7 @@ describe("connectViaRpc", () => {
           slowWork: {
             description: "slow operation",
             parameters: z.object({}),
-            execute: async (_args, ctx) => {
+            execute: async (_args: unknown, ctx: MethodExecutionContext) => {
               capturedSignal = ctx.signal;
               // Wait until aborted
               await new Promise<void>((resolve) => {
@@ -2004,7 +2098,7 @@ describe("connectViaRpc", () => {
           slowWork: {
             description: "slow operation",
             parameters: z.object({}),
-            execute: async (_args, ctx) => {
+            execute: async (_args: unknown, ctx: MethodExecutionContext) => {
               capturedSignal = ctx.signal;
               await new Promise<void>((resolve) => {
                 if (ctx.signal.aborted) return resolve();

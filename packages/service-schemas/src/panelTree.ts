@@ -8,7 +8,10 @@
 import { z } from "zod";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
-import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import {
+  defineServiceMethods,
+  fixedPreparedAuthorityRequirement,
+} from "@vibestudio/shared/typedServiceClient";
 import {
   MovePanelRequestSchema,
   PanelDiagnosticPacketSchema,
@@ -60,7 +63,9 @@ function panelBoundaryPrepared(method: string) {
     leaves: [
       {
         capability: "context.boundary",
-        requirement: requirementForPrincipals(["code", "user", "host"], "context.boundary"),
+        requirement: fixedPreparedAuthorityRequirement(
+          requirementForPrincipals(["code", "user", "host"], "context.boundary")
+        ),
         tier: { selectedFrom: ["gated", "critical"] as const },
       },
     ],

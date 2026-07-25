@@ -45,6 +45,7 @@ function fixture() {
     runtime: {
       createContext,
       createEntity,
+      retireEntity: vi.fn(async () => {}),
       resolveContext: vi.fn(async () => null),
     },
     conduitBlessings: {

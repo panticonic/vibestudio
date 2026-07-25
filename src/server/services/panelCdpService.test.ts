@@ -22,6 +22,11 @@ import type { ApprovalQueue } from "./approvalQueue.js";
 type AuthorityTestDeps = { approvalQueue: ApprovalQueue; grantStore: CapabilityGrantStore };
 type PanelAccessTestDeps = PanelAccessPermissionDeps & AuthorityTestDeps;
 
+const orchestratorTestPolicy = {
+  policyId: "test:panel-cdp",
+  kind: "orchestrator" as const,
+};
+
 function tempStatePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-cdp-"));
 }
@@ -363,6 +368,7 @@ describe("panelCdpService", () => {
           channelId: "chan",
           bindingId: "privileged",
         },
+        testPolicy: orchestratorTestPolicy,
       })
     );
     await dispatchCdp(service, { caller }, "getCdpEndpoint", ["shell"]);
@@ -668,11 +674,13 @@ describe("panelCdpService", () => {
       createTestExecutionSession({
         runtimeId: "agent:ent-1",
         contextId: "ctx-agent",
+        mode: "interactive",
         agentBinding: {
           entityId: "ent-1",
           channelId: "chan-1",
           bindingId: "agt_1",
         },
+        testPolicy: orchestratorTestPolicy,
       })
     );
 

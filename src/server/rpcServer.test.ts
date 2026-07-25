@@ -141,7 +141,18 @@ type TestRpcServer = {
     callerKind: string,
     targetId: string,
     method: string,
-    args: unknown[]
+    args: unknown[],
+    meta?: {
+      requestId?: string;
+      idempotencyKey?: string;
+      readOnly?: boolean;
+      causalParent?: import("@vibestudio/rpc").RpcCausalParent;
+      signal?: AbortSignal;
+    },
+    relayCallerScope?: {
+      authenticatedCaller: ReturnType<typeof createVerifiedCaller>;
+      authorizingCaller: ReturnType<typeof createVerifiedCaller>;
+    }
   ): Promise<unknown>;
   directDOAuthorization(input: {
     caller: ReturnType<typeof createVerifiedCaller>;
@@ -1353,6 +1364,85 @@ describe("RpcServer relay behavior", () => {
       callerId: "panel:nav-a",
       callerKind: "panel",
       userId: "user-1",
+    });
+  });
+
+  it("uses extension code authority with the initiating panel's verified subject", async () => {
+    const { server, entityCache } = createServer();
+    const targetId = "do:vibestudio/internal:BrowserDataDO:browser-data";
+    entityCache._onActivate(makeRecord(targetId, "do"));
+    server.setWorkerdUrl("http://127.0.0.1:1111");
+    server.setWorkerdGatewayToken("gateway-token");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          from: targetId,
+          target: "main",
+          delivery: { caller: { callerId: targetId, callerKind: "do" } },
+          provenance: [],
+          message: { type: "response", requestId: "x", result: [] },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const extensionCaller = createVerifiedCaller(
+      "@workspace-extensions/browser-data",
+      "extension",
+      {
+        callerId: "@workspace-extensions/browser-data",
+        callerKind: "extension",
+        repoPath: "extensions/browser-data",
+        effectiveVersion: "ev-browser-data",
+        executionDigest: "b".repeat(64),
+        requested: [
+          {
+            capability: "browser-data.read",
+            resource: { kind: "prefix", prefix: "do:vibestudio/internal:BrowserDataDO:" },
+          },
+        ],
+      }
+    );
+    extensionCaller.codeApproved = true;
+    const authorizingCaller = createVerifiedCaller(
+      "panel:nav-chat",
+      "panel",
+      {
+        callerId: "panel:nav-chat",
+        callerKind: "panel",
+        repoPath: "panels/chat",
+        effectiveVersion: "ev-chat",
+        executionDigest: "c".repeat(64),
+        requested: [],
+      },
+      null,
+      { userId: "user-browser", handle: "browser-user" }
+    );
+
+    await testServer(server).relayToDO(
+      extensionCaller.runtime.id,
+      extensionCaller.runtime.kind,
+      targetId,
+      "listImportJobs",
+      [],
+      undefined,
+      { authenticatedCaller: extensionCaller, authorizingCaller }
+    );
+
+    const envelope = JSON.parse(String(fetchMock.mock.calls[0]![1]!.body));
+    expect(envelope.delivery.caller).toMatchObject({
+      callerId: "@workspace-extensions/browser-data",
+      callerKind: "extension",
+      userId: "user-browser",
+      authorization: {
+        context: {
+          authorizingOrigin: {
+            kind: "code",
+            principal: `code:extensions/browser-data@${"b".repeat(64)}`,
+          },
+        },
+      },
     });
   });
 

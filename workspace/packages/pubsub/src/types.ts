@@ -4,6 +4,7 @@
 
 import type { SandboxSource } from "./tracker-types.js";
 import type { ChannelInvite as WorkspaceChannelInvite } from "@vibestudio/shared/channelInvites";
+import type { ParticipantRef } from "@workspace/agentic-protocol";
 
 /**
  * Channel configuration persisted with the channel.
@@ -68,6 +69,8 @@ export interface ServerLogEvent<T = unknown> {
 
 export interface ParticipantSnapshot {
   id: string;
+  /** Canonical identity assigned by the channel, never reconstructed by consumers. */
+  ref: ParticipantRef;
   metadata: Record<string, unknown>;
 }
 
@@ -232,6 +235,8 @@ export type ParticipantMetadata = Record<string, unknown>;
 export interface Participant<T extends ParticipantMetadata = ParticipantMetadata> {
   /** The client's unique ID */
   id: string;
+  /** Canonical identity assigned by the channel. */
+  ref: ParticipantRef;
   /** Arbitrary metadata provided by the client on connection */
   metadata: T;
 }

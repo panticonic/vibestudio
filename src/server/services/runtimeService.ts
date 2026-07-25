@@ -63,6 +63,10 @@ export interface RuntimeEntityHooks {
     stateArgs?: unknown;
   }) => Promise<PreparedRuntimeExecution & { targetId: string }>;
 
+  /** Called after the entity row is active but before activation is returned
+   * to its creator, so durable-work capability registration precedes work. */
+  onDurableObjectActivated?: (record: EntityRecord) => Promise<void>;
+
   /** Prepare runtime resources for a "worker" entity. */
   prepareWorker: (args: {
     source: string;
@@ -134,6 +138,7 @@ export interface RuntimeEntityHooks {
 
 export interface RuntimeServiceInternal {
   createEntity(caller: VerifiedCaller, spec: RuntimeEntityCreateSpec): Promise<RuntimeEntityHandle>;
+  retireEntity(id: string): Promise<void>;
   createContext(
     ctx: Pick<ServiceContext, "caller" | "chainCaller">,
     args: {
@@ -741,6 +746,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       ownerUserId: caller.subject?.userId,
     };
     const record = await store.activate(activateInput);
+    if (record.kind === "do") {
+      await deps.hooks.onDurableObjectActivated?.(record);
+    }
     if (spec.kind === "session" && spec.title) {
       await deps.setEntityTitle?.(record.id, spec.title, { explicit: true });
     }
@@ -1431,6 +1439,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     definition,
     internal: {
       createEntity,
+      retireEntity: (id) => retireEntity(id),
       createContext,
       resolveContext,
     },

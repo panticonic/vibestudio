@@ -50,7 +50,7 @@ const modelLibraryMock = vi.hoisted(() => {
       state.library.setRuntimeValidation.mockClear();
     },
     library: {
-      list: vi.fn(async () => []),
+      list: vi.fn<() => Promise<ModelRecord[]>>(async () => []),
       get: vi.fn<(slug: string) => Promise<ModelRecord | null>>(async () => null),
       ensureFallback: vi.fn<() => Promise<unknown>>(async () => {
         throw new Error("not used");

@@ -17,6 +17,7 @@
  */
 
 import {
+  callableEntry,
   namespaceEntry,
   valueEntry,
   type RuntimeSurfaceEntry,
@@ -317,8 +318,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   contextId: valueEntry(),
   rpc: valueEntry("Portable RPC client (the full createRpcClient)."),
   fs: valueEntry(
-    "Per-context filesystem sandbox. Paths are context-root-relative. The semantic workspace records managed mutations before projection; moves preserve file identity and copies mint a new identity with exact copy provenance. Tracked-to-scratch renames, managed empty-directory mkdir, and open with write flags are rejected. Scratch mkdir and utimes remain direct filesystem operations. Platform-excluded paths and paths outside reserved workspace source roots are local scratch.",
-    "fs"
+    "Per-context filesystem sandbox. Paths are context-root-relative. The semantic workspace records managed mutations before projection; moves preserve file identity and copies mint a new identity with exact copy provenance. Tracked-to-scratch renames, managed empty-directory mkdir, and open with write flags are rejected. Scratch mkdir and utimes remain direct filesystem operations. Platform-excluded paths and paths outside reserved workspace source roots are local scratch."
   ),
   callMain: valueEntry('Call a `main` (server) service method: callMain("fs.readFile", path).'),
   parent: valueEntry("This runtime's parent panel handle (a no-panel handle when there is none)."),
@@ -332,7 +332,11 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   gatewayFetch: valueEntry(
     "Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer."
   ),
-  openExternal: valueEntry(),
+  openExternal: callableEntry(
+    "externalOpen",
+    "openExternal",
+    "Call `await openExternal(url, options?)` from `@workspace/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides."
+  ),
   openPanel: valueEntry(
     "Open a workspace or browser panel and return a PanelHandle only after application boot-ready."
   ),

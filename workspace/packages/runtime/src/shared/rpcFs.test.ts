@@ -25,7 +25,12 @@ describe("createRpcFs transport deadlines", () => {
     const rpc = {
       call: vi.fn().mockImplementation(() => new Promise(() => {})),
     };
-    const fs = createRpcFs(rpc as never, { timeoutMs: 10 });
+    const telemetry: unknown[] = [];
+    const fs = createRpcFs(rpc as never, {
+      timeoutMs: 10,
+      slowPendingMs: 2,
+      onTelemetry: (event) => telemetry.push(event),
+    });
 
     await expect(fs.stat("stalled")).rejects.toMatchObject({
       name: "RpcFsTimeoutError",
@@ -43,6 +48,35 @@ describe("createRpcFs transport deadlines", () => {
     });
     const signal = rpc.call.mock.calls[0]?.[3]?.signal as AbortSignal;
     expect(signal.aborted).toBe(true);
+    expect(telemetry).toEqual([
+      expect.objectContaining({ method: "stat", phase: "pending" }),
+      expect.objectContaining({ method: "stat", phase: "settled", outcome: "timeout" }),
+    ]);
+  });
+
+  it("reports successful operation latency without logging healthy calls by default", async () => {
+    const telemetry: unknown[] = [];
+    const rpc = { call: vi.fn(async () => ({ size: 1 })) };
+    const fs = createRpcFs(rpc as never, {
+      onTelemetry: (event) => telemetry.push(event),
+    });
+
+    await fs.stat("ready");
+
+    expect(telemetry).toEqual([
+      expect.objectContaining({ method: "stat", phase: "settled", outcome: "ok" }),
+    ]);
+  });
+
+  it("does not let a telemetry observer change filesystem semantics", async () => {
+    const rpc = { call: vi.fn(async () => ({ size: 1 })) };
+    const fs = createRpcFs(rpc as never, {
+      onTelemetry: () => {
+        throw new Error("observer failed");
+      },
+    });
+
+    await expect(fs.stat("ready")).resolves.toMatchObject({ size: 1 });
   });
 });
 

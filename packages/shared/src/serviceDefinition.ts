@@ -8,15 +8,70 @@ import type {
 } from "./serviceDispatcher.js";
 import type { MethodSchema } from "./typedServiceClient.js";
 
-export interface PreparedAuthoritySelection {
+interface PreparedAuthoritySelectionFields {
   capability: string;
   resourceKey: string;
-  /** Required only for a schema leaf whose requirement kind is `selected`. */
-  requirement?: AuthorityRequirement;
   authorizingCaller?: VerifiedCaller;
   challenge?: AuthorityChallengePresentation;
   /** Host-selected tier, allowed only when the schema declares its closed set. */
   tier?: "gated" | "critical";
+}
+
+declare const fixedPreparedAuthoritySelectionBrand: unique symbol;
+declare const selectedPreparedAuthoritySelectionBrand: unique symbol;
+
+export type FixedPreparedAuthoritySelection = PreparedAuthoritySelectionFields & {
+  requirement?: never;
+  readonly [fixedPreparedAuthoritySelectionBrand]: true;
+};
+
+export type SelectedPreparedAuthoritySelection = PreparedAuthoritySelectionFields & {
+  requirement: AuthorityRequirement;
+  readonly [selectedPreparedAuthoritySelectionBrand]: true;
+};
+
+export type PreparedAuthoritySelection =
+  | FixedPreparedAuthoritySelection
+  | SelectedPreparedAuthoritySelection;
+
+/** Select only resource/presentation data for a schema-fixed prepared leaf. */
+export function fixedPreparedAuthoritySelection<const S extends PreparedAuthoritySelectionFields>(
+  selection: S
+): S & FixedPreparedAuthoritySelection {
+  return selection as S & FixedPreparedAuthoritySelection;
+}
+
+/**
+ * Select a complete host-derived requirement for a dynamic prepared leaf.
+ * Rejecting missing or mismatched capability leaves here keeps malformed
+ * authority out of the dispatcher and next-action/approval machinery.
+ */
+export function selectedPreparedAuthoritySelection<
+  const S extends PreparedAuthoritySelectionFields & { requirement: AuthorityRequirement },
+>(selection: S): S & SelectedPreparedAuthoritySelection {
+  let capabilityLeaves = 0;
+  const visit = (requirement: AuthorityRequirement): void => {
+    if (requirement.kind === "capability") {
+      capabilityLeaves += 1;
+      if (requirement.capability !== selection.capability) {
+        throw new Error(
+          `Selected prepared authority for '${selection.capability}' contains capability ` +
+            `'${requirement.capability}'`
+        );
+      }
+      return;
+    }
+    if (requirement.kind === "all" || requirement.kind === "any") {
+      for (const child of requirement.requirements) visit(child);
+    }
+  };
+  visit(selection.requirement);
+  if (capabilityLeaves === 0) {
+    throw new Error(
+      `Selected prepared authority for '${selection.capability}' has no capability leaf`
+    );
+  }
+  return selection as S & SelectedPreparedAuthoritySelection;
 }
 
 export type AuthorityPreparationResolver = (

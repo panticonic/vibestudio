@@ -131,11 +131,7 @@ const REQUEST_INVALID_CODES = new Set([
 // or acquire authority correctly. Retrying the model can never repair that
 // invocation and, with the durable model retry policy, would otherwise leave
 // the owning turn spinning forever.
-const INFRASTRUCTURE_TERMINAL_CODES = new Set([
-  "eacquire",
-  "eacces",
-  "respond_timeout",
-]);
+const INFRASTRUCTURE_TERMINAL_CODES = new Set(["eacquire", "eacces", "respond_timeout"]);
 
 export function classifyModelFailure(
   input: ModelFailureInputArg,
@@ -298,7 +294,8 @@ function collectFields(
       input.status ??
       numberValue(bodyRecord["status"]) ??
       numberValue(error["status"]) ??
-      numberValue(details["status"]),
+      numberValue(details["status"]) ??
+      httpStatusFromMessage(input.message ?? input.rawReason),
     code:
       input.code ??
       stringValue(bodyRecord["errorCode"]) ??
@@ -327,6 +324,16 @@ function collectFields(
       stringValue(error["message"]) ??
       stringValue(details["message"]),
   };
+}
+
+function httpStatusFromMessage(message: string | undefined): number | undefined {
+  if (!message) return undefined;
+  const match =
+    message.match(/^\s*(\d{3})(?:\s|["':-])/u) ??
+    message.match(/\bHTTP(?:\/\d(?:\.\d)?)?\s+(\d{3})\b/iu);
+  if (!match?.[1]) return undefined;
+  const status = Number(match[1]);
+  return status >= 100 && status <= 599 ? status : undefined;
 }
 
 function isInfrastructureTerminal(codeKey: string, message: string): boolean {
@@ -366,10 +373,7 @@ function codexUsageLimitMessage(
 
   const subject = limitName ? ` for ${limitName}` : "";
   const reset = resetAt ? ` Try again after ${formatResetTime(resetAt)}.` : "";
-  const readable = (readableMessage(message) || GENERIC_USAGE_LIMIT_MESSAGE).replace(
-    /[.!?]+$/,
-    ""
-  );
+  const readable = (readableMessage(message) || GENERIC_USAGE_LIMIT_MESSAGE).replace(/[.!?]+$/, "");
   return {
     reason: `${readable}${subject}.${reset}`,
     resetAt: resetAt ?? undefined,
@@ -444,7 +448,7 @@ function isInvalidRequestError(
 ): boolean {
   if (REQUEST_INVALID_CODES.has(codeKey)) return true;
   if (status === 400 || status === 404) return true;
-  return /\b(?:invalid request|invalid argument|unsupported model|model not found)\b/i.test(
+  return /\b(?:invalid request|invalid argument|invalid schema|unsupported model|model not found)\b/i.test(
     message
   );
 }

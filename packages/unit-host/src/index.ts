@@ -371,6 +371,8 @@ export type UnitApprovalDecision = "once" | "session" | "version" | "deny" | "di
 export interface UnitReconcileOptions {
   trigger?: UnitReconcileTrigger;
   removeUndeclared?: boolean;
+  /** Bound background build/start pressure while preserving declaration order. */
+  maxConcurrentApplies?: number;
   /**
    * `staged` returns once declarations and approval requests are classified.
    * `applied` also waits for already-trusted units to build and activate;
@@ -506,6 +508,12 @@ export class UnitHost<
   }
 
   async reconcileDeclared(declared: Decl[], opts: UnitReconcileOptions = {}): Promise<void> {
+    if (
+      opts.maxConcurrentApplies !== undefined &&
+      (!Number.isInteger(opts.maxConcurrentApplies) || opts.maxConcurrentApplies < 1)
+    ) {
+      throw new Error("maxConcurrentApplies must be a positive integer");
+    }
     let resolveStaged!: () => void;
     const staged = new Promise<void>((resolve) => {
       resolveStaged = resolve;
@@ -521,6 +529,9 @@ export class UnitHost<
       this.reconcileDeclaredOnce(declared, {
         trigger: opts.trigger ?? "startup",
         removeUndeclared: opts.removeUndeclared ?? true,
+        ...(opts.maxConcurrentApplies === undefined
+          ? {}
+          : { maxConcurrentApplies: opts.maxConcurrentApplies }),
         onStaged: markStaged,
       })
     );
@@ -713,6 +724,7 @@ export class UnitHost<
     opts: {
       trigger: UnitReconcileTrigger;
       removeUndeclared: boolean;
+      maxConcurrentApplies?: number;
       onStaged: () => void;
     }
   ): Promise<void> {
@@ -779,7 +791,8 @@ export class UnitHost<
       for (const item of needsApproval) {
         this.pendingApprovalIdentityKeys.add(item.identityKey);
       }
-      const startApproval = () => this.promptAndApply(needsApproval, opts.trigger);
+      const startApproval = () =>
+        this.promptAndApply(needsApproval, opts.trigger, opts.maxConcurrentApplies);
       const flow = this.backgroundFlow ? this.backgroundFlow.then(startApproval) : startApproval();
       const tracked = flow
         .catch((err) => this.opts.onBackgroundError(err))
@@ -800,12 +813,13 @@ export class UnitHost<
 
     // Apply trusted units concurrently, mirroring the post-approval path.
     // Serializing them here turned startup reconcile into a chain of builds.
-    await this.applyTrustedInGroups(trusted);
+    await this.applyTrustedInGroups(trusted, opts.maxConcurrentApplies);
   }
 
   private async promptAndApply(
     items: Array<ResolvedUnitDeclaration<Decl, Node>>,
-    trigger: UnitReconcileTrigger
+    trigger: UnitReconcileTrigger,
+    maxConcurrentApplies?: number
   ): Promise<void> {
     const entries = items.map(({ node, decl }) => this.opts.approvalEntry(node, decl));
     if (this.opts.approvalCoordinator) {
@@ -813,7 +827,7 @@ export class UnitHost<
         entries,
         trigger,
         applyApproved: async () => {
-          await this.applyTrustedInGroups(items);
+          await this.applyTrustedInGroups(items, maxConcurrentApplies);
         },
         applyDenied: () => this.opts.onApprovalDenied(items),
       });
@@ -824,12 +838,15 @@ export class UnitHost<
       this.opts.onApprovalDenied(items);
       return;
     }
-    await this.applyTrustedInGroups(items);
+    await this.applyTrustedInGroups(items, maxConcurrentApplies);
   }
 
   private async applyTrustedInGroups(
-    items: Array<ResolvedUnitDeclaration<Decl, Node>>
+    items: Array<ResolvedUnitDeclaration<Decl, Node>>,
+    maxConcurrentApplies?: number
   ): Promise<void> {
+    const concurrency =
+      maxConcurrentApplies === undefined ? Number.POSITIVE_INFINITY : maxConcurrentApplies;
     const groups = new Map<number, Array<ResolvedUnitDeclaration<Decl, Node>>>();
     for (const item of items) {
       const group = this.opts.applyGroup?.(item.node, item.decl) ?? 0;
@@ -838,9 +855,11 @@ export class UnitHost<
       groups.set(group, members);
     }
     for (const group of [...groups.keys()].sort((a, b) => a - b)) {
-      await Promise.all(
-        groups.get(group)!.map(({ node, decl }) => this.opts.applyTrusted(node, decl))
-      );
+      const pending = [...groups.get(group)!];
+      while (pending.length > 0) {
+        const batch = pending.splice(0, concurrency);
+        await Promise.all(batch.map(({ node, decl }) => this.opts.applyTrusted(node, decl)));
+      }
     }
   }
 
@@ -1030,7 +1049,6 @@ export class FileUnitIdentityApprovalStore implements UnitIdentityApprovalStore 
     fs.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`);
     fs.renameSync(tmp, this.filePath);
   }
-
 }
 
 export class UnitRegistry<Entry extends UnitRegistryEntryBase> {

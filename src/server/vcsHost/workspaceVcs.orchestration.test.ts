@@ -648,6 +648,30 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     ]);
   });
 
+  it("establishes a runtime context without materializing its filesystem projection", async () => {
+    const { root, vcs } = await harness();
+    const contextId = "context:runtime";
+    const call = vi.fn(async (method: string, input: unknown) => {
+      if (method !== "vcsEnsureContext") throw new Error(`unexpected ${method}`);
+      expect(input).toMatchObject({ projection: "deferred" });
+      return {
+        kind: "complete",
+        result: { working: { ref: { kind: "event", eventId: "event:main" } } },
+      };
+    });
+    await vcs.attachGad({ call: call as never });
+
+    await expect(vcs.ensureSemanticContext(contextId)).resolves.toEqual({
+      kind: "event",
+      eventId: "event:main",
+    });
+
+    expect(call).toHaveBeenCalledOnce();
+    await expect(
+      fsp.stat(path.join(root, "contexts", contextId, ".gad", "context-materialization.json"))
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("linearizes deletion after initialization and removes projection bytes first", async () => {
     const { root, vcs } = await harness();
     let completeEnsure!: (value: unknown) => void;
@@ -795,6 +819,49 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       "vcsEnsureContext",
       "vcsContextMaterializationCommand",
     ]);
+  });
+
+  it("verifies a recovered projection once and trusts its exact receipt for this host generation", async () => {
+    const { vcs, deps } = await harness();
+    const contextId = "context:verified-projection";
+    const targetState = { kind: "event" as const, eventId: "event:main" };
+    const call = vi.fn(async (method: string, input: unknown) => {
+      if (method === "vcsEnsureContext") {
+        return { kind: "complete", result: { working: { ref: targetState } } };
+      }
+      if (method === "vcsContextMaterializationCommand") {
+        return emptyRepairCommand(input as never, targetState);
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+    await vcs.attachGad({ call: call as never });
+    const firstGenerationMatches = vi.spyOn(
+      (
+        vcs as unknown as {
+          materializer: { projectionMatches: (state: unknown) => Promise<boolean> };
+        }
+      ).materializer,
+      "projectionMatches"
+    );
+
+    await vcs.ensureContext(contextId);
+    await vcs.ensureContext(contextId);
+    expect(firstGenerationMatches).not.toHaveBeenCalled();
+
+    const restarted = new WorkspaceVcs(deps);
+    await restarted.attachGad({ call: call as never });
+    const recoveredMatches = vi.spyOn(
+      (
+        restarted as unknown as {
+          materializer: { projectionMatches: (state: unknown) => Promise<boolean> };
+        }
+      ).materializer,
+      "projectionMatches"
+    );
+
+    await restarted.ensureContext(contextId);
+    await restarted.ensureContext(contextId);
+    expect(recoveredMatches).toHaveBeenCalledOnce();
   });
 
   it("observes import digests as intrinsic descriptors without returning blob bytes", async () => {

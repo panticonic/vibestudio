@@ -232,6 +232,7 @@ export function useChatFeedback({
 
 **Field types:** string, number, boolean, select (needs \`options\`), segmented (\`options\`), multiSelect (\`options\`), slider (\`min\`/\`max\`)
 **Field props:** \`key\` (required), \`label\` (required), \`type\` (required), \`default\`, \`required\`, \`description\`
+**Conditional props:** \`visibleWhen\`, \`enabledWhen\`, and warning \`when\` accept \`{ field, operator, value }\`; warning \`when\` also accepts a value or value array for its own field.
 **Choice fields:** select, segmented, and multiSelect include an "Other" free-text option by default unless \`allowFreeText: false\`; multiSelect also includes Select all / Deselect all controls.
 **Pre-populate:** Add \`values: { "key": "existing value" }\``,
       parameters: FeedbackFormArgsSchema,

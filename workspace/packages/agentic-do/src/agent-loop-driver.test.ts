@@ -78,6 +78,7 @@ async function makeHarness(opts: {
    *  never silently drops an outcome on a transient store error (F3). */
   gadFault?: (method: string) => Error | null;
   onGadCall?: (method: string) => void;
+  channelPublish?: ChannelCallPort["publish"];
 }) {
   const gad = opts.gad ?? (await createTestDO(GadWorkspaceDO, { __objectKey: "gad" }));
   const driverHost =
@@ -138,6 +139,7 @@ async function makeHarness(opts: {
         },
         publish: async (input: Parameters<ChannelCallPort["publish"]>[0]) => {
           channelPublishes.push(input);
+          await opts.channelPublish?.(input);
         },
         sendSignalEvent: async () => {},
       },
@@ -185,7 +187,7 @@ async function makeHarness(opts: {
  *  effects ONLY in alarm context — hibernation-first discipline). */
 async function settle(driver: AgentLoopDriver, rounds = 12): Promise<void> {
   for (let i = 0; i < rounds; i += 1) {
-    await driver.alarm().catch(() => {});
+    await driver.dispatchReadyEffectsForTest().catch(() => {});
     if (driver.outbox.all().length === 0) break;
   }
 }
@@ -242,6 +244,10 @@ function rawUsageLimitError(): string {
       "X-Codex-Bengalfox-Limit-Name": "GPT-5.3 Codex-Spark",
     },
   })}`;
+}
+
+function rawInvalidToolSchemaError(): string {
+  return "Codex error: Invalid schema for function 'client_eval': True is not of type 'number'.";
 }
 
 function deferred<T>() {
@@ -367,7 +373,7 @@ describe("AgentLoopDriver", () => {
         senderRef: { kind: "user", id: "panel:user", participantId: "panel:user" },
       },
     });
-    const alarm = harness.driver.alarm();
+    const alarm = harness.driver.dispatchReadyEffectsForTest();
     await started.promise;
     const reads = harness.channelPublishes.filter(
       (p) => (p.payload as { kind?: string } | undefined)?.kind === "message.read"
@@ -407,7 +413,7 @@ describe("AgentLoopDriver", () => {
     });
     // Channel A's first alarm owns a model call that remains pending.
     await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-a"));
-    const alarmA = harness.driver.alarm();
+    const alarmA = harness.driver.dispatchReadyEffectsForTest();
     alarmA.catch(() => undefined);
     await Promise.resolve();
     await Promise.resolve();
@@ -422,7 +428,7 @@ describe("AgentLoopDriver", () => {
         senderRef: { kind: "user", id: "panel:user", participantId: "panel:user" },
       },
     });
-    await harness.driver.alarm();
+    await harness.driver.dispatchReadyEffectsForTest();
     // Channel B got its model call despite channel A's model hanging.
     expect(bModelCalls).toBe(1);
     hung.resolve(textReply("A recovered"));
@@ -446,7 +452,7 @@ describe("AgentLoopDriver", () => {
           : null,
     });
     await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-abort"));
-    const { completion } = await harness.driver.beginAlarmDispatch();
+    const { completion } = harness.driver.beginReadyEffectDispatchForTest();
     await started.promise;
     let completionSettled = false;
     void completion.then(() => {
@@ -498,7 +504,7 @@ describe("AgentLoopDriver", () => {
       },
     });
     await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-channel-retire"));
-    const { completion } = await harness.driver.beginAlarmDispatch();
+    const { completion } = harness.driver.beginReadyEffectDispatchForTest();
     await started.promise;
 
     retiring = true;
@@ -519,7 +525,7 @@ describe("AgentLoopDriver", () => {
 
     await harness.driver.wake(CHANNEL);
     await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-after-retirement"));
-    await harness.driver.alarm();
+    await harness.driver.dispatchReadyEffectsForTest();
     expect(await logKinds(harness.gad)).toEqual(kindsAfterRetirement);
 
     harness.driver.activateChannel(CHANNEL);
@@ -544,7 +550,7 @@ describe("AgentLoopDriver", () => {
           : null,
     });
     await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-retire-after-interrupt"));
-    const alarm = harness.driver.alarm();
+    const alarm = harness.driver.dispatchReadyEffectsForTest();
     await started.promise;
 
     await harness.driver.handleIncoming(CHANNEL, {
@@ -593,7 +599,7 @@ describe("AgentLoopDriver", () => {
           : null,
     });
     await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-release"));
-    const alarm = harness.driver.alarm();
+    const alarm = harness.driver.dispatchReadyEffectsForTest();
     await started.promise;
 
     await expect(harness.driver.releaseActivation()).resolves.toBe(1);
@@ -607,7 +613,7 @@ describe("AgentLoopDriver", () => {
       expect.objectContaining({ kind: "model_call", attempts: 0 }),
     ]);
 
-    await harness.driver.alarm();
+    await harness.driver.dispatchReadyEffectsForTest();
     expect(executions).toBe(1);
     expect(ensureLoaded).toHaveBeenCalledWith("lfm2.5-1.2b", expect.any(AbortSignal));
   });
@@ -631,7 +637,7 @@ describe("AgentLoopDriver", () => {
           : null,
     });
     await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-noncooperative-release"));
-    const { completion } = await harness.driver.beginAlarmDispatch();
+    const { completion } = harness.driver.beginReadyEffectDispatchForTest();
     await started.promise;
     let completionSettled = false;
     void completion.then(() => {
@@ -666,6 +672,53 @@ describe("AgentLoopDriver", () => {
     ]);
   });
 
+  it("re-evaluates authority when a protected port is used during an active effect", async () => {
+    const started = deferred<void>();
+    const continueExecution = deferred<void>();
+    let allowed = true;
+    const publish = vi.fn(async () => {
+      if (!allowed) throw new Error("authority revoked");
+    });
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      channelPublish: publish,
+      executorOverride: (descriptor) =>
+        descriptor.kind === "model_call"
+          ? ({
+              kind: "model_call",
+              async execute({ deps }) {
+                started.resolve();
+                await continueExecution.promise;
+                await deps.channel.publish({
+                  channelId: CHANNEL,
+                  payloadKind: "agentic.trajectory.v1/event",
+                  payload: { kind: "message.completed" },
+                  idempotencyKey: "authority-probe",
+                });
+                return textReply("should not commit");
+              },
+            } as EffectExecutor)
+          : null,
+    });
+
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-authority"));
+    const alarm = harness.driver.dispatchReadyEffectsForTest().catch(() => undefined);
+    await started.promise;
+    allowed = false;
+    continueExecution.resolve();
+    await alarm;
+
+    expect(publish).toHaveBeenCalledOnce();
+    expect(harness.driver.outbox.all()).toEqual([
+      expect.objectContaining({ kind: "model_call", attempts: 1 }),
+    ]);
+    expect(await logKinds(harness.gad)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.started",
+    ]);
+  });
+
   it("closes effect admission while the interrupt marker is being journaled", async () => {
     let modelCalls = 0;
     const modelStarted = deferred<void>();
@@ -697,7 +750,7 @@ describe("AgentLoopDriver", () => {
           : null,
     });
     await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-admission"));
-    const alarm = harness.driver.alarm();
+    const alarm = harness.driver.dispatchReadyEffectsForTest();
     await modelStarted.promise;
     const handleIncoming = harness.driver.handleIncoming.bind(harness.driver);
     vi.spyOn(harness.driver, "handleIncoming").mockImplementation(async (channelId, incoming) => {
@@ -710,7 +763,7 @@ describe("AgentLoopDriver", () => {
 
     const interrupt = harness.driver.interruptChannel(CHANNEL);
     await interruptEntered.promise;
-    await harness.driver.alarm();
+    await harness.driver.dispatchReadyEffectsForTest();
     expect(modelCalls).toBe(1);
 
     releaseInterrupt.resolve();
@@ -740,8 +793,13 @@ describe("AgentLoopDriver", () => {
     await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-bg-fail"));
     expect(failAppends).toBe(false);
 
-    await expect(harness.driver.alarm()).rejects.toThrow("append down");
-    expect(harness.driver.outbox.all()[0]?.leaseExpiresAt).not.toBeNull();
+    await expect(harness.driver.dispatchReadyEffectsForTest()).rejects.toThrow("append down");
+    expect(harness.driver.outbox.all()[0]).toEqual(
+      expect.objectContaining({
+        disposition: "leased",
+        leaseOwner: "agent-loop-driver:test-host",
+      })
+    );
   });
 
   it("stamps channel-specific self identity on durable turn events", async () => {
@@ -944,26 +1002,26 @@ describe("AgentLoopDriver", () => {
     ];
     for (const descriptor of rows) harness.driver.outbox.insert(LOG_ID, descriptor, null);
 
-    await harness.driver.dispatchDue();
+    await harness.driver.dispatchReadyEffectsForTest();
     expect(starts).toEqual(["read-a", "read-b"]);
 
     for (const descriptor of rows.slice(0, 2)) {
       harness.driver.outbox.delete(LOG_ID, descriptor.effectId);
     }
-    await harness.driver.dispatchDue();
+    await harness.driver.dispatchReadyEffectsForTest();
     expect(starts).toEqual(["read-a", "read-b", "write-a"]);
 
     // A deferred/leased mutation remains a durable barrier. A later read must
     // not observe the pre-mutation state merely because another alarm fires.
-    await harness.driver.dispatchDue();
+    await harness.driver.dispatchReadyEffectsForTest();
     expect(starts).toEqual(["read-a", "read-b", "write-a"]);
 
     harness.driver.outbox.delete(LOG_ID, rows[2]!.effectId);
-    await harness.driver.dispatchDue();
+    await harness.driver.dispatchReadyEffectsForTest();
     expect(starts).toEqual(["read-a", "read-b", "write-a", "read-after-write"]);
 
     harness.driver.outbox.delete(LOG_ID, rows[3]!.effectId);
-    await harness.driver.dispatchDue();
+    await harness.driver.dispatchReadyEffectsForTest();
     expect(starts).toEqual(["read-a", "read-b", "write-a", "read-after-write", "write-b"]);
   });
 
@@ -1421,14 +1479,14 @@ describe("AgentLoopDriver", () => {
     });
 
     await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-prompt-retry"));
-    await harness.driver.alarm();
+    await harness.driver.dispatchReadyEffectsForTest();
     expect(attempts).toBe(1);
     expect(harness.driver.outbox.all()).toEqual([
       expect.objectContaining({ kind: "prompt_artifacts", attempts: 1 }),
     ]);
 
     harness.setNow(1_800_000_000_000);
-    await harness.driver.alarm();
+    await harness.driver.dispatchReadyEffectsForTest();
     expect(attempts).toBe(2);
     expect(harness.driver.outbox.all()).toEqual([
       expect.objectContaining({ kind: "prompt_artifacts", attempts: 2 }),
@@ -1447,7 +1505,7 @@ describe("AgentLoopDriver", () => {
     ]);
   });
 
-  it("does not mark an unexpired leased model call failed after restart", async () => {
+  it("does not mark a generation-owned model call failed after activation restart", async () => {
     const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
     const host = await createTestDO(GadWorkspaceDO, { __objectKey: "driver-host" });
     const started = deferred<void>();
@@ -1468,11 +1526,15 @@ describe("AgentLoopDriver", () => {
     });
 
     await first.driver.handleIncoming(CHANNEL, promptIncoming());
-    void first.driver.alarm().catch(() => undefined);
+    void first.driver.dispatchReadyEffectsForTest().catch(() => undefined);
     await started.promise;
     const leasedRow = first.driver.outbox.all()[0];
     expect(leasedRow).toEqual(
-      expect.objectContaining({ kind: "model_call", leaseExpiresAt: expect.any(Number) })
+      expect.objectContaining({
+        kind: "model_call",
+        disposition: "leased",
+        leaseOwner: "agent-loop-driver:test-host",
+      })
     );
 
     const recovered = await makeHarness({
@@ -1486,7 +1548,8 @@ describe("AgentLoopDriver", () => {
     expect(recovered.driver.outbox.all()[0]).toEqual(
       expect.objectContaining({
         kind: "model_call",
-        leaseExpiresAt: leasedRow?.leaseExpiresAt,
+        disposition: "leased",
+        leaseGeneration: leasedRow?.leaseGeneration,
       })
     );
   });
@@ -1507,7 +1570,7 @@ describe("AgentLoopDriver", () => {
     });
 
     await crashed.driver.handleIncoming(CHANNEL, promptIncoming());
-    await crashed.driver.alarm().catch(() => {});
+    await crashed.driver.dispatchReadyEffectsForTest().catch(() => {});
 
     expect(await logKinds(gad)).toEqual([
       "message.completed",
@@ -1677,7 +1740,7 @@ describe("AgentLoopDriver", () => {
     });
 
     await crashed.driver.handleIncoming(CHANNEL, promptIncoming());
-    await crashed.driver.alarm().catch(() => {});
+    await crashed.driver.dispatchReadyEffectsForTest().catch(() => {});
 
     expect(await logKinds(gad)).toEqual([
       "message.completed",
@@ -1706,7 +1769,7 @@ describe("AgentLoopDriver", () => {
     expect(recovered.driver.outbox.all()).toHaveLength(0);
   });
 
-  it("pauses usage-limit failures and resumes after a scheduled reset alarm", async () => {
+  it("pauses usage-limit failures and resumes from a scheduled host transition", async () => {
     const harness = await makeHarness({
       script: {
         model: [
@@ -1759,6 +1822,7 @@ describe("AgentLoopDriver", () => {
     expect(harness.alarms).toContain(Date.parse("2026-06-15T18:35:01.000Z"));
 
     harness.setNow(Date.parse("2026-06-15T18:35:02.000Z"));
+    await harness.driver.executeScheduledResume(CHANNEL, messageId);
     await settle(harness.driver, 6);
 
     expect(await logKinds(harness.gad)).toEqual([
@@ -1809,6 +1873,52 @@ describe("AgentLoopDriver", () => {
     });
   });
 
+  it("terminalizes provider tool-schema rejections without retrying the turn", async () => {
+    let attempts = 0;
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      executorOverride: (descriptor) => {
+        if (descriptor.kind !== "model_call") return null;
+        return {
+          kind: "model_call",
+          async execute() {
+            attempts += 1;
+            throw new Error(rawInvalidToolSchemaError());
+          },
+        } satisfies EffectExecutor;
+      },
+    });
+
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming());
+    await settle(harness.driver, 3);
+
+    expect(attempts).toBe(1);
+    expect(await logKinds(harness.gad)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.started",
+      "message.failed",
+      "turn.closed",
+    ]);
+    const failedRows = await harness.gad.call<{ rows: Array<{ payload_ref_json: string }> }>(
+      "query",
+      `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.failed'`,
+      []
+    );
+    expect(JSON.parse(failedRows.rows[0]!.payload_ref_json)).toMatchObject({
+      reason: rawInvalidToolSchemaError(),
+      recoverable: false,
+      code: "request_invalid_terminal",
+    });
+    expect(harness.driver.outbox.all()).toHaveLength(0);
+    const loop = await harness.driver.loop(CHANNEL);
+    expect(loop.state.openTurn).toBeNull();
+    expect(loop.state.inFlightModelCall).toBeNull();
+
+    await harness.driver.dispatchReadyEffectsForTest();
+    expect(attempts).toBe(1);
+  });
+
   it("reschedules retryable provider rate limits without publishing message failures", async () => {
     const harness = await makeHarness({
       script: {
@@ -1825,7 +1935,7 @@ describe("AgentLoopDriver", () => {
     });
 
     await harness.driver.handleIncoming(CHANNEL, promptIncoming());
-    await harness.driver.alarm();
+    await harness.driver.dispatchReadyEffectsForTest();
 
     expect(await logKinds(harness.gad)).toEqual([
       "message.completed",
@@ -1836,7 +1946,6 @@ describe("AgentLoopDriver", () => {
       expect.objectContaining({
         kind: "model_call",
         attempts: 1,
-        leaseExpiresAt: null,
         nextAttemptAt: expect.any(Number),
       }),
     ]);
@@ -1868,7 +1977,7 @@ describe("AgentLoopDriver", () => {
     await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-network-outage"));
     for (let attempt = 0; attempt < 5; attempt += 1) {
       harness.setNow((attempt + 1) * 10_000);
-      await harness.driver.alarm();
+      await harness.driver.dispatchReadyEffectsForTest();
     }
 
     expect(attempts).toBe(5);
@@ -1900,12 +2009,13 @@ describe("AgentLoopDriver", () => {
     });
 
     await harness.driver.handleIncoming(CHANNEL, promptIncoming());
-    const alarm = harness.driver.alarm();
+    const alarm = harness.driver.dispatchReadyEffectsForTest();
     await started.promise;
     expect(harness.driver.outbox.all()).toEqual([
       expect.objectContaining({
         kind: "model_call",
-        leaseExpiresAt: expect.any(Number),
+        disposition: "leased",
+        leaseOwner: "agent-loop-driver:test-host",
       }),
     ]);
 
@@ -1965,7 +2075,7 @@ describe("AgentLoopDriver", () => {
       });
       await crashed.driver.handleIncoming(CHANNEL, promptIncoming()).catch(() => {});
       // one pump round, then the "process dies" mid-flight
-      await crashed.driver.alarm().catch(() => {});
+      await crashed.driver.dispatchReadyEffectsForTest().catch(() => {});
 
       // restart: fresh driver on the same sql + gad; wake + pump until quiescent
       const recovered = await makeHarness({ script, gad, driverSql: host });
@@ -2011,7 +2121,7 @@ describe("AgentLoopDriver", () => {
       },
     });
     await first.driver.handleIncoming(CHANNEL, promptIncoming()).catch(() => {});
-    await first.driver.alarm().catch(() => {});
+    await first.driver.dispatchReadyEffectsForTest().catch(() => {});
 
     // cache amnesia: wipe BOTH caches
     host.sql.exec(`DELETE FROM effect_outbox`);
@@ -2040,7 +2150,7 @@ describe("AgentLoopDriver", () => {
     // run up to the pending local_tool dispatch — script.tool is empty so the
     // dispatch fails once and backs off; instead deliver the outcome out-of-band
     await driver.handleIncoming(CHANNEL, promptIncoming()).catch(() => {});
-    await driver.alarm().catch(() => {});
+    await driver.dispatchReadyEffectsForTest().catch(() => {});
     const effectId = ids.invocationEffect("tc-1");
     await expect(driver.deliverEffectOutcome(effectId, toolOk)).resolves.toBe(true);
     const kindsAfterFirst = await logKinds(harness.gad);
@@ -2091,7 +2201,7 @@ describe("AgentLoopDriver", () => {
       compaction: { minEntries: 1, triggerBytes: 1 },
     });
     await harness.driver.handleIncoming(CHANNEL, promptIncoming()).catch(() => {});
-    await harness.driver.alarm().catch(() => {});
+    await harness.driver.dispatchReadyEffectsForTest().catch(() => {});
     // Turn is open (awaiting the tool). No compaction event yet.
     expect(await logKinds(harness.gad)).not.toContain("system.compaction_recorded");
     const loop = await harness.driver.loop(CHANNEL);
@@ -2161,7 +2271,7 @@ describe("summarizeTurn over a real GAD-backed loop (agent.describe turn block)"
       script: { model: [toolCallReply("tc-1"), textReply("done")], tool: [] },
     });
     await harness.driver.handleIncoming(CHANNEL, promptIncoming()).catch(() => {});
-    await harness.driver.alarm().catch(() => {}); // model emits the tool call
+    await harness.driver.dispatchReadyEffectsForTest().catch(() => {}); // model emits the tool call
 
     harness.driver.dropLoop(CHANNEL);
     const s = summarizeTurn((await harness.driver.loop(CHANNEL)).state);

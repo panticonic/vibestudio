@@ -6,7 +6,11 @@ import {
   type CallerKind,
   type ServiceContext,
 } from "@vibestudio/shared/serviceDispatcher";
-import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import {
+  selectedPreparedAuthoritySelection,
+  type ServiceDefinition,
+} from "@vibestudio/shared/serviceDefinition";
+import { selectedPreparedAuthorityRequirement } from "@vibestudio/shared/typedServiceClient";
 import {
   createTestExecutionSession,
   createTestServiceDispatcher,
@@ -305,7 +309,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
               leaves: [
                 {
                   capabilityPrefix: "workspace-service:",
-                  requirement: { kind: "selected", principals: ["code"] },
+                  requirement: selectedPreparedAuthorityRequirement(["code"]),
                   tier: "gated",
                 },
               ],
@@ -316,11 +320,11 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       },
       authorityPreparation: {
         "discovery.resolve.dynamic": () => [
-          {
+          selectedPreparedAuthoritySelection({
             capability: "workspace-service:local",
             resourceKey: "do:workers/local:LocalDO:main",
             requirement: requirementForPrincipals(["code"], "workspace-service:local"),
-          },
+          }),
         ],
       },
       handler: vi.fn(async () => "resolved"),
@@ -404,7 +408,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
               leaves: [
                 {
                   capabilityPrefix: "workspace-service:",
-                  requirement: { kind: "selected", principals: ["code"] },
+                  requirement: selectedPreparedAuthorityRequirement(["code"]),
                   tier: "gated",
                 },
               ],
@@ -415,11 +419,11 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       },
       authorityPreparation: {
         "dynamic.resolve.target": () => [
-          {
+          selectedPreparedAuthoritySelection({
             capability: "workspace-service:local",
             resourceKey: `workspace:${selectedTarget}`,
             requirement: requirementForPrincipals(["code"], "workspace-service:local"),
-          },
+          }),
         ],
       },
       handler,

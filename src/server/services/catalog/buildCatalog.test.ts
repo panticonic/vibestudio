@@ -5,6 +5,8 @@ import type { RuntimeSurface } from "@vibestudio/shared/runtimeSurface";
 import type { CatalogEntry } from "@vibestudio/service-schemas/docs";
 import { buildCatalog, isCatalogEntryVisible } from "./buildCatalog.js";
 import { workerRuntimeSurface } from "@vibestudio/service-schemas/runtime/runtimeSurface.worker";
+import { callableEntry } from "@vibestudio/shared/runtimeSurface";
+import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
 
 const testTierLookup = (method: string) =>
   method.startsWith("demo.")
@@ -88,7 +90,7 @@ describe("buildCatalog", () => {
           source: "workers/notes",
           protocols: ["example.notes.v1"],
           principals: ["code"],
-          target: { kind: "durable-object", className: "NotesDO" },
+          target: { kind: "durable-object", className: "NotesDO", defaultObjectKey: "notes" },
         },
       ],
     });
@@ -100,7 +102,7 @@ describe("buildCatalog", () => {
         principals: ["code"],
         source: "workers/notes",
         protocols: ["example.notes.v1"],
-        target: { kind: "durable-object", className: "NotesDO" },
+        target: { kind: "durable-object", className: "NotesDO", defaultObjectKey: "notes" },
       },
     });
     expect(isCatalogEntryVisible(byId(dynamic, "workspace:example.notes"), "worker")).toBe(true);
@@ -152,6 +154,104 @@ describe("buildCatalog", () => {
     expect(byId(projected, "runtime:workerRuntime.modern").description).not.toContain(
       "service:demo"
     );
+  });
+
+  it("projects a direct callable runtime value with its full transport contract", () => {
+    const projected = buildCatalog({
+      definitions: [demo],
+      tierLookup: testTierLookup,
+      runtimeSurfaces: {
+        workerRuntime: {
+          target: "workerRuntime",
+          description: "worker runtime",
+          exports: {
+            get: callableEntry("demo", "get", "Call get directly."),
+          },
+        },
+      },
+    });
+
+    expect(byId(projected, "runtime:workerRuntime.get")).toMatchObject({
+      description: "Call get directly. Get a value.",
+      argsSchema: expect.any(Object),
+      returnsSchema: expect.any(Object),
+      access: {
+        callers: ["worker", "do"],
+        principals: ["code", "host"],
+        tier: "open",
+        sessionAdmission: "family",
+      },
+    });
+  });
+
+  it("rejects a callable runtime value whose declared method cannot be documented", () => {
+    expect(() =>
+      buildCatalog({
+        definitions: [demo],
+        tierLookup: testTierLookup,
+        runtimeSurfaces: {
+          workerRuntime: {
+            target: "workerRuntime",
+            description: "worker runtime",
+            exports: {
+              broken: callableEntry("demo", "missing"),
+            },
+          },
+        },
+      })
+    ).toThrow(
+      "runtime:workerRuntime.broken declares callable schema demo.missing, but that service method is not registered"
+    );
+  });
+
+  it("rejects a callable runtime value whose backing service is absent", () => {
+    expect(() =>
+      buildCatalog({
+        definitions: [],
+        runtimeSurfaces: {
+          workerRuntime: {
+            target: "workerRuntime",
+            description: "worker runtime",
+            exports: {
+              broken: callableEntry("missing", "call"),
+            },
+          },
+        },
+      })
+    ).toThrow(
+      "runtime:workerRuntime.broken declares callable schema missing.call, but service missing is not registered"
+    );
+  });
+
+  it("publishes the live openExternal arguments and approval contract", () => {
+    const projected = buildCatalog({
+      definitions: [
+        {
+          name: "externalOpen",
+          authority: { principals: ["user", "host", "code"] },
+          methods: externalOpenMethods,
+          handler: async () => undefined,
+        },
+      ],
+      runtimeSurfaces: { workerRuntime: workerRuntimeSurface },
+    });
+
+    expect(byId(projected, "runtime:workerRuntime.openExternal")).toMatchObject({
+      argsSchema: expect.any(Object),
+      returnsSchema: expect.any(Object),
+      access: {
+        callers: ["worker", "do"],
+        sensitivity: "write",
+        tier: "open",
+        sessionAdmission: "family",
+        approval: [
+          expect.objectContaining({
+            capability: "external.open",
+            reason: expect.stringContaining("requires user consent"),
+          }),
+        ],
+      },
+    });
   });
 
   it("projects generated runtime method schemas without importing userland code", () => {
@@ -227,7 +327,14 @@ describe("buildCatalog", () => {
 
 it("documents runtime-owned worker lifecycle helpers without exposing raw transport calls", () => {
   const projected = buildCatalog({
-    definitions: [],
+    definitions: [
+      {
+        name: "externalOpen",
+        authority: { principals: ["user", "host", "code"] },
+        methods: externalOpenMethods,
+        handler: async () => undefined,
+      },
+    ],
     runtimeSurfaces: { workerRuntime: workerRuntimeSurface },
   });
   expect(byId(projected, "runtime:workerRuntime.workers.create")).toMatchObject({

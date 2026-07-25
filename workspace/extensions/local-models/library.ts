@@ -560,8 +560,9 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
     async ensureFallback(onProgress?: (job: DownloadJob) => void): Promise<ModelRecord> {
       const records = await loadRecords();
       const existing = records.find((record) => record.slug === FALLBACK_MODEL.slug);
-      if (isCurrentFallbackRecord(existing ?? null)) {
-        return copyRecord(existing);
+      const existingFallback = existing ?? null;
+      if (isCurrentFallbackRecord(existingFallback)) {
+        return copyRecord(existingFallback);
       }
 
       const file = fallbackFileName();

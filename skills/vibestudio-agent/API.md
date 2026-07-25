@@ -171,6 +171,16 @@ Authority principals: `code`, `host`, `user`
 | `docs.listServices` | List registered RPC services and their methods (per-service view with JSON-Schema args/returns), filtered to what the calling kind may invoke. Every service.method listed is callable as services.<service>.<method>(...). |
 | `docs.describeService` | Describe one registered RPC service by name: its policy and every method the caller may invoke (with JSON-Schema args/returns). Returns null for an unknown service. |
 
+## `durableWork`
+
+Payload-free host durable-work dispatcher diagnostics
+
+Authority principals: `code`, `host`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `durableWork.inspect` | Return bounded, payload-free diagnostics for the host durable-work dispatcher, including hint/recovery attribution and recent phase timings. |
+
 ## `eval`
 
 Owner-scoped sandbox eval backed by a per-owner internal EvalDO
@@ -179,8 +189,9 @@ Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `eval.run` | Run TypeScript/JS in the caller's per-owner EvalDO notebook (30-minute live heap plus exact cold scope recovery and synchronous in-DO SQLite `db`). Kernel restarts report exact restored/lost keys. Set reset:true to atomically clear scope/db before this run. Owner is the verified caller; fs is scoped to the owner's context. |
+| `eval.run` | Run TypeScript/JS in the caller's per-owner EvalDO notebook (activation-resident live heap plus exact cold scope recovery and synchronous in-DO SQLite `db`). Kernel restarts report exact restored/lost keys. Set reset:true to atomically clear scope/db before this run. Owner is the verified caller; fs is scoped to the owner's context. |
 | `eval.reset` | Reset the eval context: wipe the live/durable scope and user `db` tables while preserving kernel infrastructure. The owner's existing eval data is cleared. |
+| `eval.dispose` | Permanently release one owner-scoped eval kernel and erase its scope, run records, loaded modules, runtime image, and entity registration. Use this for explicitly finite eval scopes; ordinary notebooks remain durable until disposed. |
 | `eval.startRun` | Start an asynchronous eval for an agent DO: returns a runId after the EvalDO durably records and schedules the idempotent run; reset:true atomically clears scope/db before first insertion. The owning EvalDO delivers the result directly to its agent, while getRun reads the canonical durable result for recovery. Panels/CLI should use run for a one-request result. |
 | `eval.getRun` | Poll an async run started with startRun: returns its status, latest durable progress heartbeat, and (when done) result. |
 | `eval.readScopeTextPage` | Read a bounded page from a string in the caller's current durable eval scope. Use this to retrieve a large eval result losslessly after an eval caches it under a scope key; pages are UTF-16LE base64 so every JavaScript string code unit round-trips exactly. |
@@ -569,6 +580,7 @@ Authority principals: `code`, `host`, `user`
 | `vcs.blame` | Trace an exact bounded file range through immediate content-coordinate mappings. |
 | `vcs.resolveRepository` | Resolve one canonical repository path at one exact semantic state. |
 | `vcs.readFile` | Read one file from an exact semantic state. |
+| `vcs.listDirectory` | Page immediate visible children of one workspace directory with stable identities and attached name provenance. |
 | `vcs.listFiles` | Page the exact path-to-file manifest of one repository at one semantic state. |
 
 ## `webhookIngress`

@@ -206,6 +206,26 @@ async function inspectAuthoredChanges(
 }
 
 describe("SemanticWorkspace snapshot import", () => {
+  it("attaches a runtime context without requesting a filesystem projection", async () => {
+    const { semantic, store } = await authorityFixture();
+
+    const attached = semantic.ensureContextCoordinate(
+      {
+        contextId: "context:runtime",
+        commandId: "command:attach-runtime",
+      },
+      { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } }
+    );
+
+    expect(attached).toEqual({
+      kind: "complete",
+      result: {
+        ...store.context("context:runtime"),
+      },
+    });
+    expect(store.pendingEffects("command:attach-runtime")).toEqual([]);
+  });
+
   it("does not initialize a forked context again when a runtime attaches to it", async () => {
     const { semantic, store, initial } = await authorityFixture();
     const forked = semantic.forkContext(

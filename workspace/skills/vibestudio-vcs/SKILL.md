@@ -46,6 +46,10 @@ Treat source history and provenance as one small, walkable graph.
   public mutation payload.
 - Use `vcs.readFile` only for an exact event/application state. Use `fs` for a
   host or projected filesystem read; there is no raw VCS read mode.
+- Use `vcs.listDirectory` when only immediate visible names are needed. It
+  returns stable entry identities and each name's exact provenance without
+  walking descendant files; reserve `vcs.listFiles` for an explicit repository
+  manifest walk.
 
 ## Use the shortest workflow
 
@@ -120,7 +124,8 @@ request schemas into operational prose. The public surface is:
 
 ```text
 edit  move  copy  integrate  revert  commit  discard  importSnapshot  push
-status  compare  inspect  neighbors  history  blame  resolveRepository  readFile  listFiles
+status  compare  inspect  neighbors  history  blame  resolveRepository  readFile
+listDirectory  listFiles
 ```
 
 ## Load only the needed reference

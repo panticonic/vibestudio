@@ -145,6 +145,7 @@ describe("renderEntry (readable docs_open text)", () => {
         protocols: ["example.notes.v1"],
         capability: "workspace-service:notes",
         source: "workers/notes",
+        target: { kind: "durable-object", className: "NotesDO", defaultObjectKey: "notes" },
       },
     };
 
@@ -157,5 +158,30 @@ describe("renderEntry (readable docs_open text)", () => {
     expect(text).toContain('import { workers, rpc } from "@workspace/runtime"');
     expect(text).toContain('runtime.workers.resolveService("example.notes.v1")');
     expect(text).toContain("Do not pass it to `host_authority_next_action`");
+  });
+
+  it("requires an explicit object key when workspace docs describe a DO factory", () => {
+    const entry: CatalogEntry = {
+      id: "workspace:channel.publish",
+      surface: "workspace",
+      qualifiedName: "channel.publish",
+      parent: "workspace:channel",
+      title: "channel.publish",
+      signature: "publish(): Promise<void>",
+      access: {
+        protocols: ["vibestudio.channel.v1"],
+        target: {
+          kind: "durable-object",
+          className: "PubSubChannel",
+          defaultObjectKey: null,
+        },
+      },
+    };
+
+    const text = renderEntry(entry);
+
+    expect(text).toContain("const objectKey = /* exact provider object key");
+    expect(text).toContain('workers.resolveService("vibestudio.channel.v1", objectKey)');
+    expect(text).not.toContain('workers.resolveService("vibestudio.channel.v1");');
   });
 });

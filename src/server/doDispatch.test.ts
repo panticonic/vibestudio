@@ -4,6 +4,7 @@ import { doRefKey, doRefUrl, encodeUniversalKey, DODispatch } from "./doDispatch
 import type { DORef } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
 import { getWorkerdConnectionDispatcher } from "./workerdRpcRelay.js";
+import { DURABLE_WORK_READY_HEADER } from "@vibestudio/shared/durableWork";
 
 /** Expected workerd path for a userland DO ref (UniversalDO facet host). */
 function userlandUrl(ref: DORef, methodPath: string): string {
@@ -104,6 +105,34 @@ describe("DODispatch", () => {
   });
 
   describe("dispatch with token-backed workerd URL", () => {
+    it("strips a work-ready receipt from the result and notifies its owner", async () => {
+      const ref = makeRef();
+      const observer = vi.fn();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ committed: true }), {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+              [DURABLE_WORK_READY_HEADER]: "agent-inbox,agent-effect,agent-inbox",
+            },
+          })
+        )
+      );
+      dispatch.setTokenManager(new TokenManager());
+      dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
+      dispatch.setGetDispatchSecret(() => "dispatch-secret");
+      dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      dispatch.setWorkReadyObserver(observer);
+
+      await expect(dispatch.dispatch(ref, "enqueue")).resolves.toEqual({ committed: true });
+      expect(observer).toHaveBeenCalledWith({
+        owner: ref,
+        queues: ["agent-inbox", "agent-effect"],
+      });
+    });
+
     it("does not impose Undici response deadlines on DO method lifetimes", async () => {
       const tokenManager = new TokenManager();
       const fetchMock = vi.fn().mockResolvedValue(

@@ -546,7 +546,13 @@ describe("WorkerdManager", () => {
       });
 
       expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
-      await expect(restored.destroyDOEntity("do:workers/new-do:NewDO:k1")).resolves.toBeUndefined();
+      await expect(
+        restored.retireDOEntity({
+          source: "workers/new-do",
+          className: "NewDO",
+          objectKey: "k1",
+        })
+      ).resolves.toBeUndefined();
     });
 
     it("registers every userland DO egress caller with its complete sealed image", async () => {
@@ -1139,12 +1145,19 @@ describe("WorkerdManager", () => {
   });
 
   describe("universal DO host", () => {
-    it("keeps object-specific module graphs so global outbound identity cannot be shared", () => {
+    it("makes object-specific module graphs facet-owned instead of process-cache-owned", () => {
       expect(compiledWorkerdPrograms.universalDo).toContain(
-        "this.env.LOADER.get(`${identity}/${userKey}@${version}`"
+        "const worker = this.env.LOADER.load({"
+      );
+      expect(compiledWorkerdPrograms.universalDo).not.toContain("this.env.LOADER.get(");
+      expect(compiledWorkerdPrograms.universalDo).toContain(
+        "if (this.loadedFacet?.version === args.version) return this.loadedFacet"
       );
       expect(compiledWorkerdPrograms.universalDo).toContain(
-        "const egressIdentity = `do:${source}:${className}:${userKey}`"
+        'this.ctx.facets.abort("do", new Error("Runtime entity retired"))'
+      );
+      expect(compiledWorkerdPrograms.universalDo).toContain(
+        "const egressIdentity = `do:${identity}:${userKey}`"
       );
     });
   });

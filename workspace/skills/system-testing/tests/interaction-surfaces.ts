@@ -1,5 +1,6 @@
 import type { TestCase, TestExecutionResult, TestOrchestrationContext } from "../types.js";
 import {
+  agentMessageHasAll,
   completedToolNames,
   finalMessageHasAll,
   getToolCalls,
@@ -312,7 +313,7 @@ export const interactionSurfaceTests: TestCase[] = [
     description: "Send a clickable follow-up action",
     category: "interaction-surfaces",
     prompt: "Send a clickable follow-up action in the message. Include MDX_ACTION_OK.",
-    validate: (result) => finalMessageHasAll(result, ["MDX_ACTION_OK", "ActionButton"]),
+    validate: (result) => agentMessageHasAll(result, ["MDX_ACTION_OK", "ActionButton"]),
   },
   {
     name: "inline-ui-transcript-event",

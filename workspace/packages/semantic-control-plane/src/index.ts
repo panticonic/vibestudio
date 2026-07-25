@@ -1220,10 +1220,13 @@ export class GadWorkspaceDO extends DurableObjectBase {
   vcsEnsureContext(input: {
     contextId: string;
     commandId: string;
+    projection?: "required" | "deferred";
     ingress: SemanticDispatchRequest["ingress"];
   }): unknown {
     this.ensureReady();
-    return this.semanticWorkspace().ensureContext(input, input.ingress);
+    return input.projection === "deferred"
+      ? this.semanticWorkspace().ensureContextCoordinate(input, input.ingress)
+      : this.semanticWorkspace().ensureContext(input, input.ingress);
   }
 
   @rpc({

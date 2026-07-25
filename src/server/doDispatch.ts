@@ -30,6 +30,11 @@ import type {
 import { assertPresent } from "../lintHelpers";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
 import { describeWorkerdFetchFailure, getWorkerdConnectionDispatcher } from "./workerdRpcRelay.js";
+import {
+  DURABLE_WORK_READY_HEADER,
+  decodeDurableWorkReady,
+  type DurableWorkReadyHint,
+} from "@vibestudio/shared/durableWork";
 
 /** Canonical string key for a DORef, used for maps and logging. */
 export function doRefKey(ref: DORef): string {
@@ -77,6 +82,8 @@ export interface PostToDOWithTokenDeps {
    * Optional because public route paths and some tests do not need it.
    */
   dispatchSecret?: string;
+  /** Disposable post-commit readiness acceleration. */
+  onWorkReady?: (queues: DurableWorkReadyHint["queues"]) => void;
 }
 
 export interface DOCallerEnvelope {
@@ -193,6 +200,18 @@ export async function postToDOWithToken(
     throw new Error(`DO dispatch failed (${res.status}): ${body}`);
   }
 
+  const encodedReady = res.headers.get(DURABLE_WORK_READY_HEADER);
+  if (encodedReady) {
+    try {
+      const queues = decodeDurableWorkReady(encodedReady);
+      if (queues.length > 0) deps.onWorkReady?.(queues);
+    } catch (error) {
+      // The durable owner remains authoritative and the registry scan recovers
+      // it. A malformed disposable hint must never turn a committed semantic
+      // call into an apparent failure that a caller might replay.
+      console.error("[DODispatch] ignored invalid durable-work receipt", error);
+    }
+  }
   return res.json();
 }
 
@@ -298,6 +317,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
         invoke: () => Promise<T>
       ) => Promise<T>)
     | null = null;
+  private workReadyObserver: ((hint: DurableWorkReadyHint) => void) | null = null;
 
   /**
    * Set the TokenManager for per-instance identity tokens.
@@ -352,6 +372,20 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     ) => Promise<T>
   ): void {
     this.authorityParentRunner = fn;
+  }
+
+  setWorkReadyObserver(observer: ((hint: DurableWorkReadyHint) => void) | null): void {
+    this.workReadyObserver = observer;
+  }
+
+  private buildPostDeps(ref: DORef): PostToDOWithTokenDeps {
+    return {
+      tokenManager: assertPresent(this.tokenManager),
+      workerdUrl: assertPresent(this.getWorkerdUrl)(),
+      workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
+      dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
+      onWorkReady: (queues) => this.workReadyObserver?.({ owner: ref, queues }),
+    };
   }
 
   private async serverCaller(
@@ -409,6 +443,21 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     );
   }
 
+  async dispatchHeldWithSignal(
+    ref: DORef,
+    signal: AbortSignal,
+    method: string,
+    ...args: unknown[]
+  ): Promise<unknown> {
+    return this.withProgressReport(
+      `${doRefKey(ref)}.${method} (held)`,
+      () => this.dispatchImpl(ref, method, args, signal),
+      300_000,
+      "working",
+      console.info
+    );
+  }
+
   /**
    * Slow-call watchdog: a DO call that never returns (loader stall, deadlock,
    * dead workerd socket) otherwise hangs its caller with zero output. Warns
@@ -442,7 +491,12 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     }
   }
 
-  private async dispatchImpl(ref: DORef, method: string, args: unknown[]): Promise<unknown> {
+  private async dispatchImpl(
+    ref: DORef,
+    method: string,
+    args: unknown[],
+    signal?: AbortSignal
+  ): Promise<unknown> {
     if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
       throw new Error("DODispatch requires token-backed workerd configuration");
     }
@@ -451,14 +505,16 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     // workspace methods, …), so the caller is always the server — stamp it so the
     // DO's converged envelope dispatch surfaces `callerKind: "server"` (e.g. the
     // EvalDO server-only gate). Mirrors dispatchLifecycle/dispatchAlarm.
-    const buildDeps = (): PostToDOWithTokenDeps => ({
-      tokenManager: assertPresent(this.tokenManager),
-      workerdUrl: assertPresent(this.getWorkerdUrl)(),
-      workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
-      dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
-    });
     const serverCaller = await this.serverCaller(ref, method, args);
-    return await postToDOWithToken(ref, method, args, buildDeps(), "main", serverCaller);
+    return await postToDOWithToken(
+      ref,
+      method,
+      args,
+      this.buildPostDeps(ref),
+      "main",
+      serverCaller,
+      signal
+    );
   }
 
   async dispatchLifecycle(
@@ -486,14 +542,15 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
       throw new Error("DODispatch requires token-backed workerd configuration");
     }
-    const buildDeps = (): PostToDOWithTokenDeps => ({
-      tokenManager: assertPresent(this.tokenManager),
-      workerdUrl: assertPresent(this.getWorkerdUrl)(),
-      workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
-      dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
-    });
     const serverCaller = await this.serverCaller(ref, lifecycleMethod, [arg]);
-    return await postToDOWithToken(ref, lifecycleMethod, [arg], buildDeps(), "main", serverCaller);
+    return await postToDOWithToken(
+      ref,
+      lifecycleMethod,
+      [arg],
+      this.buildPostDeps(ref),
+      "main",
+      serverCaller
+    );
   }
 
   /**
@@ -524,19 +581,13 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
       throw new Error("DODispatch requires token-backed workerd configuration");
     }
-    const buildDeps = (): PostToDOWithTokenDeps => ({
-      tokenManager: assertPresent(this.tokenManager),
-      workerdUrl: assertPresent(this.getWorkerdUrl)(),
-      workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
-      dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
-    });
     const serverCaller = await this.serverCaller(ref, "__alarm", [], testPolicy);
     const invoke = () =>
       postToDOWithToken(
         ref,
         "__alarm",
         [],
-        buildDeps(),
+        this.buildPostDeps(ref),
         "main",
         serverCaller,
         signal

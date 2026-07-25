@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
 import {
   Badge,
   Box,
@@ -96,6 +96,7 @@ export function AgentConfigForm({
 }: AgentConfigFormProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [savingDefault, setSavingDefault] = useState(false);
+  const effortStepsId = useId();
   const set = (patch: Partial<AgentConfigDraft>) => onChange({ ...value, ...patch });
 
   const handleSaveAsDefault = useCallback(async () => {
@@ -164,17 +165,44 @@ export function AgentConfigForm({
       {/* Effort — only for reasoning models */}
       {showEffort && (
         <Field label="Effort" hint="How much the model thinks before answering.">
-          <SegmentedControl.Root
-            value={effort}
-            style={{ width: "100%" }}
-            onValueChange={(v) => set({ thinkingLevel: v as AgentThinkingLevel })}
-          >
-            {thinkingLevels.map((lvl) => (
-              <SegmentedControl.Item key={lvl} value={lvl}>
-                {THINKING_LABELS[lvl]}
-              </SegmentedControl.Item>
-            ))}
-          </SegmentedControl.Root>
+          <Flex direction="column" gap="1">
+            <input
+              type="range"
+              aria-label="Effort"
+              aria-valuetext={THINKING_LABELS[effort]}
+              list={effortStepsId}
+              value={thinkingLevels.indexOf(effort)}
+              min={0}
+              max={thinkingLevels.length - 1}
+              step={1}
+              style={{ width: "100%", accentColor: "var(--accent-9)" }}
+              onChange={(event) => {
+                const thinkingLevel = thinkingLevels[event.currentTarget.valueAsNumber];
+                if (thinkingLevel) set({ thinkingLevel });
+              }}
+            />
+            <datalist id={effortStepsId}>
+              {thinkingLevels.map((lvl, index) => (
+                <option key={lvl} value={index} label={THINKING_LABELS[lvl]} />
+              ))}
+            </datalist>
+            <Flex justify="between" style={{ paddingInline: 2 }}>
+              {thinkingLevels.map((lvl) => {
+                const selected = lvl === effort;
+                return (
+                  <Text
+                    key={lvl}
+                    size="1"
+                    color={selected ? undefined : "gray"}
+                    weight={selected ? "medium" : undefined}
+                    style={{ whiteSpace: "nowrap" }}
+                  >
+                    {THINKING_LABELS[lvl]}
+                  </Text>
+                );
+              })}
+            </Flex>
+          </Flex>
         </Field>
       )}
 

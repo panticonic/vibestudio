@@ -1,5 +1,8 @@
 import type { z } from "zod";
-import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import {
+  fixedPreparedAuthoritySelection,
+  type ServiceDefinition,
+} from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import {
@@ -69,7 +72,7 @@ export function createCorsApprovalService(): ServiceDefinition {
         };
         const copy = describeCapability(CORS_RESPONSE_CAPABILITY, "panel");
         return [
-          {
+          fixedPreparedAuthoritySelection({
             capability: CORS_RESPONSE_CAPABILITY,
             resourceKey: target.origin,
             challenge: {
@@ -89,7 +92,7 @@ export function createCorsApprovalService(): ServiceDefinition {
                 { label: "Website", value: target.origin },
               ],
             },
-          },
+          }),
         ];
       },
     },

@@ -19,6 +19,7 @@ import {
   type LifecyclePrepareInput,
   type LifecyclePrepareResult,
   type LifecycleResumeInput,
+  assertExactSqlTableSchema,
 } from "@workspace/runtime/worker";
 import { withCausalParent, type RpcClient } from "@vibestudio/rpc";
 import {
@@ -71,8 +72,14 @@ import {
   subscribeAgentToChannel,
   type SubagentIdentity,
 } from "@workspace/agentic-core";
-import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import type { DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
+import type {
+  ClaimRequest,
+  ClaimSettlement,
+  DurableWorkQueue,
+  SettleRequest,
+  WorkClaim,
+} from "@vibestudio/shared/durableWork";
 import { executeLocalToolWithDeadline } from "./local-tool-execution.js";
 import {
   AGENT_INSPECTION_METHODS,
@@ -134,7 +141,7 @@ import { ChannelClient } from "./channel-client.js";
 import { FeedbackIngest } from "./feedback-ingest.js";
 import { CardManager } from "./custom-cards.js";
 import { AgentLoopDriver, type DriverDeps } from "./agent-loop-driver.js";
-import { inspectEffectOutbox } from "./effect-outbox.js";
+import { inspectEffectOutbox, outboxExternalId, parseOutboxExternalId } from "./effect-outbox.js";
 import {
   CredentialApprovalDeferredError,
   CredentialPendingError,
@@ -173,6 +180,8 @@ function authorityDecisionDenied(error: unknown): boolean {
 }
 
 const DELTA_BATCH_MS = 100;
+const MAX_BUFFERED_DELTA_EVENTS = 256;
+const MAX_PENDING_SIGNAL_BATCHES = 4;
 const CHANNEL_STATE_CACHE_MS = 5_000;
 const BLOB_TEXT_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 /** ~256KB of serialized session entries before compaction — comfortably
@@ -443,8 +452,28 @@ export interface AgentInitiatedTurnOptions extends AgentTurnMetadata {
   mode?: "auto" | "sequential";
 }
 
+interface ChannelDeliveryBatch {
+  channelId: string;
+  channelRef: { source: string; className: string; objectKey: string };
+  sourceIncarnation: string;
+  targetIncarnation: string;
+  rows: Array<{
+    deliveryKey: string;
+    channelSeq: number;
+    envelope: RpcChannelMessage;
+  }>;
+}
+
+interface ChannelDeliveryBatchOutcome {
+  perRow: Array<{
+    deliveryKey: string;
+    disposition: "accepted" | "duplicate-match";
+  }>;
+  highestContiguousCommittedSeq: number;
+}
+
 export abstract class AgentVesselBase extends DurableObjectBase {
-  static override schemaVersion = 2;
+  static override schemaVersion = 3;
 
   protected readonly identity: DOIdentity;
   protected readonly subscriptions: SubscriptionManager;
@@ -463,7 +492,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     string,
     {
       expiresAt: number;
-      value: Array<{ participantId: string; metadata: Record<string, unknown> }>;
+      value: Array<{
+        participantId: string;
+        ref: ParticipantRef;
+        metadata: Record<string, unknown>;
+      }>;
     }
   >();
   private readonly blobTextCache = new Map<string, { value: string; bytes: number }>();
@@ -510,20 +543,65 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     );
     this.subscriptions.createTables();
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS channel_envelope_inbox (
-        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      CREATE TABLE IF NOT EXISTS agent_inbox_queue (
+        delivery_key TEXT PRIMARY KEY,
         channel_id TEXT NOT NULL,
-        delivery_key TEXT NOT NULL,
+        source_incarnation TEXT NOT NULL,
+        channel_seq INTEGER NOT NULL,
         envelope_json TEXT NOT NULL,
+        continuation_cursor TEXT,
+        idempotency_key TEXT NOT NULL UNIQUE,
         attempts INTEGER NOT NULL DEFAULT 0,
         next_attempt_at INTEGER NOT NULL,
+        lease_owner TEXT,
+        lease_generation INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
-        UNIQUE(channel_id, delivery_key)
+        last_attempt_at INTEGER,
+        disposition TEXT NOT NULL DEFAULT 'ready'
+          CHECK (disposition IN (
+            'ready', 'leased', 'parked', 'retrying',
+            'terminal-completed', 'terminal-unsubscribed', 'terminal-integrity'
+          ))
       )
     `);
+    assertExactSqlTableSchema(this.sql, {
+      table: "agent_inbox_queue",
+      columns: [
+        ["delivery_key", "TEXT", false],
+        ["channel_id", "TEXT", true],
+        ["source_incarnation", "TEXT", true],
+        ["channel_seq", "INTEGER", true],
+        ["envelope_json", "TEXT", true],
+        ["continuation_cursor", "TEXT", false],
+        ["idempotency_key", "TEXT", true],
+        ["attempts", "INTEGER", true, "0"],
+        ["next_attempt_at", "INTEGER", true],
+        ["lease_owner", "TEXT", false],
+        ["lease_generation", "INTEGER", true, "0"],
+        ["created_at", "INTEGER", true],
+        ["last_attempt_at", "INTEGER", false],
+        ["disposition", "TEXT", true, "'ready'"],
+      ],
+      primaryKey: ["delivery_key"],
+    });
     this.sql.exec(`
-      CREATE INDEX IF NOT EXISTS idx_channel_envelope_inbox_due
-        ON channel_envelope_inbox(next_attempt_at, seq)
+      CREATE INDEX IF NOT EXISTS idx_agent_inbox_claim
+        ON agent_inbox_queue(disposition, next_attempt_at, channel_id, channel_seq)
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS agent_hot_path_trace (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel_id TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        source TEXT,
+        item_id TEXT,
+        generation INTEGER,
+        started_at INTEGER NOT NULL,
+        duration_ms INTEGER,
+        details_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_hot_path_trace_channel
+        ON agent_hot_path_trace(channel_id, sequence)
     `);
     this.subagentRuns = new SubagentRunStore(this.sql);
     this.subagentRuns.createTables();
@@ -539,37 +617,120 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       id: "agent-loop-driver",
       nextWakeAt: () => this._driver?.nextWakeAt() ?? this.driverNextWakeAtFromSql(),
       fire: async () => {
-        const { completion } = await this.driver.beginAlarmDispatch();
-        // The host alarm transport intentionally has no response deadline.
-        // Keep the request as the owner of every post-I/O continuation; a
-        // detached promise can be frozen once its event returns in Workerd.
-        // Lifecycle release remains able to fence active executors at their
-        // I/O awaits through AgentLoopDriver.releaseActivation().
-        try {
-          await completion;
-        } finally {
-          await this.persistAlarmSchedule(this.nextAgentAlarmSchedule());
-        }
+        await this.driver.reconcileForRecovery();
       },
     });
     this.registerAgentAlarmSource({
-      id: "subagent-progress-outbox",
-      nextWakeAt: () => this.subagentRuns.nextProgressWakeAt(),
-      fire: async (now) => {
-        await this.drainSubagentProgress(now);
-      },
-    });
-    this.registerAgentAlarmSource({
-      id: "channel-envelope-inbox",
-      nextWakeAt: () => this.nextChannelEnvelopeAt(),
-      fire: async (now) => {
-        await this.drainChannelEnvelopeInbox(now);
+      id: "durable-work-recovery",
+      nextWakeAt: () => this.nextDurableWorkRecoveryAt(),
+      fire: async () => {
+        const queues = this.readyDurableWorkQueues();
+        if (queues.length > 0) this.markWorkReady(...queues);
       },
     });
   }
 
   protected createTables(): void {
     // Composed managers create their own tables; nothing to do here.
+  }
+
+  protected override durableWorkQueues(): readonly DurableWorkQueue[] {
+    return ["agent-inbox", "agent-effect"];
+  }
+
+  protected override releaseDurableWorkClaims(
+    previousWorkerId: string | null,
+    _nextWorkerId: string
+  ): void {
+    if (!previousWorkerId) return;
+    const now = Date.now();
+    this.sql.exec(
+      `UPDATE agent_inbox_queue
+          SET disposition = 'ready',
+              lease_owner = NULL,
+              next_attempt_at = ?
+        WHERE disposition = 'leased' AND lease_owner = ?`,
+      now,
+      previousWorkerId
+    );
+    try {
+      this.sql.exec(
+        `UPDATE effect_outbox
+            SET disposition = 'ready',
+                lease_owner = NULL,
+                next_attempt_at = ?
+          WHERE disposition = 'leased' AND lease_owner = ?`,
+        now,
+        previousWorkerId
+      );
+    } catch {
+      // Effect storage is lazy.
+    }
+  }
+
+  protected traceHotPath(
+    channelId: string,
+    phase: string,
+    input: {
+      startedAt?: number;
+      source?: string;
+      itemId?: string;
+      generation?: number;
+      details?: Record<string, string | number | boolean | null>;
+    } = {}
+  ): void {
+    const now = Date.now();
+    const startedAt = input.startedAt ?? now;
+    this.sql.exec(
+      `INSERT INTO agent_hot_path_trace (
+         channel_id, phase, source, item_id, generation,
+         started_at, duration_ms, details_json
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      channelId,
+      phase,
+      input.source ?? null,
+      input.itemId ?? null,
+      input.generation ?? null,
+      startedAt,
+      input.startedAt === undefined ? null : Math.max(0, now - startedAt),
+      JSON.stringify(input.details ?? {})
+    );
+    this.sql.exec(
+      `DELETE FROM agent_hot_path_trace
+        WHERE channel_id = ?
+          AND sequence NOT IN (
+            SELECT sequence FROM agent_hot_path_trace
+             WHERE channel_id = ?
+             ORDER BY sequence DESC
+             LIMIT 500
+          )`,
+      channelId,
+      channelId
+    );
+  }
+
+  private hotPathTrace(channelId: string): Array<Record<string, unknown>> {
+    return (
+      this.sql
+        .exec(
+          `SELECT sequence, phase, source, item_id, generation,
+                  started_at, duration_ms, details_json
+             FROM agent_hot_path_trace
+            WHERE channel_id = ?
+            ORDER BY sequence`,
+          channelId
+        )
+        .toArray() as Array<Record<string, unknown>>
+    ).map((row) => ({
+      sequence: Number(row["sequence"]),
+      phase: String(row["phase"]),
+      ...(row["source"] == null ? {} : { source: String(row["source"]) }),
+      ...(row["item_id"] == null ? {} : { itemId: String(row["item_id"]) }),
+      ...(row["generation"] == null ? {} : { generation: Number(row["generation"]) }),
+      startedAt: Number(row["started_at"]),
+      ...(row["duration_ms"] == null ? {} : { durationMs: Number(row["duration_ms"]) }),
+      details: JSON.parse(String(row["details_json"])),
+    }));
   }
 
   override async releaseForLifecycle(
@@ -896,6 +1057,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       scheduleAlarm: (at) => {
         this.scheduleAgentAlarm("agent-loop-driver", Math.max(at, Date.now() + 50));
       },
+      notifyWorkReady: () => this.markWorkReady("agent-effect"),
       executorOverride: this.getDriverExecutorOverride(),
     });
     this._driver.connectSpecProvider = async (providerId) =>
@@ -939,8 +1101,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       if (next === null) this.alarmDeadlines.delete(source.id);
       else this.alarmDeadlines.set(source.id, next);
     }
-    const deadlines = [...this.alarmDeadlines.values()].filter(
-      (value) => Number.isFinite(value) && value >= 0
+    const deadlines = [...this.alarmDeadlines.values(), this.nextDurableWorkReadyEdgeAt()].filter(
+      (value): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0
     );
     return deadlines.length === 0 ? null : { wakeAt: Math.min(...deadlines) };
   }
@@ -957,8 +1119,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           typeof entry.wakeAt === "number" && entry.wakeAt <= now
       )
       .sort((a, b) => a.wakeAt - b.wakeAt);
+    // Reconcile every due source before entering any source handler. A long
+    // handler must not leave later sources looking not-yet-due merely because
+    // this activation is still occupied.
+    for (const { source } of due) this.alarmDeadlines.delete(source.id);
     for (const { source } of due) {
-      this.alarmDeadlines.delete(source.id);
       await source.fire(now);
     }
   }
@@ -968,12 +1133,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     try {
       const row = this.sql
         .exec(
-          `SELECT MIN(
-             CASE WHEN lease_expires_at IS NOT NULL
-                  THEN lease_expires_at
-                  ELSE COALESCE(next_attempt_at, 0)
-             END
-           ) AS due FROM effect_outbox`
+          `SELECT MIN(next_attempt_at) AS due
+             FROM effect_outbox
+            WHERE disposition IN ('retrying', 'parked')`
         )
         .toArray()[0];
       const value = row?.["due"];
@@ -1289,14 +1451,17 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return service.targetId;
   }
 
-  /** Batched delta signals (~100ms) — never durable (WS1 §2.4.1). */
-  /** Per-channel ordered signal sender — concurrent fire-and-forget posts
-   *  arrive out of order and scramble streamed token text; the chain keeps
-   *  delta order end to end (across flush batches too). */
-  private readonly signalChains = new Map<string, Promise<unknown>>();
+  /** Batched delta signals (~100ms) — never durable (WS1 §2.4.1).
+   * Per-channel pumps preserve order without allowing a slow UI transport to
+   * create an unbounded promise chain. Dropped intermediate observations are
+   * repaired by the replayable durable terminal. */
+  private readonly signalPumps = new Map<
+    string,
+    { running: boolean; pending: Array<() => Promise<void>> }
+  >();
 
   private sendOrderedSignal(channelId: string, events: AgenticEvent[]): void {
-    void serializeByKey(this.signalChains, channelId, () =>
+    this.enqueueEphemeralSignal(channelId, () =>
       this.createChannelClient(channelId)
         .sendSignalEvent(
           this.participantId(),
@@ -1308,11 +1473,30 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   private sendOrderedSignalMessage(channelId: string, content: string, contentType?: string): void {
-    void serializeByKey(this.signalChains, channelId, () =>
+    this.enqueueEphemeralSignal(channelId, () =>
       this.createChannelClient(channelId)
         .sendSignal(this.participantId(), content, contentType)
         .catch(() => {})
     );
+  }
+
+  private enqueueEphemeralSignal(channelId: string, send: () => Promise<void>): void {
+    const pump = this.signalPumps.get(channelId) ?? { running: false, pending: [] };
+    if (pump.pending.length >= MAX_PENDING_SIGNAL_BATCHES) pump.pending.shift();
+    pump.pending.push(send);
+    this.signalPumps.set(channelId, pump);
+    if (pump.running) return;
+    pump.running = true;
+    void (async () => {
+      try {
+        while (pump.pending.length > 0) await pump.pending.shift()!();
+      } finally {
+        pump.running = false;
+        if (pump.pending.length === 0 && this.signalPumps.get(channelId) === pump) {
+          this.signalPumps.delete(channelId);
+        }
+      }
+    })();
   }
 
   private emitEphemeral(emit: EphemeralEmit): void {
@@ -1321,6 +1505,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       return;
     }
     const buffer = this.deltaBuffers.get(emit.channelId) ?? { events: [], timer: null };
+    if (buffer.events.length >= MAX_BUFFERED_DELTA_EVENTS) buffer.events.shift();
     buffer.events.push(emit.event);
     if (!buffer.timer) {
       buffer.timer = setTimeout(() => {
@@ -1531,8 +1716,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           const parsed = JSON.parse(raw) as LocalModelDescriptor;
           if (parsed && parsed.slug === modelId) localEntry = parsed;
         } catch {
-          // Corrupt cache — placeholder materialization covers this call;
-          // the next artifact refresh rewrites it.
+          // Corrupt cache — the next artifact refresh rewrites it. Only the
+          // bundled fallback has a static descriptor before that refresh.
         }
       }
     }
@@ -1540,9 +1725,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   /** Cache the local-models extension entry for a `local:*` agent model so
-   *  the synchronous loopConfig() can materialize its journaled spec. Failure
-   *  is non-fatal: the placeholder spec keeps the call path alive and the
-   *  executor's ensureLoaded() supplies the live endpoint regardless. */
+   *  the synchronous loopConfig() can materialize its journaled spec. The
+   *  bundled fallback has a truthful static descriptor for first boot; every
+   *  other local model requires its extension-provided metadata. */
   private async refreshLocalModelEntry(channelId: string): Promise<void> {
     const model = this.getAgentSettings().model;
     if (!model.startsWith(`${LOCAL_PROVIDER_ID}:`)) return;
@@ -1581,6 +1766,22 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     channelId: string,
     signal?: AbortSignal
   ): Promise<Partial<AgentLoopConfig>> {
+    const preparationStartedAt = Date.now();
+    this.traceHotPath(channelId, "prompt-artifacts.started");
+    const stage = async <T>(phase: string, operation: () => T | Promise<T>): Promise<T> => {
+      const startedAt = Date.now();
+      try {
+        const value = await operation();
+        this.traceHotPath(channelId, `${phase}.completed`, { startedAt });
+        return value;
+      } catch (error) {
+        this.traceHotPath(channelId, `${phase}.failed`, {
+          startedAt,
+          details: { error: error instanceof Error ? error.name : "unknown" },
+        });
+        throw error;
+      }
+    };
     const throwIfAborted = () => {
       if (!signal?.aborted) return;
       throw signal.reason instanceof Error
@@ -1588,13 +1789,19 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         : new Error("prompt artifact preparation aborted");
     };
     throwIfAborted();
-    await this.refreshLocalModelEntry(channelId);
+    await stage("prompt-artifacts.local-model", () => this.refreshLocalModelEntry(channelId));
     throwIfAborted();
-    const immediatePrompt = await this.prepareImmediatePrompt(channelId, signal);
+    const immediatePrompt = await stage("prompt-artifacts.immediate-prompt", () =>
+      this.prepareImmediatePrompt(channelId, signal)
+    );
     throwIfAborted();
-    const systemPrompt = await this.composePrompt(channelId);
+    const systemPrompt = await stage("prompt-artifacts.resources", () =>
+      this.composePrompt(channelId)
+    );
     throwIfAborted();
-    const registry = await this.toolRegistry(channelId);
+    const registry = await stage("prompt-artifacts.tool-registry", () =>
+      this.toolRegistry(channelId)
+    );
     const schemas: Array<{ name: string; description?: string; parameters?: unknown }> = [
       ...registry.values(),
     ].map((tool) => ({
@@ -1654,13 +1861,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       this.getStateValue(toolNamesKey) !== names ||
       this.getStateValue(toolExecutionModesKey) !== executionModesJson
     ) {
-      const prompt = await this.rpc.call<{ digest?: string }>("main", "blobstore.putText", [
-        systemPrompt,
-      ]);
+      const prompt = await stage("prompt-artifacts.prompt-blob", () =>
+        this.rpc.call<{ digest?: string }>("main", "blobstore.putText", [systemPrompt])
+      );
       throwIfAborted();
-      const tools = await this.rpc.call<{ digest?: string }>("main", "blobstore.putText", [
-        schemasJson,
-      ]);
+      const tools = await stage("prompt-artifacts.tools-blob", () =>
+        this.rpc.call<{ digest?: string }>("main", "blobstore.putText", [schemasJson])
+      );
       throwIfAborted();
       const promptHash = typeof prompt?.digest === "string" ? prompt.digest : "";
       const toolsHash = typeof tools?.digest === "string" ? tools.digest : "";
@@ -1676,6 +1883,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       immediatePrompt: _synchronousImmediatePrompt,
       ...patch
     } = this.loopConfig(channelId);
+    this.traceHotPath(channelId, "prompt-artifacts.completed", {
+      startedAt: preparationStartedAt,
+      details: { toolCount: schemas.length },
+    });
     return { ...patch, immediatePrompt: immediatePrompt ?? "" };
   }
 
@@ -1817,7 +2028,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     config?: unknown;
     replay?: boolean;
   }): Promise<{ ok: boolean; participantId: string }> {
+    const subscriptionStartedAt = Date.now();
+    this.traceHotPath(opts.channelId, "subscription.started");
     this.ensureIdentity();
+    // AgentLoopDriver activation synchronously materializes its config. Resolve
+    // extension-owned local model metadata before that boundary so every
+    // installed local model is bootable, not only the bundled model with a
+    // static fallback descriptor.
+    await this.refreshLocalModelEntry(opts.channelId);
     this.driver.activateChannel(opts.channelId);
     const firstSubscription = this.subscriptions.count() === 0;
     if (firstSubscription) {
@@ -1849,7 +2067,24 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       result.envelope,
       configuredWakePolicy(opts.config) === "every-envelope"
     );
+    this.traceHotPath(opts.channelId, "subscription.completed", {
+      startedAt: subscriptionStartedAt,
+      details: { replay: opts.replay === true },
+    });
     return { ok: result.ok, participantId: result.participantId };
+  }
+
+  /** Adopt this concrete vessel's durable queues for one server generation. */
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  adoptDurableWorkWorker(
+    workerId: string
+  ): { adopted: boolean; previousWorkerId: string | null } {
+    return this.adoptDurableWorkWorkerGeneration(workerId);
   }
 
   /**
@@ -1927,10 +2162,16 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     try {
       await this.driver.abortChannel(channelId, "channel_unsubscribe");
       // End durable membership before closing the response resource. Closing
-      // publishes participant-left; onChannelEnvelope consults this row
-      // synchronously, so the terminal delivery becomes a no-op.
+      // publishes participant-left; batch admission consults this row
+      // synchronously, so terminal delivery becomes a no-op.
       this.subscriptions.deleteSubscription(channelId);
-      this.sql.exec(`DELETE FROM channel_envelope_inbox WHERE channel_id = ?`, channelId);
+      this.sql.exec(
+        `UPDATE agent_inbox_queue
+            SET disposition = 'terminal-unsubscribed',
+                lease_owner = NULL
+          WHERE channel_id = ? AND disposition NOT LIKE 'terminal-%'`,
+        channelId
+      );
       await this.subscriptions.unsubscribeFromChannel(channelId);
     } finally {
       this.subscriptions.deleteSubscription(channelId);
@@ -1938,7 +2179,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       // failure cannot lose an envelope. Once membership ends, however, those
       // envelopes have no valid consumer: replaying them can rehydrate a
       // dropped loop and start a new turn after teardown.
-      this.sql.exec(`DELETE FROM channel_envelope_inbox WHERE channel_id = ?`, channelId);
+      this.sql.exec(
+        `UPDATE agent_inbox_queue
+            SET disposition = 'terminal-unsubscribed',
+                lease_owner = NULL
+          WHERE channel_id = ? AND disposition NOT LIKE 'terminal-%'`,
+        channelId
+      );
       this.driver.dropLoop(channelId);
       if (this.subscriptions.count() === 0) await this.clearLifecycleRelease();
     }
@@ -1948,90 +2195,579 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   // ── Channel intake ───────────────────────────────────────────────────────
 
   @rpc({
-    principals: ["code"],
+    principals: ["host"],
     effect: { kind: "runtime-intrinsic" },
     tier: "open",
     sensitivity: "write",
   })
-  async onChannelEnvelope(channelId: string, envelope: RpcChannelMessage): Promise<void> {
-    this.assertChannelDeliveryCaller("onChannelEnvelope");
-    // A channel can have a delivery already in flight when unsubscribe closes
-    // its response resource. Treat that terminal race as a no-op; accepting it
-    // would recreate durable work for a channel this vessel no longer owns.
-    if (!this.subscriptions.getParticipantId(channelId)) return;
-    const deliveryKey = this.channelEnvelopeDeliveryKey(envelope);
+  acceptChannelBatch(batch: ChannelDeliveryBatch): ChannelDeliveryBatchOutcome {
+    this.ensureIdentity();
+    if (batch.channelRef.objectKey !== batch.channelId) {
+      throw new Error("acceptChannelBatch: channel identity mismatch");
+    }
+    if (batch.targetIncarnation !== this.identity.sessionId) {
+      throw new Error("acceptChannelBatch: target incarnation retired");
+    }
+    if (!this.subscriptions.getParticipantId(batch.channelId)) {
+      throw new Error("acceptChannelBatch: channel is not subscribed");
+    }
+    if (batch.rows.length === 0 || batch.rows.length > 32) {
+      throw new Error("acceptChannelBatch: invalid batch size");
+    }
+    const ordered = [...batch.rows].sort((a, b) => a.channelSeq - b.channelSeq);
     const now = Date.now();
-    this.sql.exec(
-      `INSERT OR IGNORE INTO channel_envelope_inbox
-         (channel_id, delivery_key, envelope_json, attempts, next_attempt_at, created_at)
-       VALUES (?, ?, ?, 0, ?, ?)`,
-      channelId,
-      deliveryKey,
-      JSON.stringify(envelope),
-      now,
-      now
-    );
-    this.scheduleAgentAlarm("channel-envelope-inbox", now + 1);
-  }
-
-  private channelEnvelopeDeliveryKey(envelope: RpcChannelMessage): string {
-    if (envelope.kind === "log") {
-      return `log:${envelope.phase}:${envelope.event.id}:${envelope.event.messageId}`;
-    }
-    if (envelope.kind === "signal") {
-      return `signal:${envelope.type}:${stableSha256Hex(envelope)}`;
-    }
-    return `control:${envelope.type}:${stableSha256Hex(envelope)}`;
-  }
-
-  private nextChannelEnvelopeAt(): number | null {
-    const due = this.sql
-      .exec(`SELECT MIN(next_attempt_at) AS due FROM channel_envelope_inbox`)
-      .toArray()[0]?.["due"];
-    return typeof due === "number" ? due : null;
-  }
-
-  private async drainChannelEnvelopeInbox(now: number): Promise<void> {
-    const rows = this.sql
-      .exec(
-        `SELECT seq, channel_id, envelope_json, attempts
-           FROM channel_envelope_inbox
-          WHERE next_attempt_at <= ?
-          ORDER BY seq
-          LIMIT 100`,
-        now
-      )
-      .toArray();
-    for (const row of rows) {
-      const seq = Number(row["seq"]);
-      try {
-        const envelope = JSON.parse(String(row["envelope_json"])) as RpcChannelMessage;
-        await this.processQueuedChannelEnvelope(String(row["channel_id"]), envelope);
-        this.sql.exec(`DELETE FROM channel_envelope_inbox WHERE seq = ?`, seq);
-      } catch (error) {
-        const attempts = Number(row["attempts"] ?? 0) + 1;
-        const retryMs = Math.min(
-          CHANNEL_ENVELOPE_RETRY_MS * 2 ** Math.min(attempts - 1, 7),
-          CHANNEL_ENVELOPE_MAX_RETRY_MS
-        );
+    const perRow = this.ctx.storage.transactionSync(() => {
+      const dispositions: ChannelDeliveryBatchOutcome["perRow"] = [];
+      for (const row of ordered) {
+        const envelopeJson = JSON.stringify(row.envelope);
+        const existing = this.sql
+          .exec(
+            `SELECT channel_id, source_incarnation, channel_seq, envelope_json
+               FROM agent_inbox_queue
+              WHERE delivery_key = ?`,
+            row.deliveryKey
+          )
+          .toArray()[0];
+        if (existing) {
+          if (
+            existing["channel_id"] !== batch.channelId ||
+            existing["source_incarnation"] !== batch.sourceIncarnation ||
+            Number(existing["channel_seq"]) !== row.channelSeq ||
+            existing["envelope_json"] !== envelopeJson
+          ) {
+            throw new Error(`acceptChannelBatch: mismatched duplicate ${row.deliveryKey}`);
+          }
+          dispositions.push({
+            deliveryKey: row.deliveryKey,
+            disposition: "duplicate-match",
+          });
+          continue;
+        }
         this.sql.exec(
-          `UPDATE channel_envelope_inbox
-              SET attempts = ?, next_attempt_at = ?
-            WHERE seq = ?`,
-          attempts,
-          Date.now() + retryMs,
-          seq
+          `INSERT INTO agent_inbox_queue (
+             delivery_key, channel_id, source_incarnation, channel_seq,
+             envelope_json, continuation_cursor, idempotency_key, attempts,
+             next_attempt_at, lease_generation, created_at, disposition
+           ) VALUES (?, ?, ?, ?, ?, NULL, ?, 0, ?, 0, ?, 'ready')`,
+          row.deliveryKey,
+          batch.channelId,
+          batch.sourceIncarnation,
+          row.channelSeq,
+          envelopeJson,
+          `agent-inbox:${batch.channelId}:${batch.sourceIncarnation}:${row.deliveryKey}`,
+          now,
+          now
         );
-        console.error("[AgentVessel] queued channel envelope processing failed:", error);
-        break;
+        dispositions.push({ deliveryKey: row.deliveryKey, disposition: "accepted" });
+      }
+      return dispositions;
+    });
+    this.traceHotPath(batch.channelId, "inbox.accepted", {
+      source: "channel-delivery",
+      details: { rowCount: ordered.length },
+    });
+    this.markWorkReady("agent-inbox");
+    return {
+      perRow,
+      highestContiguousCommittedSeq: ordered.at(-1)!.channelSeq,
+    };
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  claimReadyWork(queue: DurableWorkQueue, input: ClaimRequest): WorkClaim[] {
+    if (!input.workerId || input.limit < 1) {
+      throw new Error("claimReadyWork: invalid claim request");
+    }
+    this.adoptDurableWorkWorkerGeneration(input.workerId);
+    if (queue === "agent-effect") {
+      const claimed = this.driver.outbox.claimReady(input).map((row) => ({
+        itemId: outboxExternalId(row.branchId, row.effectId),
+        generation: row.leaseGeneration,
+        idempotencyKey: row.idempotencyKey,
+        createdAt: row.createdAt,
+        attempt: row.attempts + 1,
+        payload: {
+          laneKey:
+            row.kind === "publish_envelope" ||
+            row.kind === "channel_call" ||
+            row.kind === "http_call" ||
+            (row.descriptor.kind === "local_tool" && row.descriptor.executionMode === "parallel")
+              ? `${row.channelId}\u0000${row.effectId}`
+              : row.channelId,
+          channelId: row.channelId,
+          kind: row.kind,
+        },
+      }));
+      for (const claim of claimed) {
+        const channelId = String(
+          (claim.payload as { channelId?: unknown } | null)?.channelId ?? ""
+        );
+        if (channelId) {
+          this.traceHotPath(channelId, "effect.claimed", {
+            source: input.trigger ?? "unknown",
+            itemId: claim.itemId,
+            generation: claim.generation,
+          });
+        }
+      }
+      if (!this.readyDurableWorkQueues(input.now).includes("agent-effect")) {
+        this.acknowledgeDurableWorkReady("agent-effect");
+      }
+      return claimed;
+    }
+    if (queue !== "agent-inbox") return [];
+    const claimed = this.ctx.storage.transactionSync(() => {
+      let scheduledResumes: Record<string, unknown>[] = [];
+      try {
+        scheduledResumes = this.sql
+          .exec(
+            `SELECT channel_id, message_id, reset_at_ms, created_at
+               FROM scheduled_model_resumes
+              WHERE reset_at_ms <= ?`,
+            input.now
+          )
+          .toArray();
+      } catch {
+        // Scheduled-resume storage is lazy.
+      }
+      for (const resume of scheduledResumes) {
+        const channelId = String(resume["channel_id"]);
+        const messageId = String(resume["message_id"]);
+        const resetAtMs = Number(resume["reset_at_ms"]);
+        const deliveryKey = `scheduled-resume:${channelId}:${messageId}`;
+        this.sql.exec(
+          `INSERT OR IGNORE INTO agent_inbox_queue (
+             delivery_key, channel_id, source_incarnation, channel_seq,
+             envelope_json, continuation_cursor, idempotency_key, attempts,
+             next_attempt_at, lease_generation, created_at, disposition
+           ) VALUES (?, ?, 'self', ?, ?, NULL, ?, 0, ?, 0, ?, 'ready')`,
+          deliveryKey,
+          channelId,
+          resetAtMs,
+          JSON.stringify({
+            kind: "internal",
+            type: "scheduled-model-resume",
+            messageId,
+          }),
+          deliveryKey,
+          resetAtMs,
+          Number(resume["created_at"])
+        );
+      }
+      for (const progress of this.subagentRuns.dueProgress(input.now, input.limit * 4)) {
+        const deliveryKey = `subagent-progress:${progress.sequence}`;
+        this.sql.exec(
+          `INSERT OR IGNORE INTO agent_inbox_queue (
+             delivery_key, channel_id, source_incarnation, channel_seq,
+             envelope_json, continuation_cursor, idempotency_key, attempts,
+             next_attempt_at, lease_generation, created_at, disposition
+           ) VALUES (?, ?, 'self', ?, ?, NULL, ?, 0, ?, 0, ?, 'ready')`,
+          deliveryKey,
+          progress.parentChannelId,
+          progress.sequence,
+          JSON.stringify({
+            kind: "internal",
+            type: "subagent-progress",
+            sequence: progress.sequence,
+          }),
+          progress.idempotencyKey,
+          progress.nextAttemptAt,
+          progress.createdAt
+        );
+      }
+      const candidates = this.sql
+        .exec(
+          `SELECT *
+             FROM agent_inbox_queue
+            WHERE disposition IN ('ready', 'retrying') AND next_attempt_at <= ?
+            ORDER BY channel_id, channel_seq
+            LIMIT ?`,
+          input.now,
+          Math.min(input.limit * 4, 1_000)
+        )
+        .toArray();
+      const selected: typeof candidates = [];
+      const channels = new Set<string>();
+      for (const row of candidates) {
+        const channelId = String(row["channel_id"]);
+        if (channels.has(channelId)) continue;
+        channels.add(channelId);
+        selected.push(row);
+        if (selected.length >= input.limit) break;
+      }
+      return selected.map((row) => {
+        const deliveryKey = String(row["delivery_key"]);
+        const generation = Number(row["lease_generation"] ?? 0) + 1;
+        this.sql.exec(
+          `UPDATE agent_inbox_queue
+              SET disposition = 'leased',
+                  lease_owner = ?,
+                  lease_generation = ?,
+                  last_attempt_at = ?
+            WHERE delivery_key = ?`,
+          input.workerId,
+          generation,
+          input.now,
+          deliveryKey
+        );
+        return {
+          itemId: deliveryKey,
+          generation,
+          idempotencyKey: String(row["idempotency_key"]),
+          createdAt: Number(row["created_at"]),
+          attempt: Number(row["attempts"] ?? 0) + 1,
+          payload: {
+            laneKey: String(row["channel_id"]),
+            channelId: String(row["channel_id"]),
+            channelSeq: Number(row["channel_seq"]),
+          },
+        };
+      });
+    });
+    for (const claim of claimed) {
+      const channelId = String((claim.payload as { channelId?: unknown } | null)?.channelId ?? "");
+      if (channelId) {
+        this.traceHotPath(channelId, "inbox.claimed", {
+          source: input.trigger ?? "unknown",
+          itemId: claim.itemId,
+          generation: claim.generation,
+        });
       }
     }
+    if (!this.readyDurableWorkQueues(input.now).includes("agent-inbox")) {
+      this.acknowledgeDurableWorkReady("agent-inbox");
+    }
+    return claimed;
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async executeInboxClaim(input: { itemId: string; generation: number }): Promise<{
+    processed: true;
+  }> {
+    const row = this.sql
+      .exec(
+        `SELECT channel_id, envelope_json
+           FROM agent_inbox_queue
+          WHERE delivery_key = ?
+            AND lease_generation = ?
+            AND disposition = 'leased'`,
+        input.itemId,
+        input.generation
+      )
+      .toArray()[0];
+    if (!row) throw new Error("executeInboxClaim: stale claim");
+    const channelId = String(row["channel_id"]);
+    const startedAt = Date.now();
+    this.traceHotPath(channelId, "inbox.execution.started", {
+      itemId: input.itemId,
+      generation: input.generation,
+    });
+    await this.processQueuedChannelEnvelope(channelId, JSON.parse(String(row["envelope_json"])));
+    this.traceHotPath(channelId, "inbox.execution.completed", {
+      startedAt,
+      itemId: input.itemId,
+      generation: input.generation,
+    });
+    return { processed: true };
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async executeEffectClaim(input: { itemId: string; generation: number }): Promise<{
+    executed: true;
+  }> {
+    const parsed = parseOutboxExternalId(input.itemId);
+    const channelId = parsed
+      ? this.driver.outbox.get(parsed.branchId, parsed.effectId)?.channelId
+      : undefined;
+    const startedAt = Date.now();
+    if (channelId) {
+      this.traceHotPath(channelId, "effect.execution.started", {
+        itemId: input.itemId,
+        generation: input.generation,
+      });
+    }
+    await this.driver.executeClaimedEffect(input.itemId, input.generation);
+    if (channelId) {
+      this.traceHotPath(channelId, "effect.execution.completed", {
+        startedAt,
+        itemId: input.itemId,
+        generation: input.generation,
+      });
+    }
+    return { executed: true };
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  settleReadyWork(queue: DurableWorkQueue, request: SettleRequest): ClaimSettlement {
+    if (queue === "agent-effect") {
+      const parsed = parseOutboxExternalId(request.itemId);
+      if (!parsed) throw new Error("settleReadyWork: invalid effect identity");
+      const row = this.driver.outbox.get(parsed.branchId, parsed.effectId);
+      if (!row) return "duplicate";
+      if (
+        row.leaseGeneration !== request.generation ||
+        (row.leaseOwner !== null && row.leaseOwner !== request.workerId)
+      ) {
+        return "stale";
+      }
+      if (row.disposition === "leased") {
+        throw new Error("settleReadyWork: effect execution left its claim leased");
+      }
+      this.traceHotPath(row.channelId, "effect.settled", {
+        source: request.workerId,
+        itemId: request.itemId,
+        generation: request.generation,
+      });
+      return "accepted";
+    }
+    if (queue !== "agent-inbox") return "stale";
+    const settlement = this.ctx.storage.transactionSync(() => {
+      const row = this.sql
+        .exec(
+          `SELECT lease_owner, lease_generation, disposition
+             FROM agent_inbox_queue
+            WHERE delivery_key = ?`,
+          request.itemId
+        )
+        .toArray()[0];
+      if (!row) return { disposition: "duplicate" as const, channelId: null };
+      if (
+        row["lease_owner"] !== request.workerId ||
+        Number(row["lease_generation"]) !== request.generation ||
+        row["disposition"] !== "leased"
+      ) {
+        return { disposition: "stale" as const, channelId: null };
+      }
+      this.sql.exec(
+        `UPDATE agent_inbox_queue
+            SET disposition = 'terminal-completed',
+                lease_owner = NULL
+          WHERE delivery_key = ?`,
+        request.itemId
+      );
+      const channel = this.sql
+        .exec(`SELECT channel_id FROM agent_inbox_queue WHERE delivery_key = ?`, request.itemId)
+        .toArray()[0];
+      return {
+        disposition: "accepted" as const,
+        channelId: channel ? String(channel["channel_id"]) : null,
+      };
+    });
+    if (settlement.channelId) {
+      this.traceHotPath(settlement.channelId, "inbox.settled", {
+        source: request.workerId,
+        itemId: request.itemId,
+        generation: request.generation,
+      });
+    }
+    return settlement.disposition;
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  failReadyWork(
+    queue: DurableWorkQueue,
+    request: { workerId: string; itemId: string; generation: number }
+  ): { retryAt: number } | "stale" {
+    if (queue === "agent-effect") {
+      const parsed = parseOutboxExternalId(request.itemId);
+      if (!parsed) return "stale";
+      const row = this.driver.outbox.get(parsed.branchId, parsed.effectId);
+      if (
+        !row ||
+        row.leaseOwner !== request.workerId ||
+        row.leaseGeneration !== request.generation ||
+        row.disposition !== "leased"
+      ) {
+        return "stale";
+      }
+      const updated = this.driver.outbox.recordFailure(
+        parsed.branchId,
+        parsed.effectId,
+        Date.now()
+      );
+      const retryAt = updated?.nextAttemptAt;
+      if (retryAt === null || retryAt === undefined) return "stale";
+      return { retryAt };
+    }
+    if (queue !== "agent-inbox") return "stale";
+    return this.ctx.storage.transactionSync(() => {
+      const row = this.sql
+        .exec(
+          `SELECT attempts
+             FROM agent_inbox_queue
+            WHERE delivery_key = ?
+              AND lease_owner = ?
+              AND lease_generation = ?
+              AND disposition = 'leased'`,
+          request.itemId,
+          request.workerId,
+          request.generation
+        )
+        .toArray()[0];
+      if (!row) return "stale";
+      const attempts = Number(row["attempts"] ?? 0) + 1;
+      const delay = Math.min(
+        CHANNEL_ENVELOPE_RETRY_MS * 2 ** Math.min(attempts - 1, 7),
+        CHANNEL_ENVELOPE_MAX_RETRY_MS
+      );
+      const retryAt = Date.now() + delay;
+      this.sql.exec(
+        `UPDATE agent_inbox_queue
+            SET attempts = ?,
+                disposition = 'retrying',
+                next_attempt_at = ?,
+                lease_owner = NULL
+          WHERE delivery_key = ?
+            AND lease_owner = ?
+            AND lease_generation = ?`,
+        attempts,
+        retryAt,
+        request.itemId,
+        request.workerId,
+        request.generation
+      );
+      return { retryAt };
+    });
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "read",
+  })
+  durableWorkStatus(): { readyQueues: DurableWorkQueue[]; nextRecoveryAt: number | null } {
+    return {
+      readyQueues: this.readyDurableWorkQueues(),
+      nextRecoveryAt: this.nextDurableWorkRecoveryAt(),
+    };
+  }
+
+  private readyDurableWorkQueues(now = Date.now()): DurableWorkQueue[] {
+    const inboxReady =
+      this.sql
+        .exec(
+          `SELECT 1
+             FROM agent_inbox_queue
+            WHERE disposition IN ('ready', 'retrying') AND next_attempt_at <= ?
+            LIMIT 1`,
+          now
+        )
+        .toArray().length > 0;
+    let effectReady = false;
+    let scheduledResumeReady = false;
+    const subagentProgressReady =
+      (this.subagentRuns.nextProgressWakeAt() ?? Number.POSITIVE_INFINITY) <= now;
+    try {
+      effectReady =
+        this.sql
+          .exec(
+            `SELECT 1
+               FROM effect_outbox
+              WHERE (
+                disposition IN ('ready', 'retrying', 'parked')
+                AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+              )
+              LIMIT 1`,
+            now
+          )
+          .toArray().length > 0;
+    } catch {
+      // Effect storage is lazy.
+    }
+    try {
+      scheduledResumeReady =
+        this.sql
+          .exec(`SELECT 1 FROM scheduled_model_resumes WHERE reset_at_ms <= ? LIMIT 1`, now)
+          .toArray().length > 0;
+    } catch {
+      // Scheduled-resume storage is lazy.
+    }
+    return [
+      ...(inboxReady || scheduledResumeReady || subagentProgressReady
+        ? (["agent-inbox"] as const)
+        : []),
+      ...(effectReady ? (["agent-effect"] as const) : []),
+    ];
+  }
+
+  private nextDurableWorkRecoveryAt(): number | null {
+    const inboxValue = this.sql
+      .exec(
+        `SELECT MIN(next_attempt_at) AS due
+           FROM agent_inbox_queue
+          WHERE disposition = 'retrying'`
+      )
+      .toArray()[0]?.["due"];
+    const inboxAt = typeof inboxValue === "number" ? inboxValue : null;
+    let effectAt: number | null = null;
+    try {
+      const effectValue = this.sql
+        .exec(
+          `SELECT MIN(next_attempt_at) AS due
+             FROM effect_outbox
+            WHERE disposition IN ('retrying', 'parked')`
+        )
+        .toArray()[0]?.["due"];
+      effectAt = typeof effectValue === "number" ? effectValue : null;
+    } catch {
+      // Effect storage is lazy.
+    }
+    const progressAt = this.subagentRuns.nextProgressWakeAt();
+    const candidates = [inboxAt, effectAt, progressAt].filter(
+      (value): value is number => typeof value === "number"
+    );
+    return candidates.length > 0 ? Math.min(...candidates) : null;
   }
 
   private async processQueuedChannelEnvelope(
     channelId: string,
-    envelope: RpcChannelMessage
+    envelope:
+      | RpcChannelMessage
+      | {
+          kind: "internal";
+          type: "scheduled-model-resume";
+          messageId: string;
+        }
+      | {
+          kind: "internal";
+          type: "subagent-progress";
+          sequence: number;
+        }
   ): Promise<void> {
+    if (envelope.kind === "internal") {
+      if (envelope.type === "scheduled-model-resume") {
+        await this.driver.executeScheduledResume(channelId, envelope.messageId);
+      } else {
+        await this.executeSubagentProgress(envelope.sequence);
+      }
+      return;
+    }
     if (envelope.kind === "control") {
       if (envelope.type === "ready") {
         const wakePolicy = this.subscriptions.getConfig(channelId)?.wakePolicy ?? "every-envelope";
@@ -2530,11 +3266,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         .filter((participant) => participant.participantId !== this.participantId())
         .map((participant) => ({
           participantId: participant.participantId,
-          ref: {
-            kind: "panel",
-            id: participant.participantId,
-            participantId: participant.participantId,
-          } as ParticipantRef,
+          // The channel is the identity authority for roster rows. Preserve
+          // its sealed reference rather than reinterpreting mutable metadata.
+          ref: participant.ref,
           handle:
             typeof participant.metadata?.["handle"] === "string"
               ? (participant.metadata["handle"] as string)
@@ -2585,9 +3319,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return value;
   }
 
-  private async getCachedParticipants(
-    channelId: string
-  ): Promise<Array<{ participantId: string; metadata: Record<string, unknown> }>> {
+  private async getCachedParticipants(channelId: string): Promise<
+    Array<{
+      participantId: string;
+      ref: ParticipantRef;
+      metadata: Record<string, unknown>;
+    }>
+  > {
     const now = Date.now();
     const cached = this.participantCache.get(channelId);
     if (cached && cached.expiresAt > now) return cached.value;
@@ -2700,7 +3438,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   })
   async getModelExecutionEvidence(channelId: string): Promise<unknown> {
     const evidence = await this.driver.modelExecutionEvidence(channelId);
-    return { ...evidence, transportRuntime: modelTransportRuntimeEvidence() };
+    return {
+      ...evidence,
+      transportRuntime: modelTransportRuntimeEvidence(),
+      hotPathTrace: this.hotPathTrace(channelId),
+    };
   }
 
   /** Direct lifecycle barrier for non-interactive owners. Unlike the chat
@@ -3099,9 +3841,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     }
   }
 
-  /** The channel→agent delivery boundary. Effect terminals (`deliverEffectOutcome`),
-   *  structured channel envelopes (`onChannelEnvelope`), and method dispatch
-   *  (`onMethodCall`) arrive from exactly two legitimate sources: the server
+  /** The channel→agent callback boundary. Effect terminals
+   *  (`deliverEffectOutcome`) and method dispatch (`onMethodCall`) arrive from
+   *  exactly two legitimate sources: the server
    *  (http_call / credential callbacks, kind "server") and the agent's PubSubChannel
    *  DO (a "do" caller whose id names PubSubChannel). Refuse anything else — the open
    *  relay otherwise lets a panel, a worker, or ANOTHER agent forge channel traffic /
@@ -5393,33 +6135,24 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       event: progressEvent,
       now: Date.now(),
     });
-    // The alarm is the authoritative delivery mechanism. No asynchronous
-    // publication escapes this source event, so hibernation cannot drop it.
-    this.scheduleAgentAlarm("subagent-progress-outbox", Date.now() + 1);
+    this.markWorkReady("agent-inbox");
   }
 
-  private async drainSubagentProgress(now: number): Promise<void> {
-    const entries = this.subagentRuns.dueProgress(now, 50);
-    for (const entry of entries) {
-      try {
-        await this.createChannelClient(entry.parentChannelId).publishAgenticEvent(
-          entry.participantId,
-          entry.event,
-          {
-            idempotencyKey: entry.idempotencyKey,
-            senderMetadata: entry.event.actor.metadata,
-          }
-        );
-        this.subagentRuns.completeProgress(entry.sequence);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        // Retry forever with bounded exponential backoff. The persisted error
-        // is intentionally exposed by getDebugState rather than silently lost.
-        const retryDelay = Math.min(30_000, 250 * 2 ** Math.min(entry.attempts, 7));
-        this.subagentRuns.failProgress(entry.sequence, message, Date.now() + retryDelay);
-        console.error(`[AgentVessel] subagent progress publish failed for ${entry.runId}:`, error);
+  private async executeSubagentProgress(sequence: number): Promise<void> {
+    const entry = this.subagentRuns.getProgress(sequence);
+    // Deleting the projection before the inbox settlement is safe: a crash
+    // after the idempotent publication may replay this claim, which becomes a
+    // no-op once the authoritative progress row is gone.
+    if (!entry) return;
+    await this.createChannelClient(entry.parentChannelId).publishAgenticEvent(
+      entry.participantId,
+      entry.event,
+      {
+        idempotencyKey: entry.idempotencyKey,
+        senderMetadata: entry.event.actor.metadata,
       }
-    }
+    );
+    this.subagentRuns.completeProgress(entry.sequence);
   }
 
   private eventAddressesSelf(

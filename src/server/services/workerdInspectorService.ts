@@ -9,8 +9,12 @@
  * reachable through the WorkerdInspectorBridge with a single-use grant token.
  */
 import { z } from "zod";
-import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import {
+  fixedPreparedAuthoritySelection,
+  type ServiceDefinition,
+} from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { fixedPreparedAuthorityRequirement } from "@vibestudio/shared/typedServiceClient";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { WorkerdInspectorTarget } from "../workerdInspectorBridge.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
@@ -47,7 +51,9 @@ export function createWorkerdInspectorService(
           leaves: [
             {
               capability: WORKERD_INSPECTOR_CAPABILITY,
-              requirement: { kind: "selected" as const, principals: ["code" as const] },
+              requirement: fixedPreparedAuthorityRequirement(
+                requirementForPrincipals(["code"], WORKERD_INSPECTOR_CAPABILITY)
+              ),
               tier: "gated" as const,
             },
           ],
@@ -78,7 +84,7 @@ export function createWorkerdInspectorService(
           value: targetPath,
         };
         return [
-          {
+          fixedPreparedAuthoritySelection({
             capability: WORKERD_INSPECTOR_CAPABILITY,
             resourceKey: `caller:${ctx.caller.runtime.id}`,
             challenge: {
@@ -95,7 +101,7 @@ export function createWorkerdInspectorService(
               },
               details: [{ label: "Workspace process", value: targetPath }],
             },
-          },
+          }),
         ];
       },
     },

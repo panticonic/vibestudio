@@ -6,16 +6,11 @@
  * lifecycle columns (status, retired_at, cleanup_complete). Slot rows hold
  * the panel-tree position; slot_history holds the navigation history.
  *
- * This pre-release store has one exact current schema. Supported prior
- * production schemas advance only through declared, validated migrations.
+ * This pre-release store has one exact current schema. Prior workspace
+ * databases are intentionally unsupported and must be recreated.
  */
 
-import {
-  DurableObjectBase,
-  rpc,
-  type DurableObjectContext,
-  type DurableObjectSchemaMigration,
-} from "@vibestudio/durable";
+import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibestudio/durable";
 import type { SchemaSqlStorage } from "@vibestudio/durable/schema";
 import type { AgentExecutionTestPolicy } from "@vibestudio/rpc";
 import {
@@ -34,6 +29,11 @@ import type {
   IndexablePanel,
   PanelSearchResult,
 } from "../../../packages/shared/src/panelSearchTypes.js";
+import {
+  DURABLE_WORK_QUEUES,
+  type DurableWorkQueue,
+  type DurableWorkReadyHint,
+} from "../../../packages/shared/src/durableWork.js";
 
 interface DbEntityRow {
   id: string;
@@ -203,6 +203,7 @@ const WORKSPACE_REQUIRED_TABLES = [
   "lifecycle_ops",
   "do_alarms",
   "do_alarm_test_policies",
+  "durable_work_owners",
   "recurring_jobs",
   "heartbeat_registry",
   "context_edges",
@@ -352,6 +353,14 @@ const WORKSPACE_ENTITY_COLUMNS = [
   "error",
   "display_title",
 ] as const;
+const WORKSPACE_ALARM_COLUMNS = [
+  "source",
+  "class_name",
+  "object_key",
+  "wake_at",
+  "dispatch_generation",
+  "dispatch_owner",
+] as const;
 
 function assertWorkspaceEntityColumns(sql: SchemaSqlStorage, label: string): void {
   const columns = sql
@@ -377,54 +386,21 @@ function assertWorkspaceEntityStatuses(
   }
 }
 
+function assertWorkspaceAlarmColumns(sql: SchemaSqlStorage, label: string): void {
+  const columns = sql
+    .exec(`PRAGMA table_info(do_alarms)`)
+    .toArray()
+    .map((column) => String(column["name"]));
+  if (JSON.stringify(columns) !== JSON.stringify(WORKSPACE_ALARM_COLUMNS)) {
+    throw new Error(`${label} do_alarms schema is unknown: ${JSON.stringify(columns)}`);
+  }
+}
+
 export class WorkspaceDO extends DurableObjectBase {
-  static override schemaVersion = 26;
+  static override schemaVersion = 28;
 
   protected override schemaProductionBaseline() {
-    return { version: 24, name: "workspace-state-v24" } as const;
-  }
-
-  protected override schemaMigrations(): readonly DurableObjectSchemaMigration[] {
-    return [
-      {
-        version: 25,
-        name: "introduce-preparing-panel-lifecycle",
-        validateSource: (sql) => {
-          assertWorkspaceEntityColumns(sql, "WorkspaceDO v24");
-          assertWorkspaceEntityStatuses(sql, ["active", "retired"], "WorkspaceDO v24");
-        },
-        // The v24 SQLite column intentionally had no CHECK constraint. The
-        // migration is semantic: after this ledger entry, "preparing" is a
-        // recognized durable lifecycle state written by entityReservePanel.
-        migrate: () => {},
-      },
-      {
-        version: 26,
-        name: "persist-test-authority-with-owned-alarms",
-        validateSource: (sql) => {
-          const alarmTable = sql
-            .exec(
-              `SELECT name FROM sqlite_master
-                WHERE type = 'table' AND name = 'do_alarms'`
-            )
-            .toArray();
-          if (alarmTable.length !== 1) {
-            throw new Error("WorkspaceDO v25 is missing do_alarms");
-          }
-        },
-        migrate: (sql) => {
-          sql.exec(`
-            CREATE TABLE do_alarm_test_policies (
-              source TEXT NOT NULL,
-              class_name TEXT NOT NULL,
-              object_key TEXT NOT NULL,
-              test_policy_json TEXT NOT NULL,
-              PRIMARY KEY (source, class_name, object_key)
-            )
-          `);
-        },
-      },
-    ];
+    return { version: 28, name: "workspace-state-v28" } as const;
   }
 
   constructor(ctx: DurableObjectContext, env: unknown) {
@@ -614,12 +590,13 @@ export class WorkspaceDO extends DurableObjectBase {
 
   protected override validateSchema(): void {
     super.validateSchema();
-    assertWorkspaceEntityColumns(this.sql, `${this.constructor.name} v26`);
+    assertWorkspaceEntityColumns(this.sql, `${this.constructor.name} v28`);
     assertWorkspaceEntityStatuses(
       this.sql,
       ["preparing", "active", "retired"],
-      `${this.constructor.name} v26`
+      `${this.constructor.name} v28`
     );
+    assertWorkspaceAlarmColumns(this.sql, `${this.constructor.name} v28`);
   }
 
   getWorkspaceId(): string {
@@ -947,6 +924,13 @@ export class WorkspaceDO extends DurableObjectBase {
     };
     this.lifecycleLeaseClear(key);
     this.alarmClear(key);
+    this.sql.exec(
+      `DELETE FROM durable_work_owners
+        WHERE source = ? AND class_name = ? AND object_key = ?`,
+      key.source,
+      key.className,
+      key.objectKey
+    );
   }
 
   /** Mark cleanup_complete=1 after server-side hooks succeed. */
@@ -1131,16 +1115,99 @@ export class WorkspaceDO extends DurableObjectBase {
   // do alarms (server-driven; see do_alarms table comment)
   // ─────────────────────────────────────────────────────────────
 
-  /** Register/replace a DO's wake time (absolute epoch ms). */
+  /** One-time lifecycle registration. This must precede admitting queue work. */
   @rpc({
     principals: ["host"],
     effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
     tier: "gated",
     sensitivity: "write",
   })
-  alarmSet(input: LifecycleKey & { wakeAt: number; testPolicy?: AgentExecutionTestPolicy }): void {
+  durableWorkOwnerRegister(input: LifecycleKey & { queues: DurableWorkQueue[] }): void {
     this.assertLifecycleKey(input);
-    this.ctx.storage.transactionSync(() => {
+    const allowed = new Set<string>(DURABLE_WORK_QUEUES);
+    const queues = [...new Set(input.queues)].sort();
+    if (queues.length === 0 || queues.some((queue) => !allowed.has(queue))) {
+      throw new Error("durableWorkOwnerRegister: invalid queues");
+    }
+    const entityId = canonicalEntityId({
+      kind: "do",
+      source: input.source,
+      className: input.className,
+      key: input.objectKey,
+    });
+    const entity = this.readEntityRow(entityId);
+    if (!entity || entity.status !== "active") {
+      throw new Error(
+        `durableWorkOwnerRegister: Durable Object ${input.source}:${input.className}:${input.objectKey} is not active`
+      );
+    }
+    this.sql.exec(
+      `INSERT INTO durable_work_owners (
+         source, class_name, object_key, queues_json, registered_at
+       ) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(source, class_name, object_key) DO UPDATE SET
+         queues_json = excluded.queues_json`,
+      input.source,
+      input.className,
+      input.objectKey,
+      JSON.stringify(queues),
+      Date.now()
+    );
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
+  durableWorkOwnerList(): DurableWorkReadyHint[] {
+    return (
+      this.sql
+        .exec(
+          `SELECT source, class_name, object_key, queues_json
+             FROM durable_work_owners
+            ORDER BY source, class_name, object_key`
+        )
+        .toArray() as Array<{
+        source: string;
+        class_name: string;
+        object_key: string;
+        queues_json: string;
+      }>
+    ).map((row) => ({
+      owner: {
+        source: row.source,
+        className: row.class_name,
+        objectKey: row.object_key,
+      },
+      queues: JSON.parse(row.queues_json) as DurableWorkQueue[],
+    }));
+  }
+
+  /** Register/replace a DO's wake time (absolute epoch ms).
+   *
+   * Calls without a dispatch claim are fresh scheduling decisions. They fence
+   * any in-flight handler by advancing the generation and releasing its claim.
+   * Calls carrying a claim are handler acknowledgements and may update only
+   * the exact generation owned by that driver activation.
+   */
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
+  alarmSet(
+    input: LifecycleKey & {
+      wakeAt: number;
+      testPolicy?: AgentExecutionTestPolicy;
+      dispatchOwner?: string;
+      dispatchGeneration?: number;
+    }
+  ): "accepted" | "stale" {
+    this.assertLifecycleKey(input);
+    return this.ctx.storage.transactionSync(() => {
       const entityId = canonicalEntityId({
         kind: "do",
         source: input.source,
@@ -1153,16 +1220,49 @@ export class WorkspaceDO extends DurableObjectBase {
           `alarmSet: Durable Object ${input.source}:${input.className}:${input.objectKey} is not active`
         );
       }
-      this.sql.exec(
-        `INSERT INTO do_alarms (source, class_name, object_key, wake_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(source, class_name, object_key)
-           DO UPDATE SET wake_at = excluded.wake_at`,
-        input.source,
-        input.className,
-        input.objectKey,
-        Math.round(input.wakeAt)
-      );
+      const hasOwner = input.dispatchOwner !== undefined;
+      const hasGeneration = input.dispatchGeneration !== undefined;
+      if (hasOwner !== hasGeneration) {
+        throw new Error("alarmSet: dispatchOwner and dispatchGeneration must be provided together");
+      }
+      if (hasOwner) {
+        if (
+          !input.dispatchOwner?.trim() ||
+          !Number.isSafeInteger(input.dispatchGeneration) ||
+          input.dispatchGeneration! < 1
+        ) {
+          throw new Error("alarmSet: invalid dispatch claim");
+        }
+        this.sql.exec(
+          `UPDATE do_alarms
+              SET wake_at = ?,
+                  dispatch_owner = NULL
+            WHERE source = ? AND class_name = ? AND object_key = ?
+              AND dispatch_owner = ? AND dispatch_generation = ?`,
+          Math.round(input.wakeAt),
+          input.source,
+          input.className,
+          input.objectKey,
+          input.dispatchOwner,
+          input.dispatchGeneration
+        );
+        if (this.sql.exec(`SELECT changes() AS count`).one()["count"] !== 1) return "stale";
+      } else {
+        this.sql.exec(
+          `INSERT INTO do_alarms (
+             source, class_name, object_key, wake_at,
+             dispatch_generation, dispatch_owner
+           )
+           VALUES (?, ?, ?, ?, 0, NULL)
+           ON CONFLICT(source, class_name, object_key) DO UPDATE SET
+             wake_at = excluded.wake_at,
+             dispatch_owner = NULL`,
+          input.source,
+          input.className,
+          input.objectKey,
+          Math.round(input.wakeAt)
+        );
+      }
       if (input.testPolicy) {
         this.sql.exec(
           `INSERT INTO do_alarm_test_policies
@@ -1176,87 +1276,251 @@ export class WorkspaceDO extends DurableObjectBase {
           JSON.stringify(input.testPolicy)
         );
       }
+      return "accepted";
     });
   }
 
-  /** Clear a DO's pending alarm (no-op if none). */
+  /** Clear a DO's pending alarm. A claimed acknowledgement is generation-fenced. */
   @rpc({
     principals: ["host"],
     effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
     tier: "gated",
     sensitivity: "write",
   })
-  alarmClear(input: LifecycleKey): void {
+  alarmClear(
+    input: LifecycleKey & { dispatchOwner?: string; dispatchGeneration?: number }
+  ): "accepted" | "stale" {
     this.assertLifecycleKey(input);
-    this.sql.exec(
-      `DELETE FROM do_alarms WHERE source = ? AND class_name = ? AND object_key = ?`,
-      input.source,
-      input.className,
-      input.objectKey
-    );
-    this.sql.exec(
-      `DELETE FROM do_alarm_test_policies
-        WHERE source = ? AND class_name = ? AND object_key = ?`,
-      input.source,
-      input.className,
-      input.objectKey
-    );
+    return this.ctx.storage.transactionSync(() => {
+      const hasOwner = input.dispatchOwner !== undefined;
+      const hasGeneration = input.dispatchGeneration !== undefined;
+      if (hasOwner !== hasGeneration) {
+        throw new Error(
+          "alarmClear: dispatchOwner and dispatchGeneration must be provided together"
+        );
+      }
+      if (hasOwner) {
+        if (
+          !input.dispatchOwner?.trim() ||
+          !Number.isSafeInteger(input.dispatchGeneration) ||
+          input.dispatchGeneration! < 1
+        ) {
+          throw new Error("alarmClear: invalid dispatch claim");
+        }
+        this.sql.exec(
+          `DELETE FROM do_alarms
+            WHERE source = ? AND class_name = ? AND object_key = ?
+              AND dispatch_owner = ? AND dispatch_generation = ?`,
+          input.source,
+          input.className,
+          input.objectKey,
+          input.dispatchOwner,
+          input.dispatchGeneration
+        );
+        if (this.sql.exec(`SELECT changes() AS count`).one()["count"] !== 1) return "stale";
+      } else {
+        this.sql.exec(
+          `DELETE FROM do_alarms WHERE source = ? AND class_name = ? AND object_key = ?`,
+          input.source,
+          input.className,
+          input.objectKey
+        );
+      }
+      this.sql.exec(
+        `DELETE FROM do_alarm_test_policies
+          WHERE source = ? AND class_name = ? AND object_key = ?`,
+        input.source,
+        input.className,
+        input.objectKey
+      );
+      return "accepted";
+    });
   }
 
-  /** Soonest pending wake time, or null when no alarms are scheduled. */
+  /** Soonest unclaimed wake. Claimed rows remain owned until generation adoption. */
   @rpc({
     principals: ["host"],
     effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
     tier: "gated",
     sensitivity: "read",
   })
-  alarmNextWakeAt(): number | null {
-    const row = this.sql.exec(`SELECT MIN(wake_at) AS next FROM do_alarms`).toArray()[0] as
-      | { next: number | null }
-      | undefined;
-    return row && row.next !== null ? row.next : null;
-  }
-
-  /** Return alarms due at/before `now` without acknowledging them. The driver
-   *  clears or replaces each row only after the handler outcome is durable, so
-   *  a server crash or failed acknowledgement cannot lose the sole wake. */
-  @rpc({
-    principals: ["host"],
-    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
-    tier: "gated",
-    sensitivity: "read",
-  })
-  alarmListDue(
-    now: number
-  ): Array<LifecycleKey & { wakeAt: number; testPolicy?: AgentExecutionTestPolicy }> {
+  alarmNextWakeAt(now: number, exclude: LifecycleKey[] = []): number | null {
+    if (!Number.isSafeInteger(now) || now < 0) throw new Error("alarmNextWakeAt: invalid now");
+    const excluded = new Set(
+      exclude.map((key) => {
+        this.assertLifecycleKey(key);
+        return `${key.source}\u0000${key.className}\u0000${key.objectKey}`;
+      })
+    );
     const rows = this.sql
       .exec(
-        `SELECT a.source, a.class_name, a.object_key, a.wake_at, p.test_policy_json
-           FROM do_alarms AS a
-           LEFT JOIN do_alarm_test_policies AS p
-             ON p.source = a.source
-            AND p.class_name = a.class_name
-            AND p.object_key = a.object_key
-          WHERE a.wake_at <= ?
-          ORDER BY a.wake_at, a.source, a.class_name, a.object_key`,
-        now
+        `SELECT source, class_name, object_key, wake_at, dispatch_owner
+           FROM do_alarms`
       )
       .toArray() as Array<{
       source: string;
       class_name: string;
       object_key: string;
       wake_at: number;
-      test_policy_json: string | null;
+      dispatch_owner: string | null;
     }>;
-    return rows.map((r) => ({
-      source: r.source,
-      className: r.class_name,
-      objectKey: r.object_key,
-      wakeAt: r.wake_at,
-      ...(r.test_policy_json
-        ? { testPolicy: JSON.parse(r.test_policy_json) as AgentExecutionTestPolicy }
-        : {}),
+    const wakes = rows
+      .filter(
+        (row) =>
+          row.dispatch_owner === null &&
+          !excluded.has(`${row.source}\u0000${row.class_name}\u0000${row.object_key}`)
+      )
+      .map((row) => row.wake_at);
+    return wakes.length === 0 ? null : Math.min(...wakes);
+  }
+
+  /**
+   * Install the one scheduler generation allowed to claim alarms. Adoption is
+   * positive evidence that earlier in-process executors were superseded, so
+   * their claims are released atomically. Wall-clock age is irrelevant.
+   */
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
+  alarmAdoptWorker(workerId: string): { previousWorkerId: string | null } {
+    if (typeof workerId !== "string" || workerId.length < 8 || workerId.length > 512) {
+      throw new Error("alarmAdoptWorker: invalid workerId");
+    }
+    return this.ctx.storage.transactionSync(() => {
+      const previousWorkerId = this.getStateValue("alarm-active-worker");
+      this.sql.exec(
+        `UPDATE do_alarms
+            SET dispatch_owner = NULL
+          WHERE dispatch_owner IS NOT NULL`
+      );
+      this.setStateValue("alarm-active-worker", workerId);
+      return { previousWorkerId };
+    });
+  }
+
+  /** Read-only startup census. The AlarmDriver itself admits work exclusively
+   * through alarmClaimDue. */
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
+  alarmListScheduled(): LifecycleKey[] {
+    return (
+      this.sql
+        .exec(
+          `SELECT source, class_name, object_key
+             FROM do_alarms
+            ORDER BY source, class_name, object_key`
+        )
+        .toArray() as Array<{ source: string; class_name: string; object_key: string }>
+    ).map((row) => ({
+      source: row.source,
+      className: row.class_name,
+      objectKey: row.object_key,
     }));
+  }
+
+  /** Atomically claim due alarms. Rows survive until a generation-fenced
+   * handler acknowledgement replaces or clears them. */
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "write",
+  })
+  alarmClaimDue(input: {
+    now: number;
+    workerId: string;
+    limit: number;
+    exclude?: LifecycleKey[];
+  }): Array<
+    LifecycleKey & {
+      wakeAt: number;
+      dispatchGeneration: number;
+      testPolicy?: AgentExecutionTestPolicy;
+    }
+  > {
+    if (!Number.isSafeInteger(input.now) || input.now < 0) {
+      throw new Error("alarmClaimDue: invalid now");
+    }
+    if (!input.workerId.trim()) throw new Error("alarmClaimDue: invalid workerId");
+    if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 1_000) {
+      throw new Error("alarmClaimDue: invalid limit");
+    }
+    if (this.getStateValue("alarm-active-worker") !== input.workerId) {
+      throw new Error("alarmClaimDue: worker generation is not active");
+    }
+    const excluded = new Set(
+      (input.exclude ?? []).map((key) => {
+        this.assertLifecycleKey(key);
+        return `${key.source}\u0000${key.className}\u0000${key.objectKey}`;
+      })
+    );
+    return this.ctx.storage.transactionSync(() => {
+      const candidates = this.sql
+        .exec(
+          `SELECT a.source, a.class_name, a.object_key, a.wake_at, p.test_policy_json
+             FROM do_alarms AS a
+             LEFT JOIN do_alarm_test_policies AS p
+               ON p.source = a.source
+              AND p.class_name = a.class_name
+              AND p.object_key = a.object_key
+            WHERE a.wake_at <= ?
+              AND a.dispatch_owner IS NULL
+            ORDER BY a.wake_at, a.source, a.class_name, a.object_key`,
+          input.now
+        )
+        .toArray() as Array<{
+        source: string;
+        class_name: string;
+        object_key: string;
+        wake_at: number;
+        test_policy_json: string | null;
+      }>;
+      const selected = candidates
+        .filter(
+          (row) => !excluded.has(`${row.source}\u0000${row.class_name}\u0000${row.object_key}`)
+        )
+        .slice(0, input.limit);
+      return selected.map((row) => {
+        this.sql.exec(
+          `UPDATE do_alarms
+              SET dispatch_owner = ?,
+                  dispatch_generation = dispatch_generation + 1
+            WHERE source = ? AND class_name = ? AND object_key = ?
+              AND dispatch_owner IS NULL`,
+          input.workerId,
+          row.source,
+          row.class_name,
+          row.object_key
+        );
+        const generation = this.sql
+          .exec(
+            `SELECT dispatch_generation AS generation
+               FROM do_alarms
+              WHERE source = ? AND class_name = ? AND object_key = ?`,
+            row.source,
+            row.class_name,
+            row.object_key
+          )
+          .one()["generation"];
+        return {
+          source: row.source,
+          className: row.class_name,
+          objectKey: row.object_key,
+          wakeAt: row.wake_at,
+          dispatchGeneration: Number(generation),
+          ...(row.test_policy_json
+            ? { testPolicy: JSON.parse(row.test_policy_json) as AgentExecutionTestPolicy }
+            : {}),
+        };
+      });
+    });
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -2635,6 +2899,8 @@ export class WorkspaceDO extends DurableObjectBase {
         class_name TEXT NOT NULL,
         object_key TEXT NOT NULL,
         wake_at INTEGER NOT NULL,
+        dispatch_generation INTEGER NOT NULL DEFAULT 0,
+        dispatch_owner TEXT,
         PRIMARY KEY (source, class_name, object_key)
       )
     `);
@@ -2645,6 +2911,16 @@ export class WorkspaceDO extends DurableObjectBase {
         class_name TEXT NOT NULL,
         object_key TEXT NOT NULL,
         test_policy_json TEXT NOT NULL,
+        PRIMARY KEY (source, class_name, object_key)
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS durable_work_owners (
+        source TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        object_key TEXT NOT NULL,
+        queues_json TEXT NOT NULL,
+        registered_at INTEGER NOT NULL,
         PRIMARY KEY (source, class_name, object_key)
       )
     `);
@@ -2750,6 +3026,17 @@ export class WorkspaceDO extends DurableObjectBase {
           WHERE do_alarms.source = do_alarm_test_policies.source
             AND do_alarms.class_name = do_alarm_test_policies.class_name
             AND do_alarms.object_key = do_alarm_test_policies.object_key
+       )
+    `);
+    this.sql.exec(`
+      DELETE FROM durable_work_owners
+       WHERE NOT EXISTS (
+         SELECT 1 FROM entities
+          WHERE entities.kind = 'do'
+            AND entities.status = 'active'
+            AND entities.source_repo_path = durable_work_owners.source
+            AND entities.class_name = durable_work_owners.class_name
+            AND entities.key = durable_work_owners.object_key
        )
     `);
   }

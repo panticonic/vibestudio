@@ -94,6 +94,32 @@ describe("live execution caller resolution", () => {
     });
   });
 
+  it("projects current exact-version approval onto a long-lived egress caller", () => {
+    const isCodeApproved = vi.fn(() => true);
+    expect(
+      resolveLiveExecutionCaller({
+        registered,
+        activeEntity,
+        executionSession: null,
+        contextTestPolicy: null,
+        isCodeApproved,
+      })
+    ).toMatchObject({ codeApproved: true });
+    expect(isCodeApproved).toHaveBeenCalledWith(registered.code);
+  });
+
+  it("does not invent code approval when the exact version is unapproved", () => {
+    expect(
+      resolveLiveExecutionCaller({
+        registered,
+        activeEntity,
+        executionSession: null,
+        contextTestPolicy: null,
+        isCodeApproved: () => false,
+      })
+    ).not.toHaveProperty("codeApproved");
+  });
+
   it("rejects a stale session whose live context no longer matches", () => {
     expect(
       resolveLiveExecutionCaller({

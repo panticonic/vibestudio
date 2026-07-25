@@ -315,7 +315,7 @@ export function renderEntry(entry: CatalogEntry): string {
     const access = entry.access as
       | {
           protocols?: string[];
-          target?: { kind?: string };
+          target?: { kind?: string; defaultObjectKey?: string | null };
           source?: string;
           capability?: string;
         }
@@ -336,15 +336,25 @@ export function renderEntry(entry: CatalogEntry): string {
             entry.qualifiedName.split(".").at(-1)
           )}, [/* args */]);`
         : "// Open the method docs listed above, then call its exact method through rpc.call(...).";
+      const factoryObjectKey =
+        access?.target?.kind === "durable-object" && access.target.defaultObjectKey === null
+          ? "const objectKey = /* exact provider object key from the task/runtime context */;\n"
+          : "";
+      const resolutionArgs =
+        access?.target?.kind === "durable-object" && access.target.defaultObjectKey === null
+          ? `${JSON.stringify(protocol)}, objectKey`
+          : JSON.stringify(protocol);
       parts.push(
         "Finish docs_search/docs_open as agent tools before eval; `docs`, `docs.search`, and `docs.open` are not eval globals or runtime exports.\n\n" +
           "This is a live workspace service, not a host-dispatcher service. Do not pass it to `host_authority_next_action`; resolve and call it through the runtime below, where its receiver declaration and installed-unit authority are enforced.\n\n" +
           "Eval-side service resolution and proof (public exports only):\n" +
           'import { workers, rpc } from "@workspace/runtime";\n' +
-          `const service = await workers.resolveService(${JSON.stringify(protocol)});\n` +
+          factoryObjectKey +
+          `const service = await workers.resolveService(${resolutionArgs});\n` +
           callExample +
           "\n\nInstalled worker code uses the runtime created inside fetch():\n" +
-          `const service = await runtime.workers.resolveService(${JSON.stringify(protocol)});\n` +
+          factoryObjectKey +
+          `const service = await runtime.workers.resolveService(${resolutionArgs});\n` +
           callExample.replaceAll("rpc.call", "runtime.rpc.call")
       );
     }

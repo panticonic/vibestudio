@@ -136,6 +136,13 @@ export class ConnectionManager {
 
       // Wait for the initial replay to complete
       await newClient.ready(readyAbort.signal);
+      if (contextId && newClient.contextId !== contextId) {
+        const resolved = newClient.contextId ?? "none";
+        await newClient.close();
+        throw new Error(
+          `Channel ${channelId} resolved in context ${resolved}, expected ${contextId}`
+        );
+      }
       if (this.connectAbortController !== readyAbort) {
         await newClient.close();
         throw new Error("Connection attempt was superseded");

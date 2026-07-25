@@ -100,8 +100,7 @@ describe("classifyModelFailure", () => {
   it("classifies the ChatGPT plan-limit wording as terminal usage exhaustion", () => {
     const failure = classifyModelFailure({
       provider: "openai-codex",
-      rawReason:
-        "You have hit your ChatGPT usage limit (pro plan). Try again in ~7482 min.",
+      rawReason: "You have hit your ChatGPT usage limit (pro plan). Try again in ~7482 min.",
       now,
     });
 
@@ -147,6 +146,22 @@ describe("classifyModelFailure", () => {
       recoverable: false,
       reason:
         "No tool call found for function call output with call_id call_py0iLF677QYAz6AeBKguX7kc.",
+    });
+  });
+
+  it("treats provider tool-schema validation errors as terminal invalid requests", () => {
+    const failure = classifyModelFailure({
+      provider: "openai-codex",
+      rawReason:
+        "Codex error: Invalid schema for function 'client_eval': True is not of type 'number'.",
+      now,
+    });
+
+    expect(failure).toMatchObject({
+      code: "request_invalid_terminal",
+      recoverable: false,
+      reason:
+        "Codex error: Invalid schema for function 'client_eval': True is not of type 'number'.",
     });
   });
 
@@ -214,6 +229,17 @@ describe("classifyModelFailure", () => {
       code: "auth_or_credentials",
       recoverable: false,
       reason: "Provided authentication token is expired. Please try signing in again.",
+    });
+  });
+
+  it("does not retry a status-prefixed gateway rejection forever", () => {
+    expect(
+      classifyModelFailure(
+        '403 "[gateway.fetch] relationship workspace-member not satisfied (receiver-rejected)"'
+      )
+    ).toMatchObject({
+      code: "auth_or_credentials",
+      recoverable: false,
     });
   });
 
