@@ -15,7 +15,7 @@ export const MODEL_SETTINGS_SERVICE_PROTOCOL = "vibestudio.models.v1";
 /** Workspace config field holding the full default agent config (model + behavior). */
 export const WORKSPACE_DEFAULT_AGENT_CONFIG_FIELD = "defaultAgentConfig";
 export const DEFAULT_AGENT_MODEL_REF = "openai-codex:gpt-5.6-sol";
-/** The local provider id and the always-available fallback floor (design §5/§8). */
+/** The local provider id and its bundled, explicitly installable fallback. */
 export const LOCAL_PROVIDER_ID = "local";
 export const LOCAL_FALLBACK_MODEL_REF = "local:lfm2.5-1.2b";
 export const LOCAL_MODELS_EXTENSION_ID = "@workspace-extensions/local-models";
@@ -86,7 +86,13 @@ export type ModelAvailability =
       detail: "no-credential" | "credential-expired" | "not-installed";
     }
   | { state: "starting" }
-  | { state: "downloading"; progress: number; phase: "active" | "queued" | "paused" }
+  | {
+      state: "downloading";
+      progress: number;
+      phase: "active" | "queued" | "paused";
+      receivedBytes: number;
+      totalBytes: number | null;
+    }
   | { state: "error"; message: string };
 
 export interface ModelCatalogEntry {

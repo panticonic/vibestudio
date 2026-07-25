@@ -4,7 +4,12 @@ import type { WorkspaceConfig } from "@workspace/runtime/worker";
 import { DEFAULT_AGENT_MODEL_REF, type ModelCatalog } from "@workspace/model-catalog/catalog";
 import { makeTestCatalogEntry } from "@workspace/model-catalog/testing";
 import type { StoredCredentialSummary } from "@vibestudio/credential-client";
-import { getModelCatalog, ModelSettingsDO, type LocalModelEntry } from "./index.js";
+import {
+  getModelCatalog,
+  localEntryToCatalogEntry,
+  ModelSettingsDO,
+  type LocalModelEntry,
+} from "./index.js";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
 const BASE_CONFIG = { id: "test", systemEpoch: WORKSPACE_SYSTEM_EPOCH } as const;
@@ -123,12 +128,12 @@ class OfflineModelSettingsDO extends TestModelSettingsDO {
         slug: "lfm2.5-1.2b",
         displayName: "LFM2.5 1.2B Instruct",
         baseUrl: "http://127.0.0.1:43117/v1",
-        contextWindow: 8192,
-        maxTokens: 4096,
+        contextWindow: 32_768,
+        maxTokens: 32_768,
         measuredTokensPerSec: 18.4,
         toolsCapable: true,
         state: "ready" as const,
-        downloadProgress: null,
+        download: null,
         errorMessage: null,
       },
     ]);
@@ -149,15 +154,80 @@ class ExpiredModelSettingsDO extends TestModelSettingsDO {
 }
 
 describe("ModelSettingsDO", () => {
+  it("treats an absent local model as setup-required", () => {
+    expect(
+      localEntryToCatalogEntry({
+        slug: "lfm2.5-1.2b",
+        displayName: "LFM2.5 1.2B Instruct",
+        baseUrl: "http://127.0.0.1:0/v1",
+        contextWindow: 32_768,
+        maxTokens: 32_768,
+        measuredTokensPerSec: null,
+        toolsCapable: true,
+        state: "not-installed",
+        download: null,
+        errorMessage: null,
+      }).availability
+    ).toEqual({ state: "needs-setup", detail: "not-installed" });
+  });
+
+  it("preserves local download phase and byte progress in the catalog", () => {
+    expect(
+      localEntryToCatalogEntry({
+        slug: "lfm2.5-1.2b",
+        displayName: "LFM2.5 1.2B Instruct",
+        baseUrl: "http://127.0.0.1:0/v1",
+        contextWindow: 32_768,
+        maxTokens: 32_768,
+        measuredTokensPerSec: null,
+        toolsCapable: true,
+        state: "downloading",
+        download: {
+          progress: 0.4,
+          phase: "paused",
+          receivedBytes: 280_000_000,
+          totalBytes: 700_000_000,
+        },
+        errorMessage: null,
+      }).availability
+    ).toEqual({
+      state: "downloading",
+      progress: 0.4,
+      phase: "paused",
+      receivedBytes: 280_000_000,
+      totalBytes: 700_000_000,
+    });
+  });
+
+  it("keeps local models unavailable while the runtime is being prepared", () => {
+    expect(
+      localEntryToCatalogEntry({
+        slug: "lfm2.5-1.2b",
+        displayName: "LFM2.5 1.2B Instruct",
+        baseUrl: "http://127.0.0.1:0/v1",
+        contextWindow: 32_768,
+        maxTokens: 32_768,
+        measuredTokensPerSec: null,
+        toolsCapable: true,
+        state: "starting",
+        download: null,
+        errorMessage: null,
+      }).availability
+    ).toEqual({ state: "starting" });
+  });
+
   it("projects the Codex 5.6 Sol registry entry and all enabled effort levels", async () => {
     const catalog = await getModelCatalog();
     const sol = catalog.models.find((model) => model.ref === DEFAULT_AGENT_MODEL_REF);
 
     expect(DEFAULT_AGENT_MODEL_REF).toBe("openai-codex:gpt-5.6-sol");
+    expect(catalog.providers.find((provider) => provider.id === "openai-codex")?.label).toBe(
+      "GPT Codex"
+    );
     expect(sol).toMatchObject({
       id: "gpt-5.6-sol",
       provider: "openai-codex",
-      contextWindow: 372_000,
+      contextWindow: 272_000,
       thinkingLevels: ["minimal", "low", "medium", "high", "xhigh", "max"],
       modelSpec: {
         thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },

@@ -107,21 +107,17 @@ export function materializeLocalModel(entry: LocalModelDescriptor): Materialized
 }
 
 /**
- * Local ref with no cached extension entry yet (fresh channel before the
- * artifact refresh ran, or the extension is still bootstrapping). The
- * journaled baseUrl is a placeholder by design — the executor's
- * ensureLoaded() live endpoint always wins for loopback (design §6.3) — and
- * conservative limits keep the first call safe until the refresh corrects
- * them. toolsCapable stays true so the fallback model keeps its tools; the
- * refreshed entry authoritatively downgrades it when the template can't.
+ * Static descriptor for the one bundled model. This keeps its first call
+ * bootable while the local-models extension downloads/starts it. Imported
+ * local models must materialize from their own extension metadata.
  */
-export function placeholderLocalModel(modelId: string): MaterializedModel {
+export function bundledLocalFallbackModel(): MaterializedModel {
   return materializeLocalModel({
-    slug: modelId,
-    displayName: modelId,
+    slug: "lfm2.5-1.2b",
+    displayName: "LFM2.5 1.2B Instruct",
     baseUrl: "http://127.0.0.1:0/v1",
-    contextWindow: 8192,
-    maxTokens: 4096,
+    contextWindow: 32_768,
+    maxTokens: 32_768,
     toolsCapable: true,
   });
 }
@@ -141,7 +137,8 @@ export function materializeModel(
   localEntry: LocalModelDescriptor | null
 ): MaterializedModel | null {
   if (providerId === LOCAL_PROVIDER_ID) {
-    return localEntry ? materializeLocalModel(localEntry) : placeholderLocalModel(modelId);
+    if (localEntry) return materializeLocalModel(localEntry);
+    return modelId === "lfm2.5-1.2b" ? bundledLocalFallbackModel() : null;
   }
   return materializeCloudModel(providerId, modelId);
 }

@@ -17,6 +17,7 @@ import {
   LOCAL_MODELS_EXTENSION_ID,
   LOCAL_PROVIDER_ID,
   WORKSPACE_DEFAULT_AGENT_CONFIG_FIELD,
+  isModelUsable,
   type AgentThinkingLevel,
   type DefaultAgentConfig,
   type ModelAvailability,
@@ -73,8 +74,13 @@ export interface LocalModelEntry {
   maxTokens: number;
   measuredTokensPerSec: number | null;
   toolsCapable: boolean;
-  state: "ready" | "startable" | "downloading" | "error";
-  downloadProgress: number | null;
+  state: "ready" | "startable" | "not-installed" | "starting" | "downloading" | "error";
+  download: {
+    progress: number;
+    phase: "active" | "queued" | "paused";
+    receivedBytes: number;
+    totalBytes: number | null;
+  } | null;
   errorMessage: string | null;
 }
 
@@ -105,6 +111,11 @@ interface PiModelLike {
   thinkingLevelMap?: Record<string, unknown>;
   headers?: Record<string, string>;
   compat?: Record<string, unknown>;
+}
+
+function providerLabel(providerId: string): string {
+  if (providerId === "openai-codex") return "GPT Codex";
+  return providerId;
 }
 
 function piModelToSpec(model: PiModelLike): PiModelSpec {
@@ -146,7 +157,7 @@ export async function buildModelCatalog(): Promise<ModelCatalog> {
     const recommendedModelId = pickRecommendedModelId(providerId, provModels);
     providers.push({
       id: providerId,
-      label: providerId,
+      label: providerLabel(providerId),
       baseUrls,
       recommendedModelRef: recommendedModelId ? `${providerId}:${recommendedModelId}` : null,
       connectable:
@@ -232,11 +243,17 @@ function localAvailability(entry: LocalModelEntry): ModelAvailability {
       return { state: "ready", detail: "running" };
     case "startable":
       return { state: "startable", detail: "will-load-on-use" };
+    case "not-installed":
+      return { state: "needs-setup", detail: "not-installed" };
+    case "starting":
+      return { state: "starting" };
     case "downloading":
       return {
         state: "downloading",
-        progress: entry.downloadProgress ?? 0,
-        phase: "active",
+        progress: entry.download?.progress ?? 0,
+        phase: entry.download?.phase ?? "queued",
+        receivedBytes: entry.download?.receivedBytes ?? 0,
+        totalBytes: entry.download?.totalBytes ?? null,
       };
     case "error":
       return { state: "error", message: entry.errorMessage ?? "local server error" };
@@ -276,11 +293,6 @@ export function applyCloudAvailability(
   return { ...entry, availability };
 }
 
-/** A model an agent can actually run on right now (design §8). */
-export function isUsable(entry: ModelCatalogEntry): boolean {
-  return entry.availability.state === "ready" || entry.availability.state === "startable";
-}
-
 export function pickFallbackModel(catalog: ModelCatalog): {
   ref: string;
   reason?: "missing" | "unavailable";
@@ -288,13 +300,15 @@ export function pickFallbackModel(catalog: ModelCatalog): {
   const byRef = (ref: string) => catalog.models.find((model) => model.ref === ref);
   const preferred = byRef(DEFAULT_AGENT_MODEL_REF);
   const preferredRef = preferred?.ref;
-  if (preferred && isUsable(preferred)) return { ref: preferred.ref };
-  const recommended = catalog.models.find((model) => model.recommended && isUsable(model));
+  if (preferred && isModelUsable(preferred)) return { ref: preferred.ref };
+  const recommended = catalog.models.find(
+    (model) => model.recommended && isModelUsable(model)
+  );
   if (recommended) return { ref: recommended.ref };
-  // The floor (design §8): the local fallback is kept servable at all times.
+  // Prefer the local floor once the user has explicitly installed it.
   const localFloor = byRef(LOCAL_FALLBACK_MODEL_REF);
-  if (localFloor && isUsable(localFloor)) return { ref: localFloor.ref };
-  const anyUsable = catalog.models.find(isUsable);
+  if (localFloor && isModelUsable(localFloor)) return { ref: localFloor.ref };
+  const anyUsable = catalog.models.find(isModelUsable);
   if (anyUsable) return { ref: anyUsable.ref };
   // Nothing usable at all — keep the old static preference so the connect
   // flow has a sensible target.
@@ -448,7 +462,7 @@ export class ModelSettingsDO extends DurableObjectBase {
     // The stored default wins while it is usable; a present-but-unavailable
     // default falls back WITHOUT being treated as invalid (design §8) — it
     // comes back the moment its provider does.
-    if (storedEntry && isUsable(storedEntry)) {
+    if (storedEntry && isModelUsable(storedEntry)) {
       return {
         catalog,
         defaultModel: storedEntry.ref,
