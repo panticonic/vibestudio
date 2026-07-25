@@ -1340,6 +1340,14 @@ Use package imports available to inline_ui plus relative imports for local helpe
     },
     [channelName, core.clientRef, actions]
   );
+  const handlePrepareAgent = useCallback(
+    async (agentId: string | undefined, config: AgentSubscriptionConfig | null) => {
+      if (!actions?.onPrepareAgent) return;
+      const launcherContextId = core.clientRef.current?.contextId;
+      await actions.onPrepareAgent(channelName, launcherContextId, agentId, config);
+    },
+    [channelName, core.clientRef, actions]
+  );
   const handleReplaceAgent = useCallback(
     async (participantId: string, agentId?: string, config?: AgentSubscriptionConfig) => {
       if (!actions?.onReplaceAgent) return;
@@ -1367,12 +1375,16 @@ Use package imports available to inline_ui plus relative imports for local helpe
   );
   const sessionEnabled = true; // Always persistent: transcript state is projected from the durable PubSub log.
   const onAddAgent = actions?.onAddAgent ? handleAddAgent : undefined;
+  const onPrepareAgent = actions?.onPrepareAgent ? handlePrepareAgent : undefined;
   const onReplaceAgent = actions?.onReplaceAgent ? handleReplaceAgent : undefined;
   const onConnectProvider = actions?.onConnectProvider ? handleConnectProvider : undefined;
+  const onInstallLocalModel = actions?.onInstallLocalModel;
   const availableAgents = actions?.availableAgents;
   const modelCatalog = actions?.modelCatalog;
   const defaultModelRef = actions?.defaultModelRef;
   const defaultAgentConfig = actions?.defaultAgentConfig;
+  const firstAgentModelPreflight = actions?.firstAgentModelPreflight;
+  const firstAgentChannelIsNew = actions?.firstAgentChannelIsNew;
   const onSaveDefaults = actions?.onSaveDefaults;
   const onRemoveAgent = actions?.onRemoveAgent ? handleRemoveAgent : undefined;
   const onFocusPanel = actions?.onFocusPanel;
@@ -1380,6 +1392,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
   const onNewConversation = actions?.onNewConversation;
   const onOpenClaudeCode = actions?.onOpenClaudeCode;
   const onOpenLocalModelsLog = actions?.onOpenLocalModelsLog;
+  const onOpenLocalModels = actions?.onOpenLocalModels;
 
   // --- Deferred first-agent flow (inline config + pre-send delivery queue) ---
   const clearComposer = useCallback(() => {
@@ -1395,10 +1408,13 @@ Use package imports available to inline_ui plus relative imports for local helpe
     maybeSetDefaultTitle: core.maybeSetDefaultTitle,
     coreSendMessage: core.sendMessage,
     onAddAgent,
+    onPrepareAgent,
     availableAgents: availableAgents ?? [],
     modelCatalog: modelCatalog ?? null,
     defaultModelRef,
     defaultAgentConfig,
+    firstAgentModelPreflight,
+    firstAgentChannelIsNew,
     initialPrompt,
     forceInitialPrompt,
     channelName,
@@ -1475,6 +1491,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
       onAddAgent,
       onReplaceAgent,
       onConnectProvider,
+      onInstallLocalModel,
       availableAgents,
       modelCatalog,
       defaultModelRef,
@@ -1486,6 +1503,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
       onNewConversation,
       onOpenClaudeCode,
       onOpenLocalModelsLog,
+      onOpenLocalModels,
       toolApproval: chatTools.toolApprovalValue,
       // Fork UI is enabled only when the panel wired navigation handlers.
       forkState: forkNav ? forkState : undefined,
@@ -1548,6 +1566,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
       onAddAgent,
       onReplaceAgent,
       onConnectProvider,
+      onInstallLocalModel,
       availableAgents,
       modelCatalog,
       defaultModelRef,
@@ -1559,6 +1578,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
       onNewConversation,
       onOpenClaudeCode,
       onOpenLocalModelsLog,
+      onOpenLocalModels,
       chatTools.toolApprovalValue,
       forkNav,
       forkState,

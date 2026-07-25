@@ -16,6 +16,7 @@ import {
   type AgentSubscriptionConfig,
   type ModelCatalogEntry,
 } from "@workspace/agentic-core";
+import { isModelUsable } from "@workspace/model-catalog/catalog";
 import { useIsMobile, useTouchDevice, useViewportHeight } from "@workspace/react/responsive";
 import { useChatContext } from "../context/ChatContext";
 import { getMentionsFromInput, useChatInputContext } from "../context/ChatInputContext";
@@ -35,11 +36,6 @@ import {
 /** Matches a whole-input `/model [query]` composer command (item 7). */
 const MODEL_COMMAND_RE = /^\/model(?:\s+(.*))?$/;
 const MODEL_MENU_LIMIT = 8;
-
-function isUsableEntry(model: ModelCatalogEntry): boolean {
-  const state = model.availability?.state;
-  return state === "ready" || state === "startable";
-}
 
 const THINKING_LEVELS = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
 const RESPOND_POLICIES = new Set([
@@ -154,7 +150,7 @@ export function ChatInput() {
   const modelCandidates = useMemo(() => {
     if (modelQuery === null || !onReplaceAgent) return [];
     const q = modelQuery.trim().toLowerCase();
-    const usable = (modelCatalog?.models ?? []).filter(isUsableEntry);
+    const usable = (modelCatalog?.models ?? []).filter(isModelUsable);
     const matched = q
       ? usable.filter(
           (m) =>

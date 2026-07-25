@@ -1647,6 +1647,38 @@
 .agent-setup-card {
   border: 1px solid var(--surface-border);
 }
+.agent-setup-heading-icon {
+  align-items: center;
+  background: var(--accent-a3);
+  border-radius: 9999px;
+  color: var(--accent-11);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 36px;
+  justify-content: center;
+  width: 36px;
+}
+.first-agent-setup-status {
+  background: color-mix(in srgb, var(--accent-a2) 45%, var(--color-panel-solid));
+  border-color: var(--accent-a5);
+}
+.first-agent-setup-status-icon {
+  align-items: center;
+  background: var(--accent-a4);
+  border-radius: 8px;
+  color: var(--accent-11);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+.first-agent-ready-status {
+  background: var(--green-a2);
+  border: 1px solid var(--green-a5);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
 .agent-setup-glyph {
   display: inline-flex;
   align-items: center;

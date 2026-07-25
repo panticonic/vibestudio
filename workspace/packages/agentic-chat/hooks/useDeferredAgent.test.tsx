@@ -97,6 +97,75 @@ describe("useDeferredAgent", () => {
     expect(result.current.deferredAgent?.launching).toBe(false);
   });
 
+  it("prepares the default agent before send and updates the provisional intent with the draft", async () => {
+    const m = freshMocks();
+    const onPrepareAgent = vi.fn().mockResolvedValue(undefined);
+    const { result, rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, {
+        modelCatalog: MODEL_CATALOG,
+        defaultModelRef: WORKSPACE_MODEL,
+        defaultAgentConfig: { model: WORKSPACE_MODEL, approvalLevel: 2 },
+        onPrepareAgent,
+      }),
+    });
+
+    await waitFor(() =>
+      expect(onPrepareAgent).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({ model: WORKSPACE_MODEL, approvalLevel: 2 })
+      )
+    );
+    expect(m.onAddAgent).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.deferredAgent?.setDraft({
+        ...result.current.deferredAgent.draft,
+        model: PANEL_MODEL,
+      });
+    });
+    await waitFor(() =>
+      expect(onPrepareAgent).toHaveBeenLastCalledWith(
+        undefined,
+        expect.objectContaining({ model: PANEL_MODEL })
+      )
+    );
+
+    rerender(
+      makeParams(m, {
+        participants: agentRoster,
+        modelCatalog: MODEL_CATALOG,
+        defaultModelRef: WORKSPACE_MODEL,
+        defaultAgentConfig: { model: WORKSPACE_MODEL, approvalLevel: 2 },
+        onPrepareAgent,
+      })
+    );
+    await waitFor(() => expect(onPrepareAgent).toHaveBeenLastCalledWith(undefined, null));
+  });
+
+  it("prepares a host-minted new channel without waiting for replay", async () => {
+    const m = freshMocks();
+    const onPrepareAgent = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, {
+        replaySettled: false,
+        firstAgentChannelIsNew: true,
+        modelCatalog: MODEL_CATALOG,
+        defaultModelRef: WORKSPACE_MODEL,
+        defaultAgentConfig: { model: WORKSPACE_MODEL },
+        onPrepareAgent,
+      }),
+    });
+
+    await waitFor(() =>
+      expect(onPrepareAgent).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({ model: WORKSPACE_MODEL })
+      )
+    );
+    expect(result.current.deferredAgent?.setupActive ?? false).toBe(false);
+    expect(m.onAddAgent).not.toHaveBeenCalled();
+  });
+
   it("queues the first message, spawns exactly one agent, and never double-spawns", async () => {
     const m = freshMocks();
     const { result } = renderHook((p: Params) => useDeferredAgent(p), {
@@ -253,6 +322,151 @@ describe("useDeferredAgent", () => {
     expect(result.current.deferredAgent?.queued.map((q) => q.text)).toEqual(["do the thing"]);
   });
 
+  it("holds an initialPrompt for explicit model selection before launching", async () => {
+    const m = freshMocks();
+    const { result } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, {
+        initialPrompt: "help me get onboarded",
+        modelCatalog: MODEL_CATALOG,
+        defaultModelRef: WORKSPACE_MODEL,
+        defaultAgentConfig: { model: WORKSPACE_MODEL },
+        firstAgentModelPreflight: "selection-required",
+      }),
+    });
+
+    await waitFor(() =>
+      expect(result.current.deferredAgent?.queued.map((q) => q.text)).toEqual([
+        "help me get onboarded",
+      ])
+    );
+    expect(result.current.deferredAgent?.setupActive).toBe(true);
+    expect(result.current.deferredAgent?.modelSelectionRequired).toBe(true);
+    expect(m.onAddAgent).not.toHaveBeenCalled();
+
+    act(() => result.current.deferredAgent?.startQueued());
+
+    await waitFor(() => expect(m.onAddAgent).toHaveBeenCalledTimes(1));
+    expect(m.onAddAgent).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ model: WORKSPACE_MODEL })
+    );
+  });
+
+  it("cannot start a queued conversation with a model that still needs setup", async () => {
+    const m = freshMocks();
+    const unavailableCatalog: ModelCatalog = {
+      providers: [],
+      models: [
+        makeTestCatalogEntry({
+          ref: "local:lfm2.5-1.2b",
+          id: "lfm2.5-1.2b",
+          name: "LFM2.5 1.2B Instruct",
+          provider: "local",
+          baseUrl: "http://127.0.0.1:0/v1",
+          availability: { state: "needs-setup", detail: "not-installed" },
+        }),
+      ],
+    };
+    const { result } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, {
+        initialPrompt: "help me get onboarded",
+        modelCatalog: unavailableCatalog,
+        defaultModelRef: "local:lfm2.5-1.2b",
+        defaultAgentConfig: { model: "local:lfm2.5-1.2b" },
+        firstAgentModelPreflight: "selection-required",
+      }),
+    });
+
+    await waitFor(() => expect(result.current.deferredAgent?.queued).toHaveLength(1));
+    act(() => result.current.deferredAgent?.startQueued());
+
+    expect(m.onAddAgent).not.toHaveBeenCalled();
+    expect(result.current.deferredAgent?.launching).toBe(false);
+  });
+
+  it("keeps first-run setup active when OAuth makes the selected model ready", async () => {
+    const m = freshMocks();
+    const needsSetupCatalog: ModelCatalog = {
+      providers: [],
+      models: [
+        makeTestCatalogEntry({
+          ref: WORKSPACE_MODEL,
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai-codex",
+          baseUrl: "https://chatgpt.com/backend-api",
+          availability: { state: "needs-setup", detail: "no-credential" },
+        }),
+      ],
+    };
+    const configured = {
+      initialPrompt: "help me get onboarded",
+      defaultModelRef: WORKSPACE_MODEL,
+      defaultAgentConfig: { model: WORKSPACE_MODEL },
+    };
+    const { result, rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, {
+        ...configured,
+        modelCatalog: needsSetupCatalog,
+        firstAgentModelPreflight: "selection-required",
+      }),
+    });
+
+    await waitFor(() => expect(result.current.deferredAgent?.queued).toHaveLength(1));
+    expect(result.current.deferredAgent?.setupActive).toBe(true);
+    expect(m.onAddAgent).not.toHaveBeenCalled();
+
+    // Successful OAuth refreshes the catalog and makes the host preflight
+    // ready. The explicit first-run choice remains active so the Start action
+    // is not replaced by a generic empty-chat screen.
+    rerender(
+      makeParams(m, {
+        ...configured,
+        modelCatalog: MODEL_CATALOG,
+        firstAgentModelPreflight: "ready",
+      })
+    );
+
+    expect(result.current.deferredAgent?.setupActive).toBe(true);
+    expect(result.current.deferredAgent?.modelSelectionRequired).toBe(true);
+    expect(m.onAddAgent).not.toHaveBeenCalled();
+
+    act(() => result.current.deferredAgent?.startQueued());
+
+    await waitFor(() => expect(m.onAddAgent).toHaveBeenCalledTimes(1));
+    expect(m.onAddAgent).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ model: WORKSPACE_MODEL })
+    );
+  });
+
+  it("waits for model discovery before auto-launching an initialPrompt", async () => {
+    const m = freshMocks();
+    const configured = {
+      initialPrompt: "help me get onboarded",
+      modelCatalog: MODEL_CATALOG,
+      defaultModelRef: WORKSPACE_MODEL,
+      defaultAgentConfig: { model: WORKSPACE_MODEL },
+    };
+    const { result, rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, {
+        ...configured,
+        firstAgentModelPreflight: "checking",
+      }),
+    });
+
+    await waitFor(() => expect(result.current.deferredAgent?.queued).toHaveLength(1));
+    expect(m.onAddAgent).not.toHaveBeenCalled();
+
+    rerender(
+      makeParams(m, {
+        ...configured,
+        firstAgentModelPreflight: "ready",
+      })
+    );
+    await waitFor(() => expect(m.onAddAgent).toHaveBeenCalledTimes(1));
+  });
+
   it("launches an initialPrompt with the effective panel model when the catalog loads first", async () => {
     const m = freshMocks();
     const configured = {
@@ -365,9 +579,7 @@ describe("useDeferredAgent", () => {
         defaultAgentConfig: null,
       }),
     });
-    await waitFor(() =>
-      expect(result.current.deferredAgent?.draft.model).toBe(WORKSPACE_MODEL)
-    );
+    await waitFor(() => expect(result.current.deferredAgent?.draft.model).toBe(WORKSPACE_MODEL));
 
     act(() => {
       const current = result.current.deferredAgent!.draft;
@@ -401,9 +613,7 @@ describe("useDeferredAgent", () => {
         defaultAgentConfig: null,
       }),
     });
-    await waitFor(() =>
-      expect(result.current.deferredAgent?.draft.model).toBe(WORKSPACE_MODEL)
-    );
+    await waitFor(() => expect(result.current.deferredAgent?.draft.model).toBe(WORKSPACE_MODEL));
 
     act(() => {
       const current = result.current.deferredAgent!.draft;

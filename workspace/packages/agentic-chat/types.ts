@@ -12,6 +12,7 @@ export type {
   ToolProviderDeps,
   ToolProvider,
   NewConversationOptions,
+  ModelSetupResult,
 } from "@workspace/agentic-core";
 
 // Pi message/event types — re-exported via agentic-core
@@ -58,6 +59,7 @@ import type {
   DirtyRepoDetails,
   AvailableAgent,
   ConnectProviderResult,
+  ModelSetupResult,
   ModelCatalog,
   AgentSubscriptionConfig,
   NewConversationOptions,
@@ -215,6 +217,11 @@ export interface DeferredAgentState {
   launching: boolean;
   /** The spawn failed (onAddAgent rejected) — drives the queue's error + retry UI. */
   launchFailed: boolean;
+  /** The host found no configured model for the first agent. Its queued first
+   *  message must wait for an explicit model/provider choice. */
+  modelSelectionRequired: boolean;
+  /** Confirm the current draft and start the agent for the queued message. */
+  startQueued: () => void;
   /** Retry a failed launch (re-issues the spawn). */
   retryLaunch: () => void;
   /** Inline config draft (model/effort/autonomy/…) applied to the agent spawned
@@ -445,6 +452,8 @@ export interface ChatContextValue {
     modelBaseUrl: string,
     opts?: { browser?: "internal" | "external" }
   ) => Promise<ConnectProviderResult>;
+  /** Start installing a local model; live progress arrives through modelCatalog. */
+  onInstallLocalModel?: (modelRef: string) => Promise<ModelSetupResult>;
   availableAgents?: AvailableAgent[];
   /** Static pi model catalog; connection status merged in the UI. */
   modelCatalog?: ModelCatalog | null;
@@ -466,6 +475,8 @@ export interface ChatContextValue {
   /** Open the Local Models panel focused on a server's log (item 6) — wired
    *  from a local model's red error dot in the picker. */
   onOpenLocalModelsLog?: (server: "utility" | "main") => void;
+  /** Open the full Local Models manager. */
+  onOpenLocalModels?: () => void;
 
   // Tool approval (optional)
   toolApproval?: ToolApprovalProps;

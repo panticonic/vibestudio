@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { isAgentParticipantType } from "@workspace/agentic-core";
-import type { AgentSubscriptionConfig, AvailableAgent, ModelCatalog } from "@workspace/agentic-core";
-import type { DefaultAgentConfig } from "@workspace/model-catalog/catalog";
+import type {
+  AgentSubscriptionConfig,
+  AvailableAgent,
+  ModelCatalog,
+} from "@workspace/agentic-core";
+import { isModelUsable, type DefaultAgentConfig } from "@workspace/model-catalog/catalog";
 import type { AttachmentInput, Participant } from "@workspace/pubsub";
 import type { MessageTier } from "@workspace/agentic-protocol";
 import type {
@@ -19,13 +24,13 @@ import { shouldAutoSendInitialPrompt } from "./core/useChatCore";
 /**
  * Deferred first-agent flow.
  *
- * On a brand-new chat we hold off creating an agent until the user actually
- * sends something. Until then the composer is "armed" with an inline config.
- * The first send (or an injected initialPrompt) parks the message in a
- * client-side queue and ARMS a spawn; a spawn-driver effect issues `onAddAgent`
- * with that config once it can, and when the agent joins the roster the queue is
- * flushed LIVE (per item) — so the first message lands as a normal turn to a
- * present agent rather than backlog replay.
+ * On a brand-new chat the host may activate an uncommitted provisional agent
+ * for the inline config while the user types. The first send (or an injected
+ * initialPrompt) parks the message in a client-side queue and ARMS a claim;
+ * a spawn-driver effect issues `onAddAgent` with that exact config, and when
+ * the claimed agent joins the roster the queue is flushed LIVE (per item) — so
+ * the first message lands as a normal turn to a present agent rather than
+ * backlog replay.
  *
  * The whole flow is scoped to OUR spawn (`armed`), so reconnection / rehydration
  * windows (pending agents we did NOT spawn) keep their normal send-immediately
@@ -69,11 +74,21 @@ interface UseDeferredAgentParams {
   /** Normal send path, used once an agent is present (or when deferral is off). */
   coreSendMessage: ChatInputContextValue["onSendMessage"];
   onAddAgent?: (agentId?: string, config?: AgentSubscriptionConfig) => void | Promise<unknown>;
+  /** Latest uncommitted first-agent intent. `null` asks the host to retire an
+   *  existing provisional agent because this draft is not launchable. */
+  onPrepareAgent?: (
+    agentId: string | undefined,
+    config: AgentSubscriptionConfig | null
+  ) => Promise<void>;
   availableAgents: AvailableAgent[];
   modelCatalog: ModelCatalog | null;
   defaultModelRef?: string | null;
   /** Saved workspace default agent config — seeds the inline config draft. */
   defaultAgentConfig?: DefaultAgentConfig | null;
+  /** Host-owned model readiness for the first agent. */
+  firstAgentModelPreflight?: "checking" | "ready" | "selection-required";
+  /** True only when the host minted this channel for the current mount. */
+  firstAgentChannelIsNew?: boolean;
   /** Injected first message — routed through the SAME pre-send queue (held until
    *  the agent joins, then flushed live) instead of an auto-send-on-connect. */
   initialPrompt?: string;
@@ -99,10 +114,13 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
     maybeSetDefaultTitle,
     coreSendMessage,
     onAddAgent,
+    onPrepareAgent,
     availableAgents,
     modelCatalog,
     defaultModelRef,
     defaultAgentConfig,
+    firstAgentModelPreflight = "ready",
+    firstAgentChannelIsNew = false,
     initialPrompt,
     forceInitialPrompt,
     channelName,
@@ -118,6 +136,12 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
   const [armed, setArmed] = useState(false);
   const [launchFailed, setLaunchFailed] = useState(false);
   const [flushTick, setFlushTick] = useState(0);
+  // Entering first-run model setup is an explicit-choice boundary. Provider
+  // setup can make the selected model usable, but that availability change
+  // must not dismiss the setup surface before the user starts the queued turn.
+  const [explicitModelChoiceActive, setExplicitModelChoiceActive] = useState(
+    firstAgentModelPreflight === "selection-required"
+  );
 
   const draftTouchedRef = useRef(false);
   const modelTouchedRef = useRef(false);
@@ -125,7 +149,10 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
   // The agent type + config captured at the moment the spawn was armed, so a
   // later auto-seed (or a future editable card) can't change what the first
   // message commits to.
-  const spawnIntentRef = useRef<{ agentId: string | undefined; config: AgentSubscriptionConfig } | null>(null);
+  const spawnIntentRef = useRef<{
+    agentId: string | undefined;
+    config: AgentSubscriptionConfig;
+  } | null>(null);
   const issuedRef = useRef(false); // onAddAgent has been called for this spawn
   const spawnInFlightRef = useRef(false); // the onAddAgent promise is pending
   const flushingRef = useRef(false);
@@ -133,6 +160,10 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
   const launchWatchdogRef = useRef(0);
   const everHadAgentRef = useRef(false);
   const initialPromptEnqueuedRef = useRef(false);
+  const waitingForModelDiscoveryRef = useRef(false);
+  const preparedIntentFingerprintRef = useRef("none");
+  const prepareAgentRef = useRef(onPrepareAgent);
+  prepareAgentRef.current = onPrepareAgent;
 
   const agentPresent = useMemo(
     () => Object.values(participants).some((p) => isAgentParticipantType(p.metadata.type)),
@@ -147,14 +178,18 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
   const canSpawn = canDefer && availableAgents.length > 0; // can spawn RIGHT NOW
   // An agent is "coming" once WE armed a spawn or a pending badge exists.
   const agentComing = pendingAgents.size > 0 || armed;
+  const modelSelectionRequired =
+    firstAgentModelPreflight === "selection-required" || explicitModelChoiceActive;
   // Show the inline config card only for a genuinely brand-new chat: no agent
-  // present or coming, no history, none ever seen, and no initialPrompt driving
-  // the first message itself.
+  // present or coming, no history, and none ever seen. An injected initial
+  // prompt normally drives the first message itself, except when the host says
+  // model selection is required — then the setup card is the preflight that
+  // deliberately holds that prompt.
   const setupActive =
     !agentPresent &&
     !agentComing &&
     canDefer &&
-    !initialPrompt &&
+    (!initialPrompt || modelSelectionRequired) &&
     // Only once replay has settled is `messages.length === 0` a trustworthy
     // "brand-new chat" signal — this avoids flashing the setup card over an
     // agentless channel that still has history mid-replay.
@@ -163,6 +198,14 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
     !everHadAgentRef.current;
   const launching = !agentPresent && armed;
   const active = setupActive || launching;
+
+  useEffect(() => {
+    if (agentPresent || armed) {
+      setExplicitModelChoiceActive(false);
+    } else if (firstAgentModelPreflight === "selection-required") {
+      setExplicitModelChoiceActive(true);
+    }
+  }, [agentPresent, armed, firstAgentModelPreflight]);
 
   // Pick the first agent type once the gallery loads.
   useEffect(() => {
@@ -256,6 +299,86 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
   const queuedRef = useRef(queued);
   queuedRef.current = queued;
 
+  // Optimistically activate the current first-agent intent while the user is
+  // composing. The host owns the provisional lease and does not subscribe or
+  // persist it yet. Draft changes update this one intent; an unusable/absent
+  // intent retires the provisional entity.
+  useEffect(() => {
+    if (!onPrepareAgent) return;
+    const selectedAgent =
+      availableAgents.find((agent) => agent.id === agentId) ?? availableAgents[0];
+    const latestDraft = draftTouchedRef.current
+      ? draft
+      : seedDraftForAgent(selectedAgent, {
+          modelCatalog,
+          defaultModelRef,
+          defaultAgentConfig,
+          showReactiveness: false,
+        });
+    const selectedModel = modelCatalog?.models.find((model) => model.ref === latestDraft.model);
+    const modelChoiceAllowsPrewarm =
+      firstAgentModelPreflight === "ready" ||
+      (firstAgentModelPreflight === "selection-required" && modelTouchedRef.current);
+    const shouldPrepare =
+      !agentPresent &&
+      pendingAgents.size === 0 &&
+      (firstAgentChannelIsNew || (replaySettled && messages.length === 0)) &&
+      !everHadAgentRef.current &&
+      availableAgents.length > 0 &&
+      modelChoiceAllowsPrewarm &&
+      isModelUsable(selectedModel);
+    const explicitAgentId = agentTypeTouchedRef.current ? agentId : undefined;
+    const config = shouldPrepare ? spawnConfigFromDraft(latestDraft) : null;
+    const fingerprint = config
+      ? canonicalJson({ channelName, agentId: explicitAgentId, config })
+      : "none";
+    if (preparedIntentFingerprintRef.current === fingerprint) return;
+    preparedIntentFingerprintRef.current = fingerprint;
+    void onPrepareAgent(explicitAgentId, config).catch((error) => {
+      console.warn("[useDeferredAgent] Failed to prepare provisional agent:", error);
+    });
+  }, [
+    onPrepareAgent,
+    agentPresent,
+    pendingAgents,
+    replaySettled,
+    messages.length,
+    availableAgents,
+    agentId,
+    draft,
+    modelCatalog,
+    defaultModelRef,
+    defaultAgentConfig,
+    firstAgentModelPreflight,
+    firstAgentChannelIsNew,
+    channelName,
+  ]);
+
+  // If this chat surface disappears before claim, release the host-owned lease.
+  useEffect(
+    () => () => {
+      if (preparedIntentFingerprintRef.current === "none") return;
+      preparedIntentFingerprintRef.current = "none";
+      void prepareAgentRef.current?.(undefined, null).catch((error) => {
+        console.warn("[useDeferredAgent] Failed to retire provisional agent:", error);
+      });
+    },
+    []
+  );
+
+  const startQueued = useCallback(() => {
+    const s = stateRef.current;
+    if (s.agentPresent || s.armed || queuedRef.current.length === 0 || !s.draft.model) return;
+    const selectedModel = modelCatalog?.models.find((model) => model.ref === s.draft.model);
+    if (!isModelUsable(selectedModel)) return;
+    spawnIntentRef.current = {
+      agentId: agentTypeTouchedRef.current ? s.agentId : undefined,
+      config: spawnConfigFromDraft(s.draft),
+    };
+    setExplicitModelChoiceActive(false);
+    setArmed(true);
+  }, [modelCatalog]);
+
   const sendMessage = useCallback<ChatInputContextValue["onSendMessage"]>(
     async (attachments, options) => {
       const s = stateRef.current;
@@ -286,16 +409,29 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
       // Commit to spawning our first agent (the driver issues onAddAgent). Only
       // when there's no agent — an in-flight-flush enqueue needs no new agent.
       // Snapshot the type + config now so this message's spawn is locked in.
-      if (!s.agentPresent && !s.armed) {
+      if (!s.agentPresent && !s.armed && firstAgentModelPreflight === "ready") {
         spawnIntentRef.current = {
           agentId: agentTypeTouchedRef.current ? s.agentId : undefined,
           config: spawnConfigFromDraft(s.draft),
         };
         setArmed(true);
+      } else if (!s.agentPresent && firstAgentModelPreflight === "checking") {
+        waitingForModelDiscoveryRef.current = true;
       }
     },
-    [coreSendMessage, clearComposer]
+    [coreSendMessage, clearComposer, firstAgentModelPreflight]
   );
+
+  // A first message may arrive while model settings are still loading. Arm only
+  // messages specifically held by that discovery wait. A later
+  // `selection-required` → `ready` transition must not silently cross the
+  // explicit-choice boundary.
+  useEffect(() => {
+    if (firstAgentModelPreflight !== "ready" || !waitingForModelDiscoveryRef.current) return;
+    waitingForModelDiscoveryRef.current = false;
+    if (agentPresent || armed || queued.length === 0) return;
+    setArmed(true);
+  }, [firstAgentModelPreflight, agentPresent, armed, queued.length]);
 
   // Spawn-driver: issue onAddAgent exactly once, as soon as we're armed AND able
   // to spawn. Re-fires when canSpawn flips true (availableAgents loaded late) or
@@ -422,10 +558,13 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
     })();
   }, [agentPresent, queued, publishText, maybeSetDefaultTitle, flushTick]);
 
-  useEffect(() => () => {
-    window.clearTimeout(flushTimerRef.current);
-    window.clearTimeout(launchWatchdogRef.current);
-  }, []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(flushTimerRef.current);
+      window.clearTimeout(launchWatchdogRef.current);
+    },
+    []
+  );
 
   // Route an injected initialPrompt through the SAME queue only when this host
   // can spawn an agent. Otherwise useAgenticChat leaves the prompt on
@@ -460,8 +599,20 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
     // Arm a spawn for a brand-new chat. Forks/reopens already have an agent
     // rehydrating (pendingAgents) — the driver's guard skips spawning there and
     // the flush simply delivers to it on join.
-    if (!stateRef.current.agentPresent) setArmed(true);
-  }, [canDefer, replaySettled, messages, initialPrompt, forceInitialPrompt, channelName]);
+    if (!stateRef.current.agentPresent && firstAgentModelPreflight === "ready") {
+      setArmed(true);
+    } else if (!stateRef.current.agentPresent && firstAgentModelPreflight === "checking") {
+      waitingForModelDiscoveryRef.current = true;
+    }
+  }, [
+    canDefer,
+    replaySettled,
+    messages,
+    initialPrompt,
+    forceInitialPrompt,
+    channelName,
+    firstAgentModelPreflight,
+  ]);
 
   const deferredAgent = useMemo<DeferredAgentState | undefined>(() => {
     if (!active && queued.length === 0) return undefined;
@@ -470,6 +621,8 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
       setupActive,
       launching,
       launchFailed,
+      modelSelectionRequired,
+      startQueued,
       retryLaunch,
       draft,
       setDraft: handleSetDraft,
@@ -484,6 +637,8 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
     setupActive,
     launching,
     launchFailed,
+    modelSelectionRequired,
+    startQueued,
     retryLaunch,
     draft,
     handleSetDraft,

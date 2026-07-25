@@ -1,5 +1,12 @@
-import { Box, Button, Card, Flex, IconButton, Spinner, Text } from "@radix-ui/themes";
-import { Cross2Icon, ExclamationTriangleIcon, ImageIcon, ReloadIcon } from "@radix-ui/react-icons";
+import { Badge, Box, Button, Card, Flex, IconButton, Spinner, Text } from "@radix-ui/themes";
+import {
+  Cross2Icon,
+  ExclamationTriangleIcon,
+  ImageIcon,
+  LightningBoltIcon,
+  ReloadIcon,
+} from "@radix-ui/react-icons";
+import { isModelUsable } from "@workspace/model-catalog/catalog";
 import { useChatContext } from "../context/ChatContext";
 
 /**
@@ -11,9 +18,29 @@ import { useChatContext } from "../context/ChatContext";
  * the slot the post-join Outbox uses (the two are never both non-empty).
  */
 export function PendingDeliveryQueue() {
-  const { deferredAgent } = useChatContext();
+  const { deferredAgent, modelCatalog } = useChatContext();
   if (!deferredAgent || deferredAgent.queued.length === 0) return null;
-  const { queued, launching, launchFailed, retryLaunch, cancelQueued } = deferredAgent;
+  const {
+    queued,
+    launching,
+    launchFailed,
+    modelSelectionRequired,
+    retryLaunch,
+    cancelQueued,
+    draft,
+  } = deferredAgent;
+  const awaitingModelChoice = modelSelectionRequired && !launching && !launchFailed;
+  const selectedModel = modelCatalog?.models.find((model) => model.ref === draft.model);
+  const setupMessage =
+    selectedModel?.availability.state === "downloading"
+      ? `Installing ${selectedModel.name} — this sends when setup finishes.`
+      : selectedModel?.availability.state === "starting"
+        ? `Preparing ${selectedModel.name} — this sends when it is ready.`
+        : selectedModel?.availability.state === "needs-setup"
+          ? `Finish ${selectedModel.provider === "local" ? "local model installation" : "provider setup"} above — this stays queued.`
+          : isModelUsable(selectedModel)
+            ? `${selectedModel?.name ?? "Your model"} is ready — start your agent above.`
+            : "Choose a model above — this sends when your agent starts.";
 
   return (
     <Box flexShrink="0" className="pending-delivery-root" data-testid="pending-delivery-queue">
@@ -29,6 +56,13 @@ export function PendingDeliveryQueue() {
                 <ExclamationTriangleIcon style={{ color: "var(--red-9)", flexShrink: 0 }} />
                 <Text size="1" color="red" weight="medium" truncate>
                   Couldn't start your agent — these send once it's running.
+                </Text>
+              </>
+            ) : awaitingModelChoice ? (
+              <>
+                <LightningBoltIcon style={{ color: "var(--accent-9)", flexShrink: 0 }} />
+                <Text size="1" color="gray" weight="medium" truncate>
+                  {setupMessage}
                 </Text>
               </>
             ) : (
@@ -75,9 +109,19 @@ export function PendingDeliveryQueue() {
                 className="pending-delivery-item"
               >
                 <Flex align="center" gap="2" style={{ minWidth: 0 }}>
-                  {attachmentCount > 0 && <ImageIcon style={{ flexShrink: 0, color: "var(--gray-9)" }} />}
+                  {m.tier === "secondary" && (
+                    <Badge size="1" variant="soft" color="gray" style={{ flexShrink: 0 }}>
+                      Opening prompt
+                    </Badge>
+                  )}
+                  {attachmentCount > 0 && (
+                    <ImageIcon style={{ flexShrink: 0, color: "var(--gray-9)" }} />
+                  )}
                   <Text size="2" truncate className="pending-delivery-text">
-                    {m.text || (attachmentCount > 0 ? `${attachmentCount} image${attachmentCount > 1 ? "s" : ""}` : "")}
+                    {m.text ||
+                      (attachmentCount > 0
+                        ? `${attachmentCount} image${attachmentCount > 1 ? "s" : ""}`
+                        : "")}
                   </Text>
                 </Flex>
                 <IconButton

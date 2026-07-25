@@ -6,6 +6,8 @@ import { useChatContext } from "../context/ChatContext";
 import { AgentConfigForm, type AgentConfigDraft } from "./AgentConfigForm";
 import { draftForAgent as seedDraftForAgent, draftToConfig } from "./agentConfigDraft";
 import { AgentTypeCard } from "./AgentTypeCard";
+import { ModelSetupStatus } from "./ModelSetupStatus";
+import { isModelUsable, LOCAL_FALLBACK_MODEL_REF } from "@workspace/model-catalog/catalog";
 
 export interface AgentDialogProps {
   open: boolean;
@@ -41,7 +43,9 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
     onAddAgent,
     onReplaceAgent,
     onConnectProvider,
+    onInstallLocalModel,
     onCallMethodResult,
+    onOpenLocalModels,
     onOpenLocalModelsLog,
     toolApproval,
   } = ctx;
@@ -165,12 +169,13 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
     () => modelCatalog?.models.find((m) => m.ref === draft.model) ?? null,
     [modelCatalog, draft.model]
   );
-  // Availability is the worker-computed truth (design §7.1) — a model that
-  // "needs setup" and is connectable gets the sign-in nudge.
-  const needsConnect =
-    !!selectedModel &&
-    selectedModel.availability?.state === "needs-setup" &&
-    selectedModel.connectable;
+  // Availability is the worker-computed truth (design §7.1). Agent creation
+  // remains blocked until setup moves the model to startable/ready.
+  const modelUsable = isModelUsable(selectedModel);
+  const selectedProviderLabel =
+    modelCatalog?.providers.find((provider) => provider.id === selectedModel?.provider)?.label ??
+    selectedModel?.provider ??
+    "";
 
   const verb = mode === "switch" ? "Switch" : mode === "edit" ? "Save" : "Add";
   const title =
@@ -180,14 +185,6 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
     setBusy(true);
     setError(null);
     try {
-      if (needsConnect && selectedModel && onConnectProvider) {
-        const res = await onConnectProvider(selectedModel.provider, selectedModel.baseUrl);
-        if (!res.ok) {
-          setError(res.error ?? "Failed to connect provider");
-          setBusy(false);
-          return;
-        }
-      }
       const config = draftToConfig(draft);
       // Tool permission is channel-wide. Persist it before starting/restarting
       // an agent so the header and every agent enforce the same authoritative
@@ -222,9 +219,6 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
       setBusy(false);
     }
   }, [
-    needsConnect,
-    selectedModel,
-    onConnectProvider,
     draft,
     mode,
     agentId,
@@ -246,14 +240,6 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
     setBusy(true);
     setError(null);
     try {
-      if (needsConnect && selectedModel && onConnectProvider) {
-        const res = await onConnectProvider(selectedModel.provider, selectedModel.baseUrl);
-        if (!res.ok) {
-          setError(res.error ?? "Failed to connect provider");
-          setBusy(false);
-          return;
-        }
-      }
       const config = draftToConfig(draft);
       config["handle"] = (targetParticipant?.metadata.handle as string) ?? config["handle"];
       await onReplaceAgent(targetParticipantId, undefined, config);
@@ -263,19 +249,36 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
     } finally {
       setBusy(false);
     }
-  }, [
-    targetParticipantId,
-    needsConnect,
-    selectedModel,
-    onConnectProvider,
-    draft,
-    targetParticipant,
-    onReplaceAgent,
-    onOpenChange,
-  ]);
+  }, [targetParticipantId, draft, targetParticipant, onReplaceAgent, onOpenChange]);
 
-  const primaryLabel = needsConnect ? `Connect & ${verb.toLowerCase()}` : verb;
-  const canSubmit = !!draft.model && !busy;
+  const setupModel = useCallback(
+    async (browser: "internal" | "external" = "external") => {
+      if (!selectedModel) return;
+      setBusy(true);
+      setError(null);
+      try {
+        const result =
+          selectedModel.provider === "local"
+            ? await onInstallLocalModel?.(selectedModel.ref)
+            : await onConnectProvider?.(selectedModel.provider, selectedModel.baseUrl, { browser });
+        if (!result?.ok) {
+          setError(
+            result?.error ??
+              (selectedModel.provider === "local"
+                ? "Local model installation is not available."
+                : "Provider connection is not available.")
+          );
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [selectedModel, onInstallLocalModel, onConnectProvider]
+  );
+
+  const canSubmit = !!draft.model && !busy && (mode === "edit" || modelUsable);
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -347,6 +350,26 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
               onOpenServerLog={onOpenLocalModelsLog}
             />
 
+            {mode !== "edit" && selectedModel ? (
+              <Box mt="3">
+                <ModelSetupStatus
+                  model={selectedModel}
+                  providerLabel={selectedProviderLabel}
+                  pending={busy}
+                  onSetup={(browser) => void setupModel(browser)}
+                  onOpenLocalModels={onOpenLocalModels}
+                  onOpenLocalModelLog={
+                    onOpenLocalModelsLog && selectedModel.provider === "local"
+                      ? () =>
+                          onOpenLocalModelsLog(
+                            selectedModel.ref === LOCAL_FALLBACK_MODEL_REF ? "utility" : "main"
+                          )
+                      : undefined
+                  }
+                />
+              </Box>
+            ) : null}
+
             {mode === "edit" && (
               <Box mt="3">
                 <Button
@@ -354,7 +377,7 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
                   color="orange"
                   size="1"
                   onClick={restartWithModel}
-                  disabled={busy || !draft.model}
+                  disabled={busy || !draft.model || !modelUsable}
                 >
                   Restart with this model
                 </Button>
@@ -381,22 +404,15 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
                   </Button>
                 </Dialog.Close>
                 <Button onClick={finish} disabled={!canSubmit} loading={busy}>
-                  {mode === "edit" ? "Save" : primaryLabel}
+                  {mode === "edit" ? "Save" : verb}
                 </Button>
               </Flex>
             </Flex>
-            {needsConnect && selectedModel && (
-              <Text size="1" color="amber" as="p" mt="2">
-                {selectedModel.provider} isn't connected yet — you'll be asked to sign in.
+            {!modelUsable && mode !== "edit" ? (
+              <Text size="1" color="gray" as="p" mt="2">
+                Finish model setup above before {verb.toLowerCase()}ing this agent.
               </Text>
-            )}
-            {selectedModel &&
-              !selectedModel.connectable &&
-              selectedModel.availability?.state === "needs-setup" && (
-                <Text size="1" color="gray" as="p" mt="2">
-                  Connecting {selectedModel.provider} isn't supported here yet.
-                </Text>
-              )}
+            ) : null}
           </Box>
         )}
       </Dialog.Content>

@@ -35,12 +35,15 @@ import type {
   ModelCatalog,
   AgentSubscriptionConfig,
   ConnectProviderResult,
+  ModelSetupResult,
 } from "@workspace/agentic-core";
 import { toPanelConnectRequest } from "@workspace/model-catalog/providerConnect";
 import {
   DEFAULT_AGENT_MODEL_REF,
   LOCAL_MODELS_EXTENSION_ID,
+  LOCAL_PROVIDER_ID,
   MODEL_SETTINGS_SERVICE_PROTOCOL,
+  isModelUsable,
   type DefaultAgentConfig,
   type ModelSettingsSnapshot,
 } from "@workspace/model-catalog/catalog";
@@ -51,7 +54,11 @@ import {
   requireChatContextId,
   sanitizeHandle,
 } from "./bootstrap.js";
-import { createAndSubscribeAgent } from "./agentLifecycle.js";
+import {
+  ProvisionalAgentLifecycle,
+  createAndSubscribeAgent,
+  type ProvisionalAgentIntent,
+} from "./agentLifecycle.js";
 
 const AgenticChat = lazy(() =>
   import("@workspace/agentic-chat/chat").then((module) => ({ default: module.AgenticChat }))
@@ -206,6 +213,8 @@ export default function ChatPanel() {
   const stateArgs = useStateArgs<ChatStateArgs>();
   const resolvedContextId = requireChatContextId(contextId);
   const initialPromptCaptured = useRef(stateArgs.initialPrompt);
+  const provisionalAgentLifecycleRef = useRef<ProvisionalAgentLifecycle | null>(null);
+  const provisionalAgentIntentRevisionRef = useRef(0);
   const modelSettingsServiceRef = useRef<DurableObjectServiceClient | null>(null);
   const modelSettingsSnapshotRef = useRef<ModelSettingsSnapshot | null>(null);
   const modelSettingsRequestRef = useRef<Promise<ModelSettingsSnapshot> | null>(null);
@@ -214,10 +223,28 @@ export default function ChatPanel() {
   const [workspaceDefaultAgentConfig, setWorkspaceDefaultAgentConfig] =
     useState<DefaultAgentConfig | null>(null);
   const catalogRef = useRef<ModelCatalog | null>(null);
-  // "using the local fallback model" banner (design §8) — the ref it fell to,
-  // or null; dismissible per session.
-  const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
-  const [fallbackNoticeDismissed, setFallbackNoticeDismissed] = useState(false);
+  // The first agent cannot launch until model discovery establishes either a
+  // configured usable default or the need for an explicit first-run choice.
+  const [firstAgentModelPreflight, setFirstAgentModelPreflight] = useState<
+    "checking" | "ready" | "selection-required"
+  >("checking");
+
+  const getProvisionalAgentLifecycle = useCallback(() => {
+    provisionalAgentLifecycleRef.current ??= new ProvisionalAgentLifecycle(rpc);
+    return provisionalAgentLifecycleRef.current;
+  }, []);
+
+  useEffect(
+    () => () => {
+      provisionalAgentIntentRevisionRef.current += 1;
+      const lifecycle = provisionalAgentLifecycleRef.current;
+      provisionalAgentLifecycleRef.current = null;
+      void lifecycle?.dispose().catch((error) => {
+        console.warn("[ChatPanel] Failed to dispose provisional agent:", error);
+      });
+    },
+    []
+  );
 
   const getModelSettingsService = useCallback(() => {
     modelSettingsServiceRef.current ??= createDurableObjectServiceClient(
@@ -232,12 +259,18 @@ export default function ChatPanel() {
     setModelCatalog(settings.catalog);
     setWorkspaceDefaultModelRef(settings.defaultModel);
     setWorkspaceDefaultAgentConfig(settings.defaultAgentConfig);
-    // Honest expectation-setting (design §8): when the default resolved to the
-    // local floor because nothing else is usable, say so above the chat.
-    setFallbackNotice(
-      settings.defaultModelSource === "fallback" && settings.defaultModel.startsWith("local:")
-        ? settings.defaultModel
-        : null
+    const defaultEntry = settings.catalog.models.find(
+      (model) => model.ref === settings.defaultModel
+    );
+    const defaultIsUsable = isModelUsable(defaultEntry);
+    // An unusable fallback needs setup. An installed local fallback is still an
+    // explicit first-use choice because it is materially different from a
+    // configured cloud provider. The inline first-agent preflight owns both.
+    setFirstAgentModelPreflight(
+      !defaultIsUsable ||
+        (settings.defaultModelSource === "fallback" && defaultEntry?.provider === LOCAL_PROVIDER_ID)
+        ? "selection-required"
+        : "ready"
     );
   }, []);
 
@@ -250,8 +283,7 @@ export default function ChatPanel() {
         return modelSettingsRequestRef.current;
       }
 
-      let request: Promise<ModelSettingsSnapshot>;
-      request = getModelSettingsService()
+      const request: Promise<ModelSettingsSnapshot> = getModelSettingsService()
         .call<ModelSettingsSnapshot>("getSettings")
         .then((settings) => {
           applyModelSettings(settings);
@@ -280,8 +312,9 @@ export default function ChatPanel() {
     }
   }, [loadModelSettings]);
 
-  // Auto-bootstrap: when no channelName, mint one (channel only). The agent is
-  // created lazily by the chat surface on the first message / initialPrompt.
+  // Auto-bootstrap: when no channelName, mint one. The chat surface may then
+  // activate an uncommitted first-agent lease while the user composes; only the
+  // first send subscribes and persists it.
   const [bootstrapChannel, setBootstrapChannel] = useState<string | null>(null);
   const bootstrapAttempted = useRef(false);
 
@@ -290,13 +323,10 @@ export default function ChatPanel() {
     bootstrapAttempted.current = true;
 
     void (async () => {
-      // Channel-only bootstrap. Agent creation is deferred to the chat surface
-      // for BOTH a typed first message AND an injected initialPrompt: the message
-      // is held in the pre-send queue (AgenticChat → useDeferredAgent), which
-      // spawns the agent with the chosen/default options and flushes it LIVE once
-      // the agent joins — so the first message lands as a normal turn to a present
-      // agent rather than backlog replay. Creating the channel here just lets the
-      // composer connect; nothing else is persisted until an agent is added.
+      // Creating the channel lets the composer connect and gives a provisional
+      // agent its final channel binding. The first message is still held in the
+      // pre-send queue until that lease is claimed and joins, so it lands as a
+      // normal live turn rather than backlog replay.
       const channelName = `chat-${crypto.randomUUID().slice(0, 8)}`;
       void panel.stateArgs.set({ channelName });
       setBootstrapChannel(channelName);
@@ -489,6 +519,9 @@ export default function ChatPanel() {
   const handleOpenLocalModelsLog = useCallback((server: "utility" | "main") => {
     void openPanel("panels/local-models", { focus: true, stateArgs: { openLog: server } });
   }, []);
+  const handleOpenLocalModels = useCallback(() => {
+    void openPanel("panels/local-models", { focus: true });
+  }, []);
 
   // The panel declares intent; the shell's registered Claude adapter owns
   // semantic preparation, host-local materialization, and process cleanup.
@@ -627,6 +660,51 @@ export default function ChatPanel() {
     [stateArgs.systemPrompt, stateArgs.systemPromptMode]
   );
 
+  const resolveProvisionalAgentIntent = useCallback(
+    async (
+      channelId: string,
+      channelContextId: string | undefined,
+      agentId: string | undefined,
+      config: AgentSubscriptionConfig | undefined
+    ): Promise<ProvisionalAgentIntent> => {
+      const activeContextId = requireChatContextId(contextId, channelContextId);
+      const matched = agentId
+        ? availableAgents.find((agent) => agent.id === agentId || agent.className === agentId)
+        : undefined;
+      const pinned = panel.stateArgs.get<ChatStateArgs>();
+      const source =
+        matched?.id ?? (!agentId ? pinned.agentSource : undefined) ?? DEFAULT_WORKER_SOURCE;
+      const className =
+        matched?.className ?? (!agentId ? pinned.agentClass : undefined) ?? DEFAULT_CLASS_NAME;
+      const handleFromClass =
+        className === DEFAULT_CLASS_NAME
+          ? DEFAULT_HANDLE
+          : className.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
+      const configHandle =
+        typeof config?.["handle"] === "string" ? (config["handle"] as string) : "";
+      const requestedHandle =
+        configHandle.trim() || matched?.proposedHandle || handleFromClass || DEFAULT_HANDLE;
+      const handleBase = sanitizeHandle(requestedHandle);
+      const defaultAgentConfig = await resolveWorkspaceDefaultAgentConfig();
+      const { subscribeConfig, perAgent } = buildSubscribeConfig(
+        handleBase,
+        config,
+        defaultAgentConfig
+      );
+      return {
+        source,
+        className,
+        channelId,
+        channelContextId: activeContextId,
+        handleBase,
+        config: subscribeConfig,
+        persistedConfig: perAgent,
+        replay: true,
+      };
+    },
+    [availableAgents, buildSubscribeConfig, resolveWorkspaceDefaultAgentConfig]
+  );
+
   // The ONLY path that writes the workspace default agent config (model +
   // behavior). Driven by the explicit "Save as defaults" control.
   const saveDefaultAgentConfig = useCallback(
@@ -640,6 +718,34 @@ export default function ChatPanel() {
     [applyModelSettings, getModelSettingsService]
   );
 
+  const handlePrepareAgent = useCallback(
+    async (
+      channelName: string,
+      channelContextId: string | undefined,
+      agentId: string | undefined,
+      config: AgentSubscriptionConfig | null
+    ): Promise<void> => {
+      const revision = ++provisionalAgentIntentRevisionRef.current;
+      if (config === null) {
+        await provisionalAgentLifecycleRef.current?.prepare(null);
+        return;
+      }
+      if ((panel.stateArgs.get<ChatStateArgs>().installedAgents?.length ?? 0) > 0) {
+        await provisionalAgentLifecycleRef.current?.prepare(null);
+        return;
+      }
+      const intent = await resolveProvisionalAgentIntent(
+        channelName,
+        channelContextId,
+        agentId,
+        config
+      );
+      if (revision !== provisionalAgentIntentRevisionRef.current) return;
+      await getProvisionalAgentLifecycle().prepare(intent);
+    },
+    [getProvisionalAgentLifecycle, resolveProvisionalAgentIntent]
+  );
+
   const handleAddAgent = useCallback(
     async (
       channelName: string,
@@ -647,50 +753,41 @@ export default function ChatPanel() {
       agentId?: string,
       config?: AgentSubscriptionConfig
     ) => {
-      const activeContextId = requireChatContextId(contextId, channelContextId);
-      // Resolve the agent type. An explicit agentId wins; otherwise honor a
-      // caller-pinned stateArgs.agentSource/agentClass (programmatic opens — e.g.
-      // the test-agent harness, or the onboarding chat — where the agent may not
-      // be in the manifest gallery). Fall back to the DEFAULT chat agent, NOT
-      // availableAgents[0] (whose identity + handle are non-deterministic).
-      const matched = agentId
-        ? availableAgents.find((a) => a.id === agentId || a.className === agentId)
-        : undefined;
-      const pinned = panel.stateArgs.get<ChatStateArgs>();
-      const pinnedSource = !agentId ? pinned.agentSource : undefined;
-      const pinnedClass = !agentId ? pinned.agentClass : undefined;
-      const source = matched?.id ?? pinnedSource ?? DEFAULT_WORKER_SOURCE;
-      const className = matched?.className ?? pinnedClass ?? DEFAULT_CLASS_NAME;
-      // Derive the handle from the RESOLVED agent, then sanitize to the channel's
-      // participant-handle rule so a manifest handle with spaces/punctuation (or a
-      // stale handle leaked from a different agent's draft) can never produce an
-      // invalid subscription.
-      const handleFromClass =
-        className === DEFAULT_CLASS_NAME
-          ? DEFAULT_HANDLE
-          : className.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
-      const configHandle =
-        typeof config?.["handle"] === "string" ? (config["handle"] as string) : "";
-      const requestedHandle =
-        configHandle.trim() || matched?.proposedHandle || handleFromClass || DEFAULT_HANDLE;
-      const handle = `${sanitizeHandle(requestedHandle)}-${crypto.randomUUID().slice(0, 4)}`;
-      // Mint key once and persist into installedAgents so rehydration reuses it.
-      const agentKey = `${handle}-${crypto.randomUUID().slice(0, 8)}`;
-      const defaultAgentConfig = await resolveWorkspaceDefaultAgentConfig();
-      const { subscribeConfig, perAgent } = buildSubscribeConfig(
-        handle,
-        config,
-        defaultAgentConfig
+      const intent = await resolveProvisionalAgentIntent(
+        channelName,
+        channelContextId,
+        agentId,
+        config
       );
-      await createAndSubscribeAgent({
-        source,
-        className,
-        key: agentKey,
-        channelId: channelName,
-        channelContextId: activeContextId,
-        config: subscribeConfig,
-        replay: true,
-      });
+      const lifecycle = getProvisionalAgentLifecycle();
+      const isFirstPersistedAgent =
+        (panel.stateArgs.get<ChatStateArgs>().installedAgents?.length ?? 0) === 0;
+      let source = intent.source;
+      let className = intent.className;
+      let handle: string;
+      let agentKey: string;
+      let perAgent = intent.persistedConfig;
+
+      if (isFirstPersistedAgent && !lifecycle.hasCommitted) {
+        const claimed = await lifecycle.claim(intent);
+        source = claimed.source;
+        className = claimed.className;
+        handle = claimed.handle;
+        agentKey = claimed.key;
+        perAgent = claimed.persistedConfig;
+      } else {
+        handle = `${intent.handleBase}-${crypto.randomUUID().slice(0, 4)}`;
+        agentKey = `${handle}-${crypto.randomUUID().slice(0, 8)}`;
+        await createAndSubscribeAgent({
+          source,
+          className,
+          key: agentKey,
+          channelId: channelName,
+          channelContextId: intent.channelContextId,
+          config: { ...intent.config, handle },
+          replay: intent.replay,
+        });
+      }
       // The workspace default model is written ONLY via the explicit "Save as
       // default" control (onSaveDefaultModel) — never as a side-effect of adding an
       // agent, so a deferred/auto spawn (e.g. onboarding) can't silently change it.
@@ -709,7 +806,7 @@ export default function ChatPanel() {
       await panel.stateArgs.set({ installedAgents: nextInstalled });
       return { agentId: source, handle };
     },
-    [availableAgents, buildSubscribeConfig, resolveWorkspaceDefaultAgentConfig]
+    [getProvisionalAgentLifecycle, resolveProvisionalAgentIntent]
   );
 
   const handleReplaceAgent = useCallback(
@@ -806,6 +903,19 @@ export default function ChatPanel() {
     [loadModelSettings]
   );
 
+  const handleInstallLocalModel = useCallback(
+    async (modelRef: string): Promise<ModelSetupResult> => {
+      try {
+        await extensions.invoke(LOCAL_MODELS_EXTENSION_ID, "installModel", [modelRef]);
+        await loadModelSettings(true);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+    [loadModelSettings]
+  );
+
   const handlePersistAgentModel = useCallback(
     async (_channelName: string, participantId: string, model: string): Promise<void> => {
       const target = parseDoTargetId(participantId);
@@ -866,8 +976,10 @@ export default function ChatPanel() {
     () => ({
       onNewConversation: handleNewConversation,
       onAddAgent: handleAddAgent,
+      onPrepareAgent: handlePrepareAgent,
       onReplaceAgent: handleReplaceAgent,
       onConnectProvider: handleConnectProvider,
+      onInstallLocalModel: handleInstallLocalModel,
       onPersistAgentModel: handlePersistAgentModel,
       onSaveDefaults: saveDefaultAgentConfig,
       onRemoveAgent: handleRemoveAgent,
@@ -875,10 +987,13 @@ export default function ChatPanel() {
       modelCatalog,
       defaultModelRef: workspaceDefaultModelRef,
       defaultAgentConfig: effectiveDefaultAgentConfig,
+      firstAgentModelPreflight,
+      firstAgentChannelIsNew: bootstrapChannel !== null && channelName === bootstrapChannel,
       onFocusPanel: handleFocusPanel,
       onReloadPanel: handleReloadPanel,
       onOpenClaudeCode: handleOpenClaudeCode,
       onOpenLocalModelsLog: handleOpenLocalModelsLog,
+      onOpenLocalModels: handleOpenLocalModels,
       onAttentionRequired: (title, message) => {
         void notifications.show({
           id: `chat-attention:${channelName ?? "pending"}`,
@@ -891,8 +1006,10 @@ export default function ChatPanel() {
     [
       handleNewConversation,
       handleAddAgent,
+      handlePrepareAgent,
       handleReplaceAgent,
       handleConnectProvider,
+      handleInstallLocalModel,
       handlePersistAgentModel,
       saveDefaultAgentConfig,
       handleRemoveAgent,
@@ -900,10 +1017,13 @@ export default function ChatPanel() {
       modelCatalog,
       workspaceDefaultModelRef,
       effectiveDefaultAgentConfig,
+      firstAgentModelPreflight,
+      bootstrapChannel,
       handleFocusPanel,
       handleReloadPanel,
       handleOpenClaudeCode,
       handleOpenLocalModelsLog,
+      handleOpenLocalModels,
       channelName,
     ]
   );
@@ -1021,12 +1141,6 @@ export default function ChatPanel() {
       </ErrorBoundary>
     );
   }
-  const fallbackModelName = fallbackNotice
-    ? (modelCatalog?.models.find((model) => model.ref === fallbackNotice)?.name ??
-      fallbackNotice.replace(/^local:/, ""))
-    : null;
-  const fallbackConsentRequired = Boolean(fallbackNotice && !fallbackNoticeDismissed);
-
   return (
     <>
       {rehydrationStatus !== "idle" ? (
@@ -1059,29 +1173,6 @@ export default function ChatPanel() {
           </Callout.Root>
         </Theme>
       ) : null}
-      {fallbackNotice && !fallbackNoticeDismissed && (
-        <Theme appearance={theme} {...appTheme}>
-          <Callout.Root
-            color="amber"
-            size="1"
-            style={{ borderRadius: 0, paddingTop: 6, paddingBottom: 6 }}
-          >
-            <Flex align="center" justify="between" gap="3" style={{ width: "100%" }}>
-              <Callout.Text>
-                No cloud provider is connected. Before sending a first message, choose whether to
-                use <Text weight="medium">{fallbackModelName}</Text> on this device. This downloads
-                roughly 700 MB; progress is available in Local Models, and answers will be simpler
-                than a frontier model's.
-              </Callout.Text>
-              <Flex gap="2" align="center" style={{ flexShrink: 0 }}>
-                <Button size="1" variant="solid" onClick={() => setFallbackNoticeDismissed(true)}>
-                  Use local model (~700 MB)
-                </Button>
-              </Flex>
-            </Flex>
-          </Callout.Root>
-        </Theme>
-      )}
       <Suspense
         fallback={
           <Theme appearance={theme} {...appTheme}>

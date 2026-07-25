@@ -73,11 +73,13 @@ export interface AvailableAgent {
   proposedHandle: string;
 }
 
-/** Result of connecting a model provider's credential. */
-export interface ConnectProviderResult {
+/** Result of completing or starting a model setup action. */
+export interface ModelSetupResult {
   ok: boolean;
   error?: string;
 }
+
+export type ConnectProviderResult = ModelSetupResult;
 
 export interface NewConversationOptions {
   /** Optional first user message for the new conversation. */
@@ -99,6 +101,23 @@ export interface AgenticChatActions {
     config?: AgentSubscriptionConfig
   ) => Promise<{ agentId: string; handle: string } | void>;
   /**
+   * Update the uncommitted first-agent intent. A concrete config lets the host
+   * activate its provisional agent before the first send; `null` retires any
+   * provisional entity when the draft is no longer launchable.
+   */
+  onPrepareAgent?: (
+    channelName: string,
+    contextId: string | undefined,
+    agentId: string | undefined,
+    config: AgentSubscriptionConfig | null
+  ) => Promise<void>;
+  /**
+   * The host minted this channel for the current panel mount, so an empty
+   * transcript is already authoritative and provisional activation need not
+   * wait for replay to settle.
+   */
+  firstAgentChannelIsNew?: boolean;
+  /**
    * Replace an existing agent (resolved by its participant id) with a fresh DO,
    * reusing the same handle. Used for "switch agent" and "restart with new model"
    * (model is not live-mutable). History is restored via channel replay.
@@ -116,6 +135,8 @@ export interface AgenticChatActions {
     modelBaseUrl: string,
     opts?: { browser?: "internal" | "external" }
   ) => Promise<ConnectProviderResult>;
+  /** Start installing a local model. Availability/progress remains catalog-owned. */
+  onInstallLocalModel?: (modelRef: string) => Promise<ModelSetupResult>;
   onPersistAgentModel?: (
     channelName: string,
     participantId: string,
@@ -132,6 +153,13 @@ export interface AgenticChatActions {
   defaultModelRef?: string | null;
   /** Full workspace default agent config (model + behavior) for new agents. */
   defaultAgentConfig?: DefaultAgentConfig | null;
+  /**
+   * Host-owned readiness for creating the first agent. `checking` prevents an
+   * injected or typed first message from racing model-settings discovery;
+   * `selection-required` keeps it queued until the user explicitly confirms a
+   * model (and connects its provider when needed).
+   */
+  firstAgentModelPreflight?: "checking" | "ready" | "selection-required";
   onFocusPanel?: (panelId: string) => void;
   onReloadPanel?: (panelId: string) => Promise<void>;
   onBecomeVisible?: () => void;
@@ -148,6 +176,8 @@ export interface AgenticChatActions {
    *  from a local model's red error dot in the model picker (item 6). Absent
    *  on hosts that don't wire panel navigation. */
   onOpenLocalModelsLog?: (server: "utility" | "main") => void;
+  /** Open the full Local Models manager. */
+  onOpenLocalModels?: () => void;
 }
 
 /** Chat API exposed to sandboxed code (eval, inline_ui, action bars, feedback_custom) */
