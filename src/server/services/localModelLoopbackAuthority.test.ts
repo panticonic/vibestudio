@@ -114,6 +114,7 @@ function fixtureRoot(): string {
       pid: 100,
       bootId: "boot",
       ports: { utility: 43117, main: 43118 },
+      adminPort: 43119,
       workspaceId: "ws-test",
       since: 1,
       serverPids: { utility: 101, main: 102 },

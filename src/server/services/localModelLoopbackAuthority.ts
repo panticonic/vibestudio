@@ -13,6 +13,7 @@ interface LocalModelOwner {
   pid: number;
   bootId: string;
   ports: { utility: number; main: number };
+  adminPort?: number;
   workspaceId: string;
   since: number;
   serverPids: { utility?: number; main?: number };
@@ -114,6 +115,7 @@ function parseOwner(text: string): LocalModelOwner | null {
     "pid",
     "bootId",
     "ports",
+    "adminPort",
     "workspaceId",
     "since",
     "serverPids",
@@ -124,12 +126,14 @@ function parseOwner(text: string): LocalModelOwner | null {
   if (typeof record["workspaceId"] !== "string" || typeof record["since"] !== "number") return null;
   const ports = parsePorts(record["ports"]);
   const serverPids = parseServerPids(record["serverPids"]);
-  if (!ports || !serverPids) return null;
+  const adminPort = record["adminPort"];
+  if (!ports || !serverPids || (adminPort !== undefined && !isPort(adminPort))) return null;
   return {
     schemaVersion: OWNER_SCHEMA_VERSION,
     pid: record["pid"],
     bootId: record["bootId"],
     ports,
+    ...(typeof adminPort === "number" ? { adminPort } : {}),
     workspaceId: record["workspaceId"],
     since: record["since"],
     serverPids,
