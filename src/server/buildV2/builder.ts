@@ -84,10 +84,6 @@ import type {
 import { collectWorkspaceRpcCatalog } from "./workspaceRpcCatalog.js";
 import { createPanelBundleReport } from "./panelBundleReport.js";
 
-const transformModulesCommonJs = createRequire(path.join(process.cwd(), "package.json"))(
-  "@babel/plugin-transform-modules-commonjs"
-) as PluginItem;
-
 /**
  * Library artifacts execute inside the eval linker, not the host ESM loader.
  * Route every syntactic dynamic import through the linker's closure-held
@@ -119,6 +115,40 @@ const controlledDynamicImportPlugin: PluginObj = {
  * for workspace-linked packages that electron-builder stores in the archive.
  */
 let _appNodeModules: string[] = [];
+let _transformModulesCommonJs: PluginItem | null = null;
+
+function createHostRequire(nodeModulesRoot: string): NodeJS.Require {
+  return createRequire(path.join(nodeModulesRoot, "__vibestudio_host_resolver.cjs"));
+}
+
+function resolveHostDependency(specifier: string): string {
+  let cause: unknown;
+  for (const nodeModulesRoot of _appNodeModules) {
+    try {
+      return createHostRequire(nodeModulesRoot).resolve(specifier);
+    } catch (error) {
+      cause = error;
+    }
+  }
+  throw new Error(
+    `Could not resolve host dependency ${JSON.stringify(specifier)} from configured app node_modules roots: ${_appNodeModules.join(", ") || "(none)"}`,
+    { cause }
+  );
+}
+
+function requireHostDependency(specifier: string): unknown {
+  const resolved = resolveHostDependency(specifier);
+  return createRequire(resolved)(resolved);
+}
+
+function getTransformModulesCommonJs(): PluginItem {
+  if (!_transformModulesCommonJs) {
+    _transformModulesCommonJs = requireHostDependency(
+      "@babel/plugin-transform-modules-commonjs"
+    ) as PluginItem;
+  }
+  return _transformModulesCommonJs;
+}
 
 /**
  * Initialize the builder with the app's node_modules paths.
@@ -126,6 +156,7 @@ let _appNodeModules: string[] = [];
  */
 export function initBuilder(appNodeModules: string | string[]): void {
   _appNodeModules = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
+  _transformModulesCommonJs = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -946,9 +977,7 @@ export default { promises: _fs, readFile, writeFile, readdir, stat, lstat, mkdir
 }
 
 function createPathShimPlugin(resolveDir: string): esbuild.Plugin {
-  const reviewedPatheEntry = createRequire(path.join(process.cwd(), "package.json")).resolve(
-    "pathe"
-  );
+  const reviewedPatheEntry = resolveHostDependency("pathe");
   return {
     name: "path-shim",
     setup(build) {
@@ -1027,9 +1056,7 @@ export default { getRandomValues, randomBytes, createHash };`,
 }
 
 function createWorkerBufferShimPlugin(_resolveDir: string): esbuild.Plugin {
-  const reviewedBufferEntry = createRequire(path.join(process.cwd(), "package.json")).resolve(
-    "buffer/"
-  );
+  const reviewedBufferEntry = resolveHostDependency("buffer/");
   return {
     name: "worker-buffer-shim",
     setup(build) {
@@ -3446,7 +3473,10 @@ async function buildLibraryBundle(
       babelrc: false,
       configFile: false,
       sourceType: "module",
-      plugins: [controlledDynamicImportPlugin, [transformModulesCommonJs, { strictMode: true }]],
+      plugins: [
+        controlledDynamicImportPlugin,
+        [getTransformModulesCommonJs(), { strictMode: true }],
+      ],
       compact: false,
       comments: true,
       ast: false,

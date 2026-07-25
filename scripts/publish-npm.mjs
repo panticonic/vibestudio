@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // npm publish helper for the public @panticonic packages.
 // Real publishes require a granular token with bypass 2FA enabled.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -29,14 +29,14 @@ const packages = [
 ];
 
 try {
-  main();
+  await main();
 } catch (err) {
   const message = err instanceof Error ? err.message : String(err);
   console.error(`\n[publish-npm] ${message}`);
   process.exit(1);
 }
 
-function main() {
+async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     printUsage();
@@ -130,7 +130,7 @@ function main() {
 
   if (options.installSmoke) {
     for (const entry of manifests) {
-      runInstallSmoke(entry);
+      await runInstallSmoke(entry);
     }
   }
 }
@@ -304,22 +304,81 @@ function ensureTokenAuth() {
   return whoami.stdout.trim();
 }
 
-function runInstallSmoke(entry) {
+async function runInstallSmoke(entry) {
   const prefix = `${entry.pkg.smokePrefix}-${entry.version}`;
+  const launchDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-npm-launch-"));
   console.log(`\n[publish-npm] Install smoke ${entry.pkg.name}@${entry.version}`);
-  fs.rmSync(prefix, { recursive: true, force: true });
-  run("npm", ["install", "-g", "--prefix", prefix, `${entry.pkg.name}@${entry.version}`], {
-    cwd: repoRoot,
+  try {
+    fs.rmSync(prefix, { recursive: true, force: true });
+    run("npm", ["install", "-g", "--prefix", prefix, `${entry.pkg.name}@${entry.version}`], {
+      cwd: launchDirectory,
+    });
+    run(path.join(prefix, "bin", "vibestudio"), ["--version"], { cwd: launchDirectory });
+    run(path.join(prefix, "bin", "vibestudio"), ["--help"], { cwd: launchDirectory });
+    run(path.join(prefix, "bin", "vibestudio"), ["remote", "serve", "--help"], {
+      cwd: launchDirectory,
+    });
+    run(path.join(prefix, "bin", "vibestudio"), ["remote", "doctor", "--json"], {
+      cwd: launchDirectory,
+    });
+    run(path.join(prefix, "bin", "vibestudio-server"), ["--help"], {
+      cwd: launchDirectory,
+    });
+    await runServerStartupSmoke(path.join(prefix, "bin", "vibestudio-server"), launchDirectory);
+  } finally {
+    fs.rmSync(launchDirectory, { recursive: true, force: true });
+  }
+}
+
+async function runServerStartupSmoke(serverBinary, launchDirectory) {
+  const readyFile = path.join(launchDirectory, "hub-ready.json");
+  const env = { ...process.env };
+  for (const key of [
+    "NPM_TOKEN",
+    "NODE_AUTH_TOKEN",
+    "NPM_CONFIG_USERCONFIG",
+    "npm_config_userconfig",
+  ]) {
+    delete env[key];
+  }
+  env.XDG_CONFIG_HOME = path.join(launchDirectory, "config");
+  const child = spawn(
+    serverBinary,
+    ["--bootstrap-workspace", "npm-install-smoke", "--ready-file", readyFile],
+    {
+      cwd: launchDirectory,
+      stdio: "inherit",
+      env,
+    }
+  );
+  let exit = null;
+  child.once("exit", (code, signal) => {
+    exit = { code, signal };
   });
-  run(path.join(prefix, "bin", "vibestudio"), ["--version"], { cwd: repoRoot });
-  run(path.join(prefix, "bin", "vibestudio"), ["--help"], { cwd: repoRoot });
-  run(path.join(prefix, "bin", "vibestudio"), ["remote", "serve", "--help"], {
-    cwd: repoRoot,
-  });
-  run(path.join(prefix, "bin", "vibestudio"), ["remote", "doctor", "--json"], {
-    cwd: repoRoot,
-  });
-  run(path.join(prefix, "bin", "vibestudio-server"), ["--help"], { cwd: repoRoot });
+
+  const deadline = Date.now() + 60_000;
+  while (!fs.existsSync(readyFile)) {
+    if (exit) {
+      throw new Error(
+        `Installed server exited before readiness (code ${exit.code ?? "null"}, signal ${exit.signal ?? "none"})`
+      );
+    }
+    if (Date.now() >= deadline) {
+      child.kill("SIGTERM");
+      throw new Error("Installed server did not become ready within 60 seconds");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  child.kill("SIGTERM");
+  const shutdownDeadline = Date.now() + 15_000;
+  while (!exit && Date.now() < shutdownDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (!exit) {
+    child.kill("SIGKILL");
+    throw new Error("Installed server did not stop after the startup smoke");
+  }
 }
 
 function run(command, args, options) {

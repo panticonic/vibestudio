@@ -112,7 +112,6 @@ const serverElectronConfig = {
   external: [
     "electron",
     "esbuild",
-    "@npmcli/arborist",
     "node-datachannel",
     "@vibestudio/extension-host",
     "vitest",
@@ -196,7 +195,6 @@ const serverConfig = {
   outfile: "dist/server.mjs",
   external: [
     "esbuild",
-    "@npmcli/arborist",
     "@vibestudio/extension-host",
     "vitest",
     "vitest/node",
@@ -235,7 +233,7 @@ const mainConfig = {
   target: "node20",
   format: "cjs",
   outfile: "dist/main.cjs",
-  external: ["electron", "esbuild", "@npmcli/arborist", "node-datachannel"],
+  external: ["electron", "esbuild", "node-datachannel"],
   sourcemap: isDev,
   minify: !isDev,
   logOverride,

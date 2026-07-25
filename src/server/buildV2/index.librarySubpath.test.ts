@@ -16,6 +16,8 @@ import type { BuildSourceProvider } from "./buildSource.js";
 import type { WorkspaceStateSource } from "./stateTrigger.js";
 import { discoverPackageGraph } from "./packageGraph.js";
 
+const APP_NODE_MODULES = [path.resolve(__dirname, "../../../node_modules")];
+
 /** Serves the working tree as the (only) workspace state. */
 function fakeWorkspaceSource(
   getWorkspaceRoot: () => string
@@ -129,7 +131,7 @@ describe("BuildSystemV2 library package subpaths", () => {
     buildSystem = await initBuildSystemV2(
       workspaceRoot,
       fakeWorkspaceSource(() => workspaceRoot),
-      []
+      APP_NODE_MODULES
     );
 
     const rootResult = await buildSystem.getBuild("@workspace/split-library", undefined, {
@@ -172,7 +174,7 @@ describe("BuildSystemV2 library package subpaths", () => {
     buildSystem = await initBuildSystemV2(
       workspaceRoot,
       fakeWorkspaceSource(() => workspaceRoot),
-      []
+      APP_NODE_MODULES
     );
 
     const result = await buildSystem.getBuild(
@@ -219,7 +221,7 @@ describe("BuildSystemV2 library package subpaths", () => {
     buildSystem = await initBuildSystemV2(
       workspaceRoot,
       fakeWorkspaceSource(() => workspaceRoot),
-      []
+      APP_NODE_MODULES
     );
 
     // Panel target resolves the `vibestudio-panel` condition.
@@ -246,7 +248,7 @@ describe("BuildSystemV2 library package subpaths", () => {
     buildSystem = await initBuildSystemV2(
       actualWorkspaceRoot,
       fakeWorkspaceSource(() => actualWorkspaceRoot),
-      []
+      APP_NODE_MODULES
     );
 
     const result = await buildSystem.getBuild("@workspace/agentic-do", undefined, {
@@ -301,7 +303,7 @@ describe("BuildSystemV2 library package subpaths", () => {
     buildSystem = await initBuildSystemV2(
       actualWorkspaceRoot,
       fakeWorkspaceSource(() => actualWorkspaceRoot),
-      []
+      APP_NODE_MODULES
     );
 
     const result = await buildSystem.getBuild("@workspace/mdx-editor-core", undefined, {
@@ -346,7 +348,7 @@ describe("BuildSystemV2 library package subpaths", () => {
     buildSystem = await initBuildSystemV2(
       actualWorkspaceRoot,
       fakeWorkspaceSource(() => actualWorkspaceRoot),
-      []
+      APP_NODE_MODULES
     );
 
     const result = await buildSystem.getBuild("@workspace/runtime/hosted", undefined, {
@@ -457,7 +459,7 @@ describe("BuildSystemV2 library package subpaths", () => {
         "state:main",
         { "ctx:agent-1": "state:ctx" }
       ),
-      []
+      APP_NODE_MODULES
     );
 
     await expect(
@@ -512,7 +514,7 @@ describe("BuildSystemV2 library package subpaths", () => {
         "state:main-resolve",
         { "ctx:agent-resolve": "state:ctx-resolve" }
       ),
-      []
+      APP_NODE_MODULES
     );
 
     await expect(buildSystem.resolveBuildUnit("panels/context-panel")).resolves.toBeNull();

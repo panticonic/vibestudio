@@ -38,6 +38,17 @@ const contracts = [
     mustContain: [SERVER_ESM_BANNER],
   },
   {
+    path: "src/server/buildV2/builder.ts",
+    runtime: "runtime workspace builder",
+    forbidden: [
+      {
+        pattern: 'path.join(process.cwd(), "package.json")',
+        reason:
+          "Runtime build dependencies must resolve from the explicit app roots, not the launch directory.",
+      },
+    ],
+  },
+  {
     path: "dist/internal-do.bundle.mjs",
     runtime: "workerd/browser Durable Object bundle",
     format: "esm",
