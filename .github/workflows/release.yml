@@ -1,8 +1,8 @@
 name: Release
 
-# Tag a release with `v*` (e.g. v0.2.0). publish-npm always runs and publishes
-# @vibestudio/server + @vibestudio/app at the tag version. The native-installer jobs
-# are opt-in via repo variables so a release is green before icons/signing exist:
+# Publish the npm packages locally with `pnpm publish:npm`, then tag the validated
+# release with `v*` (e.g. v0.2.0). This workflow creates the GitHub release and
+# optionally attaches native installers:
 #   - vars.RELEASE_LINUX = 'true'  → build + attach AppImage/deb (needs build-resources icons)
 #   - vars.RELEASE_MAC   = 'true'  → build + attach a signed/notarized DMG (needs the Apple secrets)
 on:
@@ -13,34 +13,10 @@ permissions:
   contents: write # create the GitHub Release and upload installer assets
 
 jobs:
-  publish-npm:
-    name: Publish npm packages
+  github-release:
+    name: Create GitHub release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-          cache-dependency-path: |
-            pnpm-lock.yaml
-            workspace/pnpm-lock.yaml
-          registry-url: "https://registry.npmjs.org"
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --dir workspace install --frozen-lockfile
-      - name: Set version from tag
-        run: node scripts/set-version-from-tag.mjs "${GITHUB_REF_NAME}"
-      - run: pnpm build
-      - run: node scripts/build-npm-packages.mjs
-      - name: Publish @vibestudio/server
-        run: npm publish ./dist-packages/server --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Publish @vibestudio/app
-        run: npm publish ./dist-packages/app --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: GitHub Release
         # Pinned to a commit SHA (v2.6.2) — refresh via Dependabot. Matches build-mobile.yml.
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
@@ -50,15 +26,15 @@ jobs:
             ### Install
 
             ```sh
-            npm install -g @vibestudio/app      # desktop app + the `vibestudio` CLI
-            npm install -g @vibestudio/server   # headless server (CLI + daemon)
+            npm install -g @panticonic/vibestudio          # desktop app + CLI
+            npm install -g @panticonic/vibestudio-server   # headless server + CLI
             ```
 
-            Requires Node.js 20+. Native installers (DMG/AppImage/deb) are attached when available.
+            Requires Node.js 22.13+. Native installers (DMG/AppImage/deb) are attached when available.
 
   linux-installers:
     name: Linux installers (AppImage/deb)
-    needs: publish-npm
+    needs: github-release
     if: ${{ vars.RELEASE_LINUX == 'true' }}
     runs-on: ubuntu-latest
     steps:
@@ -85,7 +61,7 @@ jobs:
 
   mac-dmg:
     name: macOS signed DMG
-    needs: publish-npm
+    needs: github-release
     if: ${{ vars.RELEASE_MAC == 'true' }}
     runs-on: macos-latest
     env:
