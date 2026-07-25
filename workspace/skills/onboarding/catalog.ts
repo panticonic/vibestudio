@@ -49,7 +49,7 @@ export type SetupActionTarget =
   | { via: "owner-skill" }
   | { via: "about-page"; page: "credentials" | "permissions" }
   | { via: "model-settings" }
-  | { via: "panel"; path: "panels/local-models" }
+  | { via: "panel"; path: "panels/local-models" | "about/browser-import-inspector" }
   | { via: "shell-navigation"; target: ShellNavigationTarget }
   | { via: "conversation" };
 
@@ -88,8 +88,8 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
     tier: "direct",
     ownerSkillPath: "skills/api-integrations/SKILL.md",
     actions: {
-      setup: { via: "owner-skill" },
-      repair: { via: "owner-skill" },
+      setup: { via: "model-settings" },
+      repair: { via: "model-settings" },
       change: { via: "model-settings" },
       ...connectionManagement,
     },
@@ -154,8 +154,8 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
     tier: "direct",
     ownerSkillPath: "extensions/browser-data/SKILL.md",
     actions: {
-      setup: { via: "owner-skill" },
-      resume: { via: "owner-skill" },
+      setup: { via: "panel", path: "about/browser-import-inspector" },
+      resume: { via: "panel", path: "about/browser-import-inspector" },
     },
     visibility: "primary",
     setup: {

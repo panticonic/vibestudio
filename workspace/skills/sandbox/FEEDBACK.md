@@ -6,6 +6,12 @@ Block the agent until the user responds. Two variants: schema-based (simple form
 
 For standard forms with typed fields. No code needed.
 
+Use this for one self-contained decision or a genuinely simple set of fields.
+Never serialize a known multi-step setup into several one-question forms.
+Provider setup, permission selection, deep links, progress, retry, and
+explanatory choices belong in a persistent `inline_ui` surface that calls its
+trusted helpers directly.
+
 ### Parameters
 
 | Param         | Type                              | Description                            |
@@ -77,7 +83,14 @@ feedback_form({
 
 ## feedback_custom (React Component)
 
-For complex interactions that schema-based forms can't express.
+For complex decisions that schema-based forms cannot express and whose
+structured result the agent genuinely needs for subsequent reasoning.
+
+Do not use this as the default provider-setup surface. When every control maps
+to an existing runtime or skill helper, use `inline_ui`, invoke that helper in
+the component, and keep progress, errors, retry, and completion there. Returning
+choices to the agent solely to assemble a function call is an unnecessary
+agent-mediated control plane.
 
 ### Parameters
 
@@ -151,45 +164,24 @@ export default function NameForm({ onSubmit, onCancel }) {
 })
 ```
 
-### Example — Form with Runtime Access
+### Example — Structured input for agent reasoning
 
 ```
 feedback_custom({
   code: `
-import { useState, useEffect } from "react";
-import { Button, Flex, Text, Select } from "@radix-ui/themes";
-import { browserData } from "@workspace/runtime";
+import { useState } from "react";
+import { Button, Flex, Text, TextArea } from "@radix-ui/themes";
 
-export default function BrowserPicker({ onSubmit, onCancel, chat }) {
-  const [sources, setSources] = useState([]);
-  const [selected, setSelected] = useState("");
-
-  useEffect(() => {
-    browserData.listImportHosts().then(async hosts => {
-      const host = hosts.find(candidate => candidate.connected);
-      if (!host) return;
-      const next = await browserData.listImportSources(host.hostId);
-      setSources(next.map(source => ({ ...source, hostId: host.hostId })));
-    });
-  }, []);
-
+export default function ReviewRequest({ onSubmit, onCancel }) {
+  const [focus, setFocus] = useState("");
   return (
     <Flex direction="column" gap="3" p="2">
-      <Text size="2" weight="bold">Select browser to import from</Text>
-      <Select.Root value={selected} onValueChange={setSelected}>
-        <Select.Trigger placeholder="Choose browser..." />
-        <Select.Content>
-          {sources.map(source => (
-            <Select.Item key={source.sourceId} value={source.sourceId}>
-              {source.displayName} ({source.localDataSetCount} local data sets)
-            </Select.Item>
-          ))}
-        </Select.Content>
-      </Select.Root>
+      <Text size="2" weight="bold">What should the review prioritize?</Text>
+      <TextArea value={focus} onChange={(event) => setFocus(event.target.value)} />
       <Flex gap="2" justify="end">
         <Button variant="soft" onClick={onCancel}>Cancel</Button>
-        <Button onClick={() => onSubmit(sources.find(source => source.sourceId === selected))} disabled={!selected}>
-          Import
+        <Button onClick={() => onSubmit({ focus })} disabled={!focus}>
+          Start review
         </Button>
       </Flex>
     </Flex>

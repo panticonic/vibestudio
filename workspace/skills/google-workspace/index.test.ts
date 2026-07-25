@@ -82,7 +82,8 @@ describe("google-workspace skill facade", () => {
     expect(status.stage).toBe("needs-setup");
     expect(status.configured).toBe(false);
     expect(status.connected).toBe(false);
-    expect(status.nextActions.join(" ")).toContain("SETUP.md");
+    expect(status.nextActions.join(" ")).toContain("GoogleWorkspaceSetup.tsx");
+    expect(status.nextActions.join(" ")).toContain("inline_ui");
   });
 
   it("reports needs-setup when only a Google client id is configured", async () => {

@@ -37,7 +37,9 @@ of through this runtime client, use the exact wire method
 
 ## UX Rules
 
-1. Prefer a `feedback_custom` workflow UI for setup flows with multiple steps.
+1. Use one persistent `inline_ui` workflow for setup flows with multiple
+   steps. Its controls call trusted setup helpers directly; never return
+   choices to the agent merely to assemble the same helper call.
 2. Put provider-console links directly beside the step that uses them.
 3. Offer both **Internal** and **External** opens when a URL is useful:
    - Internal: `openPanel(url, { focus: true })`
@@ -46,6 +48,14 @@ of through this runtime client, use the exact wire method
    authorize URLs so the host validates the callback binding.
 5. Do not ask the user to paste secrets into chat. Use a trusted provider setup
    UI/API or host-owned credential flow.
+6. Ask about user outcomes, not credential formats, OAuth vocabulary,
+   permission-scope names, transport modes, or storage mechanics. Apply a
+   recommended default and put exceptional choices behind an Advanced path.
+7. Keep provider choice, access intent, browser actions, credential collection,
+   progress, errors, and retry in the same workflow whenever they belong to one
+   setup attempt.
+8. Use `feedback_custom` only when the agent genuinely needs a returned
+   decision for later reasoning. It is not the default provider-setup surface.
 
 ## Runtime Credential API
 

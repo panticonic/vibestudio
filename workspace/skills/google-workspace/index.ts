@@ -177,13 +177,13 @@ function getNextActions(
   switch (status.stage) {
     case "needs-setup":
       return [
-        "Render the Google Workspace setup workflow from SETUP.md.",
-        "Run configureGoogleOAuthClient() and enter the Desktop app client_id and client_secret in the trusted approval UI.",
+        "Render skills/google-workspace/GoogleWorkspaceSetup.tsx once with inline_ui.",
+        "Use its Configure button to enter Desktop app details in the trusted approval UI.",
       ];
     case "ready-to-connect":
-      return ["Run connectGoogle() to create the Google Workspace credential."];
+      return ["Use the setup component's Connect button."];
     case "connected":
-      return ["Run verifyGoogleConnection(connectionId) before declaring onboarding complete."];
+      return ["Use the setup component's Verify button before declaring onboarding complete."];
     case "verified":
       return ["Continue onboarding with the verified Google Workspace credential."];
     case "error":

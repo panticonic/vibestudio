@@ -13,21 +13,41 @@ Use `eval` for deterministic runtime work where no user choice is needed:
 
 ## Use `feedback_form`
 
-Use `feedback_form` for small typed inputs:
+Use `feedback_form` for one isolated, easily understood input:
 
 - Pick one option from a list.
 - Confirm a safe command.
 - Enter a short label or numeric setting.
 
-## Use `feedback_custom`
+Do not chain several feedback forms to implement one setup flow. If the next
+question is already known, it belongs in the same surface. Do not expose
+implementation choices—credential formats, protocol variants, permission
+names, storage modes, or browser mechanics—when a recommended default can
+derive them from the user's goal.
 
-Use `feedback_custom` for setup and workflow UI when the agent must wait for
-the result:
+## Use `inline_ui`
 
-- Provider setup checklists.
-- OAuth app creation walkthroughs.
-- Browser/profile/data import choices.
-- Any flow with deep links, progress, retry, or multiple completion states.
+Use `inline_ui` for a self-contained workflow whose component can invoke the
+trusted runtime or skill helpers itself:
+
+- Provider and OAuth setup.
+- Browser/profile/data import.
+- Deep-linked checklists.
+- Progress, verification, retry, and completion states.
+
+A setup surface should:
+
+- ask in plain language about outcomes, not implementation;
+- preselect the safest useful default;
+- keep related choices, explanations, links, progress, and retry together;
+- reveal advanced controls only after an explicit need;
+- use action buttons for where an operation happens instead of a separate
+  question;
+- call trusted helpers directly from its buttons;
+- keep status, errors, retry, and success in the component.
+
+Do not return setup choices to the agent merely so it can assemble a function
+call containing those choices.
 
 Use direct link buttons in the UI:
 
@@ -36,7 +56,7 @@ import { Button, Flex, Text } from "@radix-ui/themes";
 import { GlobeIcon, OpenInNewWindowIcon } from "@radix-ui/react-icons";
 import { openPanel, openExternal } from "@workspace/runtime";
 
-export default function SetupStep({ onSubmit }) {
+export default function SetupStep() {
   const url = "https://console.cloud.google.com/apis/credentials";
   return (
     <Flex direction="column" gap="3" p="2">
@@ -49,20 +69,23 @@ export default function SetupStep({ onSubmit }) {
           <OpenInNewWindowIcon /> External
         </Button>
       </Flex>
-      <Button onClick={() => onSubmit({ opened: true })}>Continue</Button>
     </Flex>
   );
 }
 ```
 
-## Use `inline_ui`
+## Use `feedback_custom`
 
-Use `inline_ui` for persistent display, not blocking handoff:
+Use `feedback_custom` only when the agent truly needs a returned decision
+before it can determine the next operation, and the component cannot own that
+operation itself. Examples:
 
-- Status dashboards.
-- Rendered reports.
-- Long-running workflow progress.
-- Inspectable search or browser-import results.
+- selecting one of several fundamentally different plans the agent must author;
+- approving a generated proposal before the agent changes workspace files;
+- supplying structured requirements that become input to later reasoning.
+
+If every result maps directly to an existing helper call, use `inline_ui` and
+make that call in the component.
 
 ## Use `load_action_bar`
 

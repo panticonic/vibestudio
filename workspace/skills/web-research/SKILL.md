@@ -256,27 +256,36 @@ eval({ code: `
 DuckDuckGo works without setup but rate-limits under load and ships
 short snippets. Tavily / Brave / Exa give cleaner, longer results.
 **Provider keys live in the app's encrypted credentials system, not in
-environment variables or settings files** — register them with the
-helpers below and the credentialed fetcher injects auth automatically
-when `web_search` calls the provider URL.
+environment variables or settings files**.
 
-```
-eval({ code: `
-  import { requestTavilyApiKey } from "@workspace-skills/web-research";
-  // Pops the trusted credential-input dialog. The user pastes their key
-  // and it's stored encrypted, bound to https://api.tavily.com/. The
-  // agent never sees the key value — subsequent web_search calls are
-  // routed through Tavily automatically.
-  await requestTavilyApiKey();
-` })
+Enhanced search setup is one optional workflow, not a provider questionnaire:
+
+```text
+inline_ui({
+  path: "skills/web-research/SearchProviderSetup.tsx",
+  props: {}
+})
 ```
 
-Same shape for Brave and Exa:
+The persistent surface makes it clear that built-in search remains usable,
+recommends Tavily, keeps the other providers available for users who already
+have those accounts, offers internal/external signup actions, and directly
+opens the trusted credential prompt. It owns status, errors, and retry. Do not
+ask separate questions for provider, browser placement, or key entry, and do
+not return those choices to the agent for a second call. Never ask for the key
+in chat.
 
-```
-import { requestBraveApiKey, requestExaApiKey } from "@workspace-skills/web-research";
-await requestBraveApiKey();
-await requestExaApiKey();
+Use the direct helpers only when the user has already specified a provider or
+automation already has a complete selection:
+
+```ts
+import {
+  requestSearchProviderApiKey,
+  requestTavilyApiKey,
+} from "@workspace-skills/web-research";
+
+await requestSearchProviderApiKey("brave");
+await requestTavilyApiKey();
 ```
 
 Check what's currently active without making a search call:
@@ -298,9 +307,8 @@ await revokeSearchProviderCredential(credentialId);
 **When to suggest an upgrade**: if `web_search` returns a
 `DuckDuckGoBlockedError`, returns 0 results twice in a row, or the
 user is doing lots of research, mention they can register a Tavily
-key — it's the most agent-friendly of the three. Don't ask for the
-key in chat — call `requestTavilyApiKey()` and let the user paste it
-into the trusted approval UI.
+key—it is the recommended default. If they accept, render the checked-in setup
+surface rather than asking follow-up questions.
 
 ## Notes
 

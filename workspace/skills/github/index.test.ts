@@ -77,7 +77,36 @@ describe("github skill facade", () => {
 
     expect(status.stage).toBe("needs-token");
     expect(status.connected).toBe(false);
-    expect(status.nextActions.join(" ")).toContain("requestGitHubTokenCredential");
+    expect(status.nextActions.join(" ")).toContain("GitHubSetup.tsx");
+    expect(status.nextActions.join(" ")).toContain("inline_ui");
+    expect(status.nextActions.join(" ")).not.toContain("choose fine-grained");
+  });
+
+  it("defaults credential setup to ordinary code collaboration", async () => {
+    await requestGitHubTokenCredential();
+
+    expect(runtimeMock.credentials.requestCredentialInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description: "Save the token you created on GitHub for repository and Git operations.",
+        credential: expect.objectContaining({
+          metadata: expect.objectContaining({
+            accessLevel: "collaborate",
+            credentialMode: "api-and-git",
+          }),
+          scopes: expect.arrayContaining([
+            "contents:write",
+            "issues:write",
+            "pull_requests:write",
+          ]),
+        }),
+        fields: [
+          expect.objectContaining({
+            name: "token",
+            description: "Paste the token from GitHub.",
+          }),
+        ],
+      })
+    );
   });
 
   it("requests API PAT material through privileged credential input UI", async () => {
@@ -176,7 +205,7 @@ describe("github skill facade", () => {
 
     expect(runtimeMock.credentials.requestCredentialInput).toHaveBeenCalledWith(
       expect.objectContaining({
-        description: "Save a GitHub classic personal access token for broad GitHub access.",
+        description: "Save the classic token you created on GitHub.",
         credential: expect.objectContaining({
           metadata: expect.objectContaining({ accessLevel: "broad", providerKind: "classic-pat" }),
         }),

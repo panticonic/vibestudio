@@ -1,8 +1,7 @@
 # Inline UI
 
-Use inline UI for persistent, rich components in the chat transcript. Use
-`feedback_custom` instead when the agent must block until the user submits a
-decision.
+Use inline UI for persistent, rich components in the chat transcript and for
+self-contained workflows whose controls can call trusted helpers directly.
 
 ## When To Use It
 
@@ -14,11 +13,12 @@ Use a UI instead of plain text when the task has:
 - Choices where a card, table, segmented control, or checklist is clearer than
   prose.
 
-For one-shot approval/setup workflows, prefer `feedback_custom`; it returns a
-structured result to the agent. For dashboards, previews, logs, or long-lived
-assistants in the transcript, prefer `inline_ui`. For compact controls or
-status that should remain pinned above chat history in the current panel, use
-`load_action_bar` with a TSX file instead.
+For provider setup, OAuth, imports, and similar workflows, prefer `inline_ui`
+when the component can perform the operation. Keep browser actions, trusted
+prompts, progress, verification, errors, and retry in that component. Do not
+return selections to the agent solely so it can construct the corresponding
+helper call. Use `feedback_custom` only when the agent genuinely needs the
+returned decision for subsequent reasoning.
 
 You can send raw TSX with `code`, or put the component in a context-relative
 file and call `inline_ui({ path: ".vibestudio/ui/review.tsx", props: {...} })`.
@@ -44,6 +44,10 @@ state all see the same canonical event.
   deep links.
 - Use `openExternal(url)` for system-browser links. This is approval-gated.
 - OAuth authorize URLs should use `openExternal(url, { expectedRedirectUri })`.
+- Event handlers may call imported trusted skill/runtime helpers directly.
+- Surface pending, failure, retry, and verified states locally.
+- Secrets must be collected by host-owned credential prompts, never ordinary
+  React inputs or component state.
 
 ## Workflow Link Pattern
 

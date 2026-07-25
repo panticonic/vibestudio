@@ -14,15 +14,19 @@ upstream Workspace grant, staged local bindings, and a verified live API call.
 ## Onboarding Policy
 
 Be explicit about state and next action. Do not ask the user to paste secrets
-into chat. When Google Cloud setup is missing, render the workflow UI from
-[SETUP.md](SETUP.md); do not replace it with a plain numbered list.
+into chat. When Google setup is incomplete, render
+[GoogleWorkspaceSetup.tsx](GoogleWorkspaceSetup.tsx) with `inline_ui`; do not
+replace it with a plain numbered list.
+Do not split project, API, publishing, client type, browser placement, or
+credential collection into separate feedback forms. Those are steps inside one
+workflow, not independent onboarding questions.
 
 Use this order:
 
 1. Run `getGoogleOnboardingStatus()` and summarize the stage.
-2. If `stage === "needs-setup"`, show the [SETUP.md](SETUP.md) workflow UI.
-3. If `stage === "ready-to-connect"`, run `connectGoogle()`.
-4. If `stage === "connected"`, run `verifyGoogleConnection(connectionId)`.
+2. Unless `stage === "verified"`, show the persistent setup component.
+3. Let its buttons call configuration, connection, and verification helpers.
+4. Do not translate UI choices into agent-authored eval calls.
 5. If `stage === "verified"`, continue onboarding.
 
 `connectGoogle()` must be the connection path for Google Workspace. It requests
@@ -51,11 +55,11 @@ Gmail, Calendar, and Drive expire after 7 days.
 3. Configure the OAuth consent screen with the required scopes.
 4. Publish the app to Production, even while unverified.
 5. Create OAuth credentials with application type **Desktop app**.
-6. Run `configureGoogleOAuthClient()` and have the user enter
-   `installed.client_id` and `installed.client_secret` in the trusted approval
-   UI. Do not ask the user to paste client secrets into chat.
-7. Connect the account through Vibestudio's credential flow.
-8. Verify a live Google API call succeeds.
+6. Use the component's **Save Desktop app details** button. It calls
+   `configureGoogleOAuthClient()` and the trusted prompt collects
+   `installed.client_id` and `installed.client_secret`.
+7. Use the component's **Connect Google** button.
+8. Let the component verify a live Google API call.
 
 Deep-link every Google Console step where possible. Offer both:
 
@@ -85,25 +89,17 @@ import {
 } from "@workspace-skills/google-workspace";
 ```
 
-Recommended onboarding flow:
+Recommended status flow:
 
 ```typescript
 const status = await getGoogleOnboardingStatus();
 console.log(formatGoogleOnboardingStatus(status));
 
-if (status.stage === "needs-setup") {
-  // Render the workflow UI from SETUP.md. After the user creates the Desktop
-  // client, run configureGoogleOAuthClient(); the trusted approval UI collects
-  // installed.client_id and installed.client_secret.
-  await configureGoogleOAuthClient();
-}
-
-if (status.stage === "ready-to-connect") {
-  const result = await connectGoogle();
-  if (result.success && result.connectionId) {
-    await verifyGoogleConnection(result.connectionId);
-  }
-}
+// Unless already verified, render:
+// inline_ui({
+//   path: "skills/google-workspace/GoogleWorkspaceSetup.tsx",
+//   props: {},
+// })
 ```
 
 Use `checkGoogleConnection()` only for terse status checks. Prefer

@@ -1,118 +1,54 @@
-# Google Workspace Onboarding Flow
+# Google Workspace onboarding
 
-This document is for onboarding agents. It describes how to guide a user from
-no Google configuration to a verified Vibestudio Google Workspace connection.
+Use the checked-in [GoogleWorkspaceSetup.tsx](GoogleWorkspaceSetup.tsx)
+component for every incomplete Google setup state. Render it with `inline_ui`.
+Do not turn the workflow into prose, feedback forms, or agent-authored helper
+calls.
 
-## Principles
+## Detect state
 
-- Keep the user in control of secrets. They should import or paste OAuth client
-  fields into a trusted setup UI/API; they should not paste client secrets into
-  chat.
-- Keep the Google Cloud project consistent. APIs, OAuth consent, and OAuth
-  credentials must all belong to the same project.
-- Require Desktop app credentials. Web application credentials are the wrong
-  client type for loopback PKCE.
-- Require Production publishing before connecting. Testing mode causes 7-day
-  refresh-token expiry for Google user-data scopes.
-- Verify with a live API call before declaring onboarding complete.
-- Prefer workflow UI over prose. Use the setup UI in [SETUP.md](SETUP.md) so
-  the user gets checkboxes and deep links that can open internally or
-  externally.
+```ts
+import { getGoogleOnboardingStatus }
+  from "@workspace-skills/google-workspace";
 
-## Detect State
-
-Run:
-
-```typescript
-import {
-  formatGoogleOnboardingStatus,
-  getGoogleOnboardingStatus,
-} from "@workspace-skills/google-workspace";
-
-const status = await getGoogleOnboardingStatus();
-console.log(formatGoogleOnboardingStatus(status));
-return status;
+return await getGoogleOnboardingStatus({ verify: true });
 ```
 
-Stages:
+| Stage | Meaning | Action |
+| --- | --- | --- |
+| `needs-setup` | Desktop app details are not saved | Render the setup component |
+| `ready-to-connect` | App details are saved | Keep the component visible; its Connect button owns the call |
+| `connected` | A credential exists but is not verified | Keep the component visible; it verifies directly |
+| `verified` | A live Google identity request succeeded | Continue onboarding |
+| `error` | Status could not be read | Show the concrete error and retry in the component |
 
-| Stage | Meaning | Agent Action |
-|-------|---------|--------------|
-| `needs-setup` | Google OAuth client fields are not saved | Render the SETUP.md workflow UI, then run `configureGoogleOAuthClient()` |
-| `ready-to-connect` | Trusted URL-bound client config is present but no credential is stored | Run `connectGoogle()` |
-| `connected` | Credential exists but live verification has not run | Run `verifyGoogleConnection(connectionId)` |
-| `verified` | A live Google userinfo request succeeded | Continue onboarding |
-| `error` | Status check failed | Resolve the error and rerun status |
+## Component contract
 
-## Missing Setup UX
+The component owns the entire user workflow:
 
-When setup is missing, render the `feedback_custom` workflow UI from
-[SETUP.md](SETUP.md). Do not send only this list as chat prose. The UI must
-include these deep-linked actions:
+- explains the Google Cloud project, API, consent-screen, Production, and
+  Desktop app requirements;
+- opens each Console step internally or in the user's normal browser;
+- calls `configureGoogleOAuthClient()` from its button so the host-owned prompt
+  collects the client ID and secret;
+- calls `connectGoogle()` from its Connect button;
+- verifies the live connection;
+- renders pending, success, failure, and retry state.
 
-1. Create/select one Google Cloud project.
-2. Enable Gmail API, Google Calendar API, and Google Drive API.
-3. Configure OAuth branding.
-4. Open OAuth audience and publish to Production.
-5. Create OAuth credentials with application type Desktop app.
-6. Return to Vibestudio and run `configureGoogleOAuthClient()` so the trusted
-   approval UI can collect `installed.client_id` and `installed.client_secret`.
+It never stores secrets in React state or chat. It never returns setup choices
+to the agent for translation into eval code.
 
-Do not say that Google verification is required for local development. It is
-not required while under Google's unverified-app user cap. Do say that users may
-see Google's unverified-app warning and can continue through **Advanced**.
+## Recovery
 
-Use `openPanel(url, { focus: true })` for **Internal** link buttons
-and `openExternal(url)` for **External** link buttons. If opening an OAuth
-authorize URL, pass `{ expectedRedirectUri }` to `openExternal` so the host
-validates the callback binding.
+- If verification reports `credential-expired` or the credential has no durable
+  refresh token, reconnect with `connectGoogle({ force: true })`.
+- If Google reports an API-disabled error, reopen the API library in the setup
+  component and enable the named API in the same project.
+- Testing-mode refresh tokens for Google user-data scopes can expire after
+  seven days. Publish the consent screen to Production even when the app remains
+  unverified for personal use.
+- Consult [TROUBLESHOOTING.md](TROUBLESHOOTING.md) only after a concrete
+  failure.
 
-## Connect
-
-After `getGoogleOnboardingStatus()` reports
-`ready-to-connect`, run:
-
-```typescript
-import { connectGoogle } from "@workspace-skills/google-workspace";
-
-const result = await connectGoogle();
-console.log(result);
-return result;
-```
-
-If the browser flow succeeds, keep the returned `connectionId`.
-The helper requests Google offline access and opts into Vibestudio refresh-token
-persistence. If an existing credential reports `credential-expired` or warns
-that no refresh token is stored, replace it with `connectGoogle({ force: true })`.
-
-## Verify
-
-Run:
-
-```typescript
-import { verifyGoogleConnection } from "@workspace-skills/google-workspace";
-
-const verification = await verifyGoogleConnection(connectionId);
-console.log(verification);
-return verification;
-```
-
-If verification fails, consult [TROUBLESHOOTING.md](TROUBLESHOOTING.md). Do not
-continue onboarding until the live API call is valid.
-
-If the user is configuring Gmail, continue with
-[Gmail onboarding](../../workers/gmail-agent/docs/ONBOARDING.md) once
-verification succeeds.
-
-## Completion Criteria
-
-Onboarding is complete only when:
-
-- Google OAuth client setup is saved.
-- At least one `google-workspace` connection exists.
-- `verifyGoogleConnection(connectionId)` returns `{ valid: true }`.
-- The user understands the app should remain published to Production.
-
-For Gmail-specific onboarding, the next completion gate is the Gmail skill:
-custom message renderers registered, action bar loaded, and a `gmail` agent
-participant present in the channel.
+After Google reaches `verified`, continue to Gmail-specific setup only if the
+user selected a Gmail goal.

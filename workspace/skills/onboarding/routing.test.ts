@@ -23,4 +23,26 @@ describe("onboarding selection routing", () => {
       resolveOnboardingSelection(onboardingInteraction("connection.github", "change"))
     ).toThrow("does not offer the change action");
   });
+
+  it("routes browser migration to its cohesive first-party workflow", () => {
+    expect(
+      resolveOnboardingSelection(
+        onboardingInteraction("migration.browser-environment", "setup")
+      )
+    ).toEqual(
+      expect.objectContaining({
+        target: { via: "panel", path: "about/browser-import-inspector" },
+      })
+    );
+  });
+
+  it("routes model setup to the model-settings workflow instead of an agent questionnaire", () => {
+    expect(
+      resolveOnboardingSelection(onboardingInteraction("connection.ai-provider", "setup"))
+    ).toEqual(
+      expect.objectContaining({
+        target: { via: "model-settings" },
+      })
+    );
+  });
 });

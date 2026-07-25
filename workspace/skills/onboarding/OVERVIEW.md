@@ -52,9 +52,12 @@ Panels in the same context share a filesystem. The chat panel's agent and its ch
 The chat panel hosts an AI agent that can:
 
 - **Run code** via the `eval` tool — runs server-side in the agent's own notebook
-  kernel (30-minute live-object lease plus durable exact recovery; works even
+  kernel (activation-resident live objects plus durable exact recovery; works even
   if the panel is closed)
-- **Render UI** via `inline_ui` (persistent components in chat), `load_action_bar` / panel `actionBarFile` (compact pinned panel controls), and `feedback_custom` (interactive forms)
+- **Render UI** via `inline_ui` (persistent components and self-contained
+  workflows in chat), `load_action_bar` / panel `actionBarFile` (compact pinned
+  panel controls), and `feedback_custom` only when the agent needs a returned
+  decision
 - **Preserve transcript state** through typed PubSub events: messages,
   invocations, inline UI, and action bars all replay from the same channel log
 - **Read/write files** in the workspace

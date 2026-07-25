@@ -26,7 +26,7 @@
  *   await revokeSearchProviderCredential(creds[0].id);
  */
 
-import { credentials, openExternal } from "@workspace/runtime";
+import { credentials, openExternal, openPanel } from "@workspace/runtime";
 import type { RequestCredentialInputRequest, StoredCredentialSummary } from "@workspace/runtime";
 
 type RuntimeCredentials = typeof credentials;
@@ -159,6 +159,12 @@ export async function requestExaApiKey(): Promise<StoredCredentialSummary> {
   return requestSearchProviderCredential(PROVIDERS.exa);
 }
 
+export async function requestSearchProviderApiKey(
+  provider: SearchProviderId,
+): Promise<StoredCredentialSummary> {
+  return requestSearchProviderCredential(PROVIDERS[provider]);
+}
+
 export async function openSearchProviderSignup(
   provider: SearchProviderId,
   opts: { browser?: "internal" | "external" } = {},
@@ -167,7 +173,7 @@ export async function openSearchProviderSignup(
   if (opts.browser === "external") {
     await openExternal(spec.signupUrl);
   } else {
-    await openExternal(spec.signupUrl);
+    await openPanel(spec.signupUrl, { focus: true, name: `${spec.label} setup` });
   }
 }
 

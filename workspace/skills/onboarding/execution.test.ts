@@ -26,9 +26,14 @@ describe("executeOnboardingSelection", () => {
       target: { via: "shell-navigation", target: "connection-settings" },
     });
     await executeOnboardingSelection(onboardingInteraction("connection.github", "inspect"), deps);
+    await executeOnboardingSelection(
+      onboardingInteraction("migration.browser-environment", "setup"),
+      deps
+    );
 
     expect(deps.openShellSurface).toHaveBeenCalledWith("connection-settings");
     expect(deps.openWorkspacePanel).toHaveBeenCalledWith("about/credentials");
+    expect(deps.openWorkspacePanel).toHaveBeenCalledWith("about/browser-import-inspector");
   });
 
   it("returns existing owner workflows and rejects retired IDs", async () => {

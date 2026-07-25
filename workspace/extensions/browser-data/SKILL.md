@@ -17,6 +17,15 @@ filesystem path.
 
 Import is a migration snapshot, not sync:
 
+For user-driven setup, open `about/browser-import-inspector`. It is the
+first-party cohesive workflow for device/browser selection, data categories,
+preview, warnings, progress, cancellation, retry, and history. Do not recreate
+it as chat questions or chained feedback forms. Do not ask users for internal
+host IDs, source IDs, profile paths, or import job IDs.
+
+Use the API sequence below for automation, diagnostics, or code that already
+has a complete user-approved selection:
+
 1. `listImportHosts()`
 2. `listImportSources(hostId)`
 3. `previewImport({ hostId, sourceId, dataTypes })`

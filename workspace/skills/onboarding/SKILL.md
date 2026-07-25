@@ -55,6 +55,12 @@ and shell navigation in the inviting client.
 Navigation routes return `handled: true`. Owner/model/conversation routes
 return `handled: false` with the authoritative target. Unknown IDs and
 unsupported actions are errors. Do not fall back to matching button prose.
+`client_eval` owns only the client-affine snapshot and selection boundary.
+After an `owner-skill` handoff, use ordinary server-side `eval` for owner
+helpers unless the operation actually depends on the inviting panel's DOM,
+loaded modules, panel-local scope, or Electron-local host transport. Portable
+runtime helpers such as `openExternal()` work from either eval path and retain
+their normal approval flow.
 
 ## Verification and refresh
 
@@ -80,6 +86,13 @@ device IDs, pairing links, profile paths, or private topology.
   upstream appears only after the relevant goal is selected.
 - Secrets use host-owned credential input. Never ask for them in chat or keep
   them in inline UI state.
+- A setup selection opens one owner-controlled workflow surface. Never turn a
+  single capability setup into a sequence of one-question feedback forms.
+  Owner workflows use persistent inline UI, call trusted helpers directly,
+  ask about plain-language outcomes, preselect a recommended default, and hide
+  credential formats and permission vocabulary unless an advanced case
+  requires them. Do not return selections to the agent just to build an eval
+  call.
 
 See [GETTING_STARTED.md](GETTING_STARTED.md) for the concise execution recipe,
 [OVERVIEW.md](OVERVIEW.md) for product concepts, and

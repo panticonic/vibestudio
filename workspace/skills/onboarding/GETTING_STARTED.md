@@ -49,5 +49,10 @@ Channel and project configuration is disclosed only when the user chooses that
 channel or project goal.
 
 Use the owner’s trusted workflow UI for OAuth, credential entry, browser
-imports, and other side effects. Use `feedback_custom` when the turn must wait
-for structured user input and `inline_ui` for durable results.
+imports, and other side effects. A self-contained setup workflow uses
+`inline_ui` and calls its trusted helpers directly; it does not return choices
+to the agent for translation into eval code. Use `feedback_custom` only when
+the agent truly needs structured input for later reasoning. One setup
+selection produces one cohesive owner workflow; do not chain small feedback
+forms for access, provider, browser, or permission choices that can be shown
+together or derived from a recommended default.

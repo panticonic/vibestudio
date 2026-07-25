@@ -392,9 +392,9 @@ function getPresetScopes(
 function buildCredentialRequest(
   opts: RequestGitHubTokenCredentialOptions = {}
 ): RequestCredentialInputRequest {
-  const defaultBroad =
+  const useFriendlyDefault =
     !opts.accessLevel && !opts.mode && !opts.presets?.length && !opts.scopes?.length;
-  const accessLevel = opts.accessLevel ?? (defaultBroad ? "broad" : undefined);
+  const accessLevel = opts.accessLevel ?? (useFriendlyDefault ? "collaborate" : undefined);
   const access = accessLevel ? GITHUB_ACCESS_LEVELS[accessLevel] : undefined;
   const mode = opts.mode ?? access?.mode ?? "api";
   const tokenKind = opts.tokenKind ?? "fine-grained";
@@ -419,10 +419,10 @@ function buildCredentialRequest(
     title: "Add GitHub",
     description:
       tokenKind === "classic"
-        ? "Save a GitHub classic personal access token for broad GitHub access."
+        ? "Save the classic token you created on GitHub."
         : mode === "api"
-          ? "Save a GitHub fine-grained personal access token for GitHub API calls."
-          : "Save a GitHub fine-grained personal access token with repository contents permissions for direct git workflows.",
+          ? "Save the token you created on GitHub for account and repository access."
+          : "Save the token you created on GitHub for repository and Git operations.",
     credential: {
       label: opts.label ?? "GitHub",
       audience: primaryBinding.audience,
@@ -450,8 +450,8 @@ function buildCredentialRequest(
         required: true,
         description:
           tokenKind === "classic"
-            ? "Paste the generated classic personal access token."
-            : "Paste the generated fine-grained personal access token.",
+            ? "Paste the classic token from GitHub."
+            : "Paste the token from GitHub.",
       },
     ],
     material: {
@@ -465,10 +465,9 @@ function getNextActions(status: Pick<GitHubOnboardingStatus, "stage">): string[]
   switch (status.stage) {
     case "needs-token":
       return [
-        "Ask the user to choose fine-grained (recommended) or classic broad PAT access.",
-        "Open the chosen GitHub token page, offering Internal and External browser options.",
-        "Run requestGitHubTokenCredential() and enter the token in the trusted approval UI.",
-        "Use SETUP.md only if the user wants step-by-step permission guidance.",
+        "Render skills/github/GitHubSetup.tsx once with inline_ui.",
+        "Use the recommended Work with code choice unless the user selects another outcome.",
+        "Let the checked-in workflow handle browser placement, trusted token entry, and verification directly.",
       ];
     case "connected":
       return ["Run verifyGitHubCredential(connectionId) before declaring onboarding complete."];

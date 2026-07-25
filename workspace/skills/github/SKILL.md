@@ -1,84 +1,80 @@
 ---
 name: github
-description: Set up broad GitHub access for Vibestudio with fine-grained or classic personal access tokens, staged local bindings, deep links, and verification helpers.
+description: Connect and verify GitHub access, then use it for API and Git repository workflows.
 ---
 
-# GitHub Skill
+# GitHub
 
-Use this skill when a user wants Vibestudio to connect to GitHub for repository
-metadata, issues, pull requests, contents API calls, Actions-related reads, or
-to create the PAT needed for direct GitHub clone/pull/push support.
+Use this skill when the user wants to connect GitHub, work with repositories,
+issues, pull requests, or Actions, or use Git clone/pull/push.
 
-## Default Approach
+## Product UX
 
-Use a GitHub fine-grained personal access token. This is the simplest approach
-that requires no centralized Vibestudio server, no app registration controlled by
-Vibestudio, and no OAuth callback infrastructure. The default helper path is
-broad upstream access with local staging: a fine-grained PAT can be valid for
-All repositories, while Vibestudio stores separate bindings for user API,
-repository API, release uploads, and git HTTPS. Repository API approvals stage
-to `/repos/{owner}/{repo}/`.
+GitHub setup is one workflow, not a questionnaire.
 
-If the user wants blanket or higher-trust access instead of least-privilege
-setup, say so plainly and offer the broad route:
+- When status is `needs-token`, render the checked-in
+  [GitHubSetup.tsx](GitHubSetup.tsx) with `inline_ui`.
+- The card calls the GitHub helpers itself. Do not ask the agent to collect its
+  choices and assemble a second eval/function call.
+- Do not issue feedback requests for token type, access level, browser
+  placement, repository selection, or permission names.
+- Ask only about the user-visible outcome. The setup surface offers:
+  **Look around**, **Work with code** (recommended), **Edit Actions too**, and
+  **Full GitHub access**.
+- Use GitHub’s fine-grained token flow automatically. Do not ask the user what
+  “PAT,” “fine-grained,” “classic,” `repo`, or individual permission scopes
+  mean on the happy path.
+- Browser placement is expressed by the setup surface’s **Open here** and
+  **Open in my browser** actions, not another form.
+- Keep secrets out of chat and component state. The final action must call
+  `requestGitHubTokenCredential()`, which opens the trusted credential prompt.
+- If the user cancels or denies a prompt, stop cleanly. Do not retry, split the
+  workflow into smaller prompts, or ask for the token in chat.
 
-- Fine-grained PAT: choose **All repositories**, then grant the prefilled broad
-  repository permissions needed for durable workspace use.
-- Classic PAT: use broader scopes such as `repo` when the user explicitly wants
-  broad access and accepts the larger blast radius.
-
-`requestGitHubTokenCredential()` can store either token style. Use
-`tokenKind: "classic"` when the user chose a classic PAT so the credential
-metadata matches what was saved.
-
-GitHub Apps are more granular for multi-user products, but they require app
-registration and installation flows. OAuth apps can work, but for this personal
-sandbox they add more moving pieces than a user-owned fine-grained PAT and still
-do not avoid broad user authorization concerns.
-GitHub App support is the right follow-up for API surfaces that fine-grained
-PATs do not cover, such as Checks API writes.
+In a client without `inline_ui`, explain that GitHub setup needs an
+interactive Vibestudio panel. Do not reconstruct the workflow as sequential
+questions.
 
 ## Workflow
 
-1. Run `getGitHubOnboardingStatus()` from `@workspace-skills/github`.
-2. If the stage is `needs-token`, ask the user to choose token style:
-   - **Fine-grained PAT (recommended)**: broad-but-staged, can choose All
-     repositories, and GitHub requires selecting permission categories.
-   - **Classic PAT (broad)**: faster blanket access with broad scopes such as
-     `repo`; use only when the user explicitly accepts the larger blast radius.
-3. Ask for a broad-strokes access level instead of exposing every GitHub
-   permission:
-   - **Read Only**: inspect repositories, issues, PRs, Actions, and clone/pull
-     repository remotes without changing code.
-   - **Collaborate**: normal code/content changes plus issues and PRs.
-   - **Code + Workflows**: collaborate plus GitHub Actions workflow edits.
-   - **Broad**: high-trust access; pair with All repositories or classic `repo`.
-4. Open the chosen GitHub token page and offer both browser options:
-   - Internal: `openGitHubTokenSettings({ tokenKind, accessLevel, browser: "internal" })` or
-     `openPanel(url, { focus: true })`.
-   - External: `openGitHubTokenSettings({ tokenKind, accessLevel, browser: "external" })` or
-     `openExternal(url)`.
-     If the agent opens an internal browser panel only to guide setup or verify a
-     page, keep the handle and close it when that step is complete. Leave it open
-     only when the user needs to continue interacting with GitHub in that panel.
-5. Call `requestGitHubTokenCredential()` so the shell-owned approval UI collects
-   the PAT. Do not ask the user to paste the PAT into chat or a panel-owned form.
-   Access levels choose the right mode automatically. Use explicit
-   `mode: "api"` only for API-only access, `mode: "git"` only for
-   clone/pull/push permissions, or `mode: "api-and-git"` when the user wants
-   both.
-   If the user chose a broad classic token, pass `tokenKind: "classic"`.
-6. Run `verifyGitHubCredential(credentialId)` or
-   `getGitHubOnboardingStatus({ verify: true })`.
-7. If the user intends to clone/pull/push a specific remote, run
-   `verifyGitHubGitRemoteAccess(remoteUrl, credentialId)` before declaring git
-   remote access complete.
+1. Run `getGitHubOnboardingStatus()`.
+2. For `needs-token`, render:
 
-Only render the full [SETUP.md](SETUP.md) checklist when the user asks for
-guided setup or needs help choosing repository access and permissions. Do not
-lead with the checklist for routine GitHub access.
+   ```text
+   inline_ui({
+     path: "skills/github/GitHubSetup.tsx",
+     props: {}
+   })
+   ```
 
-## Runtime Helpers
+3. The component opens GitHub, invokes the trusted credential prompt, verifies
+   the stored credential, and renders success or retry state itself.
+4. If a specific remote will be cloned or pulled later, run
+   `verifyGitHubGitRemoteAccess(remoteUrl, credentialId)`.
+5. Refresh onboarding state when the card asks for it. Do not declare success
+   before live verification.
+
+Use ordinary server-side `eval` for status and verification. Use `client_eval`
+only when work genuinely depends on the inviting panel’s local runtime. The
+portable browser helpers work through either path with the same
+destination-scoped approval.
+
+## Friendly access levels
+
+The UI owns these mappings:
+
+| User-facing choice | Helper value | Outcome |
+| --- | --- | --- |
+| Look around | `read-only` | Read repositories, issues, pull requests, and Actions; clone/pull |
+| Work with code | `collaborate` | Normal code changes, push, issues, and pull requests |
+| Edit Actions too | `code-workflows` | Collaborate plus workflow-file changes |
+| Full GitHub access | `broad` | Broadest supported repository permissions |
+
+Default to `collaborate`. Use `broad` only when the user chooses the explicit
+full-access outcome. Repository selection remains on GitHub’s page: users may
+choose selected repositories or all repositories there.
+
+## Runtime helpers
 
 ```ts
 import {
@@ -88,243 +84,49 @@ import {
   verifyGitHubCredential,
   verifyGitHubGitRemoteAccess,
 } from "@workspace-skills/github";
-
-const status = await getGitHubOnboardingStatus();
-if (status.stage === "needs-token") {
-  const tokenKind = "fine-grained"; // or "classic" if the user chose broad access
-  const accessLevel = "broad";
-  await openGitHubTokenSettings({ tokenKind, accessLevel, browser: "internal" });
-  const stored = await requestGitHubTokenCredential({
-    tokenKind,
-    accessLevel,
-  });
-  await verifyGitHubCredential(stored.id);
-  await verifyGitHubGitRemoteAccess("https://github.com/owner/repo.git", stored.id);
-}
 ```
 
-For broad access, the storage call is still simple:
+The setup component uses:
 
 ```ts
+await openGitHubTokenSettings({
+  accessLevel: "collaborate",
+  browser: "external", // or "internal"
+});
+
 const stored = await requestGitHubTokenCredential({
-  accessLevel: "broad",
-  tokenKind: "classic",
+  accessLevel: "collaborate",
 });
 ```
 
-For setup links, use Internal when the user wants to keep setup inside Vibestudio;
-use External when their normal browser already has GitHub auth, passkeys, or
-password-manager state. The full workflow UI in `SETUP.md` is optional guidance,
-not the default happy path.
+`openGitHubTokenSettings()` pre-fills the supported GitHub permissions.
+`requestGitHubTokenCredential()` stores separate URL-bound bindings for GitHub
+API, uploads, and Git HTTPS without exposing the token to workspace code.
 
-The stored credential is URL-bound through staged bindings:
-`github-user`, `github-repos`, `github-uploads`, and `github-git-http`.
-API requests should use `credentials.fetch()`. Direct GitHub clone/pull/push
-should use `@vibestudio/git` with `credentials.gitHttp()`. Vibestudio's
-host-mediated isomorphic-git HTTP adapter handles `https://github.com/...` git
-remotes without exposing the PAT to panels or workers.
+## Advanced cases
 
-```ts
-import { credentials, fs } from "@workspace/runtime";
-import { GitClient } from "@vibestudio/git";
+Keep these out of initial setup:
 
-const client = new GitClient(fs, { http: credentials.gitHttp() });
-await client.clone({
-  url: "https://github.com/owner/repo.git",
-  dir: "/repo",
-});
-const status = await client.status("/repo");
-```
+- Use `tokenKind: "classic"` only when the user explicitly requests a classic
+  token or a required GitHub operation cannot use a fine-grained token.
+- Checks API writes require a GitHub App; do not invent a token permission.
+- Use explicit `mode` or permission presets only for a task that genuinely
+  needs narrower transport than the friendly access levels.
+- Use [SETUP.md](SETUP.md) for GitHub-page guidance and advanced token details.
+- Use [TROUBLESHOOTING.md](TROUBLESHOOTING.md) after a concrete verification
+  failure.
 
-For normal runtime code, use the host-mediated HTTP adapter:
+## Repository work after connection
 
-```ts
-import { credentials, fs } from "@workspace/runtime";
-import { GitClient } from "@vibestudio/git";
+- API calls use `credentials.fetch()`.
+- Clone/pull/push uses `@vibestudio/git` with `credentials.gitHttp()`.
+- Workspace-managed remotes use the runtime `git` provider.
+- `publishToGitHub()` creates a new GitHub repository through
+  `git.publishRepo()` without receiving the token.
+- Configure shared remotes with `git.setSharedRemote()`, tracking with
+  `git.setUpstream()`, and inspect before push with `git.upstreamStatus()`.
+- Import an external repository with `git.importProject()` and integrate its
+  returned semantic candidate before publishing protected `main`.
 
-const client = new GitClient(fs, { http: credentials.gitHttp() });
-await client.clone({ url: "https://github.com/owner/repo.git", dir: "/repo" });
-await client.push({ dir: "/repo" });
-```
-
-For GAD-native repos, use the runtime `git` provider path rather than pushing a
-checkout directly. `publishToGitHub()` is a thin GitHub-specific wrapper around
-`git.publishRepo()`: it creates a new GitHub repository, records the resulting
-remote and upstream, exports protected `main`, and performs the first push.
-
-```ts
-import { publishToGitHub, upstreamStatus } from "@workspace-skills/github";
-
-const status = await upstreamStatus("projects/bgkit");
-if (status.state === "diverged") {
-  // Follow docs/git-upstream.md before publishing.
-}
-
-await publishToGitHub({
-  repoPath: "projects/bgkit",
-  name: "bgkit",
-  private: true,
-  remote: "origin",
-  branch: "main",
-  credentialId: "cred_github_...",
-  autoPush: false,
-});
-```
-
-The runtime routes the call through the configured `gitInterop` provider, while
-the helper pins the remote-hosting provider to `provider: "github"`. It does not
-receive the GitHub token; credential injection stays host-mediated. Use this
-helper only when creating a new GitHub repository.
-
-Use `client.status(dir)` for structured status. Use `client.statusMatrix(dir)`
-only when raw isomorphic-git HEAD/WORKDIR/STAGE tuples are needed.
-
-To make a GitHub remote available to future workspace contexts, configure it as
-a shared remote instead of only editing the current context's `.git/config`.
-This records the declaration in `meta/vibestudio.yml`:
-
-```ts
-import { git } from "@workspace/runtime";
-
-await git.setSharedRemote("panels/my-panel", {
-  name: "origin",
-  url: "https://github.com/owner/my-panel.git",
-  branch: "main",
-});
-```
-
-The durable config shape is:
-
-```yaml
-git:
-  remotes:
-    panels:
-      my-panel:
-        origin:
-          url: https://github.com/owner/my-panel.git
-          branch: main
-        ci:
-          url: https://github.com/owner/my-panel-ci.git
-```
-
-Upstream tracking is separate from remote declaration:
-
-```ts
-import { git } from "@workspace/runtime";
-
-await git.setUpstream("panels/my-panel", {
-  remote: "origin",
-  branch: "main",
-  credentialId: "cred_github_...",
-  autoPush: false,
-});
-```
-
-For an existing GitHub remote, these are deliberately separate operations:
-declare it with `git.setSharedRemote()`, track it with `git.setUpstream()`, then
-inspect and push through the configured provider.
-
-```ts
-const [status] = await git.upstreamStatus(["panels/my-panel"], { fetch: true });
-if (status?.state === "in-sync" || status?.state === "ahead") {
-  await git.pushUpstream("panels/my-panel");
-}
-```
-
-This records:
-
-```yaml
-git:
-  upstreams:
-    panels:
-      my-panel:
-        remote: origin
-        branch: main
-        credentialId: cred_github_...
-        autoPush: false
-```
-
-For the full upstream model, approval matrix, and divergence playbook, see
-`docs/git-upstream.md`.
-
-To import a remote repository into workspace source, use `git.importProject()`
-with the destination path where it should live:
-
-```ts
-import { git } from "@workspace/runtime";
-
-const imported = await git.importProject({
-  path: "panels/my-panel",
-  remote: {
-    name: "origin",
-    url: "https://github.com/owner/my-panel.git",
-    branch: "feature/workspace-integration",
-  },
-  credentialId: "cred_github_...",
-});
-
-console.log(imported.candidate.contextId, imported.candidate.eventId);
-```
-
-Supported parent directories are `panels`, `packages`, `workers`,
-`skills`, `about`, `templates`, and `projects`. `git.importProject()` uses one
-workspace config approval showing destination path, remote URL, and branch;
-then it records the shared remote and matching upstream with `autoPush: false`
-in `meta/vibestudio.yml` and clones the exact Git tree as a committed semantic
-candidate. The clone does not advance protected `main` or make host bytes a
-second workspace source of truth. Integrate the returned candidate event in
-small ordinary VCS steps, run checks, commit the complete chain, and publish it
-explicitly before treating the repo as shared workspace source. `autoPush`
-controls only later outgoing Git pushes. The import may also prompt to use the
-selected GitHub credential for the clone.
-
-At startup, the configured Git provider reports operational checkout state via
-`upstreamStatus`. Vibestudio clones/imports only `not-materialized`
-declarations; all other provider-reported states are skipped as
-`already-materialized`, including `integration-required`. Use
-`git.completeWorkspaceDependencies()` for the same explicit retry/backfill flow.
-For private repos, pass the GitHub credential id because startup auto-import has
-no interactive `credentialId` argument:
-
-```ts
-const result = await git.completeWorkspaceDependencies({ credentialId: "cred_github_..." });
-console.log(result.imported, result.skipped, result.failed);
-```
-
-Operational clones live under server `state/git-checkouts/`, not workspace
-source. Build V2 reads exact semantic/CAS state and cannot build an unpublished
-candidate merely because its Git checkout was materialized.
-
-For the full external-project model, including string vs `{ url, branch }`
-config declarations, see
-`skills/onboarding/EXTERNAL_GIT_PROJECTS.md`.
-
-## Permission Presets
-
-- Clone: Metadata read, Contents read.
-- Pull: Metadata read, Contents read.
-- Push: Metadata read, Contents write.
-- Contents read: Metadata read, Contents read.
-- Contents write: Metadata read, Contents write.
-- Issues: Metadata read, Issues read/write.
-- Pull requests: Metadata read, Pull requests read/write.
-- Actions read: Metadata read, Actions read.
-- Workflows: Metadata read, Contents write, Workflows write.
-- Statuses: Metadata read, Statuses read/write.
-- Deployments: Metadata read, Deployments read/write.
-- Discussions: Metadata read, Discussions read/write.
-
-Use Broad when the user wants seamless future repository access. Use the
-narrower presets only when the user explicitly wants upstream narrowing. Avoid
-workflow write unless the user explicitly wants to edit GitHub Actions workflow
-files.
-
-## Troubleshooting
-
-- `401 Bad credentials`: the PAT was revoked, expired, or copied incorrectly.
-- `403 Resource not accessible by personal access token`: the token does not
-  have access to that repository or the needed permission.
-- Git clone or push is requested: use a friendly access level, or explicit
-  `mode: "git"` / `mode: "api-and-git"` when creating the PAT. Verify a target
-  remote with `verifyGitHubGitRemoteAccess(remoteUrl, credentialId)`. Git
-  transport should use `@vibestudio/git` with `credentials.gitHttp()`.
+For the complete remote/upstream model and divergence recovery, use
+`docs/git-upstream.md`. Do not duplicate that machinery inside onboarding.
