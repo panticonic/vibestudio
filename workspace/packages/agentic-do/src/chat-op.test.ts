@@ -124,19 +124,21 @@ class TestVessel extends AgentVesselBase {
     this.markWorkReady(...queues);
   }
 
-  durableWorkWakeEdgesForTest(): Array<{ queue: string; requestedAt: number }> {
+  durableWorkReadyGenerationsForTest(): Array<{ queue: string; generation: number }> {
+    const prefix = "durable-work-ready-generation:";
     return (
       this.sql
         .exec(
           `SELECT key, value
              FROM state
-            WHERE key LIKE 'durable-work-ready-edge:%'
-            ORDER BY key`
+            WHERE key LIKE ?
+            ORDER BY key`,
+          `${prefix}%`
         )
         .toArray() as Record<string, unknown>[]
     ).map((row) => ({
-      queue: String(row["key"]).slice("durable-work-ready-edge:".length),
-      requestedAt: Number(row["value"]),
+      queue: String(row["key"]).slice(prefix.length),
+      generation: Number(row["value"]),
     }));
   }
 
@@ -615,8 +617,8 @@ describe("AgentVesselBase structured batch admission", () => {
   });
 });
 
-describe("AgentVesselBase durable work wake edges", () => {
-  it("persists a one-shot immediate host wake for work exposed by a DO-to-DO callback", async () => {
+describe("AgentVesselBase durable work readiness", () => {
+  it("persists an immediate host wake until work exposed by a DO-to-DO callback is drained", async () => {
     await withAlarmGateway(async (gatewayUrl) => {
       const { instance: vessel, callAs } = await createTestDO(TestVessel, {
         ...TEST_AGENT_ENV,
@@ -625,12 +627,24 @@ describe("AgentVesselBase durable work wake edges", () => {
 
       await callAs("do", "markWorkReadyForTest", "agent-effect", "agent-effect");
 
-      const [edge] = vessel.durableWorkWakeEdgesForTest();
-      expect(edge).toMatchObject({ queue: "agent-effect" });
-      expect(vessel.nextAlarmScheduleForTest()?.wakeAt).toBe(edge!.requestedAt);
+      expect(vessel.durableWorkReadyGenerationsForTest()).toEqual([
+        { queue: "agent-effect", generation: 1 },
+      ]);
+      expect(vessel.nextAlarmScheduleForTest()?.wakeAt).toEqual(expect.any(Number));
 
       await vessel.alarm();
-      expect(vessel.durableWorkWakeEdgesForTest()).toEqual([]);
+      expect(vessel.durableWorkReadyGenerationsForTest()).toEqual([
+        { queue: "agent-effect", generation: 1 },
+      ]);
+
+      expect(
+        vessel.claimReadyWork("agent-effect", {
+          workerId: "test-worker",
+          now: Date.now(),
+          limit: 1,
+        })
+      ).toEqual([]);
+      expect(vessel.nextAlarmScheduleForTest()).toBeNull();
     });
   });
 
@@ -643,7 +657,9 @@ describe("AgentVesselBase durable work wake edges", () => {
 
       await call("markWorkReadyForTest", "agent-effect");
 
-      expect(vessel.durableWorkWakeEdgesForTest()).toEqual([]);
+      expect(vessel.durableWorkReadyGenerationsForTest()).toEqual([
+        { queue: "agent-effect", generation: 1 },
+      ]);
     });
   });
 });

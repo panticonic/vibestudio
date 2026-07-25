@@ -10,7 +10,14 @@ function parseReq(init?: RequestInit) {
   const envelope = JSON.parse(String(init?.body ?? "{}")) as {
     from?: string;
     target?: string;
-    message?: { type?: string; requestId?: string; method?: string; args?: unknown[]; event?: string; payload?: unknown };
+    message?: {
+      type?: string;
+      requestId?: string;
+      method?: string;
+      args?: unknown[];
+      event?: string;
+      payload?: unknown;
+    };
   };
   const msg = envelope.message ?? {};
   return {
@@ -22,7 +29,9 @@ function parseReq(init?: RequestInit) {
 }
 function respond(init: RequestInit | undefined, result: unknown) {
   const envelope = JSON.parse(String(init?.body ?? "{}")) as {
-    from?: string; target?: string; message?: { requestId?: string };
+    from?: string;
+    target?: string;
+    message?: { requestId?: string };
   };
   return new Response(
     JSON.stringify({
@@ -53,7 +62,6 @@ function readyObservation(panelId: string, source = "panels/a") {
   };
 }
 
-
 describe("DurableObjectBase panelTree handles", () => {
   const originalFetch = globalThis.fetch;
 
@@ -78,13 +86,13 @@ describe("DurableObjectBase panelTree handles", () => {
       });
       if (body.method === "panelTree.metadata") {
         return respond(init, {
-              id: "slot-a",
-              title: "Panel A",
-              source: "panels/a",
-              kind: "workspace",
-              parentId: "root",
-              runtimeEntityId: "panel:slot-a-current-entity",
-            });
+          id: "slot-a",
+          title: "Panel A",
+          source: "panels/a",
+          kind: "workspace",
+          parentId: "root",
+          runtimeEntityId: "panel:slot-a-current-entity",
+        });
       }
       return respond(init, "ok");
     }) as typeof fetch;
@@ -97,7 +105,12 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelTreeProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
+      @rpc({
+        principals: ["host", "user", "code"],
+        effect: { kind: "runtime-intrinsic" },
+        tier: "open",
+        sensitivity: "read",
+      })
       async probePanelTree(): Promise<{
         title: string | undefined;
         source: string | undefined;
@@ -171,7 +184,12 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelTreeProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
+      @rpc({
+        principals: ["host", "user", "code"],
+        effect: { kind: "runtime-intrinsic" },
+        tier: "open",
+        sensitivity: "read",
+      })
       async probePanelTree(): Promise<boolean> {
         return (await this.panelTree.get("slot-a").observe()).phase === "ready";
       }
@@ -203,30 +221,15 @@ describe("DurableObjectBase panelTree handles", () => {
       calls.push(body);
       if (body.method === "panelTree.list" && body.args[0] === null) {
         return respond(init, [
-              {
-                panelId: "root-slot",
-                title: "Root",
-                source: "panels/root",
-                kind: "workspace",
-                parentId: null,
-                contextId: "ctx-root",
-                runtimeEntityId: "panel:root-entity",
-                children: [
-                  {
-                    panelId: "child-slot",
-                    title: "Child",
-                    source: "panels/child",
-                    kind: "workspace",
-                    parentId: "root-slot",
-                    contextId: "ctx-child",
-                    runtimeEntityId: "panel:child-entity",
-                  },
-                ],
-              },
-            ]);
-      }
-      if (body.method === "panelTree.list" && body.args[0] === "root-slot") {
-        return respond(init, [
+          {
+            panelId: "root-slot",
+            title: "Root",
+            source: "panels/root",
+            kind: "workspace",
+            parentId: null,
+            contextId: "ctx-root",
+            runtimeEntityId: "panel:root-entity",
+            children: [
               {
                 panelId: "child-slot",
                 title: "Child",
@@ -236,15 +239,31 @@ describe("DurableObjectBase panelTree handles", () => {
                 contextId: "ctx-child",
                 runtimeEntityId: "panel:child-entity",
               },
-            ]);
+            ],
+          },
+        ]);
+      }
+      if (body.method === "panelTree.list" && body.args[0] === "root-slot") {
+        return respond(init, [
+          {
+            panelId: "child-slot",
+            title: "Child",
+            source: "panels/child",
+            kind: "workspace",
+            parentId: "root-slot",
+            contextId: "ctx-child",
+            runtimeEntityId: "panel:child-entity",
+          },
+        ]);
       }
       if (body.method === "panelTree.create") {
         return respond(init, {
-              id: "created-slot",
-              title: "Created",
-              kind: "workspace",
-              runtimeEntityId: "panel:created-entity",
-            });
+          id: "created-slot",
+          title: "Created",
+          kind: "workspace",
+          runtimeEntityId: "panel:created-entity",
+          observation: readyObservation("created-slot", "panels/new"),
+        });
       }
       return respond(init, "ok");
     }) as typeof fetch;
@@ -257,7 +276,12 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelTreeProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
+      @rpc({
+        principals: ["host", "user", "code"],
+        effect: { kind: "runtime-intrinsic" },
+        tier: "open",
+        sensitivity: "read",
+      })
       async probePanelTree(): Promise<{
         allIds: string[];
         childParentId: string | null | undefined;
@@ -321,11 +345,12 @@ describe("DurableObjectBase panelTree handles", () => {
       }
       if (body.method === "panelTree.create") {
         return respond(init, {
-              id: "created-slot",
-              title: "Created",
-              kind: "workspace",
-              runtimeEntityId: "panel:created-entity",
-            });
+          id: "created-slot",
+          title: "Created",
+          kind: "workspace",
+          runtimeEntityId: "panel:created-entity",
+          observation: readyObservation("created-slot", "panels/new"),
+        });
       }
       return respond(init, null);
     }) as typeof fetch;
@@ -338,7 +363,12 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelAliasProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
+      @rpc({
+        principals: ["host", "user", "code"],
+        effect: { kind: "runtime-intrinsic" },
+        tier: "open",
+        sensitivity: "read",
+      })
       async probePanelAliases(): Promise<{
         createdId: string;
         listedCount: number;
@@ -401,7 +431,12 @@ describe("DurableObjectBase panelTree handles", () => {
     class ParentProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
+      @rpc({
+        principals: ["host", "user", "code"],
+        effect: { kind: "runtime-intrinsic" },
+        tier: "open",
+        sensitivity: "read",
+      })
       async probeParent(): Promise<{
         id: string;
         title: string | undefined;

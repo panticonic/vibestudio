@@ -6,9 +6,12 @@ import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { setUserDataPath } from "@vibestudio/env-paths";
 
-import { buildUnit } from "./builder.js";
+import { buildUnit, initBuilder } from "./builder.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
-beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
+beforeAll(() => {
+  initBuilder(path.resolve(__dirname, "../../../node_modules"));
+  setBuildSourceProvider(workingTreeSourceProvider());
+});
 afterAll(() => setBuildSourceProvider(null));
 import { discoverPackageGraph } from "./packageGraph.js";
 import { clearBuildProvidersForTests, registerBuildProvider } from "./buildProviderRegistry.js";

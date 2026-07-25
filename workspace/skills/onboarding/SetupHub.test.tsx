@@ -36,10 +36,7 @@ const snapshots: SetupCapabilitySnapshot[] = [
 
 describe("SetupHub", () => {
   it("uses only renderer-safe imports", () => {
-    const source = readFileSync(
-      resolve(process.cwd(), "workspace/skills/onboarding/SetupHub.tsx"),
-      "utf8"
-    );
+    const source = readFileSync(resolve(__dirname, "SetupHub.tsx"), "utf8");
     expect(lintRendererSource(source)).toEqual([]);
   });
 

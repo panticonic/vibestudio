@@ -21,6 +21,7 @@ class TestableAiChatWorker extends AiChatWorker {
   readonly fakeDriver = {
     handleIncoming: this.driverHandleIncoming,
     wake: this.driverWake,
+    activateChannel: vi.fn(),
     abortChannel: vi.fn(),
     dropLoop: vi.fn(),
     deliverEffectOutcome: vi.fn(async () => undefined),

@@ -28,7 +28,7 @@ describe("SubagentRunStore schema", () => {
     `);
     const store = new SubagentRunStore(sql);
     expect(() => store.createTables()).toThrow(
-      "Unsupported subagent_runs schema; delete this pre-release agent state"
+      "Unsupported subagent_runs schema; delete this pre-release state"
     );
   });
 

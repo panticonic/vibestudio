@@ -1233,12 +1233,22 @@ export async function executeSandbox(
     let normalizedCode = normalizeAgentEvalCode(code);
     // (#1) Fail loudly if pre-injected globals are imported from the runtime.
     const ambientCompatModule = moduleMap["@workspace/runtime"];
-    assertNoPreInjectedImports(
-      normalizedCode,
+    const ambientCompatExports =
       ambientCompatModule && typeof ambientCompatModule === "object"
         ? (ambientCompatModule as Record<string, unknown>)
-        : null
-    );
+        : null;
+    try {
+      assertNoPreInjectedImports(normalizedCode, ambientCompatExports);
+    } catch (originalError) {
+      const repairedCode = normalizeAgentEvalCode(code, true);
+      if (repairedCode === normalizedCode) throw originalError;
+      try {
+        assertNoPreInjectedImports(repairedCode, ambientCompatExports);
+        normalizedCode = repairedCode;
+      } catch {
+        throw originalError;
+      }
+    }
     if (options.publishLazyLoaderToGlobal !== false) {
       restoreLazyImportLoader = installLazyImportLoader(
         options.loadImport,

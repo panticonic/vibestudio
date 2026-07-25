@@ -1,5 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+function readyObservation(panelId: string, source: string) {
+  return {
+    panelId,
+    title: "Agentic Chat",
+    source,
+    kind: "workspace" as const,
+    parentId: "spectrolite",
+    contextId: "ctx-vault",
+    requestedRef: "main",
+    runtimeEntityId: `panel:${panelId}-entity`,
+    attemptId: `panel:${panelId}-entity@build-chat`,
+    effectiveVersion: "ev-chat",
+    buildKey: "build-chat",
+    phase: "ready" as const,
+    updatedAt: 1,
+  };
+}
+
 function createRpcCall() {
   return vi.fn(async (_target: string, method: string, args: unknown[]) => {
     switch (method) {
@@ -35,6 +53,29 @@ function createRpcCall() {
           dropped: { entries: 0, errors: 0 },
           capacity: { entries: 1000, errors: 500 },
         };
+      case "panelTree.diagnose":
+        return {
+          observation: {
+            ...readyObservation("spectrolite", "panels/spectrolite"),
+            title: "Spectrolite",
+            parentId: null,
+          },
+          consoleHistory: {
+            entries: [
+              {
+                timestamp: 1,
+                level: "error",
+                message: "Fetch failed with Bearer abcdefghijklmnop",
+                line: 10,
+                sourceId: "index.tsx",
+                url: "http://localhost/panels/spectrolite",
+              },
+            ],
+            errors: [],
+            dropped: { entries: 0, errors: 0 },
+            capacity: { entries: 1000, errors: 500 },
+          },
+        };
       case "panelTree.create":
         return {
           id: "debug-chat",
@@ -42,6 +83,7 @@ function createRpcCall() {
           kind: "workspace",
           runtimeEntityId: "panel:debug-chat-entity",
           effectiveVersion: "ev-chat",
+          observation: readyObservation("debug-chat", "panels/chat"),
         };
       default:
         return undefined;

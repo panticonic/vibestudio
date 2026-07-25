@@ -72,7 +72,7 @@ describe("AgentHeartbeatLoop", () => {
     });
 
     expect(() => loop.createTables()).toThrow(
-      "Unsupported heartbeat_loop_test schema; delete this pre-release agent state"
+      "Unsupported heartbeat_loop_test schema; delete this pre-release state"
     );
   });
 
