@@ -1,11 +1,10 @@
 import { Badge, Box, Card, Flex, Heading, Text } from "@radix-ui/themes";
-import { HomeIcon, LightningBoltIcon, LockClosedIcon } from "@radix-ui/react-icons";
+import { HomeIcon, LockClosedIcon } from "@radix-ui/react-icons";
 
 /**
  * First-run narrative card (design §9, item 9). Shown as the empty-transcript
  * state of a brand-new chat: it explains, once and unobtrusively, that this
- * workspace can use a connected provider or an explicitly downloaded local
- * model. It disappears the
+ * workspace can use a connected provider. It disappears the
  * moment the first message lands, so it never competes with real content.
  */
 export function FirstRunCard() {
@@ -31,16 +30,10 @@ export function FirstRunCard() {
                 body="Use the model picker to connect OpenAI, Anthropic, or another configured provider. If a request cannot run, the chat shows a connection card."
               />
               <Feature
-                icon={<LightningBoltIcon width="14" height="14" />}
-                color="amber"
-                title="Local models are opt-in"
-                body="Prefer offline use? Choose a model in Local Models first. The initial engine and model download can use several hundred MB, and progress is shown there."
-              />
-              <Feature
                 icon={<LockClosedIcon width="14" height="14" />}
                 color="blue"
-                title="Your keys, your models"
-                body="Keys stay in Vibestudio's credential store. You can switch providers or local models from the model picker at any time."
+                title="Your credentials stay protected"
+                body="Keys stay in Vibestudio's credential store. You can switch providers and models from the model picker at any time."
               />
             </Flex>
           </Box>
@@ -57,7 +50,7 @@ function Feature({
   body,
 }: {
   icon: React.ReactNode;
-  color: "green" | "amber" | "blue";
+  color: "green" | "blue";
   title: string;
   body: string;
 }) {

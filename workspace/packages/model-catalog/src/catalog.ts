@@ -126,6 +126,13 @@ export interface ModelCatalog {
   models: ModelCatalogEntry[];
 }
 
+/** Whether a model can be assigned to an agent without another setup step. */
+export function isModelUsable(
+  model: Pick<ModelCatalogEntry, "availability"> | null | undefined
+): boolean {
+  return model?.availability.state === "ready" || model?.availability.state === "startable";
+}
+
 export interface ModelSettingsSnapshot {
   catalog: ModelCatalog;
   /** Resolved/validated default model (equals `defaultAgentConfig.model`). */

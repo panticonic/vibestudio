@@ -233,6 +233,9 @@ describe("ModelSettingsDO", () => {
       defaultModelSource: "fallback",
     });
     const catalog = (snapshot as { catalog: ModelCatalog }).catalog;
+    expect(catalog.providers.find((provider) => provider.id === "local")?.label).toBe(
+      "Local inference (experimental)"
+    );
     const local = catalog.models.find((m) => m.ref === "local:lfm2.5-1.2b");
     expect(local).toMatchObject({
       auth: "loopback",

@@ -51,7 +51,7 @@ const helpSections: HelpSection[] = [
     icon: <MagicWandIcon />,
     content:
       "Agents work inside your workspace, but cannot silently cross protected boundaries. " +
-      "Open a chat from the panel launcher and connect a cloud provider when prompted, or opt into a local model.",
+      "Open a chat from the panel launcher and connect a supported model provider when prompted.",
   },
   {
     title: "Approvals and sandboxing",

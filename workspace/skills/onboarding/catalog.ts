@@ -165,8 +165,8 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
   },
   {
     id: "configuration.local-models",
-    title: "Local models",
-    summary: "Install and run private models on this server when that fits your work.",
+    title: "Experimental local inference",
+    summary: "Try private on-device models with limited reliability and hardware-dependent speed.",
     category: "environment",
     role: "optional-configuration",
     scope: "server",

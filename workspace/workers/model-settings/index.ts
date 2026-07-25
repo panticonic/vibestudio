@@ -388,7 +388,7 @@ export class ModelSettingsDO extends DurableObjectBase {
           ...base.providers,
           {
             id: LOCAL_PROVIDER_ID,
-            label: "Local (llama.cpp)",
+            label: "Local inference (experimental)",
             baseUrls: Array.from(new Set(localEntries.map((entry) => entry.baseUrl))),
             recommendedModelRef: LOCAL_FALLBACK_MODEL_REF,
             connectable: false,

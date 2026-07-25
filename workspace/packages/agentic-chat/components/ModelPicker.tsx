@@ -1,9 +1,7 @@
 /**
- * Availability-first model picker (design docs/local-models-extension-design.md
- * §7.2). Rebuilt around `ModelCatalogEntry.availability` — the worker-computed
- * truth shared by every consumer — replacing the old panel-side
- * connected-credential heuristic. Groups: Ready → Available to start →
- * Needs setup (providers with nothing usable collapse to one connect row).
+ * Provider-tiered model picker. Supported cloud providers are sorted by live
+ * availability. Experimental providers are separated before sorting so a warm
+ * local process never becomes the apparent happy path.
  */
 
 import { useMemo, useState } from "react";
@@ -28,7 +26,12 @@ import {
   HomeIcon,
 } from "@radix-ui/react-icons";
 import type { ModelCatalog, ModelCatalogEntry } from "@workspace/agentic-core";
-import { LOCAL_FALLBACK_MODEL_REF, type ModelAvailability } from "@workspace/model-catalog/catalog";
+import {
+  isModelUsable,
+  LOCAL_FALLBACK_MODEL_REF,
+  LOCAL_PROVIDER_ID,
+  type ModelAvailability,
+} from "@workspace/model-catalog/catalog";
 
 export interface ModelPickerProps {
   catalog: ModelCatalog | null;
@@ -51,11 +54,6 @@ const NEEDS_SETUP: ModelAvailability = { state: "needs-setup", detail: "no-crede
 
 function availabilityOf(model: ModelCatalogEntry): ModelAvailability {
   return model.availability ?? NEEDS_SETUP;
-}
-
-function isUsable(model: ModelCatalogEntry): boolean {
-  const state = availabilityOf(model).state;
-  return state === "ready" || state === "startable";
 }
 
 function formatContext(tokens: number): string {
@@ -81,6 +79,31 @@ function sortReadyModels(models: ModelCatalogEntry[]): ModelCatalogEntry[] {
       return a.index - b.index;
     })
     .map(({ model }) => model);
+}
+
+export interface ModelPickerPartition {
+  standard: ModelCatalogEntry[];
+  experimentalLocal: ModelCatalogEntry[];
+}
+
+/** Provider maturity outranks runtime availability in the picker hierarchy. */
+export function partitionModelPickerModels(
+  models: readonly ModelCatalogEntry[],
+  query: string
+): ModelPickerPartition {
+  const normalizedQuery = query.trim().toLowerCase();
+  const matching = normalizedQuery
+    ? models.filter(
+        (model) =>
+          model.name.toLowerCase().includes(normalizedQuery) ||
+          model.provider.toLowerCase().includes(normalizedQuery) ||
+          model.ref.toLowerCase().includes(normalizedQuery)
+      )
+    : [...models];
+  return {
+    standard: matching.filter((model) => model.provider !== LOCAL_PROVIDER_ID),
+    experimentalLocal: matching.filter((model) => model.provider === LOCAL_PROVIDER_ID),
+  };
 }
 
 function dotColor(availability: ModelAvailability): string {
@@ -185,8 +208,8 @@ function ModelChips({ model }: { model: ModelCatalogEntry }) {
   return (
     <Flex gap="2" align="center" wrap="wrap">
       {onDevice && (
-        <Badge color="green" variant="soft" size="1">
-          <HomeIcon width="10" height="10" /> on-device · free
+        <Badge color="amber" variant="soft" size="1">
+          <HomeIcon width="10" height="10" /> experimental
         </Badge>
       )}
       {model.reasoning && (
@@ -213,11 +236,13 @@ function ModelChips({ model }: { model: ModelCatalogEntry }) {
 
 function ModelRow({
   model,
+  providerLabel,
   selected,
   onSelect,
   onOpenServerLog,
 }: {
   model: ModelCatalogEntry;
+  providerLabel: string;
   selected: boolean;
   onSelect: () => void;
   onOpenServerLog?: (server: "utility" | "main") => void;
@@ -240,11 +265,11 @@ function ModelRow({
         borderRadius: 6,
         padding: "6px 8px",
         background: selected ? "var(--accent-a3)" : undefined,
-        opacity: isUsable(model) ? 1 : 0.75,
+        opacity: isModelUsable(model) ? 1 : 0.75,
       }}
     >
       <Flex justify="between" align="center" gap="2">
-        <Box style={{ minWidth: 0 }}>
+        <Box style={{ minWidth: 0, flex: 1 }}>
           <Flex align="center" gap="2">
             <StatusDot availability={availability} onOpenLog={openLog} />
             {selected && <CheckIcon />}
@@ -253,7 +278,7 @@ function ModelRow({
             </Text>
           </Flex>
           <Text size="1" color={availability.state === "error" ? "red" : "gray"}>
-            {model.provider}
+            {providerLabel}
             {label ? ` · ${label}` : ""}
           </Text>
         </Box>
@@ -263,15 +288,15 @@ function ModelRow({
   );
 }
 
-/** One collapsed "connect this provider" row for a provider with nothing
- *  usable. Selecting it picks the provider's best model — the existing
- *  connect-on-use flow (suspend + connect card) takes it from there. */
+/** One collapsed setup row for a provider with nothing usable. Selecting it
+ * chooses the provider's best model; the surrounding agent setup surface then
+ * owns connection or installation and blocks launch until availability flips. */
 function ProviderSetupRow({
-  provider,
+  providerLabel,
   models,
   onSelect,
 }: {
-  provider: string;
+  providerLabel: string;
   models: ModelCatalogEntry[];
   onSelect: (ref: string) => void;
 }) {
@@ -284,7 +309,7 @@ function ProviderSetupRow({
         <Flex align="center" gap="2" style={{ minWidth: 0 }}>
           <StatusDot availability={NEEDS_SETUP} />
           <Text size="2" truncate>
-            {provider}
+            {providerLabel}
           </Text>
           <Text size="1" color="gray">
             {models.length} models
@@ -302,7 +327,13 @@ function ProviderSetupRow({
       {expanded && (
         <Flex direction="column" gap="1" ml="4">
           {models.map((m) => (
-            <ModelRow key={m.ref} model={m} selected={false} onSelect={() => onSelect(m.ref)} />
+            <ModelRow
+              key={m.ref}
+              model={m}
+              providerLabel={providerLabel}
+              selected={false}
+              onSelect={() => onSelect(m.ref)}
+            />
           ))}
         </Flex>
       )}
@@ -313,27 +344,23 @@ function ProviderSetupRow({
 export function ModelPicker({ catalog, value, onChange, onOpenServerLog }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [showExperimental, setShowExperimental] = useState(false);
 
   const models = useMemo(() => catalog?.models ?? [], [catalog]);
+  const providerLabels = useMemo(
+    () => new Map((catalog?.providers ?? []).map((provider) => [provider.id, provider.label])),
+    [catalog]
+  );
   const selected = models.find((m) => m.ref === value) ?? null;
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return models;
-    return models.filter(
-      (m) =>
-        m.name.toLowerCase().includes(q) ||
-        m.provider.toLowerCase().includes(q) ||
-        m.ref.toLowerCase().includes(q)
-    );
-  }, [models, query]);
+  const partition = useMemo(() => partitionModelPickerModels(models, query), [models, query]);
 
   const groups = useMemo(() => {
     const ready: ModelCatalogEntry[] = [];
     const startable: ModelCatalogEntry[] = [];
     const busy: ModelCatalogEntry[] = []; // starting / downloading / error — visible, actionable
     const needsSetup = new Map<string, ModelCatalogEntry[]>();
-    for (const model of filtered) {
+    for (const model of partition.standard) {
       const availability = availabilityOf(model);
       switch (availability.state) {
         case "ready":
@@ -356,7 +383,7 @@ export function ModelPicker({ catalog, value, onChange, onOpenServerLog }: Model
       }
     }
     return { ready: sortReadyModels(ready), startable, busy, needsSetup };
-  }, [filtered]);
+  }, [partition.standard]);
 
   const select = (ref: string) => {
     onChange(ref);
@@ -374,6 +401,7 @@ export function ModelPicker({ catalog, value, onChange, onOpenServerLog }: Model
             <ModelRow
               key={m.ref}
               model={m}
+              providerLabel={providerLabels.get(m.provider) ?? m.provider}
               selected={m.ref === value}
               onSelect={() => select(m.ref)}
               onOpenServerLog={onOpenServerLog}
@@ -389,6 +417,9 @@ export function ModelPicker({ catalog, value, onChange, onOpenServerLog }: Model
     onOpenServerLog && selected?.provider === "local" && selectedAvailability?.state === "error"
       ? () => onOpenServerLog(serverForLocalRef(selected.ref))
       : undefined;
+  const experimentalForcedOpen =
+    selected?.provider === LOCAL_PROVIDER_ID || query.trim().length > 0;
+  const experimentalExpanded = experimentalForcedOpen || showExperimental;
 
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
@@ -431,17 +462,18 @@ export function ModelPicker({ catalog, value, onChange, onOpenServerLog }: Model
         <ScrollArea type="auto" scrollbars="vertical" style={{ maxHeight: 360 }}>
           <Box pr="2">
             {renderGroup("Ready", groups.ready)}
-            {renderGroup("Available to start", [...groups.startable, ...groups.busy])}
+            {renderGroup("Available to start", groups.startable)}
+            {renderGroup("Setup in progress or needs attention", groups.busy)}
             {groups.needsSetup.size > 0 && (
               <Box mb="2">
                 <Text size="1" color="gray" weight="bold" style={{ textTransform: "uppercase" }}>
                   Needs setup
                 </Text>
                 <Flex direction="column" gap="1" mt="1">
-                  {[...groups.needsSetup.entries()].map(([provider, list]) => (
+                  {[...groups.needsSetup.entries()].map(([providerId, list]) => (
                     <ProviderSetupRow
-                      key={provider}
-                      provider={provider}
+                      key={providerId}
+                      providerLabel={providerLabels.get(providerId) ?? providerId}
                       models={list}
                       onSelect={select}
                     />
@@ -449,7 +481,60 @@ export function ModelPicker({ catalog, value, onChange, onOpenServerLog }: Model
                 </Flex>
               </Box>
             )}
-            {filtered.length === 0 && (
+            {partition.experimentalLocal.length > 0 && (
+              <Box mt="3" mb="2" pt="2" style={{ borderTop: "1px solid var(--gray-a5)" }}>
+                <Button
+                  type="button"
+                  size="1"
+                  variant="ghost"
+                  color="gray"
+                  aria-expanded={experimentalExpanded}
+                  onClick={() => setShowExperimental((visible) => !visible)}
+                  style={{ width: "100%", justifyContent: "space-between" }}
+                >
+                  <Flex align="center" gap="2">
+                    <Badge size="1" color="amber" variant="soft">
+                      Experimental
+                    </Badge>
+                    <Text size="2">Local inference</Text>
+                  </Flex>
+                  <ChevronDownIcon
+                    style={{
+                      transform: experimentalExpanded ? "rotate(180deg)" : undefined,
+                      transition: "transform 120ms ease",
+                    }}
+                  />
+                </Button>
+                {experimentalExpanded ? (
+                  <Box mt="1">
+                    <Text
+                      size="1"
+                      color="gray"
+                      as="p"
+                      mb="2"
+                      style={{ paddingInline: "var(--space-2)" }}
+                    >
+                      Early preview. Agent tool use and response times may be unreliable.
+                    </Text>
+                    <Flex direction="column" gap="1">
+                      {partition.experimentalLocal.map((model) => (
+                        <ModelRow
+                          key={model.ref}
+                          model={model}
+                          providerLabel={
+                            providerLabels.get(model.provider) ?? "Local inference (experimental)"
+                          }
+                          selected={model.ref === value}
+                          onSelect={() => select(model.ref)}
+                          onOpenServerLog={onOpenServerLog}
+                        />
+                      ))}
+                    </Flex>
+                  </Box>
+                ) : null}
+              </Box>
+            )}
+            {partition.standard.length === 0 && partition.experimentalLocal.length === 0 && (
               <Text size="2" color="gray">
                 No models match “{query}”.
               </Text>
