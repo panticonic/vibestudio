@@ -36,6 +36,10 @@ import {
   saveDeviceCredential,
   type DeviceCredentialEntry,
 } from "./services/deviceCredentialStore.js";
+import {
+  terminateOwnedProcessTree,
+  type ProcessTreeTerminationResult,
+} from "../../scripts/owned-process-tree.mjs";
 
 const log = createDevLogger("HubProcessManager");
 const READY_POLL_INTERVAL_MS = 250;
@@ -185,6 +189,7 @@ async function postJson(
 
 export class HubProcessManager {
   private current: HubWorkspaceTarget | null = null;
+  private currentHubPid: number | null = null;
   /** Consumed once the new dev session owns a freshly established lifecycle. */
   private ephemeralReplacementPending = false;
   private restartTimestamps: number[] = [];
@@ -214,6 +219,7 @@ export class HubProcessManager {
     const credential = await this.ensureDeviceCredential(processTarget);
     const target = await this.routeWorkspace(processTarget, credential);
     this.current = target;
+    this.currentHubPid = processTarget.record.pid;
     return target;
   }
 
@@ -575,6 +581,7 @@ export class HubProcessManager {
     if (attached) {
       const credential = await this.ensureDeviceCredential(attached);
       this.current = await this.routeWorkspace(attached, credential);
+      this.currentHubPid = attached.record.pid;
       return;
     }
     const now = Date.now();
@@ -591,6 +598,7 @@ export class HubProcessManager {
       const target = await this.spawnDetached(current.gatewayPort);
       const credential = await this.ensureDeviceCredential(target);
       this.current = await this.routeWorkspace(target, credential);
+      this.currentHubPid = target.record.pid;
     } catch (error) {
       log.warn(`[supervise] hub restart failed: ${error instanceof Error ? error.message : error}`);
       this.config.onCrash(null);
@@ -600,12 +608,41 @@ export class HubProcessManager {
   async stop(): Promise<void> {
     this.isStopping = true;
     this.current = null;
+    this.currentHubPid = null;
     const lease = this.liveLease();
     if (lease) await this.waitForExit(lease.pid, false);
   }
 
+  /**
+   * Update-only stop: the verified detached hub is a process-group owner, so
+   * package replacement requires its complete tree to be gone.
+   */
+  async stopTree(): Promise<ProcessTreeTerminationResult> {
+    this.isStopping = true;
+    this.current = null;
+    const pid = this.currentHubPid ?? this.liveLease()?.pid ?? null;
+    this.currentHubPid = null;
+    if (pid === null) return { gone: true, escalated: false };
+    if (!this.verifiedHubPids.has(pid)) {
+      throw new Error(`Refusing to terminate unverified hub PID ${pid}`);
+    }
+    if (recordedPidIsHub(pid) === false) {
+      throw new Error(`Refusing to terminate PID ${pid}; it is no longer the verified hub`);
+    }
+    const result = await terminateOwnedProcessTree(pid, {
+      termTimeoutMs: STOP_SIGTERM_TIMEOUT_MS,
+      killTimeoutMs: 5_000,
+    });
+    if (!result.gone) {
+      throw new Error(result.detail ?? `Hub process tree ${pid} survived termination`);
+    }
+    this.verifiedHubPids.delete(pid);
+    return result;
+  }
+
   detach(): void {
     this.isStopping = true;
+    this.currentHubPid = null;
   }
 
   private async waitForExit(pid: number, alreadyRequested: boolean): Promise<void> {

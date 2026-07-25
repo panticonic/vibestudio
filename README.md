@@ -20,11 +20,11 @@ The vibestudio sandbox:
 
 ## Status
 
-This is alpha software. It is *not* reliable or safe. Or possibly fit for your purposes. The architecture is subject to sudden and violent spasmodic changes. You have been warned.
+This is alpha software. It is _not_ reliable or safe. Or possibly fit for your purposes. The architecture is subject to sudden and violent spasmodic changes. You have been warned.
 
 ## Installation
 
-Requires **Node.js 22.19.0+**. Both packages update via npm (re-run with `@latest`).
+Requires **Node.js 22.19.0+**.
 
 ### Desktop app (macOS, Linux)
 
@@ -40,6 +40,20 @@ On the first launch, choose or create a workspace. Its configured onboarding
 prompt is added to the new chat's history and starts the onboarding agent
 automatically.
 
+A verified global npm desktop install checks the npm `latest` release
+periodically. When an update is available, **Update and restart** confirms any
+interruption of the desktop-owned local hub, stops its complete process tree,
+installs the exact offered version, and relaunches the app. Vibestudio never
+updates on a timer. If the npm prefix is not writable, the action instead
+copies an exact-version command for the package manager environment that owns
+the installation.
+
+Only one desktop update can mutate the installation at a time. A second launch
+during that window reports that Vibestudio is updating and exits. If
+installation fails, the launcher tries once to restore the previous exact
+version and the relaunched app reports the outcome and private update-log path.
+Local, linked, `npx`, pnpm, and development launches do not self-update.
+
 ### Headless server (remote/home server; clients connect to it)
 
 ```bash
@@ -54,6 +68,13 @@ endpoint is only used to rendezvous, not to carry workspace data. See
 [docs/webrtc-deployment.md](docs/webrtc-deployment.md) and [docs/cli.md](docs/cli.md).
 The hosted signaling service (`wss://signal.vibestudio.app`) is used by default;
 self-hosting is optional.
+
+The headless server does not update itself. Re-run the npm install through the
+service supervisor or deployment workflow that owns the server process:
+
+```bash
+npm install -g @panticonic/vibestudio-server@latest
+```
 
 #### Inviting a user
 

@@ -124,6 +124,7 @@ function stageServer() {
 
   // Bin shims.
   copyFile("scripts/vibestudio-launcher.mjs", path.join(root, "scripts/vibestudio-launcher.mjs"));
+  stageNpmUpdateLauncherFiles(root);
   copyFile(
     "scripts/vibestudio-server-shim.mjs",
     path.join(root, "scripts/vibestudio-server-shim.mjs")
@@ -181,6 +182,7 @@ function stageApp() {
   stageWorkspaceTemplateSupport(root);
 
   copyFile("scripts/vibestudio-launcher.mjs", path.join(root, "scripts/vibestudio-launcher.mjs"));
+  stageNpmUpdateLauncherFiles(root);
   copyFile(
     "scripts/vibestudio-server-shim.mjs",
     path.join(root, "scripts/vibestudio-server-shim.mjs")
@@ -237,6 +239,16 @@ export function assertPassthroughScriptsStaged(root) {
   const missing = required.filter((relative) => !fs.existsSync(path.join(root, relative)));
   if (missing.length > 0) {
     throw new Error(`Staged package is missing CLI support files: ${missing.join(", ")}`);
+  }
+}
+
+export function stageNpmUpdateLauncherFiles(root) {
+  for (const relative of [
+    "scripts/npm-update-contract.mjs",
+    "scripts/npm-update-launcher.mjs",
+    "scripts/owned-process-tree.mjs",
+  ]) {
+    copyFile(relative, path.join(root, relative));
   }
 }
 

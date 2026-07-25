@@ -3,7 +3,10 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { assertPassthroughScriptsStaged } from "../scripts/build-npm-packages.mjs";
+import {
+  assertPassthroughScriptsStaged,
+  stageNpmUpdateLauncherFiles,
+} from "../scripts/build-npm-packages.mjs";
 
 describe("npm CLI packaging", () => {
   it("stages the passthrough script tree into both published packages", () => {
@@ -15,6 +18,19 @@ describe("npm CLI packaging", () => {
     expect(fs.existsSync(path.resolve("scripts/cli/remote-serve.mjs"))).toBe(true);
     expect(fs.existsSync(path.resolve("scripts/cli/lib/server-entry.mjs"))).toBe(true);
     expect(fs.existsSync(path.resolve("scripts/cli/lib/smoke-remote-server.mjs"))).toBe(true);
+  });
+
+  it("stages the complete shared npm update launcher contract", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "vibestudio-update-staging-"));
+    stageNpmUpdateLauncherFiles(root);
+    for (const relative of [
+      "scripts/npm-update-contract.mjs",
+      "scripts/npm-update-launcher.mjs",
+      "scripts/owned-process-tree.mjs",
+    ]) {
+      expect(fs.existsSync(path.join(root, relative))).toBe(true);
+    }
+    fs.rmSync(root, { recursive: true, force: true });
   });
 
   it("fails staging when a packaged passthrough dependency is absent", () => {

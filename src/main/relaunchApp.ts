@@ -1,15 +1,29 @@
 import { app } from "electron";
 
+export interface RelaunchOptions {
+  args?: string[];
+  exitCode?: number;
+}
+
+let installedHandler: ((opts: RelaunchOptions) => void) | null = null;
+
+/** Main installs the lifecycle-owned handler once its quit state exists. */
+export function installRelaunchHandler(handler: (opts: RelaunchOptions) => void): void {
+  if (installedHandler) throw new Error("The app relaunch handler is already installed");
+  installedHandler = handler;
+}
+
 /**
- * Relaunch the Electron app and terminate the current process — the
- * `app.relaunch()` + `app.exit()` pair that the startup, workspace-switch, and
- * remote-credential recovery paths all repeated inline (the old `relaunchWithArgs`
- * helper was lost in the rewrite). `exitCode` defaults to 0 (a clean, intentional
- * relaunch); the crash-recovery path passes 1 so the exit reflects the failure.
- * Pass `args` to override the relaunched process's argv (Electron otherwise reuses
- * the current args).
+ * Request a relaunch through main's lifecycle-owned quit state. The fallback is
+ * retained for isolated service tests that do not load the main entry point.
+ * `exitCode` defaults to 0; crash recovery passes 1. `args` overrides the
+ * relaunched process argv.
  */
-export function relaunchApp(opts: { args?: string[]; exitCode?: number } = {}): void {
+export function relaunchApp(opts: RelaunchOptions = {}): void {
+  if (installedHandler) {
+    installedHandler(opts);
+    return;
+  }
   if (opts.args) app.relaunch({ args: opts.args });
   else app.relaunch();
   app.exit(opts.exitCode ?? 0);

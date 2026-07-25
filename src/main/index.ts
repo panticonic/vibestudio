@@ -25,7 +25,13 @@ import {
   startupPathDiagnosticEntries,
 } from "./startupDiagnostics.js";
 import { cleanupNodeDatachannel } from "../node/webrtc/nodeDatachannelPeer.js";
-import { maybeNotifyNpmUpdate } from "./updateCheck.js";
+import {
+  copyPendingNpmUpdateCommand,
+  consumeNpmUpdateResult,
+  createNpmUpdateController,
+  type NpmUpdateController,
+} from "./updateCheck.js";
+import { NPM_UPDATE_REQUESTED_EXIT_CODE } from "../../scripts/npm-update-contract.mjs";
 import { createDevLogger } from "@vibestudio/dev-log";
 import {
   createConnectDeepLink,
@@ -50,10 +56,11 @@ import {
   registerProtocol,
 } from "./protocolHandler.js";
 import { BrowserEnvironmentReadiness } from "./services/browserEnvironmentReadiness.js";
+import { installRelaunchHandler, type RelaunchOptions } from "./relaunchApp.js";
 
 const log = createDevLogger("App");
 const APP_NAME = "Vibestudio";
-const APP_SHUTDOWN_TIMEOUT_MS = 15_000;
+const APP_SHUTDOWN_TIMEOUT_MS = 30_000;
 const startupInvocation = parseMainStartupInvocation(process.argv, process.env);
 // Consume one-shot recovery markers so intentional relaunches do not replay them.
 process.argv = startupInvocation.argv;
@@ -176,7 +183,6 @@ import {
   persistStoredRemoteWorkspaceRoute,
   readPendingPairLabel,
 } from "./services/remoteCredService.js";
-import { relaunchApp } from "./relaunchApp.js";
 import type { ServerClient } from "./serverClient.js";
 import { CdpHostProvider } from "./cdpHostProvider.js";
 import { RemoteCdpHostProviderSocket } from "./remoteCdpHostProviderSocket.js";
@@ -318,10 +324,6 @@ let bootstrapWorkspaceRpcReady = false;
 let bootstrapStartupProgress: StartupConnectionProgress | null = null;
 let bootstrapConnectionKind: "local" | "remote" | null =
   startupMode.kind === "local" ? "local" : null;
-let desktopAutoUpdater: {
-  downloadUpdate(): Promise<unknown>;
-  quitAndInstall(): void;
-} | null = null;
 // True when this launch found a persisted WebRTC remote pairing — the chooser is
 // skipped and `establishServerSession` connects to the remote over the pipe.
 let remotePairedAtLaunch = false;
@@ -376,6 +378,21 @@ const getBrowserSessionPartition = (): string => {
 let panelLocationForWorkspaceRelaunch: PanelLocation | null = null;
 let approvalAttention: ApprovalAttention | null = null;
 let isCleaningUp = false; // Prevent re-entry in will-quit handler
+type QuitIntent =
+  | { kind: "ordinary"; serverDecision: "stop" | "keep" | null }
+  | { kind: "relaunch"; exitCode: number }
+  | { kind: "npm-update"; targetVersion: string };
+let quitIntent: QuitIntent = { kind: "ordinary", serverDecision: null };
+let npmUpdateController: NpmUpdateController | null = null;
+let npmUpdateResultConsumed = false;
+
+function relaunchWithIntent(opts: RelaunchOptions = {}): void {
+  quitIntent = { kind: "relaunch", exitCode: opts.exitCode ?? 0 };
+  if (opts.args) app.relaunch({ args: opts.args });
+  else app.relaunch();
+  app.quit();
+}
+installRelaunchHandler(relaunchWithIntent);
 
 const applicationWindow = new ApplicationWindowController({
   eventService,
@@ -1420,7 +1437,7 @@ function installBootstrapConnectionHandlers(): void {
 
   ipcMain.handle("vibestudio:bootstrap:retry-startup", (event) => {
     requireBootstrapShellSender(event, "vibestudio:bootstrap:retry-startup");
-    relaunchApp({
+    relaunchWithIntent({
       args: retryWorkspaceIsEphemeral
         ? ephemeralWorkspaceRelaunchArgs()
         : retryWorkspaceName
@@ -1431,7 +1448,7 @@ function installBootstrapConnectionHandlers(): void {
 
   ipcMain.handle("vibestudio:bootstrap:choose-connection", (event) => {
     requireBootstrapShellSender(event, "vibestudio:bootstrap:choose-connection");
-    relaunchApp({
+    relaunchWithIntent({
       args: [
         ...chooseConnectionRelaunchArgs().filter((arg) => arg !== SKIP_REMOTE_PAIRING_ARG),
         SKIP_REMOTE_PAIRING_ARG,
@@ -1581,19 +1598,32 @@ app.on("ready", async () => {
       client.nudge();
     }
   };
-  powerMonitor.on("resume", () => nudgeServerLiveness("system resume"));
+  powerMonitor.on("resume", () => {
+    nudgeServerLiveness("system resume");
+    npmUpdateController?.triggerIfStale("resume");
+  });
   powerMonitor.on("unlock-screen", () => nudgeServerLiveness("screen unlock"));
   // Same recovery, awake path: the shell renderer forwards its `window` `online`
   // event so a network flap (e.g. Wi-Fi reassociate) probes the pipe promptly
   // instead of lingering on a stale "connected". NUDGE ONLY, never a teardown.
-  ipcMain.on("vibestudio:shell.network-online", () => nudgeServerLiveness("network online"));
+  ipcMain.on("vibestudio:shell.network-online", () => {
+    nudgeServerLiveness("network online");
+    npmUpdateController?.triggerIfStale("network");
+  });
   ipcMain.on("vibestudio:shell.chrome-interactive-focus", (event, active: unknown) => {
     applicationWindow.viewManager?.setShellChromeInteractiveFocus(event.sender.id, active === true);
   });
   installBootstrapConnectionHandlers();
-  // npm-channel update notice — no-ops unless launched from a global npm install
-  // (the launcher sets VIBESTUDIO_NPM_CHANNEL); notification-first, never self-updates.
-  void maybeNotifyNpmUpdate();
+  npmUpdateController = createNpmUpdateController({
+    eventService,
+    ownsLocalHub: () =>
+      serverSession?.serverOwnership === "desktop-local" &&
+      serverSession.hubProcessManager !== null,
+    requestUpdateQuit: (targetVersion) => {
+      quitIntent = { kind: "npm-update", targetVersion };
+      app.quit();
+    },
+  });
 
   // Default to browser CORS. For panel fetch/XHR responses, relax CORS only
   // after the trusted shell approval flow grants that panel access to the
@@ -1755,95 +1785,6 @@ app.on("ready", async () => {
       );
     }
   });
-
-  // Auto-update check (production only)
-  if (!isDev()) {
-    try {
-      // Dynamic import to avoid bundling electron-updater in development
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { autoUpdater } = require("electron-updater") as {
-        autoUpdater: {
-          logger: unknown;
-          autoDownload: boolean;
-          autoInstallOnAppQuit: boolean;
-          on: (
-            event: string,
-            callback: (info: { version?: string; message?: string }) => void
-          ) => void;
-          checkForUpdates: () => Promise<unknown>;
-          downloadUpdate: () => Promise<unknown>;
-          quitAndInstall: () => void;
-        };
-      };
-
-      autoUpdater.logger = {
-        info: (msg: string) => console.log(`[AutoUpdater] ${msg}`),
-        warn: (msg: string) => console.warn(`[AutoUpdater] ${msg}`),
-        error: (msg: string) => console.error(`[AutoUpdater] ${msg}`),
-        debug: (msg: string) => console.log(`[AutoUpdater:debug] ${msg}`),
-      };
-      autoUpdater.autoDownload = false; // Don't auto-download, let user decide
-      autoUpdater.autoInstallOnAppQuit = true;
-      desktopAutoUpdater = autoUpdater;
-
-      autoUpdater.on("update-available", (info: { version?: string }) => {
-        console.log(`[AutoUpdater] Update available: ${info.version}`);
-        eventService.emit("notification:show", {
-          id: "desktop-update-available",
-          type: "info",
-          title: `Vibestudio ${info.version ?? "update"} is available`,
-          message: "Download it now and keep working while it prepares in the background.",
-          ttl: 0,
-          actions: [
-            {
-              id: "desktop-update-download",
-              label: "Download update",
-              variant: "solid",
-              command: { type: "desktop.downloadUpdate" },
-            },
-          ],
-        });
-      });
-
-      autoUpdater.on("update-downloaded", (info: { version?: string }) => {
-        console.log(`[AutoUpdater] Update downloaded: ${info.version}`);
-        eventService.emit("notification:show", {
-          id: "desktop-update-ready",
-          type: "success",
-          title: "Update ready to install",
-          message: `Restart Vibestudio to install ${info.version ?? "the update"}.`,
-          ttl: 0,
-          actions: [
-            {
-              id: "desktop-update-install",
-              label: "Restart and install",
-              variant: "solid",
-              command: { type: "desktop.installUpdate" },
-            },
-          ],
-        });
-      });
-
-      autoUpdater.on("error", (error: { message?: string }) => {
-        console.warn(`[AutoUpdater] Error: ${error.message}`);
-        eventService.emit("notification:show", {
-          id: "desktop-update-error",
-          type: "error",
-          title: "App update failed",
-          message: error.message ?? "The update could not be prepared.",
-          ttl: 0,
-        });
-      });
-
-      // Check for updates (non-blocking)
-      autoUpdater.checkForUpdates().catch((err: Error) => {
-        console.warn(`[AutoUpdater] Failed to check for updates: ${err.message}`);
-      });
-    } catch {
-      // electron-updater not available or failed to load - this is fine in development
-      console.log("[AutoUpdater] Not available (this is normal in development)");
-    }
-  }
 
   // A saved remote is resumed only for an ordinary interactive "continue where
   // I left off" launch. Development's ephemeral default, an explicit workspace,
@@ -2054,7 +1995,7 @@ app.on("ready", async () => {
           `[App] Dropping stale panel-location relaunch for "${location.workspace ?? "unknown"}" while switching to "${name}"`
         );
       }
-      relaunchApp({ args });
+      relaunchWithIntent({ args });
     } catch (error) {
       panelLocationForWorkspaceRelaunch = null;
       log.error(
@@ -2091,12 +2032,24 @@ app.on("ready", async () => {
       handleCredentialSessionCaptureRequest(payload as CredentialSessionCaptureRequest),
     onNotificationAction: async (_id, actionId) => {
       websiteNotificationBridge?.handleAction(_id, actionId);
-      if (actionId === "desktop-update-download") {
-        if (!desktopAutoUpdater) throw new Error("Desktop updater is unavailable");
-        await desktopAutoUpdater.downloadUpdate();
-      } else if (actionId === "desktop-update-install") {
-        if (!desktopAutoUpdater) throw new Error("Desktop updater is unavailable");
-        desktopAutoUpdater.quitAndInstall();
+      if (actionId === "desktop-npm-update-install") {
+        if (!npmUpdateController) throw new Error("The npm updater is unavailable");
+        await npmUpdateController.requestInstall().catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          eventService.emit("notification:show", {
+            id: "desktop-npm-update-action-error",
+            type: "error",
+            title: "Vibestudio update could not start",
+            message,
+            ttl: 0,
+          });
+          throw error;
+        });
+      } else if (actionId === "desktop-npm-update-copy") {
+        if (npmUpdateController) npmUpdateController.copyUpdateCommand();
+        else copyPendingNpmUpdateCommand();
+      } else if (actionId === "desktop-npm-update-copy-result") {
+        copyPendingNpmUpdateCommand();
       } else if (actionId.startsWith("oauth-cancel:")) {
         const transactionId = actionId.slice("oauth-cancel:".length);
         const client = serverClientRef;
@@ -2976,6 +2929,11 @@ app.on("ready", async () => {
     applicationWindow.create();
 
     performance.mark("startup:workspace-window-attached");
+    npmUpdateController?.start();
+    if (!npmUpdateResultConsumed) {
+      npmUpdateResultConsumed = true;
+      consumeNpmUpdateResult(eventService);
+    }
 
     // Log startup timing in dev mode
     if (isDev()) {
@@ -3081,21 +3039,21 @@ app.on("window-all-closed", () => {
 // No activity guessing: the user decides, and can persist that choice with
 // "Remember my choice" (cleared by re-toggling in Settings / deleting the
 // `keepServerOnQuit` field). Decided here, consumed by the will-quit cleanup.
-let serverQuitDecision: "stop" | "keep" | null = null;
 
 app.on("before-quit", (event) => {
-  if (serverQuitDecision !== null || isCleaningUp) return;
+  if (quitIntent.kind === "npm-update" || quitIntent.kind === "relaunch") return;
+  if (quitIntent.serverDecision !== null || isCleaningUp) return;
   const conn = serverSession;
   if (!conn || conn.serverOwnership !== "desktop-local" || !conn.hubProcessManager) {
     // Remote/external server: nothing desktop-owned to stop.
-    serverQuitDecision = "keep";
+    quitIntent = { kind: "ordinary", serverDecision: "keep" };
     return;
   }
   // Remembered choice: honor it. With no preference, keep the detached server;
   // its idle monitor reaps it automatically when no clients or work remain.
   const remembered = centralData.getKeepServerOnQuit();
   if (remembered !== null) {
-    serverQuitDecision = remembered ? "keep" : "stop";
+    quitIntent = { kind: "ordinary", serverDecision: remembered ? "keep" : "stop" };
     return;
   }
   event.preventDefault();
@@ -3117,7 +3075,7 @@ app.on("before-quit", (event) => {
     });
     const keep = response === 0;
     if (checkboxChecked) centralData.setKeepServerOnQuit(keep);
-    serverQuitDecision = keep ? "keep" : "stop";
+    quitIntent = { kind: "ordinary", serverDecision: keep ? "keep" : "stop" };
     app.quit();
   })();
 });
@@ -3129,10 +3087,13 @@ app.on("will-quit", (event) => {
     return;
   }
 
-  const hasResourcesToClean = serverSession || cdpHostProvider;
+  const updateQuit = quitIntent.kind === "npm-update";
+  const relaunchQuit = quitIntent.kind === "relaunch";
+  const hasResourcesToClean = serverSession || cdpHostProvider || updateQuit || relaunchQuit;
   if (!hasResourcesToClean) return;
   isCleaningUp = true;
   event.preventDefault();
+  npmUpdateController?.stop();
 
   console.log("[App] Shutting down...");
 
@@ -3147,30 +3108,51 @@ app.on("will-quit", (event) => {
     const stopServer =
       session.serverOwnership === "desktop-local" &&
       session.hubProcessManager !== null &&
-      serverQuitDecision !== "keep";
+      (updateQuit || (quitIntent.kind === "ordinary" && quitIntent.serverDecision !== "keep"));
 
     const cleanupThenClose = (async () => {
       if (panelRegistry && shellCore) {
         const livePanelIds = panelRegistry.listPanels().map((p) => asPanelSlotId(p.panelId));
-        await shellCore.panelManager
-          .shutdownCleanup(livePanelIds)
-          .catch((e: unknown) => console.error("[App] Failed to run shutdown cleanup:", e));
+        const cleanup = shellCore.panelManager.shutdownCleanup(livePanelIds);
+        if (updateQuit) {
+          await cleanup;
+        } else {
+          await cleanup.catch((e: unknown) =>
+            console.error("[App] Failed to run shutdown cleanup:", e)
+          );
+        }
       }
-      await panelOrchestrator
-        ?.unregisterRuntimeClient()
-        .catch((e: unknown) => console.error("[App] Failed to unregister runtime client:", e));
+      const unregister = panelOrchestrator?.unregisterRuntimeClient();
+      if (updateQuit) {
+        await unregister;
+      } else {
+        await unregister?.catch((e: unknown) =>
+          console.error("[App] Failed to unregister runtime client:", e)
+        );
+      }
       if (stopServer) {
-        await assertPresent(session.hubProcessManager)
-          .stop()
-          .then(() => console.log("[App] Hub stopped"))
-          .catch((e) => console.error("[App] Hub stop error:", e));
+        if (updateQuit) {
+          const result = await assertPresent(session.hubProcessManager).stopTree();
+          if (!result.gone) throw new Error("The local hub process tree is still running");
+          console.log("[App] Hub process tree stopped");
+        } else {
+          await assertPresent(session.hubProcessManager)
+            .stop()
+            .then(() => console.log("[App] Hub stopped"))
+            .catch((e) => console.error("[App] Hub stop error:", e));
+        }
       } else {
         // Keep: leave the detached process running; the attachment record stays
         // so the next launch reattaches instantly.
         session.hubProcessManager?.detach();
         if (session.hubProcessManager) console.log("[App] Hub left running (detached)");
       }
-      await session.close().catch((e) => console.error("[App] Session close error:", e));
+      const close = session.close();
+      if (updateQuit) {
+        await close;
+      } else {
+        await close.catch((e) => console.error("[App] Session close error:", e));
+      }
     })();
     stopPromises.push(cleanupThenClose);
   }
@@ -3186,14 +3168,38 @@ app.on("will-quit", (event) => {
     app.exit(1);
   }, APP_SHUTDOWN_TIMEOUT_MS);
 
-  Promise.all(stopPromises).finally(() => {
-    shellCore?.shutdown?.();
-    shellCore = null;
-    cleanupNativeWebRtc();
-    clearTimeout(shutdownTimeout);
-    console.log("[App] Shutdown complete");
-    app.exit(0);
-  });
+  Promise.all(stopPromises)
+    .then(() => {
+      const core = shellCore;
+      shellCore = null;
+      core?.shutdown?.();
+      cleanupNativeWebRtc();
+      clearTimeout(shutdownTimeout);
+      console.log("[App] Shutdown complete");
+      app.exit(
+        updateQuit
+          ? NPM_UPDATE_REQUESTED_EXIT_CODE
+          : quitIntent.kind === "relaunch"
+            ? quitIntent.exitCode
+            : 0
+      );
+    })
+    .catch((error: unknown) => {
+      const core = shellCore;
+      shellCore = null;
+      try {
+        core?.shutdown?.();
+      } catch (cleanupError) {
+        console.error("[App] Shell cleanup also failed:", formatUnknownError(cleanupError));
+      }
+      cleanupNativeWebRtc();
+      clearTimeout(shutdownTimeout);
+      console.error(
+        `[App] Shutdown failed${updateQuit ? "; update cancelled" : ""}:`,
+        formatUnknownError(error)
+      );
+      app.exit(1);
+    });
 });
 
 app.on("activate", () => {

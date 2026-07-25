@@ -78,8 +78,8 @@ export interface NotificationAction {
     | { type: "app.applyUpdate"; appId: string }
     | { type: "app.rollback"; appId: string; buildKey?: string }
     | { type: "workspace.restartUnit"; name: string }
-    | { type: "desktop.downloadUpdate" }
-    | { type: "desktop.installUpdate" }
+    | { type: "desktop.installNpmUpdate" }
+    | { type: "desktop.copyNpmUpdateCommand" }
     | { type: "browser.downloadOpen"; downloadId: string }
     | { type: "browser.downloadReveal"; downloadId: string }
     | { type: "panel.focus"; panelId: string };
