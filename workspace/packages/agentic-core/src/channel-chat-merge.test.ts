@@ -2266,7 +2266,7 @@ describe("chatMessagesFromChannelView", () => {
         protocol: AGENTIC_PROTOCOL_VERSION,
         uiType: "action_bar",
         id: "bar-1",
-        source: { type: "file", path: "skills/onboarding/ActionBar.tsx" },
+        source: { type: "file", path: "skills/test/ActionBar.tsx" },
         props: { compact: true },
         maxHeight: 180,
         result: { ok: true },
@@ -2278,7 +2278,7 @@ describe("chatMessagesFromChannelView", () => {
 
     expect(actionBarPayloadFromChannelView(state)).toEqual({
       id: "bar-1",
-      source: { type: "file", path: "skills/onboarding/ActionBar.tsx" },
+      source: { type: "file", path: "skills/test/ActionBar.tsx" },
       props: { compact: true },
       maxHeight: 180,
       result: { ok: true },

@@ -249,43 +249,4 @@ describe("sandbox source hooks", () => {
       expect(view.getByText(/Credential required for/)).toBeTruthy();
     });
   });
-
-  it("renders the onboarding action bar without a development JSX runtime", async () => {
-    const moduleMap = (globalThis as Record<string, unknown>)["__vibestudioModuleMap__"] as Record<
-      string,
-      unknown
-    >;
-    moduleMap["react"] = React;
-    moduleMap["react/jsx-runtime"] = ReactJsxRuntime;
-    moduleMap["@radix-ui/themes"] = RadixThemes;
-    expect(moduleMap["react/jsx-dev-runtime"]).toBeUndefined();
-
-    const sourcePath = "skills/onboarding/ActionBar.tsx";
-    const source = await readFile(path.resolve(process.cwd(), sourcePath), "utf8");
-    const states: ActionBarHookState[] = [];
-
-    function Harness() {
-      const state = useActionBar({
-        data: { id: "onboarding", source: { type: "file", path: sourcePath } },
-        loadSourceFile: async (requestedPath) => {
-          if (requestedPath === sourcePath) return source;
-          throw new Error(`Missing ${requestedPath}`);
-        },
-      });
-      useEffect(() => {
-        states.push(state);
-      }, [state]);
-      const Component = state.actionBar?.component?.Component;
-      return Component ? (
-        <Component props={{}} chat={{ send: async () => ({}) }} scope={{}} scopes={{}} />
-      ) : null;
-    }
-
-    const view = render(<Harness />);
-
-    await waitFor(() => {
-      expect(states[states.length - 1]?.actionBar?.component?.error).toBeUndefined();
-      expect(view.getByText("Start here")).toBeTruthy();
-    });
-  });
 });

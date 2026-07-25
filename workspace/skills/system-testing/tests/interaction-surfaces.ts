@@ -116,7 +116,7 @@ async function runOnboardingOpening(
     syntheticPanelUiTools: true,
     additionalSystemPrompt: `
 
-Exercise the shipped first-run onboarding contract. Read skills/onboarding/SKILL.md. On the opening turn, use client_eval with inline TypeScript that statically imports composeOnboardingSnapshot from "@workspace-skills/onboarding" and returns await composeOnboardingSnapshot(). Render the returned array through inline_ui using skills/onboarding/SetupHub.tsx as the file path and snapshot as its prop, then clear the preparing action bar. Never use server-side eval to compose onboarding state.`,
+Exercise the shipped first-run onboarding contract. Read skills/onboarding/SKILL.md. On the opening turn, use client_eval with inline TypeScript that statically imports composeOnboardingSnapshot from "@workspace-skills/onboarding" and returns await composeOnboardingSnapshot(). Render the returned array through inline_ui using skills/onboarding/SetupHub.tsx as the file path and snapshot as its prop. Do not load or publish an action bar. Never use server-side eval to compose onboarding state.`,
     methods: {
       client_eval: {
         description:
@@ -223,7 +223,7 @@ export const interactionSurfaceTests: TestCase[] = [
       "I just opened this workspace for the first time. Show the setup overview, then finish with ONBOARDING_OPENING_OK.",
     orchestrate: runOnboardingOpening,
     validate: (result) => {
-      const tools = requireCompletedTools(result, ["client_eval", "inline_ui", "load_action_bar"]);
+      const tools = requireCompletedTools(result, ["client_eval", "inline_ui"]);
       if (!tools.passed) return tools;
       if (completedNamedToolCalls(result, "eval").length > 0) {
         return {
@@ -264,13 +264,10 @@ export const interactionSurfaceTests: TestCase[] = [
           reason: "SetupHub.tsx was not rendered with the composed snapshot prop",
         };
       }
-      const clears = completedNamedToolCalls(result, "load_action_bar").filter(
-        (call) => call.arguments?.["clear"] === true
-      );
-      if (clears.length === 0) {
+      if (completedNamedToolCalls(result, "load_action_bar").length > 0) {
         return {
           passed: false,
-          reason: "Opening onboarding did not clear the preparing action bar",
+          reason: "Opening onboarding published an action bar instead of staying inline",
         };
       }
       return finalMessageHasAll(result, ["ONBOARDING_OPENING_OK"]);

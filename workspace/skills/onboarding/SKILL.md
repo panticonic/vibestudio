@@ -25,7 +25,7 @@ and web search directly from their owners. It makes one additional redacted
 optional read becomes an honest `unknown` row and does not suppress the rest.
 
 The opening message is short. The inline setup overview is the first-screen
-information architecture. Clear the preparing action bar after it renders.
+information architecture. Do not load or publish an onboarding action bar.
 
 ## Capability selections
 

@@ -1,9 +1,9 @@
 # Getting started
 
-The first-run chat opens with a compact “Preparing setup overview…” action bar.
-The agent reads [SKILL.md](SKILL.md), composes the authoritative snapshot, gives
-a short welcome, renders [SetupHub.tsx](SetupHub.tsx), and clears the action
-bar.
+The first-run chat opens directly in the transcript. The agent reads
+[SKILL.md](SKILL.md), composes the authoritative snapshot, gives a short
+welcome, and renders [SetupHub.tsx](SetupHub.tsx) inline. Onboarding does not
+install an action bar.
 
 ## Run the setup projection
 

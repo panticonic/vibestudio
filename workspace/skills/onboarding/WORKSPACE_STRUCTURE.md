@@ -21,7 +21,6 @@ source/
   skills/               ← Cross-repo agent skill packages
     onboarding/         ← Workspace-wide onboarding skill and setup references
       SKILL.md
-      ActionBar.tsx
     sandbox/            ← Sandbox execution skill
     workspace-dev/           ← Workspace development skill
   workers/              ← Workerd Durable Object source
