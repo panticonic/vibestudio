@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FALLBACK_MODEL } from "./types.js";
+import { FALLBACK_MODEL, type ModelRecord } from "./types.js";
 
 interface TestDownloadJob {
   id: string;
@@ -19,8 +19,8 @@ const modelLibraryMock = vi.hoisted(() => {
   const initialJob = (id = "job-1"): TestDownloadJob => ({
     id,
     slug: "lfm2.5-1.2b",
-    hfRepo: "LiquidAI/LFM2.5-1.2B-Instruct-GGUF",
-    file: "LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
+    hfRepo: "NobodyWho/LFM2.5-1.2B-Instruct-GGUF",
+    file: "LFM2.5-1.2B-Instruct-Q4_0-vendor-sampling.gguf",
     totalBytes: 100,
     receivedBytes: 25,
     phase: "active",
@@ -47,10 +47,11 @@ const modelLibraryMock = vi.hoisted(() => {
       state.library.startDownload.mockClear();
       state.library.startDownloadJob.mockClear();
       state.library.listDownloads.mockClear();
+      state.library.setRuntimeValidation.mockClear();
     },
     library: {
       list: vi.fn(async () => []),
-      get: vi.fn(async () => null),
+      get: vi.fn<(slug: string) => Promise<ModelRecord | null>>(async () => null),
       ensureFallback: vi.fn<() => Promise<unknown>>(async () => {
         throw new Error("not used");
       }),
@@ -64,6 +65,7 @@ const modelLibraryMock = vi.hoisted(() => {
       importDir: vi.fn(async () => []),
       setModelConfig: vi.fn(async () => {}),
       setBenchmark: vi.fn(async () => {}),
+      setRuntimeValidation: vi.fn(async () => {}),
     },
   };
   function ensureDownload(): {
@@ -105,8 +107,27 @@ const engineMock = vi.hoisted(() => {
   return state;
 });
 
+const supervisorMock = vi.hoisted(() => {
+  const state = {
+    ensureLoaded: vi.fn(async () => ({ baseUrl: "http://127.0.0.1:8080/v1" })),
+    validateModel: vi.fn(async () => {}),
+    reset(): void {
+      state.ensureLoaded.mockClear();
+      state.validateModel.mockClear();
+    },
+  };
+  return state;
+});
+
 vi.mock("./library.js", () => ({
   createModelLibrary: vi.fn(() => modelLibraryMock.library),
+  isCurrentFallbackRecord: vi.fn(
+    (record: ModelRecord | null) =>
+      record !== null &&
+      record.slug === FALLBACK_MODEL.slug &&
+      record.hfRepo === FALLBACK_MODEL.hfRepo &&
+      path.basename(record.file) === FALLBACK_MODEL.file
+  ),
   estimateFit: vi.fn(() => ({
     fit: "cpu-only",
     estTokensPerSec: null,
@@ -142,7 +163,8 @@ vi.mock("./engine.js", () => ({
 vi.mock("./supervisor.js", () => ({
   createServerSupervisor: vi.fn(() => ({
     activate: vi.fn(async () => {}),
-    ensureLoaded: vi.fn(async () => ({ baseUrl: "http://127.0.0.1:8080/v1" })),
+    ensureLoaded: supervisorMock.ensureLoaded,
+    validateModel: supervisorMock.validateModel,
     status: vi.fn(() => ({
       utility: { state: "stopped" },
       main: { state: "stopped" },
@@ -167,6 +189,7 @@ describe("local-models extension", () => {
     vi.stubEnv("VIBESTUDIO_LOCAL_MODELS_DIR", tempRoot);
     modelLibraryMock.reset();
     engineMock.reset();
+    supervisorMock.reset();
   });
 
   afterEach(() => {
@@ -183,8 +206,8 @@ describe("local-models extension", () => {
     });
 
     const response = api.downloadModel({
-      hfRepo: "LiquidAI/LFM2.5-1.2B-Instruct-GGUF",
-      file: "LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
+      hfRepo: "NobodyWho/LFM2.5-1.2B-Instruct-GGUF",
+      file: "LFM2.5-1.2B-Instruct-Q4_0-vendor-sampling.gguf",
       slug: "lfm2.5-1.2b",
     });
     const lines = jsonLineReader(response);
@@ -216,8 +239,8 @@ describe("local-models extension", () => {
       {
         id: "pre-existing",
         slug: "lfm2.5-1.2b",
-        hfRepo: "LiquidAI/LFM2.5-1.2B-Instruct-GGUF",
-        file: "LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
+        hfRepo: "NobodyWho/LFM2.5-1.2B-Instruct-GGUF",
+        file: "LFM2.5-1.2B-Instruct-Q4_0-vendor-sampling.gguf",
         totalBytes: 100,
         receivedBytes: 80,
         phase: "active",
@@ -231,8 +254,8 @@ describe("local-models extension", () => {
     });
 
     const response = api.downloadModel({
-      hfRepo: "LiquidAI/LFM2.5-1.2B-Instruct-GGUF",
-      file: "LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
+      hfRepo: "NobodyWho/LFM2.5-1.2B-Instruct-GGUF",
+      file: "LFM2.5-1.2B-Instruct-Q4_0-vendor-sampling.gguf",
       slug: "lfm2.5-1.2b",
     });
     const lines = jsonLineReader(response);
@@ -269,6 +292,8 @@ describe("local-models extension", () => {
     await expect(api.listModels()).resolves.toEqual([
       expect.objectContaining({
         slug: FALLBACK_MODEL.slug,
+        contextWindow: FALLBACK_MODEL.contextLength,
+        maxTokens: FALLBACK_MODEL.contextLength,
         state: "error",
         errorMessage: "engine install failed",
       }),
@@ -281,8 +306,143 @@ describe("local-models extension", () => {
     await expect(api.listModels()).resolves.toEqual([
       expect.objectContaining({
         slug: FALLBACK_MODEL.slug,
-        state: "startable",
+        state: "not-installed",
+        download: null,
         errorMessage: null,
+      }),
+    ]);
+  });
+
+  it("installs the fallback explicitly and exposes progress before it becomes usable", async () => {
+    const { activate } = await import("./index.js");
+    const api = await activate({
+      log: { info: vi.fn(), warn: vi.fn() },
+      emit: vi.fn(),
+    });
+
+    await expect(api.listModels()).resolves.toEqual([
+      expect.objectContaining({
+        slug: FALLBACK_MODEL.slug,
+        state: "not-installed",
+      }),
+    ]);
+
+    await expect(api.installModel(FALLBACK_MODEL.ref)).resolves.toMatchObject({
+      slug: FALLBACK_MODEL.slug,
+      hfRepo: FALLBACK_MODEL.hfRepo,
+      file: FALLBACK_MODEL.file,
+    });
+    await expect(api.listModels()).resolves.toEqual([
+      expect.objectContaining({
+        slug: FALLBACK_MODEL.slug,
+        state: "downloading",
+        download: expect.objectContaining({
+          phase: "active",
+          receivedBytes: 25,
+          totalBytes: 100,
+          progress: 0.25,
+        }),
+      }),
+    ]);
+  });
+
+  it("does not expose a stale fallback artifact as installed", async () => {
+    const stale = {
+      ...fallbackRecord(),
+      hfRepo: "LiquidAI/LFM2.5-1.2B-GGUF",
+      file: "/models/LFM2.5-1.2B-Q4_K_M.gguf",
+    };
+    modelLibraryMock.library.list.mockResolvedValueOnce([stale]);
+    modelLibraryMock.library.get.mockResolvedValueOnce(stale);
+    const { activate } = await import("./index.js");
+    const api = await activate({
+      log: { info: vi.fn(), warn: vi.fn() },
+      emit: vi.fn(),
+    });
+
+    await expect(api.listModels()).resolves.toEqual([
+      expect.objectContaining({
+        slug: FALLBACK_MODEL.slug,
+        state: "not-installed",
+      }),
+    ]);
+    await expect(api.status()).resolves.toMatchObject({
+      fallback: {
+        ready: false,
+        reason: "not installed",
+      },
+    });
+  });
+
+  it("validates a newly added fallback exactly once before its first invocation", async () => {
+    const pending = fallbackRecord({
+      status: "pending",
+      error: null,
+      validatedAt: null,
+    });
+    modelLibraryMock.library.ensureFallback.mockResolvedValueOnce(pending);
+    modelLibraryMock.library.get.mockResolvedValueOnce(pending);
+    const { activate } = await import("./index.js");
+    const api = await activate({
+      log: { info: vi.fn(), warn: vi.fn() },
+      emit: vi.fn(),
+    });
+
+    await expect(api.ensureLoaded(FALLBACK_MODEL.ref)).resolves.toEqual({
+      baseUrl: "http://127.0.0.1:8080/v1",
+    });
+
+    expect(supervisorMock.validateModel).toHaveBeenCalledTimes(1);
+    expect(modelLibraryMock.library.setRuntimeValidation).toHaveBeenCalledWith(
+      FALLBACK_MODEL.slug,
+      expect.objectContaining({ status: "ready", error: null })
+    );
+    expect(supervisorMock.ensureLoaded).toHaveBeenCalledTimes(1);
+  });
+
+  it("never validates a preconfigured fallback record during invocation", async () => {
+    const preconfigured = fallbackRecord();
+    modelLibraryMock.library.ensureFallback.mockResolvedValueOnce(preconfigured);
+    const { activate } = await import("./index.js");
+    const api = await activate({
+      log: { info: vi.fn(), warn: vi.fn() },
+      emit: vi.fn(),
+    });
+
+    await expect(api.ensureLoaded(FALLBACK_MODEL.ref)).resolves.toEqual({
+      baseUrl: "http://127.0.0.1:8080/v1",
+    });
+
+    expect(supervisorMock.validateModel).not.toHaveBeenCalled();
+    expect(modelLibraryMock.library.setRuntimeValidation).not.toHaveBeenCalled();
+    expect(supervisorMock.ensureLoaded).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces a failed fallback download as a terminal model error", async () => {
+    modelLibraryMock.downloads = [
+      {
+        id: "failed-job",
+        slug: FALLBACK_MODEL.slug,
+        hfRepo: FALLBACK_MODEL.hfRepo,
+        file: FALLBACK_MODEL.file,
+        totalBytes: 700,
+        receivedBytes: 350,
+        phase: "active",
+        error: "Model download failed with HTTP 503",
+      },
+    ];
+    const { activate } = await import("./index.js");
+    const api = await activate({
+      log: { info: vi.fn(), warn: vi.fn() },
+      emit: vi.fn(),
+    });
+
+    await expect(api.listModels()).resolves.toEqual([
+      expect.objectContaining({
+        slug: FALLBACK_MODEL.slug,
+        state: "error",
+        download: null,
+        errorMessage: "Model download failed with HTTP 503",
       }),
     ]);
   });
@@ -314,6 +474,26 @@ describe("local-models extension", () => {
     resolveSharedLoad();
   });
 });
+
+function fallbackRecord(runtimeValidation?: ModelRecord["runtimeValidation"]): ModelRecord {
+  return {
+    slug: FALLBACK_MODEL.slug,
+    displayName: FALLBACK_MODEL.displayName,
+    hfRepo: FALLBACK_MODEL.hfRepo,
+    file: `/models/${FALLBACK_MODEL.file}`,
+    sizeBytes: 700 * 1024 * 1024,
+    quant: FALLBACK_MODEL.quant,
+    paramCount: "1.2B",
+    arch: "lfm2",
+    trainedContextLength: FALLBACK_MODEL.contextLength,
+    toolsCapable: true,
+    sha256: "a".repeat(64),
+    importedInPlace: false,
+    config: { contextLength: null, gpuLayers: null },
+    runtimeValidation,
+    addedAt: 1,
+  };
+}
 
 function jsonLineReader(response: Response): {
   next(): Promise<unknown>;

@@ -2,7 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import * as fsp from "node:fs/promises";
 import path from "node:path";
-import { detectToolsCapable, parseGgufHeader } from "./gguf.js";
+import {
+  detectToolsCapable,
+  GgufHeaderTruncatedError,
+  parseGgufHeader,
+  type GgufMeta,
+} from "./gguf.js";
 import type {
   DownloadJob,
   FitEstimate,
@@ -68,6 +73,7 @@ interface BuildRecordInput {
 }
 
 const HEADER_READ_BYTES = 8 * 1024 * 1024;
+const MAX_HEADER_READ_BYTES = 256 * 1024 * 1024;
 const PROGRESS_INTERVAL_MS = 500;
 const RECORDS_FILE = "records.json";
 
@@ -121,6 +127,21 @@ class CancelledDownload extends Error {
   }
 }
 
+/**
+ * The fallback reference is stable across releases, but the artifact behind it
+ * is not. Template and tokenizer metadata are executable runtime compatibility
+ * data, so an older GGUF with the same slug must not masquerade as the current
+ * fallback.
+ */
+export function isCurrentFallbackRecord(record: ModelRecord | null): record is ModelRecord {
+  return (
+    record !== null &&
+    record.slug === FALLBACK_MODEL.slug &&
+    record.hfRepo === FALLBACK_MODEL.hfRepo &&
+    path.basename(record.file) === FALLBACK_MODEL.file
+  );
+}
+
 export function createModelLibrary(deps: ModelLibraryDeps): {
   list(): Promise<ModelRecord[]>;
   get(slug: string): Promise<ModelRecord | null>;
@@ -147,6 +168,10 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
   importDir(dir: string): Promise<ModelRecord[]>;
   setModelConfig(slug: string, cfg: ModelRuntimeConfig): Promise<void>;
   setBenchmark(slug: string, result: ModelBenchmarkResult): Promise<void>;
+  setRuntimeValidation(
+    slug: string,
+    validation: ModelRecord["runtimeValidation"]
+  ): Promise<void>;
 } {
   const modelsDir = path.join(deps.rootDir, ROOT_LAYOUT.modelsDir);
   const recordsFile = path.join(modelsDir, RECORDS_FILE);
@@ -181,12 +206,14 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
 
   async function saveRecords(records: ModelRecord[]): Promise<void> {
     recordsCache = records;
-    const write = writeChain.catch(() => undefined).then(async () => {
-      await ensureStorage();
-      const tmp = path.join(modelsDir, `${RECORDS_FILE}.${process.pid}.${randomUUID()}.tmp`);
-      await fsp.writeFile(tmp, `${JSON.stringify(records, null, 2)}\n`, "utf8");
-      await fsp.rename(tmp, recordsFile);
-    });
+    const write = writeChain
+      .catch(() => undefined)
+      .then(async () => {
+        await ensureStorage();
+        const tmp = path.join(modelsDir, `${RECORDS_FILE}.${process.pid}.${randomUUID()}.tmp`);
+        await fsp.writeFile(tmp, `${JSON.stringify(records, null, 2)}\n`, "utf8");
+        await fsp.rename(tmp, recordsFile);
+      });
     writeChain = write;
     await write;
   }
@@ -206,12 +233,17 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
     task.onProgress?.(job);
   }
 
-  async function startDownloadTask(req: DownloadRequest, options: DownloadOptions = {}): Promise<StartedDownloadTask> {
+  async function startDownloadTask(
+    req: DownloadRequest,
+    options: DownloadOptions = {}
+  ): Promise<StartedDownloadTask> {
     validateDownloadRequest(req);
     await ensureStorage();
     const records = await loadRecords();
     const targetPath = modelTargetPath(modelsDir, req.hfRepo, req.file);
-    const existing = records.find((record) => path.resolve(record.file) === path.resolve(targetPath));
+    const existing = records.find(
+      (record) => path.resolve(record.file) === path.resolve(targetPath)
+    );
     if (existing) {
       const job: DownloadJob = {
         id: randomUUID(),
@@ -226,6 +258,14 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
       return { job, done: Promise.resolve(copyJob(job)) };
     }
 
+    // A failed attempt remains visible until the user retries or dismisses it.
+    // Retrying the same model replaces that terminal job with a fresh task.
+    for (const [id, task] of downloads) {
+      if (task.job.error && task.req.hfRepo === req.hfRepo && task.req.file === req.file) {
+        downloads.delete(id);
+      }
+    }
+
     const existingTask = findMatchingDownloadTask(req);
     if (existingTask) {
       return { job: copyJob(existingTask.job), done: existingTask.done };
@@ -235,7 +275,8 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
       ...records.map((record) => record.slug),
       ...Array.from(downloads.values()).map((task) => task.job.slug),
     ]);
-    const slug = options.slugOverride ?? uniqueSlug(downloadSlugBase(req.hfRepo, req.file), usedSlugs);
+    const slug =
+      options.slugOverride ?? uniqueSlug(downloadSlugBase(req.hfRepo, req.file), usedSlugs);
     const job: DownloadJob = {
       id: randomUUID(),
       slug,
@@ -274,11 +315,17 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
     return { job: copyJob(task.job), done: task.done };
   }
 
-  async function startDownloadInternal(req: DownloadRequest, options: DownloadOptions = {}): Promise<DownloadJob> {
+  async function startDownloadInternal(
+    req: DownloadRequest,
+    options: DownloadOptions = {}
+  ): Promise<DownloadJob> {
     return (await startDownloadTask(req, options)).done;
   }
 
-  async function startDownloadJobInternal(req: DownloadRequest, options: DownloadOptions = {}): Promise<DownloadJob> {
+  async function startDownloadJobInternal(
+    req: DownloadRequest,
+    options: DownloadOptions = {}
+  ): Promise<DownloadJob> {
     const started = await startDownloadTask(req, options);
     void started.done.catch(() => {
       // The job starter is intentionally nonblocking; callers observe failures
@@ -323,9 +370,9 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
           return;
         }
 
-        downloads.delete(task.job.id);
         const normalized = normalizeError(error);
         task.job.error = normalized.message;
+        emitProgress(task, true);
         task.reject(normalized);
       })
       .finally(() => {
@@ -372,7 +419,11 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
 
       task.job.totalBytes = responseTotalBytes(response, resumeFrom);
       emitProgress(task, true);
-      await preflightDiskSpace(path.dirname(task.targetPath), task.job.totalBytes, task.job.receivedBytes);
+      await preflightDiskSpace(
+        path.dirname(task.targetPath),
+        task.job.totalBytes,
+        task.job.receivedBytes
+      );
 
       const hash = createHash("sha256");
       if (resumed) {
@@ -416,7 +467,10 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
       }
 
       const digest = hash.digest("hex");
-      if (task.req.expectedSha256 && digest.toLowerCase() !== task.req.expectedSha256.toLowerCase()) {
+      if (
+        task.req.expectedSha256 &&
+        digest.toLowerCase() !== task.req.expectedSha256.toLowerCase()
+      ) {
         await unlinkIfExists(task.partPath);
         throw new Error(
           `Checksum mismatch for ${task.req.hfRepo}/${task.req.file}: expected ${task.req.expectedSha256}, got ${digest}`
@@ -462,7 +516,13 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
 
   async function buildRecord(input: BuildRecordInput): Promise<ModelRecord> {
     const stat = await fsp.stat(input.file);
-    const meta = parseGgufHeader(await readFilePrefix(input.file, HEADER_READ_BYTES));
+    const meta = await readGgufHeader(input.file);
+    const trainedContextLength =
+      meta.contextLength ??
+      (input.slug === FALLBACK_MODEL.slug ? FALLBACK_MODEL.contextLength : null);
+    if (trainedContextLength === null) {
+      throw new Error(`GGUF metadata for ${input.displayName} does not declare a context length`);
+    }
     const quant = (meta.quantLabel ?? quantFromFilename(input.file) ?? "unknown") as QuantName;
     return {
       slug: input.slug,
@@ -473,13 +533,17 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
       quant,
       paramCount: meta.paramCountLabel ?? inferParamCount(input.displayName, input.file),
       arch: meta.arch,
-      trainedContextLength:
-        meta.contextLength ?? (input.slug === FALLBACK_MODEL.slug ? FALLBACK_MODEL.contextLength : 4096),
+      trainedContextLength,
       toolsCapable: detectToolsCapable(meta.chatTemplate),
       sha256: input.sha256,
       importedInPlace: input.importedInPlace,
       config: { contextLength: null, gpuLayers: null },
       benchmark: null,
+      runtimeValidation: {
+        status: "pending",
+        error: null,
+        validatedAt: null,
+      },
       addedAt: deps.now(),
     };
   }
@@ -494,12 +558,35 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
     },
 
     async ensureFallback(onProgress?: (job: DownloadJob) => void): Promise<ModelRecord> {
-      const existing = (await loadRecords()).find((record) => record.slug === FALLBACK_MODEL.slug);
-      if (existing) {
+      const records = await loadRecords();
+      const existing = records.find((record) => record.slug === FALLBACK_MODEL.slug);
+      if (isCurrentFallbackRecord(existing ?? null)) {
         return copyRecord(existing);
       }
 
       const file = fallbackFileName();
+      const cachedFile = modelTargetPath(modelsDir, FALLBACK_MODEL.hfRepo, file);
+      try {
+        const stat = await fsp.stat(cachedFile);
+        if (stat.isFile()) {
+          const record = await buildRecord({
+            slug: FALLBACK_MODEL.slug,
+            hfRepo: FALLBACK_MODEL.hfRepo,
+            file: cachedFile,
+            displayName: FALLBACK_MODEL.displayName,
+            sha256: await sha256File(cachedFile),
+            importedInPlace: false,
+          });
+          await saveRecords([
+            ...records.filter((item) => item.slug !== FALLBACK_MODEL.slug),
+            record,
+          ]);
+          emitModelsChanged();
+          return copyRecord(record);
+        }
+      } catch (error) {
+        if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+      }
       await startDownloadInternal(
         {
           hfRepo: FALLBACK_MODEL.hfRepo,
@@ -565,7 +652,9 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
 
     async remove(slug: string): Promise<void> {
       if (slug === FALLBACK_MODEL.slug) {
-        throw new Error(`Refusing to remove fallback model ${FALLBACK_MODEL.ref}; it is required for local models.`);
+        throw new Error(
+          `Refusing to remove fallback model ${FALLBACK_MODEL.ref}; it is required for local models.`
+        );
       }
 
       const records = await loadRecords();
@@ -595,7 +684,7 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
           continue;
         }
 
-        const header = parseGgufHeader(await readFilePrefix(resolved, HEADER_READ_BYTES));
+        const header = await readGgufHeader(resolved);
         const quant = header.quantLabel ?? quantFromFilename(resolved) ?? "gguf";
         const slug = uniqueSlug(importSlugBase(resolved, quant), usedSlugs);
         usedSlugs.add(slug);
@@ -671,6 +760,23 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
       await saveRecords(next);
       emitModelsChanged();
     },
+
+    async setRuntimeValidation(
+      slug: string,
+      validation: ModelRecord["runtimeValidation"]
+    ): Promise<void> {
+      const records = await loadRecords();
+      const index = records.findIndex((record) => record.slug === slug);
+      if (index === -1) {
+        throw new Error(`Model ${slug} is not installed`);
+      }
+      const record = records[index];
+      if (!record) throw new Error(`Model ${slug} is not installed`);
+      const next = records.slice();
+      next[index] = { ...record, runtimeValidation: validation };
+      await saveRecords(next);
+      emitModelsChanged();
+    },
   };
 
   function mustFindDownload(id: string): DownloadTask {
@@ -704,9 +810,9 @@ export function estimateFit(
     fit = "too-big";
   }
 
-  const contextLimit =
-    fit === "full-gpu" ? 32768 : fit === "partial-offload" ? 16384 : fit === "cpu-only" ? 8192 : 8192;
-  const trainedContextLength = record.trainedContextLength > 0 ? record.trainedContextLength : contextLimit;
+  if (!Number.isSafeInteger(record.trainedContextLength) || record.trainedContextLength <= 0) {
+    throw new Error("Model metadata must declare a positive context length");
+  }
   const gpuLayers = fit === "full-gpu" ? 99 : fit === "partial-offload" ? -1 : 0;
   const notes =
     fit === "too-big"
@@ -716,7 +822,7 @@ export function estimateFit(
   return {
     fit,
     estTokensPerSec: null,
-    contextLength: Math.min(trainedContextLength, contextLimit),
+    contextLength: record.trainedContextLength,
     gpuLayers,
     notes,
   };
@@ -733,7 +839,13 @@ function validateDownloadRequest(req: DownloadRequest): void {
 }
 
 function isSafePathSegment(segment: string): boolean {
-  return segment.length > 0 && segment !== "." && segment !== ".." && !segment.includes("/") && !segment.includes("\\");
+  return (
+    segment.length > 0 &&
+    segment !== "." &&
+    segment !== ".." &&
+    !segment.includes("/") &&
+    !segment.includes("\\")
+  );
 }
 
 function modelTargetPath(modelsDir: string, hfRepo: string, file: string): string {
@@ -766,7 +878,11 @@ function responseTotalBytes(response: Response, resumeFrom: number): number | nu
   return null;
 }
 
-async function preflightDiskSpace(dir: string, totalBytes: number | null, receivedBytes: number): Promise<void> {
+async function preflightDiskSpace(
+  dir: string,
+  totalBytes: number | null,
+  receivedBytes: number
+): Promise<void> {
   if (totalBytes === null) {
     return;
   }
@@ -804,13 +920,38 @@ async function readFilePrefix(file: string, maxBytes: number): Promise<Uint8Arra
   }
 }
 
+async function readGgufHeader(file: string): Promise<GgufMeta> {
+  const stat = await fsp.stat(file);
+  const safeLimit = Math.min(stat.size, MAX_HEADER_READ_BYTES);
+  let readBytes = Math.min(stat.size, HEADER_READ_BYTES);
+
+  while (true) {
+    try {
+      return parseGgufHeader(await readFilePrefix(file, readBytes));
+    } catch (error) {
+      if (!(error instanceof GgufHeaderTruncatedError) || readBytes >= safeLimit) {
+        if (error instanceof GgufHeaderTruncatedError && stat.size > MAX_HEADER_READ_BYTES) {
+          throw new Error(
+            `GGUF metadata header exceeds the ${MAX_HEADER_READ_BYTES / 1024 / 1024} MiB safety limit`
+          );
+        }
+        throw error;
+      }
+      readBytes = Math.min(safeLimit, Math.max(readBytes * 2, error.requiredBytes));
+    }
+  }
+}
+
 async function sha256File(file: string): Promise<string> {
   const hash = createHash("sha256");
   await updateHashFromFile(hash, file);
   return hash.digest("hex");
 }
 
-async function updateHashFromFile(hash: ReturnType<typeof createHash>, file: string): Promise<void> {
+async function updateHashFromFile(
+  hash: ReturnType<typeof createHash>,
+  file: string
+): Promise<void> {
   const stream = createReadStream(file);
   for await (const chunk of stream) {
     hash.update(chunk as Uint8Array);
@@ -954,8 +1095,7 @@ function titleize(value: string): string {
 }
 
 function fallbackFileName(): string {
-  const repoName = FALLBACK_MODEL.hfRepo.split("/").at(-1)?.replace(/[-_.]?gguf$/i, "") ?? "model";
-  return `${repoName}-${FALLBACK_MODEL.quant}.gguf`;
+  return FALLBACK_MODEL.file;
 }
 
 function escapeRegExp(value: string): string {

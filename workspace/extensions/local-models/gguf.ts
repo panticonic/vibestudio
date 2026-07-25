@@ -11,6 +11,13 @@ type GgufValue = string | number | bigint | boolean | GgufValue[];
 const GGUF_MAGIC = [0x47, 0x47, 0x55, 0x46] as const;
 const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
+export class GgufHeaderTruncatedError extends Error {
+  constructor(readonly requiredBytes: number) {
+    super("Truncated GGUF metadata header");
+    this.name = "GgufHeaderTruncatedError";
+  }
+}
+
 const VALUE_TYPE = {
   uint8: 0,
   int8: 1,
@@ -168,9 +175,18 @@ class GgufReader {
     return this.decoder.decode(this.readBytes(length));
   }
 
+  skipBytes(length: number): void {
+    this.ensure(length);
+    this.offset += length;
+  }
+
+  skipString(): void {
+    this.skipBytes(this.readUint64Number("GGUF string length"));
+  }
+
   private ensure(length: number): void {
     if (length < 0 || this.remaining() < length) {
-      throw new Error("Truncated GGUF metadata header");
+      throw new GgufHeaderTruncatedError(this.offset + Math.max(0, length));
     }
   }
 }
@@ -202,6 +218,16 @@ export function parseGgufHeader(buf: Uint8Array): GgufMeta {
   for (let index = 0; index < kvCount; index += 1) {
     const key = reader.readString();
     const type = reader.readUint32();
+    const relevant =
+      key === "general.architecture" ||
+      key === "general.size_label" ||
+      key === "tokenizer.chat_template" ||
+      key === "general.file_type" ||
+      key.endsWith(".context_length");
+    if (!relevant) {
+      skipValue(reader, type);
+      continue;
+    }
     const value = readValue(reader, type);
 
     if (key === "general.architecture" && typeof value === "string") {
@@ -255,6 +281,43 @@ export function detectToolsCapable(chatTemplate: string | null): boolean {
     /\bavailable_tools\b/,
     /\btools\b/,
   ].some((pattern) => pattern.test(text));
+}
+
+function skipValue(reader: GgufReader, type: number): void {
+  switch (type) {
+    case VALUE_TYPE.uint8:
+    case VALUE_TYPE.int8:
+    case VALUE_TYPE.bool:
+      reader.skipBytes(1);
+      return;
+    case VALUE_TYPE.uint16:
+    case VALUE_TYPE.int16:
+      reader.skipBytes(2);
+      return;
+    case VALUE_TYPE.uint32:
+    case VALUE_TYPE.int32:
+    case VALUE_TYPE.float32:
+      reader.skipBytes(4);
+      return;
+    case VALUE_TYPE.uint64:
+    case VALUE_TYPE.int64:
+    case VALUE_TYPE.float64:
+      reader.skipBytes(8);
+      return;
+    case VALUE_TYPE.string:
+      reader.skipString();
+      return;
+    case VALUE_TYPE.array: {
+      const elementType = reader.readUint32();
+      const length = reader.readUint64Number("GGUF array length");
+      for (let index = 0; index < length; index += 1) {
+        skipValue(reader, elementType);
+      }
+      return;
+    }
+    default:
+      throw new Error(`Unsupported GGUF metadata value type ${type}`);
+  }
 }
 
 function readValue(reader: GgufReader, type: number): GgufValue {

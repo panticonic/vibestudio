@@ -19,11 +19,17 @@ import path from "node:path";
 
 import { createHardwareProfiler } from "./hardware.js";
 import { createEngineInstaller } from "./engine.js";
-import { createModelLibrary, estimateFit } from "./library.js";
+import {
+  createModelLibrary,
+  estimateFit,
+  isCurrentFallbackRecord,
+} from "./library.js";
 import { createServerSupervisor } from "./supervisor.js";
+import { runtimeContextLengthFor } from "./runtime-profiles.js";
 import { runModelBenchmark } from "./benchmark.js";
 import {
   FALLBACK_MODEL,
+  ROOT_LAYOUT,
   type CuratedModel,
   type DownloadJob,
   type EnginePin,
@@ -45,57 +51,57 @@ import {
  * extraction/execution.
  */
 const ENGINE_PIN: EnginePin = {
-  buildTag: "b9895", // verified live 2026-07-07; asset names locked by engine tests
+  buildTag: "b10107", // published 2026-07-24; asset names locked by engine tests
   checksums: {
     "cudart-llama-bin-win-cuda-12.4-x64.zip":
       "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
     "cudart-llama-bin-win-cuda-13.3-x64.zip":
       "1462a050eb4c684921ba51dcc4cc488a036674c3e73e9945ee705b854808d03e",
-    "llama-b9895-bin-android-arm64.tar.gz":
-      "362f72212ea6bcc779f977ced45e172bc59a5d9c084939e6ebbec1bf24035963",
-    "llama-b9895-bin-macos-arm64.tar.gz":
-      "cd4a629d1bcdc0292bdb3ec4f4c3fd6c4632de85feb0524caac646d0659bc3ef",
-    "llama-b9895-bin-macos-x64.tar.gz":
-      "27808d34265f29fd16a2a3ab3c326d771be384a120afb5bd185bbff87bd61415",
-    "llama-b9895-bin-ubuntu-arm64.tar.gz":
-      "2b77400f6e795d3f3accaff62aa93b84eab1f655c9b14854d9c8535fe53fac45",
-    "llama-b9895-bin-ubuntu-openvino-2026.2.1-x64.tar.gz":
-      "a8bd4e47a337338b8aeb6cbe2ae30b4dc003cb25cea4a6f4a774e8b8b26fa27b",
-    "llama-b9895-bin-ubuntu-rocm-7.2-x64.tar.gz":
-      "168a45c556b4d68751279de329f8c23febc7b83a0d73b8feb51b373263e64f3c",
-    "llama-b9895-bin-ubuntu-s390x.tar.gz":
-      "91230a6a610a934aee955d376f7de928f5daa7329da57881e8fa67b4b3424870",
-    "llama-b9895-bin-ubuntu-sycl-fp16-x64.tar.gz":
-      "cd17bfa882db66d27f8a6d0c0add58850d9ca1c2fa6c803d442219a9a0594d8e",
-    "llama-b9895-bin-ubuntu-sycl-fp32-x64.tar.gz":
-      "12a5ffd3afeb05d8424b1b1b381e38d2ff88a68a104160630603a35a1923c51e",
-    "llama-b9895-bin-ubuntu-vulkan-arm64.tar.gz":
-      "a3038e4053a705d578c09d62bad6e92b911cf71976504fdaaaeeda5832d9290d",
-    "llama-b9895-bin-ubuntu-vulkan-x64.tar.gz":
-      "f0e26a2daa227e78253b837596718306afc75dad241e7980fbcabc61bdcb2d6c",
-    "llama-b9895-bin-ubuntu-x64.tar.gz":
-      "910b574007d0848a99eb6cefd3c715c68deccc3e17f53cea27ffbaf1bf46ea16",
-    "llama-b9895-bin-win-cpu-arm64.zip":
-      "a36c43da9126c977709e2c6ed4af5afe7ded9c3178d920ffe295f7c08b80f4b0",
-    "llama-b9895-bin-win-cpu-x64.zip":
-      "a69d92ae6a3e352c5c389f3798b6c287d73100d84612753506dc55b10f517c05",
-    "llama-b9895-bin-win-cuda-12.4-x64.zip":
-      "b9511fba86de6abc6707c8d855ea26910a5bf416dd57cb8ddfb0b64dc2e0fe99",
-    "llama-b9895-bin-win-cuda-13.3-x64.zip":
-      "2032c87ca594b3f3e07f0d3444ffd3e78a3b953cc7c02e3fbb32559b1ef247c8",
-    "llama-b9895-bin-win-hip-radeon-x64.zip":
-      "e57386790fc94a1e65bfe9bac66797f2a52f1de78a3f0f9ced9539253d1a7d02",
-    "llama-b9895-bin-win-opencl-adreno-arm64.zip":
-      "524744001f1fff431fdf85b6031cf9e61a333a35ac59e3dd22bc9a7dce90f765",
-    "llama-b9895-bin-win-openvino-2026.2.1-x64.zip":
-      "f6acc6ca670ec1401d0ef67a9c3855da982d58e81e06829d676e21aab4fe4cad",
-    "llama-b9895-bin-win-sycl-x64.zip":
-      "33e0a3a37debd23908b7b3b8d9c03ce3e06ff95c74ac64121d109478cac47dee",
-    "llama-b9895-bin-win-vulkan-x64.zip":
-      "8db79022bcfe0fae5a2a9b466e6c6f4a47fe29c0fe4865a9a562a681ae1cd438",
-    "llama-b9895-ui.tar.gz": "6a1771fd5f50585350ae659810b3e859c204249d4b13b48a224416c15825aa60",
-    "llama-b9895-xcframework.zip":
-      "886c75728c7e20c4d7bca819fa5219a5a2d642fb45a04044528a6515305e64a2",
+    "llama-b10107-bin-android-arm64.tar.gz":
+      "aec87eb7ca00f0e331e13312c90a9ff0aa0e310f2eb12f97b9d2763ef5a2f10c",
+    "llama-b10107-bin-macos-arm64.tar.gz":
+      "b9554ab4c9f6e91199f48387cb4ab27466fb1d724881f81463ef03f6370cfa32",
+    "llama-b10107-bin-macos-x64.tar.gz":
+      "6f35c90a6e9f33c905d09694946b82a29b4ab530a358226d95d832262f526ea2",
+    "llama-b10107-bin-ubuntu-arm64.tar.gz":
+      "1f93c35122865287824ef0dc040e24190b18edc6e163152be9ac10b8aaeafeef",
+    "llama-b10107-bin-ubuntu-openvino-2026.2.1-x64.tar.gz":
+      "828ed66fc7936c4b49bda2c667bf5ef38acb0f77de02c75955af666a94858667",
+    "llama-b10107-bin-ubuntu-rocm-7.2-x64.tar.gz":
+      "c7a3c6332add60718a26e2986ede21f74ce658ac8beb04630b65409f485699ad",
+    "llama-b10107-bin-ubuntu-s390x.tar.gz":
+      "274af6f7fe0b40f6053b1f3e7e1659228ba24cc8aa638467644b6f3669804ee5",
+    "llama-b10107-bin-ubuntu-sycl-fp16-x64.tar.gz":
+      "8bc558d669c0769859fd7617e1870706ea82e86e4a0ab20c362464ac985b5d59",
+    "llama-b10107-bin-ubuntu-sycl-fp32-x64.tar.gz":
+      "58fe78ef6d6f77b87c7e580262bc03e98b69d6711aa8939c778f1286c8bdc98d",
+    "llama-b10107-bin-ubuntu-vulkan-arm64.tar.gz":
+      "c786b0f5269964e6c9385bf68ffeb275c070b5a5bfcc7d9cea0d8ae6d6790bc1",
+    "llama-b10107-bin-ubuntu-vulkan-x64.tar.gz":
+      "28f86dfce8c3723d4e9fd971b8456d946e09324708880533091399d284fe9add",
+    "llama-b10107-bin-ubuntu-x64.tar.gz":
+      "afe1ae0b706c4a0830b218a9249037b7a6cc723f81deb78825662128b25453e6",
+    "llama-b10107-bin-win-cpu-arm64.zip":
+      "5fc3757d28de88902665091c27d34011fa4fe569d7b57b19fcc9c3431bb02a06",
+    "llama-b10107-bin-win-cpu-x64.zip":
+      "52133a0a5a8f6035b1bdd2f89c3425ea8b742413d9bdb9a2dee30e3a1681b18c",
+    "llama-b10107-bin-win-cuda-12.4-x64.zip":
+      "1e43bbec9691cd0bc636603c366769148fa6265fd261c5f7c67050b450bbc237",
+    "llama-b10107-bin-win-cuda-13.3-x64.zip":
+      "ee48a48839f07b8ac3b5929783bf0320dc370e7ff6cfa567473c8ca11c9b2336",
+    "llama-b10107-bin-win-hip-radeon-x64.zip":
+      "b55e43c94c80c222de5854db32e6ac00e0f27cd6cba1d41c04de585aab623014",
+    "llama-b10107-bin-win-opencl-adreno-arm64.zip":
+      "1adca072b5ef8203409bb75258faa5ab7476d93fcf1bd38fbc44cb68cb3b1eef",
+    "llama-b10107-bin-win-openvino-2026.2.1-x64.zip":
+      "2d67cb0b3970a08b668d4fee056a5fdacdaeb54163a20b40fdd0acec9f48a60b",
+    "llama-b10107-bin-win-sycl-x64.zip":
+      "8232f68d1e6e8b29dcc4cf8a3b1832cd155652062de92292e443b426f47e910c",
+    "llama-b10107-bin-win-vulkan-x64.zip":
+      "c5b3a5ee8319b1eccbb748a54390aa806bbf7d1aceeea452e4c57921d113e53e",
+    "llama-b10107-ui.tar.gz": "eb661eb8709398e3d825663d261847dea73708c09db540bb5fa267cb04224a91",
+    "llama-b10107-xcframework.zip":
+      "d640b6679bb7092832dcd96dc7b78af1bee4af54582f85edf990ce4444c2401e",
   },
 };
 
@@ -110,34 +116,19 @@ const CURATED_CATALOG: CuratedModel[] = [
     hfRepo: FALLBACK_MODEL.hfRepo,
     quantByTier: {
       "gpu-large": "Q8_0",
-      "gpu-mid": "Q4_K_M",
-      "gpu-small": "Q4_K_M",
-      "cpu-strong": "Q4_K_M",
+      "gpu-mid": "Q4_0",
+      "gpu-small": "Q4_0",
+      "cpu-strong": "Q4_0",
       "cpu-min": "Q4_0",
     },
     sha256ByQuant: {},
     toolsCapable: true,
-    blurb: "The always-available fallback: fast, tiny, agentic-tuned.",
+    blurb: "The bundled fallback: fast, compact, and available for one-click installation.",
   },
   {
-    slug: "lfm2.5-230m",
-    displayName: "LFM2.5 230M",
-    hfRepo: "LiquidAI/LFM2.5-230M-GGUF",
-    quantByTier: {
-      "gpu-large": "Q8_0",
-      "gpu-mid": "Q4_K_M",
-      "gpu-small": "Q4_K_M",
-      "cpu-strong": "Q4_K_M",
-      "cpu-min": "Q4_K_M",
-    },
-    sha256ByQuant: {},
-    toolsCapable: true,
-    blurb: "The featherweight sibling — instant loads, runs on anything.",
-  },
-  {
-    slug: "qwen3-4b-instruct",
-    displayName: "Qwen3 4B Instruct",
-    hfRepo: "Qwen/Qwen3-4B-Instruct-2507-GGUF",
+    slug: "qwen3-4b",
+    displayName: "Qwen3 4B",
+    hfRepo: "Qwen/Qwen3-4B-GGUF",
     quantByTier: {
       "gpu-large": "Q8_0",
       "gpu-mid": "Q5_K_M",
@@ -146,7 +137,7 @@ const CURATED_CATALOG: CuratedModel[] = [
     },
     sha256ByQuant: {},
     toolsCapable: true,
-    blurb: "Strong small generalist with solid tool calling.",
+    blurb: "Official agent-capable local model with native tool calling.",
   },
   {
     slug: "qwen3-8b",
@@ -508,6 +499,7 @@ export async function activate(ctx: Ctx) {
     void ensureBootstrap().catch(() => {});
   }
   const benchmarkRuns = new Map<string, Promise<{ tokensPerSec: number } | null>>();
+  const addValidationRuns = new Map<string, Promise<void>>();
 
   function hasRecentBenchmark(record: ModelRecord | null): boolean {
     const benchmark = record?.benchmark ?? null;
@@ -526,12 +518,72 @@ export async function activate(ctx: Ctx) {
     await awaitInvocation(ensureBootstrap());
     const slug = bareSlug(modelId);
     if (slug === FALLBACK_MODEL.slug) {
-      await awaitInvocation(library.ensureFallback());
+      const fallback = await awaitInvocation(library.ensureFallback());
+      if (fallback.runtimeValidation?.status === "pending") {
+        await awaitInvocation(validateAddedModel(slug));
+      } else if (fallback.runtimeValidation?.status === "error") {
+        throw new Error(
+          fallback.runtimeValidation.error ?? `Local model ${slug} failed installation validation`
+        );
+      }
       if (options.scheduleFallbackBenchmark) {
         scheduleBenchmark(slug);
       }
+    } else {
+      const record = await library.get(slug);
+      if (record?.runtimeValidation?.status === "pending") {
+        throw new Error(`Local model ${slug} is still being installed`);
+      }
+      if (record?.runtimeValidation?.status === "error") {
+        throw new Error(
+          record.runtimeValidation.error ?? `Local model ${slug} failed installation validation`
+        );
+      }
     }
     return awaitInvocation(supervisor.ensureLoaded(slug));
+  }
+
+  async function validateAddedModel(slug: string): Promise<void> {
+    const active = addValidationRuns.get(slug);
+    if (active) return active;
+    const record = await library.get(slug);
+    // Records created before add-time validation are preconfigured models:
+    // they remain trusted and are never probed during startup or invocation.
+    if (!record?.runtimeValidation || record.runtimeValidation.status === "ready") return;
+    if (record.runtimeValidation.status === "error") {
+      throw new Error(
+        record.runtimeValidation.error ?? `Local model ${slug} failed installation validation`
+      );
+    }
+
+    const run = (async () => {
+      try {
+        // Downloads and imports may finish while activation's native-engine
+        // bootstrap is still in flight. Validation owns an isolated llama.cpp
+        // process, so it must join that bootstrap before attempting to spawn.
+        await ensureBootstrap();
+        await supervisor.validateModel(slug);
+        await library.setRuntimeValidation(slug, {
+          status: "ready",
+          error: null,
+          validatedAt: Date.now(),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await library.setRuntimeValidation(slug, {
+          status: "error",
+          error: message,
+          validatedAt: null,
+        });
+        throw error;
+      }
+    })();
+    addValidationRuns.set(slug, run);
+    try {
+      await run;
+    } finally {
+      if (addValidationRuns.get(slug) === run) addValidationRuns.delete(slug);
+    }
   }
 
   async function benchmarkModelInternal(
@@ -580,25 +632,25 @@ export async function activate(ctx: Ctx) {
     });
   }
 
-  function scheduleBenchmarkAfterDownload(download: Promise<DownloadJob>): void {
-    void download
-      .then((job) => {
-        scheduleBenchmark(job.slug);
-      })
-      .catch(() => {
-        // Download failure already surfaces through the download job path.
-      });
+  async function finishModelAddition(download: Promise<DownloadJob>): Promise<DownloadJob> {
+    const job = await download;
+    await validateAddedModel(job.slug);
+    scheduleBenchmark(job.slug);
+    return job;
   }
 
   function startDownloadWithBenchmark(req: DownloadModelRequest): Promise<DownloadJob> {
-    const download = library.startDownload(req);
-    scheduleBenchmarkAfterDownload(download);
-    return download;
+    return finishModelAddition(library.startDownload(req));
   }
 
   async function startDownloadJobWithBenchmark(req: DownloadModelRequest): Promise<DownloadJob> {
     const job = await library.startDownloadJob(req);
-    scheduleBenchmarkAfterDownload(library.startDownload(req));
+    void finishModelAddition(library.startDownload(req)).catch((error: unknown) => {
+      log("model installation validation failed", {
+        slug: job.slug,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     return job;
   }
 
@@ -645,31 +697,64 @@ export async function activate(ctx: Ctx) {
     record: ModelRecord,
     servers: Record<ServerKind, ServerState>,
     downloads: DownloadJob[]
-  ): { state: LocalModelEntry["state"]; progress: number | null; error: string | null } {
+  ): {
+    state: LocalModelEntry["state"];
+    download: LocalModelEntry["download"];
+    error: string | null;
+  } {
     const download = downloads.find((job) => job.slug === record.slug && !job.error);
-    if (download && download.phase !== "paused") {
-      const progress = download.totalBytes ? download.receivedBytes / download.totalBytes : 0;
-      return { state: "downloading", progress, error: null };
+    if (download) {
+      return { state: "downloading", download: downloadStatus(download), error: null };
+    }
+    const failedDownload = downloads.find((job) => job.slug === record.slug && job.error);
+    if (failedDownload) {
+      return {
+        state: "error",
+        download: null,
+        error: failedDownload.error ?? "Model download failed",
+      };
     }
     if (bootstrapStage === "error") {
       return {
         state: "error",
-        progress: null,
+        download: null,
         error: bootstrapError ?? "local-models bootstrap failed",
+      };
+    }
+    if (bootstrapStage === "probing" || bootstrapStage === "engines") {
+      return { state: "starting", download: null, error: null };
+    }
+    if (record.runtimeValidation?.status === "pending") {
+      return { state: "starting", download: null, error: null };
+    }
+    if (record.runtimeValidation?.status === "error") {
+      return {
+        state: "error",
+        download: null,
+        error: record.runtimeValidation.error ?? "Model installation validation failed",
       };
     }
     const kind = serverForRecord(record);
     const server = servers[kind];
     if (server.state === "error") {
-      return { state: "error", progress: null, error: server.message };
+      return { state: "error", download: null, error: server.message };
     }
     if (server.state === "running") {
       const loaded = kind === "utility" || server.loadedModels.includes(record.slug);
-      return { state: loaded ? "ready" : "startable", progress: null, error: null };
+      return { state: loaded ? "ready" : "startable", download: null, error: null };
     }
     // Downloaded but the server is cold: startable — ensureLoaded starts the
     // server (and, for the fallback, its lazy load) on demand.
-    return { state: "startable", progress: null, error: null };
+    return { state: "startable", download: null, error: null };
+  }
+
+  function downloadStatus(job: DownloadJob): NonNullable<LocalModelEntry["download"]> {
+    return {
+      progress: job.totalBytes ? job.receivedBytes / job.totalBytes : 0,
+      phase: job.phase,
+      receivedBytes: job.receivedBytes,
+      totalBytes: job.totalBytes,
+    };
   }
 
   async function listModels(): Promise<LocalModelEntry[]> {
@@ -679,41 +764,49 @@ export async function activate(ctx: Ctx) {
     ]);
     const servers = supervisor.status();
     const downloads = library.listDownloads();
-    const entries = records.map((record) => {
-      const kind = serverForRecord(record);
-      const status = recordState(record, servers, downloads);
-      const contextWindow = record.config.contextLength ?? record.trainedContextLength;
-      return {
-        slug: record.slug,
-        displayName: record.displayName,
-        baseUrl: baseUrlFor(kind, servers),
-        server: kind,
-        contextWindow,
-        maxTokens: Math.min(4096, contextWindow),
-        toolsCapable: record.toolsCapable,
-        fit: hw
-          ? estimateFit(record, hw)
-          : {
-              fit: "cpu-only",
-              estTokensPerSec: null,
-              contextLength: contextWindow,
-              gpuLayers: 0,
-              notes: ["hardware profile unavailable"],
-            },
-        measuredTokensPerSec: record.benchmark?.tokensPerSec ?? null,
-        state: status.state,
-        downloadProgress: status.progress,
-        errorMessage: status.error,
-      } satisfies LocalModelEntry;
-    });
+    const entries = records
+      .filter(
+        (record) =>
+          record.slug !== FALLBACK_MODEL.slug || isCurrentFallbackRecord(record)
+      )
+      .map((record) => {
+        const kind = serverForRecord(record);
+        const status = recordState(record, servers, downloads);
+        const contextWindow = runtimeContextLengthFor(record);
+        return {
+          slug: record.slug,
+          displayName: record.displayName,
+          baseUrl: baseUrlFor(kind, servers),
+          server: kind,
+          contextWindow,
+          maxTokens: contextWindow,
+          toolsCapable: record.toolsCapable,
+          fit: hw
+            ? estimateFit(record, hw)
+            : {
+                fit: "cpu-only",
+                estTokensPerSec: null,
+                contextLength: contextWindow,
+                gpuLayers: 0,
+                notes: ["hardware profile unavailable"],
+              },
+          measuredTokensPerSec: record.benchmark?.tokensPerSec ?? null,
+          state: status.state,
+          download: status.download,
+          errorMessage: status.error,
+        } satisfies LocalModelEntry;
+      });
 
     // The fallback floor must stay visible in the picker even before it is
-    // downloaded (design §5/§8): it is lazy, not absent. When no record exists
-    // yet, advertise it as a "startable" entry that downloads + loads on first
-    // use so the catalog's guaranteed floor never disappears.
+    // downloaded (design §5/§8): it is installable, not absent. An absent file
+    // is explicitly not-installed; the chat/model picker starts the download
+    // and blocks agent launch until the record exists.
     if (!entries.some((entry) => entry.slug === FALLBACK_MODEL.slug)) {
       const fallbackDownload = downloads.find(
         (job) => job.slug === FALLBACK_MODEL.slug && !job.error
+      );
+      const fallbackFailure = downloads.find(
+        (job) => job.slug === FALLBACK_MODEL.slug && job.error
       );
       const contextWindow = FALLBACK_MODEL.contextLength;
       entries.unshift({
@@ -722,27 +815,29 @@ export async function activate(ctx: Ctx) {
         baseUrl: baseUrlFor("utility", servers),
         server: "utility",
         contextWindow,
-        maxTokens: Math.min(4096, contextWindow),
+        maxTokens: contextWindow,
         toolsCapable: true,
         fit: {
           fit: "cpu-only",
           estTokensPerSec: null,
           contextLength: contextWindow,
           gpuLayers: 0,
-          notes: ["downloads on first use"],
+          notes: ["explicit installation required"],
         },
         measuredTokensPerSec: null,
-        state:
-          fallbackDownload && fallbackDownload.phase !== "paused"
-            ? "downloading"
+        state: fallbackDownload
+          ? "downloading"
+          : fallbackFailure
+            ? "error"
             : bootstrapStage === "error"
               ? "error"
-              : "startable",
-        downloadProgress: fallbackDownload?.totalBytes
-          ? fallbackDownload.receivedBytes / fallbackDownload.totalBytes
-          : null,
-        errorMessage:
-          bootstrapStage === "error" ? (bootstrapError ?? "local-models bootstrap failed") : null,
+              : "not-installed",
+        download: fallbackDownload ? downloadStatus(fallbackDownload) : null,
+        errorMessage: fallbackFailure?.error
+          ? fallbackFailure.error
+          : bootstrapStage === "error"
+            ? (bootstrapError ?? "local-models bootstrap failed")
+            : null,
       } satisfies LocalModelEntry);
     }
     return entries;
@@ -750,7 +845,10 @@ export async function activate(ctx: Ctx) {
 
   async function status(): Promise<LocalModelsStatus> {
     const servers = supervisor.status();
-    const fallbackRecord = await library.get(FALLBACK_MODEL.slug);
+    const storedFallback = await library.get(FALLBACK_MODEL.slug);
+    const fallbackRecord = isCurrentFallbackRecord(storedFallback)
+      ? storedFallback
+      : null;
     const utilityRunning = servers.utility.state === "running";
     let diskFreeBytes = 0;
     try {
@@ -769,14 +867,22 @@ export async function activate(ctx: Ctx) {
         // ready = downloaded and loadable on demand; warm = currently serving.
         // The floor is lazy (design §5) — a downloaded-but-cold fallback is the
         // healthy default, so `ready` no longer requires the utility server.
-        ready: Boolean(fallbackRecord),
+        ready:
+          Boolean(fallbackRecord) &&
+          fallbackRecord?.runtimeValidation?.status !== "pending" &&
+          fallbackRecord?.runtimeValidation?.status !== "error",
         warm: utilityRunning,
         modelRef: FALLBACK_MODEL.ref,
-        reason: fallbackRecord
-          ? null
-          : bootstrapStage === "ready"
-            ? "fallback downloads on first use"
-            : (bootstrapError ?? `bootstrap ${bootstrapStage}`),
+        reason:
+          fallbackRecord?.runtimeValidation?.status === "pending"
+            ? "installing"
+            : fallbackRecord?.runtimeValidation?.status === "error"
+              ? (fallbackRecord.runtimeValidation.error ?? "installation validation failed")
+              : fallbackRecord
+                ? null
+                : bootstrapStage === "ready"
+                  ? "not installed"
+                  : (bootstrapError ?? `bootstrap ${bootstrapStage}`),
       },
       downloads: library.listDownloads(),
       storageRoot: rootDir,
@@ -818,6 +924,41 @@ export async function activate(ctx: Ctx) {
       // no-op once the GGUF is present, so warm calls stay cheap. A completed
       // lazy fallback download schedules a background benchmark.
       return ensureLoadedInternal(modelId, { scheduleFallbackBenchmark: true });
+    },
+
+    /**
+     * Start installation without waiting for the model transfer. The model
+     * remains unavailable to agents until listModels() reports startable/ready.
+     */
+    async installModel(modelId: string): Promise<DownloadJob | null> {
+      const slug = bareSlug(modelId);
+      if (slug !== FALLBACK_MODEL.slug) {
+        throw new Error(`Model ${modelId} is not available for one-click installation`);
+      }
+      if (isCurrentFallbackRecord(await library.get(slug))) return null;
+      await awaitInvocation(ensureBootstrap());
+      const cachedFallbackPath = path.join(
+        rootDir,
+        ROOT_LAYOUT.modelsDir,
+        ...FALLBACK_MODEL.hfRepo.split("/"),
+        FALLBACK_MODEL.file
+      );
+      try {
+        const cached = await fs.stat(cachedFallbackPath);
+        if (cached.isFile()) {
+          const record = await library.ensureFallback();
+          await validateAddedModel(record.slug);
+          return null;
+        }
+      } catch (error) {
+        if (!isNodeErrorWithCode(error, "ENOENT")) throw error;
+      }
+      return startDownloadJobWithBenchmark({
+        hfRepo: FALLBACK_MODEL.hfRepo,
+        file: FALLBACK_MODEL.file,
+        displayName: FALLBACK_MODEL.displayName,
+        slug: FALLBACK_MODEL.slug,
+      });
     },
 
     async getLoopbackAuth(): Promise<{ apiKey: string }> {
@@ -932,8 +1073,11 @@ export async function activate(ctx: Ctx) {
 
     async importDir(dir: string): Promise<ModelRecord[]> {
       const imported = await library.importDir(dir);
+      await Promise.all(imported.map((record) => validateAddedModel(record.slug)));
       emit({ kind: "models.changed" });
-      return imported;
+      return Promise.all(
+        imported.map(async (record) => (await library.get(record.slug)) ?? record)
+      );
     },
 
     async setModelConfig(slug: string, cfg: ModelRuntimeConfig): Promise<void> {
@@ -978,6 +1122,12 @@ export async function activate(ctx: Ctx) {
   };
 
   return api;
+}
+
+function isNodeErrorWithCode(error: unknown, code: string): boolean {
+  return (
+    error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === code
+  );
 }
 
 export async function deactivate(): Promise<void> {

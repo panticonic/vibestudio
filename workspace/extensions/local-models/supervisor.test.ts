@@ -30,7 +30,11 @@ vi.mock("node:net", () => ({
   createServer: netMock.createServer,
 }));
 
-import { createServerSupervisor, type SupervisorDeps } from "./supervisor.js";
+import {
+  createServerSupervisor,
+  type SupervisorAdminTransport,
+  type SupervisorDeps,
+} from "./supervisor.js";
 import {
   FALLBACK_MODEL,
   ROOT_LAYOUT,
@@ -107,9 +111,37 @@ interface Harness {
 }
 
 const roots: string[] = [];
+const adminEndpoints = new Map<
+  number,
+  {
+    apiKey: string;
+    handler: Parameters<SupervisorAdminTransport["listen"]>[2];
+  }
+>();
+
+const adminTransport: SupervisorAdminTransport = {
+  async listen(port, apiKey, handler) {
+    if (adminEndpoints.has(port))
+      throw Object.assign(new Error("EADDRINUSE"), { code: "EADDRINUSE" });
+    const endpoint = { apiKey, handler };
+    adminEndpoints.set(port, endpoint);
+    return {
+      close: () => {
+        if (adminEndpoints.get(port) === endpoint) adminEndpoints.delete(port);
+      },
+    };
+  },
+  async request(port, apiKey, command) {
+    const endpoint = adminEndpoints.get(port);
+    if (!endpoint) throw new Error("admin endpoint is unavailable");
+    if (endpoint.apiKey !== apiKey) throw new Error("unauthorized");
+    return endpoint.handler(command);
+  },
+};
 
 beforeEach(() => {
   roots.length = 0;
+  adminEndpoints.clear();
   netMock.nextPort = 41000;
   netMock.createServer.mockClear();
 });
@@ -141,7 +173,20 @@ describe("createServerSupervisor", () => {
     expect(attached.spawns).toHaveLength(0);
   });
 
-  it("rejects attached fallback loads while the owner's utility server is cold", async () => {
+  it("reallocates the admin endpoint when its persisted candidate is occupied", async () => {
+    adminEndpoints.set(41002, {
+      apiKey: "other-owner",
+      handler: async () => ({ ok: true }),
+    });
+    const harness = makeHarness();
+
+    await harness.supervisor.activate();
+
+    expect(readConfig(harness.rootDir).adminPort).toBe(41003);
+    expect(harness.supervisor.ownerInfo()?.adminPort).toBe(41003);
+  });
+
+  it("forwards attached fallback loads while the owner's utility server is cold", async () => {
     const rootDir = tempRoot();
     const owner = makeHarness({ rootDir, workspaceId: "owner-ws" });
     await owner.supervisor.activate();
@@ -149,25 +194,28 @@ describe("createServerSupervisor", () => {
     const attached = makeHarness({ rootDir, workspaceId: "attached-ws" });
     await attached.supervisor.activate();
 
-    await expect(attached.supervisor.ensureLoaded(FALLBACK_MODEL.slug)).rejects.toThrow(
-      /utility server is cold/
+    await expect(attached.supervisor.ensureLoaded(FALLBACK_MODEL.slug)).resolves.toEqual(
+      expect.objectContaining({ baseUrl: expect.stringContaining("/v1") })
     );
     expect(attached.spawns).toHaveLength(0);
-    expect(owner.spawns.filter((spawn) => serverKind(spawn) === "utility")).toHaveLength(0);
+    expect(owner.spawns.filter((spawn) => serverKind(spawn) === "utility")).toHaveLength(1);
   });
 
-  it("rejects attached main-model loads while the owner's main server is cold", async () => {
+  it("forwards attached main-model loads while the owner's main server is cold", async () => {
     const rootDir = tempRoot();
     const owner = makeHarness({ rootDir, workspaceId: "owner-ws" });
+    owner.models.set("toy", modelRecord("toy"));
     await owner.supervisor.activate();
 
     const attached = makeHarness({ rootDir, workspaceId: "attached-ws" });
     attached.models.set("toy", modelRecord("toy"));
     await attached.supervisor.activate();
 
-    await expect(attached.supervisor.ensureLoaded("toy")).rejects.toThrow(/main server is cold/);
+    await expect(attached.supervisor.ensureLoaded("toy")).resolves.toEqual(
+      expect.objectContaining({ baseUrl: expect.stringContaining("/v1") })
+    );
     expect(attached.spawns).toHaveLength(0);
-    expect(owner.spawns.filter((spawn) => serverKind(spawn) === "main")).toHaveLength(0);
+    expect(owner.spawns.filter((spawn) => serverKind(spawn) === "main")).toHaveLength(1);
   });
 
   it("returns an attached fallback URL when the owner utility server is warm", async () => {
@@ -246,6 +294,195 @@ describe("createServerSupervisor", () => {
     expect(allArgs).not.toContain("--api-key");
     expect(allArgs).toContain("--api-key-file");
     expect(allArgs).toContain(keyPath);
+    const utilityArgs = lastSpawn(harness, "utility").args;
+    expect(utilityArgs[utilityArgs.indexOf("-c") + 1]).toBe(
+      String(modelRecord(FALLBACK_MODEL.slug).trainedContextLength)
+    );
+    expect(utilityArgs).not.toContain("--chat-template-file");
+    expect(utilityArgs).not.toContain("--temp");
+    expect(utilityArgs).not.toContain("--top-k");
+    expect(utilityArgs).not.toContain("--repeat-penalty");
+    expect(lastSpawn(harness, "utility").bin).toBe("/engines/gpu/llama-server");
+  });
+
+  it("uses the fastest validated utility engine and degrades to CPU after a failure", async () => {
+    const harness = makeHarness();
+    await harness.supervisor.activate();
+    await harness.supervisor.ensureLoaded(FALLBACK_MODEL.slug);
+
+    expect(lastSpawn(harness, "utility").bin).toBe("/engines/gpu/llama-server");
+
+    lastSpawn(harness, "utility").exit(1);
+    await harness.timers.advance(backoffFor(1, "utility"));
+
+    expect(lastSpawn(harness, "utility").bin).toBe("/engines/cpu/llama-server");
+    expect(harness.supervisor.tailLog("utility")).toContainEqual(
+      expect.stringContaining("accelerated utility server failed; degrading to CPU")
+    );
+  });
+
+  it("rejects a tools-capable model when its template drops assistant tool-call history", async () => {
+    const harness = makeHarness({
+      fetch: vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/props")) {
+          return Response.json({
+            chat_template_caps: {
+              supports_tools: true,
+              supports_tool_calls: true,
+              supports_object_arguments: true,
+            },
+          });
+        }
+        if (url.includes("/apply-template")) {
+          return Response.json({ prompt: "assistant call was silently omitted" });
+        }
+        if (url.includes("/v1/chat/completions")) return runtimeProbeResponse();
+        return new Response("ok", { status: 200 });
+      }),
+    });
+
+    await expect(harness.supervisor.validateModel(FALLBACK_MODEL.slug)).rejects.toThrow(
+      /drops assistant tool calls/
+    );
+  });
+
+  it("does not run compatibility probes from the normal model invocation path", async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/props")) {
+        return Response.json({
+          chat_template_caps: {
+            supports_tools: true,
+            supports_tool_calls: true,
+            supports_object_arguments: true,
+          },
+        });
+      }
+      if (url.includes("/apply-template")) {
+        return Response.json({ prompt: "vibestudio-assistant-call-sentinel" });
+      }
+      if (url.includes("/v1/chat/completions")) return runtimeProbeResponse();
+      return new Response("ok", { status: 200 });
+    });
+    const harness = makeHarness({ fetch });
+
+    await harness.supervisor.ensureLoaded(FALLBACK_MODEL.slug);
+    expect(fetch.mock.calls.map(([input]) => String(input))).not.toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("/props"),
+        expect.stringContaining("/apply-template"),
+        expect.stringContaining("/v1/chat/completions"),
+      ])
+    );
+
+    await harness.supervisor.validateModel(FALLBACK_MODEL.slug);
+    expect(fetch.mock.calls.map(([input]) => String(input))).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("/props"),
+        expect.stringContaining("/apply-template"),
+        expect.stringContaining("/v1/chat/completions"),
+      ])
+    );
+  });
+
+  it("rejects a tools-capable model when llama.cpp cannot parse its generated call", async () => {
+    const harness = makeHarness({
+      fetch: vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/props")) {
+          return Response.json({
+            chat_template_caps: {
+              supports_tools: true,
+              supports_tool_calls: true,
+              supports_object_arguments: true,
+            },
+          });
+        }
+        if (url.includes("/v1/chat/completions")) {
+          return Response.json({
+            choices: [{ message: { content: "I cannot use tools." } }],
+          });
+        }
+        return new Response("ok", { status: 200 });
+      }),
+    });
+
+    await expect(harness.supervisor.validateModel(FALLBACK_MODEL.slug)).rejects.toThrow(
+      /could not reliably select/
+    );
+  });
+
+  it("qualifies tool selection against the full agent tool surface with the target last", async () => {
+    let requestBody: {
+      tools?: Array<{ function?: { name?: string } }>;
+      tool_choice?: string;
+      max_tokens?: number;
+    } | null = null;
+    const harness = makeHarness({
+      fetch: vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/props")) {
+          return Response.json({
+            chat_template_caps: {
+              supports_tools: true,
+              supports_tool_calls: true,
+              supports_object_arguments: true,
+            },
+          });
+        }
+        if (url.includes("/v1/chat/completions")) {
+          requestBody = JSON.parse(String(init?.body)) as typeof requestBody;
+          return runtimeProbeResponse();
+        }
+        if (url.includes("/apply-template")) {
+          return Response.json({ prompt: "vibestudio-assistant-call-sentinel" });
+        }
+        return new Response("ok", { status: 200 });
+      }),
+    });
+
+    await harness.supervisor.validateModel(FALLBACK_MODEL.slug);
+
+    expect(requestBody?.tools).toHaveLength(39);
+    expect(requestBody?.tools?.at(-1)?.function?.name).toBe("vibestudio_runtime_probe");
+    expect(requestBody?.tool_choice).toBe("required");
+    expect(requestBody?.max_tokens).toBeUndefined();
+  });
+
+  it("runs isolated add-time validation from an attached workspace", async () => {
+    const rootDir = tempRoot();
+    const owner = makeHarness({ rootDir, workspaceId: "owner" });
+    await owner.supervisor.activate();
+    const attached = makeHarness({ rootDir, workspaceId: "attached" });
+    await attached.supervisor.activate();
+
+    expect(attached.supervisor.role()).toBe("attached");
+    await expect(attached.supervisor.validateModel(FALLBACK_MODEL.slug)).resolves.toEqual(
+      expect.objectContaining({ baseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:/u) })
+    );
+    expect(attached.spawns).toHaveLength(1);
+    expect(attached.spawns[0]?.args).toEqual(
+      expect.arrayContaining(["-m", `/models/${FALLBACK_MODEL.slug}.gguf`, "-np", "1"])
+    );
+  });
+
+  it("uses model metadata without family-specific router overrides", async () => {
+    const harness = makeHarness();
+    const routed = modelRecord("metadata-owned-model");
+    harness.models.set(routed.slug, routed);
+
+    await harness.supervisor.ensureLoaded(routed.slug);
+
+    const mainArgs = lastSpawn(harness, "main").args;
+    const presetPath = mainArgs[mainArgs.indexOf("--models-preset") + 1]!;
+    const preset = readFileSync(presetPath, "utf8");
+    expect(preset).toContain("[metadata-owned-model]");
+    expect(preset).toContain("ctx-size = 65536");
+    expect(preset).not.toContain("chat-template-file");
+    expect(preset).not.toContain("temp =");
+    expect(preset).not.toContain("top-k =");
+    expect(preset).not.toContain("repeat-penalty =");
   });
 
   it("persists ports across restart", async () => {
@@ -261,6 +498,20 @@ describe("createServerSupervisor", () => {
     const secondPort = portArg(lastSpawn(harness, "utility"));
     expect(secondConfig).toEqual(firstConfig);
     expect(secondPort).toBe(firstPort);
+  });
+
+  it("forwards attached restart requests to the owner", async () => {
+    const rootDir = tempRoot();
+    const owner = makeHarness({ rootDir, workspaceId: "owner-ws" });
+    await owner.supervisor.ensureLoaded(FALLBACK_MODEL.slug);
+    const firstUtility = lastSpawn(owner, "utility");
+
+    const attached = makeHarness({ rootDir, workspaceId: "attached-ws" });
+    await attached.supervisor.restart("utility");
+
+    expect(attached.spawns).toHaveLength(0);
+    expect(firstUtility.killed).toContain("SIGTERM");
+    expect(owner.spawns.filter((spawn) => serverKind(spawn) === "utility")).toHaveLength(2);
   });
 
   it("reallocates on EADDRINUSE and ensureLoaded returns the live port", async () => {
@@ -282,6 +533,47 @@ describe("createServerSupervisor", () => {
     expect(secondPort).not.toBe(firstPort);
     expect(config.mainPort).toBe(secondPort);
     expect(portArg(lastSpawn(harness, "main"))).toBe(secondPort);
+  });
+
+  it("passes each library model's declared context window to the router", async () => {
+    const harness = makeHarness();
+    harness.models.set("toy", modelRecord("toy"));
+    await harness.supervisor.activate();
+    await harness.supervisor.ensureLoaded("toy");
+
+    expect(readFileSync(join(harness.rootDir, "router-preset.ini"), "utf8")).toContain(
+      "ctx-size = 65536"
+    );
+  });
+
+  it("refreshes a warm router before loading a model added after startup", async () => {
+    const fetch = vi.fn(async () => new Response("ok", { status: 200 }));
+    const harness = makeHarness({ fetch });
+    harness.models.set("toy", modelRecord("toy"));
+
+    await harness.supervisor.ensureLoaded("toy");
+    expect(harness.supervisor.status().main).toMatchObject({
+      state: "running",
+      loadedModels: ["toy"],
+    });
+
+    harness.models.set("new-model", modelRecord("new-model"));
+    await harness.supervisor.ensureLoaded("new-model");
+
+    expect(harness.spawns.filter((spawn) => serverKind(spawn) === "main")).toHaveLength(1);
+    expect(fetch.mock.calls.map(([input]) => String(input))).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("/models?reload=1"),
+        expect.stringContaining("/models/load"),
+      ])
+    );
+    expect(readFileSync(join(harness.rootDir, "router-preset.ini"), "utf8")).toContain(
+      "[new-model]"
+    );
+    expect(harness.supervisor.status().main).toMatchObject({
+      state: "running",
+      loadedModels: ["new-model"],
+    });
   });
 
   it("restarts utility forever but puts main in error after five failures in-window", async () => {
@@ -309,22 +601,49 @@ describe("createServerSupervisor", () => {
     if (mainState.state === "error") expect(mainState.logTail.at(-1)).toContain("main failure 4");
   });
 
-  it("restarts main after fifteen minutes of model idleness", async () => {
+  it("stops main and utility servers after fifteen minutes of model idleness", async () => {
     const harness = makeHarness();
     harness.models.set("toy", modelRecord("toy"));
     await harness.supervisor.activate();
     await harness.supervisor.ensureLoaded("toy");
+    await harness.supervisor.ensureLoaded(FALLBACK_MODEL.slug);
 
     const firstMain = lastSpawn(harness, "main");
-    const spawnCount = harness.spawns.filter((spawn) => serverKind(spawn) === "main").length;
+    const firstUtility = lastSpawn(harness, "utility");
+    const mainSpawnCount = harness.spawns.filter((spawn) => serverKind(spawn) === "main").length;
+    const utilitySpawnCount = harness.spawns.filter(
+      (spawn) => serverKind(spawn) === "utility"
+    ).length;
     await harness.timers.advance(15 * 60_000 - 1);
-    expect(harness.spawns.filter((spawn) => serverKind(spawn) === "main")).toHaveLength(spawnCount);
+    expect(firstMain.killed).toHaveLength(0);
+    expect(firstUtility.killed).toHaveLength(0);
 
     await harness.timers.advance(1);
     expect(firstMain.killed).toContain("SIGTERM");
+    expect(firstUtility.killed).toContain("SIGTERM");
     expect(harness.spawns.filter((spawn) => serverKind(spawn) === "main")).toHaveLength(
-      spawnCount + 1
+      mainSpawnCount
     );
+    expect(harness.spawns.filter((spawn) => serverKind(spawn) === "utility")).toHaveLength(
+      utilitySpawnCount
+    );
+    expect(harness.supervisor.status().main.state).toBe("stopped");
+    expect(harness.supervisor.status().utility.state).toBe("stopped");
+  });
+
+  it("lets an attached workspace re-warm an owner server after idle unload", async () => {
+    const rootDir = tempRoot();
+    const owner = makeHarness({ rootDir, workspaceId: "owner-ws" });
+    await owner.supervisor.ensureLoaded(FALLBACK_MODEL.slug);
+    await owner.timers.advance(15 * 60_000);
+    expect(owner.supervisor.status().utility.state).toBe("stopped");
+
+    const attached = makeHarness({ rootDir, workspaceId: "attached-ws" });
+    await attached.supervisor.ensureLoaded(FALLBACK_MODEL.slug);
+
+    expect(attached.spawns).toHaveLength(0);
+    expect(owner.spawns.filter((spawn) => serverKind(spawn) === "utility")).toHaveLength(2);
+    expect(owner.supervisor.status().utility.state).toBe("running");
   });
 
   it("keeps only the last 500 log lines and returns requested tails", async () => {
@@ -380,7 +699,25 @@ function makeHarness(
       spawns.push(call);
       return child;
     }),
-    fetch: opts.fetch ?? vi.fn(async () => new Response("ok", { status: 200 })),
+    fetch:
+      opts.fetch ??
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/props")) {
+          return Response.json({
+            chat_template_caps: {
+              supports_tools: true,
+              supports_tool_calls: true,
+              supports_object_arguments: true,
+            },
+          });
+        }
+        if (url.includes("/apply-template")) {
+          return Response.json({ prompt: "vibestudio-assistant-call-sentinel" });
+        }
+        if (url.includes("/v1/chat/completions")) return runtimeProbeResponse();
+        return new Response("ok", { status: 200 });
+      }),
     log: vi.fn(),
     emit: vi.fn((event) => {
       events.push(event);
@@ -392,6 +729,7 @@ function makeHarness(
     now: () => timers.now,
     setTimeoutFn: timers.setTimeout,
     clearTimeoutFn: timers.clearTimeout,
+    adminTransport,
   };
 
   return {
@@ -441,8 +779,8 @@ function modelRecord(slug: string): ModelRecord {
     sizeBytes: 1,
     quant: "Q4_K_M",
     paramCount: "1B",
-    arch: "llama",
-    trainedContextLength: 8192,
+    arch: slug === FALLBACK_MODEL.slug ? "lfm2" : "llama",
+    trainedContextLength: 65_536,
     toolsCapable: true,
     sha256: "0".repeat(64),
     importedInPlace: false,
@@ -466,12 +804,38 @@ function portArg(spawn: SpawnCall): number {
   return Number(spawn.args[index + 1]);
 }
 
-function readConfig(rootDir: string): { utilityPort: number; mainPort: number } {
-  return readJson(join(rootDir, ROOT_LAYOUT.config)) as { utilityPort: number; mainPort: number };
+function readConfig(rootDir: string): { utilityPort: number; mainPort: number; adminPort: number } {
+  return readJson(join(rootDir, ROOT_LAYOUT.config)) as {
+    utilityPort: number;
+    mainPort: number;
+    adminPort: number;
+  };
 }
 
 function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8")) as unknown;
+}
+
+function runtimeProbeResponse(): Response {
+  return Response.json({
+    choices: [
+      {
+        message: {
+          tool_calls: [
+            {
+              type: "function",
+              function: {
+                name: "vibestudio_runtime_probe",
+                arguments: JSON.stringify({
+                  value: "vibestudio-assistant-call-sentinel",
+                }),
+              },
+            },
+          ],
+        },
+      },
+    ],
+  });
 }
 
 function backoffFor(attempt: number, kind: ServerKind): number {

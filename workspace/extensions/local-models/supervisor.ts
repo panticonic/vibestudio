@@ -11,9 +11,11 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { createServer } from "node:net";
+import { createServer as createHttpServer, type IncomingMessage } from "node:http";
+import { createServer as createNetServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
+import { runtimeContextLengthFor } from "./runtime-profiles.js";
 import {
   FALLBACK_MODEL,
   ROOT_LAYOUT,
@@ -56,6 +58,26 @@ export interface SupervisorDeps {
   killPid?(pid: number): void;
   setTimeoutFn?: typeof setTimeout;
   clearTimeoutFn?: typeof clearTimeout;
+  adminTransport?: SupervisorAdminTransport;
+}
+
+export type SupervisorAdminCommand =
+  | { kind: "ensure-loaded"; slug: string }
+  | { kind: "restart"; server: ServerKind };
+
+export type SupervisorAdminResult = { baseUrl: string } | { ok: true };
+
+export interface SupervisorAdminTransport {
+  listen(
+    port: number,
+    apiKey: string,
+    handler: (command: SupervisorAdminCommand) => Promise<SupervisorAdminResult>
+  ): Promise<{ close(): Promise<void> | void }>;
+  request(
+    port: number,
+    apiKey: string,
+    command: SupervisorAdminCommand
+  ): Promise<SupervisorAdminResult>;
 }
 
 type SpawnedProcess = { pid: number; kill(signal?: string): void };
@@ -65,6 +87,7 @@ type ServerEvent = "stdout" | "stderr";
 interface PersistedConfig {
   utilityPort: number;
   mainPort: number;
+  adminPort?: number;
 }
 
 interface RuntimeProcess {
@@ -105,6 +128,7 @@ export function createServerSupervisor(deps: SupervisorDeps): {
   ownerInfo(): OwnerInfo | null;
   status(): Record<ServerKind, ServerState>;
   ensureLoaded(slug: string): Promise<{ baseUrl: string }>;
+  validateModel(slug: string): Promise<{ baseUrl: string }>;
   apiKey(): Promise<string>;
   restart(kind: ServerKind): Promise<void>;
   tailLog(kind: ServerKind, lines?: number): string[];
@@ -130,11 +154,23 @@ class ServerSupervisor {
   private bootId = "";
   private keyCache: string | null = null;
   private ports: { utility: number; main: number } | null = null;
+  private adminPort: number | null = null;
+  private adminListener: { close(): Promise<void> | void } | null = null;
   private activated = false;
   private disposed = false;
   private nextProcessToken = 0;
+  /**
+   * Prefer the fastest smoke-tested engine for the utility server. If that
+   * process fails, use the universal CPU build for the rest of this activation;
+   * a future activation tries the preferred engine again.
+   */
+  private utilityCpuFallback = false;
   private idleTimer: TimerHandle | null = null;
   private readonly lastUsed = new Map<string, number>();
+  /** Models present in the preset consumed by this supervisor's live router. */
+  private routerCatalogModels = new Set<string>();
+  /** Models this supervisor has explicitly loaded through the live router. */
+  private readonly loadedMainModels = new Set<string>();
   private readonly logs: Record<ServerKind, string[]> = { utility: [], main: [] };
   private readonly servers: Record<ServerKind, ServerRuntime> = {
     utility: this.createRuntime(),
@@ -160,6 +196,7 @@ class ServerSupervisor {
     ownerInfo(): OwnerInfo | null;
     status(): Record<ServerKind, ServerState>;
     ensureLoaded(slug: string): Promise<{ baseUrl: string }>;
+    validateModel(slug: string): Promise<{ baseUrl: string }>;
     apiKey(): Promise<string>;
     restart(kind: ServerKind): Promise<void>;
     tailLog(kind: ServerKind, lines?: number): string[];
@@ -171,6 +208,7 @@ class ServerSupervisor {
       ownerInfo: () => this.ownerInfoValue,
       status: () => this.status(),
       ensureLoaded: (slug) => this.ensureLoaded(slug),
+      validateModel: (slug) => this.validateModel(slug),
       apiKey: () => this.publicApiKey(),
       restart: (kind) => this.restart(kind),
       tailLog: (kind, lines) => this.tailLog(kind, lines),
@@ -211,6 +249,7 @@ class ServerSupervisor {
       this.roleValue = "attached";
       this.ownerInfoValue = owner;
       this.ports = owner.ports;
+      this.adminPort = owner.adminPort ?? null;
       return;
     }
 
@@ -239,6 +278,7 @@ class ServerSupervisor {
       this.roleValue = "attached";
       this.ownerInfoValue = owner;
       this.ports = owner.ports;
+      this.adminPort = owner.adminPort ?? null;
       return;
     }
 
@@ -259,23 +299,42 @@ class ServerSupervisor {
     this.bootId = readBootId();
     writeSync(fd, JSON.stringify({ pid: process.pid, bootId: this.bootId }));
 
-    this.roleValue = "owner";
-    this.ports = await this.loadOrCreatePorts();
-    await this.ensureApiKeyFile();
-    this.writeOwnerInfo();
-    // Servers stay cold: the fallback floor is lazy (design §5), so the
-    // utility server starts on the first ensureLoaded(fallback), not here.
-    return true;
+    try {
+      this.roleValue = "owner";
+      const config = await this.loadOrCreatePorts();
+      this.ports = { utility: config.utilityPort, main: config.mainPort };
+      this.adminPort = config.adminPort;
+      const apiKey = await this.ensureApiKeyFile();
+      await this.startAdminListener(apiKey);
+      this.writeOwnerInfo();
+      // Servers stay cold: the fallback floor is lazy (design §5), so the
+      // utility server starts on the first ensureLoaded(fallback), not here.
+      return true;
+    } catch (error) {
+      closeSync(fd);
+      this.lockFd = null;
+      unlinkIfExists(this.paths.owner);
+      unlinkIfExists(this.paths.lock);
+      throw error;
+    }
   }
 
-  private async loadOrCreatePorts(): Promise<{ utility: number; main: number }> {
+  private async loadOrCreatePorts(): Promise<Required<PersistedConfig>> {
     const config = this.readConfig();
-    if (config) return { utility: config.utilityPort, main: config.mainPort };
+    if (config) {
+      if (validPort(config.adminPort)) return config as Required<PersistedConfig>;
+      const adminPort = await allocatePort([config.utilityPort, config.mainPort]);
+      const migrated = { ...config, adminPort };
+      this.writeConfig(migrated);
+      return migrated;
+    }
 
     const utility = await allocatePort();
     const main = await allocatePort(utility);
-    this.writeConfig({ utilityPort: utility, mainPort: main });
-    return { utility, main };
+    const adminPort = await allocatePort([utility, main]);
+    const created = { utilityPort: utility, mainPort: main, adminPort };
+    this.writeConfig(created);
+    return created;
   }
 
   private readConfig(): PersistedConfig | null {
@@ -287,6 +346,29 @@ class ServerSupervisor {
 
   private writeConfig(config: PersistedConfig): void {
     writeFileSync(this.paths.config, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  }
+
+  private async startAdminListener(apiKey: string): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (!validPort(this.adminPort) || !this.ports) {
+        throw new Error("local-models admin port is not initialized");
+      }
+      try {
+        this.adminListener = await this.adminTransport().listen(this.adminPort, apiKey, (command) =>
+          this.handleAdminCommand(command)
+        );
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
+        this.adminPort = await allocatePort([this.ports.utility, this.ports.main, this.adminPort]);
+        this.writeConfig({
+          utilityPort: this.ports.utility,
+          mainPort: this.ports.main,
+          adminPort: this.adminPort,
+        });
+      }
+    }
+    throw new Error("local-models admin endpoint could not acquire a loopback port");
   }
 
   private writeOwnerInfo(): void {
@@ -301,6 +383,7 @@ class ServerSupervisor {
       pid: process.pid,
       bootId: this.bootId,
       ports: this.ports,
+      adminPort: this.adminPort ?? undefined,
       workspaceId: this.deps.workspaceId,
       since: this.ownerInfoValue?.since ?? this.deps.now(),
       serverPids,
@@ -316,14 +399,22 @@ class ServerSupervisor {
       value.schemaVersion !== 1 ||
       Object.keys(value).some(
         (key) =>
-          !["schemaVersion", "pid", "bootId", "ports", "workspaceId", "since", "serverPids"].includes(
-            key
-          )
+          ![
+            "schemaVersion",
+            "pid",
+            "bootId",
+            "ports",
+            "adminPort",
+            "workspaceId",
+            "since",
+            "serverPids",
+          ].includes(key)
       )
     ) {
       return null;
     }
     if (!validPort(value.ports?.utility) || !validPort(value.ports?.main)) return null;
+    if (value.adminPort !== undefined && !validPort(value.adminPort)) return null;
     if (!Number.isInteger(value.pid) || typeof value.bootId !== "string") return null;
     if (typeof value.workspaceId !== "string" || typeof value.since !== "number") return null;
     return value;
@@ -380,7 +471,7 @@ class ServerSupervisor {
     return {
       state: "running",
       port,
-      loadedModels: kind === "utility" ? [FALLBACK_MODEL.slug] : Array.from(this.lastUsed.keys()),
+      loadedModels: kind === "utility" ? [FALLBACK_MODEL.slug] : Array.from(this.loadedMainModels),
       uptimeMs: Math.max(0, this.deps.now() - startedAt),
     };
   }
@@ -388,10 +479,23 @@ class ServerSupervisor {
   private async ensureLoaded(inputSlug: string): Promise<{ baseUrl: string }> {
     await this.activate();
     const slug = normalizeSlug(inputSlug);
-    if (slug === FALLBACK_MODEL.slug) {
+    if (this.roleValue === "attached") {
+      await this.ensureAttachedOwnerAlive();
       if (this.roleValue === "attached") {
-        return this.attachedWarmBaseUrl("utility");
+        const result = await this.requestOwner({ kind: "ensure-loaded", slug });
+        if (!("baseUrl" in result)) {
+          throw new Error("local-models owner returned an invalid load response");
+        }
+        return { baseUrl: result.baseUrl };
       }
+    }
+    return this.ensureLoadedAsOwner(slug);
+  }
+
+  private async ensureLoadedAsOwner(slug: string): Promise<{ baseUrl: string }> {
+    if (this.roleValue !== "owner") throw new Error("local-models supervisor is attached");
+    if (slug === FALLBACK_MODEL.slug) {
+      this.markUsed(slug);
       await this.ensureOwnerServer("utility");
       await this.assertHealthy("utility");
       return { baseUrl: baseUrl(this.portFor("utility")) };
@@ -400,32 +504,132 @@ class ServerSupervisor {
     const model = await this.deps.libraryModel(slug);
     if (!model) throw new Error(`local model not found: ${slug}`);
 
-    if (this.roleValue === "attached") {
-      return this.attachedWarmBaseUrl("main");
-    }
-
-    this.lastUsed.set(slug, this.deps.now());
-    this.scheduleIdleUnload();
     await this.ensureOwnerServer("main");
     await this.assertHealthy("main");
+
+    this.markUsed(slug);
+    await this.ensureRouterModelLoaded(slug);
     return { baseUrl: baseUrl(this.portFor("main")) };
   }
 
-  private async attachedWarmBaseUrl(kind: ServerKind): Promise<{ baseUrl: string }> {
-    await this.ensureAttachedOwnerAlive();
-    const owner = this.ownerInfoValue;
-    const serverPid = owner?.serverPids?.[kind];
-    if (typeof serverPid !== "number" || serverPid <= 0 || !pidAlive(serverPid)) {
-      throw new Error(
-        `local-models ${kind} server is cold in owner process; load the model from the owning workspace first`
-      );
+  /**
+   * Keep the running llama.cpp router synchronized with the shared model
+   * library, then explicitly load the requested model before advertising it as
+   * ready. Router presets are read at startup; llama.cpp requires a
+   * `GET /models?reload=1` after a new preset entry is written.
+   *
+   * Only the owner performs router mutations. Attached workspaces forward the
+   * complete load request through the authenticated admin endpoint.
+   */
+  private async ensureRouterModelLoaded(slug: string): Promise<void> {
+    const key = await this.apiKey();
+    const endpoint = `http://127.0.0.1:${this.portFor("main")}`;
+    if (!this.routerCatalogModels.has(slug)) {
+      const presetPath = await this.writeRouterPreset();
+      if (!presetPath || !this.routerCatalogModels.has(slug)) {
+        throw new Error(`local model ${slug} is missing from the router preset`);
+      }
+      const reload = await this.deps.fetch(`${endpoint}/models?reload=1`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${key}` },
+      });
+      if (!reload.ok) {
+        throw new Error(`local model router catalog refresh failed with HTTP ${reload.status}`);
+      }
     }
 
-    const port = this.portFor(kind);
-    if (!(await this.healthCheck(port))) {
-      throw new Error(`local-models ${kind} server is not healthy in owner process`);
+    if (this.loadedMainModels.has(slug)) return;
+    const load = await this.deps.fetch(`${endpoint}/models/load`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ model: slug }),
+    });
+    if (!load.ok) {
+      const detail = await load.text().catch(() => "");
+      throw new Error(
+        `local model ${slug} failed to load with HTTP ${load.status}${detail ? `: ${detail}` : ""}`
+      );
     }
-    return { baseUrl: baseUrl(port) };
+    // --models-max 1 makes this the only resident main model.
+    this.loadedMainModels.clear();
+    this.loadedMainModels.add(slug);
+  }
+
+  private async validateModel(inputSlug: string): Promise<{ baseUrl: string }> {
+    await this.activate();
+    const slug = normalizeSlug(inputSlug);
+    const model =
+      slug === FALLBACK_MODEL.slug
+        ? await this.deps.fallbackModel()
+        : await this.deps.libraryModel(slug);
+    if (!model) throw new Error(`local model not found: ${slug}`);
+
+    const engines = this.deps.engines();
+    const engine = engines?.gpu ?? engines?.cpu;
+    if (!engine) throw new Error("llama.cpp engine is not installed");
+
+    // Installation validation is deliberately isolated from the shared,
+    // workspace-owned serving processes. Any workspace can add a model without
+    // taking over or restarting another workspace's warm router.
+    const port = await allocatePort();
+    const contextLength = runtimeContextLengthFor(model);
+    let exited = false;
+    let exitCode: number | null = null;
+    const stderr: string[] = [];
+    const child = this.deps.spawn(
+      engine.serverBinPath,
+      [
+        "-m",
+        model.file,
+        "--port",
+        String(port),
+        "--host",
+        "127.0.0.1",
+        "--api-key-file",
+        this.paths.authKey,
+        "-c",
+        String(contextLength),
+        "--jinja",
+        "-np",
+        "1",
+      ],
+      {
+        env: cleanEnv(),
+        onExit: (code) => {
+          exited = true;
+          exitCode = code;
+        },
+        onStdout: () => {},
+        onStderr: (line) => {
+          stderr.push(line);
+          if (stderr.length > 20) stderr.shift();
+        },
+      }
+    );
+
+    try {
+      const deadline = this.deps.now() + HEALTH_WAIT_MS;
+      let healthy = await this.healthCheck(port);
+      while (!healthy && !exited && this.deps.now() < deadline) {
+        await this.sleep(HEALTH_WAIT_STEP_MS);
+        healthy = await this.healthCheck(port);
+      }
+      if (!healthy) {
+        const detail = stderr.at(-1);
+        throw new Error(
+          `local model ${slug} validation server ${
+            exited ? `exited with code ${String(exitCode)}` : "did not become healthy"
+          }${detail ? `: ${detail}` : ""}`
+        );
+      }
+      await this.assertModelRuntime(port, model);
+      return { baseUrl: baseUrl(port) };
+    } finally {
+      child.kill("SIGTERM");
+    }
   }
 
   private async ensureAttachedOwnerAlive(): Promise<void> {
@@ -433,6 +637,7 @@ class ServerSupervisor {
     if (owner) {
       this.ownerInfoValue = owner;
       this.ports = owner.ports;
+      this.adminPort = owner.adminPort ?? null;
     }
 
     const activeOwner = this.ownerInfoValue;
@@ -442,6 +647,32 @@ class ServerSupervisor {
     // cold until demanded, so utility health is not a liveness signal.
     if (pidAlive(activeOwner.pid)) return;
     await this.acquireOrAttach(false);
+  }
+
+  private adminTransport(): SupervisorAdminTransport {
+    return this.deps.adminTransport ?? HTTP_ADMIN_TRANSPORT;
+  }
+
+  private async requestOwner(command: SupervisorAdminCommand): Promise<SupervisorAdminResult> {
+    const port = this.ownerInfoValue?.adminPort ?? this.adminPort;
+    if (!validPort(port)) {
+      throw new Error(
+        "local-models owner predates the admin control plane; restart the owning workspace"
+      );
+    }
+    const key = await this.apiKey();
+    return this.adminTransport().request(port, key, command);
+  }
+
+  private async handleAdminCommand(
+    command: SupervisorAdminCommand
+  ): Promise<SupervisorAdminResult> {
+    if (this.roleValue !== "owner") throw new Error("local-models supervisor is attached");
+    if (command.kind === "ensure-loaded") {
+      return this.ensureLoadedAsOwner(normalizeSlug(command.slug));
+    }
+    await this.restartAsOwner(command.server);
+    return { ok: true };
   }
 
   private async ensureOwnerServer(kind: ServerKind): Promise<void> {
@@ -470,6 +701,178 @@ class ServerSupervisor {
     if (runtime.process) this.setState(kind, this.runningState(kind));
   }
 
+  /**
+   * A healthy HTTP process and template capability flags are not enough. At
+   * add time, a tools-capable model must generate a call that llama.cpp parses
+   * into the OpenAI shape, and its embedded template must retain that call when
+   * the next turn is rendered. This is deliberately never run on invocation.
+   */
+  private async assertModelRuntime(port: number, model: ModelRecord): Promise<void> {
+    const key = await this.apiKey();
+    const propsResponse = await this.deps.fetch(`http://127.0.0.1:${port}/props`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    if (!propsResponse.ok) {
+      throw new Error(
+        `local model ${model.slug} runtime properties failed with HTTP ${propsResponse.status}`
+      );
+    }
+    const props = (await propsResponse.json()) as {
+      chat_template_caps?: {
+        supports_tools?: boolean;
+        supports_tool_calls?: boolean;
+        supports_object_arguments?: boolean;
+      };
+    };
+    if (!model.toolsCapable) return;
+
+    const caps = props.chat_template_caps;
+    if (
+      caps?.supports_tools !== true ||
+      caps.supports_tool_calls !== true ||
+      caps.supports_object_arguments !== true
+    ) {
+      throw new Error(
+        `local model ${model.slug} declares tool support but its active chat template cannot round-trip structured tool calls`
+      );
+    }
+
+    const assistantCallSentinel = "vibestudio-assistant-call-sentinel";
+    const probeTool = {
+      type: "function",
+      function: {
+        name: "vibestudio_runtime_probe",
+        description: "Return the supplied compatibility sentinel.",
+        parameters: {
+          type: "object",
+          properties: { value: { type: "string" } },
+          required: ["value"],
+        },
+      },
+    };
+    // The agent currently exposes roughly this many tools in a normal turn.
+    // A one-tool probe admits small models that can serialize a call but cannot
+    // select the requested operation from the real agent surface. Keep this
+    // model-agnostic and deliberately place the target last.
+    const selectionDecoys = Array.from({ length: 38 }, (_, index) => ({
+      type: "function",
+      function: {
+        name: `vibestudio_unrelated_operation_${index}`,
+        description: `Unrelated compatibility operation ${index}. Do not use it for the runtime probe.`,
+        parameters: {
+          type: "object",
+          properties: { input: { type: "string" } },
+          required: ["input"],
+        },
+      },
+    }));
+    const selectionTools = [...selectionDecoys, probeTool];
+    const generationResponse = await this.deps.fetch(
+      `http://127.0.0.1:${port}/v1/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: model.slug,
+          messages: [
+            {
+              role: "user",
+              content: `Call vibestudio_runtime_probe with value "${assistantCallSentinel}".`,
+            },
+          ],
+          tools: selectionTools,
+          tool_choice: "required",
+          temperature: 0,
+        }),
+      }
+    );
+    if (!generationResponse.ok) {
+      throw new Error(
+        `local model ${model.slug} tool-call probe failed with HTTP ${generationResponse.status}`
+      );
+    }
+    const generated = (await generationResponse.json()) as {
+      choices?: Array<{
+        message?: {
+          tool_calls?: Array<{
+            function?: { name?: string; arguments?: string | Record<string, unknown> };
+          }>;
+        };
+      }>;
+    };
+    const generatedCall = generated.choices?.[0]?.message?.tool_calls?.[0]?.function;
+    let generatedArguments: unknown = generatedCall?.arguments;
+    if (typeof generatedArguments === "string") {
+      try {
+        generatedArguments = JSON.parse(generatedArguments) as unknown;
+      } catch {
+        // The structured shape below rejects non-JSON arguments.
+      }
+    }
+    if (
+      generatedCall?.name !== "vibestudio_runtime_probe" ||
+      !generatedArguments ||
+      typeof generatedArguments !== "object" ||
+      (generatedArguments as Record<string, unknown>)["value"] !== assistantCallSentinel
+    ) {
+      throw new Error(
+        `local model ${model.slug} could not reliably select and produce a parsed structured tool call from the full agent tool surface`
+      );
+    }
+
+    const templateResponse = await this.deps.fetch(`http://127.0.0.1:${port}/apply-template`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: model.slug,
+        messages: [
+          { role: "user", content: "Run the runtime probe." },
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: "runtime_probe_call",
+                type: "function",
+                function: {
+                  name: "vibestudio_runtime_probe",
+                  arguments: JSON.stringify({ value: assistantCallSentinel }),
+                },
+              },
+            ],
+          },
+          {
+            role: "tool",
+            tool_call_id: "runtime_probe_call",
+            name: "vibestudio_runtime_probe",
+            content: JSON.stringify({ received: true }),
+          },
+          { role: "user", content: "Continue." },
+        ],
+        tools: [probeTool],
+        add_generation_prompt: true,
+      }),
+    });
+    if (!templateResponse.ok) {
+      throw new Error(
+        `local model ${model.slug} chat-template probe failed with HTTP ${templateResponse.status}`
+      );
+    }
+    const rendered = (await templateResponse.json()) as { prompt?: string };
+    if (!rendered.prompt?.includes(assistantCallSentinel)) {
+      throw new Error(
+        `local model ${model.slug} chat template drops assistant tool calls from conversation history`
+      );
+    }
+  }
+
   private sleep(ms: number): Promise<void> {
     const setTimeoutFn = this.deps.setTimeoutFn ?? setTimeout;
     return new Promise((resolve) => setTimeoutFn(() => resolve(), ms));
@@ -477,8 +880,21 @@ class ServerSupervisor {
 
   private async restart(kind: ServerKind): Promise<void> {
     await this.activate();
-    if (this.roleValue !== "owner")
-      throw new Error("attached local-models supervisors cannot restart servers");
+    if (this.roleValue === "attached") {
+      await this.ensureAttachedOwnerAlive();
+      if (this.roleValue === "attached") {
+        const result = await this.requestOwner({ kind: "restart", server: kind });
+        if (!("ok" in result) || result.ok !== true) {
+          throw new Error("local-models owner returned an invalid restart response");
+        }
+        return;
+      }
+    }
+    await this.restartAsOwner(kind);
+  }
+
+  private async restartAsOwner(kind: ServerKind): Promise<void> {
+    if (this.roleValue !== "owner") throw new Error("local-models supervisor is attached");
 
     // A restart only re-launches a server that was already up (or mid-launch):
     // the fallback floor is lazy (design §5), so restarting a cold utility must
@@ -504,6 +920,7 @@ class ServerSupervisor {
 
     const runtime = this.servers[kind];
     runtime.consecutiveHealthFailures = 0;
+    if (kind === "main") this.loadedMainModels.clear();
 
     const launch = await this.launchSpec(kind);
     if (!launch) return;
@@ -563,8 +980,9 @@ class ServerSupervisor {
         });
         return null;
       }
+      const utilityEngine = !this.utilityCpuFallback && engines.gpu ? engines.gpu : engines.cpu;
       return {
-        bin: engines.cpu.serverBinPath,
+        bin: utilityEngine.serverBinPath,
         args: [
           "-m",
           fallback.file,
@@ -575,14 +993,14 @@ class ServerSupervisor {
           "--api-key-file",
           this.paths.authKey,
           "-c",
-          "8192",
+          String(runtimeContextLengthFor(fallback)),
           "--jinja",
           // Single sequence, not `-np 2`: llama.cpp splits the KV cache evenly
-          // across parallel slots, so `-c 8192 -np 2` would give each request
-          // only 4096 tokens — too tight for a fallback carrying tool schemas +
-          // history. The utility server is a lazy, single-purpose floor (design
-          // §5), so full context per turn beats concurrency; simultaneous
-          // fallbacks queue, which is the right trade for a rarely-hit floor.
+          // across parallel slots. The fallback needs its full advertised 32K
+          // window for the agent prompt, tool schemas, history, and response.
+          // The utility server is a lazy, single-purpose floor (design §5), so
+          // full context per turn beats concurrency; simultaneous fallbacks
+          // queue, which is the right trade for a rarely-hit floor.
           "-np",
           "1",
         ],
@@ -594,7 +1012,7 @@ class ServerSupervisor {
     // publisher/repo/file.gguf layout (verified live: "Available models (0)"),
     // and file-derived names wouldn't match our slugs. A generated preset INI
     // solves both — sections are slugs, entries point at the exact GGUF
-    // (design §4.4; verified live on b9895).
+    // (design §4.4; verified against current llama.cpp releases).
     const presetPath = await this.writeRouterPreset();
     if (!presetPath) {
       this.setState(kind, {
@@ -628,9 +1046,13 @@ class ServerSupervisor {
     const records = (await this.deps.libraryModels()).filter(
       (record) => record.slug !== FALLBACK_MODEL.slug
     );
-    if (records.length === 0) return null;
+    if (records.length === 0) {
+      this.routerCatalogModels.clear();
+      return null;
+    }
+    this.routerCatalogModels = new Set(records.map((record) => record.slug));
     const sections = records.map((record) => {
-      const ctx = Math.min(record.config.contextLength ?? record.trainedContextLength, 16384);
+      const ctx = runtimeContextLengthFor(record);
       const lines = [`[${record.slug}]`, `model = ${record.file}`, `ctx-size = ${ctx}`];
       if (record.config.gpuLayers !== null) {
         lines.push(`n-gpu-layers = ${record.config.gpuLayers}`);
@@ -649,6 +1071,7 @@ class ServerSupervisor {
 
     runtime.process = null;
     runtime.startedAt = null;
+    if (kind === "main") this.loadedMainModels.clear();
     this.clearHealthTimer(kind);
 
     if (active.expectedExit || this.disposed) {
@@ -677,6 +1100,16 @@ class ServerSupervisor {
     runtime.failureTimes = runtime.failureTimes.filter((time) => now - time <= FAILURE_WINDOW_MS);
     runtime.failureTimes.push(now);
 
+    const engines = this.deps.engines();
+    if (kind === "utility" && !this.utilityCpuFallback && engines?.gpu) {
+      this.utilityCpuFallback = true;
+      this.recordLog(
+        "utility",
+        "stderr",
+        `accelerated utility server failed; degrading to CPU: ${message}`
+      );
+    }
+
     if (kind === "main" && runtime.failureTimes.length >= MAIN_FAILURE_LIMIT) {
       this.setState("main", { state: "error", message, logTail: this.tailLog("main") });
       return;
@@ -697,7 +1130,11 @@ class ServerSupervisor {
     const nextPort = await allocatePort(oldPort);
     if (!this.ports) throw new Error("ports are not initialized");
     this.ports = { ...this.ports, [kind]: nextPort };
-    this.writeConfig({ utilityPort: this.ports.utility, mainPort: this.ports.main });
+    this.writeConfig({
+      utilityPort: this.ports.utility,
+      mainPort: this.ports.main,
+      adminPort: this.adminPort ?? undefined,
+    });
     this.writeOwnerInfo();
   }
 
@@ -764,24 +1201,55 @@ class ServerSupervisor {
     }, IDLE_UNLOAD_MS);
   }
 
+  private markUsed(slug: string): void {
+    this.lastUsed.set(slug, this.deps.now());
+    this.scheduleIdleUnload();
+  }
+
   private async checkIdleUnload(): Promise<void> {
     if (this.roleValue !== "owner" || this.lastUsed.size === 0) return;
     const now = this.deps.now();
-    const newestUse = Math.max(...this.lastUsed.values());
-    const idleFor = now - newestUse;
-    if (idleFor < IDLE_UNLOAD_MS) {
+    let nextCheckMs = Number.POSITIVE_INFINITY;
+
+    const fallbackUsedAt = this.lastUsed.get(FALLBACK_MODEL.slug);
+    if (fallbackUsedAt !== undefined) {
+      const fallbackIdleFor = now - fallbackUsedAt;
+      if (fallbackIdleFor >= IDLE_UNLOAD_MS) {
+        this.lastUsed.delete(FALLBACK_MODEL.slug);
+        this.stopIdleServer("utility");
+      } else {
+        nextCheckMs = Math.min(nextCheckMs, IDLE_UNLOAD_MS - fallbackIdleFor);
+      }
+    }
+
+    const mainUses = Array.from(this.lastUsed.entries()).filter(
+      ([slug]) => slug !== FALLBACK_MODEL.slug
+    );
+    if (mainUses.length > 0) {
+      const newestMainUse = Math.max(...mainUses.map(([, usedAt]) => usedAt));
+      const mainIdleFor = now - newestMainUse;
+      if (mainIdleFor >= IDLE_UNLOAD_MS) {
+        for (const [slug] of mainUses) this.lastUsed.delete(slug);
+        this.stopIdleServer("main");
+      } else {
+        nextCheckMs = Math.min(nextCheckMs, IDLE_UNLOAD_MS - mainIdleFor);
+      }
+    }
+
+    if (Number.isFinite(nextCheckMs)) {
       this.idleTimer = this.setTimer(() => {
         this.idleTimer = null;
         void this.checkIdleUnload();
-      }, IDLE_UNLOAD_MS - idleFor);
-      return;
+      }, nextCheckMs);
     }
+  }
 
-    this.lastUsed.clear();
-    const runtime = this.servers.main;
-    if (runtime.process || runtime.state.state === "running") {
-      await this.restart("main");
-    }
+  private stopIdleServer(kind: ServerKind): void {
+    this.clearRestartTimer(kind);
+    this.clearHealthTimer(kind);
+    this.stopProcess(kind, "SIGTERM");
+    if (kind === "main") this.loadedMainModels.clear();
+    this.setState(kind, { state: "stopped" });
   }
 
   private stopProcess(kind: ServerKind, signal: string): void {
@@ -859,6 +1327,15 @@ class ServerSupervisor {
     }
 
     if (this.roleValue === "owner") {
+      const listener = this.adminListener;
+      this.adminListener = null;
+      try {
+        await listener?.close();
+      } catch (error) {
+        this.deps.log("failed to stop local-models admin endpoint", {
+          error: errorMessage(error),
+        });
+      }
       if (this.lockFd !== null) {
         closeSync(this.lockFd);
         this.lockFd = null;
@@ -887,17 +1364,20 @@ function cleanEnv(source: NodeJS.ProcessEnv = process.env): Record<string, strin
   return env;
 }
 
-async function allocatePort(exclude?: number): Promise<number> {
+async function allocatePort(exclude?: number | number[]): Promise<number> {
+  const excluded = new Set(
+    Array.isArray(exclude) ? exclude : exclude === undefined ? [] : [exclude]
+  );
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const port = await askOsForPort().catch(() => fallbackPort(exclude, attempt));
-    if (port !== exclude) return port;
+    const port = await askOsForPort().catch(() => fallbackPort(excluded, attempt));
+    if (!excluded.has(port)) return port;
   }
-  return askOsForPort().catch(() => fallbackPort(exclude, 20));
+  return askOsForPort().catch(() => fallbackPort(excluded, 20));
 }
 
 function askOsForPort(): Promise<number> {
   return new Promise((resolve, reject) => {
-    const server = createServer();
+    const server = createNetServer();
     server.unref();
     server.on("error", reject);
     server.listen(0, "127.0.0.1", () => {
@@ -916,12 +1396,121 @@ function validPort(port: unknown): port is number {
   return typeof port === "number" && Number.isInteger(port) && port > 0 && port <= 65535;
 }
 
-function fallbackPort(exclude: number | undefined, attempt: number): number {
+function fallbackPort(excluded: ReadonlySet<number>, attempt: number): number {
   const min = 20_000;
   const span = 45_536;
   let port = min + ((randomBytes(2).readUInt16BE(0) + attempt) % span);
-  if (port === exclude) port = port >= 65_535 ? min : port + 1;
+  while (excluded.has(port)) port = port >= 65_535 ? min : port + 1;
   return port;
+}
+
+const ADMIN_BODY_LIMIT_BYTES = 16 * 1024;
+
+const HTTP_ADMIN_TRANSPORT: SupervisorAdminTransport = {
+  listen(port, apiKey, handler) {
+    return new Promise((resolve, reject) => {
+      const server = createHttpServer((request, response) => {
+        void handleAdminHttpRequest(request, apiKey, handler)
+          .then(({ status, body }) => {
+            response.writeHead(status, { "content-type": "application/json" });
+            response.end(JSON.stringify(body));
+          })
+          .catch((error: unknown) => {
+            response.writeHead(500, { "content-type": "application/json" });
+            response.end(JSON.stringify({ error: errorMessage(error) }));
+          });
+      });
+      const onError = (error: Error) => reject(error);
+      server.once("error", onError);
+      server.listen(port, "127.0.0.1", () => {
+        server.off("error", onError);
+        server.unref();
+        resolve({
+          close: () =>
+            new Promise<void>((closeResolve, closeReject) => {
+              server.close((error) => (error ? closeReject(error) : closeResolve()));
+            }),
+        });
+      });
+    });
+  },
+  async request(port, apiKey, command) {
+    const response = await fetch(`http://127.0.0.1:${port}/admin`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(command),
+    });
+    const body = (await response.json().catch(() => null)) as unknown;
+    if (!response.ok) {
+      const detail =
+        isRecord(body) && typeof body["error"] === "string" ? `: ${body["error"]}` : "";
+      throw new Error(`local-models owner request failed with HTTP ${response.status}${detail}`);
+    }
+    if (!isAdminResult(body)) throw new Error("local-models owner returned malformed JSON");
+    return body;
+  },
+};
+
+async function handleAdminHttpRequest(
+  request: IncomingMessage,
+  apiKey: string,
+  handler: (command: SupervisorAdminCommand) => Promise<SupervisorAdminResult>
+): Promise<{ status: number; body: SupervisorAdminResult | { error: string } }> {
+  if (request.method !== "POST" || request.url !== "/admin") {
+    return { status: 404, body: { error: "not found" } };
+  }
+  if (request.headers.authorization !== `Bearer ${apiKey}`) {
+    return { status: 401, body: { error: "unauthorized" } };
+  }
+  try {
+    const command = parseAdminCommand(JSON.parse(await readBoundedBody(request)) as unknown);
+    return { status: 200, body: await handler(command) };
+  } catch (error) {
+    return { status: 400, body: { error: errorMessage(error) } };
+  }
+}
+
+async function readBoundedBody(request: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.byteLength;
+    if (bytes > ADMIN_BODY_LIMIT_BYTES) throw new Error("admin request body is too large");
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function parseAdminCommand(value: unknown): SupervisorAdminCommand {
+  if (!isRecord(value) || typeof value["kind"] !== "string") {
+    throw new Error("invalid admin command");
+  }
+  if (
+    value["kind"] === "ensure-loaded" &&
+    typeof value["slug"] === "string" &&
+    value["slug"].length > 0
+  ) {
+    return { kind: "ensure-loaded", slug: value["slug"] };
+  }
+  if (
+    value["kind"] === "restart" &&
+    (value["server"] === "utility" || value["server"] === "main")
+  ) {
+    return { kind: "restart", server: value["server"] };
+  }
+  throw new Error("invalid admin command");
+}
+
+function isAdminResult(value: unknown): value is SupervisorAdminResult {
+  return isRecord(value) && (typeof value["baseUrl"] === "string" || value["ok"] === true);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readJsonFile<T>(path: string): T | null {

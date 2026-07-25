@@ -3,9 +3,9 @@
  * real llama.cpp release download, real LFM2.5 GGUF download, real
  * llama-server, real OpenAI-compatible + tool-calling round-trips.
  *
- * Gated behind RUN_LOCAL_MODELS_E2E=1 — it downloads ~800 MB on first run
+ * Gated behind RUN_LOCAL_MODELS_E2E=1 — it downloads ~700 MB on first run
  * (cached machine-globally afterwards) and starts local servers. Locks
- * design risks #1 (loopback fetch), #2 (LFM2.5 tool template under --jinja),
+ * design risks #1 (loopback fetch), #2 (embedded tool template under --jinja),
  * and the pinned-build asset naming against reality.
  */
 
@@ -14,7 +14,7 @@ import { activate } from "./index.js";
 import { FALLBACK_MODEL } from "./types.js";
 
 const RUN = process.env["RUN_LOCAL_MODELS_E2E"] === "1";
-// Sized for a slow (~500 KB/s) connection downloading the 731 MB fallback
+// Sized for a slow (~500 KB/s) connection downloading the fallback
 // GGUF; interrupted runs resume via HTTP Range, so re-runs only pay the rest.
 const BOOTSTRAP_TIMEOUT_MS = 40 * 60_000;
 
@@ -46,9 +46,10 @@ describe.runIf(RUN)("local-models live e2e", () => {
       const { apiKey } = await api.getLoopbackAuth();
 
       const status = await api.status();
-      expect(status.fallback.ready, `fallback not downloaded: ${JSON.stringify(status.fallback)}`).toBe(
-        true
-      );
+      expect(
+        status.fallback.ready,
+        `fallback not downloaded: ${JSON.stringify(status.fallback)}`
+      ).toBe(true);
       expect(status.fallback.warm, "fallback not warm after demand").toBe(true);
       expect(status.servers.utility.state).toBe("running");
 
@@ -138,68 +139,68 @@ describe.runIf(RUN)("local-models live e2e", () => {
         `no tool_calls parsed (risk #2): ${JSON.stringify(toolBody.choices?.[0]?.message)}`
       ).toBeGreaterThan(0);
       expect(toolCalls[0]?.function?.name).toBe("get_time");
-    },
-    BOOTSTRAP_TIMEOUT_MS
-  );
 
-  it(
-    "downloads the 230M sibling and switches models across the router (main) server",
-    async () => {
-      const api = await activate(stubCtx());
-      const SIBLING = "lfm2.5-230m";
-
-      // Pull the tiny sibling via the curated-catalog path if absent.
-      let models = await api.listModels();
-      if (!models.some((m) => m.slug === SIBLING)) {
-        await api.startDownloadJob({
-          hfRepo: "LiquidAI/LFM2.5-230M-GGUF",
-          file: "LFM2.5-230M-Q4_K_M.gguf",
-          displayName: "LFM2.5 230M",
-          slug: SIBLING,
-        });
-        const deadline = Date.now() + BOOTSTRAP_TIMEOUT_MS - 120_000;
-        while (Date.now() < deadline) {
-          models = await api.listModels();
-          const entry = models.find((m) => m.slug === SIBLING);
-          if (entry && entry.state !== "downloading") break;
-          await new Promise((resolve) => setTimeout(resolve, 5_000));
-        }
-      }
-      const sibling = (await api.listModels()).find((m) => m.slug === SIBLING);
-      expect(sibling, "230M sibling missing after download").toBeTruthy();
-      expect(sibling?.server).toBe("main");
-
-      // Switching: the sibling loads on the router (main) server — a
-      // different process and port than the fallback's utility server.
-      const [siblingLoaded, fallbackLoaded, auth] = [
-        await api.ensureLoaded(SIBLING),
-        await api.ensureLoaded(FALLBACK_MODEL.slug),
-        await api.getLoopbackAuth(),
-      ];
-      expect(siblingLoaded.baseUrl).not.toBe(fallbackLoaded.baseUrl);
-
-      // A real completion from the sibling, selected by the request's model
-      // field (router semantics).
-      const res = await fetch(`${siblingLoaded.baseUrl}/chat/completions`, {
+      // The selected fallback publishes its corrected template inside the
+      // GGUF. Lock that artifact contract at the wire boundary: a prior
+      // assistant call survives into the next turn instead of becoming empty.
+      const templateRes = await fetch(`${baseUrl.replace(/\/v1$/u, "")}/apply-template`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          authorization: `Bearer ${auth.apiKey}`,
+          authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: SIBLING,
-          messages: [{ role: "user", content: "Say hello in three words or fewer." }],
-          max_tokens: 24,
+          messages: [
+            { role: "system", content: "Use tools when needed." },
+            { role: "user", content: "What time is it in Berlin?" },
+            {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function",
+                  function: {
+                    name: "get_time",
+                    arguments: JSON.stringify({ timezone: "Europe/Berlin" }),
+                  },
+                },
+              ],
+            },
+            {
+              role: "tool",
+              tool_call_id: "call_1",
+              name: "get_time",
+              content: JSON.stringify({ time: "10:30" }),
+            },
+            { role: "user", content: "And in Tokyo?" },
+          ],
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "get_time",
+                description: "Get the current time in a timezone",
+                parameters: {
+                  type: "object",
+                  properties: { timezone: { type: "string" } },
+                  required: ["timezone"],
+                },
+              },
+            },
+          ],
+          add_generation_prompt: true,
         }),
       });
-      expect(res.ok, `sibling completion HTTP ${res.status}`).toBe(true);
-      const body = (await res.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-        model?: string;
-      };
-      const text = body.choices?.[0]?.message?.content ?? "";
-      expect(text.trim().length, `empty sibling completion: ${JSON.stringify(body)}`).toBeGreaterThan(0);
+      expect(templateRes.ok, `apply-template HTTP ${templateRes.status}`).toBe(true);
+      const templateBody = (await templateRes.json()) as { prompt?: string };
+      const prompt = templateBody.prompt ?? "";
+      expect(prompt).toContain(
+        '<|tool_call_start|>[get_time(timezone="Europe/Berlin")]<|tool_call_end|>'
+      );
+      expect(prompt).toContain('<|im_start|>tool\n{"time":"10:30"}<|im_end|>');
     },
     BOOTSTRAP_TIMEOUT_MS
   );
+
 });

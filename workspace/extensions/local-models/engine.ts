@@ -35,9 +35,9 @@ export function resolveAssetNames(
       return { cpu: asset, gpu: profile.chosenBackend === "cpu" ? null : asset, extra: [] };
     }
     case "linux": {
-      // Verified against the live b9895 release: the CPU build is the PLAIN
+      // Verified against current llama.cpp releases: the CPU build is the PLAIN
       // arch asset (no "-cpu" segment), and GPU variants put the backend
-      // BEFORE the arch (e.g. llama-b9895-bin-ubuntu-vulkan-x64.tar.gz).
+      // BEFORE the arch (e.g. llama-b10107-bin-ubuntu-vulkan-x64.tar.gz).
       const cpu = `llama-${buildTag}-bin-ubuntu-${profile.arch}.tar.gz`;
       const gpu =
         profile.chosenBackend === "cpu"

@@ -45,7 +45,9 @@ const rangeServers: RangeServer[] = [];
 
 afterEach(async () => {
   await Promise.all(rangeServers.splice(0).map((server) => server.close()));
-  await Promise.all(tempRoots.splice(0).map((root) => fsp.rm(root, { recursive: true, force: true })));
+  await Promise.all(
+    tempRoots.splice(0).map((root) => fsp.rm(root, { recursive: true, force: true }))
+  );
 });
 
 describe("GGUF parser", () => {
@@ -54,7 +56,10 @@ describe("GGUF parser", () => {
       ["general.architecture", { kind: "string", value: "llama" }],
       ["general.size_label", { kind: "string", value: "1.2B" }],
       ["llama.context_length", { kind: "uint32", value: 8192 }],
-      ["tokenizer.chat_template", { kind: "string", value: "{% if tools %}{{ tool_calls }}{% endif %}" }],
+      [
+        "tokenizer.chat_template",
+        { kind: "string", value: "{% if tools %}{{ tool_calls }}{% endif %}" },
+      ],
       ["general.file_type", { kind: "uint32", value: 15 }],
       ["test.u8", { kind: "uint8", value: 1 }],
       ["test.i8", { kind: "int8", value: -1 }],
@@ -105,19 +110,19 @@ describe("estimateFit", () => {
 
     expect(estimateFit(modelSizeMB(700), gpuMid)).toMatchObject({
       fit: "full-gpu",
-      contextLength: 32768,
+      contextLength: 65536,
       gpuLayers: 99,
       estTokensPerSec: null,
     });
     expect(estimateFit(modelSizeMB(5 * 1024), gpuMid).fit).toBe("full-gpu");
     expect(estimateFit(modelSizeMB(9 * 1024), gpuMid)).toMatchObject({
       fit: "partial-offload",
-      contextLength: 16384,
+      contextLength: 65536,
       gpuLayers: -1,
     });
     expect(estimateFit(modelSizeMB(700), cpuMin)).toMatchObject({
       fit: "cpu-only",
-      contextLength: 8192,
+      contextLength: 65536,
       gpuLayers: 0,
     });
     expect(estimateFit(modelSizeMB(6 * 1024), cpuMin).fit).toBe("too-big");
@@ -240,7 +245,7 @@ describe("ModelLibrary", () => {
     const root = await tempRoot();
     const body = modelBytes("bad-checksum", 32 * 1024);
     const server = await startRangeServer({ "Bad-Q4_K_M.gguf": body });
-    const { library } = createTestLibrary(root, server);
+    const { library, events } = createTestLibrary(root, server);
 
     await expect(
       library.startDownload({
@@ -253,13 +258,86 @@ describe("ModelLibrary", () => {
     const partPath = path.join(root, "models", "Acme", "Bad-GGUF", "Bad-Q4_K_M.gguf.part");
     expect(await pathExists(partPath)).toBe(false);
     expect(await library.list()).toEqual([]);
+    expect(library.listDownloads()).toEqual([
+      expect.objectContaining({
+        slug: "bad-q4-k-m",
+        error: expect.stringMatching(/Checksum mismatch/),
+      }),
+    ]);
+    expect(events.at(-1)).toEqual({
+      kind: "download.progress",
+      job: expect.objectContaining({ error: expect.stringMatching(/Checksum mismatch/) }),
+    });
+
+    await expect(
+      library.startDownload({
+        hfRepo: "Acme/Bad-GGUF",
+        file: "Bad-Q4_K_M.gguf",
+        expectedSha256: sha256Hex(body),
+      })
+    ).resolves.toMatchObject({
+      slug: "bad-q4-k-m",
+      error: null,
+    });
+    expect(library.listDownloads()).toEqual([]);
   });
 
   it("refuses to remove the fallback model", async () => {
     const root = await tempRoot();
     const { library } = createTestLibrary(root);
 
-    await expect(library.remove(FALLBACK_MODEL.slug)).rejects.toThrow(/Refusing to remove fallback model/);
+    await expect(library.remove(FALLBACK_MODEL.slug)).rejects.toThrow(
+      /Refusing to remove fallback model/
+    );
+  });
+
+  it("replaces a stale fallback record with the current artifact", async () => {
+    const root = await tempRoot();
+    const body = modelBytes("current fallback", 64 * 1024);
+    const server = await startRangeServer({ [FALLBACK_MODEL.file]: body });
+    await fsp.mkdir(path.join(root, "models"), { recursive: true });
+    await fsp.writeFile(
+      path.join(root, "models", "records.json"),
+      `${JSON.stringify([
+        {
+          slug: FALLBACK_MODEL.slug,
+          displayName: FALLBACK_MODEL.displayName,
+          hfRepo: "LiquidAI/LFM2.5-1.2B-GGUF",
+          file: path.join(root, "models", "LiquidAI", "LFM2.5-1.2B-Q4_K_M.gguf"),
+          sizeBytes: 1,
+          quant: "Q4_K_M",
+          paramCount: "1.2B",
+          arch: "lfm2",
+          trainedContextLength: 32_768,
+          toolsCapable: true,
+          sha256: "a".repeat(64),
+          importedInPlace: false,
+          config: { contextLength: null, gpuLayers: null },
+          benchmark: null,
+          runtimeValidation: {
+            status: "ready",
+            error: null,
+            validatedAt: 1,
+          },
+          addedAt: 1,
+        },
+      ])}\n`,
+      "utf8"
+    );
+    const { library } = createTestLibrary(root, server);
+
+    await expect(library.ensureFallback()).resolves.toMatchObject({
+      slug: FALLBACK_MODEL.slug,
+      hfRepo: FALLBACK_MODEL.hfRepo,
+      file: expect.stringMatching(new RegExp(`${FALLBACK_MODEL.file}$`)),
+      runtimeValidation: { status: "pending" },
+    });
+    await expect(library.list()).resolves.toEqual([
+      expect.objectContaining({
+        slug: FALLBACK_MODEL.slug,
+        hfRepo: FALLBACK_MODEL.hfRepo,
+      }),
+    ]);
   });
 
   it("imports GGUF files in place and skips paths already indexed", async () => {
@@ -287,6 +365,38 @@ describe("ModelLibrary", () => {
     expect(events.some((event) => event.kind === "models.changed")).toBe(true);
     await expect(library.importDir(importRoot)).resolves.toEqual([]);
     await expect(library.list()).resolves.toHaveLength(1);
+  });
+
+  it("grows the metadata read window for modern large-vocabulary GGUF files", async () => {
+    const root = await tempRoot();
+    const importRoot = path.join(root, "imports");
+    await fsp.mkdir(importRoot, { recursive: true });
+    const file = path.join(importRoot, "Large-Vocabulary-Q4_K_M.gguf");
+    const largeTokenizerMetadata = Array.from({ length: 9 }, () => "x".repeat(1024 * 1024));
+    await fsp.writeFile(
+      file,
+      buildGguf([
+        ["general.architecture", { kind: "string", value: "qwen35" }],
+        [
+          "tokenizer.ggml.tokens",
+          { kind: "array", elementKind: "string", values: largeTokenizerMetadata },
+        ],
+        ["general.size_label", { kind: "string", value: "2B" }],
+        ["qwen35.context_length", { kind: "uint32", value: 262_144 }],
+        ["tokenizer.chat_template", { kind: "string", value: "{{ tools }}{{ tool_calls }}" }],
+        ["general.file_type", { kind: "uint32", value: 15 }],
+      ])
+    );
+    const { library } = createTestLibrary(root);
+
+    await expect(library.importDir(importRoot)).resolves.toEqual([
+      expect.objectContaining({
+        file,
+        arch: "qwen35",
+        trainedContextLength: 262_144,
+        toolsCapable: true,
+      }),
+    ]);
   });
 
   it("persists benchmark metadata on model records", async () => {
@@ -383,7 +493,10 @@ function modelBytes(label: string, paddingBytes: number): Uint8Array {
       ["general.architecture", { kind: "string", value: "llama" }],
       ["general.size_label", { kind: "string", value: "1.2B" }],
       ["llama.context_length", { kind: "uint32", value: 8192 }],
-      ["tokenizer.chat_template", { kind: "string", value: `{{ tools }} {{ message.tool_calls }} ${label}` }],
+      [
+        "tokenizer.chat_template",
+        { kind: "string", value: `{{ tools }} {{ message.tool_calls }} ${label}` },
+      ],
       ["general.file_type", { kind: "uint32", value: 15 }],
     ]),
     Buffer.alloc(paddingBytes, 0x2a),
@@ -494,7 +607,10 @@ async function tempRoot(): Promise<string> {
   return root;
 }
 
-function createTestLibrary(root: string, server?: RangeServer): {
+function createTestLibrary(
+  root: string,
+  server?: RangeServer
+): {
   library: ReturnType<typeof createModelLibrary>;
   events: Array<Parameters<ModelLibraryDeps["emit"]>[0]>;
 } {
@@ -502,7 +618,7 @@ function createTestLibrary(root: string, server?: RangeServer): {
   return {
     library: createModelLibrary({
       rootDir: root,
-      fetch: server ? server.fetch ?? fetchThrough(server.baseUrl) : fetch,
+      fetch: server ? (server.fetch ?? fetchThrough(server.baseUrl)) : fetch,
       log: vi.fn(),
       emit(event) {
         events.push(event);
@@ -560,7 +676,10 @@ async function startRangeServer(
   });
   if (listenError) {
     server.removeAllListeners();
-    if (isNodeError(listenError) && (listenError.code === "EPERM" || listenError.code === "EACCES")) {
+    if (
+      isNodeError(listenError) &&
+      (listenError.code === "EPERM" || listenError.code === "EACCES")
+    ) {
       const fallbackServer: RangeServer = {
         baseUrl: "http://local-range.test",
         ranges,
@@ -721,7 +840,10 @@ function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-async function waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs = 2000): Promise<void> {
+async function waitUntil(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 2000
+): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     if (await predicate()) {

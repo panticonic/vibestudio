@@ -16,13 +16,7 @@
 // ---------------------------------------------------------------- hardware
 
 export type GpuVendor = "nvidia" | "amd" | "intel" | "apple";
-export type EngineBackend =
-  | "cuda-12.4"
-  | "cuda-13.3"
-  | "vulkan"
-  | "rocm"
-  | "metal"
-  | "cpu";
+export type EngineBackend = "cuda-12.4" | "cuda-13.3" | "vulkan" | "rocm" | "metal" | "cpu";
 
 export interface GpuInfo {
   vendor: GpuVendor;
@@ -79,9 +73,9 @@ export interface InstalledEngine {
 
 export interface EngineState {
   pin: EnginePin;
-  /** Universal CPU build — utility server (§3). Always present after bootstrap. */
+  /** Universal recovery build. Always present after bootstrap. */
   cpu: InstalledEngine | null;
-  /** Hardware-optimal build — main server; null while tier is cpu-*. */
+  /** Hardware-optimal build used by every server when available; null on CPU-only hosts. */
   gpu: InstalledEngine | null;
   /** Why gpu degraded from HardwareProfile.chosenBackend, if it did (§4.2). */
   degradedReason: string | null;
@@ -120,11 +114,20 @@ export interface ModelRecord {
   config: ModelRuntimeConfig;
   /** Real decode throughput measured from a local llama.cpp completion. */
   benchmark?: ModelBenchmarkResult | null;
+  /**
+   * Add-time compatibility validation. Older/preconfigured records omit this
+   * field intentionally and are treated as ready without being probed.
+   */
+  runtimeValidation?: {
+    status: "pending" | "ready" | "error";
+    error: string | null;
+    validatedAt: number | null;
+  };
   addedAt: number;
 }
 
 export interface ModelRuntimeConfig {
-  contextLength: number | null; // null → auto-fit
+  contextLength: number | null; // null → use the model's declared native window
   gpuLayers: number | null; // null → auto-fit
 }
 
@@ -185,6 +188,8 @@ export interface OwnerInfo {
   pid: number;
   bootId: string;
   ports: { utility: number; main: number };
+  /** Authenticated loopback control plane used by attached workspaces. */
+  adminPort?: number;
   workspaceId: string;
   since: number;
   /** Live server child pids — lets a takeover reap a dead owner's orphans. */
@@ -226,8 +231,13 @@ export interface LocalModelEntry {
   toolsCapable: boolean;
   fit: FitEstimate;
   measuredTokensPerSec: number | null;
-  state: "ready" | "startable" | "downloading" | "error";
-  downloadProgress: number | null;
+  state: "ready" | "startable" | "not-installed" | "starting" | "downloading" | "error";
+  download: {
+    progress: number;
+    phase: DownloadPhase;
+    receivedBytes: number;
+    totalBytes: number | null;
+  } | null;
   errorMessage: string | null;
 }
 
@@ -267,7 +277,12 @@ export const FALLBACK_MODEL = {
   slug: "lfm2.5-1.2b",
   ref: "local:lfm2.5-1.2b",
   displayName: "LFM2.5 1.2B Instruct",
-  hfRepo: "LiquidAI/LFM2.5-1.2B-Instruct-GGUF",
-  quant: "Q4_K_M" as QuantName,
-  contextLength: 8192,
+  // The upstream LiquidAI GGUF currently embeds a template that drops
+  // assistant tool_calls on replay. This artifact keeps bit-identical weights
+  // and publishes the corrected template in GGUF metadata, so llama.cpp can
+  // remain embedded-template-first with no runtime override.
+  hfRepo: "NobodyWho/LFM2.5-1.2B-Instruct-GGUF",
+  quant: "Q4_0" as QuantName,
+  file: "LFM2.5-1.2B-Instruct-Q4_0-vendor-sampling.gguf",
+  contextLength: 32_768,
 } as const;

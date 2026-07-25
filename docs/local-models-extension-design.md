@@ -35,9 +35,11 @@ handled *inside* this change. Companion reading: `EXTENSIONS.md`, `PANEL_SYSTEM.
 5. **Honest availability in the picker** — the model selection UI knows which
    providers are *actually usable right now* (credentialed cloud, running local) and
    says so, instead of listing 200 models it can't call.
-6. **Guaranteed floor** — LFM2.5-1.2B-Instruct (~731 MB GGUF Q4_K_M, runs CPU-only
-   under 1 GB RAM) is installed by default and kept servable at all times; when no
-   other provider works, the system falls back to it automatically.
+6. **Guaranteed floor** — LFM2.5-1.2B-Instruct (~696 MB GGUF Q4_0, runs under
+   1 GB RAM) is installed by default and available on demand. It uses the fastest
+   validated engine on the machine and degrades to the universal CPU build only if
+   accelerated execution fails; when no other provider works, the system falls back
+   to it automatically.
 7. **E2e-testable by construction** — the local model turns the whole agentic stack
    into something CI can exercise headlessly, offline, with zero cloud keys; the app
    CLI grows the commands to drive it (§11).
@@ -144,7 +146,8 @@ llama.cpp / model ecosystem (researched 2026-07-07):
   request's `"model"` field; `--models-max` bounds simultaneously-loaded models.
   Caveats: eviction is on-switch (no idle TTL), still maturing.
 - **LFM2.5-1.2B-Instruct (Liquid AI) — confirmed.** HF `LiquidAI/LFM2.5-1.2B-Instruct`,
-  official GGUF `LiquidAI/LFM2.5-1.2B-Instruct-GGUF` (Q4_0 696 MB, Q4_K_M 731 MB,
+  corrected GGUF `NobodyWho/LFM2.5-1.2B-Instruct-GGUF` (Q4_0 696 MB,
+  bit-identical Liquid weights with the multi-turn tool-call fix embedded in model metadata;
   Q8_0 1.25 GB). 1.17 B params, hybrid conv+GQA ("lfm2" arch, supported in llama.cpp),
   32 K context, ChatML-like template, tool calling via `<|tool_call_start|>` Pythonic
   format. ~239 tok/s decode on desktop CPUs — comfortably usable with no GPU.
@@ -179,7 +182,7 @@ llama.cpp / model ecosystem (researched 2026-07-07):
 │    ├─ HardwareProfiler   (GPU/VRAM/CPU/RAM probe, cached)            ▲       ▲       │
 │    ├─ EngineInstaller    (llama.cpp release binaries per backend)    │       │       │
 │    ├─ ModelLibrary       (GGUF downloads, HF, resumable)             │       │       │
-│    └─ ServerSupervisor ──┬─ utility server (CPU build, LFM2.5, lazy on-demand)│       │
+│    └─ ServerSupervisor ──┬─ utility server (best backend, CPU recovery, LFM2.5)│      │
 │                          └─ main server  (best backend, router mode, user models)    │
 │                                                                                      │
 │  workspace/panels/local-models  (React) ── extensions.use("local-models").*          │
@@ -193,17 +196,20 @@ existing executor.
 
 ### The two-server topology
 
-The fallback must not share fate with the GPU stack (driver bugs, VRAM
-exhaustion, a 13B model OOM-ing the server). So the extension runs **two**
-`llama-server` processes, each started only when first demanded:
+The fallback must not share a process with a large user model, but making CPU the
+normal path would punish every healthy machine for a failure that has not happened.
+The extension therefore runs **two** `llama-server` processes, each started only
+when first demanded. Both prefer the fastest installed engine that passed its smoke
+test; if the accelerated utility process fails, its supervisor relaunches it on the
+universal CPU engine:
 
 | | **Utility server** | **Main server** |
 |---|---|---|
 | Purpose | LFM2.5 fallback, loaded on demand | User's model library |
-| Build | **CPU-only** llama.cpp (universal, zero driver risk) | Best backend for the hardware (CUDA/Metal/Vulkan/ROCm) |
+| Build | Best validated backend; automatic CPU degradation after failure | Best validated backend (CUDA/Metal/Vulkan/ROCm, or CPU) |
 | Models | `LFM2.5-1.2B-Instruct` pinned, single-model mode | Router mode over the library, load-on-demand, `--models-max 1` (configurable) |
-| Footprint | 0 when cold (the default); ~0.8–1 GB RAM once loaded (Q4_K_M + small KV, `-c 8192` default) | 0 when cold; whatever the loaded model needs (auto-fit) |
-| Lifecycle | **Cold until the first fallback `ensureLoaded`**; once running, restarts with backoff forever *while in use* (it is the floor) | Starts on the first non-fallback `ensureLoaded`; weights load on demand via `ensureLoaded` (§6.3); idle model unload after 15 min, implemented by the supervisor — llama.cpp's router has no native idle TTL (§2) |
+| Footprint | 0 when cold (the default); model weights plus its 32K KV cache while loaded | 0 when cold; whatever the loaded model needs (auto-fit) |
+| Lifecycle | **Cold until the first fallback `ensureLoaded`**; restarts with backoff while in use, then stops after 15 min idle | Starts on the first non-fallback `ensureLoaded`; weights load on demand via `ensureLoaded` (§6.3), then the server stops after 15 min idle — llama.cpp's router has no native idle TTL (§2) |
 | Port | `127.0.0.1:<utilityPort>` | `127.0.0.1:<mainPort>` |
 
 On a low-powered machine (no GPU, ≤8 GB RAM) the main server is simply never
@@ -277,7 +283,7 @@ offload up to ~9 B Q4_K_M, partial offload to ~14 B; a GPU-less 8 GB laptop is
   day and we want a tested pair; the pin is bumped with extension updates, with a
   panel override for opt-in newer builds).
 - Downloads **two** archives from `github.com/ggml-org/llama.cpp/releases`: the
-  CPU build (utility server, universal) and the `chosenBackend` build (+ `cudart`
+  universal CPU recovery build and the `chosenBackend` build (+ `cudart`
   zip on Windows CUDA). Verified against the release's published checksums.
 - Extracts to `<modelsRoot>/engines/<buildTag>/<backend>/` and smoke-tests each
   binary (`llama-server --version`, then a 1-token generation against a tiny GGUF)
@@ -342,8 +348,9 @@ offload up to ~9 B Q4_K_M, partial offload to ~14 B; a GPU-less 8 GB laptop is
   demanded simply stays stopped.
 - Utility server flags:
   `llama-server -m <lfm2.5.gguf> --port <p> --host 127.0.0.1
-  --api-key-file <root>/auth.key -c 8192 --jinja -np 2 --threads <cores/2>` —
-  deliberately boring; no GPU flags. The key always rides `--api-key-file`, never a
+  --api-key-file <root>/auth.key -c 32768 --jinja -np 1` — launched with the
+  fastest smoke-tested engine, then with the CPU recovery build if accelerated
+  execution fails. The key always rides `--api-key-file`, never a
   raw `--api-key` argument: `/proc/<pid>/cmdline` is world-readable on Linux, and a
   key on the command line would leak machine-wide — defeating the very thing it
   guards (inference *and* the admin endpoint).
@@ -386,7 +393,7 @@ model-settings worker subscribes and rebuilds its snapshot), `download.progress`
 
 The fallback is a **lazy floor, not a warm guarantee**: it loads on first demand and
 is never kept resident. This is the deliberate default — a machine that never falls
-back to local should never pay RAM, CPU, or a 731 MB download for a model it does not
+back to local should never pay RAM, CPU, or a 696 MB download for a model it does not
 use. The floor is a *promise that it will be there when needed*, not a running process.
 
 First activation (after the standard extension install approval, whose prompt copy
@@ -404,7 +411,7 @@ On-demand load (the first `ensureLoaded("lfm2.5-1.2b")`, e.g. when every cloud p
 fails): download the GGUF if absent (idempotent), then start the utility server and
 wait out its model-load window. Time-to-first-local-token on a warm-engine cold-model
 box is the model-load latency; on a fully cold box it additionally pays the one-time
-731 MB download, surfaced as an in-chat progress signal.
+696 MB download, surfaced as an in-chat progress signal.
 
 Steady-state invariants:
 
@@ -412,8 +419,9 @@ Steady-state invariants:
   `ensureLoaded`; the main server on the first non-fallback `ensureLoaded`. Once a
   server *is* running, the supervisor keeps it healthy — the utility server is exempt
   from the main server's failure cap and restarts forever **while it is in use** (a
-  crash mid-fallback must not drop the floor). Idle unload (main) and process cold-
-  start (both) return the machine to the no-resident-model default.
+  crash mid-fallback must not drop the floor). After 15 minutes without use, either
+  server stops and releases its model RAM/VRAM; on-demand cold start returns it to
+  service.
 - The extension refuses to delete the LFM2.5 GGUF while fallback duty is assigned to
   it (the panel offers "replace fallback model" instead, gated on the replacement
   being downloaded and smoke-tested first).
@@ -847,7 +855,7 @@ off or ships half-enabled. The order below only sequences local verification:
 | # | Risk | Resolution inside this change |
 |---|---|---|
 | 1 | Agent DO runtime can't `fetch` loopback (incl. SSE) | Verified as the first task of build step 2. If blocked, the gateway-forwarded route (`/_local-models/…` → loopback) is implemented as part of this change — and buys remote-attach support for free. |
-| 2 | Pinned build's `--jinja` autoparser mishandles LFM2.5's `<|tool_call_start|>` Pythonic tool format | Locked by e2e test §11.2·3; if broken, ship a corrected template via `--chat-template-file` with the ModelRecord — in this change. |
+| 2 | A GGUF advertises tools but its embedded template/parser contract cannot complete and replay a structured call | Locked by the add-time runtime probe and e2e test §11.2·3; reject the artifact as incompatible. Vibestudio never silently replaces model-owned templates. |
 | 3 | Router-mode rough edges on the pinned build (load latency, eviction, stability) | Router mode is the committed topology. Rough edges are resolved by choosing the pin: bump the build tag until §11.2·6 passes. The build tag is an implementation detail, not a design fork. |
 | 4 | Exact `llamaServerCompat` knobs (usage reporting, tool-call streaming shape) | Locked by e2e test §11.2·3 against the pinned build; re-validated on every pin bump. |
 | 5 | Multi-GPU hosts (discrete + iGPU) | Decided: discrete GPU only, pinned via `--device`; the panel shows which device was chosen. |
