@@ -41,6 +41,7 @@ const FRAME_ERROR = 0x04;
 
 /** Human-readable reason attached to CONNECTION_LOST rejections (§3.4). */
 const CONNECTION_LOST_MESSAGE = "Connection lost before the response arrived";
+type ErrorWithCode = Error & { code?: string };
 
 function acquisitionIdOf(error: unknown, selfId: string): string | null {
   if (!error || typeof error !== "object" || (error as { code?: unknown }).code !== "EACQUIRE") {
@@ -71,7 +72,8 @@ function isServerTarget(target: string): boolean {
 }
 
 function generateRequestId(): string {
-  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  const runtimeCrypto = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (typeof runtimeCrypto?.randomUUID === "function") return runtimeCrypto.randomUUID();
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
@@ -333,8 +335,8 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     }, entry.bodyIdleTimeoutMs);
   }
 
-  function makeConnectionLostError(): NodeJS.ErrnoException {
-    const err = new Error(CONNECTION_LOST_MESSAGE) as NodeJS.ErrnoException;
+  function makeConnectionLostError(): ErrorWithCode {
+    const err = new Error(CONNECTION_LOST_MESSAGE) as ErrorWithCode;
     err.code = SESSION_CONNECTION_LOST_CODE;
     return err;
   }
@@ -494,8 +496,8 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
             error: error instanceof Error ? error.message : String(error),
             errorKind: rpcErrorKindOf(error),
             ...(error instanceof Error && error.stack ? { errorStack: error.stack } : {}),
-            ...(error instanceof Error && typeof (error as NodeJS.ErrnoException).code === "string"
-              ? { errorCode: (error as NodeJS.ErrnoException).code }
+            ...(error instanceof Error && typeof (error as ErrorWithCode).code === "string"
+              ? { errorCode: (error as ErrorWithCode).code }
               : {}),
             ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
           })

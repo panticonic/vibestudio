@@ -23,6 +23,9 @@
     "paths": {
       "@vibestudio/browser-data": ["packages/browser-data/src/index.ts"],
       "@vibestudio/browser-data/client": ["packages/browser-data/src/client.ts"],
+      "@vibestudio/browser-data/source-reader-internals": [
+        "packages/browser-data/src/sourceReaderInternals.ts"
+      ],
       "@vibestudio/content-addressing": ["packages/content-addressing/src/index.ts"],
       "@vibestudio/credential-client": ["packages/credential-client/src/index.ts"],
       "@vibestudio/credential-client/*": ["packages/credential-client/src/*"],

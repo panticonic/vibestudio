@@ -1,6 +1,10 @@
 {
   "extends": "../../../tsconfig.workers.json",
   "compilerOptions": {
+    "baseUrl": "../../..",
+    "paths": {
+      "@vibestudio/rpc/internal": ["packages/rpc/src/internal.ts"]
+    },
     "types": ["@cloudflare/workers-types/experimental"]
   },
   "include": ["./*.ts"]
