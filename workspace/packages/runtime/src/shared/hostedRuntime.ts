@@ -212,7 +212,12 @@ export function createServicesProxy(rt: WorkspaceRuntime): Record<string, unknow
 export function createHostedRuntime(host: RuntimeHost): WorkspaceRuntime {
   const rpc = host.rpc;
   const credentials = helpfulNamespace("credentials", createCredentialClient(rpc));
-  const browserData = helpfulNamespace("browserData", createBrowserDataClient(rpc));
+  const browserData = helpfulNamespace(
+    "browserData",
+    createBrowserDataClient({
+      call: (service, method, args) => rpc.call("main", `${service}.${method}`, args),
+    })
+  );
   const gad = helpfulNamespace("gad", createGadClient(rpc));
   const blobstore = helpfulNamespace("blobstore", createBlobstoreClient(rpc, host.fs));
   const workspace = helpfulNamespace("workspace", createWorkspaceClient(rpc));

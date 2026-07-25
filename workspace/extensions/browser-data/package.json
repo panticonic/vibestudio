@@ -19,6 +19,33 @@
           "evidence": "bounded-dynamic"
         },
         {
+          "capability": "browser-data.read",
+          "resource": {
+            "kind": "prefix",
+            "prefix": "do:vibestudio/internal:BrowserDataDO:"
+          },
+          "tier": "gated",
+          "evidence": "bounded-dynamic"
+        },
+        {
+          "capability": "browser-data.write",
+          "resource": {
+            "kind": "prefix",
+            "prefix": "do:vibestudio/internal:BrowserDataDO:"
+          },
+          "tier": "gated",
+          "evidence": "bounded-dynamic"
+        },
+        {
+          "capability": "browser-data.delete",
+          "resource": {
+            "kind": "prefix",
+            "prefix": "do:vibestudio/internal:BrowserDataDO:"
+          },
+          "tier": "gated",
+          "evidence": "bounded-dynamic"
+        },
+        {
           "capability": "user-approval.request",
           "resource": {
             "kind": "prefix",

@@ -187,7 +187,6 @@ export type Api = Awaited<ReturnType<typeof activate>>;
 
 export async function activate(ctx: ExtensionContextLike) {
   ctx.log.info("browser-data extension activating");
-  ctx.health?.healthy({ summary: "Browser environment ready" });
 
   const resolvedStores = new Map<
     string,
@@ -234,6 +233,14 @@ export async function activate(ctx: ExtensionContextLike) {
           };
           targetByEnvironment.set(environmentKey, target.targetId);
           return { identity, targetId: target.targetId };
+        })
+        .catch((error: unknown) => {
+          resolvedStores.delete(cacheKey);
+          ctx.health?.degraded({
+            summary: "Browser environment storage unavailable",
+            reasons: [error instanceof Error ? error.message : String(error)],
+          });
+          throw error;
         });
       resolvedStores.set(cacheKey, pending);
     }
@@ -247,7 +254,19 @@ export async function activate(ctx: ExtensionContextLike) {
   ): Promise<T> => {
     const targetId = targetByEnvironment.get(identity.environmentKey);
     if (!targetId) throw new Error("Browser environment target is not resolved");
-    return ctx.rpc.call<T>(targetId, method, ...args);
+    return ctx.rpc
+      .call<T>(targetId, method, ...args)
+      .then((result) => {
+        ctx.health?.healthy({ summary: "Browser environment storage ready" });
+        return result;
+      })
+      .catch((error: unknown) => {
+        ctx.health?.degraded({
+          summary: "Browser environment storage unavailable",
+          reasons: [error instanceof Error ? error.message : String(error)],
+        });
+        throw error;
+      });
   };
 
   const store: BrowserImportStore = {
@@ -392,8 +411,8 @@ export async function activate(ctx: ExtensionContextLike) {
     };
 
   const callStore = async <T>(method: string, ...args: unknown[]): Promise<T> => {
-    const { targetId } = await currentIdentity();
-    return ctx.rpc.call<T>(targetId, method, ...args);
+    const { identity } = await currentIdentity();
+    return callStoreForIdentity<T>(identity, method, ...args);
   };
   const mutate = async <T>(
     dataType: string,
@@ -909,8 +928,9 @@ function reportImportHealth(ctx: ExtensionContextLike, job: ImportJobSnapshot): 
 }
 
 function normalizedPlatform(): "darwin" | "linux" | "win32" {
-  return process.platform === "darwin" || process.platform === "win32"
-    ? process.platform
+  const platform = (globalThis as { process?: { platform?: string } }).process?.platform;
+  return platform === "darwin" || platform === "win32"
+    ? platform
     : "linux";
 }
 

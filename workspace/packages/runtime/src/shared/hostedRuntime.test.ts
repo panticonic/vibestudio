@@ -70,6 +70,7 @@ function recordingHost() {
           workingCounts: { applications: 0, workUnits: 0, changes: 0 },
         };
       }
+      if (method === "extensions.invokeProvider") return [];
       return undefined;
     },
     stream: async () => new Response(),
@@ -135,6 +136,19 @@ describe("createHostedRuntime", () => {
     const core = createHostedRuntime(host);
     expect(typeof core.credentials.forAudience).toBe("function");
     expect(typeof core.credentials.connect).toBe("function");
+  });
+
+  it("routes browser data through the main extension-provider service", async () => {
+    const { host, calls } = recordingHost();
+    const core = createHostedRuntime(host);
+
+    await core.browserData.listImportJobs();
+
+    expect(calls).toContainEqual({
+      target: "main",
+      method: "extensions.invokeProvider",
+      args: ["browserData", "listImportJobs", []],
+    });
   });
 
   it("exposes a blobstore client that forwards to the main blobstore service", async () => {

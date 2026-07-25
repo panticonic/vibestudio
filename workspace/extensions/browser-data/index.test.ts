@@ -147,8 +147,9 @@ describe("@workspace-extensions/browser-data", () => {
   });
 
   it("uses the server-derived environment key rather than a caller key", async () => {
-    const { ctx, rpcCall, resolveDurableObject } = makeContext();
+    const { ctx, rpcCall, resolveDurableObject, health } = makeContext();
     const api = (await activate(ctx as never)).providerContracts.browserData;
+    expect(health.healthy).not.toHaveBeenCalled();
     await api.getBookmarks();
     expect(resolveDurableObject).toHaveBeenCalledWith(
       "vibestudio/internal",
@@ -160,6 +161,40 @@ describe("@workspace-extensions/browser-data", () => {
       "getBookmarks",
       "/"
     );
+    expect(health.healthy).toHaveBeenCalledWith({
+      summary: "Browser environment storage ready",
+    });
+  });
+
+  it("degrades health on store resolution failure and retries the dependency", async () => {
+    const { ctx, resolveDurableObject, health } = makeContext();
+    resolveDurableObject.mockRejectedValueOnce(new Error("backing store refused"));
+    const api = (await activate(ctx as never)).providerContracts.browserData;
+
+    await expect(api.listImportJobs()).rejects.toThrow("backing store refused");
+    expect(health.degraded).toHaveBeenCalledWith({
+      summary: "Browser environment storage unavailable",
+      reasons: ["backing store refused"],
+    });
+
+    await expect(api.listImportJobs()).resolves.toEqual([]);
+    expect(resolveDurableObject).toHaveBeenCalledTimes(2);
+    expect(health.healthy).toHaveBeenCalledWith({
+      summary: "Browser environment storage ready",
+    });
+  });
+
+  it("does not report healthy when the resolved store refuses a call", async () => {
+    const { ctx, rpcCall, health } = makeContext();
+    rpcCall.mockRejectedValueOnce(new Error("store authority refused"));
+    const api = (await activate(ctx as never)).providerContracts.browserData;
+
+    await expect(api.listImportJobs()).rejects.toThrow("store authority refused");
+    expect(health.healthy).not.toHaveBeenCalled();
+    expect(health.degraded).toHaveBeenCalledWith({
+      summary: "Browser environment storage unavailable",
+      reasons: ["store authority refused"],
+    });
   });
 
   it("gates sensitive reads and rejects a denial", async () => {
