@@ -389,7 +389,7 @@ export const MessageCard = React.memo(function MessageCard({
     if (data) {
       const compiled = inlineUiComponents?.get(data.id);
       return (
-        <Box key={key} className="message-row message-row-agent">
+        <Box key={key} className="message-row message-row-agent message-row-inline-ui">
           <InlineUiMessage
             data={data}
             compiledComponent={compiled?.Component}

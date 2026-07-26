@@ -81,10 +81,10 @@ export default function SearchProviderSetup(_input: SearchProviderSetupProps) {
     });
 
   return (
-    <Flex direction="column" gap="4" p="2">
+    <Flex direction="column" gap="4" p="2" style={{ width: "100%", minWidth: 0 }}>
       <Box>
         <Heading size="4">Enhance web search</Heading>
-        <Text size="2" color="gray">
+        <Text as="div" size="2" color="gray">
           Built-in search already works without setup. Add a provider only if you want richer
           research results or already have an account.
         </Text>
@@ -98,7 +98,12 @@ export default function SearchProviderSetup(_input: SearchProviderSetupProps) {
         ) : null}
       </Box>
 
-      <Grid columns={{ initial: "1", sm: "3" }} gap="2">
+      <Grid
+        gap="2"
+        style={{
+          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 14rem), 1fr))",
+        }}
+      >
         {PROVIDERS.map((choice) => (
           <Button
             key={choice.value}
@@ -120,7 +125,7 @@ export default function SearchProviderSetup(_input: SearchProviderSetupProps) {
       </Grid>
 
       <Box>
-        <Text size="2" weight="bold">
+        <Text as="div" size="2" weight="bold">
           Get an API key
         </Text>
         <Flex gap="2" wrap="wrap" mt="2">

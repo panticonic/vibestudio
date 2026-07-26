@@ -116,10 +116,10 @@ export default function GitHubSetup({
     });
 
   return (
-    <Flex direction="column" gap="4" p="2">
+    <Flex direction="column" gap="4" p="2" style={{ width: "100%", minWidth: 0 }}>
       <Box>
         <Heading size="4">Connect GitHub</Heading>
-        <Text size="2" color="gray">
+        <Text as="div" size="2" color="gray">
           Choose what Vibestudio should be able to do. We’ll configure GitHub’s recommended
           token type and keep the token in the trusted credential store.
         </Text>
@@ -144,10 +144,16 @@ export default function GitHubSetup({
       ) : null}
 
       <Box>
-        <Text size="2" weight="bold">
+        <Text as="div" size="2" weight="bold">
           What do you want to do?
         </Text>
-        <Grid columns={{ initial: "1", sm: "2" }} gap="2" mt="2">
+        <Grid
+          gap="2"
+          mt="2"
+          style={{
+            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 18rem), 1fr))",
+          }}
+        >
           {ACCESS_CHOICES.map((choice) => (
             <Button
               key={choice.value}
@@ -170,10 +176,10 @@ export default function GitHubSetup({
       </Box>
 
       <Box>
-        <Text size="2" weight="bold">
+        <Text as="div" size="2" weight="bold">
           Create the token on GitHub
         </Text>
-        <Text size="1" color="gray">
+        <Text as="div" size="1" color="gray">
           Open GitHub here for guided setup, or use your normal browser for saved sign-in,
           passkeys, and password managers.
         </Text>

@@ -185,6 +185,7 @@ export function InlineUiMessage({ data, compiledComponent: CompiledComponent, co
 
   return (
     <SurfaceFrame
+      className="inline-ui-frame"
       title="Interactive UI"
       tone="blue"
       icon={<ComponentInstanceIcon />}
@@ -192,6 +193,7 @@ export function InlineUiMessage({ data, compiledComponent: CompiledComponent, co
       defaultExpanded
     >
       <Box
+        className="inline-ui-content"
         onClickCapture={onInteraction}
         onInputCapture={onInteraction}
         onChangeCapture={onInteraction}

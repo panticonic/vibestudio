@@ -40,6 +40,14 @@ state all see the same canonical event.
   feedback components.
 - Use Radix primitives from `@radix-ui/themes` and icons from
   `@radix-ui/react-icons`.
+- Design against the component's own card width, not the browser viewport.
+  Panel splits can be narrow on a wide desktop, so do not use Radix breakpoint
+  objects such as `columns={{ initial: "1", sm: "2" }}` for primary layout.
+  Prefer an intrinsic grid such as
+  `style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 16rem), 1fr))" }}`.
+- Give root layouts `style={{ width: "100%", minWidth: 0 }}`, wrap action rows,
+  and render explanatory text as a block (`as="div"` or `as="p"`). Controls and
+  prose must remain usable at a 320px card width without horizontal scrolling.
 - Use `openPanel(url, { focus: true })` for internal browser-panel
   deep links.
 - Use `openExternal(url)` for system-browser links. This is approval-gated.

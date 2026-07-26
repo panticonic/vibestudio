@@ -136,11 +136,11 @@ export default function GoogleWorkspaceSetup({ chat }: GoogleWorkspaceSetupProps
   const connected = status?.stage === "verified";
 
   return (
-    <Flex direction="column" gap="4" p="2">
+    <Flex direction="column" gap="4" p="2" style={{ width: "100%", minWidth: 0 }}>
       <Flex justify="between" align="start" gap="3" wrap="wrap">
-        <Box>
+        <Box style={{ flex: "1 1 16rem", minWidth: 0 }}>
           <Heading size="4">Connect Google Workspace</Heading>
-          <Text size="2" color="gray">
+          <Text as="div" size="2" color="gray">
             One durable connection enables Gmail, Calendar, Drive, Docs, Sheets,
             Slides, contacts, and account identity.
           </Text>
@@ -157,7 +157,7 @@ export default function GoogleWorkspaceSetup({ chat }: GoogleWorkspaceSetupProps
             <Text as="p" size="1" color="gray">
               Use your normal browser for existing sign-in, passkeys, or a password manager.
             </Text>
-            <Flex gap="2" mt="2">
+            <Flex gap="2" mt="2" wrap="wrap">
               <Button
                 variant={browser === "internal" ? "solid" : "soft"}
                 onClick={() => setBrowser("internal")}
@@ -173,7 +173,12 @@ export default function GoogleWorkspaceSetup({ chat }: GoogleWorkspaceSetupProps
             </Flex>
           </Box>
 
-          <Grid columns={{ initial: "1", sm: "2" }} gap="2">
+          <Grid
+            gap="2"
+            style={{
+              gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 18rem), 1fr))",
+            }}
+          >
             {STEPS.map((step, index) => (
               <Box
                 key={step.url}

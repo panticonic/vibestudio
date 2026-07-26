@@ -353,6 +353,75 @@
   overflow-x: hidden;
 }
 
+.message-row-inline-ui,
+.inline-ui-frame,
+.inline-ui-content {
+  inline-size: 100%;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+/*
+ * Compiled UIs live inside panels, so their useful breakpoint is the
+ * transcript width rather than the browser viewport. Give every inline UI its
+ * own query container and make common Radix layout primitives intrinsically
+ * shrinkable. This is also a safety net for user-authored components with long
+ * labels or data.
+ */
+.inline-ui-content {
+  container-type: inline-size;
+  overflow-wrap: anywhere;
+}
+
+.inline-ui-content > *,
+.inline-ui-content :where(.rt-Box, .rt-Card, .rt-Flex, .rt-Grid, .rt-TextFieldRoot) {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+.inline-ui-content :where(.rt-Heading, .rt-Text) {
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Radix ghost buttons pull their hit area outside their layout box with
+ * negative margins. That is useful on an unconstrained page edge, but creates
+ * horizontal scroll when an inline UI places one at the edge of a panel.
+ */
+.inline-ui-content .rt-Button.rt-variant-ghost {
+  --margin-top-override: var(--margin-top);
+  --margin-right-override: var(--margin-right);
+  --margin-bottom-override: var(--margin-bottom);
+  --margin-left-override: var(--margin-left);
+}
+
+@container (max-width: 520px) {
+  /*
+   * Radix responsive object props use viewport media queries. A two- or
+   * three-column Grid must still collapse when its panel is narrow inside a
+   * wide desktop window.
+   */
+  .inline-ui-content .rt-Grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .inline-ui-content .rt-Button {
+    block-size: auto;
+    max-inline-size: 100%;
+    white-space: normal;
+  }
+
+  .inline-ui-content .rt-Button :where(.rt-Text) {
+    white-space: normal;
+  }
+}
+
+@media (pointer: coarse) {
+  .inline-ui-content .rt-Button {
+    min-block-size: 44px;
+  }
+}
+
 .message-row-client {
   align-self: flex-end;
   justify-content: flex-end;

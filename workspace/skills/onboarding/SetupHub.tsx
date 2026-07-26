@@ -255,8 +255,8 @@ export default function SetupHub({ props, chat }: SetupHubProps) {
 
   return (
     <Flex direction="column" gap="3" style={{ width: "100%", minWidth: 0 }}>
-      <Flex align="start" justify="between" gap="2">
-        <Box>
+      <Flex align="start" justify="between" gap="2" wrap="wrap">
+        <Box style={{ flex: "1 1 14rem", minWidth: 0 }}>
           <Text as="div" size="4" weight="bold">
             Your Vibestudio
           </Text>
