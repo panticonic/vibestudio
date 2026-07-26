@@ -95,9 +95,25 @@ async function ensureWorkspaceBlobReference(
   if (path.resolve(blobsDir) === path.resolve(backingDir)) return;
   const sourcePath = blobCasPath(backingDir, digest);
   const referencePath = blobPath(blobsDir, digest);
-  await fsp.mkdir(path.dirname(referencePath), { recursive: true });
+  await ensureImmutableHardlink(sourcePath, referencePath);
+}
+
+/**
+ * Register immutable content in a logical CAS namespace. Existing targets are
+ * already the function's success state, so check that dominant repeated-write
+ * path before allocating an EEXIST exception from link() or entering recursive
+ * mkdir. The link-after-miss path retains atomic cross-process convergence.
+ */
+async function ensureImmutableHardlink(sourcePath: string, targetPath: string): Promise<void> {
   try {
-    await fsp.link(sourcePath, referencePath);
+    await fsp.access(targetPath);
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await fsp.mkdir(path.dirname(targetPath), { recursive: true });
+  try {
+    await fsp.link(sourcePath, targetPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
@@ -146,12 +162,7 @@ async function promoteTempBlob(blobsDir: string, tmpPath: string, digest: string
   const backingDir = backingCasDir(blobsDir);
   ensureBlobCasLayout(backingDir);
   const finalPath = blobCasPath(backingDir, digest);
-  await fsp.mkdir(path.dirname(finalPath), { recursive: true });
-  try {
-    await fsp.link(tmpPath, finalPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
+  await ensureImmutableHardlink(tmpPath, finalPath);
   await ensureWorkspaceBlobReference(blobsDir, backingDir, digest);
 }
 

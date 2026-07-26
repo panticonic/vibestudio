@@ -64,6 +64,17 @@ const part = (key: string, seq: number, size = 2): Uint8Array => {
   return p;
 };
 const label = (p: Uint8Array): string => `${String.fromCharCode(p[0]!)}${p[1]}`;
+const numberedPart = (key: number, seq: number): Uint8Array => {
+  const value = new Uint8Array(6);
+  const view = new DataView(value.buffer);
+  view.setUint32(0, key);
+  view.setUint16(4, seq);
+  return value;
+};
+const numberedLabel = (value: Uint8Array): [key: number, seq: number] => {
+  const view = new DataView(value.buffer, value.byteOffset, value.byteLength);
+  return [view.getUint32(0), view.getUint16(4)];
+};
 
 describe("frame scheduler", () => {
   it("round-robins across keys at part granularity", async () => {
@@ -74,6 +85,48 @@ describe("frame scheduler", () => {
     await Promise.all([a, b]);
     expect(ch.sent.map(label)).toEqual(["a0", "b0", "a1", "b1", "a2", "b2", "a3"]);
     expect(s.pendingBytes()).toBe(0);
+  });
+
+  it("preserves exact round-robin fairness across ten thousand active streams", async () => {
+    const ch = new FakeChannel();
+    const s = createFrameScheduler({ getChannel: () => ch });
+    const streams = 10_000;
+    const pending: Array<Promise<unknown>> = [];
+    for (let key = 0; key < streams; key++) {
+      pending.push(
+        s.enqueue(key, [numberedPart(key, 0), numberedPart(key, 1), numberedPart(key, 2)])
+      );
+    }
+
+    await Promise.all(pending);
+
+    expect(ch.sent).toHaveLength(streams * 3);
+    for (let seq = 0; seq < 3; seq++) {
+      for (let key = 0; key < streams; key++) {
+        expect(numberedLabel(ch.sent[seq * streams + key] as Uint8Array)).toEqual([key, seq]);
+      }
+    }
+  });
+
+  it("drops a key deep in a large rotation without disturbing its neighbors", async () => {
+    const ch = new FakeChannel();
+    ch.bufferedAmount = 1;
+    const s = createFrameScheduler({ getChannel: () => ch });
+    const streams = 2_048;
+    const droppedKey = 1_024;
+    const pending: Array<Promise<unknown>> = [];
+    for (let key = 0; key < streams; key++) {
+      pending.push(s.enqueue(key, [numberedPart(key, 0)]));
+    }
+    s.dropKey(droppedKey);
+    ch.drain();
+
+    await Promise.all(pending);
+
+    expect(ch.sent).toHaveLength(streams - 1);
+    expect(ch.sent.map((value) => numberedLabel(value)[0])).toEqual(
+      Array.from({ length: streams }, (_, key) => key).filter((key) => key !== droppedKey)
+    );
   });
 
   it("preserves per-key FIFO across multiple enqueues", async () => {

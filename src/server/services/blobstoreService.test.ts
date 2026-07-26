@@ -245,6 +245,32 @@ describe("blobstoreService", () => {
     }
   });
 
+  it("converges concurrent repeated writes onto one workspace CAS reference", async () => {
+    const previousGlobalCas = process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"];
+    try {
+      const globalCas = path.join(rootDir, "global-cas");
+      const workspace = path.join(rootDir, "workspace", "blobs");
+      process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"] = globalCas;
+      const bytes = Buffer.from("concurrent shared content", "utf8");
+
+      const writes = await Promise.all(
+        Array.from({ length: 64 }, () => putBytes(workspace, bytes))
+      );
+      expect(new Set(writes.map((write) => write.digest))).toHaveProperty("size", 1);
+      const digest = writes.at(0)?.digest;
+      if (!digest) throw new Error("concurrent writes returned no digest");
+      const [workspaceStat, globalStat] = await Promise.all([
+        fsp.stat(blobPath(workspace, digest)),
+        fsp.stat(blobPath(globalCas, digest)),
+      ]);
+      expect(workspaceStat.ino).toBe(globalStat.ino);
+      await expect(fsp.readdir(path.join(globalCas, "tmp"))).resolves.toEqual([]);
+    } finally {
+      if (previousGlobalCas === undefined) delete process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"];
+      else process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"] = previousGlobalCas;
+    }
+  });
+
   it("migrates independent workspace blob namespaces into the global CAS", async () => {
     const namespaceA = path.join(rootDir, "namespace-a");
     const namespaceB = path.join(rootDir, "namespace-b");

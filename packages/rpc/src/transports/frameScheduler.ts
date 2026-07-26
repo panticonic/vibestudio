@@ -110,7 +110,8 @@ export function createFrameScheduler(options: {
 
   const queues = new Map<SchedulerKey, KeyQueue>();
   /** Round-robin rotation ring of keys with queued parts (each key at most once). */
-  const ring: SchedulerKey[] = [];
+  let ring: Array<SchedulerKey | undefined> = [];
+  let ringHead = 0;
   /** Enqueues awaiting capacity, FIFO. */
   let waiters: Waiter[] = [];
   let totalBytes = 0;
@@ -118,8 +119,35 @@ export function createFrameScheduler(options: {
   let pumping = false;
 
   const removeFromRing = (key: SchedulerKey): void => {
-    const at = ring.indexOf(key);
-    if (at >= 0) ring.splice(at, 1);
+    const at = ring.indexOf(key, ringHead);
+    if (at >= 0) ring[at] = undefined;
+  };
+
+  const pushToRing = (key: SchedulerKey): void => {
+    ring.push(key);
+  };
+
+  /**
+   * Dequeue without Array.shift(), which copies the whole active rotation for
+   * every frame. Tombstones make the rare dropKey removal cheap to consume;
+   * periodic slicing bounds retained slots with amortized O(1) rotation.
+   */
+  const takeFromRing = (): SchedulerKey | undefined => {
+    for (;;) {
+      if (ringHead >= ring.length) {
+        ring = [];
+        ringHead = 0;
+        return undefined;
+      }
+      const key = ring[ringHead];
+      ring[ringHead] = undefined;
+      ringHead += 1;
+      if (ringHead >= 1_024 && ringHead * 2 >= ring.length) {
+        ring = ring.slice(ringHead);
+        ringHead = 0;
+      }
+      if (key !== undefined) return key;
+    }
   };
 
   /** Settle every accepted batch and every capacity waiter (channel gone /
@@ -131,7 +159,8 @@ export function createFrameScheduler(options: {
     const settledQueues = [...queues.values()];
     const settledWaiters = waiters;
     queues.clear();
-    ring.length = 0;
+    ring = [];
+    ringHead = 0;
     waiters = [];
     totalBytes = 0;
     for (const q of settledQueues) for (const batch of q.batches) batch.resolve("dropped");
@@ -149,7 +178,7 @@ export function createFrameScheduler(options: {
     q.batches.push({ parts: w.parts, next: 0, resolve: w.resolve });
     q.bytes += w.bytes;
     totalBytes += w.bytes;
-    if (!hadParts) ring.push(w.key);
+    if (!hadParts) pushToRing(w.key);
     void pump();
   };
 
@@ -190,7 +219,7 @@ export function createFrameScheduler(options: {
     pumping = true;
     try {
       while (!closed) {
-        const key = ring.shift();
+        const key = takeFromRing();
         if (key === undefined) return; // idle — next accept restarts the pump
         const q = queues.get(key);
         if (!q || q.batches.length === 0) continue; // dropped between turns
@@ -224,7 +253,7 @@ export function createFrameScheduler(options: {
           live.batches.shift();
           batch.resolve("flushed"); // resolves only after the batch's LAST part is sent
         }
-        if (live.batches.length > 0) ring.push(key);
+        if (live.batches.length > 0) pushToRing(key);
         else queues.delete(key);
         admitWaiters(); // bytes drained — capacity may have opened up
       }
