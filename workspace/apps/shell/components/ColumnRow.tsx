@@ -196,22 +196,28 @@ export function ColumnRow({
   const [liveFrs, setLiveFrs] = useState<number[] | null>(null);
   const liveFrsRef = useRef<number[] | null>(null);
   const rowRef = useRef<HTMLDivElement | null>(null);
+  const dragColumnWidthsRef = useRef<number[] | null>(null);
 
   const frs = liveFrs ?? residentColumns.map((column) => column.widthFr);
   const totalFr = frs.reduce((sum, fr) => sum + fr, 0);
 
-  const dragBetween = (index: number, deltaPx: number) => {
+  const prepareDrag = () => {
     const elements = rowRef.current?.querySelectorAll<HTMLElement>("[data-column-id]");
-    const beforeWidth = elements?.[index]?.getBoundingClientRect().width ?? 0;
-    const afterWidth = elements?.[index + 1]?.getBoundingClientRect().width ?? 0;
-    const columnsWidth = residentColumns.reduce(
-      (sum, _column, columnIndex) =>
-        sum + (elements?.[columnIndex]?.getBoundingClientRect().width ?? 0),
-      0
+    const widths = residentColumns.map(
+      (_column, columnIndex) => elements?.[columnIndex]?.getBoundingClientRect().width ?? 0
     );
-    if (columnsWidth <= 0 || beforeWidth <= 0 || afterWidth <= 0) return;
+    dragColumnWidthsRef.current = widths.every((width) => width > 0) ? widths : null;
+  };
+
+  const dragBetween = (index: number, deltaPx: number) => {
+    const widths = dragColumnWidthsRef.current;
+    if (!widths) return;
+    const columnsWidth = widths.reduce((sum, width) => sum + width, 0);
     const current = liveFrsRef.current ?? residentColumns.map((column) => column.widthFr);
     const total = current.reduce((sum, fr) => sum + fr, 0);
+    const beforeWidth = widths[index] ?? 0;
+    const afterWidth = widths[index + 1] ?? 0;
+    if (beforeWidth <= 0 || afterWidth <= 0) return;
     const beforeMin = columnMinWidths[index] ?? MIN_COLUMN_WIDTH;
     const afterMin = columnMinWidths[index + 1] ?? MIN_COLUMN_WIDTH;
     const appliedPx = Math.max(
@@ -223,6 +229,8 @@ export function ColumnRow({
     const before = next[index];
     const after = next[index + 1];
     if (before === undefined || after === undefined) return;
+    widths[index] = beforeWidth + appliedPx;
+    widths[index + 1] = afterWidth - appliedPx;
     next[index] = before + deltaFr;
     next[index + 1] = after - deltaFr;
     liveFrsRef.current = next;
@@ -232,6 +240,7 @@ export function ColumnRow({
   const commit = () => {
     const live = liveFrsRef.current;
     liveFrsRef.current = null;
+    dragColumnWidthsRef.current = null;
     setLiveFrs(null);
     if (!live) return;
     // Merge live resident frs back into the full column list (parked columns
@@ -262,9 +271,11 @@ export function ColumnRow({
               orientation="vertical"
               label={`Resize columns ${index} and ${index + 1}`}
               valueNow={(frs.slice(0, index).reduce((sum, fr) => sum + fr, 0) / totalFr) * 100}
+              onDragStart={prepareDrag}
               onDrag={(deltaPx) => dragBetween(index - 1, deltaPx)}
               onDragEnd={commit}
               onKeyboardStep={(deltaPx) => {
+                prepareDrag();
                 dragBetween(index - 1, deltaPx);
                 commit();
               }}

@@ -8,6 +8,8 @@ interface ResizableDividerProps {
   label: string;
   /** Current position as a percentage (0–100) of the divided space. */
   valueNow: number;
+  /** Called once before pointer-driven resize work starts. */
+  onDragStart?: () => void;
   /** Called with the pointer delta in px along the resize axis while dragging. */
   onDrag: (deltaPx: number) => void;
   /** Commit the drag (pointer-up); fractions are written to layout state here. */
@@ -28,6 +30,7 @@ export function ResizableDivider({
   orientation,
   label,
   valueNow,
+  onDragStart,
   onDrag,
   onDragEnd,
   onKeyboardStep,
@@ -37,6 +40,12 @@ export function ResizableDivider({
   const [hovered, setHovered] = useState(false);
   const pointerIdRef = useRef<number | null>(null);
   const lastPosRef = useRef(0);
+  const onDragStartRef = useRef(onDragStart);
+  const onDragRef = useRef(onDrag);
+  const onDragEndRef = useRef(onDragEnd);
+  onDragStartRef.current = onDragStart;
+  onDragRef.current = onDrag;
+  onDragEndRef.current = onDragEnd;
 
   const axisPos = useCallback(
     (event: PointerEvent | React.PointerEvent) =>
@@ -48,6 +57,7 @@ export function ResizableDivider({
     event.preventDefault();
     pointerIdRef.current = event.pointerId;
     lastPosRef.current = axisPos(event);
+    onDragStartRef.current?.();
     event.currentTarget.setPointerCapture(event.pointerId);
     setDragging(true);
   };
@@ -61,14 +71,14 @@ export function ResizableDivider({
       const delta = pos - lastPosRef.current;
       if (delta !== 0) {
         lastPosRef.current = pos;
-        onDrag(delta);
+        onDragRef.current(delta);
       }
     };
     const stopDrag = (event: PointerEvent) => {
       if (pointerIdRef.current !== null && event.pointerId !== pointerIdRef.current) return;
       pointerIdRef.current = null;
       setDragging(false);
-      onDragEnd?.();
+      onDragEndRef.current?.();
     };
 
     window.addEventListener("pointermove", handlePointerMove);
@@ -81,7 +91,7 @@ export function ResizableDivider({
         capture: true,
       } as EventListenerOptions);
     };
-  }, [dragging, axisPos, onDrag, onDragEnd]);
+  }, [dragging, axisPos]);
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
     if (!onKeyboardStep) return;
@@ -131,7 +141,8 @@ export function ResizableDivider({
           alignSelf: "stretch",
           flex: isVertical ? undefined : "1 1 0",
           backgroundColor: active ? "var(--accent-8)" : "var(--gray-a6)",
-          transition: "background-color 120ms ease-out, width 120ms ease-out, height 120ms ease-out",
+          transition:
+            "background-color 120ms ease-out, width 120ms ease-out, height 120ms ease-out",
         }}
       />
     </Box>

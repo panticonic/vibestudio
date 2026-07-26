@@ -37,12 +37,18 @@ export function PaneColumn({
   // so per-pointer-move renders stay local to this column (plan §11).
   const [liveFrs, setLiveFrs] = useState<number[] | null>(null);
   const liveFrsRef = useRef<number[] | null>(null);
+  const dragHeightRef = useRef<number | null>(null);
 
   const frs = liveFrs ?? column.panes.map((pane) => pane.heightFr);
   const totalFr = frs.reduce((sum, fr) => sum + fr, 0);
-  const dragBetween = (index: number, deltaPx: number) => {
+  const prepareDrag = () => {
     const height = containerRef.current?.getBoundingClientRect().height ?? 0;
-    if (height <= 0) return;
+    dragHeightRef.current = height > 0 ? height : null;
+  };
+
+  const dragBetween = (index: number, deltaPx: number) => {
+    const height = dragHeightRef.current;
+    if (!height) return;
     const current = liveFrsRef.current ?? column.panes.map((pane) => pane.heightFr);
     const total = current.reduce((sum, fr) => sum + fr, 0);
     const deltaFr = (deltaPx / height) * total;
@@ -61,6 +67,7 @@ export function PaneColumn({
   const commit = () => {
     if (liveFrsRef.current) onResizePanes(column.id, liveFrsRef.current);
     liveFrsRef.current = null;
+    dragHeightRef.current = null;
     setLiveFrs(null);
   };
 
@@ -86,9 +93,11 @@ export function PaneColumn({
               orientation="horizontal"
               label={`Resize panes ${index} and ${index + 1}`}
               valueNow={(frs.slice(0, index).reduce((sum, fr) => sum + fr, 0) / totalFr) * 100}
+              onDragStart={prepareDrag}
               onDrag={(deltaPx) => dragBetween(index - 1, deltaPx)}
               onDragEnd={commit}
               onKeyboardStep={(deltaPx) => {
+                prepareDrag();
                 dragBetween(index - 1, deltaPx);
                 commit();
               }}

@@ -14,8 +14,7 @@ import { useNavigation, DrawerActions } from "@react-navigation/native";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { ConnectionBar } from "./ConnectionBar";
 import { AppBar } from "./AppBar";
-import { PanelWebView } from "./PanelWebView";
-import { WebViewErrorBoundary } from "./WebViewErrorBoundary";
+import { LoadedPanelWebView } from "./LoadedPanelWebView";
 import { ApprovalSheet } from "./ApprovalSheet";
 import { VibestudioLogo } from "./VibestudioLogo";
 import { useAppLifecycle } from "../hooks/useAppLifecycle";
@@ -181,6 +180,7 @@ export function MainScreen() {
     appId: string | null;
   }>({ source: null, appId: null });
   const [webViewNavigation, setWebViewNavigation] = useState<Record<string, WebViewNavigation>>({});
+  const webViewNavigationRef = useRef<Record<string, WebViewNavigation>>({});
   const webViewStackRef = useRef<WebViewEntry[]>([]);
   const webViewRefsMap = useRef<Map<string, PanelWebViewHandle | null>>(new Map());
   const pendingPanelLoads = useRef<Set<string>>(new Set());
@@ -190,6 +190,9 @@ export function MainScreen() {
   useEffect(() => {
     webViewStackRef.current = webViewStack;
   }, [webViewStack]);
+  useEffect(() => {
+    webViewNavigationRef.current = webViewNavigation;
+  }, [webViewNavigation]);
   useEffect(() => {
     userNotificationRefreshSeq.current += 1;
     if (!shellClient) {
@@ -280,6 +283,10 @@ export function MainScreen() {
     },
     [shellClient]
   );
+  const handleWebViewRef = useCallback((panelId: string, handle: PanelWebViewHandle | null) => {
+    if (handle) webViewRefsMap.current.set(panelId, handle);
+    else webViewRefsMap.current.delete(panelId);
+  }, []);
   const hostConfig: HostConfig | null = useMemo(() => {
     if (!shellClient) return null;
     try {
@@ -504,9 +511,7 @@ export function MainScreen() {
   const resolveMissionReview = useCallback(
     async (
       approvalId: string,
-      resolution:
-        | { decision: "approve"; selectedAuthorityKeys: string[] }
-        | { decision: "dismiss" }
+      resolution: { decision: "approve"; selectedAuthorityKeys: string[] } | { decision: "dismiss" }
     ) => {
       if (!shellClient) throw new Error("Shell client not available");
       await shellClient.shellApproval.resolveMissionReview(approvalId, resolution);
@@ -1149,8 +1154,7 @@ export function MainScreen() {
             id: command.id,
             label: command.label,
             description: presentation?.description,
-            icon:
-              command.id === "toggle-pin" && isPinned ? PinOffIcon : presentation?.icon,
+            icon: command.id === "toggle-pin" && isPinned ? PinOffIcon : presentation?.icon,
             tone: command.id === "archive" ? ("danger" as const) : ("default" as const),
           };
         }),
@@ -1462,7 +1466,7 @@ export function MainScreen() {
   const handlePanelTitleChange = useCallback(
     (panelId: string, title: string) => {
       if (!shellClient) return;
-      const navUrl = webViewNavigation[panelId]?.url;
+      const navUrl = webViewNavigationRef.current[panelId]?.url;
       const panel = shellClient.panels.registry.getPanel(panelId);
       if (navUrl && panel && isBrowserPanelSource(getCurrentSnapshot(panel).source)) {
         void shellClient.panels.updateHistoryTitle({ url: navUrl, title }).catch(() => {});
@@ -1474,7 +1478,7 @@ export function MainScreen() {
           console.warn(`[MainScreen] Failed to update title for panel ${panelId}:`, error);
         });
     },
-    [refreshTree, shellClient, webViewNavigation]
+    [refreshTree, shellClient]
   );
   const recordMobileBrowserNavigation = useCallback(
     (panelId: string, navState: WebViewNavigation) => {
@@ -1500,6 +1504,19 @@ export function MainScreen() {
         .catch(() => {});
     },
     [shellClient]
+  );
+  const handleWebViewNavigationStateChange = useCallback(
+    (panelId: string, managed: boolean, navState: WebViewNavigation) => {
+      setWebViewNavigation((prev) => ({
+        ...prev,
+        [panelId]: navState,
+      }));
+      if (!managed && /^https?:\/\//i.test(navState.url)) {
+        void shellClient?.panels.updateBrowserUrl(panelId, navState.url).catch(() => {});
+        recordMobileBrowserNavigation(panelId, navState);
+      }
+    },
+    [recordMobileBrowserNavigation, shellClient]
   );
   const handleBridgeCall = useCallback(
     async (panelId: string, method: string, args: unknown[]) => {
@@ -1680,10 +1697,7 @@ export function MainScreen() {
         >
           <BellIcon size={17} color={colors.primary} />
           <View style={styles.userNotificationCopy}>
-            <Text
-              style={[styles.userNotificationTitle, { color: colors.text }]}
-              numberOfLines={1}
-            >
+            <Text style={[styles.userNotificationTitle, { color: colors.text }]} numberOfLines={1}>
               {currentUserNotification.title}
             </Text>
             <Text
@@ -1694,7 +1708,9 @@ export function MainScreen() {
             </Text>
           </View>
           {userNotifications.length > 1 ? (
-            <View style={[styles.userNotificationCountPill, { backgroundColor: colors.accentSoft }]}>
+            <View
+              style={[styles.userNotificationCountPill, { backgroundColor: colors.accentSoft }]}
+            >
               <Text style={[typeScale.micro, { color: colors.primary }]}>
                 +{userNotifications.length - 1}
               </Text>
@@ -1776,59 +1792,20 @@ export function MainScreen() {
 
         {!activePanelLeasedElsewhere &&
           webViewStack.map((entry) => (
-            <View
+            <LoadedPanelWebView
               key={entry.panelId}
-              style={styles.webViewSlot}
-              pointerEvents={entry.panelId === activePanelId ? "auto" : "none"}
-            >
-              <WebViewErrorBoundary
-                panelId={entry.panelId}
-                colors={{
-                  background: colors.background,
-                  text: colors.text,
-                  textSecondary: colors.textSecondary,
-                  accent: colors.primary,
-                  accentText: colors.text,
-                }}
-              >
-                <PanelWebView
-                  ref={(handle) => {
-                    if (handle) {
-                      webViewRefsMap.current.set(entry.panelId, handle);
-                    }
-                  }}
-                  panelId={entry.panelId}
-                  url={entry.url}
-                  visible={entry.panelId === activePanelId}
-                  managed={entry.managed}
-                  panelInit={entry.panelInit}
-                  managedBasePath={hostConfig?.basePath ?? ""}
-                  onPanelNavigate={handlePanelNavigate}
-                  onNavigationStateChange={(navState) => {
-                    setWebViewNavigation((prev) => ({
-                      ...prev,
-                      [entry.panelId]: navState,
-                    }));
-                    if (!entry.managed && /^https?:\/\//i.test(navState.url)) {
-                      void shellClient?.panels
-                        .updateBrowserUrl(entry.panelId, navState.url)
-                        .catch(() => {});
-                      recordMobileBrowserNavigation(entry.panelId, navState);
-                    }
-                  }}
-                  onTitleChange={handlePanelTitleChange}
-                  onBridgeCall={handleBridgeCall}
-                  onUnmount={handleWebViewUnmount}
-                  diagnosticsEnabled={entry.managed && hostConfig?.protocol === "http"}
-                  colors={{
-                    background: colors.background,
-                    text: colors.text,
-                    textSecondary: colors.textSecondary,
-                    primary: colors.primary,
-                  }}
-                />
-              </WebViewErrorBoundary>
-            </View>
+              entry={entry}
+              visible={entry.panelId === activePanelId}
+              colors={colors}
+              managedBasePath={hostConfig?.basePath ?? ""}
+              diagnosticsEnabled={entry.managed && hostConfig?.protocol === "http"}
+              onHandleChange={handleWebViewRef}
+              onPanelNavigate={handlePanelNavigate}
+              onNavigationStateChange={handleWebViewNavigationStateChange}
+              onTitleChange={handlePanelTitleChange}
+              onBridgeCall={handleBridgeCall}
+              onUnmount={handleWebViewUnmount}
+            />
           ))}
       </View>
       <ApprovalSheet
@@ -1902,9 +1879,6 @@ const styles = StyleSheet.create({
   userNotificationButtonText: {
     fontSize: 13,
     fontWeight: "600",
-  },
-  webViewSlot: {
-    ...StyleSheet.absoluteFillObject,
   },
   loadingContainer: {
     flex: 1,
