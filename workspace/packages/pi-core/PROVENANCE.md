@@ -5,8 +5,8 @@ TypeScript **sources** from https://github.com/earendil-works/pi at tag
 `v0.82.0` (`packages/agent/src/`), per WS1.1 of the unified-log plan.
 
 Vendoring is fully reproducible: run `./vendor.sh [tag]`. The script clones
-the tag, copies the kept subset, and applies the only transformations we
-make — all mechanical, none semantic:
+the tag, copies the kept subset, and applies the transformations below. All
+but the explicit tool-contract tightening are mechanical:
 
 1. Relative `.ts` import/augmentation specifiers → `.js` (this workspace's
    `moduleResolution: bundler` house style; upstream uses
@@ -15,7 +15,11 @@ make — all mechanical, none semantic:
    upstream barrel re-exports excluded runtime modules), and the
    `AgentHarness` re-export removed (agent-harness.ts not vendored). Both
    patch sites carry `Vibestudio vendoring patch` comments.
-3. A `// @ts-nocheck` banner per file: upstream compiles under its own
+3. Remove the optional `AgentTool.prepareArguments` compatibility hook.
+   Vibestudio validates the provider's exact arguments at its durable execution
+   boundary; silently converting legacy shapes would make the journal differ
+   from what the model actually requested.
+4. A `// @ts-nocheck` banner per file: upstream compiles under its own
    tsconfig (ES2022 lib, without this repo's `noUncheckedIndexedAccess` /
    `noPropertyAccessFromIndexSignature`); the pinned sources are typechecked
    by upstream CI at the tag, and `@ts-nocheck` does not affect the exported

@@ -13,7 +13,9 @@
 #   3. harness/types.ts: import from "../types.js" instead of the upstream
 #      barrel "../index.js" (the barrel re-exports excluded runtime modules),
 #      and drop the AgentHarness re-export (agent-harness.ts not vendored).
-#   4. Prepend a @ts-nocheck banner: upstream compiles under its own tsconfig
+#   4. Remove AgentTool.prepareArguments. Vibestudio validates the exact
+#      provider-emitted shape at its durable execution boundary.
+#   5. Prepend a @ts-nocheck banner: upstream compiles under its own tsconfig
 #      (ES2022 lib, no noUncheckedIndexedAccess); this repo's stricter flags
 #      would reject pinned upstream internals in every consumer project.
 #      Exported type declarations are unaffected by @ts-nocheck.
@@ -63,7 +65,13 @@ sed -i \
   -e 's|export type { AgentHarness } from "./agent-harness.js";|// Vibestudio vendoring patch: AgentHarness re-export removed (agent-harness.ts is intentionally not vendored).|' \
   "$VENDOR/harness/types.ts"
 
-# (4) @ts-nocheck banner
+# (4) remove the legacy raw-argument compatibility hook
+perl -0pi -e '
+  s/\t\/\*\*\n\t \* Optional compatibility shim for raw tool-call arguments before schema validation\.\n\t \* Must return an object that matches `TParameters`\.\n\t \*\/\n\tprepareArguments\?: \(args: unknown\) => Static<TParameters>;\n//
+    or die "AgentTool.prepareArguments vendoring patch no longer matches upstream\n";
+' "$VENDOR/types.ts"
+
+# (5) @ts-nocheck banner
 for f in "${FILES[@]}"; do
   printf '// @ts-nocheck — vendored from @earendil-works/pi-agent-core %s; see PROVENANCE.md and vendor.sh\n%s' \
     "$TAG" "$(cat "$VENDOR/$f")" > "$VENDOR/$f.tmp"

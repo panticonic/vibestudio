@@ -2,21 +2,20 @@ import { Kind } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import type { AgentTool } from "@workspace/pi-core";
 
-/** Prepare legacy argument shapes, then enforce the tool's advertised schema
- * at the durable execution boundary. Model providers may emit malformed tool
- * calls; no local tool may rely on provider-side validation for safety. */
+/** Enforce the tool's advertised schema at the durable execution boundary.
+ * Model providers may emit malformed tool calls; no local tool may rely on
+ * provider-side validation for safety. */
 export function prepareAgentToolArguments(tool: AgentTool, raw: unknown): unknown {
-  const prepared = tool.prepareArguments ? tool.prepareArguments(raw) : raw;
-  if (!isRecord(tool.parameters) || !(Kind in tool.parameters)) return prepared;
-  const mismatch = findDiscriminatorMismatch(tool.parameters, prepared);
+  if (!isRecord(tool.parameters) || !(Kind in tool.parameters)) return raw;
+  const mismatch = findDiscriminatorMismatch(tool.parameters, raw);
   if (mismatch) {
     throw new Error(
       `Invalid arguments for tool ${tool.name}: ${mismatch.path}: Expected one of ${mismatch.expected.map((value) => JSON.stringify(value)).join(", ")}; received ${JSON.stringify(mismatch.actual)}`
     );
   }
-  const schema = specializeDiscriminatedUnions(tool.parameters, prepared);
-  const errors = [...Value.Errors(schema as never, prepared)].slice(0, 3);
-  if (errors.length === 0) return prepared;
+  const schema = specializeDiscriminatedUnions(tool.parameters, raw);
+  const errors = [...Value.Errors(schema as never, raw)].slice(0, 3);
+  if (errors.length === 0) return raw;
   const detail = errors.map((error) => `${error.path || "/"}: ${error.message}`).join("; ");
   throw new Error(`Invalid arguments for tool ${tool.name}: ${detail}`);
 }

@@ -381,11 +381,6 @@ export type AgentToolUpdateCallback<T = any> = (partialResult: AgentToolResult<T
 export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any> extends Tool<TParameters> {
 	/** Human-readable label for UI display. */
 	label: string;
-	/**
-	 * Optional compatibility shim for raw tool-call arguments before schema validation.
-	 * Must return an object that matches `TParameters`.
-	 */
-	prepareArguments?: (args: unknown) => Static<TParameters>;
 	/** Execute the tool call. Throw on failure instead of encoding errors in `content`. */
 	execute: (
 		toolCallId: string,

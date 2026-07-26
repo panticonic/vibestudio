@@ -3,12 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentTool } from "@workspace/pi-core";
 import { prepareAgentToolArguments } from "./tool-arguments.js";
 
-function tool(prepareArguments?: (raw: unknown) => { operation: "status" }): AgentTool {
+function tool(): AgentTool {
   return {
     name: "vcs",
     label: "vcs",
     parameters: Type.Object({ operation: Type.Literal("status") }, { additionalProperties: false }),
-    ...(prepareArguments ? { prepareArguments } : {}),
     execute: vi.fn(),
   } as unknown as AgentTool;
 }
@@ -61,14 +60,6 @@ describe("prepareAgentToolArguments", () => {
         decision: { kind: "reconciled", sourceChangeIds: ["change:1"] },
       })
     ).toThrow("/decision/evidence: Expected required property");
-  });
-
-  it("applies compatibility preparation before validation", () => {
-    const prepare = vi.fn(() => ({ operation: "status" as const }));
-    expect(prepareAgentToolArguments(tool(prepare), { op: "status" })).toEqual({
-      operation: "status",
-    });
-    expect(prepare).toHaveBeenCalledWith({ op: "status" });
   });
 
   it("leaves plain JSON-schema tools to their own executor validation", () => {
