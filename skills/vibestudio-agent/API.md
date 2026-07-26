@@ -684,6 +684,7 @@ Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
+| `workspace-state.panelTree.snapshot` | Read one revisioned, internally consistent panel-tree reconstruction snapshot. |
 | `workspace-state.slot.list` | List open slots. |
 | `workspace-state.slot.get` | Get a single slot row by id. |
 | `workspace-state.slot.history` | Get the history for a slot. |

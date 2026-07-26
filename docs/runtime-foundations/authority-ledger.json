@@ -33603,6 +33603,47 @@
       "capability": "service:workspace-state.panel.updateTitle"
     },
     {
+      "id": "host:workspace-state.panelTree.snapshot",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "panelTree.snapshot",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspace-state.panelTree.snapshot"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:workspace-state.panelTree.snapshot),allOf(capability(user,service:workspace-state.panelTree.snapshot),workspace-member),allOf(capability(code,service:workspace-state.panelTree.snapshot),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:workspace-state.panelTree.snapshot"
+    },
+    {
       "id": "host:workspace-state.slot.close",
       "rpcPlane": "host-service",
       "owner": "workspace-state",

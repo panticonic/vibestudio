@@ -2674,6 +2674,11 @@ export const METHOD_TIERS = {
     session: "family",
     rationale: "G5: host infrastructure plumbing; §2 default {code, session} family",
   },
+  "workspace-state.panelTree.snapshot": {
+    tier: "open",
+    session: "family",
+    rationale: "Workspace-member panel-tree state read; no C1-C4 or G1-G5 rule applies",
+  },
   "workspace-state.slot.commitPreparedNavigation": {
     tier: "gated",
     session: "family",

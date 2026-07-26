@@ -10923,6 +10923,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:workspace-state.panelTree.snapshot",
+    rpcPlane: "host-service",
+    capability: "service:workspace-state.panelTree.snapshot",
+    authorityPrincipals: ["user", "code", "host"],
+    owner: "workspace-state",
+    method: "panelTree.snapshot",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:workspace-state.panelTree.snapshot",
+    },
+  },
+  {
     id: "host:workspace-state.slot.close",
     rpcPlane: "host-service",
     capability: "service:workspace-state.slot.close",
@@ -12968,6 +12981,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "workspace-state",
+    method: "panelTree.snapshot",
+  },
+  {
+    service: "workspace-state",
     method: "slot.close",
   },
   {
@@ -13827,6 +13844,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:workspace-state.panel.rebuildIndex",
   "service:workspace-state.panel.search",
   "service:workspace-state.panel.updateTitle",
+  "service:workspace-state.panelTree.snapshot",
   "service:workspace-state.slot.close",
   "service:workspace-state.slot.commitPreparedNavigation",
   "service:workspace-state.slot.create",

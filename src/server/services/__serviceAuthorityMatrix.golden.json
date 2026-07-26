@@ -8337,6 +8337,18 @@
           "sensitivity": "write"
         }
       },
+      "panelTree.snapshot": {
+        "authority": {
+          "principals": [
+            "user",
+            "code",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
       "slot.close": {
         "authority": {
           "principals": [

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:bbf65846c6ab2343b494fe4cfcd03f6a306ba194fcd3ac483d91c9dc0ca91f0e",
+  "censusDigest": "sha256:7c9a1eecaaaf71f32675957144df10afdc74d70eb74368b4f9f80e242745f89c",
   "decisions": {
     "direct:src/server/internalDOs/evalDO.ts:acquireKernelLease": {
       "review": "host-only-eval-kernel-residency-refresh",
