@@ -26,8 +26,8 @@ export interface FrameworkAdapter {
   /** esbuild tsconfigRaw compilerOptions.jsx value (e.g., "react-jsx") */
   readonly tsconfigJsx?: "preserve" | "react" | "react-jsx" | "react-native" | "react-jsxdev";
 
-  /** Additional esbuild plugins (e.g., svelte compiler) */
-  readonly plugins?: () => esbuild.Plugin[];
+  /** Additional esbuild plugins (e.g., Svelte compiler), loaded on first use. */
+  readonly plugins?: () => Promise<esbuild.Plugin[]>;
 
   /**
    * Generate the entry wrapper that imports the user module and mounts it.

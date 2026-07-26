@@ -23,7 +23,7 @@ const contracts = [
     path: "dist/server-electron.cjs",
     runtime: "Electron utilityProcess",
     format: "cjs",
-    mustContain: ['"use strict"'],
+    mustContain: ['"use strict"', 'import("esbuild-svelte")'],
     forbidden: [
       {
         pattern: "throw Error('Dynamic require of \"",
@@ -35,7 +35,7 @@ const contracts = [
     path: "dist/server.mjs",
     runtime: "standalone Node server",
     format: "esm",
-    mustContain: [SERVER_ESM_BANNER],
+    mustContain: [SERVER_ESM_BANNER, 'import("esbuild-svelte")'],
   },
   {
     path: "src/server/buildV2/builder.ts",
@@ -171,6 +171,15 @@ for (const contract of contracts) {
 
 for (const smoke of importSmokes) {
   await runImportSmoke(smoke);
+}
+
+if (process.env.NODE_ENV === "production") {
+  const maps = fs
+    .readdirSync(path.join(repoRoot, "dist"), { recursive: true })
+    .filter((entry) => String(entry).endsWith(".map"));
+  if (maps.length > 0) {
+    throw new Error(`Production dist contains source maps: ${maps.join(", ")}`);
+  }
 }
 
 console.log(

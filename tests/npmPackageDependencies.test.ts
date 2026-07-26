@@ -10,7 +10,9 @@ const rootPackage = JSON.parse(
 };
 
 const publicRuntimeDependencies = Object.fromEntries(
-  Object.entries(rootPackage.dependencies).filter(([, version]) => !version.startsWith("workspace:"))
+  Object.entries(rootPackage.dependencies).filter(
+    ([, version]) => !version.startsWith("workspace:")
+  )
 );
 
 describe("published npm dependency surface", () => {
@@ -23,5 +25,20 @@ describe("published npm dependency surface", () => {
       ...publicRuntimeDependencies,
       electron: rootPackage.devDependencies.electron,
     });
+  });
+
+  it("does not publish unused host dependencies or type-only packages", () => {
+    for (const dependency of [
+      "@modelcontextprotocol/sdk",
+      "chokidar",
+      "p-limit",
+      "pacote",
+      "react-devtools-core",
+      "@types/json-schema",
+      "@types/ws",
+    ]) {
+      expect(publicRuntimeDependencies).not.toHaveProperty(dependency);
+    }
+    expect(rootPackage.devDependencies).toHaveProperty("@types/ws");
   });
 });

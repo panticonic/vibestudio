@@ -19,6 +19,7 @@
     "@vibestudio/shared": "workspace:*"
   },
   "devDependencies": {
+    "@types/sql.js": "^1.4.11",
     "sql.js": "^1.14.0",
     "typescript": "^5.9.3"
   }

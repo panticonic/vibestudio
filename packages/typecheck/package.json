@@ -19,7 +19,7 @@
     }
   },
   "scripts": {
-    "build": "tsc --build tsconfig.build.json --force",
+    "build": "tsc --build tsconfig.build.json",
     "dev": "tsc --build tsconfig.build.json --watch",
     "test": "cd ../.. && vitest run packages/typecheck/src"
   },

@@ -83,9 +83,9 @@ describe("svelteAdapter", () => {
     expect(adapter.dedupePackages).toContain("svelte");
   });
 
-  it("contributes at least one esbuild plugin (the svelte compiler)", () => {
+  it("contributes at least one esbuild plugin (the svelte compiler)", async () => {
     expect(adapter.plugins).toBeDefined();
-    const plugins = adapter.plugins?.() ?? [];
+    const plugins = (await adapter.plugins?.()) ?? [];
     expect(plugins.length).toBeGreaterThan(0);
     // Plugins must be valid esbuild plugins (named with a setup function).
     for (const plugin of plugins) {

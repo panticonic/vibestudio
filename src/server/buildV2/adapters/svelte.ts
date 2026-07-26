@@ -1,5 +1,4 @@
 import type * as esbuild from "esbuild";
-import sveltePlugin from "esbuild-svelte";
 import { SVELTE_FRAMEWORK_MODULE } from "../platformModules.js";
 import type { FrameworkAdapter } from "./types.js";
 
@@ -12,7 +11,8 @@ export const svelteAdapter: FrameworkAdapter = {
   jsx: undefined,
   tsconfigJsx: undefined,
 
-  plugins(): esbuild.Plugin[] {
+  async plugins(): Promise<esbuild.Plugin[]> {
+    const { default: sveltePlugin } = await import("esbuild-svelte");
     return [
       sveltePlugin({
         compilerOptions: {

@@ -113,6 +113,7 @@ const serverElectronConfig = {
   external: [
     "electron",
     "esbuild",
+    "esbuild-svelte",
     "node-datachannel",
     "@vibestudio/extension-host",
     "@vibestudio/typecheck",
@@ -198,6 +199,7 @@ const serverConfig = {
   outfile: "dist/server.mjs",
   external: [
     "esbuild",
+    "esbuild-svelte",
     "@vibestudio/extension-host",
     "@vibestudio/typecheck",
     "typescript",

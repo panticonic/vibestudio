@@ -1985,7 +1985,7 @@ async function buildPanel(
   }
   // Add framework-specific plugins (e.g., esbuild-svelte)
   if (adapter.plugins) {
-    plugins.push(...adapter.plugins());
+    plugins.push(...(await adapter.plugins()));
   }
 
   // Build esbuild options with adapter-driven JSX settings
