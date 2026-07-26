@@ -7,6 +7,13 @@
   or the missing fine-grained permission in GitHub.
 - Organization repositories may require organization approval for fine-grained
   PAT access.
+- `credential-audience-mismatch`: the publish path could not bind the selected
+  credential to GitHub's account API or Git HTTPS audience. Retry with the
+  credential ID returned by onboarding, or omit `credentialId` and let the
+  runtime select the connected GitHub credential.
+- `GitHub publish preflight failed`: reconnect using the **Publish
+  repositories** access level. It requires `contents: write`, repository
+  `Administration: write`, and both GitHub API and Git HTTPS bindings.
 
 ## Git Clone Or Push Is Needed
 

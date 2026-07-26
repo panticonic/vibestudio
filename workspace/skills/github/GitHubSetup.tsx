@@ -1,13 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  Box,
-  Button,
-  Flex,
-  Grid,
-  Heading,
-  Separator,
-  Text,
-} from "@radix-ui/themes";
+import { Box, Button, Flex, Grid, Heading, Separator, Text, TextField } from "@radix-ui/themes";
 import { GlobeIcon, OpenInNewWindowIcon } from "@radix-ui/react-icons";
 import {
   openGitHubTokenSettings,
@@ -20,10 +12,7 @@ import {
 interface GitHubSetupProps {
   props?: Record<string, never>;
   chat: {
-    send(
-      content: string,
-      options?: { metadata?: Record<string, unknown> }
-    ): Promise<unknown>;
+    send(content: string, options?: { metadata?: Record<string, unknown> }): Promise<unknown>;
   };
 }
 
@@ -61,13 +50,12 @@ const ACCESS_CHOICES: Array<{
   },
 ];
 
-export default function GitHubSetup({
-  chat,
-}: GitHubSetupProps) {
+export default function GitHubSetup({ chat }: GitHubSetupProps) {
   const [accessLevel, setAccessLevel] = useState<GitHubAccessLevel>("collaborate");
   const [busy, setBusy] = useState<"internal" | "external" | "save" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [connectedAs, setConnectedAs] = useState<string | null>(null);
+  const [targetName, setTargetName] = useState("");
 
   useEffect(() => {
     void getGitHubOnboardingStatus({ verify: true }).then((status) => {
@@ -75,10 +63,7 @@ export default function GitHubSetup({
     });
   }, []);
 
-  const run = async (
-    action: "internal" | "external" | "save",
-    operation: () => Promise<void>
-  ) => {
+  const run = async (action: "internal" | "external" | "save", operation: () => Promise<void>) => {
     setBusy(action);
     setMessage(null);
     try {
@@ -93,23 +78,59 @@ export default function GitHubSetup({
 
   const openSettings = (browser: "internal" | "external") =>
     run(browser, async () => {
-      await openGitHubTokenSettings({ accessLevel, browser });
-      setMessage("GitHub’s token page is open. Create the token there, then return here to save it.");
+      await openGitHubTokenSettings({
+        accessLevel,
+        browser,
+        ...(targetName.trim() ? { targetName: targetName.trim() } : {}),
+      });
+      setMessage(
+        "GitHub’s token page is open. Create the token there, then return here to save it."
+      );
     });
 
   const saveToken = () =>
     run("save", async () => {
-      const stored = await requestGitHubTokenCredential({ accessLevel });
+      const stored = await requestGitHubTokenCredential({
+        accessLevel,
+        ...(targetName.trim() ? { targetName: targetName.trim() } : {}),
+      });
       const verification = await verifyGitHubCredential(stored.id);
       if (!verification.valid) {
         throw new Error(verification.error ?? "GitHub could not verify this token.");
       }
       setConnectedAs(verification.login ?? "GitHub account");
       setMessage("GitHub is connected and verified.");
+      // The component's local success state is not enough to update the
+      // onboarding agent's snapshot. Ask the owning onboarding workflow to
+      // compose a fresh observation immediately after verification.
+      try {
+        await notifySetupSucceeded(verification.login);
+      } catch {
+        // The credential is already saved and verified. A transient chat
+        // refresh failure must not turn a successful connection into an error.
+      }
     });
 
-  const refreshOverview = () =>
-    chat.send("Check the GitHub connection and refresh the setup overview.", {
+  async function notifySetupSucceeded(login?: string): Promise<void> {
+    await chat.send(
+      `GitHub setup succeeded: the credential was saved and live account verification passed${
+        login ? ` as ${login}` : ""
+      }. Refresh the onboarding snapshot and report GitHub as connected.`,
+      {
+        metadata: {
+          interaction: {
+            source: "onboarding-setup-hub",
+            kind: "onboarding-capability",
+            action: "check",
+            targetId: "connection.github",
+          },
+        },
+      }
+    );
+  }
+
+  async function refreshOverview(): Promise<void> {
+    await chat.send("Check the GitHub connection and refresh the setup overview.", {
       metadata: {
         interaction: {
           source: "onboarding-setup-hub",
@@ -119,14 +140,15 @@ export default function GitHubSetup({
         },
       },
     });
+  }
 
   return (
     <Flex direction="column" gap="4" p="2" style={{ width: "100%", minWidth: 0 }}>
       <Box>
         <Heading size="4">Connect GitHub</Heading>
         <Text as="div" size="2" color="gray">
-          Choose what Vibestudio should be able to do. We’ll configure GitHub’s recommended
-          token type and keep the token in the trusted credential store.
+          Choose what Vibestudio should be able to do. We’ll configure GitHub’s recommended token
+          type and keep the token in the trusted credential store.
         </Text>
       </Box>
 
@@ -185,8 +207,8 @@ export default function GitHubSetup({
           Create the token on GitHub
         </Text>
         <Text as="div" size="1" color="gray">
-          Open GitHub here for guided setup, or use your normal browser for saved sign-in,
-          passkeys, and password managers.
+          Open GitHub here for guided setup, or use your normal browser for saved sign-in, passkeys,
+          and password managers.
         </Text>
         <Flex gap="2" wrap="wrap" mt="2">
           <Button
@@ -206,6 +228,20 @@ export default function GitHubSetup({
             {busy === "external" ? "Opening…" : "Open in my browser"}
           </Button>
         </Flex>
+        <Text as="label" size="1" color="gray" mt="3" style={{ display: "block" }}>
+          Organization owner (optional)
+        </Text>
+        <TextField.Root
+          mt="1"
+          placeholder="e.g. my-org"
+          value={targetName}
+          onChange={(event) => setTargetName(event.target.value)}
+          aria-label="Organization owner (optional)"
+        />
+        <Text as="p" size="1" color="gray" mt="1">
+          If provided, GitHub will target this organization when creating the fine-grained token.
+          You must be a member and the organization may need to approve the token.
+        </Text>
       </Box>
 
       {message ? (

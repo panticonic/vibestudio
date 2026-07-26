@@ -31,6 +31,7 @@ import type {
   WorkspaceGitRemoteConfig,
   WorkspaceGitUpstreamConfig,
 } from "@vibestudio/workspace-contracts/types";
+import { resolveGitHubPublishOperation } from "@workspace/integrations/github";
 import { getRemoteProvider } from "@workspace/integrations/remoteProviders";
 import {
   GitBridge,
@@ -573,17 +574,38 @@ export class UpstreamEngine {
     if (!provider) throw new Error(`Unknown remote provider: ${providerId}`);
     if (input.name?.includes("/")) {
       throw new Error(
-        `Repository name "${input.name}" must not contain "/" — the owner is determined ` +
-          `by the credential; pass just the repository name`
+        `Repository name "${input.name}" must not contain "/" — pass the repository name ` +
+          `separately from the optional organization`
       );
+    }
+    let organization = input.organization?.trim();
+    if (input.organization !== undefined && !organization) {
+      throw new Error("Organization must be a non-empty GitHub organization name");
+    }
+    let credentialId = input.credentialId?.trim() || undefined;
+    let credentialLogin: string | undefined;
+    let credentialTarget: string | undefined;
+    let credentialOwnerSource: "explicit" | "credential-target" | "authenticated-user" | undefined;
+    if (providerId === "github") {
+      const operation = await resolveGitHubPublishOperation(this.ctx.credentials, {
+        ...(credentialId ? { credentialId } : {}),
+        ...(organization ? { organization } : {}),
+      });
+      credentialId = operation.credentialId;
+      credentialLogin = operation.login;
+      credentialTarget = operation.targetName;
+      credentialOwnerSource = operation.ownerSource;
+      organization = operation.organization;
     }
     const repoName = input.name ?? repo.split("/").at(-1) ?? repo;
     const remoteName = input.remote ? validateWorkspaceGitRemoteName(input.remote) : "origin";
     const branch = input.branch ? validateWorkspaceGitRemoteBranch(input.branch) : DEFAULT_BRANCH;
     const created = await provider.createRepo(this.ctx.credentials, {
       name: repoName,
+      ...(organization ? { organization } : {}),
       private: input.private ?? true,
       description: input.description,
+      ...(credentialId ? { credentialId } : {}),
     });
     try {
       await this.setRemote(repo, {
@@ -595,7 +617,7 @@ export class UpstreamEngine {
         remote: remoteName,
         branch,
         autoPush: input.autoPush ?? false,
-        ...(input.credentialId ? { credentialId: input.credentialId } : {}),
+        ...(credentialId ? { credentialId } : {}),
         ...(input.authorEmail ? { authorEmail: input.authorEmail } : {}),
         ...(input.authorName ? { authorName: input.authorName } : {}),
       });
@@ -629,6 +651,10 @@ export class UpstreamEngine {
       remoteUrl: created.cloneUrl,
       webUrl: created.webUrl,
       owner: created.owner,
+      ...(credentialId ? { credentialId } : {}),
+      ...(credentialLogin ? { credentialLogin } : {}),
+      ...(credentialTarget ? { credentialTarget } : {}),
+      ...(credentialOwnerSource ? { credentialOwnerSource } : {}),
       exported: pushed.exported,
       headCommit: pushed.headCommit,
       pushed: pushed.pushed,

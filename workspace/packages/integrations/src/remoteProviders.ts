@@ -3,8 +3,11 @@ import type { CredentialClient } from "@vibestudio/credential-client";
 
 export interface RemoteCreateRepoParams {
   name: string;
+  organization?: string;
   private: boolean;
   description?: string;
+  /** Credential selected by the caller; never sent to the remote API. */
+  credentialId?: string;
 }
 
 export interface RemoteCreateRepoResult {
@@ -67,7 +70,10 @@ export const githubRemoteProvider: RemoteProvider = {
   id: "github",
   displayName: "GitHub",
   matches: (idOrUrl) => parseGitHubHttpsRemote(idOrUrl) !== null,
-  createRepo: (credentials, params) => createGitHubClient(credentials).createRepo(params),
+  createRepo: (credentials, params) => {
+    const { credentialId, ...repoParams } = params;
+    return createGitHubClient(credentials, { credentialId }).createRepo(repoParams);
+  },
   webUrls(remoteUrl) {
     const parsed = parseGitHubHttpsRemote(remoteUrl);
     if (!parsed) {

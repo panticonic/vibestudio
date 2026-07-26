@@ -107,6 +107,13 @@ const stored = await requestGitHubTokenCredential({
 `openGitHubTokenSettings()` pre-fills the supported GitHub permissions.
 `requestGitHubTokenCredential()` stores separate URL-bound bindings for GitHub
 API, uploads, and Git HTTPS without exposing the token to workspace code.
+The setup surface also accepts an optional organization owner, passes it to
+GitHub as `target_name`, and persists it as credential metadata. Publishing
+first resolves exactly one credential: an explicit `credentialId`, or the
+sole active GitHub credential. It refuses to guess when multiple credentials
+exist. It then resolves the owner as explicit organization, persisted token
+owner, or authenticated GitHub user. The raw `git.publishRepo()` path and
+`publishToGitHub()` use the same rules.
 
 ## Advanced cases
 
@@ -126,8 +133,15 @@ Keep these out of initial setup:
 - API calls use `credentials.fetch()`.
 - Clone/pull/push uses `@vibestudio/git` with `credentials.gitHttp()`.
 - Workspace-managed remotes use the runtime `git` provider.
-- `publishToGitHub()` creates a new GitHub repository through
-  `git.publishRepo()` without receiving the token.
+- `publishToGitHub()` and `git.publishRepo()` create a new GitHub repository
+  through the configured provider without receiving the token. If
+  `organization` is omitted, they use the persisted organization owner from
+  the selected GitHub credential when one exists; otherwise they create the
+  repository under the authenticated user. An explicit organization must
+  match the selected token owner. Publishing performs live credential and
+  permission preflight first, then returns the resolved credential ID, login,
+  owner, and owner-source as safe diagnostics. If multiple GitHub credentials
+  are active, pass `credentialId` explicitly.
 - Configure shared remotes with `git.setSharedRemote()`, tracking with
   `git.setUpstream()`, and inspect before push with `git.upstreamStatus()`.
 - Import an external repository with `git.importProject()` and integrate its

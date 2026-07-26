@@ -3,7 +3,7 @@ import {
   createCredentialClient,
   type StoredCredentialSummary,
 } from "@workspace/runtime/credentials";
-import { createGitHubClient } from "./github.js";
+import { createGitHubClient, resolveGitHubPublishOperation } from "./github.js";
 import { createGmailClient } from "@workspace/gmail";
 import { createCalendarClient } from "./calendar.js";
 
@@ -25,6 +25,7 @@ function makeMockEnv(
 ) {
   const stats = {
     resolveCalls: 0,
+    resolveDescriptors: [] as unknown[],
     fetchCalls: [] as Array<{ url: string; method: string; body?: string }>,
   };
   const credential: StoredCredentialSummary = {
@@ -34,17 +35,29 @@ function makeMockEnv(
     accountIdentity: { providerUserId: "mock" },
     audience: [],
     injection: { type: "header", name: "authorization", valueTemplate: "Bearer {token}" },
-    bindings: [],
-    scopes: [],
-    metadata: {},
+    bindings: [
+      { id: "github-user", use: "fetch", audience: [], injection: credentialInjection() },
+      { id: "github-git-http", use: "git-http", audience: [], injection: credentialInjection() },
+    ],
+    scopes: ["metadata:read", "contents:write", "administration:write"],
+    lifecycle: { state: "active", canRefresh: false },
+    metadata: {
+      providerId: "github",
+      providerKind: "fine-grained-pat",
+      targetName: "acme",
+    },
     createdAt: Date.now(),
   } as unknown as StoredCredentialSummary;
 
   const rpc: RpcCaller = {
-    call: (async <T = unknown>(_targetId: string, method: string, _args: unknown[]): Promise<T> => {
+    call: (async <T = unknown>(_targetId: string, method: string, args: unknown[]): Promise<T> => {
       if (method === "credentials.resolveCredential") {
         stats.resolveCalls++;
+        stats.resolveDescriptors.push(args[0]);
         return credential as unknown as T;
+      }
+      if (method === "credentials.listStoredCredentials") {
+        return [credential] as unknown as T;
       }
       throw new Error(`unexpected method: ${method}`);
     }) as RpcCaller["call"],
@@ -70,6 +83,10 @@ function makeMockEnv(
   return { credentials, stats };
 }
 
+function credentialInjection() {
+  return { type: "header", name: "authorization", valueTemplate: "Bearer {token}" } as const;
+}
+
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
     status: 200,
@@ -79,6 +96,23 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 }
 
 describe("createGitHubClient", () => {
+  it("preflights and resolves the credential owner for publishing", async () => {
+    const { credentials } = makeMockEnv((url) => {
+      if (url.endsWith("/user")) return jsonResponse({ login: "octocat", id: 1 });
+      return jsonResponse({}, { status: 404 });
+    });
+
+    await expect(resolveGitHubPublishOperation(credentials)).resolves.toMatchObject({
+      credentialId: "cred-mock",
+      credentialLabel: "Mock",
+      login: "octocat",
+      targetName: "acme",
+      destinationOwner: "acme",
+      ownerSource: "credential-target",
+      organization: "acme",
+    });
+  });
+
   it("memoizes the credential handle across method calls", async () => {
     const { credentials, stats } = makeMockEnv((url) => {
       if (url.endsWith("/user")) return jsonResponse({ login: "octocat", id: 1 });
@@ -148,6 +182,56 @@ describe("createGitHubClient", () => {
         method: "POST",
         body: JSON.stringify({ name: "demo", private: true, description: "Demo repo" }),
       },
+    ]);
+  });
+
+  it("creates repositories through the GitHub organization repos API", async () => {
+    const { credentials, stats } = makeMockEnv(() =>
+      jsonResponse({
+        id: 2,
+        name: "demo",
+        full_name: "acme/demo",
+        private: true,
+        html_url: "https://github.com/acme/demo",
+        clone_url: "https://github.com/acme/demo.git",
+        owner: { id: 2, login: "acme", avatar_url: "", html_url: "", type: "Organization" },
+      })
+    );
+    const github = createGitHubClient(credentials);
+
+    await github.createRepo({
+      name: "demo",
+      organization: "acme",
+      private: true,
+    });
+
+    expect(stats.fetchCalls).toEqual([
+      {
+        url: "https://api.github.com/orgs/acme/repos",
+        method: "POST",
+        body: JSON.stringify({ name: "demo", private: true }),
+      },
+    ]);
+  });
+
+  it("routes repository creation through the explicitly selected credential", async () => {
+    const { credentials, stats } = makeMockEnv(() =>
+      jsonResponse({
+        id: 3,
+        name: "demo",
+        full_name: "acme/demo",
+        private: true,
+        html_url: "https://github.com/acme/demo",
+        clone_url: "https://github.com/acme/demo.git",
+        owner: { id: 3, login: "acme", avatar_url: "", html_url: "", type: "Organization" },
+      })
+    );
+    const github = createGitHubClient(credentials, { credentialId: "github-org-token" });
+
+    await github.createRepo({ name: "demo", organization: "acme", private: true });
+
+    expect(stats.resolveDescriptors).toEqual([
+      expect.objectContaining({ credentialId: "github-org-token" }),
     ]);
   });
 

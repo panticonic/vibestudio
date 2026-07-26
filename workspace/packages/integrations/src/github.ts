@@ -1,7 +1,12 @@
 import { bindingAudience, githubCredential } from "./providers.js";
-import type { CredentialClient, UrlCredentialHandle } from "@vibestudio/credential-client";
+import type {
+  CredentialClient,
+  StoredCredentialSummary,
+  UrlCredentialHandle,
+} from "@vibestudio/credential-client";
 
 const GITHUB_API_BASE = "https://api.github.com";
+const GITHUB_API_ORIGIN = GITHUB_API_BASE;
 const GITHUB_ACCEPT_HEADER = "application/vnd.github+json";
 
 export const manifest = {
@@ -12,6 +17,7 @@ export const manifest = {
     github: [
       { url: "https://api.github.com/user", methods: ["GET"] },
       { url: "https://api.github.com/user/repos", methods: ["GET", "POST"] },
+      { url: "https://api.github.com/orgs/*/repos", methods: ["POST"] },
       { url: "https://api.github.com/repos/*", methods: ["GET"] },
       { url: "https://api.github.com/repos/*/issues", methods: ["GET", "POST"] },
       { url: "https://api.github.com/repos/*/issues/*", methods: ["GET", "PATCH"] },
@@ -120,6 +126,7 @@ export interface CreateIssueParams {
 
 export interface CreateRepoParams {
   name: string;
+  organization?: string;
   private: boolean;
   description?: string;
 }
@@ -128,6 +135,142 @@ export interface CreateRepoResult {
   cloneUrl: string;
   webUrl: string;
   owner: string;
+}
+
+export type GitHubPublishOwnerSource = "explicit" | "credential-target" | "authenticated-user";
+
+export interface GitHubPublishOperationResolution {
+  credentialId: string;
+  credentialLabel: string;
+  login: string;
+  destinationOwner: string;
+  ownerSource: GitHubPublishOwnerSource;
+  targetName?: string;
+  organization?: string;
+  requiredCapabilities: readonly ["github-api", "github-repository-create", "github-git-push"];
+}
+
+function isClassicGitHubCredential(credential: StoredCredentialSummary): boolean {
+  return credential.metadata?.["providerKind"] === "classic-pat";
+}
+
+function targetNameForCredential(credential: StoredCredentialSummary): string | undefined {
+  const targetName = credential.metadata?.["targetName"]?.trim();
+  return targetName || undefined;
+}
+
+function isGitHubStoredCredential(credential: StoredCredentialSummary): boolean {
+  if (credential.metadata?.["providerId"] === "github") return true;
+  return credential.audience.some((audience) => {
+    try {
+      return new URL(audience.url).origin === GITHUB_API_ORIGIN;
+    } catch {
+      return false;
+    }
+  });
+}
+
+export function validateGitHubPublishCredential(credential: StoredCredentialSummary): void {
+  if (credential.lifecycle.state !== "active") {
+    throw new Error(
+      `GitHub publish preflight failed for credential "${credential.label}": ` +
+        `the credential is ${credential.lifecycle.state}. Reconnect GitHub and retry.`
+    );
+  }
+  const bindingIds = new Set((credential.bindings ?? []).map((binding) => binding.id));
+  const missingBindings = ["github-user", "github-git-http"].filter(
+    (bindingId) => credential.bindings && !bindingIds.has(bindingId)
+  );
+  if (missingBindings.length) {
+    throw new Error(
+      `GitHub publish preflight failed for credential "${credential.label}": ` +
+        `it is missing ${missingBindings.join(" and ")} access. Reconnect with "Publish repositories" access.`
+    );
+  }
+  if (!isClassicGitHubCredential(credential)) {
+    const scopes = new Set(credential.scopes);
+    const missingScopes = ["contents:write", "administration:write"].filter(
+      (scope) => !scopes.has(scope)
+    );
+    if (missingScopes.length) {
+      throw new Error(
+        `GitHub publish preflight failed for credential "${credential.label}": ` +
+          `missing ${missingScopes.join(" and ")} permission${missingScopes.length === 1 ? "" : "s"}. ` +
+          `Reconnect with "Publish repositories" access.`
+      );
+    }
+  }
+}
+
+export async function resolveGitHubPublishOperation(
+  credentials: CredentialClient,
+  opts: { credentialId?: string; organization?: string } = {}
+): Promise<GitHubPublishOperationResolution> {
+  const requestedOrganization = opts.organization?.trim() || undefined;
+  const candidates = (await credentials.listStoredCredentials()).filter(isGitHubStoredCredential);
+  const activeCandidates = candidates.filter((candidate) => candidate.lifecycle.state === "active");
+  const credential = opts.credentialId
+    ? candidates.find((candidate) => candidate.id === opts.credentialId)
+    : activeCandidates.length === 1
+      ? activeCandidates[0]
+      : undefined;
+  if (!credential) {
+    const available = activeCandidates
+      .map((candidate) => `${candidate.label} (${candidate.id})`)
+      .join(", ");
+    throw new Error(
+      opts.credentialId
+        ? `GitHub credential "${opts.credentialId}" was not found. ` +
+            "Reconnect GitHub or choose one of the connected GitHub credentials."
+        : activeCandidates.length > 1
+          ? `Multiple active GitHub credentials are available (${available}). ` +
+            "Pass credentialId explicitly; Vibestudio will not guess."
+          : "No active GitHub credential is available. Connect GitHub with Publish repositories access."
+    );
+  }
+  validateGitHubPublishCredential(credential);
+  const targetName = targetNameForCredential(credential);
+  if (requestedOrganization && targetName && requestedOrganization !== targetName) {
+    throw new Error(
+      `GitHub organization "${requestedOrganization}" does not match the connected token owner ` +
+        `"${targetName}" for credential "${credential.label}". ` +
+        "Use the matching organization or reconnect with a token targeted to it."
+    );
+  }
+  const github = createGitHubClient(credentials, { credentialId: credential.id });
+  let user: GitHubUser;
+  try {
+    user = await github.getUser();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `GitHub credential "${credential.label}" failed live verification: ${message}. ` +
+        "Reconnect GitHub or choose a different credential.",
+      { cause: error }
+    );
+  }
+  if (!user.login?.trim()) {
+    throw new Error(
+      `GitHub credential "${credential.label}" passed the API check but returned no account login. ` +
+        "Reconnect GitHub and retry."
+    );
+  }
+  const ownerSource: GitHubPublishOwnerSource = requestedOrganization
+    ? "explicit"
+    : targetName
+      ? "credential-target"
+      : "authenticated-user";
+  const destinationOwner = requestedOrganization ?? targetName ?? user.login;
+  return {
+    credentialId: credential.id,
+    credentialLabel: credential.label,
+    login: user.login,
+    destinationOwner,
+    ownerSource,
+    ...(targetName ? { targetName } : {}),
+    ...(ownerSource !== "authenticated-user" ? { organization: destinationOwner } : {}),
+    requiredCapabilities: ["github-api", "github-repository-create", "github-git-push"],
+  };
 }
 
 interface GitHubCreatedRepo extends GitHubRepo {
@@ -242,7 +385,10 @@ function githubApiErrorDetail(responseBody: string): string {
  * don't repeat audience lookup. The harness never sees the
  * underlying token; auth is injected by the credentialed fetcher.
  */
-export function createGitHubClient(credentials: CredentialClient): GitHubClient {
+export function createGitHubClient(
+  credentials: CredentialClient,
+  opts: { credentialId?: string } = {}
+): GitHubClient {
   const memoizeHandle = (
     resolveDescriptor: () => Parameters<CredentialClient["forAudience"]>[0]
   ) => {
@@ -264,8 +410,9 @@ export function createGitHubClient(credentials: CredentialClient): GitHubClient 
   const handle = memoizeHandle(() => ({
     ...githubCredential,
     label: githubCredential.displayName,
+    ...(opts.credentialId ? { credentialId: opts.credentialId } : {}),
   }));
-  const userHandle = memoizeHandle(() => bindingAudience(githubCredential, "github-user"));
+  const userHandle = memoizeHandle(() => bindingAudience(githubCredential, "github-user", opts));
 
   const apiFetch = async <T>(
     path: string,
@@ -307,12 +454,14 @@ export function createGitHubClient(credentials: CredentialClient): GitHubClient 
       }),
     createRepo: async (params) => {
       let repo: GitHubCreatedRepo;
+      const { organization, ...repositoryParams } = params;
+      const endpoint = organization ? `/orgs/${enc(organization)}/repos` : "/user/repos";
       try {
         repo = await apiFetch<GitHubCreatedRepo>(
-          "/user/repos",
+          endpoint,
           {
             method: "POST",
-            body: JSON.stringify(params),
+            body: JSON.stringify(repositoryParams),
           },
           userHandle
         );

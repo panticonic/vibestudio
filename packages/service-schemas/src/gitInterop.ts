@@ -339,6 +339,7 @@ export const gitPublishRepoInputSchema = z
     repoPath: z.string(),
     provider: z.string().optional(),
     name: z.string().optional(),
+    organization: z.string().optional(),
     private: z.boolean().optional(),
     description: z.string().optional(),
     remote: z.string().optional(),
@@ -361,6 +362,12 @@ export const gitPublishRepoResultSchema = z
     remoteUrl: z.string(),
     webUrl: z.string(),
     owner: z.string(),
+    credentialId: z.string().optional(),
+    credentialLogin: z.string().optional(),
+    credentialTarget: z.string().optional(),
+    credentialOwnerSource: z
+      .enum(["explicit", "credential-target", "authenticated-user"])
+      .optional(),
     exported: nonNegativeIntegerSchema,
     headCommit: z.string().nullable(),
     pushed: z.boolean(),
@@ -561,7 +568,7 @@ export const gitInteropMethods = defineServiceMethods({
   },
   publishRepo: {
     description:
-      "Create a provider repository, configure tracking, export protected main, and push through the configured gitInterop provider.",
+      "Resolve exactly one GitHub credential (explicit credentialId, or the sole active GitHub credential; refuse ambiguity), resolve the destination owner from explicit organization, persisted credential target, or authenticated user, preflight live account and publish permissions, create a provider repository, configure tracking, export protected main, and push through the configured gitInterop provider.",
     args: z.tuple([gitPublishRepoInputSchema]),
     returns: gitPublishRepoResultSchema,
     authority: {

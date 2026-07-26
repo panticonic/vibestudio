@@ -122,6 +122,7 @@
       "@workspace/eval/sandbox": ["workspace/packages/eval/src/sandbox.ts"],
       "@workspace/eval/scope": ["workspace/packages/eval/src/scope.ts"],
       "@workspace/integrations": ["workspace/packages/integrations/src/index.ts"],
+      "@workspace/integrations/github": ["workspace/packages/integrations/src/github.ts"],
       "@workspace/integrations/calendar": ["workspace/packages/integrations/src/calendar.ts"],
       "@workspace/integrations/providers": ["workspace/packages/integrations/src/providers.ts"],
       "@workspace/integrations/remoteProviders": [
