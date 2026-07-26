@@ -63,16 +63,21 @@ destination-scoped approval.
 
 The UI owns these mappings:
 
-| User-facing choice | Helper value | Outcome |
-| --- | --- | --- |
-| Look around | `read-only` | Read repositories, issues, pull requests, and Actions; clone/pull |
-| Work with code | `collaborate` | Normal code changes, push, issues, and pull requests |
-| Edit Actions too | `code-workflows` | Collaborate plus workflow-file changes |
-| Full GitHub access | `broad` | Broadest supported repository permissions |
+| User-facing choice   | Helper value     | Outcome                                                                     |
+| -------------------- | ---------------- | --------------------------------------------------------------------------- |
+| Look around          | `read-only`      | Read repositories, issues, pull requests, and Actions; clone/pull           |
+| Work with code       | `collaborate`    | Normal code changes, push, issues, and pull requests                        |
+| Publish repositories | `publish`        | Create repositories, push code, and collaborate on issues and pull requests |
+| Edit Actions too     | `code-workflows` | Collaborate plus workflow-file changes                                      |
+| Full GitHub access   | `broad`          | Broadest supported repository permissions                                   |
 
-Default to `collaborate`. Use `broad` only when the user chooses the explicit
-full-access outcome. Repository selection remains on GitHub’s page: users may
-choose selected repositories or all repositories there.
+Default to `collaborate`. If the task includes creating a new repository, use
+`publish`; GitHub requires the fine-grained **Administration: write** repository
+permission for personal and organization repository creation. Organization
+creation additionally requires organization membership and organization policy
+approval. Use `broad` only when the user chooses the explicit full-access
+outcome. Repository selection remains on GitHub’s page: users may choose
+selected repositories or all repositories there.
 
 ## Runtime helpers
 

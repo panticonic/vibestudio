@@ -123,7 +123,7 @@ export const googleWorkspaceCredential: UrlCredentialDescriptor = {
 export const githubBindings = {
   user: {
     id: "github-user",
-    label: "GitHub user and repository listing",
+    label: "GitHub profile and repositories",
     use: "fetch",
     audience: [
       { url: "https://api.github.com/user", match: "path-prefix" },

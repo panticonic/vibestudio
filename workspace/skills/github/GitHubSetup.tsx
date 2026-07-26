@@ -45,6 +45,11 @@ const ACCESS_CHOICES: Array<{
     recommended: true,
   },
   {
+    value: "publish",
+    title: "Publish repositories",
+    description: "Create repositories, push code, and collaborate on issues and pull requests.",
+  },
+  {
     value: "code-workflows",
     title: "Edit Actions too",
     description: "Work with code and also change GitHub Actions workflow files.",

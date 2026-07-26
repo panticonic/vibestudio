@@ -205,6 +205,37 @@ export interface GitHubClient {
   ): Promise<GitHubIssue>;
 }
 
+class GitHubApiError extends Error {
+  readonly detail: string;
+
+  constructor(
+    readonly status: number,
+    readonly statusText: string,
+    readonly responseBody: string
+  ) {
+    const detail = githubApiErrorDetail(responseBody);
+    super(`GitHub API request failed: ${status} ${statusText}${detail ? ` - ${detail}` : ""}`);
+    this.name = "GitHubApiError";
+    this.detail = detail;
+  }
+}
+
+function githubApiErrorDetail(responseBody: string): string {
+  if (!responseBody.trim()) return "";
+  try {
+    const payload = JSON.parse(responseBody) as {
+      message?: unknown;
+      documentation_url?: unknown;
+    };
+    const message = typeof payload.message === "string" ? payload.message.trim() : "";
+    const documentationUrl =
+      typeof payload.documentation_url === "string" ? payload.documentation_url.trim() : "";
+    return [message, documentationUrl].filter(Boolean).join(" — ");
+  } catch {
+    return responseBody.trim();
+  }
+}
+
 /**
  * Build a GitHub client bound to the given `CredentialClient`. The
  * credential handles are resolved on first use and memoized — methods
@@ -250,9 +281,7 @@ export function createGitHubClient(credentials: CredentialClient): GitHubClient 
     const response = await auth.fetch(`${GITHUB_API_BASE}${path}`, { ...init, headers });
     if (!response.ok) {
       const bodyText = await response.text();
-      throw new Error(
-        `GitHub API request failed: ${response.status} ${response.statusText}${bodyText ? ` - ${bodyText}` : ""}`
-      );
+      throw new GitHubApiError(response.status, response.statusText, bodyText);
     }
     return (await response.json()) as T;
   };
@@ -277,14 +306,27 @@ export function createGitHubClient(credentials: CredentialClient): GitHubClient 
         body: JSON.stringify(params),
       }),
     createRepo: async (params) => {
-      const repo = await apiFetch<GitHubCreatedRepo>(
-        "/user/repos",
-        {
-          method: "POST",
-          body: JSON.stringify(params),
-        },
-        userHandle
-      );
+      let repo: GitHubCreatedRepo;
+      try {
+        repo = await apiFetch<GitHubCreatedRepo>(
+          "/user/repos",
+          {
+            method: "POST",
+            body: JSON.stringify(params),
+          },
+          userHandle
+        );
+      } catch (error) {
+        if (error instanceof GitHubApiError) {
+          throw new Error(
+            `GitHub repository creation failed (${error.status} ${error.statusText})` +
+              `${error.detail ? `: ${error.detail}` : "."} ` +
+              "Review the connected credential and any GitHub account or organization restrictions, then retry.",
+            { cause: error }
+          );
+        }
+        throw error;
+      }
       return {
         cloneUrl: repo.clone_url,
         webUrl: repo.html_url,

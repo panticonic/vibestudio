@@ -11,8 +11,12 @@
 ## Git Clone Or Push Is Needed
 
 Create the PAT with a friendly access level such as
-`requestGitHubTokenCredential({ accessLevel: "read-only" })` for clone/pull or
-`accessLevel: "collaborate"` for push. Explicit `mode: "git"` and
+`requestGitHubTokenCredential({ accessLevel: "read-only" })` for clone/pull,
+`accessLevel: "collaborate"` for push, or `accessLevel: "publish"` when the
+workflow must create a new repository. Repository creation requires GitHub’s
+fine-grained **Administration: write** repository permission. Organization
+creation also requires organization membership and organization policy
+approval. Explicit `mode: "git"` and
 `mode: "api-and-git"` are still available for lower-level agent flows. Verify a
 specific remote with `verifyGitHubGitRemoteAccess(remoteUrl, credentialId)`.
 

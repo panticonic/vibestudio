@@ -23,7 +23,12 @@ type RuntimeGitPublishResult = Awaited<ReturnType<RuntimeGit["publishRepo"]>>;
 export type GitHubOnboardingStage = "needs-token" | "connected" | "verified" | "error";
 export type GitHubCredentialMode = "api" | "git" | "api-and-git";
 export type GitHubTokenKind = "fine-grained" | "classic";
-export type GitHubAccessLevel = "read-only" | "collaborate" | "code-workflows" | "broad";
+export type GitHubAccessLevel =
+  | "read-only"
+  | "collaborate"
+  | "publish"
+  | "code-workflows"
+  | "broad";
 export type GitHubPermissionPreset =
   | "clone"
   | "pull"
@@ -36,7 +41,8 @@ export type GitHubPermissionPreset =
   | "workflows"
   | "statuses"
   | "deployments"
-  | "discussions";
+  | "discussions"
+  | "repository-admin";
 
 export interface GitHubVerificationResult {
   valid: boolean;
@@ -111,6 +117,7 @@ export const GITHUB_PERMISSION_PRESETS: Record<GitHubPermissionPreset, string[]>
   statuses: ["metadata:read", "statuses:read", "statuses:write"],
   deployments: ["metadata:read", "deployments:read", "deployments:write"],
   discussions: ["metadata:read", "discussions:read", "discussions:write"],
+  "repository-admin": ["metadata:read", "administration:write"],
 };
 
 export const GITHUB_ACCESS_LEVELS: Record<
@@ -192,6 +199,27 @@ export const GITHUB_ACCESS_LEVELS: Record<
       discussions: "write",
     },
   },
+  publish: {
+    label: "Publish repositories",
+    mode: "api-and-git",
+    presets: ["push", "repository-admin", "issues", "pull-requests"],
+    scopes: [
+      "metadata:read",
+      "contents:write",
+      "administration:write",
+      "issues:read",
+      "issues:write",
+      "pull_requests:read",
+      "pull_requests:write",
+    ],
+    fineGrainedPermissions: {
+      metadata: "read",
+      contents: "write",
+      administration: "write",
+      issues: "write",
+      pull_requests: "write",
+    },
+  },
   "code-workflows": {
     label: "Code + Workflows",
     mode: "api-and-git",
@@ -258,6 +286,7 @@ export const GITHUB_ACCESS_LEVELS: Record<
     ],
     fineGrainedPermissions: {
       ...GITHUB_FINE_GRAINED_BROAD_PERMISSIONS,
+      administration: "write",
     },
   },
 };

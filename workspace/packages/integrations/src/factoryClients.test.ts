@@ -151,6 +151,43 @@ describe("createGitHubClient", () => {
     ]);
   });
 
+  it("adds repository-creation context without guessing the cause of a GitHub rejection", async () => {
+    const { credentials } = makeMockEnv(
+      () =>
+        new Response(
+          JSON.stringify({
+            message: "Resource not accessible by personal access token",
+            documentation_url:
+              "https://docs.github.com/rest/repos/repos#create-a-repository-for-the-authenticated-user",
+          }),
+          {
+            status: 403,
+            statusText: "Forbidden",
+          }
+        )
+    );
+    const github = createGitHubClient(credentials);
+
+    await expect(github.createRepo({ name: "demo", private: true })).rejects.toThrow(
+      /GitHub repository creation failed \(403 Forbidden\): Resource not accessible by personal access token.*Review the connected credential and any GitHub account or organization restrictions/iu
+    );
+  });
+
+  it("adds repository-creation context to non-permission API failures too", async () => {
+    const { credentials } = makeMockEnv(
+      () =>
+        new Response('{"message":"Repository creation failed: name already exists"}', {
+          status: 422,
+          statusText: "Unprocessable Content",
+        })
+    );
+    const github = createGitHubClient(credentials);
+
+    await expect(github.createRepo({ name: "demo", private: true })).rejects.toThrow(
+      /GitHub repository creation failed \(422 Unprocessable Content\): Repository creation failed: name already exists/iu
+    );
+  });
+
   it("throws a typed error on non-2xx responses", async () => {
     const { credentials } = makeMockEnv(
       () => new Response("forbidden", { status: 403, statusText: "Forbidden" })

@@ -33,6 +33,9 @@ panel-owned React state.
   clone or pull code.
 - **Work with code**: make normal code changes, push, and work with issues and
   pull requests.
+- **Publish repositories**: create repositories, push code, and collaborate on
+  issues and pull requests. This adds GitHub’s repository **Administration:
+  write** permission, required by GitHub’s repository-creation API.
 - **Edit Actions too**: work with code and change GitHub Actions workflow
   files.
 - **Full GitHub access**: request the broadest supported repository

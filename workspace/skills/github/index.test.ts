@@ -232,6 +232,15 @@ describe("github skill facade", () => {
     expect(url.searchParams.get("discussions")).toBe("write");
   });
 
+  it("prefills repository administration for publishing access", () => {
+    const url = new URL(buildGitHubTokenSettingsUrl({ accessLevel: "publish" }));
+
+    expect(url.searchParams.get("contents")).toBe("write");
+    expect(url.searchParams.get("administration")).toBe("write");
+    expect(url.searchParams.get("issues")).toBe("write");
+    expect(url.searchParams.get("pull_requests")).toBe("write");
+  });
+
   it("reports verified after a live user check succeeds", async () => {
     runtimeMock.credentials.listStoredCredentials.mockResolvedValue([githubCredential]);
 
