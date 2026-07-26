@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { ReactNode } from "react";
 import { Flex, Spinner, Text } from "@radix-ui/themes";
 import { useChatContext } from "../context/ChatContext";
-import { useChatInputContext } from "../context/ChatInputContext";
+import { useChatInputActions } from "../context/ChatInputContext";
 import { AgentSetupInline } from "./AgentSetupInline";
 import { FirstRunCard } from "./FirstRunCard";
 import { LinkedPermissionCards } from "./LinkedPermissionCards";
@@ -42,7 +42,7 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
     clientRef,
     deferredAgent,
   } = useChatContext();
-  const { setReplyTo } = useChatInputContext();
+  const { setReplyTo } = useChatInputActions();
 
   const mdxActions = useMemo(() => ({
     publishMessage: async (content: string) => {

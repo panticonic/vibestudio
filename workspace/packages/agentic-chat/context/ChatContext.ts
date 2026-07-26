@@ -3,6 +3,34 @@ import type { ChatContextValue } from "../types";
 
 export const ChatContext = createContext<ChatContextValue | null>(null);
 
+export type ChatMessageActionsValue = Pick<
+  ChatContextValue,
+  "editPendingMessage" | "forkState" | "onNewConversation"
+>;
+
+export type ChatComposerRuntimeValue = Pick<
+  ChatContextValue,
+  | "agentBusy"
+  | "allParticipants"
+  | "chat"
+  | "connected"
+  | "flushNarration"
+  | "flushOutboxAndInterrupt"
+  | "hasOpenTurn"
+  | "modelCatalog"
+  | "onCallMethodResult"
+  | "onReplaceAgent"
+  | "participants"
+  | "pendingSendCount"
+  | "primaryActionIntent"
+  | "selfId"
+  | "undoableAction"
+  | "undoLastAction"
+>;
+
+export const ChatMessageActionsContext = createContext<ChatMessageActionsValue | null>(null);
+export const ChatComposerRuntimeContext = createContext<ChatComposerRuntimeValue | null>(null);
+
 /**
  * Access the chat context. Must be used within a `<ChatProvider>`.
  * Throws if used outside of a ChatProvider.
@@ -26,4 +54,24 @@ export function useChatContext(): ChatContextValue {
  */
 export function useOptionalChatContext(): ChatContextValue | null {
   return useContext(ChatContext);
+}
+
+/**
+ * Row-depth message actions are isolated from transcript and presence changes
+ * so a streaming tail cannot wake every resident card.
+ */
+export function useOptionalChatMessageActions(): ChatMessageActionsValue | null {
+  return useContext(ChatMessageActionsContext);
+}
+
+/**
+ * Runtime state used by the composer, excluding the transcript and unrelated
+ * shell projections that update while the user is typing.
+ */
+export function useChatComposerRuntime(): ChatComposerRuntimeValue {
+  const ctx = useContext(ChatComposerRuntimeContext);
+  if (!ctx) {
+    throw new Error("useChatComposerRuntime must be used within a <ChatProvider>");
+  }
+  return ctx;
 }

@@ -103,6 +103,26 @@ function childForksFromMessages(messages: ChatMessage[]): ForkEntry[] {
     });
 }
 
+function sameForkEntries(a: ForkEntry[], b: ForkEntry[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((entry, index) => {
+    const other = b[index];
+    return (
+      other !== undefined &&
+      entry.forkId === other.forkId &&
+      entry.channelId === other.channelId &&
+      entry.contextId === other.contextId &&
+      entry.label === other.label &&
+      entry.reason === other.reason &&
+      entry.actorName === other.actorName &&
+      entry.forkPointId === other.forkPointId &&
+      entry.createdAtSeq === other.createdAtSeq &&
+      entry.archived === other.archived
+    );
+  });
+}
+
 /** Map a durable `ForkProjection` (from `listForks`) onto a switcher entry —
  *  the sibling analogue of `childForksFromMessages`'s per-row mapping. */
 function forkProjectionToEntry(fork: ForkProjection): ForkEntry {
@@ -141,6 +161,8 @@ function labelForProvenance(prov: ChannelProvenance | undefined): string {
 export function useForkLineage(options: UseForkLineageOptions): ForkUiState {
   const { rpc, channelId, contextId, selfId, selfMetadata, messages, replaySettled, client, nav } =
     options;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
 
   const [provenance, setProvenance] = useState<ChannelProvenance | undefined>(undefined);
   const [siblings, setSiblings] = useState<ForkEntry[]>([]);
@@ -188,7 +210,15 @@ export function useForkLineage(options: UseForkLineageOptions): ForkUiState {
     [liveHeads]
   );
 
-  const baseChildren = useMemo(() => childForksFromMessages(messages), [messages]);
+  const baseChildrenCacheRef = useRef<ForkEntry[]>([]);
+  const baseChildren = useMemo(() => {
+    const next = childForksFromMessages(messages);
+    if (sameForkEntries(baseChildrenCacheRef.current, next)) {
+      return baseChildrenCacheRef.current;
+    }
+    baseChildrenCacheRef.current = next;
+    return next;
+  }, [messages]);
   useEffect(() => {
     if (baselineChannelRef.current !== channelId) {
       baselineChannelRef.current = channelId;
@@ -394,7 +424,7 @@ export function useForkLineage(options: UseForkLineageOptions): ForkUiState {
       ...(selfMetadata?.name ? { displayName: selfMetadata.name } : {}),
       ...(selfId ? { participantId: selfId } : {}),
     };
-  }, [rpc, selfId, selfMetadata]);
+  }, [rpc, selfId, selfMetadata?.type, selfMetadata?.name, selfMetadata?.handle]);
 
   const runFork = useCallback(
     async (opts: {
@@ -468,12 +498,12 @@ export function useForkLineage(options: UseForkLineageOptions): ForkUiState {
 
   const newFork = useCallback(async (): Promise<void> => {
     // Fork at the current head: the highest seq we have projected.
-    const headSeq = messages.reduce(
+    const headSeq = messagesRef.current.reduce(
       (max, m) => (m.seq !== undefined && m.seq > max ? m.seq : max),
       0
     );
     await runFork({ forkPointPubsubId: headSeq, reason: "fork" });
-  }, [runFork, messages]);
+  }, [runFork]);
 
   const currentLabel = useMemo(() => labelForProvenance(provenance), [provenance]);
 

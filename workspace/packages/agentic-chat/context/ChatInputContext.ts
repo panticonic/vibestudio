@@ -39,6 +39,8 @@ export function getMentionsFromInput(
 }
 
 export const ChatInputContext = createContext<ChatInputContextValue | null>(null);
+export type ChatInputActionsValue = Pick<ChatInputContextValue, "onInputChange" | "setReplyTo">;
+export const ChatInputActionsContext = createContext<ChatInputActionsValue | null>(null);
 
 /**
  * Access the chat input context. Must be used within a `<ChatProvider>`.
@@ -50,4 +52,16 @@ export function useChatInputContext(): ChatInputContextValue {
     throw new Error("useChatInputContext must be used within a <ChatProvider>");
   }
   return ctx;
+}
+
+export function useChatInputActions(): ChatInputActionsValue {
+  const ctx = useContext(ChatInputActionsContext);
+  if (!ctx) {
+    throw new Error("useChatInputActions must be used within a <ChatProvider>");
+  }
+  return ctx;
+}
+
+export function useOptionalChatInputActions(): ChatInputActionsValue | null {
+  return useContext(ChatInputActionsContext);
 }

@@ -18,7 +18,7 @@ import {
 } from "@workspace/agentic-core";
 import { isModelUsable } from "@workspace/model-catalog/catalog";
 import { useIsMobile, useTouchDevice, useViewportHeight } from "@workspace/react/responsive";
-import { useChatContext } from "../context/ChatContext";
+import { useChatComposerRuntime } from "../context/ChatContext";
 import { getMentionsFromInput, useChatInputContext } from "../context/ChatInputContext";
 import { ImageInput, getAttachmentInputsFromPendingImages } from "./ImageInput";
 import { MentionAutocomplete } from "./MentionAutocomplete";
@@ -100,7 +100,7 @@ export function ChatInput() {
     onReplaceAgent,
     onCallMethodResult,
     chat,
-  } = useChatContext();
+  } = useChatComposerRuntime();
   const {
     input,
     pendingImages,

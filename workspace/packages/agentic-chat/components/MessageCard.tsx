@@ -1,10 +1,9 @@
-import React, { useCallback, useContext, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   Badge,
   Box,
   Button,
   Card,
-  Code,
   Dialog,
   DropdownMenu,
   Flex,
@@ -24,8 +23,8 @@ import { CONTENT_TYPE_INLINE_UI, isClientParticipantType } from "@workspace/pubs
 import { LOCAL_FALLBACK_MODEL_REF } from "@workspace/model-catalog/catalog";
 import type { AgentSubscriptionConfig } from "@workspace/agentic-core";
 import type { Participant } from "@workspace/pubsub";
-import { useOptionalChatContext } from "../context/ChatContext";
-import { ChatInputContext } from "../context/ChatInputContext";
+import { useOptionalChatMessageActions } from "../context/ChatContext";
+import { useOptionalChatInputActions } from "../context/ChatInputContext";
 import { TypingIndicator } from "./TypingIndicator";
 import { MessageContent } from "./MessageContent";
 import { ImageGallery } from "./ImageGallery";
@@ -225,8 +224,8 @@ export const MessageCard = React.memo(function MessageCard({
     undefined
   );
   const [longContentExpanded, setLongContentExpanded] = useState(false);
-  const inputContext = useContext(ChatInputContext);
-  const chatContext = useOptionalChatContext();
+  const inputActions = useOptionalChatInputActions();
+  const messageActions = useOptionalChatMessageActions();
   const callMethod = chatCallMethod(chat);
   const sendFromChat = chatSend(chat);
   const providerLevelModelFailure =
@@ -245,12 +244,12 @@ export const MessageCard = React.memo(function MessageCard({
     providerLevelModelFailure &&
     currentAgentModelKnown &&
     !currentAgentModelIsLocal &&
-    Boolean(callMethod && (inputContext || sendFromChat));
+    Boolean(callMethod && (inputActions || sendFromChat));
   const canStartCleanLocalChat =
     localContextOverflowFailure &&
     currentAgentModelKnown &&
     currentAgentModelIsLocal &&
-    Boolean(chatContext?.onNewConversation && callMethod);
+    Boolean(messageActions?.onNewConversation && callMethod);
 
   useEffect(() => {
     if (!shouldInspectCurrentAgentModel || !callMethod) {
@@ -293,18 +292,18 @@ export const MessageCard = React.memo(function MessageCard({
       if (sendFromChat) {
         await sendFromChat("retry", { tier: "primary" });
         setRetryLocalState("sent");
-      } else if (inputContext) {
-        inputContext.onInputChange("retry");
+      } else if (inputActions) {
+        inputActions.onInputChange("retry");
         setRetryLocalState("ready");
       }
     } catch (err) {
       console.warn("[MessageCard] Retry with local model failed:", err);
       setRetryLocalState("failed");
     }
-  }, [callMethod, currentAgentModelRef, inputContext, msg.senderId, selfId, sendFromChat]);
+  }, [callMethod, currentAgentModelRef, inputActions, msg.senderId, selfId, sendFromChat]);
 
   const handleStartCleanLocalChat = useCallback(async () => {
-    const onNewConversation = chatContext?.onNewConversation;
+    const onNewConversation = messageActions?.onNewConversation;
     if (!onNewConversation || !callMethod) return;
     setCleanStartState("starting");
     try {
@@ -318,7 +317,7 @@ export const MessageCard = React.memo(function MessageCard({
       console.warn("[MessageCard] Clean local chat launch failed:", err);
       setCleanStartState("failed");
     }
-  }, [callMethod, chatContext, currentAgentModelRef, msg.senderId]);
+  }, [callMethod, currentAgentModelRef, messageActions?.onNewConversation, msg.senderId]);
 
   const handleScheduleResumeAtReset = useCallback(async () => {
     const diagnostic = msg.diagnostic;
@@ -344,8 +343,8 @@ export const MessageCard = React.memo(function MessageCard({
   // Fork/edit affordances read fork state + the outbox editor from context.
   // Read optionally so the card still renders provider-less (tests, standalone
   // transcript views); the affordances simply stay hidden without a provider.
-  const forkState = chatContext?.forkState;
-  const editPendingMessage = chatContext?.editPendingMessage;
+  const forkState = messageActions?.forkState;
+  const editPendingMessage = messageActions?.editPendingMessage;
   // Edit dialog: "outbox" edits the unread message in place; "fork" seeds an
   // edit-fork (own read messages) or a steer-fork (agent messages).
   const [editMode, setEditMode] = useState<null | "outbox" | "fork">(null);
@@ -962,7 +961,7 @@ export const MessageCard = React.memo(function MessageCard({
 
 /** Inline "conversation forked" annotation row + a Switch affordance. */
 function ForkRow({ fork }: { fork: NonNullable<ChatMessage["fork"]> }) {
-  const forkState = useOptionalChatContext()?.forkState;
+  const forkState = useOptionalChatMessageActions()?.forkState;
   if (fork.archived) return null;
   const actorName = fork.actor.displayName ?? fork.actor.id;
   return (

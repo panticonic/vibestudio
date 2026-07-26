@@ -42,7 +42,7 @@ vi.mock("../hooks/useStickToBottom.js", () => ({
 
 import type { ChatMessage, InvocationCardPayload } from "@workspace/agentic-core";
 import { LOCAL_FALLBACK_MODEL_REF } from "@workspace/model-catalog/catalog";
-import { ChatContext } from "../context/ChatContext.js";
+import { ChatMessageActionsContext } from "../context/ChatContext.js";
 import { MessageList } from "./MessageList.js";
 import { SubagentRunCard } from "./SubagentRunCard.js";
 
@@ -408,7 +408,7 @@ describe("MessageList typing indicators (roster-based)", () => {
 
     render(
       React.createElement(
-        ChatContext.Provider,
+        ChatMessageActionsContext.Provider,
         { value: { onNewConversation } as never },
         React.createElement(MessageList, {
           messages: [

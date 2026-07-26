@@ -6,8 +6,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { Theme } from "@radix-ui/themes";
 import { makeTestCatalogEntry } from "@workspace/model-catalog/testing";
 import { ChatInput } from "./ChatInput";
-import { ChatContext } from "../context/ChatContext";
-import { ChatInputContext } from "../context/ChatInputContext";
+import { ChatProvider } from "../context/ChatProvider";
 import type {
   ChatContextValue,
   ChatInputContextValue,
@@ -90,11 +89,9 @@ function renderInput(
 
   render(
     <Theme>
-      <ChatContext.Provider value={ctx}>
-        <ChatInputContext.Provider value={inputCtx}>
-          <ChatInput />
-        </ChatInputContext.Provider>
-      </ChatContext.Provider>
+      <ChatProvider value={ctx} inputValue={inputCtx}>
+        <ChatInput />
+      </ChatProvider>
     </Theme>
   );
   return { onSendMessage, onInputChange, flushOutboxAndInterrupt, undoLastAction };

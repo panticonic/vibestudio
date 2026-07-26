@@ -7,7 +7,7 @@ import type {
   SubagentRunState,
   ToolExecutionState,
 } from "@workspace/agentic-core";
-import { useOptionalChatContext } from "../context/ChatContext";
+import { useOptionalChatMessageActions } from "../context/ChatContext";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { MessageContent } from "./MessageContent";
 
@@ -258,7 +258,7 @@ function TimelineItem({
 }
 
 export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
-  const forkState = useOptionalChatContext()?.forkState;
+  const forkState = useOptionalChatMessageActions()?.forkState;
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [idsOpen, setIdsOpen] = useState(false);
   const invocation = msg.invocation;
