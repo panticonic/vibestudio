@@ -64,6 +64,8 @@ export interface HubProcessManagerConfig {
   logLevel?: string;
   centralData: CentralDataManager;
   onCrash: (code: number | null) => void;
+  /** Desktop-only confirmation before reusing a live detached hub. */
+  confirmExistingHub?: (lease: HubProcessLeaseRecord) => Promise<"attach" | "replace" | "cancel">;
 }
 
 export interface HubWorkspaceTarget {
@@ -212,7 +214,22 @@ export class HubProcessManager {
 
   async attachOrSpawn(): Promise<HubWorkspaceTarget> {
     const existing = this.liveLease();
-    let processTarget = existing ? await this.tryAttach(existing) : null;
+    let processTarget: HubProcessTarget | null = null;
+    if (existing) {
+      const decision = this.config.confirmExistingHub
+        ? await this.config.confirmExistingHub(existing)
+        : "attach";
+      if (decision === "cancel") throw new Error("Local server connection cancelled");
+      if (decision === "replace") {
+        const attached = await this.tryAttach(existing);
+        if (attached) {
+          await this.terminateVerifiedHub(existing.pid);
+          this.config.centralData.releaseHubProcessLease(existing.ownerBootId);
+        }
+      } else {
+        processTarget = await this.tryAttach(existing);
+      }
+    }
     if (!processTarget) {
       processTarget = await this.spawnDetached();
     }
@@ -608,9 +625,12 @@ export class HubProcessManager {
   async stop(): Promise<void> {
     this.isStopping = true;
     this.current = null;
-    this.currentHubPid = null;
     const lease = this.liveLease();
-    if (lease) await this.waitForExit(lease.pid, false);
+    const pid = this.currentHubPid ?? this.liveLease()?.pid ?? null;
+    this.currentHubPid = null;
+    if (pid === null) return;
+    await this.terminateVerifiedHub(pid);
+    if (lease) this.config.centralData.releaseHubProcessLease(lease.ownerBootId);
   }
 
   /**
@@ -620,9 +640,23 @@ export class HubProcessManager {
   async stopTree(): Promise<ProcessTreeTerminationResult> {
     this.isStopping = true;
     this.current = null;
-    const pid = this.currentHubPid ?? this.liveLease()?.pid ?? null;
+    const lease = this.liveLease();
+    const pid = this.currentHubPid ?? lease?.pid ?? null;
     this.currentHubPid = null;
     if (pid === null) return { gone: true, escalated: false };
+    if (!this.verifiedHubPids.has(pid)) {
+      throw new Error(`Refusing to terminate unverified hub PID ${pid}`);
+    }
+    if (recordedPidIsHub(pid) === false) {
+      throw new Error(`Refusing to terminate PID ${pid}; it is no longer the verified hub`);
+    }
+    const result = await this.terminateVerifiedHub(pid);
+    if (lease) this.config.centralData.releaseHubProcessLease(lease.ownerBootId);
+    this.verifiedHubPids.delete(pid);
+    return result;
+  }
+
+  private async terminateVerifiedHub(pid: number): Promise<ProcessTreeTerminationResult> {
     if (!this.verifiedHubPids.has(pid)) {
       throw new Error(`Refusing to terminate unverified hub PID ${pid}`);
     }
@@ -636,7 +670,6 @@ export class HubProcessManager {
     if (!result.gone) {
       throw new Error(result.detail ?? `Hub process tree ${pid} survived termination`);
     }
-    this.verifiedHubPids.delete(pid);
     return result;
   }
 

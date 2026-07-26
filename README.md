@@ -112,12 +112,17 @@ pnpm server:live --help
 See [docs/cli.md](docs/cli.md). (The published npm packages above replace the old
 `pnpm link --global` flow; `pnpm dev` / `pnpm cli` remain the dev workflow.)
 
-`pnpm dev` and `pnpm server:live` share one developer-instance supervisor and
-both default to the persistent `source` instance. This is the only instance
-whose protected workspace publications are mirrored back into the source
-checkout. Add `--instance NAME` for another persistent isolated instance, or
-`--ephemeral --instance NAME` for a disposable parallel test hub. Named and
-ephemeral instances never write their workspace publications into the checkout.
+`pnpm dev` opens a fresh, hub-owned ephemeral development workspace. If another
+local hub is still running, the desktop asks whether to start fresh, connect to
+it, or cancel; it never silently reuses one. Closing the app and choosing
+**Stop server** terminates the hub's complete process tree, including workspace
+children and extension hosts.
+
+`pnpm server:live` remains the explicit persistent `source` instance for CLI
+and long-lived server work. Add `--instance NAME` for another persistent
+isolated instance, or `--ephemeral --instance NAME` for a disposable parallel
+test hub. Named and ephemeral instances never write their workspace
+publications into the checkout.
 Profile-owned model configuration and encrypted provider credentials remain
 shared. The launcher prints the exact CLI prefix:
 

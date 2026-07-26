@@ -2090,6 +2090,23 @@ app.on("ready", async () => {
     const establish = (mode: ConnectedStartupMode | null) =>
       establishServerSession({
         mode,
+        confirmExistingLocalHub: async (lease) => {
+          const { response } = await dialog.showMessageBox({
+            type: "question",
+            buttons: ["Start fresh", "Connect to existing", "Cancel"],
+            defaultId: mode?.isEphemeral ? 0 : 1,
+            cancelId: 2,
+            title: "A Vibestudio server is already running",
+            message: "Choose which local server this session should use.",
+            detail:
+              `A detached Vibestudio hub is already running (PID ${lease.pid}, ` +
+              `port ${lease.gatewayPort}). Connecting to it may reuse its workspace ` +
+              "and loaded builds. Start fresh to terminate its complete process tree.",
+          });
+          if (response === 0) return "replace";
+          if (response === 1) return "attach";
+          return "cancel";
+        },
         onStartupProgress: (progress) => {
           bootstrapStartupProgress = progress;
           pushBootstrapConnectionState();

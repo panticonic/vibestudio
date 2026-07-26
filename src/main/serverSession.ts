@@ -23,7 +23,7 @@ import { saveDeviceCredential, type StoredRemote } from "./services/deviceCreden
 import type { PanelHttpServerLike } from "@vibestudio/shared/panelInterfaces";
 import type { ServerInfo } from "./serverInfo.js";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
-import type { CentralDataManager } from "@vibestudio/shared/centralData";
+import type { CentralDataManager, HubProcessLeaseRecord } from "@vibestudio/shared/centralData";
 import type { ConnectedStartupMode } from "./startupMode.js";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
@@ -211,6 +211,9 @@ export async function establishServerSession(args: {
    */
   storedRemote?: StoredRemote;
   centralData: CentralDataManager;
+  confirmExistingLocalHub?: (
+    lease: HubProcessLeaseRecord
+  ) => Promise<"attach" | "replace" | "cancel">;
   /** Structured startup progress for the bootstrap timeline. */
   onStartupProgress?: (progress: StartupConnectionProgress) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
@@ -245,6 +248,7 @@ export async function establishServerSession(args: {
     appVersion: app.getVersion(),
     buildId: getServerProcessBuildId(),
     centralData: args.centralData,
+    confirmExistingHub: args.confirmExistingLocalHub,
     onCrash: (code) => {
       console.error(`[App] Local hub died and could not be recovered (code ${code ?? "?"})`);
       relaunchApp({ exitCode: 1 });
