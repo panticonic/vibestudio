@@ -15,6 +15,7 @@ import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { ConnectionBar } from "./ConnectionBar";
 import { AppBar } from "./AppBar";
 import { LoadedPanelWebView } from "./LoadedPanelWebView";
+import { syncManagedWebViewThemes } from "./webViewThemes";
 import { ApprovalSheet } from "./ApprovalSheet";
 import { VibestudioLogo } from "./VibestudioLogo";
 import { useAppLifecycle } from "../hooks/useAppLifecycle";
@@ -139,6 +140,8 @@ export function MainScreen() {
   const setPanelForest = useSetAtom(panelForestAtom);
   const setActivePanelId = useSetAtom(activePanelIdAtom);
   const colorScheme = useAtomValue(colorSchemeAtom);
+  const currentThemeModeRef = useRef<"light" | "dark">(colorScheme === "light" ? "light" : "dark");
+  currentThemeModeRef.current = colorScheme === "light" ? "light" : "dark";
   const activePanelId = useAtomValue(activePanelIdAtom);
   const activePanelTitle = useAtomValue(activePanelTitleAtom);
   const activePanelParentId = useAtomValue(activePanelParentIdAtom);
@@ -183,6 +186,7 @@ export function MainScreen() {
   const webViewNavigationRef = useRef<Record<string, WebViewNavigation>>({});
   const webViewStackRef = useRef<WebViewEntry[]>([]);
   const webViewRefsMap = useRef<Map<string, PanelWebViewHandle | null>>(new Map());
+  const webViewThemeSignaturesRef = useRef<Map<string, string>>(new Map());
   const pendingPanelLoads = useRef<Set<string>>(new Set());
   const pendingHistoryIntentByUrl = useRef<Map<string, BrowserNavigationIntent>>(new Map());
   const pendingHistoryIntentByPanel = useRef<Map<string, BrowserNavigationIntent>>(new Map());
@@ -277,6 +281,7 @@ export function MainScreen() {
   const handleWebViewUnmount = useCallback(
     (panelId: string) => {
       webViewRefsMap.current.delete(panelId);
+      webViewThemeSignaturesRef.current.delete(panelId);
       if (shellClient) {
         void shellClient.panels.unload(panelId).catch(() => {});
       }
@@ -284,8 +289,21 @@ export function MainScreen() {
     [shellClient]
   );
   const handleWebViewRef = useCallback((panelId: string, handle: PanelWebViewHandle | null) => {
-    if (handle) webViewRefsMap.current.set(panelId, handle);
-    else webViewRefsMap.current.delete(panelId);
+    if (!handle) {
+      webViewRefsMap.current.delete(panelId);
+      webViewThemeSignaturesRef.current.delete(panelId);
+      return;
+    }
+    webViewRefsMap.current.set(panelId, handle);
+    const existingEntry = webViewStackRef.current.find((entry) => entry.panelId === panelId);
+    if (existingEntry) {
+      syncManagedWebViewThemes(
+        [existingEntry],
+        webViewRefsMap.current,
+        webViewThemeSignaturesRef.current,
+        currentThemeModeRef.current
+      );
+    }
   }, []);
   const hostConfig: HostConfig | null = useMemo(() => {
     if (!shellClient) return null;
@@ -949,10 +967,12 @@ export function MainScreen() {
   }, [shellClient, pinsHydrated, buildStackPredicates]);
   useEffect(() => {
     const mode = colorScheme === "light" ? "light" : "dark";
-    for (const entry of webViewStack) {
-      if (!entry.managed) continue;
-      webViewRefsMap.current.get(entry.panelId)?.injectTheme(mode);
-    }
+    syncManagedWebViewThemes(
+      webViewStack,
+      webViewRefsMap.current,
+      webViewThemeSignaturesRef.current,
+      mode
+    );
   }, [colorScheme, webViewStack]);
   useEffect(() => {
     if (!activePanelId) return;

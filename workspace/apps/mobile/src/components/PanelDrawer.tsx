@@ -12,7 +12,7 @@
  * Long-press opens the themed action sheet with per-command descriptions.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -24,6 +24,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
+import { useDrawerStatus } from "@react-navigation/drawer";
 import { useAtomValue, useSetAtom } from "jotai";
 import { panelForestAtom, shellClientAtom } from "../state/shellClientAtom";
 import { themeColorsAtom } from "../state/themeAtoms";
@@ -42,9 +43,9 @@ import { copyToClipboard, openExternalUrl } from "../services/nativeCapabilities
 import {
   buildMobilePanelForestRows,
   mobilePanelRoots,
-  type MobileOwnerProfile,
   type MobilePanelForestRow,
 } from "../shellCore/panelForest";
+import { useVisibleAccountProfiles } from "../hooks/useVisibleAccountProfiles";
 import { hairline, radius, spacing, type } from "../design/tokens";
 import {
   Archive,
@@ -96,37 +97,17 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
   const pinnedPanelIds = useAtomValue(pinnedPanelIdsAtom);
   const setPinnedPanelIds = useSetAtom(pinnedPanelIdsAtom);
   const navigation = useNavigation();
+  const drawerVisible = useDrawerStatus() === "open";
   const insets = useSafeAreaInsets();
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
-  const [ownerProfiles, setOwnerProfiles] = useState<Map<string, MobileOwnerProfile>>(new Map());
 
   const panelRoots = useMemo(() => mobilePanelRoots(panelForest.forest), [panelForest]);
   const ownerIds = useMemo(
     () => panelForest.forest.map((group) => group.owner).filter(Boolean),
     [panelForest]
   );
-  useEffect(() => {
-    if (!shellClient) {
-      setOwnerProfiles(new Map());
-      return;
-    }
-    let cancelled = false;
-    const refresh = async () => {
-      try {
-        const profiles = await shellClient.resolveAccountProfiles(ownerIds);
-        if (!cancelled) setOwnerProfiles(new Map(Object.entries(profiles)));
-      } catch {
-        // Keep the last successful labels during a transient reconnect.
-      }
-    };
-    void refresh();
-    const timer = setInterval(() => void refresh(), 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [ownerIds, shellClient]);
+  const ownerProfiles = useVisibleAccountProfiles(shellClient, ownerIds, drawerVisible);
 
   // Build the collapsed set from the shell client's registry
   const collapsedIds = useMemo(() => {
@@ -456,7 +437,10 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       <View
         style={[
           styles.footer,
-          { borderTopColor: colors.borderSubtle, paddingBottom: Math.max(insets.bottom, spacing.md) },
+          {
+            borderTopColor: colors.borderSubtle,
+            paddingBottom: Math.max(insets.bottom, spacing.md),
+          },
         ]}
       >
         <Pressable

@@ -249,6 +249,34 @@ export interface MessageListProps {
   emptyState?: React.ReactNode;
 }
 
+interface GroupedMessageRowProps {
+  item: GroupedItem;
+  index: number;
+  copied: boolean;
+  renderItem: (index: number, copied: boolean) => React.ReactNode;
+}
+
+/**
+ * Dynamic-height rows stay in normal document flow for scroll anchoring, but
+ * unchanged rows no longer rerender when a streaming tail message is replaced.
+ */
+const GroupedMessageRow = React.memo(function GroupedMessageRow({
+  item,
+  index,
+  copied,
+  renderItem,
+}: GroupedMessageRowProps) {
+  return (
+    <div
+      className="message-item"
+      data-scroll-anchor-id={groupedItemAnchorId(item)}
+      key={item.type === "inline-group" ? item.key : item.msg.id || `msg-${index}`}
+    >
+      {renderItem(index, copied)}
+    </div>
+  );
+});
+
 /**
  * MessageList — the core message rendering area, wrapped in React.memo.
  *
@@ -568,6 +596,8 @@ export const MessageList = React.memo(function MessageList({
     for (const message of messages) byId.set(message.id, message);
     return byId;
   }, [messages]);
+  const messagesByIdRef = useRef(messagesById);
+  messagesByIdRef.current = messagesById;
 
   const hasDurableTypingMessages = messages.some((msg) => msg.contentType === "typing");
   const activeTypingItems = useMemo(
@@ -575,19 +605,16 @@ export const MessageList = React.memo(function MessageList({
     [participants, selfId, hasDurableTypingMessages]
   );
 
-  // Refs for stable renderItem callback — avoids recreating the closure on every
-  // groupedItems / copiedMessageId change, which would force every visible
-  // virtual item to re-render.
+  // Ref for the stable renderItem callback — avoids recreating its closure when
+  // grouped items change, which would force every visible row to re-render.
   const groupedItemsRef = useRef(visibleGroupedItems);
   groupedItemsRef.current = visibleGroupedItems;
-  const copiedMessageIdRef = useRef(copiedMessageId);
-  copiedMessageIdRef.current = copiedMessageId;
 
   // Render a single grouped item by index.
   // Each item is wrapped in its own flex column container so that
   // MessageCard's alignSelf works regardless of the parent's display mode.
   const renderItem = useCallback(
-    (index: number) => {
+    (index: number, copied: boolean) => {
       const item = groupedItemsRef.current[index];
       if (!item) return null;
 
@@ -625,7 +652,7 @@ export const MessageList = React.memo(function MessageList({
           participantId
         );
       });
-      const repliedTo = msg.replyTo ? messagesById.get(msg.replyTo) : undefined;
+      const repliedTo = msg.replyTo ? messagesByIdRef.current.get(msg.replyTo) : undefined;
       const replySender = repliedTo ? getSenderInfo(repliedTo.senderId, repliedTo) : null;
       const replyContext =
         repliedTo && replySender
@@ -670,7 +697,7 @@ export const MessageList = React.memo(function MessageList({
             mentionLabels={mentionLabels}
             replyContext={replyContext}
             isStreaming={isStreaming}
-            isCopied={copiedMessageIdRef.current === msg.id}
+            isCopied={copied}
             inlineUiComponents={inlineUiComponents}
             messageTypeComponents={messageTypeComponents}
             chat={chat}
@@ -694,7 +721,6 @@ export const MessageList = React.memo(function MessageList({
       browserHandoffCaller,
       mdxActions,
       allParticipants,
-      messagesById,
       onReply,
       handleInterruptMessage,
       handleCopyMessage,
@@ -768,13 +794,13 @@ export const MessageList = React.memo(function MessageList({
           ) : (
             <Flex className="message-list-stack" direction="column" gap="1">
               {visibleGroupedItems.map((item, index) => (
-                <div
-                  className="message-item"
-                  data-scroll-anchor-id={groupedItemAnchorId(item)}
+                <GroupedMessageRow
                   key={item.type === "inline-group" ? item.key : item.msg.id || `msg-${index}`}
-                >
-                  {renderItem(index)}
-                </div>
+                  item={item}
+                  index={index}
+                  copied={item.type === "chat-message" && copiedMessageId === item.msg.id}
+                  renderItem={renderItem}
+                />
               ))}
               {activeTypingItems.length > 0 && (
                 <div className="message-item" key="active-typing">

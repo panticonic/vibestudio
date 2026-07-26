@@ -65,7 +65,11 @@ vi.mock("../hooks/useStickToBottom.js", () => ({
     isAtBottom: hookState.isAtBottom,
     // Live getter so tests that flip hookState.isAtBottom between renders are
     // reflected synchronously, mirroring the real hook's ref.
-    isAtBottomRef: { get current() { return hookState.isAtBottom; } },
+    isAtBottomRef: {
+      get current() {
+        return hookState.isAtBottom;
+      },
+    },
   }),
 }));
 
@@ -107,7 +111,7 @@ describe("MessageList scroll behavior", () => {
         hasMoreHistory={true}
         loadingMore={false}
         onLoadEarlierMessages={onLoadEarlierMessages}
-      />,
+      />
     );
 
     await waitFor(() => expect(onLoadEarlierMessages).toHaveBeenCalledTimes(1));
@@ -121,7 +125,7 @@ describe("MessageList scroll behavior", () => {
         hasMoreHistory={true}
         loadingMore={false}
         onLoadEarlierMessages={onLoadEarlierMessages}
-      />,
+      />
     );
 
     expect(onLoadEarlierMessages).toHaveBeenCalledTimes(1);
@@ -138,7 +142,7 @@ describe("MessageList scroll behavior", () => {
         participants={{}}
         selfId={null}
         allParticipants={{}}
-      />,
+      />
     );
 
     hookState.scrollElement.scrollHeight = 550;
@@ -149,7 +153,7 @@ describe("MessageList scroll behavior", () => {
         participants={{}}
         selfId={null}
         allParticipants={{}}
-      />,
+      />
     );
 
     expect(hookState.scrollElement.scrollTop).toBe(270);
@@ -165,7 +169,7 @@ describe("MessageList scroll behavior", () => {
         participants={{}}
         selfId={null}
         allParticipants={{}}
-      />,
+      />
     );
 
     rerender(
@@ -174,7 +178,7 @@ describe("MessageList scroll behavior", () => {
         participants={{}}
         selfId={null}
         allParticipants={{}}
-      />,
+      />
     );
 
     fireEvent.click(screen.getByText("New messages"));
@@ -192,7 +196,7 @@ describe("MessageList scroll behavior", () => {
         participants={{}}
         selfId={null}
         allParticipants={{}}
-      />,
+      />
     );
 
     rerender(
@@ -201,10 +205,40 @@ describe("MessageList scroll behavior", () => {
         participants={{}}
         selfId={null}
         allParticipants={{}}
-      />,
+      />
     );
 
     expect(screen.queryByText("New messages")).toBeNull();
+  });
+
+  it("rerenders only the changed row during a streaming tail update", () => {
+    const participants = {};
+    const first = makeMessage("m1");
+    const streaming = makeMessage("m2", { complete: false, content: "a" });
+    const renderMessage = vi.fn((message: ChatMessage) => <span>{message.content}</span>);
+    const { rerender } = render(
+      <MessageList
+        messages={[first, streaming]}
+        participants={participants}
+        selfId={null}
+        allParticipants={participants}
+        renderMessage={renderMessage}
+      />
+    );
+    expect(renderMessage).toHaveBeenCalledTimes(2);
+
+    rerender(
+      <MessageList
+        messages={[first, { ...streaming, content: "ab" }]}
+        participants={participants}
+        selfId={null}
+        allParticipants={participants}
+        renderMessage={renderMessage}
+      />
+    );
+
+    expect(renderMessage).toHaveBeenCalledTimes(3);
+    expect(screen.getByText("ab")).toBeTruthy();
   });
 
   it("shows the new content indicator when an item below the viewport updates", () => {
@@ -223,7 +257,7 @@ describe("MessageList scroll behavior", () => {
         participants={{}}
         selfId={null}
         allParticipants={{}}
-      />,
+      />
     );
 
     rerender(
@@ -232,7 +266,7 @@ describe("MessageList scroll behavior", () => {
         participants={{}}
         selfId={null}
         allParticipants={{}}
-      />,
+      />
     );
 
     expect(screen.getByText("New messages")).toBeTruthy();
@@ -254,7 +288,7 @@ describe("MessageList scroll behavior", () => {
         participants={{}}
         selfId={null}
         allParticipants={{}}
-      />,
+      />
     );
 
     hookState.scrollElement.scrollHeight = 350;
@@ -266,11 +300,15 @@ describe("MessageList scroll behavior", () => {
 
     rerender(
       <MessageList
-        messages={[makeMessage("m1", { content: "expanded" }), makeMessage("m2"), makeMessage("m3")]}
+        messages={[
+          makeMessage("m1", { content: "expanded" }),
+          makeMessage("m2"),
+          makeMessage("m3"),
+        ]}
         participants={{}}
         selfId={null}
         allParticipants={{}}
-      />,
+      />
     );
 
     expect(hookState.scrollElement.scrollTop).toBe(200);
@@ -293,7 +331,7 @@ describe("MessageList scroll behavior", () => {
         participants={{}}
         selfId={null}
         allParticipants={{}}
-      />,
+      />
     );
 
     hookState.setLayoutItems([
@@ -308,7 +346,7 @@ describe("MessageList scroll behavior", () => {
         participants={{}}
         selfId={null}
         allParticipants={{}}
-      />,
+      />
     );
 
     expect(hookState.scrollElement.scrollTop).toBe(250);
