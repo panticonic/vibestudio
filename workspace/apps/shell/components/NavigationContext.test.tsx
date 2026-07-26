@@ -4,7 +4,13 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { NavigationProvider, useNavigation } from "./NavigationContext";
+import {
+  NavigationProvider,
+  useNavigation,
+  useNavigationActions,
+  useNavigationLazy,
+  useNavigationLayout,
+} from "./NavigationContext";
 
 function ModeProbe() {
   const { mode } = useNavigation();
@@ -26,6 +32,42 @@ function NavigationProbe({ handler }: { handler: ReturnType<typeof vi.fn> }) {
       }
     >
       Navigate
+    </button>
+  );
+}
+
+function LayoutRenderProbe({ rendered }: { rendered: ReturnType<typeof vi.fn> }) {
+  rendered();
+  const { mode } = useNavigationLayout();
+  return <span>{mode}</span>;
+}
+
+function ActionsRenderProbe({ rendered }: { rendered: ReturnType<typeof vi.fn> }) {
+  rendered();
+  useNavigationActions();
+  return null;
+}
+
+function LazyRenderProbe({ rendered }: { rendered: ReturnType<typeof vi.fn> }) {
+  rendered();
+  useNavigationLazy();
+  return null;
+}
+
+function LazyNavigationWriter() {
+  const { setLazyTitleNavigation } = useNavigationActions();
+  return (
+    <button
+      onClick={() =>
+        setLazyTitleNavigation({
+          ancestors: [],
+          currentSiblings: [],
+          currentId: "panel-1",
+          currentTitle: "Panel 1",
+        })
+      }
+    >
+      Publish lazy navigation
     </button>
   );
 }
@@ -93,5 +135,28 @@ describe("NavigationProvider", () => {
       intentId: "create:panel-child",
       target: "focused-pane",
     });
+  });
+
+  it("does not rerender layout consumers when only lazy breadcrumb data changes", () => {
+    const layoutRendered = vi.fn();
+    const actionsRendered = vi.fn();
+    const lazyRendered = vi.fn();
+    render(
+      <NavigationProvider>
+        <LayoutRenderProbe rendered={layoutRendered} />
+        <ActionsRenderProbe rendered={actionsRendered} />
+        <LazyRenderProbe rendered={lazyRendered} />
+        <LazyNavigationWriter />
+      </NavigationProvider>
+    );
+    expect(layoutRendered).toHaveBeenCalledTimes(1);
+    expect(actionsRendered).toHaveBeenCalledTimes(1);
+    expect(lazyRendered).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Publish lazy navigation" }));
+
+    expect(layoutRendered).toHaveBeenCalledTimes(1);
+    expect(actionsRendered).toHaveBeenCalledTimes(1);
+    expect(lazyRendered).toHaveBeenCalledTimes(2);
   });
 });

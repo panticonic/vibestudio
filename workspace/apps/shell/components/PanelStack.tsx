@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { memo, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useSetAtom } from "jotai";
 import { Cross2Icon } from "@radix-ui/react-icons";
 import { Box, Button, Card, Flex, IconButton, Spinner, Text, TextField } from "@radix-ui/themes";
@@ -45,7 +45,7 @@ import {
   workspaceChooserDialogOpenAtom,
 } from "../state/appModeAtoms";
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
-import { useNavigation } from "./NavigationContext";
+import { useNavigationActions, useNavigationLayout } from "./NavigationContext";
 import type { NavigateToPanelId } from "./NavigationContext";
 import { LazyPanelTreeSidebar } from "./LazyPanelTreeSidebar";
 import { useShellEvent } from "../shell/useShellEvent";
@@ -116,7 +116,7 @@ function captureHostThemeCss(): string {
   return `${cssVariables}\n${baseline}`;
 }
 
-export function PanelStack({
+export const PanelStack = memo(function PanelStack({
   onTitleChange,
   onChromeStateChange,
   hostTheme,
@@ -127,14 +127,14 @@ export function PanelStack({
   onPaneChromeStateChange,
   onRegisterPaneChromeCommand,
 }: PanelStackProps) {
+  const { mode: navigationMode } = useNavigationLayout();
   const {
-    mode: navigationMode,
     setMode,
     setLazyTitleNavigation,
     setLazyStatusNavigation,
     registerNavigateToId,
     setAddressBarVisible,
-  } = useNavigation();
+  } = useNavigationActions();
 
   const setPinnedPanelIds = useSetAtom(pinnedPanelIdsAtom);
   const bumpPinMutationSeq = useSetAtom(pinMutationSeqAtom);
@@ -1560,4 +1560,4 @@ export function PanelStack({
       </Flex>
     </Flex>
   );
-}
+});

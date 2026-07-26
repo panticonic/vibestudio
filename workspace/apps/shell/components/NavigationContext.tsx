@@ -24,21 +24,32 @@ export interface PanelNavigationOptions {
 
 export type NavigateToPanelId = (panelId: string, options?: PanelNavigationOptions) => void;
 
-interface NavigationContextValue {
+export interface NavigationLayoutValue {
   mode: NavigationMode;
-  setMode: (mode: NavigationMode) => void;
   addressBarVisible: boolean;
-  setAddressBarVisible: (visible: boolean) => void;
-  // ID-based lazy navigation
+}
+
+export interface NavigationLazyValue {
   lazyTitleNavigation: LazyTitleNavigationData | null;
-  setLazyTitleNavigation: (data: LazyTitleNavigationData | null) => void;
   lazyStatusNavigation: LazyStatusNavigationData | null;
+}
+
+export interface NavigationActionsValue {
+  setMode: (mode: NavigationMode) => void;
+  setAddressBarVisible: (visible: boolean) => void;
+  setLazyTitleNavigation: (data: LazyTitleNavigationData | null) => void;
   setLazyStatusNavigation: (data: LazyStatusNavigationData | null) => void;
   navigateToId: NavigateToPanelId;
   registerNavigateToId: (fn: NavigateToPanelId) => void;
 }
 
-const NavigationContext = createContext<NavigationContextValue | null>(null);
+export type NavigationContextValue = NavigationLayoutValue &
+  NavigationLazyValue &
+  NavigationActionsValue;
+
+const NavigationLayoutContext = createContext<NavigationLayoutValue | null>(null);
+const NavigationLazyContext = createContext<NavigationLazyValue | null>(null);
+const NavigationActionsContext = createContext<NavigationActionsValue | null>(null);
 const SMALL_WINDOW_QUERY = "(max-width: 767px)";
 
 export function getDefaultNavigationMode(): NavigationMode {
@@ -49,12 +60,36 @@ export function getDefaultNavigationMode(): NavigationMode {
   return window.matchMedia(SMALL_WINDOW_QUERY).matches ? "stack" : "tree";
 }
 
-export function useNavigation(): NavigationContextValue {
-  const context = useContext(NavigationContext);
+export function useNavigationLayout(): NavigationLayoutValue {
+  const context = useContext(NavigationLayoutContext);
   if (!context) {
-    throw new Error("useNavigation must be used within a NavigationProvider");
+    throw new Error("useNavigationLayout must be used within a NavigationProvider");
   }
   return context;
+}
+
+export function useNavigationLazy(): NavigationLazyValue {
+  const context = useContext(NavigationLazyContext);
+  if (!context) {
+    throw new Error("useNavigationLazy must be used within a NavigationProvider");
+  }
+  return context;
+}
+
+export function useNavigationActions(): NavigationActionsValue {
+  const context = useContext(NavigationActionsContext);
+  if (!context) {
+    throw new Error("useNavigationActions must be used within a NavigationProvider");
+  }
+  return context;
+}
+
+export function useNavigation(): NavigationContextValue {
+  return {
+    ...useNavigationLayout(),
+    ...useNavigationLazy(),
+    ...useNavigationActions(),
+  };
 }
 
 interface NavigationProviderProps {
@@ -93,35 +128,48 @@ export function NavigationProvider({ children }: NavigationProviderProps) {
     navigateToIdFnRef.current = fn;
   }, []);
 
-  const value = useMemo<NavigationContextValue>(
+  const setPersistedAddressBarVisible = useCallback((visible: boolean) => {
+    setAddressBarVisible(visible);
+    try {
+      localStorage.setItem("address-bar-visible", visible ? "true" : "false");
+    } catch {
+      // Ignore storage failures.
+    }
+  }, []);
+
+  const layoutValue = useMemo<NavigationLayoutValue>(
     () => ({
       mode,
-      setMode,
       addressBarVisible,
-      setAddressBarVisible: (visible: boolean) => {
-        setAddressBarVisible(visible);
-        try {
-          localStorage.setItem("address-bar-visible", visible ? "true" : "false");
-        } catch {
-          // Ignore storage failures.
-        }
-      },
+    }),
+    [mode, addressBarVisible]
+  );
+  const lazyValue = useMemo<NavigationLazyValue>(
+    () => ({
       lazyTitleNavigation,
-      setLazyTitleNavigation,
       lazyStatusNavigation,
+    }),
+    [lazyTitleNavigation, lazyStatusNavigation]
+  );
+  const actionsValue = useMemo<NavigationActionsValue>(
+    () => ({
+      setMode,
+      setAddressBarVisible: setPersistedAddressBarVisible,
+      setLazyTitleNavigation,
       setLazyStatusNavigation,
       navigateToId,
       registerNavigateToId,
     }),
-    [
-      mode,
-      addressBarVisible,
-      lazyTitleNavigation,
-      lazyStatusNavigation,
-      navigateToId,
-      registerNavigateToId,
-    ]
+    [setPersistedAddressBarVisible, navigateToId, registerNavigateToId]
   );
 
-  return <NavigationContext.Provider value={value}>{children}</NavigationContext.Provider>;
+  return (
+    <NavigationActionsContext.Provider value={actionsValue}>
+      <NavigationLayoutContext.Provider value={layoutValue}>
+        <NavigationLazyContext.Provider value={lazyValue}>
+          {children}
+        </NavigationLazyContext.Provider>
+      </NavigationLayoutContext.Provider>
+    </NavigationActionsContext.Provider>
+  );
 }

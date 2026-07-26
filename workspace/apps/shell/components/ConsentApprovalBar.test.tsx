@@ -88,7 +88,7 @@ vi.mock("../state/themeAtoms", async () => {
 });
 
 vi.mock("./NavigationContext", () => ({
-  useNavigation: () => ({ navigateToId: shellClient.navigateToId }),
+  useNavigationActions: () => ({ navigateToId: shellClient.navigateToId }),
 }));
 
 import { ConsentApprovalBar } from "./ConsentApprovalBar";

@@ -29,7 +29,7 @@ import {
 import { useShellContentOverlay, type ContentOverlayBounds } from "../shell/useShellContentOverlay";
 import { useShellEvent } from "../shell/useShellEvent";
 import { effectiveThemeAtom, themeConfigAtom } from "../state/themeAtoms";
-import { useNavigation } from "./NavigationContext";
+import { useNavigationActions } from "./NavigationContext";
 import { ApprovalKindIcon } from "./ApprovalCard";
 import {
   diffReviewPayloadHashes,
@@ -90,7 +90,7 @@ export function ConsentApprovalBar() {
   blobResultsRef.current = blobResults;
   const inFlightBlobsRef = useRef<Set<string>>(new Set());
   const seenApprovalIdsRef = useRef<Set<string>>(new Set());
-  const { navigateToId } = useNavigation();
+  const { navigateToId } = useNavigationActions();
   const effectiveTheme = useAtomValue(effectiveThemeAtom);
   const themeConfig = useAtomValue(themeConfigAtom);
 

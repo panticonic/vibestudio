@@ -3,7 +3,7 @@ import { useAtomValue, useSetAtom } from "jotai";
 import { Box, Flex } from "@radix-ui/themes";
 
 import { effectiveThemeAtom, loadThemePreferenceAtom } from "../state/themeAtoms";
-import { NavigationProvider, useNavigation } from "./NavigationContext";
+import { NavigationProvider, useNavigationActions, useNavigationLayout } from "./NavigationContext";
 import { PanelTreeProvider, PanelDndProvider } from "../shell/hooks/index.js";
 import { useShellEvent } from "../shell/useShellEvent";
 import { app, incomingPanelLocation, notification, panel, workspace } from "../shell/client";
@@ -59,8 +59,8 @@ function PanelAppContent() {
   const handleChromeCommandRef = useRef<(command: ChromeCommand) => void>(() => {});
   const handlePaneChromeCommandRef = useRef<(command: PaneChromeCommand) => void>(() => {});
 
-  const { navigateToId, registerNavigateToId, addressBarVisible, setAddressBarVisible } =
-    useNavigation();
+  const { addressBarVisible } = useNavigationLayout();
+  const { navigateToId, registerNavigateToId, setAddressBarVisible } = useNavigationActions();
 
   // Stable callbacks that delegate to refs
   const openPanelDevTools = useCallback(() => openPanelDevToolsRef.current(), []);
@@ -77,6 +77,25 @@ function PanelAppContent() {
     (command: PaneChromeCommand) => handlePaneChromeCommandRef.current(command),
     []
   );
+  const navigateToFocusedPane = useCallback(
+    (panelId: string) => navigateToId(panelId, { target: "focused-pane" }),
+    [navigateToId]
+  );
+  const registerPanelDevTools = useCallback((handler: () => void) => {
+    openPanelDevToolsRef.current = handler;
+  }, []);
+  const registerPanelContextMenu = useCallback(
+    (handler: (panelId: string, position: { x: number; y: number }) => Promise<void>) => {
+      showPanelContextMenuRef.current = handler;
+    },
+    []
+  );
+  const registerChromeCommand = useCallback((handler: (command: ChromeCommand) => void) => {
+    handleChromeCommandRef.current = handler;
+  }, []);
+  const registerPaneChromeCommand = useCallback((handler: (command: PaneChromeCommand) => void) => {
+    handlePaneChromeCommandRef.current = handler;
+  }, []);
 
   // Keyboard shortcut for panel devtools
   useEffect(() => {
@@ -222,7 +241,7 @@ function PanelAppContent() {
         title={currentTitle}
         chromeState={chromeState}
         onChromeCommand={handleChromeCommand}
-        onNavigateToId={(panelId) => navigateToId(panelId, { target: "focused-pane" })}
+        onNavigateToId={navigateToFocusedPane}
         onPanelContextMenu={showPanelContextMenu}
         paneChromeState={paneChromeState}
         onPaneChromeCommand={handlePaneChromeCommand}
@@ -247,20 +266,12 @@ function PanelAppContent() {
           onTitleChange={setCurrentTitle}
           onChromeStateChange={setChromeState}
           hostTheme={effectiveTheme}
-          onRegisterDevToolsHandler={(handler) => {
-            openPanelDevToolsRef.current = handler;
-          }}
+          onRegisterDevToolsHandler={registerPanelDevTools}
           onRegisterNavigateToId={registerNavigateToId}
-          onRegisterPanelContextMenu={(handler) => {
-            showPanelContextMenuRef.current = handler;
-          }}
-          onRegisterChromeCommand={(handler) => {
-            handleChromeCommandRef.current = handler;
-          }}
+          onRegisterPanelContextMenu={registerPanelContextMenu}
+          onRegisterChromeCommand={registerChromeCommand}
           onPaneChromeStateChange={setPaneChromeState}
-          onRegisterPaneChromeCommand={(handler) => {
-            handlePaneChromeCommandRef.current = handler;
-          }}
+          onRegisterPaneChromeCommand={registerPaneChromeCommand}
         />
       </Box>
     </Flex>
