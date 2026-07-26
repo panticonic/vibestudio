@@ -1495,7 +1495,6 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     const previous = activeSubscription;
     const generation = ++subscriptionGeneration;
     const controller = new AbortController();
-    previous?.controller.abort();
 
     let resolveAck!: () => void;
     let rejectAck!: (error: Error) => void;
@@ -1518,7 +1517,11 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
           SubscribeResult,
           { channelId?: string; message?: RpcChannelMessage }
         >(response)) {
-          if (generation !== activeSubscription?.generation) break;
+          // A superseded reader remains valid until the channel atomically
+          // installs and ACKs its replacement. Continue consuming it during
+          // that overlap; replay/event idempotency collapses duplicates. An
+          // eager break cancels the old response and recreates the exact
+          // zero-subscription race this overlap is meant to prevent.
           if (record.kind === "subscribed") {
             if (acknowledged) throw new Error("Channel subscription sent more than one ACK");
             acknowledged = true;
@@ -1558,7 +1561,19 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     terminal.catch(() => {});
     subscription = { generation, controller, terminal, acknowledged: false };
     activeSubscription = subscription;
-    await ack;
+    try {
+      // The channel replaces the response resource atomically under this
+      // client's stable delivery identity. Keep the previous response alive
+      // until the replacement ACK proves that the new resource exists; then
+      // close the obsolete client-side reader. This prevents a recovery from
+      // manufacturing a zero-subscription leave/join gap.
+      await ack;
+      previous?.controller.abort();
+    } catch (error) {
+      controller.abort();
+      if (activeSubscription === subscription) activeSubscription = previous;
+      throw error;
+    }
   }
 
   async function recoverSubscription(): Promise<void> {
@@ -1589,7 +1604,11 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
 
   const unregisterResubscribe = opts.recoveryCoordinator?.registerResubscribeHandler(
     `pubsub:${channel}:${pid}`,
-    recoverSubscription
+    recoverSubscription,
+    // connectViaRpc opens its initial channel response itself. Replaying the
+    // shell transport's already-completed initial generation would create a
+    // redundant replacement subscription during bootstrap.
+    { includeCurrentGeneration: false }
   );
   const unregisterColdRecover = opts.recoveryCoordinator?.registerColdRecoverHandler(
     `pubsub:${channel}:${pid}`,

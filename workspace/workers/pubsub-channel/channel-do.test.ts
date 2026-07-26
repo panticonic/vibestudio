@@ -1642,6 +1642,95 @@ describe("PubSubChannel", () => {
     );
   });
 
+  it("atomically replaces a human delivery stream without abandoning pending calls", async () => {
+    const { instance, gad, sql } = await createGadBackedChannel();
+    const userParticipantId = "user:usr_alice";
+
+    setRpcCaller(instance, "panel:slot-a", "panel", "panel:slot-a", "usr_alice");
+    await instance.subscribe(userParticipantId, {
+      contextId: "ctx-1",
+      name: "Chat panel",
+      type: "panel",
+      methods: [{ name: "feedback_form" }],
+    });
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.subscribe("panel:caller", {
+      contextId: "ctx-1",
+      name: "Caller",
+      type: "panel",
+    });
+    await instance.callMethod(
+      "panel:caller",
+      userParticipantId,
+      "feedback-transport",
+      "feedback_form",
+      { title: "Question", fields: [] },
+      {
+        invocationId: "feedback-invocation",
+        transportCallId: "feedback-transport",
+        turnId: "feedback-turn",
+      }
+    );
+
+    setRpcCaller(instance, "panel:slot-a", "panel", "panel:slot-a", "usr_alice");
+    await instance.subscribe(userParticipantId, {
+      contextId: "ctx-1",
+      name: "Chat panel",
+      type: "panel",
+      methods: [{ name: "feedback_form" }],
+      sinceId: 10_000,
+    });
+
+    const lifecycle = gad.sql
+      .exec(
+        `SELECT payload_kind, payload_ref_json
+           FROM log_events
+          WHERE payload_kind IN ('presence', ?)
+          ORDER BY seq`,
+        AGENTIC_EVENT_PAYLOAD_KIND
+      )
+      .toArray()
+      .map((row) => ({
+        kind: String(row["payload_kind"]),
+        payload: JSON.parse(String(row["payload_ref_json"])) as {
+          action?: string;
+          kind?: string;
+          causality?: { invocationId?: string };
+        },
+      }));
+    expect(
+      lifecycle.some((entry) => entry.kind === "presence" && entry.payload.action === "leave")
+    ).toBe(false);
+    expect(
+      lifecycle.some(
+        (entry) =>
+          entry.payload.kind === "invocation.abandoned" &&
+          entry.payload.causality?.invocationId === "feedback-invocation"
+      )
+    ).toBe(false);
+    expect(
+      sql
+        .exec(
+          `SELECT transport_call_id FROM pending_calls WHERE transport_call_id = ?`,
+          "feedback-transport"
+        )
+        .toArray()
+    ).toHaveLength(1);
+
+    setRpcCaller(instance, "panel:slot-a", "panel", "panel:slot-a", "usr_alice");
+    await instance.submitMethodResult(
+      userParticipantId,
+      "feedback-transport",
+      { answer: "private" },
+      false,
+      {
+        invocationId: "feedback-invocation",
+        turnId: "feedback-turn",
+        terminalOutcome: "success",
+      }
+    );
+  });
+
   it("admin-inspects a DO-backed agent debug method without requiring a live roster row", async () => {
     const targetPid = "do:workers/agent-worker:AiChatWorker:agent-recently-active";
     const rpcCalls: Array<{ target: string; method: string; args: unknown[] }> = [];

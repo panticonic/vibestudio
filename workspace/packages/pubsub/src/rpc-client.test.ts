@@ -15,6 +15,7 @@ import {
   invocationCompletedPayload,
   invocationFailedPayload,
 } from "@workspace/agentic-protocol";
+import { createRecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
 import { z } from "zod";
 
 const CHANNEL = "test-channel";
@@ -93,6 +94,8 @@ function createMockRpc() {
   const removeListener = vi.fn();
   let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
   const pendingPayloads: unknown[] = [];
+  const streamSignals: AbortSignal[] = [];
+  const priorSignalStatesAtOpen: boolean[][] = [];
   const encoder = new TextEncoder();
 
   const rpc: MockRpc = {
@@ -109,6 +112,8 @@ function createMockRpc() {
         args: unknown[],
         options?: { signal?: AbortSignal }
       ) => {
+        priorSignalStatesAtOpen.push(streamSignals.map((signal) => signal.aborted));
+        if (options?.signal) streamSignals.push(options.signal);
         const result = await rpc.call(target, method, args);
         const body = new ReadableStream<Uint8Array>({
           start(controller) {
@@ -206,7 +211,7 @@ function createMockRpc() {
     writePayload({ channelId: CHANNEL, message: msg });
   }
 
-  return { rpc, emit, removeListener };
+  return { rpc, emit, removeListener, streamSignals, priorSignalStatesAtOpen };
 }
 
 /**
@@ -1660,6 +1665,47 @@ describe("connectViaRpc", () => {
       expect(mockRpc.call.mock.calls.some((call) => call[1] === "unsubscribe")).toBe(false);
       expect(mockRpc.call.mock.calls.some((call) => call[1] === "getSettledResult")).toBe(false);
 
+      await client.close();
+    });
+
+    it("does not replace its initial subscription for an already-completed transport generation", async () => {
+      const coordinator = createRecoveryCoordinator();
+      await coordinator.run("resubscribe");
+      const mock = createMockRpc();
+      const client = connectViaRpc({
+        rpc: mock.rpc as any,
+        channel: CHANNEL,
+        recoveryCoordinator: coordinator,
+      });
+
+      await emitReplayAndReady(mock.emit, []);
+      await client.ready();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mock.rpc.stream).toHaveBeenCalledTimes(1);
+      await client.close();
+    });
+
+    it("keeps the previous subscription alive until a future-generation replacement is acknowledged", async () => {
+      const coordinator = createRecoveryCoordinator();
+      const mock = createMockRpc();
+      const client = connectViaRpc({
+        rpc: mock.rpc as any,
+        channel: CHANNEL,
+        recoveryCoordinator: coordinator,
+      });
+
+      await emitReplayAndReady(mock.emit, []);
+      await client.ready();
+      const firstSignal = mock.streamSignals[0]!;
+      expect(firstSignal.aborted).toBe(false);
+
+      await coordinator.run("resubscribe");
+
+      expect(mock.rpc.stream).toHaveBeenCalledTimes(2);
+      expect(mock.priorSignalStatesAtOpen[1]).toEqual([false]);
+      expect(firstSignal.aborted).toBe(true);
       await client.close();
     });
   });

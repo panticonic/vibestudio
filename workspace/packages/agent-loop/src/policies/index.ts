@@ -16,6 +16,8 @@ import {
 import type { StepOutput, StepPolicy } from "../step.js";
 import type { AgentState, RosterEntry } from "../state.js";
 
+type AskUserParticipant = Pick<RosterEntry, "participantId" | "ref" | "handle">;
+
 export const DEFAULT_SAFE_TOOL_NAMES = new Set([
   "read",
   "grep",
@@ -202,7 +204,10 @@ function askUserTargetHint(raw: unknown): string | undefined {
 /** Resolve a target hint (`@handle`, bare handle, or `user:<id>`) to a human
  *  roster participant. Attribution/data-hygiene, not security: unresolvable
  *  hints fall back to broadcast rather than failing the ask. */
-function resolveAskUserTarget(humans: RosterEntry[], hint: string): RosterEntry | undefined {
+function resolveAskUserTarget(
+  humans: AskUserParticipant[],
+  hint: string
+): AskUserParticipant | undefined {
   const mention = hint.startsWith("@") ? hint.slice(1) : hint;
   const lower = mention.toLowerCase();
   return humans.find(
@@ -226,8 +231,17 @@ export function askUserPolicy(): StepPolicy {
   return {
     name: "ask-user",
     intercept({ state, output }) {
-      const roster = state.config.roster?.participants ?? [];
-      const humans = roster.filter((participant) => participant.ref.kind === "user");
+      // Use the same model-bound participant snapshot as channel tool routing.
+      // Presence may change while a model request is in flight; interpreting
+      // the returned tool call against a later roster makes execution depend
+      // on transport timing. The live-roster fallback reads historical
+      // message.started events written before askUserParticipants existed.
+      const capturedHumans = state.openTurn?.activeModelRequest?.askUserParticipants;
+      const humans: AskUserParticipant[] =
+        capturedHumans ??
+        (state.config.roster?.participants ?? []).filter(
+          (participant) => participant.ref.kind === "user"
+        );
       if (humans.length === 0) return output;
       // invocationId → ordered fan-out targets (first is the payload transport
       // target and keeps the canonical ids).
@@ -244,10 +258,28 @@ export function askUserPolicy(): StepPolicy {
         if (item.payloadKind !== "invocation.started") return item;
         const payload = item.payload as Record<string, unknown>;
         if (payload["name"] !== "ask_user") return item;
+        // `question` is required by the ask_user tool schema. Do not turn a
+        // malformed model call into a generic user-facing form: rewriting it
+        // here would bypass the normal local-tool argument validation and
+        // leave the user staring at a meaningless "Question" prompt.
+        const request = payload["request"];
+        const question =
+          request && typeof request === "object" && !Array.isArray(request)
+            ? (request as Record<string, unknown>)["question"]
+            : undefined;
+        if (
+          !request ||
+          typeof request !== "object" ||
+          Array.isArray(request) ||
+          typeof question !== "string" ||
+          !question.trim()
+        ) {
+          return item;
+        }
         const invocationId = String(
           (item.causality as { invocationId?: string } | undefined)?.invocationId ?? ""
         );
-        const targets = targetsFor(payload["request"]);
+        const targets = targetsFor(request);
         if (targets.length === 0) return item;
         rewrittenIds.set(invocationId, targets);
         return {
@@ -256,7 +288,7 @@ export function askUserPolicy(): StepPolicy {
             ...payload,
             name: "feedback_form",
             invocationType: "user",
-            request: feedbackFormArgsFromAskUser(payload["request"]),
+            request: feedbackFormArgsFromAskUser(request),
             askUserTargets: targets,
             transport: {
               kind: "channel",

@@ -146,6 +146,13 @@ function modelStartItems(
     ...(config.toolSchemasHash ? { toolSchemasHash: config.toolSchemasHash } : {}),
     activeToolNames: config.activeToolNames,
     channelToolOwners: channelToolOwnersFor(config.roster, latestUserParticipantId(state)),
+    askUserParticipants: config.roster.participants
+      .filter((participant) => participant.ref.kind === "user")
+      .map((participant) => ({
+        participantId: participant.participantId,
+        ref: participant.ref,
+        ...(participant.handle ? { handle: participant.handle } : {}),
+      })),
     contextThroughSeq: state.lastSeq + itemsBefore,
     attemptId,
     ...(state.openTurn?.metadata ? { turnMetadata: state.openTurn.metadata } : {}),

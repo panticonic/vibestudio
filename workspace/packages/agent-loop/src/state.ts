@@ -200,6 +200,16 @@ export interface ModelRequestDescriptor {
    * model call. Dispatch must use this map rather than a later live roster,
    * which may change while the model request is in flight. */
   channelToolOwners?: Record<string, ParticipantRef>;
+  /** Exact canonical humans available when this model call was materialized.
+   * `ask_user` is a local model tool whose execution is rewritten onto the
+   * channel, so its target set must be pinned at the same boundary as channel
+   * tool ownership instead of consulting mutable presence after the model
+   * returns. */
+  askUserParticipants?: Array<{
+    participantId: string;
+    ref: ParticipantRef;
+    handle?: string;
+  }>;
   /** entries snapshot boundary; executor rebuilds context through this seq. */
   contextThroughSeq: number;
   attemptId: string;

@@ -1330,6 +1330,41 @@ describe("approval gate (approvalLevel < 2)", () => {
 });
 
 describe("ask user policy", () => {
+  it("does not rewrite an ask_user call with a missing question", () => {
+    const s = scenario({
+      roster: {
+        participants: [
+          {
+            participantId: "user:alice",
+            ref: { kind: "user", id: "user:alice", participantId: "user:alice" },
+            type: "user",
+            handle: "alice",
+            methods: [{ name: "feedback_form" }],
+          },
+        ],
+      },
+    });
+    prompt(s);
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        {
+          type: "toolCall",
+          id: "tc-invalid",
+          name: "ask_user",
+          arguments: { options: ["Yes"] },
+        },
+      ],
+      stopReason: "completed",
+    });
+
+    const started = s.log.find((row) => row.envelopeId === ids.invocationStart("tc-invalid"))!;
+    expect(started.payload).toMatchObject({ name: "ask_user", request: { options: ["Yes"] } });
+    expect(s.outputs.flatMap((output) => output.effects)).toContainEqual(
+      expect.objectContaining({ kind: "local_tool", tool: "ask_user" })
+    );
+  });
+
   it("rewrites multi-select ask_user calls to multi-select feedback forms", () => {
     const s = scenario({
       roster: {
@@ -1489,6 +1524,78 @@ describe("ask user policy", () => {
     });
     expect([...unknown.effects.values()]).toEqual([
       expect.objectContaining({ kind: "local_tool", tool: "ask_user" }),
+    ]);
+  });
+
+  it("routes ask_user against the humans captured for the model call when presence changes in flight", () => {
+    const human = {
+      participantId: "user:alice",
+      ref: {
+        kind: "user" as const,
+        id: "user:alice",
+        participantId: "user:alice",
+      },
+      type: "user",
+      handle: "alice",
+      methods: [{ name: "feedback_form" }],
+    };
+    const s = scenario({ roster: { participants: [human] } });
+    prompt(s);
+
+    expect(s.state.inFlightModelCall?.request.askUserParticipants).toEqual([
+      {
+        participantId: human.participantId,
+        ref: human.ref,
+        handle: human.handle,
+      },
+    ]);
+
+    applyAppend(s, [
+      {
+        envelopeId: "human-roster-empty-while-model-runs",
+        payloadKind: "system.event",
+        payload: {
+          protocol: "agentic.trajectory.v1",
+          kind: "roster.snapshot",
+          details: {
+            kind: "roster.snapshot",
+            roster: { participants: [] },
+          },
+        },
+      },
+    ]);
+    expect(s.state.config.roster.participants).toEqual([]);
+
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        {
+          type: "toolCall",
+          id: "tc-presence-race",
+          name: "ask_user",
+          arguments: { question: "Still there?" },
+        },
+      ],
+      stopReason: "completed",
+    });
+
+    const started = s.log.find(
+      (row) => row.envelopeId === ids.invocationStart("tc-presence-race")
+    )!;
+    expect(started.payload).toMatchObject({
+      name: "feedback_form",
+      askUserTargets: [human.ref],
+      transport: {
+        kind: "channel",
+        target: human.ref,
+      },
+    });
+    expect(derivePendingEffects(s.state)).toEqual([
+      expect.objectContaining({
+        kind: "channel_call",
+        method: "feedback_form",
+        target: human.ref,
+      }),
     ]);
   });
 });

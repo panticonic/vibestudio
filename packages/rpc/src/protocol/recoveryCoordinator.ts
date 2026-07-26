@@ -1,12 +1,25 @@
 export type RecoveryKind = "resubscribe" | "cold-recover";
 
+export interface ResubscribeRegistrationOptions {
+  /** Include the already-completed current transport generation. Keep this
+   * enabled for consumers whose recovery callback owns bootstrap. Disable it
+   * when the registering resource has already bootstrapped itself and should
+   * only observe future transport generations. */
+  includeCurrentGeneration?: boolean;
+}
+
 type Handler = {
   name: string;
   fn: () => Promise<void> | void;
+  includeCurrentGeneration: boolean;
 };
 
 export interface RecoveryCoordinator {
-  registerResubscribeHandler(name: string, fn: () => Promise<void> | void): () => void;
+  registerResubscribeHandler(
+    name: string,
+    fn: () => Promise<void> | void,
+    options?: ResubscribeRegistrationOptions
+  ): () => void;
   registerColdRecoverHandler(name: string, fn: () => Promise<void> | void): () => void;
   run(kind: RecoveryKind): Promise<void>;
 }
@@ -20,12 +33,16 @@ export class DefaultRecoveryCoordinator implements RecoveryCoordinator {
   private completedGeneration: Partial<Record<RecoveryKind, number>> = {};
   private queue: Promise<void> = Promise.resolve();
 
-  registerResubscribeHandler(name: string, fn: () => Promise<void> | void): () => void {
-    return this.register("resubscribe", name, fn);
+  registerResubscribeHandler(
+    name: string,
+    fn: () => Promise<void> | void,
+    options: ResubscribeRegistrationOptions = {}
+  ): () => void {
+    return this.register("resubscribe", name, fn, options.includeCurrentGeneration !== false);
   }
 
   registerColdRecoverHandler(name: string, fn: () => Promise<void> | void): () => void {
-    return this.register("cold-recover", name, fn);
+    return this.register("cold-recover", name, fn, false);
   }
 
   async run(kind: RecoveryKind): Promise<void> {
@@ -35,10 +52,19 @@ export class DefaultRecoveryCoordinator implements RecoveryCoordinator {
     return this.queue;
   }
 
-  private register(kind: RecoveryKind, name: string, fn: () => Promise<void> | void): () => void {
-    const handler = { name, fn };
+  private register(
+    kind: RecoveryKind,
+    name: string,
+    fn: () => Promise<void> | void,
+    includeCurrentGeneration: boolean
+  ): () => void {
+    const handler = { name, fn, includeCurrentGeneration };
     this.handlers[kind].set(name, handler);
-    if (kind === "resubscribe" && this.completedGeneration[kind] === this.generation) {
+    if (
+      kind === "resubscribe" &&
+      handler.includeCurrentGeneration &&
+      this.completedGeneration[kind] === this.generation
+    ) {
       queueMicrotask(() => {
         if (this.handlers[kind].get(name) === handler) void this.runOne(kind, handler);
       });
@@ -67,14 +93,18 @@ export class DefaultRecoveryCoordinator implements RecoveryCoordinator {
       } catch (error) {
         console.warn(
           `[RecoveryCoordinator] ${kind} handler "${handler.name}" failed (attempt ${attempt}/${maxAttempts}):`,
-          error,
+          error
         );
         if (attempt < maxAttempts) {
-          await new Promise((resolve) => setTimeout(resolve, Math.min(250 * 2 ** (attempt - 1), 1000)));
+          await new Promise((resolve) =>
+            setTimeout(resolve, Math.min(250 * 2 ** (attempt - 1), 1000))
+          );
         }
       }
     }
-    console.warn(`[RecoveryCoordinator] ${kind} handler "${handler.name}" exhausted all ${maxAttempts} attempts`);
+    console.warn(
+      `[RecoveryCoordinator] ${kind} handler "${handler.name}" exhausted all ${maxAttempts} attempts`
+    );
   }
 }
 

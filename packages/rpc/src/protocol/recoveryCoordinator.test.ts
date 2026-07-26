@@ -86,6 +86,20 @@ describe("DefaultRecoveryCoordinator", () => {
     expect(ran).toEqual(["late"]);
   });
 
+  it("lets self-bootstrapped resources observe only future resubscribe generations", async () => {
+    const coord = createRecoveryCoordinator();
+    await coord.run("resubscribe");
+    const ran: string[] = [];
+    coord.registerResubscribeHandler("self-bootstrapped", () => void ran.push("run"), {
+      includeCurrentGeneration: false,
+    });
+    await flush();
+    expect(ran).toEqual([]);
+
+    await coord.run("resubscribe");
+    expect(ran).toEqual(["run"]);
+  });
+
   it("does NOT auto-fire a cold-recover handler registered after a run", async () => {
     const coord = createRecoveryCoordinator();
     await coord.run("cold-recover");

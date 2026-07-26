@@ -17,6 +17,21 @@ describe("RecoveryCoordinator", () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
+  it("does not replay the current generation to a self-bootstrapped resource", async () => {
+    const coordinator = createRecoveryCoordinator();
+    await coordinator.run("resubscribe");
+
+    const handler = vi.fn();
+    coordinator.registerResubscribeHandler("future-resubscribe", handler, {
+      includeCurrentGeneration: false,
+    });
+    await flushMicrotasks();
+
+    expect(handler).not.toHaveBeenCalled();
+    await coordinator.run("resubscribe");
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
   it("does not run newly registered cold-recover handlers after cold recovery completed", async () => {
     const coordinator = createRecoveryCoordinator();
     await coordinator.run("resubscribe");
