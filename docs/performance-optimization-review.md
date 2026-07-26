@@ -29,6 +29,18 @@ is otherwise validated.
   - **Recommended follow-up:** Announce the contract tightening to any external
     tool authors; tools must advertise the schema they actually accept.
 
+- **Primary legacy cleanup / 2026-07-27**
+  - **Choice:** Remove the invalid-gateway URL fallback from panel link
+    construction.
+  - **Why it is questionable:** A malformed injected server URL now fails
+    immediately instead of producing a root-relative link, but the old link
+    could silently navigate to the wrong workspace.
+  - **Evidence and validation:** The canonical configured and mobile link tests
+    remain green, and a new regression test requires invalid configuration to
+    fail loudly.
+  - **Recommended follow-up:** None; injected runtime configuration must be a
+    valid URL.
+
 - **Build track / 2026-07-26**
   - **Choice:** Make a full host build clean every `dist/` entry except the
     separately produced `baked-app/` payload and the active prerequisite lock,
@@ -67,7 +79,7 @@ is otherwise validated.
     exact-state build report in a packaged desktop session; retain the lazy
     boundary unless that one-time latency is user-visible.
 
-- **UI track, tranche 2 / 2026-07-27**
+- **UI track, tranche 2 / 2026-07-26**
   - **Choice:** Gate mobile drawer profile polling on React Navigation's open
     drawer lifecycle and deduplicate managed-WebView theme delivery by document
     URL and theme mode.

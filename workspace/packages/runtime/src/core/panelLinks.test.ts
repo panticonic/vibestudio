@@ -21,6 +21,17 @@ describe("buildPanelLink", () => {
     expect(buildPanelLink("about/server-logs")).toBe("/_workspace/dev-123/about/server-logs/");
   });
 
+  it("fails loudly instead of navigating to the wrong workspace for invalid gateway config", () => {
+    vi.stubGlobal("window", { location: { origin: "http://127.0.0.1:43873" } });
+    (
+      globalThis as {
+        __vibestudioGatewayConfig?: { serverUrl: string };
+      }
+    ).__vibestudioGatewayConfig = { serverUrl: "not a URL" };
+
+    expect(() => buildPanelLink("about/server-logs")).toThrow();
+  });
+
   it("preserves ref, state, focus, tree disposition, and layout placement in HTTP links", () => {
     expect(
       buildPanelLink("panels/chat", {

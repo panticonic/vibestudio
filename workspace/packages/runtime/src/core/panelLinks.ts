@@ -130,13 +130,8 @@ export function buildPanelLink(source: string, options?: BuildPanelLinkOptions):
   const configuredGatewayServerUrl = gatewayServerUrl();
   let basePath = "";
   if (typeof window !== "undefined" && configuredGatewayServerUrl) {
-    try {
-      const pathname = new URL(configuredGatewayServerUrl).pathname.replace(/\/+$/, "");
-      basePath = pathname === "/" ? "" : pathname;
-    } catch {
-      // Invalid injected configuration is reported by runtime initialization;
-      // keep this pure helper's legacy root-relative fallback.
-    }
+    const pathname = new URL(configuredGatewayServerUrl).pathname.replace(/\/+$/, "");
+    basePath = pathname === "/" ? "" : pathname;
   }
   const relativePath = `${basePath}/${encodedPath}/${query ? `?${query}` : ""}`;
 
