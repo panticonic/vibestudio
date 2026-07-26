@@ -641,6 +641,70 @@ describe("WorkspaceDO slot operations", () => {
     ({ instance } = await createTestDO(WorkspaceDOTestable));
   });
 
+  it("returns one revisioned, internally consistent panel-tree state snapshot", () => {
+    expect(instance.panelTreeStateSnapshot()).toEqual({
+      revision: 0,
+      slots: [],
+      histories: [],
+      entities: [],
+    });
+    const entryA = instance.entityActivate(preparedPanelInput({ key: "snapshot-a" }));
+    const entryB = instance.entityActivate(preparedPanelInput({ key: "snapshot-b" }));
+    instance.slotCreate({
+      slotId: "snapshot-slot",
+      parentSlotId: null,
+      positionId: "000001000000",
+      initialEntry: {
+        entryKey: entryA.key,
+        entityId: entryA.id,
+        source: SOURCE,
+        contextId: "ctx-1",
+        stateArgs: { step: "a" },
+      },
+    });
+
+    const created = instance.panelTreeStateSnapshot();
+    expect(created.revision).toBeGreaterThan(0);
+    expect(created.slots).toHaveLength(1);
+    expect(created.histories).toMatchObject([
+      {
+        slot_id: "snapshot-slot",
+        entry_key: entryA.key,
+        entity_id: entryA.id,
+        state_args: JSON.stringify({ step: "a" }),
+      },
+    ]);
+    expect(created.entities.map((entity) => entity.id)).toEqual([entryA.id]);
+
+    instance.slotCommitPreparedNavigation({
+      slotId: "snapshot-slot",
+      expectedCurrentEntityId: entryA.id,
+      mutation: {
+        kind: "append",
+        entry: {
+          entryKey: entryB.key,
+          entityId: entryB.id,
+          source: SOURCE,
+          contextId: "ctx-1",
+          stateArgs: { step: "b" },
+        },
+      },
+    });
+    const navigated = instance.panelTreeStateSnapshot();
+    expect(navigated.revision).toBeGreaterThan(created.revision);
+    expect(navigated.slots[0]?.current_entity_id).toBe(entryB.id);
+    expect(navigated.histories.map((row) => row.entity_id)).toEqual([entryA.id, entryB.id]);
+    expect(navigated.entities.map((entity) => entity.id)).toEqual([entryB.id]);
+
+    instance.slotUpdateCurrentStateArgs("snapshot-slot", { step: "updated" });
+    instance.entitySetDisplayTitle(entryB.id, "Snapshot title");
+    const updated = instance.panelTreeStateSnapshot();
+    expect(updated.revision).toBeGreaterThan(navigated.revision);
+    expect(updated.slots[0]?.current_entity_title).toBe("Snapshot title");
+    expect(updated.histories[1]?.state_args).toBe(JSON.stringify({ step: "updated" }));
+    expect(updated.entities[0]?.stateArgs).toEqual({ step: "updated" });
+  });
+
   it("atomically appends, selects, and replaces prepared panel incarnations", () => {
     const entryA = instance.entityActivate(preparedPanelInput({ key: "a" }));
     const entryB = instance.entityActivate(preparedPanelInput({ key: "b" }));
@@ -724,6 +788,7 @@ describe("WorkspaceDO slot operations", () => {
     });
     const beforeSlot = instance.slotGet("slot-r");
     const beforeHistory = instance.slotHistory("slot-r");
+    const beforeRevision = instance.panelTreeStateSnapshot().revision;
 
     expect(() =>
       instance.slotCommitPreparedNavigation({
@@ -758,6 +823,7 @@ describe("WorkspaceDO slot operations", () => {
 
     expect(instance.slotGet("slot-r")).toEqual(beforeSlot);
     expect(instance.slotHistory("slot-r")).toEqual(beforeHistory);
+    expect(instance.panelTreeStateSnapshot().revision).toBe(beforeRevision);
   });
 
   it("slotUpdateCurrentStateArgs mutates the current history entry without changing entity id", () => {

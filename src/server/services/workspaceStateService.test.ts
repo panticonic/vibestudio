@@ -57,6 +57,9 @@ describe("workspaceStateService — title mirror hooks", () => {
     expect(svc.methods["slot.list"]?.authority).toEqual({
       principals: expect.arrayContaining(["host", "user", "code"]),
     });
+    expect(svc.methods["panelTree.snapshot"]?.authority).toEqual({
+      principals: expect.arrayContaining(["host", "user", "code"]),
+    });
     expect(svc.methods["slot.create"]?.authority).toEqual({
       principals: expect.arrayContaining(["host", "user", "code"]),
     });
@@ -262,6 +265,7 @@ describe("workspaceStateService — slot-state change hook", () => {
   }
 
   const reads: Array<[method: string, args: unknown[]]> = [
+    ["panelTree.snapshot", []],
     ["slot.list", []],
     ["slot.get", ["s1"]],
     ["slot.history", ["s1"]],

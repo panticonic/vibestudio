@@ -31,6 +31,34 @@ function readyBoot(
 import type { PanelTreeBridgeRequest } from "./services/panelTreeService.js";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 
+function panelTreeSnapshot(
+  slots: readonly unknown[],
+  histories: readonly unknown[],
+  entities: readonly unknown[],
+  revision = 1
+) {
+  return { revision, slots, histories, entities };
+}
+
+function panelTreeSnapshotFromMaps(
+  slots: ReadonlyMap<string, Record<string, unknown>>,
+  histories: ReadonlyMap<string, unknown[]>,
+  entities: ReadonlyMap<string, Record<string, unknown>>,
+  revision = 1
+) {
+  const openSlots = [...slots.values()].filter((slot) => slot["closed_at"] == null);
+  return panelTreeSnapshot(
+    openSlots,
+    openSlots.flatMap((slot) => histories.get(slot["slot_id"] as string) ?? []),
+    openSlots.flatMap((slot) => {
+      const id = slot["current_entity_id"];
+      const entity = typeof id === "string" ? entities.get(id) : undefined;
+      return entity ? [entity] : [];
+    }),
+    revision
+  );
+}
+
 describe("panelHostCommandAssignmentError", () => {
   it("classifies mobile-held structural host commands distinctly", () => {
     const error = panelHostCommandAssignmentError("slot-mobile", "mobile_held") as Error & {
@@ -191,6 +219,9 @@ async function createSinglePanelBridge(options?: {
     cleanupComplete: false,
   };
   const dispatch = vi.fn(async (_ctx, service: string, method: string, args: unknown[]) => {
+    if (service === "workspace-state" && method === "panelTree.snapshot") {
+      return panelTreeSnapshot([slot], [history], [entity]);
+    }
     if (service === "workspace-state" && method === "slot.list") return [slot];
     if (service === "workspace-state" && method === "slot.get") {
       return args[0] === slot.slot_id ? slot : null;
@@ -483,6 +514,9 @@ describe("createServerPanelTreeBridge reload", () => {
       activeAuthority: { requests: [] },
     };
     const dispatch = vi.fn(async (_ctx, service: string, method: string, args: unknown[]) => {
+      if (service === "workspace-state" && method === "panelTree.snapshot") {
+        return panelTreeSnapshot([slot], [history], [entity]);
+      }
       if (service === "workspace-state" && method === "slot.list") return [slot];
       if (service === "workspace-state" && method === "slot.get")
         return args[0] === "panel:tree/slot-a" ? slot : null;
@@ -578,6 +612,9 @@ describe("createServerPanelTreeBridge reload", () => {
       activeAuthority: { requests: [] },
     };
     const dispatch = vi.fn(async (_ctx, service: string, method: string, args: unknown[]) => {
+      if (service === "workspace-state" && method === "panelTree.snapshot") {
+        return panelTreeSnapshot([slot], [history], [entity]);
+      }
       if (service === "workspace-state" && method === "slot.list") return [slot];
       if (service === "workspace-state" && method === "slot.get")
         return args[0] === "panel:tree/slot-a" ? slot : null;
@@ -724,6 +761,9 @@ describe("createServerPanelTreeBridge reload", () => {
       activeAuthority: { requests: [] },
     };
     const dispatch = vi.fn(async (_ctx, service: string, method: string, args: unknown[]) => {
+      if (service === "workspace-state" && method === "panelTree.snapshot") {
+        return panelTreeSnapshot([slot], [history], [entity]);
+      }
       if (service === "workspace-state" && method === "slot.list") return [slot];
       if (service === "workspace-state" && method === "slot.get")
         return args[0] === "panel:tree/slot-a" ? slot : null;
@@ -846,6 +886,8 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
     const dispatch = vi.fn(async (_ctx, service: string, method: string, args: unknown[]) => {
       if (service === "workspace-state") {
         switch (method) {
+          case "panelTree.snapshot":
+            return panelTreeSnapshotFromMaps(slots, histories, entities);
           case "slot.list":
             return [...slots.values()].filter((s) => s["closed_at"] == null);
           case "slot.get":
@@ -1081,6 +1123,8 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       async (ctx: ServiceContext, service: string, method: string, args: unknown[]) => {
         if (service === "workspace-state") {
           switch (method) {
+            case "panelTree.snapshot":
+              return panelTreeSnapshotFromMaps(slots, histories, entities);
             case "slot.list":
               return [...slots.values()].filter((s) => s["closed_at"] == null);
             case "slot.get":
@@ -1312,11 +1356,16 @@ describe("createServerPanelTreeBridge self-heal", () => {
       status: "active",
       cleanupComplete: false,
     };
-    let slotListCalls = 0;
+    let snapshotCalls = 0;
     const dispatch = vi.fn(async (_ctx, service: string, method: string, args: unknown[]) => {
+      if (service === "workspace-state" && method === "panelTree.snapshot") {
+        snapshotCalls += 1;
+        return snapshotCalls === 1
+          ? panelTreeSnapshot([], [], [], 0)
+          : panelTreeSnapshot([slot], [history], [entity], 1);
+      }
       if (service === "workspace-state" && method === "slot.list") {
-        slotListCalls += 1;
-        return slotListCalls === 1 ? [] : [slot];
+        return [slot];
       }
       if (service === "workspace-state" && method === "slot.get")
         return args[0] === "panel:tree/slot-a" ? slot : null;
@@ -1357,7 +1406,7 @@ describe("createServerPanelTreeBridge self-heal", () => {
 
     const roots = snapshot.forest.flatMap((group) => group.rootPanels);
     expect(roots).toEqual([expect.objectContaining({ id: "panel:tree/slot-a" })]);
-    expect(slotListCalls).toBe(2);
+    expect(snapshotCalls).toBe(2);
   });
 
   it("re-syncs the mirror and re-broadcasts (debounced) when the slot tree changes", async () => {
@@ -1393,6 +1442,9 @@ describe("createServerPanelTreeBridge self-heal", () => {
       cleanupComplete: false,
     };
     const dispatch = vi.fn(async (_ctx, service: string, method: string, args: unknown[]) => {
+      if (service === "workspace-state" && method === "panelTree.snapshot") {
+        return panelTreeSnapshot([slot], [history], [entity]);
+      }
       if (service === "workspace-state" && method === "slot.list") return [slot];
       if (service === "workspace-state" && method === "slot.get")
         return args[0] === "panel:tree/slot-a" ? slot : null;
@@ -1443,9 +1495,19 @@ describe("createServerPanelTreeBridge self-heal", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.anything(),
       "workspace-state",
-      "slot.list",
+      "panelTree.snapshot",
       expect.anything()
     );
+    expect(
+      dispatch.mock.calls.some(
+        ([, service, method]) =>
+          service === "workspace-state" &&
+          (method === "slot.list" ||
+            method === "slot.history" ||
+            method === "entity.resolveActive" ||
+            method === "entity.resolve")
+      )
+    ).toBe(false);
     // … and re-broadcast exactly once (debounced).
     const treeEmits = eventService.emit.mock.calls.filter((c) => c[0] === "panel-tree-updated");
     expect(treeEmits).toHaveLength(1);

@@ -14,6 +14,7 @@ import { createDevLogger } from "@vibestudio/dev-log";
 import type { UserSubject } from "@vibestudio/identity/types";
 import { PanelManager } from "@vibestudio/shell-core/panelManager";
 import type {
+  PanelTreeStateSnapshot,
   RuntimeClient,
   SlotCreateInput,
   SlotHistoryRow,
@@ -434,6 +435,8 @@ export async function createServerPanelTreeBridge(
     ) as Promise<T>;
   const callRuntime = <T>(method: string, args: unknown[]) => call<T>("runtime", method, args);
   const workspaceState: WorkspaceStateClient = {
+    getPanelTreeStateSnapshot: () =>
+      call<PanelTreeStateSnapshot>("workspace-state", "panelTree.snapshot", []),
     listSlots: () => call<SlotRow[]>("workspace-state", "slot.list", []),
     getSlot: (slotId) => call<SlotRow | null>("workspace-state", "slot.get", [slotId]),
     getSlotHistory: (slotId) => call<SlotHistoryRow[]>("workspace-state", "slot.history", [slotId]),
@@ -513,37 +516,8 @@ export async function createServerPanelTreeBridge(
 
   let panelTreeLoaded = false;
   let panelTreeLoadPromise: Promise<void> | null = null;
-  const hydrateExecutionAuthority = async (): Promise<void> => {
-    const preparingSlots: PanelSlotId[] = [];
-    await Promise.all(
-      registry.listPanels().map(async ({ panelId }) => {
-        const panel = registry.getPanel(panelId);
-        if (!panel?.runtimeEntityId || panel.snapshot.source.startsWith("browser:")) return;
-        const record = await workspaceState.resolveEntity(panel.runtimeEntityId);
-        const authority = record?.activeAuthority;
-        panel.buildKey = record?.activeBuildKey ?? null;
-        panel.executionDigest = record?.activeExecutionDigest ?? null;
-        panel.authorityRequests = authority?.requests;
-        if (record?.status === "preparing") {
-          preparingSlots.push(asPanelSlotId(panelId));
-          panel.artifacts = {
-            ...panel.artifacts,
-            buildState: "pending",
-            buildProgress: "Preparing panel runtime...",
-            error: undefined,
-          };
-        } else if (!record?.activeBuildKey || !record.activeExecutionDigest || !authority) {
-          panel.artifacts = {
-            ...panel.artifacts,
-            buildState: "error",
-            error:
-              "Panel execution identity is incomplete. The workspace state is incompatible or corrupt and cannot be loaded.",
-            buildProgress: "Panel unavailable — invalid execution identity",
-          };
-        }
-      })
-    );
-    for (const slotId of preparingSlots) {
+  const resumePreparingPanelRuntimes = (preparingSlotIds: readonly PanelSlotId[]): void => {
+    for (const slotId of preparingSlotIds) {
       void panelManager
         .resumePanelPreparation(slotId)
         .then(() => emitTreeSnapshot())
@@ -568,9 +542,9 @@ export async function createServerPanelTreeBridge(
     log.verbose(`Synchronizing authoritative tree (force=${options.force === true})`);
     panelTreeLoadPromise ??= panelManager
       .loadTree()
-      .then(async () => {
-        log.verbose("Authoritative slot tree loaded; hydrating execution authority");
-        await hydrateExecutionAuthority();
+      .then(({ preparingSlotIds }) => {
+        log.verbose("Authoritative slot tree and execution authority loaded");
+        resumePreparingPanelRuntimes(preparingSlotIds);
         panelTreeLoaded = true;
         log.verbose("Authoritative tree synchronization complete");
       })

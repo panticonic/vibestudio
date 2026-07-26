@@ -117,6 +117,29 @@ is otherwise validated.
 
 ## Resolved choices
 
+- **Runtime track, tranche 5 / 2026-07-27**
+  - **Choice:** Replace panel-tree startup reconstruction with one revisioned
+    WorkspaceDO transaction containing every open slot, its full history, and
+    each current entity record; hydrate runtime authority and preparation state
+    from that same result instead of re-resolving entities in the owner bridge.
+  - **Why it is questionable:** This makes the aggregate the sole startup
+    contract and adds SQLite revision triggers over every row that can change
+    its projection. A missing trigger or partial aggregate would strand a
+    client on stale state, while retaining a fallback would conceal the defect
+    and restore the fanout.
+  - **Evidence and validation:** The 64-panel regression measures one
+    workspace-state invocation instead of the prior 193
+    (1 slot list + 64 histories + 64 reconstruction entity reads + 64 owner
+    hydration entity reads), a 99.5% reduction and one transport latency wave
+    instead of four. Exact WorkspaceDO tests cover creation, navigation,
+    current state/title changes, transaction rollback, and monotonic revision;
+    owner tests prove no legacy startup read is dispatched. All 332 broad
+    shell-core, service-schema, WorkspaceDO, service, and owner-bridge tests
+    pass, as do the generated authority and runtime-document checks.
+  - **Recommended follow-up:** Preserve the aggregate-only startup assertion
+    and add a revision trigger whenever the durable projection gains another
+    table or field.
+
 - **Runtime track, tranche 3 / 2026-07-27**
   - **Choice:** Rotate active WebRTC scheduler keys with an indexed,
     periodically compacted array and tombstones for cancelled keys; fast-path

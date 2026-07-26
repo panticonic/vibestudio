@@ -8,6 +8,7 @@ import {
   type PanelManagerServerInfo,
 } from "./panelManager.js";
 import type {
+  PanelTreeStateSnapshot,
   RuntimeClient,
   SlotHistoryRow,
   SlotRow,
@@ -29,10 +30,11 @@ export function createWorkspaceStateClient(callService: ShellServiceCall): Works
   const call = <T>(service: string, method: string, args: unknown[]) =>
     callService(service, method, args) as Promise<T>;
   return {
+    getPanelTreeStateSnapshot: () =>
+      call<PanelTreeStateSnapshot>("workspace-state", "panelTree.snapshot", []),
     listSlots: () => call<SlotRow[]>("workspace-state", "slot.list", []),
     getSlot: (slotId) => call<SlotRow | null>("workspace-state", "slot.get", [slotId]),
-    getSlotHistory: (slotId) =>
-      call<SlotHistoryRow[]>("workspace-state", "slot.history", [slotId]),
+    getSlotHistory: (slotId) => call<SlotHistoryRow[]>("workspace-state", "slot.history", [slotId]),
     resolveActiveEntity: (id) =>
       call<EntityRecord | null>("workspace-state", "entity.resolveActive", [id]),
     resolveEntity: (id) => call<EntityRecord | null>("workspace-state", "entity.resolve", [id]),

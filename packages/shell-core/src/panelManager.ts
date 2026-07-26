@@ -34,7 +34,6 @@ import {
 import { between as rankBetween, first as firstRank } from "@vibestudio/shared/lexorank";
 import {
   canonicalEntityId,
-  type EntityRecord,
   type RuntimeEntityHandle,
   type RuntimePanelEntityCreateSpec,
 } from "@vibestudio/shared/runtime/entitySpec";
@@ -252,18 +251,15 @@ export class PanelManager {
   // ===========================================================================
 
   /**
-   * Pull the current slot tree from the server, fetch each slot's history and
-   * current entity, and repopulate the local panel registry. Called at boot
-   * and after any operation that wants a fresh view.
+   * Pull one revisioned, internally consistent tree-state snapshot and
+   * repopulate the local panel registry. Called at boot and after any operation
+   * that wants a fresh view.
    */
   async syncSnapshot(): Promise<void> {
     await this.ensureViewStateLoaded();
-    const tree = await this.fetchPanelTree();
-    this.registry.repopulate(tree, [...this.collapsedIds]);
-    // The legacy aggregate read has no authoritative revision. The next
-    // state-bearing event must therefore be accepted even when its revision is
-    // zero; only events applied through applyForestSnapshot are comparable.
-    this.appliedForestRevision = null;
+    const snapshot = await this.fetchPanelTree();
+    this.registry.repopulate(snapshot.roots, [...this.collapsedIds]);
+    this.appliedForestRevision = snapshot.revision;
   }
 
   /**
@@ -283,11 +279,20 @@ export class PanelManager {
     return true;
   }
 
-  async loadTree(): Promise<{ collapsedIds: string[] }> {
+  async loadTree(): Promise<{
+    collapsedIds: string[];
+    revision: number;
+    preparingSlotIds: PanelSlotId[];
+  }> {
     await this.ensureViewStateLoaded();
-    const tree = await this.fetchPanelTree();
-    this.registry.repopulate(tree, [...this.collapsedIds]);
-    return { collapsedIds: [...this.collapsedIds] };
+    const snapshot = await this.fetchPanelTree();
+    this.registry.repopulate(snapshot.roots, [...this.collapsedIds]);
+    this.appliedForestRevision = snapshot.revision;
+    return {
+      collapsedIds: [...this.collapsedIds],
+      revision: snapshot.revision,
+      preparingSlotIds: snapshot.preparingSlotIds,
+    };
   }
 
   // ===========================================================================
@@ -1193,28 +1198,26 @@ export class PanelManager {
   // Private — tree reconstruction
   // ===========================================================================
 
-  private async fetchPanelTree(): Promise<Panel[]> {
-    const slots = await this.workspaceState.listSlots();
-    const openSlots = slots.filter((s) => s.closed_at == null);
-    // Per-slot lookups are independent server round trips — issue them in
-    // parallel; awaiting each one serially made startup latency O(slots).
+  private async fetchPanelTree(): Promise<{
+    revision: number;
+    roots: Panel[];
+    preparingSlotIds: PanelSlotId[];
+  }> {
+    const state = await this.workspaceState.getPanelTreeStateSnapshot();
+    const openSlots = state.slots;
     const histories = new Map<PanelSlotId, SlotHistoryRow[]>();
-    await Promise.all(
-      openSlots.map(async (slot) => {
-        const rows = await this.workspaceState.getSlotHistory(slot.slot_id);
-        histories.set(slot.slot_id, rows);
-      })
-    );
+    for (const row of state.histories) {
+      let rows = histories.get(row.slot_id);
+      if (!rows) {
+        rows = [];
+        histories.set(row.slot_id, rows);
+      }
+      rows.push(row);
+    }
     const metadataBySource = await this.fetchPanelMetadataForHistories(histories);
 
-    const entityById = new Map<string, EntityRecord>();
-    await Promise.all(
-      openSlots.map(async (slot) => {
-        if (!slot.current_entity_id) return;
-        const record = await this.workspaceState.resolveEntity(slot.current_entity_id);
-        if (record) entityById.set(slot.current_entity_id, record);
-      })
-    );
+    const entityById = new Map(state.entities.map((entity) => [entity.id, entity]));
+    const preparingSlotIds: PanelSlotId[] = [];
 
     const slotById = new Map(openSlots.map((slot) => [slot.slot_id, slot]));
 
@@ -1234,6 +1237,29 @@ export class PanelManager {
       const entity = currentEntityId ? entityById.get(currentEntityId) : undefined;
       const entitySource = entity?.source;
       if (entitySource) this.currentEntitySourceBySlot.set(slot.slot_id, entitySource);
+      const isBrowserPanel = snapshot.source.startsWith("browser:");
+      let artifacts: Panel["artifacts"] = {
+        buildState: "building",
+        buildProgress: "Restoring...",
+      };
+      if (!isBrowserPanel && entity?.status === "preparing") {
+        preparingSlotIds.push(slot.slot_id);
+        artifacts = {
+          buildState: "pending",
+          buildProgress: "Preparing panel runtime...",
+        };
+      } else if (
+        !isBrowserPanel &&
+        currentEntityId &&
+        (!entity?.activeBuildKey || !entity.activeExecutionDigest || !entity.activeAuthority)
+      ) {
+        artifacts = {
+          buildState: "error",
+          error:
+            "Panel execution identity is incomplete. The workspace state is incompatible or corrupt and cannot be loaded.",
+          buildProgress: "Panel unavailable — invalid execution identity",
+        };
+      }
       const title = this.titleFor(
         slot.slot_id,
         snapshot.source,
@@ -1247,12 +1273,13 @@ export class PanelManager {
         effectiveVersion: entitySource?.effectiveVersion ?? null,
         buildKey: entity?.activeBuildKey ?? null,
         executionDigest: entity?.activeExecutionDigest ?? null,
+        authorityRequests: entity?.activeAuthority?.requests,
         ...(slot.owner_user_id ? { owner: slot.owner_user_id } : {}),
         children: [],
         positionId: slot.position_id,
         snapshot,
         history: { entries, index: cursor },
-        artifacts: { buildState: "building", buildProgress: "Restoring..." },
+        artifacts,
       };
     };
 
@@ -1287,7 +1314,7 @@ export class PanelManager {
       for (const item of items) sortRecursive(item.children);
     };
     sortRecursive(roots);
-    return roots;
+    return { revision: state.revision, roots, preparingSlotIds };
   }
 
   private snapshotFromHistoryRow(slotId: PanelSlotId, row: SlotHistoryRow): PanelSnapshot {

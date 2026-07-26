@@ -1626,6 +1626,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "direct:src/server/internalDOs/workspaceDO.ts:panelTreeStateSnapshot",
+    rpcPlane: "workspace-do",
+    capability: "workspace.runtime-state.manage",
+    authorityPrincipals: ["host"],
+    owner: "src/server/internalDOs/workspaceDO.ts",
+    source: "product/bootstrap",
+    method: "panelTreeStateSnapshot",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "src/server/internalDOs/workspaceDO.ts",
+    },
+  },
+  {
     id: "direct:src/server/internalDOs/workspaceDO.ts:panelUpdateTitle",
     rpcPlane: "workspace-do",
     capability: "workspace.runtime-state.manage",

@@ -34,6 +34,7 @@ import {
   type DurableWorkQueue,
   type DurableWorkReadyHint,
 } from "../../../packages/shared/src/durableWork.js";
+import type { WorkspacePanelTreeStateSnapshot } from "../../../packages/shared/src/panel/workspaceStateSnapshot.js";
 
 interface DbEntityRow {
   id: string;
@@ -192,6 +193,7 @@ export interface GcOptions {
 }
 
 const DEFAULT_GRACE_MS = 60 * 60 * 1000;
+const PANEL_TREE_REVISION_KEY = "panel_tree_revision";
 const WORKSPACE_REQUIRED_TABLES = [
   "entities",
   "slots",
@@ -560,6 +562,7 @@ export class WorkspaceDO extends DurableObjectBase {
         value TEXT NOT NULL
       )
     `);
+    this.createPanelTreeRevisionTracking();
     // context_edges — the context-relationship registry. Two edge kinds:
     // 'lifecycle' (subagent contexts — cascaded on destroy, cloned on recursive
     // clone) and 'lineage' (conversation-fork provenance — access-only, never
@@ -582,6 +585,79 @@ export class WorkspaceDO extends DurableObjectBase {
       `CREATE INDEX IF NOT EXISTS idx_context_edges_child ON context_edges(context_id)`
     );
     this.createLifecycleTables();
+  }
+
+  protected createPanelTreeRevisionTracking(): void {
+    this.sql.exec(
+      `INSERT OR IGNORE INTO workspace_meta (key, value) VALUES ('${PANEL_TREE_REVISION_KEY}', '0')`
+    );
+    const bumpPanelTreeRevision = `
+      INSERT INTO workspace_meta (key, value)
+      VALUES ('${PANEL_TREE_REVISION_KEY}', '1')
+      ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1;
+    `;
+    for (const [name, timing] of [
+      ["slots_insert", "AFTER INSERT ON slots"],
+      ["slots_update", "AFTER UPDATE ON slots"],
+      ["slots_delete", "AFTER DELETE ON slots"],
+    ] as const) {
+      this.sql.exec(`
+        CREATE TRIGGER IF NOT EXISTS panel_tree_revision_${name}
+        ${timing} BEGIN
+          ${bumpPanelTreeRevision}
+        END
+      `);
+    }
+    this.sql.exec(`
+      CREATE TRIGGER IF NOT EXISTS panel_tree_revision_history_insert
+      AFTER INSERT ON slot_history
+      WHEN EXISTS (
+        SELECT 1 FROM slots WHERE slot_id = NEW.slot_id AND closed_at IS NULL
+      ) BEGIN
+        ${bumpPanelTreeRevision}
+      END
+    `);
+    this.sql.exec(`
+      CREATE TRIGGER IF NOT EXISTS panel_tree_revision_history_update
+      AFTER UPDATE ON slot_history
+      WHEN EXISTS (
+        SELECT 1 FROM slots WHERE slot_id = NEW.slot_id AND closed_at IS NULL
+      ) OR EXISTS (
+        SELECT 1 FROM slots WHERE slot_id = OLD.slot_id AND closed_at IS NULL
+      ) BEGIN
+        ${bumpPanelTreeRevision}
+      END
+    `);
+    this.sql.exec(`
+      CREATE TRIGGER IF NOT EXISTS panel_tree_revision_history_delete
+      AFTER DELETE ON slot_history
+      WHEN EXISTS (
+        SELECT 1 FROM slots WHERE slot_id = OLD.slot_id AND closed_at IS NULL
+      ) BEGIN
+        ${bumpPanelTreeRevision}
+      END
+    `);
+    this.sql.exec(`
+      CREATE TRIGGER IF NOT EXISTS panel_tree_revision_entity_update
+      AFTER UPDATE ON entities
+      WHEN EXISTS (
+        SELECT 1 FROM slots
+        WHERE (current_entity_id = NEW.id OR current_entity_id = OLD.id)
+          AND closed_at IS NULL
+      ) BEGIN
+        ${bumpPanelTreeRevision}
+      END
+    `);
+    this.sql.exec(`
+      CREATE TRIGGER IF NOT EXISTS panel_tree_revision_entity_delete
+      AFTER DELETE ON entities
+      WHEN EXISTS (
+        SELECT 1 FROM slots
+        WHERE current_entity_id = OLD.id AND closed_at IS NULL
+      ) BEGIN
+        ${bumpPanelTreeRevision}
+      END
+    `);
   }
 
   protected override requiredTables(): readonly string[] {
@@ -2137,6 +2213,52 @@ export class WorkspaceDO extends DurableObjectBase {
   // ─────────────────────────────────────────────────────────────
   // slot.* operations
   // ─────────────────────────────────────────────────────────────
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.manage" },
+    tier: "gated",
+    sensitivity: "read",
+  })
+  panelTreeStateSnapshot(): WorkspacePanelTreeStateSnapshot {
+    return this.ctx.storage.transactionSync(() => {
+      const revisionValue = this.sql
+        .exec(`SELECT value FROM workspace_meta WHERE key = ?`, PANEL_TREE_REVISION_KEY)
+        .one()["value"];
+      const revision = Number(revisionValue);
+      if (!Number.isSafeInteger(revision) || revision < 0) {
+        throw new Error(`Invalid panel tree revision: ${String(revisionValue)}`);
+      }
+      const slots = this.slotListOpen();
+      const histories = this.sql
+        .exec(
+          `SELECT history.*
+             FROM slot_history history
+             JOIN slots slot ON slot.slot_id = history.slot_id
+            WHERE slot.closed_at IS NULL
+            ORDER BY history.slot_id, history.cursor`
+        )
+        .toArray() as unknown as WorkspacePanelTreeStateSnapshot["histories"];
+      const entityRows = this.sql
+        .exec(
+          `SELECT entity.*
+             FROM entities entity
+            WHERE entity.id IN (
+              SELECT current_entity_id
+                FROM slots
+               WHERE closed_at IS NULL AND current_entity_id IS NOT NULL
+            )
+            ORDER BY entity.id`
+        )
+        .toArray() as unknown as DbEntityRow[];
+      return {
+        revision,
+        slots: slots as unknown as WorkspacePanelTreeStateSnapshot["slots"],
+        histories,
+        entities: entityRows.map((row) => this.rowToEntity(row)),
+      };
+    });
+  }
 
   @rpc({
     principals: ["host"],

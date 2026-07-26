@@ -4872,6 +4872,47 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
+      "id": "direct:src/server/internalDOs/workspaceDO.ts:panelTreeStateSnapshot",
+      "rpcPlane": "workspace-do",
+      "owner": "src/server/internalDOs/workspaceDO.ts",
+      "source": "product/bootstrap",
+      "method": "panelTreeStateSnapshot",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "src/server/internalDOs/workspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "gated",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:panelTreeStateSnapshot)",
+      "r3b": {
+        "review": "consistent-bounded-panel-tree-projection",
+        "change": "Adds one host-only, read-only projection of the open slots, histories, and current entity records already exposed through granular WorkspaceDO reads. It performs no mutation and replaces startup fanout with one internally consistent transaction."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
       "id": "direct:src/server/internalDOs/workspaceDO.ts:panelUpdateTitle",
       "rpcPlane": "workspace-do",
       "owner": "src/server/internalDOs/workspaceDO.ts",

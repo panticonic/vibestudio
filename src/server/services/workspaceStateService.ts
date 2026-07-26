@@ -1,9 +1,9 @@
 /**
  * workspace-state — read/write surface over slot.* and entity.* on WorkspaceDO.
  *
- * Replaces the old workspace-sync op-log service. Reads (slot.list/get/history,
- * entity.resolveActive) are open to all runtime kinds; writes (slot create /
- * commitPreparedNavigation / setParent / close) are gated to
+ * Replaces the old workspace-sync op-log service. Reads (panelTree.snapshot,
+ * slot.list/get/history, and entity resolution) are open to all runtime kinds;
+ * writes (slot create / commitPreparedNavigation / setParent / close) are gated to
  * the shipped shell, approved shell app, and server. Panels and workers
  * manipulate slots via runtime.*, not directly here.
  */
@@ -12,6 +12,7 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import type { PanelSearchResult } from "@vibestudio/shared/panelSearchTypes";
+import type { WorkspacePanelTreeStateSnapshot } from "@vibestudio/shared/panel/workspaceStateSnapshot";
 import {
   WORKSPACE_STATE_READ_POLICY as READ_POLICY,
   workspaceStateMethods,
@@ -61,6 +62,8 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
     authority: READ_POLICY,
     methods: workspaceStateMethods,
     handler: defineServiceHandler("workspace-state", workspaceStateMethods, {
+      "panelTree.snapshot": () =>
+        dispatch<WorkspacePanelTreeStateSnapshot>("panelTreeStateSnapshot", []),
       "slot.list": () => dispatch<unknown>("slotListOpen", []),
       "slot.get": (_ctx, [slotId]) => dispatch<unknown>("slotGet", [slotId]),
       "slot.history": (_ctx, [slotId]) => dispatch<unknown>("slotHistory", [slotId]),

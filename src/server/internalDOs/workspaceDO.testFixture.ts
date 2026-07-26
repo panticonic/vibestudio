@@ -105,6 +105,7 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         value TEXT NOT NULL
       )
     `);
+    this.createPanelTreeRevisionTracking();
     sql.exec(`
       CREATE TABLE IF NOT EXISTS lifecycle_epochs (
         epoch_id TEXT PRIMARY KEY,

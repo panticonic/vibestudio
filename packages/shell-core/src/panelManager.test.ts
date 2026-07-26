@@ -8,6 +8,7 @@ import { PanelManager } from "./panelManager.js";
 import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
 import type {
+  EntityRecord,
   RuntimeEntityCreateSpec,
   RuntimeEntityHandle,
 } from "@vibestudio/shared/runtime/entitySpec";
@@ -60,6 +61,7 @@ function createWorkspaceMemory() {
   const slots = new Map<PanelSlotId, MemSlot>();
   const history = new Map<PanelSlotId, MemHistoryEntry[]>();
   const entities = new Map<string, MemEntity>();
+  let revision = 0;
 
   const retired: string[] = [];
   const created: string[] = [];
@@ -72,74 +74,78 @@ function createWorkspaceMemory() {
       return null;
     }
   };
+  const slotRow = (slot: MemSlot): SlotRow => ({
+    ...slot,
+    current_entity_title: slot.current_entity_id
+      ? (entities.get(slot.current_entity_id)?.displayTitle ?? null)
+      : null,
+  });
+  const historyRows = (slotId: PanelSlotId): SlotHistoryRow[] =>
+    (history.get(slotId) ?? []).map((row, cursor) => ({
+      slot_id: slotId,
+      cursor,
+      entry_key: row.entry_key,
+      entity_id: row.entity_id,
+      source: row.source,
+      context_id: row.context_id,
+      state_args: row.state_args,
+      options: row.options,
+      recorded_at: row.recorded_at,
+    }));
+  const entityRecord = (entity: MemEntity): EntityRecord => ({
+    id: entity.id,
+    kind: entity.kind,
+    source: {
+      repoPath: entity.source,
+      effectiveVersion: entity.status === "preparing" ? "" : "test",
+    },
+    contextId: entity.contextId,
+    key: entity.key,
+    ...(entity.activeBuildKey ? { activeBuildKey: entity.activeBuildKey } : {}),
+    ...(entity.activeExecutionDigest
+      ? { activeExecutionDigest: entity.activeExecutionDigest }
+      : {}),
+    ...(entity.status === "active" ? { activeAuthority: entity.activeAuthority } : {}),
+    createdAt: Date.now(),
+    status: entity.status,
+    cleanupComplete: entity.status === "retired",
+  });
 
   const workspaceState: WorkspaceStateClient = {
+    async getPanelTreeStateSnapshot() {
+      const openSlots = [...slots.values()].filter((slot) => slot.closed_at === null);
+      const currentEntityIds = new Set(
+        openSlots.flatMap((slot) => (slot.current_entity_id ? [slot.current_entity_id] : []))
+      );
+      return {
+        revision,
+        slots: openSlots.map(slotRow),
+        histories: openSlots.flatMap((slot) => historyRows(slot.slot_id)),
+        entities: [...currentEntityIds].flatMap((id) => {
+          const entity = entities.get(id);
+          return entity ? [entityRecord(entity)] : [];
+        }),
+      };
+    },
     async listSlots(): Promise<SlotRow[]> {
-      return [...slots.values()].map((s) => ({
-        ...s,
-        current_entity_title: s.current_entity_id
-          ? (entities.get(s.current_entity_id)?.displayTitle ?? null)
-          : null,
-      }));
+      return [...slots.values()].map(slotRow);
     },
     async getSlot(slotId): Promise<SlotRow | null> {
       const s = slots.get(slotId);
-      return s
-        ? {
-            ...s,
-            current_entity_title: s.current_entity_id
-              ? (entities.get(s.current_entity_id)?.displayTitle ?? null)
-              : null,
-          }
-        : null;
+      return s ? slotRow(s) : null;
     },
     async getSlotHistory(slotId): Promise<SlotHistoryRow[]> {
-      const rows = history.get(slotId) ?? [];
-      return rows.map((row, cursor) => ({
-        slot_id: slotId,
-        cursor,
-        entry_key: row.entry_key,
-        entity_id: row.entity_id,
-        source: row.source,
-        context_id: row.context_id,
-        state_args: row.state_args,
-        options: row.options,
-        recorded_at: row.recorded_at,
-      }));
+      return historyRows(slotId);
     },
     async resolveActiveEntity(id) {
       const e = entities.get(id);
       if (!e || e.status !== "active") return null;
-      return {
-        id: e.id,
-        kind: e.kind,
-        source: { repoPath: e.source, effectiveVersion: "test" },
-        contextId: e.contextId,
-        key: e.key,
-        activeBuildKey: e.activeBuildKey,
-        activeExecutionDigest: e.activeExecutionDigest,
-        activeAuthority: e.activeAuthority,
-        createdAt: Date.now(),
-        status: e.status,
-        cleanupComplete: true,
-      };
+      return entityRecord(e);
     },
     async resolveEntity(id) {
       const e = entities.get(id);
       if (!e) return null;
-      return {
-        id: e.id,
-        kind: e.kind,
-        source: { repoPath: e.source, effectiveVersion: e.status === "preparing" ? "" : "test" },
-        contextId: e.contextId,
-        key: e.key,
-        ...(e.activeBuildKey ? { activeBuildKey: e.activeBuildKey } : {}),
-        ...(e.activeExecutionDigest ? { activeExecutionDigest: e.activeExecutionDigest } : {}),
-        ...(e.status === "active" ? { activeAuthority: e.activeAuthority } : {}),
-        createdAt: Date.now(),
-        status: e.status,
-        cleanupComplete: e.status === "retired",
-      };
+      return entityRecord(e);
     },
     async resolveSlotByEntity(entityId) {
       for (const s of slots.values()) {
@@ -173,6 +179,7 @@ function createWorkspaceMemory() {
           },
         ]);
       }
+      revision += 1;
     },
     async commitPreparedNavigation(input) {
       const { slotId, expectedCurrentEntityId, mutation } = input;
@@ -216,6 +223,7 @@ function createWorkspaceMemory() {
       slot.current_entity_id = row.entity_id;
       slot.current_entry_key = row.entry_key;
       history.set(slotId, nextRows);
+      revision += 1;
       return {
         previousEntityId: previousEntityId as PanelEntityId,
         currentEntityId: row.entity_id,
@@ -229,14 +237,17 @@ function createWorkspaceMemory() {
       const rows = history.get(slotId) ?? [];
       const row = rows.find((r) => r.entry_key === slot.current_entry_key);
       if (row) row.state_args = stringifyStateArgs(stateArgs);
+      revision += 1;
     },
     async setSlotParent(slotId, parentSlotId) {
       const slot = slots.get(slotId);
       if (slot) slot.parent_slot_id = parentSlotId;
+      revision += 1;
     },
     async setSlotPosition(slotId, positionId) {
       const slot = slots.get(slotId);
       if (slot) slot.position_id = positionId;
+      revision += 1;
     },
     async moveSlot(slotId, parentSlotId, positionId) {
       const slot = slots.get(slotId);
@@ -244,10 +255,12 @@ function createWorkspaceMemory() {
         slot.parent_slot_id = parentSlotId;
         slot.position_id = positionId;
       }
+      revision += 1;
     },
     async closeSlot(slotId) {
       const slot = slots.get(slotId);
       if (slot) slot.closed_at = Date.now();
+      revision += 1;
     },
   };
 
@@ -277,6 +290,7 @@ function createWorkspaceMemory() {
         });
       }
       created.push(id);
+      revision += 1;
       return {
         id,
         kind: spec.kind,
@@ -303,6 +317,7 @@ function createWorkspaceMemory() {
         activeAuthority: { requests: [] },
       });
       created.push(id);
+      revision += 1;
       return {
         id,
         kind: "panel",
@@ -321,6 +336,7 @@ function createWorkspaceMemory() {
       entity.status = "active";
       entity.activeBuildKey = "b".repeat(64);
       entity.activeExecutionDigest = "a".repeat(64);
+      revision += 1;
       return {
         id,
         kind: "panel",
@@ -336,13 +352,23 @@ function createWorkspaceMemory() {
       retired.push(id);
       const e = entities.get(id);
       if (e) e.status = "retired";
+      revision += 1;
     },
   };
 
   return {
     workspaceState,
     runtime,
-    state: { slots, history, entities, retired, created },
+    state: {
+      slots,
+      history,
+      entities,
+      retired,
+      created,
+      get revision() {
+        return revision;
+      },
+    },
   };
 }
 
@@ -1543,6 +1569,110 @@ describe("PanelManager", () => {
     expect(getCurrentSnapshot(registryB.getPanel(created.panelId)!).source).toBe("panels/second");
     await managerB.navigateHistory(created.panelId, -1);
     expect(getCurrentSnapshot(registryB.getPanel(created.panelId)!).source).toBe("panels/first");
+  });
+
+  it("reconstructs startup state with one aggregate RPC instead of per-slot fanout", async () => {
+    const registryA = new PanelRegistry({});
+    const { mem, deps } = makeManagerDeps("/tmp/workspace");
+    const managerA = new PanelManager({
+      registry: registryA,
+      ...deps,
+      allowMissingManifests: true,
+    });
+    for (let index = 0; index < 64; index++) {
+      await managerA.createBrowser(null, `https://startup-${index}.example`, {
+        addAsRoot: true,
+      });
+    }
+
+    const aggregate = vi.spyOn(mem.workspaceState, "getPanelTreeStateSnapshot");
+    const list = vi.spyOn(mem.workspaceState, "listSlots");
+    const history = vi.spyOn(mem.workspaceState, "getSlotHistory");
+    const entity = vi.spyOn(mem.workspaceState, "resolveEntity");
+    const restored = new PanelRegistry({});
+    const managerB = new PanelManager({
+      registry: restored,
+      ...deps,
+      allowMissingManifests: true,
+    });
+
+    await managerB.syncSnapshot();
+
+    expect(restored.listPanels()).toHaveLength(64);
+    expect(aggregate).toHaveBeenCalledOnce();
+    expect(list).not.toHaveBeenCalled();
+    expect(history).not.toHaveBeenCalled();
+    expect(entity).not.toHaveBeenCalled();
+  });
+
+  it("returns preparing slots and their pending UX directly from the aggregate", async () => {
+    const { mem, deps } = makeManagerDeps("/tmp/workspace");
+    const reserved = await mem.runtime.reservePanelEntity({
+      kind: "panel",
+      source: "panels/preparing",
+      key: "preparing-entry",
+      contextId: "ctx-preparing",
+    });
+    const slotId = "panel:tree/preparing" as PanelSlotId;
+    await mem.workspaceState.createSlot({
+      slotId,
+      parentSlotId: null,
+      positionId: "root",
+      initialEntry: {
+        entryKey: "preparing-entry",
+        entityId: reserved.id as PanelEntityId,
+        source: "panels/preparing",
+        contextId: "ctx-preparing",
+      },
+    });
+    const entity = vi.spyOn(mem.workspaceState, "resolveEntity");
+    const registry = new PanelRegistry({});
+    const manager = new PanelManager({
+      registry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+
+    const loaded = await manager.loadTree();
+
+    expect(loaded.preparingSlotIds).toEqual([slotId]);
+    expect(registry.getPanel(slotId)).toMatchObject({
+      runtimeEntityId: reserved.id,
+      buildKey: null,
+      executionDigest: null,
+      artifacts: {
+        buildState: "pending",
+        buildProgress: "Preparing panel runtime...",
+      },
+    });
+    expect(entity).not.toHaveBeenCalled();
+  });
+
+  it("keeps revision comparability after a forced aggregate sync", async () => {
+    const registry = new PanelRegistry({});
+    const { mem, deps } = makeManagerDeps("/tmp/workspace");
+    const manager = new PanelManager({
+      registry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+    await manager.createBrowser(null, "https://revision.example", { addAsRoot: true });
+    await manager.syncSnapshot();
+    const authoritativeRevision = mem.state.revision;
+
+    expect(
+      manager.applyForestSnapshot({
+        revision: authoritativeRevision,
+        forest: [],
+      })
+    ).toBe(false);
+    expect(
+      manager.applyForestSnapshot({
+        revision: authoritativeRevision - 1,
+        forest: [],
+      })
+    ).toBe(false);
+    expect(registry.listPanels()).toHaveLength(1);
   });
 
   it("applies complete forest events directly and rejects stale revisions", async () => {

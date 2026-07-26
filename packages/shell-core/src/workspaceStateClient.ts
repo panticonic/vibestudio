@@ -14,6 +14,11 @@ import type {
   RuntimePanelEntityCreateSpec,
 } from "@vibestudio/shared/runtime/entitySpec";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
+import type {
+  WorkspacePanelTreeHistoryRow,
+  WorkspacePanelTreeSlot,
+  WorkspacePanelTreeStateSnapshot,
+} from "@vibestudio/shared/panel/workspaceStateSnapshot";
 
 export interface SlotHistoryEntryInput {
   entryKey: string;
@@ -51,38 +56,18 @@ export interface SlotCreateInput {
   initialEntry?: SlotHistoryEntryInput;
 }
 
-export interface SlotRow {
-  slot_id: PanelSlotId;
-  parent_slot_id: PanelSlotId | null;
-  current_entity_id: PanelEntityId | null;
-  current_entity_title?: string | null;
-  current_entry_key: string | null;
-  position_id: string;
-  /** Owning-user id (WP3); null for pre-identity/system-seeded slots. */
-  owner_user_id?: string | null;
-  created_at: number;
-  closed_at: number | null;
-}
-
-export interface SlotHistoryRow {
-  slot_id: PanelSlotId;
-  cursor: number;
-  entry_key: string;
-  entity_id: PanelEntityId;
-  source: string;
-  context_id: string;
-  state_args: string | null;
-  options?: string | null;
-  recorded_at: number;
-}
+export type SlotRow = WorkspacePanelTreeSlot;
+export type SlotHistoryRow = WorkspacePanelTreeHistoryRow;
+export type PanelTreeStateSnapshot = WorkspacePanelTreeStateSnapshot;
 
 /**
  * Client surface mirroring the `workspace-state` server service.
- * Read methods (slot list/get/history, entity.resolveActive) are available to
- * any kind; write methods (everything starting with `slot` other than reads)
- * are only routable from shell/server callers.
+ * Read methods (the panel-tree aggregate, slot list/get/history, and entity
+ * resolution) are available to any kind; write methods (everything starting
+ * with `slot` other than reads) are only routable from shell/server callers.
  */
 export interface WorkspaceStateClient {
+  getPanelTreeStateSnapshot(): Promise<PanelTreeStateSnapshot>;
   listSlots(): Promise<SlotRow[]>;
   getSlot(slotId: PanelSlotId): Promise<SlotRow | null>;
   getSlotHistory(slotId: PanelSlotId): Promise<SlotHistoryRow[]>;

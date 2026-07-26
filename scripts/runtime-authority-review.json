@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:1e9efecb7a0377b1b21573a7c99742f0a0099ecb02707688c0c641cd1a366dd1",
+  "censusDigest": "sha256:bbf65846c6ab2343b494fe4cfcd03f6a306ba194fcd3ac483d91c9dc0ca91f0e",
   "decisions": {
     "direct:src/server/internalDOs/evalDO.ts:acquireKernelLease": {
       "review": "host-only-eval-kernel-residency-refresh",
@@ -69,6 +69,10 @@
     "host:onboardingStatus.read": {
       "review": "bounded-owner-status-projection",
       "change": "Adds a read-only aggregate of existing host-owned onboarding facts for the calling workspace and device; it returns normalized status only, performs no live verification, and exposes no credential secret."
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:panelTreeStateSnapshot": {
+      "review": "consistent-bounded-panel-tree-projection",
+      "change": "Adds one host-only, read-only projection of the open slots, histories, and current entity records already exposed through granular WorkspaceDO reads. It performs no mutation and replaces startup fanout with one internally consistent transaction."
     },
     "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onAuthorityChanged": {
       "review": "host-authority-redrive-hint",

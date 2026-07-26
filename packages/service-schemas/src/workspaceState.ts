@@ -3,11 +3,10 @@
  * entity.* on WorkspaceDO. Pure-data wire contract shared by the server
  * registration and typed clients.
  *
- * Reads (slot.list/get/history, entity.resolveActive) are open to all runtime
- * kinds; writes (slot create / commitPreparedNavigation / setParent / close)
- * are gated to the shipped shell, approved shell app, and
- * server. Panels and workers manipulate slots via runtime.*, not directly
- * here.
+ * Reads (panelTree.snapshot, slot.list/get/history, and entity resolution) are
+ * open to all runtime kinds; writes (slot create / commitPreparedNavigation /
+ * setParent / close) are gated to the shipped shell, approved shell app, and
+ * server. Panels and workers manipulate slots via runtime.*, not directly here.
  */
 
 import { z } from "zod";
@@ -146,7 +145,21 @@ export const EntityRecordSchema = z.object({
   error: z.string().optional(),
 });
 
+export const PanelTreeStateSnapshotSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  slots: z.array(SlotRowSchema),
+  histories: z.array(SlotHistoryRowSchema),
+  entities: z.array(EntityRecordSchema),
+});
+
 export const workspaceStateMethods = defineServiceMethods({
+  "panelTree.snapshot": {
+    args: z.tuple([]),
+    description: "Read one revisioned, internally consistent panel-tree reconstruction snapshot.",
+    authority: WORKSPACE_STATE_READ_POLICY,
+    access: { sensitivity: "read" },
+    returns: PanelTreeStateSnapshotSchema,
+  },
   "slot.list": {
     args: z.tuple([]),
     description: "List open slots.",
