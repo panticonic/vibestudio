@@ -517,6 +517,34 @@ describe("eval lifecycle semantic validators", () => {
       },
     ]);
     expect(scenario(evalLifecycleTests, "eval-db-persistence").validate(result).passed).toBe(true);
+    expect(
+      scenario(evalLifecycleTests, "eval-db-persistence").validate(
+        execution("The later query returned the one row from the earlier evaluation.", [
+          {
+            code: "db.run('CREATE TABLE rows (id INTEGER)'); db.run('INSERT INTO rows VALUES (1)'); return { inserted: 1 };",
+            returnValue: { inserted: 1 },
+          },
+          {
+            code: "return { rows: db.exec('SELECT * FROM rows') };",
+            returnValue: { rows: [{ id: 1 }] },
+          },
+        ])
+      ).passed
+    ).toBe(true);
+    expect(
+      scenario(evalLifecycleTests, "eval-db-persistence").validate(
+        execution("The row written through db.exec remained available later.", [
+          {
+            code: "db.exec('CREATE TABLE rows (id INTEGER)'); db.exec('INSERT INTO rows VALUES (1)'); return { inserted: 1 };",
+            returnValue: { inserted: 1 },
+          },
+          {
+            code: "return { rows: db.exec('SELECT * FROM rows') };",
+            returnValue: { rows: [{ id: 1 }] },
+          },
+        ])
+      ).passed
+    ).toBe(true);
   });
 
   it("requires an actual reset boundary after a separate scope confirmation", () => {
@@ -532,6 +560,23 @@ describe("eval lifecycle semantic validators", () => {
     expect(scenario(evalLifecycleTests, "eval-scope-reset").validate(result).passed).toBe(true);
     expect(
       scenario(evalLifecycleTests, "eval-scope-reset").validate(
+        execution("A clean baseline was established, then the later reset removed the value.", [
+          {
+            code: "scope.probe = 'retained'; return scope.probe;",
+            reset: true,
+            returnValue: "retained",
+          },
+          { code: "return scope.probe;", returnValue: "retained" },
+          {
+            code: "return { oldValue: scope.probe ?? null };",
+            reset: true,
+            returnValue: { oldValue: null },
+          },
+        ])
+      ).passed
+    ).toBe(true);
+    expect(
+      scenario(evalLifecycleTests, "eval-scope-reset").validate(
         execution("I reset it and the value was gone.", [
           { code: "return { fresh: true };", returnValue: { fresh: true } },
         ])
@@ -540,13 +585,17 @@ describe("eval lifecycle semantic validators", () => {
   });
 
   it("accepts one terminal cancellation and rejects cancellation prose alone", () => {
-    const cancelled = execution("The long run reached a cancelled terminal state.", [
-      {
-        code: "await new Promise(() => {});",
-        status: "cancelled",
-        result: { message: "run cancelled by caller" },
+    const cancelled: TestExecutionResult = {
+      duration: 0,
+      messages: [],
+      diagnostics: {
+        evalCancellation: {
+          runId: "run-1",
+          cancel: { ok: true, forcedReset: false },
+          terminal: { status: "cancelled" },
+        },
       },
-    ]);
+    };
     expect(scenario(evalLifecycleTests, "eval-cancel-run").validate(cancelled).passed).toBe(true);
     expect(
       scenario(evalLifecycleTests, "eval-cancel-run").validate(

@@ -59,6 +59,12 @@ interface ModelPolicyState {
   activations: ModelPolicyActivation[];
 }
 
+export interface EvalCancellationProbe {
+  runId: string;
+  cancel: { ok: true; forcedReset: boolean };
+  terminal: { status: string; result?: unknown };
+}
+
 function fixturePublicationAuthority(
   fixture: (WorkspaceRepoFixtureSpec & { repoName: string | null }) | null
 ): AgentExecutionTestPolicySpec["authority"] {
@@ -449,6 +455,43 @@ export class HeadlessRunner {
       }
     }
     return diagnostics;
+  }
+
+  /**
+   * Exercise the host-side asynchronous eval contract from the harness that
+   * owns the run. An ordinary agent tool call is intentionally synchronous, so
+   * asking that same blocked turn to discover and cancel its own run cannot
+   * test cancellation.
+   */
+  async probeEvalCancellation(): Promise<EvalCancellationProbe> {
+    const runId = `system-test-cancel-${crypto.randomUUID()}`;
+    const subKey = `system-test-cancel-${crypto.randomUUID()}`;
+    let activated = false;
+    try {
+      const started = await rpc.call<{ runId: string }>("main", "eval.startRun", [
+        {
+          subKey,
+          lifecycle: "finite",
+          runId,
+          code: "await new Promise(() => {});",
+        },
+      ]);
+      activated = true;
+      if (started.runId !== runId) {
+        throw new Error(`eval.startRun returned ${started.runId}, expected ${runId}`);
+      }
+      const cancel = await rpc.call<{ ok: true; forcedReset: boolean }>("main", "eval.cancel", [
+        { subKey, runId },
+      ]);
+      const terminal = await rpc.call<{ status: string; result?: unknown }>("main", "eval.getRun", [
+        { subKey, runId },
+      ]);
+      return { runId, cancel, terminal };
+    } finally {
+      if (activated) {
+        await rpc.call("main", "eval.dispose", [{ subKey }]);
+      }
+    }
   }
 
   private requireWorkspaceRepoFixture(): NonNullable<HeadlessRunner["workspaceRepoFixture"]> {

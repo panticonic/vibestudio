@@ -16,9 +16,7 @@ function successfulEvalCalls(result: TestExecutionResult) {
   );
 }
 
-function invocationKernelIncarnation(
-  call: ReturnType<typeof getToolCalls>[number]
-): string | null {
+function invocationKernelIncarnation(call: ReturnType<typeof getToolCalls>[number]): string | null {
   const result = call.execution?.result;
   if (!result || typeof result !== "object" || Array.isArray(result)) return null;
   const details = (result as Record<string, unknown>)["details"];
@@ -41,7 +39,9 @@ function validateDbPersistence(result: TestExecutionResult) {
   }
   const writer = calls.findIndex((call) => {
     const code = String(call.arguments?.["code"] ?? "");
-    return /\bCREATE\b/iu.test(code) && /\bINSERT\b/iu.test(code) && /\bdb\.run\b/u.test(code);
+    return (
+      /\bCREATE\b/iu.test(code) && /\bINSERT\b/iu.test(code) && /\bdb\.(?:run|exec)\b/u.test(code)
+    );
   });
   const reader = calls.findIndex((call, index) => {
     const code = String(call.arguments?.["code"] ?? "");
@@ -55,9 +55,43 @@ function validateDbPersistence(result: TestExecutionResult) {
     };
   }
   const readValue = invocationReturnValue(readerCall);
-  return readValue.present && walkArrays([readValue.value]).some((rows) => rows.length >= 2)
+  return readValue.present && walkArrays([readValue.value]).some((rows) => rows.length >= 1)
     ? { passed: true, reason: undefined }
     : { passed: false, reason: "The later database read did not return the persisted rows" };
+}
+
+async function orchestrateDbPersistence(
+  context: TestOrchestrationContext
+): Promise<TestExecutionResult> {
+  const startedAt = Date.now();
+  const session = await context.runner.spawn();
+  let error: string | undefined;
+  try {
+    await context.sendAndWait(
+      session,
+      "Using exactly one eval call, use synchronous db.run to create a table named system_test_eval_db and insert the row ('probe', 'DB_PERSISTENCE_OK'). Return the inserted value. Do not inspect the API or make any other tool call.",
+      "write eval database row"
+    );
+    await context.sendAndWait(
+      session,
+      "Using exactly one separate eval call, read system_test_eval_db with db.exec, which directly returns an array of rows. Return that array unchanged. Do not write or recreate the row.",
+      "read eval database row"
+    );
+  } catch (cause) {
+    error = formatError(cause);
+  }
+  const execution: TestExecutionResult = {
+    messages: [...session.messages],
+    duration: Date.now() - startedAt,
+    snapshot: session.snapshot(),
+    ...(error ? { error } : {}),
+  };
+  try {
+    await session.close();
+  } catch (cause) {
+    execution.cleanupErrors = [`close: ${formatError(cause)}`];
+  }
+  return execution;
 }
 
 function resetResultProvesFresh(result: TestExecutionResult, resetCallIndex: number): boolean {
@@ -82,7 +116,9 @@ function validateScopeReset(result: TestExecutionResult) {
   const base = completedScenarioEvidence(result);
   if (!base.passed) return base;
   const calls = successfulEvalCalls(result);
-  const resetIndex = calls.findIndex((call) => call.arguments?.["reset"] === true);
+  const resetIndex = calls.findIndex(
+    (call, index) => index >= 2 && call.arguments?.["reset"] === true
+  );
   if (resetIndex < 2) {
     return {
       passed: false,
@@ -110,39 +146,55 @@ function validateScopeReset(result: TestExecutionResult) {
       };
 }
 
-function cancellationText(call: ReturnType<typeof getToolCalls>[number]): string {
-  return JSON.stringify({
-    outcome: call.execution?.terminalOutcome,
-    result: call.execution?.result,
-    error: call.execution?.error,
-  });
-}
-
 function validateCancellation(result: TestExecutionResult) {
-  const base = completedScenarioEvidence(result, [], {
-    allowFailed: (call) => call.name === "eval" && /cancel|abort/iu.test(cancellationText(call)),
-  });
-  if (!base.passed) return base;
-  const cancelled = getToolCalls(result).filter(
-    (call) =>
-      call.name === "eval" &&
-      (call.execution?.isError === true ||
-        call.execution?.status === "error" ||
-        call.execution?.status === "failed" ||
-        call.execution?.status === "cancelled" ||
-        call.execution?.terminalOutcome === "cancelled") &&
-      /cancel|abort/iu.test(cancellationText(call))
-  );
-  return cancelled.length === 1
-    ? { passed: true, reason: undefined }
-    : {
-        passed: false,
-        reason: `Expected exactly one terminal cancelled eval invocation; observed ${cancelled.length}`,
-      };
+  if (result.error) return { passed: false, reason: result.error };
+  const probe = result.diagnostics?.["evalCancellation"];
+  if (!probe || typeof probe !== "object" || Array.isArray(probe)) {
+    return { passed: false, reason: "The harness did not record eval cancellation evidence" };
+  }
+  const record = probe as {
+    runId?: unknown;
+    cancel?: { ok?: unknown; forcedReset?: unknown };
+    terminal?: { status?: unknown };
+  };
+  if (
+    typeof record.runId !== "string" ||
+    record.cancel?.ok !== true ||
+    record.cancel.forcedReset !== false ||
+    record.terminal?.status !== "cancelled"
+  ) {
+    return {
+      passed: false,
+      reason: `Expected one cooperative cancelled terminal without a forced reset; observed ${JSON.stringify(
+        probe
+      )}`,
+    };
+  }
+  return { passed: true, reason: undefined };
 }
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function orchestrateCancellation(
+  context: TestOrchestrationContext
+): Promise<TestExecutionResult> {
+  const startedAt = Date.now();
+  try {
+    const probe = await context.runner.probeEvalCancellation();
+    return {
+      messages: [],
+      duration: Date.now() - startedAt,
+      diagnostics: { evalCancellation: probe },
+    };
+  } catch (cause) {
+    return {
+      messages: [],
+      duration: Date.now() - startedAt,
+      error: formatError(cause),
+    };
+  }
 }
 
 async function orchestrateLiveKernelContinuity(
@@ -215,11 +267,7 @@ function validateLiveKernelContinuity(result: TestExecutionResult) {
   }
   const writerIncarnation = invocationKernelIncarnation(writerCall);
   const readerIncarnation = invocationKernelIncarnation(readerCall);
-  if (
-    !writerIncarnation ||
-    !readerIncarnation ||
-    writerIncarnation !== readerIncarnation
-  ) {
+  if (!writerIncarnation || !readerIncarnation || writerIncarnation !== readerIncarnation) {
     return {
       passed: false,
       reason: "The eval kernel incarnation changed across the inter-cell idle boundary",
@@ -250,7 +298,8 @@ export const evalLifecycleTests: TestCase[] = [
     name: "eval-db-persistence",
     description: "The eval-local database persists rows across separate eval calls",
     category: "eval-lifecycle",
-    prompt: "Show whether the sandbox local database retains rows between separate evaluations.",
+    prompt: "Harness-orchestrated eval database continuity check.",
+    orchestrate: orchestrateDbPersistence,
     validate: validateDbPersistence,
   },
   {
@@ -265,9 +314,8 @@ export const evalLifecycleTests: TestCase[] = [
     name: "eval-cancel-run",
     description: "A long-running sandbox run can be cancelled and the cancellation is visible",
     category: "eval-lifecycle",
-    prompt:
-      "Start cancellable long-running sandbox work, cancel it, verify its terminal state, and leave nothing pending.",
-    expectedToolFailures: [{ name: "eval", errorIncludes: "cancel" }],
+    prompt: "Harness-orchestrated asynchronous eval cancellation check.",
+    orchestrate: orchestrateCancellation,
     validate: validateCancellation,
   },
 ];

@@ -109,6 +109,47 @@ describe("HeadlessRunner", () => {
     });
   });
 
+  it("cancels one harness-owned asynchronous eval and disposes its finite scope", async () => {
+    const runner = new HeadlessRunner("ctx-test");
+    mocks.rpc.call.mockImplementation(async (_target, method, args) => {
+      if (method === "eval.startRun") {
+        return { runId: (args[0] as { runId: string }).runId };
+      }
+      if (method === "eval.cancel") return { ok: true, forcedReset: false };
+      if (method === "eval.getRun") return { status: "cancelled" };
+      if (method === "eval.dispose") return { ok: true };
+      throw new Error(`Unexpected method ${method}`);
+    });
+
+    const result = await runner.probeEvalCancellation();
+
+    expect(result).toMatchObject({
+      runId: expect.stringMatching(/^system-test-cancel-/u),
+      cancel: { ok: true, forcedReset: false },
+      terminal: { status: "cancelled" },
+    });
+    const startArgs = mocks.rpc.call.mock.calls[0]![2][0] as {
+      subKey: string;
+      runId: string;
+    };
+    expect(mocks.rpc.call).toHaveBeenNthCalledWith(1, "main", "eval.startRun", [
+      expect.objectContaining({
+        subKey: startArgs.subKey,
+        lifecycle: "finite",
+        runId: startArgs.runId,
+      }),
+    ]);
+    expect(mocks.rpc.call).toHaveBeenNthCalledWith(2, "main", "eval.cancel", [
+      { subKey: startArgs.subKey, runId: startArgs.runId },
+    ]);
+    expect(mocks.rpc.call).toHaveBeenNthCalledWith(3, "main", "eval.getRun", [
+      { subKey: startArgs.subKey, runId: startArgs.runId },
+    ]);
+    expect(mocks.rpc.call).toHaveBeenNthCalledWith(4, "main", "eval.dispose", [
+      { subKey: startArgs.subKey },
+    ]);
+  });
+
   it("does not attach a fallback route to an explicit model override", async () => {
     const runner = new HeadlessRunner("ctx-test", { model: SYSTEM_TEST_AGENT_MODEL });
 
