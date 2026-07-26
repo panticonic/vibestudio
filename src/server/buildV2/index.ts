@@ -48,7 +48,6 @@ import {
   type BuildSourceProvider,
 } from "./buildSource.js";
 import { validateBuildRef } from "./refs.js";
-import { typecheckUnit } from "./typecheckFold.js";
 import {
   BuildRequestError,
   diagnosticsFromError,
@@ -726,6 +725,9 @@ export async function initBuildSystemV2(
       // Provision resolution exactly like the build: workspace deps from the
       // materialized subtrees, external deps from the app node_modules. Without
       // both, the bare source root resolves nothing → false "Cannot find module".
+      // TypeScript and its virtual standard-library payload are build-report
+      // dependencies, not server-bootstrap dependencies.
+      const { typecheckUnit } = await import("./typecheckFold.js");
       const tsc = await typecheckUnit(
         node.relativePath,
         sourceRoot,

@@ -14,13 +14,10 @@
 
 import * as path from "path";
 import * as fsp from "fs/promises";
-import {
-  TypeCheckService,
-  createDiskFileSource,
-  loadSourceFiles,
-  type TypeCheckDiagnostic,
-  type WorkspaceContext,
-  type WorkspacePackageInfo,
+import type {
+  TypeCheckDiagnostic,
+  WorkspaceContext,
+  WorkspacePackageInfo,
 } from "@vibestudio/typecheck";
 import { workspaceDiagnosticPath, type BuildDiagnostic } from "./diagnostics.js";
 
@@ -85,6 +82,8 @@ export async function typecheckUnit(
 ): Promise<BuildDiagnostic[]> {
   const unitDir = path.join(sourceRoot, unitRelativePath);
   try {
+    const { TypeCheckService, createDiskFileSource, loadSourceFiles } =
+      await import("@vibestudio/typecheck");
     const packages = new Map<string, WorkspacePackageInfo>();
     for (const dep of internalDeps) {
       const dir = path.join(sourceRoot, dep.relativePath);

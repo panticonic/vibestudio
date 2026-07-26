@@ -281,7 +281,7 @@ async function bundleWorker(source: string, entryPoint: string, ev: string): Pro
     source,
     ev,
     result.outputFiles[0]!.text,
-    collectWorkspaceRpcCatalog(dirname(entryPoint))
+    await collectWorkspaceRpcCatalog(dirname(entryPoint))
   );
 }
 

@@ -8,6 +8,7 @@ import { collectWorkersFromDependencies, workersToArray } from "./scripts/collec
 import { SERVER_ESM_BANNER } from "./scripts/build-artifact-contracts.mjs";
 import { generateConnectGrammar } from "./scripts/generate-connect-grammar.mjs";
 import { buildWorkerdPrograms } from "./scripts/build-workerd-programs.mjs";
+import { cleanHostBuildOutput } from "./scripts/clean-host-build-output.mjs";
 import {
   computeHostBuildFingerprint,
   HOST_BUILD_FINGERPRINT_PATH,
@@ -114,6 +115,8 @@ const serverElectronConfig = {
     "esbuild",
     "node-datachannel",
     "@vibestudio/extension-host",
+    "@vibestudio/typecheck",
+    "typescript",
     "vitest",
     "vitest/node",
     "vite",
@@ -196,6 +199,8 @@ const serverConfig = {
   external: [
     "esbuild",
     "@vibestudio/extension-host",
+    "@vibestudio/typecheck",
+    "typescript",
     "vitest",
     "vitest/node",
     "vite",
@@ -402,19 +407,6 @@ async function buildVibestudioPackages() {
   }
 }
 
-async function buildWorkspacePackages() {
-  console.log("Building userland workspace packages...");
-  try {
-    execSync("pnpm --dir workspace build", {
-      stdio: "inherit",
-    });
-    console.log("Userland workspace packages built successfully!");
-  } catch (error) {
-    console.error("Failed to build userland workspace packages:", error);
-    throw error;
-  }
-}
-
 async function buildHeadlessHost() {
   console.log("Building @vibestudio/headless-host...");
   try {
@@ -497,7 +489,10 @@ async function buildDependencyWorkers() {
  * Defines explicit dependencies between build steps to ensure correct ordering
  */
 async function build() {
+  let releaseLock;
   try {
+    releaseLock = await acquireSourcePrerequisiteLock();
+    cleanHostBuildOutput();
     fs.mkdirSync("dist", { recursive: true });
     // A build in progress is never a reusable build. In particular, retain no
     // prior success marker if a source mutation or compilation failure leaves
@@ -517,38 +512,19 @@ async function build() {
     await buildVibestudioPackages();
 
     // ========================================================================
-    // STEP 1: Build @workspace/* packages
-    // ========================================================================
-    // These must be built as they are consumed by later steps
-    // Dependencies: buildVibestudioPackages
-    await buildWorkspacePackages();
-
-    // ========================================================================
-    // STEP 1.5: Build standalone headless panel host
+    // STEP 1: Build standalone headless panel host
     // ========================================================================
     // The server auto-spawns this bundle as a child process when no desktop
     // CDP host is connected; copy it under dist/ so packaged CLIs can find it.
-    // Dependencies: buildVibestudioPackages, buildWorkspacePackages
+    // Dependencies: buildVibestudioPackages
     await buildHeadlessHost();
 
     // ========================================================================
     // STEP 2: Build main application
     // ========================================================================
     // These can run in parallel as they don't depend on each other.
-    // Dependencies: buildWorkspacePackages
+    // Dependencies: buildVibestudioPackages
     // Required by: None (final outputs)
-    // Clean stale renderer/bootstrap artifacts before the parallel ESM builds.
-    for (const artifact of [
-      "dist/renderer.js",
-      "dist/renderer.css",
-      "dist/preload.cjs",
-      "dist/preload.cjs.map",
-    ]) {
-      fs.rmSync(artifact, { force: true });
-    }
-    fs.rmSync("dist/renderer", { recursive: true, force: true });
-    fs.rmSync("dist/bootstrap", { recursive: true, force: true });
-
     const workerdProgramsPromise = buildWorkerdPrograms({ minify: !isDev, logOverride });
     await Promise.all([
       esbuild.build(mainConfig),
@@ -603,7 +579,9 @@ async function build() {
     console.log("Build successful!");
   } catch (error) {
     console.error("Build failed:", error);
-    process.exit(1);
+    process.exitCode = 1;
+  } finally {
+    releaseLock?.();
   }
 }
 

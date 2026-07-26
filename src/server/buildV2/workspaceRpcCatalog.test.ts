@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { collectWorkspaceRpcCatalog } from "./workspaceRpcCatalog.js";
 
 describe("workspace RPC build catalog", () => {
-  it("derives documented receiver methods from the exact worker source", () => {
+  it("derives documented receiver methods from the exact worker source", async () => {
     const root = mkdtempSync(join(tmpdir(), "vibestudio-rpc-catalog-"));
     mkdirSync(join(root, "nested"));
     writeFileSync(
@@ -25,7 +25,7 @@ describe("workspace RPC build catalog", () => {
       `class Fake { @rpc({ principals: ["code"], tier: "open", sensitivity: "read" }) nope() {} }`
     );
 
-    expect(collectWorkspaceRpcCatalog(root)).toEqual([
+    expect(await collectWorkspaceRpcCatalog(root)).toEqual([
       {
         className: "NotesDO",
         name: "getNote",

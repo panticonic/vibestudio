@@ -9,7 +9,13 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import ts from "typescript";
+import type tsTypes from "typescript";
+
+let ts: typeof import("typescript");
+
+async function loadTypescript(): Promise<typeof import("typescript")> {
+  return (ts ??= await import("typescript"));
+}
 
 export interface WorkspaceRpcMethodDoc {
   className: string;
@@ -52,7 +58,7 @@ function sourceFiles(root: string): string[] {
   return files.sort();
 }
 
-function rpcDecorator(method: ts.MethodDeclaration): ts.CallExpression | null {
+function rpcDecorator(method: tsTypes.MethodDeclaration): tsTypes.CallExpression | null {
   const decorators = ts.canHaveDecorators(method) ? ts.getDecorators(method) : undefined;
   for (const decorator of decorators ?? []) {
     if (!ts.isCallExpression(decorator.expression)) continue;
@@ -67,17 +73,17 @@ function rpcDecorator(method: ts.MethodDeclaration): ts.CallExpression | null {
   return null;
 }
 
-function propertyName(node: ts.ObjectLiteralElementLike): string | null {
+function propertyName(node: tsTypes.ObjectLiteralElementLike): string | null {
   if (!ts.isPropertyAssignment(node) || !node.name) return null;
   if (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)) return node.name.text;
   return null;
 }
 
-function literalString(expression: ts.Expression): string | null {
+function literalString(expression: tsTypes.Expression): string | null {
   return ts.isStringLiteralLike(expression) ? expression.text : null;
 }
 
-function accessOf(call: ts.CallExpression): WorkspaceRpcMethodDoc["access"] {
+function accessOf(call: tsTypes.CallExpression): WorkspaceRpcMethodDoc["access"] {
   const object = call.arguments[0];
   if (!object || !ts.isObjectLiteralExpression(object)) return undefined;
   const access: NonNullable<WorkspaceRpcMethodDoc["access"]> = {};
@@ -86,7 +92,7 @@ function accessOf(call: ts.CallExpression): WorkspaceRpcMethodDoc["access"] {
     if (!name || !ts.isPropertyAssignment(property)) continue;
     if (name === "principals" && ts.isArrayLiteralExpression(property.initializer)) {
       const values = property.initializer.elements
-        .map((element) => literalString(element as ts.Expression))
+        .map((element) => literalString(element as tsTypes.Expression))
         .filter((value): value is string => value !== null);
       if (values.length === property.initializer.elements.length) access.principals = values;
     } else if (name === "tier") {
@@ -105,7 +111,7 @@ function accessOf(call: ts.CallExpression): WorkspaceRpcMethodDoc["access"] {
   return Object.keys(access).length > 0 ? access : undefined;
 }
 
-function effectOf(call: ts.CallExpression, label: string): WorkspaceRpcMethodDoc["effect"] {
+function effectOf(call: tsTypes.CallExpression, label: string): WorkspaceRpcMethodDoc["effect"] {
   const object = call.arguments[0];
   if (!object || !ts.isObjectLiteralExpression(object)) {
     throw new Error(`${label} must declare a literal RPC effect`);
@@ -139,18 +145,18 @@ function effectOf(call: ts.CallExpression, label: string): WorkspaceRpcMethodDoc
   throw new Error(`${label} has an invalid literal RPC effect`);
 }
 
-function methodName(method: ts.MethodDeclaration): string | null {
+function methodName(method: tsTypes.MethodDeclaration): string | null {
   if (ts.isIdentifier(method.name) || ts.isStringLiteral(method.name)) return method.name.text;
   return null;
 }
 
-function methodDescription(method: ts.MethodDeclaration): string | undefined {
+function methodDescription(method: tsTypes.MethodDeclaration): string | undefined {
   for (const doc of ts.getJSDocCommentsAndTags(method)) {
     if (!ts.isJSDoc(doc)) continue;
     if (typeof doc.comment === "string" && doc.comment.trim()) return doc.comment.trim();
     if (Array.isArray(doc.comment)) {
       const rendered = doc.comment
-        .map((part: ts.JSDocComment) => part.text)
+        .map((part: tsTypes.JSDocComment) => part.text)
         .join("")
         .trim();
       if (rendered) return rendered;
@@ -159,7 +165,7 @@ function methodDescription(method: ts.MethodDeclaration): string | undefined {
   return undefined;
 }
 
-function signatureOf(method: ts.MethodDeclaration, source: ts.SourceFile): string {
+function signatureOf(method: tsTypes.MethodDeclaration, source: tsTypes.SourceFile): string {
   const typeParameters = method.typeParameters?.map((p) => p.getText(source)).join(", ");
   const params = method.parameters.map((p) => p.getText(source)).join(", ");
   const returns = method.type?.getText(source) ?? "unknown";
@@ -167,7 +173,10 @@ function signatureOf(method: ts.MethodDeclaration, source: ts.SourceFile): strin
 }
 
 /** Extract `@rpc` public method docs from one exact materialized worker package. */
-export function collectWorkspaceRpcCatalog(workerSourcePath: string): WorkspaceRpcMethodDoc[] {
+export async function collectWorkspaceRpcCatalog(
+  workerSourcePath: string
+): Promise<WorkspaceRpcMethodDoc[]> {
+  await loadTypescript();
   const methods: WorkspaceRpcMethodDoc[] = [];
   for (const file of sourceFiles(workerSourcePath)) {
     const text = fs.readFileSync(file, "utf8");
@@ -178,7 +187,7 @@ export function collectWorkspaceRpcCatalog(workerSourcePath: string): WorkspaceR
       true,
       file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
     );
-    const visit = (node: ts.Node): void => {
+    const visit = (node: tsTypes.Node): void => {
       if (ts.isClassDeclaration(node) && node.name) {
         for (const member of node.members) {
           if (!ts.isMethodDeclaration(member)) continue;

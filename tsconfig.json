@@ -52,6 +52,7 @@
       "@vibestudio/shared/*": ["packages/shared/src/*"],
       "@vibestudio/sqlite": ["packages/sqlite/src/index.ts"],
       "@vibestudio/typecheck": ["packages/typecheck/src/index.ts"],
+      "@vibestudio/typecheck/workspace": ["packages/typecheck/src/lib/workspace-packages.ts"],
       "@vibestudio/unit-host": ["packages/unit-host/src/index.ts"],
       "@vibestudio/types": ["packages/types/src/index.ts"],
       "@vibestudio/workspace/*": ["packages/workspace/src/*"],

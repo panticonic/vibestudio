@@ -23,6 +23,7 @@ const INPUT_FILES = [
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
   "scripts/build-artifact-contracts.mjs",
+  "scripts/clean-host-build-output.mjs",
   "scripts/build-workerd-programs.mjs",
   "scripts/collectWorkers.mjs",
   "scripts/ensure-host-build.mjs",

@@ -7,7 +7,6 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "pnpm --filter \"@workspace/*\" --filter \"@workspace-about/*\" --filter \"@workspace-apps/*\" --filter \"@workspace-extensions/*\" --filter \"@workspace-panels/*\" --filter \"@workspace-skills/*\" --filter \"@workspace-workers/*\" build",
     "type-check": "node --max-old-space-size=4096 node_modules/typescript/bin/tsc --project tsconfig.json && node --max-old-space-size=4096 node_modules/typescript/bin/tsc --project tsconfig.integration.json && node --max-old-space-size=4096 node_modules/typescript/bin/tsc --project tsconfig.integration.mobile.json",
     "test": "node ../node_modules/vitest/vitest.mjs run --root .. --config vitest.userland.config.ts"
   },

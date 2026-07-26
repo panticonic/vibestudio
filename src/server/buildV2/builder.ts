@@ -72,7 +72,7 @@ import {
   TERMINAL_SHIM_TERMINAL_SIZE,
   WORKER_RUNTIME_COMPANION_MODULES,
 } from "./platformModules.js";
-import { resolveExportSubpath } from "@vibestudio/typecheck";
+import { resolveExportSubpath } from "@vibestudio/typecheck/workspace";
 import { assertPresent } from "../../lintHelpers";
 import { resolveBuildProvider } from "./buildProviderRegistry.js";
 import { createBuildScratchDir } from "./buildScratch.js";
@@ -2622,7 +2622,7 @@ async function buildWorker(
   // Read the manifest from the materialized source state rather than
   // `node.manifest`, so exact-state builds never observe mutable source directories.
   const workerSourcePath = path.join(sourceRoot, node.relativePath);
-  const workspaceRpcCatalog = collectWorkspaceRpcCatalog(workerSourcePath);
+  const workspaceRpcCatalog = await collectWorkspaceRpcCatalog(workerSourcePath);
   const extractedPkgPath = path.join(workerSourcePath, "package.json");
   const extractedPkg = JSON.parse(fs.readFileSync(extractedPkgPath, "utf-8"));
   const extractedManifest = extractedPkg.vibestudio ?? {};
