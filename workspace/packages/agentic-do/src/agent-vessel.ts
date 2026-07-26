@@ -538,6 +538,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     }
   >();
   private readonly blobTextCache = new Map<string, { value: string; bytes: number }>();
+  private readonly blobTextReads = new Map<string, Promise<string | null>>();
   private blobTextCacheBytes = 0;
   private readonly alarmSources = new Map<string, AgentAlarmSource>();
   private readonly alarmDeadlines = new Map<string, number>();
@@ -1460,9 +1461,25 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       this.blobTextCache.set(digest, cached);
       return cached.value;
     }
-    const value = await this.rpc.call<string | null>("main", "blobstore.getText", [digest]);
-    if (value != null) this.rememberBlobText(digest, value);
-    return value;
+    const active = this.blobTextReads.get(digest);
+    if (active) return active;
+
+    const pending = this.rpc
+      .call<string | null>("main", "blobstore.getText", [digest])
+      .then((value) => {
+        if (value != null) this.rememberBlobText(digest, value);
+        return value;
+      });
+    this.blobTextReads.set(digest, pending);
+    void pending.then(
+      () => {
+        if (this.blobTextReads.get(digest) === pending) this.blobTextReads.delete(digest);
+      },
+      () => {
+        if (this.blobTextReads.get(digest) === pending) this.blobTextReads.delete(digest);
+      }
+    );
+    return pending;
   }
 
   private rememberBlobText(digest: string, value: string): void {

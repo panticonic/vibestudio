@@ -97,6 +97,7 @@ const WEATHER_TYPE = {
 class TestVessel extends AgentVesselBase {
   callerIdForTest: string | null = null;
   callerKindForTest: string | null = null;
+  blobTextReaderForTest: ((digest: string) => Promise<string | null>) | null = null;
   readonly channelPublishFailures = new Set<string>();
   readonly channelStub = {
     published: [] as Array<{
@@ -175,12 +176,20 @@ class TestVessel extends AgentVesselBase {
    * client so tests that exercise transport behavior retain coverage. */
   protected override get rpc(): RpcClient {
     const base = super.rpc;
+    const vessel = this;
     return new Proxy(base, {
       get(target, property, receiver) {
         if (property === "call") {
           return async (targetId: string, method: string, args: unknown[], options?: unknown) => {
             if (targetId === "main" && method === "contextIntegrity.ingest") {
               return { class: "internal", latchEpoch: 0, externalKeys: [] };
+            }
+            if (
+              targetId === "main" &&
+              method === "blobstore.getText" &&
+              vessel.blobTextReaderForTest
+            ) {
+              return vessel.blobTextReaderForTest(String(args[0]));
             }
             return target.call(targetId, method, args, options as never);
           };
@@ -220,6 +229,14 @@ class TestVessel extends AgentVesselBase {
 
   driverForTest(): AgentLoopDriver {
     return this.driver;
+  }
+
+  readBlobTextForTest(digest: string): Promise<string | null> {
+    return (
+      this as unknown as {
+        getCachedBlobText(value: string): Promise<string | null>;
+      }
+    ).getCachedBlobText(digest);
   }
 
   private makeChannelStub(channelId: string) {
@@ -907,6 +924,46 @@ describe("AgentVesselBase activation-local inspection", () => {
 });
 
 describe("AgentVesselBase.chatOp", () => {
+  it("coalesces concurrent blob-cache misses and retains the immutable result", async () => {
+    const vessel = await makeVessel();
+    let releaseRead: ((value: string) => void) | undefined;
+    let reads = 0;
+    vessel.blobTextReaderForTest = async () => {
+      reads += 1;
+      return await new Promise<string>((resolve) => {
+        releaseRead = resolve;
+      });
+    };
+
+    const concurrent = Array.from({ length: 32 }, () => vessel.readBlobTextForTest("same-digest"));
+    await vi.waitFor(() => expect(reads).toBe(1));
+    releaseRead?.("shared text");
+
+    await expect(Promise.all(concurrent)).resolves.toEqual(
+      Array.from({ length: 32 }, () => "shared text")
+    );
+    await expect(vessel.readBlobTextForTest("same-digest")).resolves.toBe("shared text");
+    expect(reads).toBe(1);
+  });
+
+  it("does not retain failed or missing blob reads", async () => {
+    const vessel = await makeVessel();
+    let reads = 0;
+    vessel.blobTextReaderForTest = async () => {
+      reads += 1;
+      if (reads === 1) throw new Error("temporary read failure");
+      if (reads === 2) return null;
+      return "available";
+    };
+
+    await expect(vessel.readBlobTextForTest("eventual-digest")).rejects.toThrow(
+      "temporary read failure"
+    );
+    await expect(vessel.readBlobTextForTest("eventual-digest")).resolves.toBeNull();
+    await expect(vessel.readBlobTextForTest("eventual-digest")).resolves.toBe("available");
+    expect(reads).toBe(3);
+  });
+
   it("rejects a caller that is not this agent's own EvalDO", async () => {
     const vessel = await makeVessel();
     vessel.callerIdForTest = "do:vibestudio/internal:EvalDO:someoneelse";

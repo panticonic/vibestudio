@@ -1664,7 +1664,8 @@ async function mkdirNoFollow(dir: string): Promise<void> {
  * always COPIED then chmod'd so the shared CAS inode's mode is never touched
  * (a chmod on a hardlink would flip every build-source checkout sharing the
  * blob). The outDir is treated as immutable-per-tree: an existing file is
- * skipped only when its byte size and content hash match the source blob.
+ * skipped only when it is the source blob's exact inode or its byte size and
+ * content hash match the source blob.
  * Writes are tmp+rename so a crash never leaves a half-written file at a final path. Entry names
  * come from strictly-decoded nodes (no separators/`..`), so the tree cannot
  * write outside `outDir`. Directory descent is additionally no-follow: `outDir`
@@ -1721,6 +1722,18 @@ export async function materializeTree(
         // real file below (rm removes the link itself, no-follow).
         const [sourceStat, targetStat] = await Promise.all([fsp.stat(source), fsp.lstat(target)]);
         if (targetStat.isFile() && targetStat.size === sourceStat.size) {
+          // The default projector hardlinks non-executables from the immutable
+          // CAS. Matching non-zero device/inode identity is a stronger proof
+          // than re-reading and hashing the same bytes, and makes repeated
+          // materialization metadata-bound rather than file-size-bound.
+          if (
+            sourceStat.ino !== 0 &&
+            sourceStat.dev === targetStat.dev &&
+            sourceStat.ino === targetStat.ino
+          ) {
+            unchanged += 1;
+            continue;
+          }
           const targetDigest = await sha256File(target);
           if (targetDigest === entry.contentHash) {
             unchanged += 1;
