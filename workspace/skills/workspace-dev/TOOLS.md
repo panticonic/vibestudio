@@ -239,7 +239,7 @@ auto-recovered.
 
 Execute TypeScript/JavaScript code server-side in your own notebook sandbox (a
 per-agent EvalDO). It runs even when no panel is open. The same live heap is
-retained while the kernel activation remains resident; no idle request pins it.
+retained for 30 minutes after the latest cell; every cell renews the lease.
 After an unavoidable restart, `[kernel] Restarted` reports exact restored and
 lost scope keys. In eval, `rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`,
 `db`, `help` (and, in agent eval, `chat`) are injected free variables; reach

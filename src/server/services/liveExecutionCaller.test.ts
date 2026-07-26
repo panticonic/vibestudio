@@ -2,7 +2,11 @@ import type { AgentExecutionSessionFact, AgentExecutionTestPolicy } from "@vibes
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { describe, expect, it } from "vitest";
-import { refineExecutionTestPolicy, resolveLiveExecutionCaller } from "./liveExecutionCaller.js";
+import {
+  executionHarnessCodeIdentity,
+  refineExecutionTestPolicy,
+  resolveLiveExecutionCaller,
+} from "./liveExecutionCaller.js";
 
 const orchestratorPolicy: AgentExecutionTestPolicy = {
   policyId: "test:run-1",
@@ -87,11 +91,31 @@ describe("live execution caller resolution", () => {
       })
     ).toMatchObject({
       runtime: registered.runtime,
-      code: registered.code,
+      code: {
+        callerId: registered.runtime.id,
+        callerKind: "do",
+        repoPath: executionSession.harness.repoPath,
+        effectiveVersion: executionSession.harness.effectiveVersion,
+        executionDigest: "digest",
+        requested: [],
+      },
       agentBinding: activeEntity.agentBinding,
       executionSession,
       testPolicy: casePolicy,
     });
+  });
+
+  it("rejects a malformed host harness principal", () => {
+    expect(() =>
+      executionHarnessCodeIdentity({
+        runtime: registered.runtime,
+        executionSession: {
+          ...executionSession,
+          harness: { ...executionSession.harness, principal: "code:workers/other@digest" },
+        },
+        residentCode: registered.code,
+      })
+    ).toThrow(/does not match its repository/);
   });
 
   it("projects current exact-version approval onto a long-lived egress caller", () => {

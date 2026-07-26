@@ -25,7 +25,7 @@ describe("formatEvalResult (shared by the eval tool's execute + the agent's defe
 
   it("documents the warm notebook contract and makes a cold restart impossible to miss", () => {
     const tool = createEvalTool(async () => ({ success: true, console: "" }) as never);
-    expect(tool.description).toContain("not pinned by an idle timer");
+    expect(tool.description).toContain("retained for 30 minutes");
     expect(tool.description).toContain("objects with methods");
     expect(tool.description).toContain("[kernel] Restarted");
 
@@ -37,6 +37,7 @@ describe("formatEvalResult (shared by the eval tool's execute + the agent's defe
         kernel: {
           incarnationId: "kernel-2",
           startedAt: 2,
+          idleExpiresAt: 3,
           event: {
             kind: "restarted",
             recovery: {

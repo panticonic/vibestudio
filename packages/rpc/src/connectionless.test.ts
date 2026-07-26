@@ -5,7 +5,7 @@ import {
   rpcExposedMethodNames,
   rpcMethodAuthority,
 } from "./connectionless.js";
-import { createInternalConnectionlessRpcClient } from "./internal.js";
+import { bindExecutionSession, createInternalConnectionlessRpcClient } from "./internal.js";
 import type { RpcEnvelope } from "./types.js";
 
 const SELF = "do:test:EvalDO:obj1";
@@ -69,6 +69,33 @@ describe("createConnectionlessRpcClient", () => {
         (envelope) => (envelope.message as { authorityParentNonce?: string }).authorityParentNonce
       )
     ).toEqual(["host-invocation-parent-1", "host-invocation-parent-2"]);
+  });
+
+  it("carries an execution session only for options explicitly bound by the trusted runtime", async () => {
+    const seen: RpcEnvelope[] = [];
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const envelope = JSON.parse(String(init?.body)) as RpcEnvelope;
+      seen.push(envelope);
+      const requestId = (envelope.message as { requestId: string }).requestId;
+      return new Response(JSON.stringify(responseEnvelope(requestId, { result: "ok" })), {
+        status: 200,
+      });
+    });
+    const { client } = makeClient(fetchMock as unknown as typeof fetch);
+
+    await client.call("main", "x.infrastructure", []);
+    await client.call(
+      "main",
+      "x.evaluated",
+      [],
+      bindExecutionSession({}, "evaluated-session-nonce-1")
+    );
+
+    expect(
+      seen.map(
+        (envelope) => (envelope.message as { executionSessionNonce?: string }).executionSessionNonce
+      )
+    ).toEqual([undefined, "evaluated-session-nonce-1"]);
   });
 
   describe("respond (inbound request → response envelope, no POST)", () => {

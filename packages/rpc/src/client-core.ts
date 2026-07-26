@@ -32,7 +32,12 @@ import { bytesToBase64, base64ToBytes } from "./base64.js";
 import { SESSION_CONNECTION_LOST_CODE } from "./protocol/sessionNegotiation.js";
 import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
 import { RemoteRpcError, rpcErrorDataOf, rpcErrorKindOf } from "./errors.js";
-import type { InternalRpcRequest, InternalRpcStreamRequest } from "./internal-types.js";
+import {
+  executionSessionNonceFor,
+  type InternalRpcEvent,
+  type InternalRpcRequest,
+  type InternalRpcStreamRequest,
+} from "./internal-types.js";
 
 const FRAME_HEAD = 0x01;
 const FRAME_DATA = 0x02;
@@ -213,20 +218,31 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
   function makeEnvelope(
     targetId: string,
     message: RpcMessage,
-    options?: { idempotencyKey?: string; readOnly?: boolean },
+    options?: RpcCallOptions | RpcStreamOptions,
     provenance: AuthenticatedCaller[] = baseProvenance
   ): RpcEnvelope {
     const authorityParentNonce =
       message.type === "request" || message.type === "stream-request"
         ? config.authorityParentNonce?.()
         : undefined;
+    const executionSessionNonce =
+      message.type === "request" || message.type === "stream-request" || message.type === "event"
+        ? executionSessionNonceFor(options)
+        : undefined;
     const carriedMessage =
-      authorityParentNonce && (message.type === "request" || message.type === "stream-request")
+      (authorityParentNonce || executionSessionNonce) &&
+      (message.type === "request" || message.type === "stream-request")
         ? ({
             ...message,
-            authorityParentNonce,
+            ...(authorityParentNonce ? { authorityParentNonce } : {}),
+            ...(executionSessionNonce ? { executionSessionNonce } : {}),
           } satisfies InternalRpcRequest | InternalRpcStreamRequest)
-        : message;
+        : executionSessionNonce && message.type === "event"
+          ? ({
+              ...message,
+              executionSessionNonce,
+            } satisfies InternalRpcEvent)
+          : message;
     return {
       from: config.selfId,
       target: targetId,

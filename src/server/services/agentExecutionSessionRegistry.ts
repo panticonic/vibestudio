@@ -228,6 +228,16 @@ export class AgentExecutionSessionRegistry {
     return fact;
   }
 
+  /**
+   * Resolve the admission claimed by one outbound evaluated-execution effect.
+   * Runtime identity alone is insufficient: the EvalDO also performs its own
+   * lifecycle work while a run is admitted.
+   */
+  resolveInvocation(runtimeId: string, nonce: string): AgentExecutionSessionFact | null {
+    const fact = this.resolve(runtimeId);
+    return fact?.nonce === nonce ? fact : null;
+  }
+
   close(runtimeId: string, runId?: string): boolean {
     const fact = this.byRuntime.get(runtimeId);
     if (!fact || (runId !== undefined && fact.eval.runId !== runId)) return false;

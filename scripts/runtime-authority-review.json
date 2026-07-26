@@ -1,7 +1,19 @@
 {
   "version": 1,
-  "censusDigest": "sha256:d7f1c2878c2a20740571e1af92e99e32d9be970b5956a3a662d06ccd7da37f82",
+  "censusDigest": "sha256:91c7660f1966eed2a05d8431d101f654e23970f25878b3b80b24f399bfa52e67",
   "decisions": {
+    "direct:src/server/internalDOs/evalDO.ts:acquireKernelLease": {
+      "review": "host-only-eval-kernel-residency-refresh",
+      "change": "Adds a host-only, gated code-execution authority that creates or refreshes the exact EvalDO incarnation's bounded idle residency lease. The receiver validates the lease identity and duration, and no user or code principal may invoke it directly."
+    },
+    "direct:src/server/internalDOs/evalDO.ts:attachKernelLeaseHolder": {
+      "review": "host-only-eval-kernel-holder-claim",
+      "change": "Adds a host-only, gated code-execution authority that atomically claims the single held-request slot for an already-active exact kernel lease. It cannot create, widen, or extend a lease."
+    },
+    "direct:src/server/internalDOs/evalDO.ts:holdKernelLease": {
+      "review": "host-only-bounded-eval-kernel-hold",
+      "change": "Adds a host-only, gated code-execution authority whose request remains held only for the exact attached lease and settles on expiry, release, or replacement. It exposes no scope data and cannot outlive the receiver-owned lease deadline."
+    },
     "host:eval.dispose": {
       "review": "owner-scoped-finite-eval-release",
       "change": "Adds explicit release for an EvalDO whose immutable first activation declared it finite. The receiver derives the exact object from the verified owner and subkey, rejects persistent scopes, erases the finite object's durable records and loaded runtime, and retires it through the normal sealed lifecycle and cleanup reaper. Closing this owned finite resource is open and cannot address another caller's eval state."

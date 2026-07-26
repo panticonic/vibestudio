@@ -2714,7 +2714,8 @@ async function main() {
         egressProxy,
         fsService,
         entityCache,
-        executionSessionForRuntime: (runtimeId) => agentExecutionSessions.resolve(runtimeId),
+        executionSessionForRuntime: (runtimeId, nonce) =>
+          agentExecutionSessions.resolveInvocation(runtimeId, nonce),
         testPolicyForContext: (contextId) => agentExecutionSessions.testPolicyForContext(contextId),
         connectionGrants,
         // Resolves each authenticated caller's account subject (WP0 §5.2/§5.5).

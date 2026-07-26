@@ -32,6 +32,7 @@ import {
 } from "@vibestudio/rpc";
 import type {
   DirectAuthorityAttestation,
+  InternalRpcEvent,
   InternalRpcRequest,
   InternalRpcStreamRequest,
 } from "@vibestudio/rpc/internal";
@@ -72,7 +73,10 @@ import type { EventService } from "@vibestudio/shared/eventsService";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
-import { refineExecutionTestPolicy } from "./services/liveExecutionCaller.js";
+import {
+  executionHarnessCodeIdentity,
+  refineExecutionTestPolicy,
+} from "./services/liveExecutionCaller.js";
 
 function refineTestPolicy(
   first: AgentExecutionTestPolicy | null | undefined,
@@ -444,7 +448,8 @@ export class RpcServer {
       entityCache?: EntityCache;
       /** Live host-created admission for one concrete evaluated run. */
       executionSessionForRuntime?: (
-        runtimeId: string
+        runtimeId: string,
+        nonce: string
       ) => import("@vibestudio/rpc").AgentExecutionSessionFact | null;
       /** Canonical unattended-test policy inherited by reviewed runtimes in a test context. */
       testPolicyForContext?: (
@@ -637,7 +642,8 @@ export class RpcServer {
           this.testPolicyFromAuthorityParent(
             caller.callerId,
             (request as InternalRpcRequest | InternalRpcStreamRequest).authorityParentNonce
-          )
+          ),
+          (request as InternalRpcRequest | InternalRpcStreamRequest).executionSessionNonce
         ),
       authorizeRelay: (callerId, callerKind, targetId, method) =>
         this.checkRelayAuth(callerId, callerKind, targetId, method),
@@ -700,14 +706,15 @@ export class RpcServer {
     callerKind: CallerKind,
     agentBinding?: import("@vibestudio/identity/types").AgentBinding,
     subject?: UserSubject,
-    inheritedTestPolicy?: AgentExecutionTestPolicy | null
+    inheritedTestPolicy?: AgentExecutionTestPolicy | null,
+    executionSessionNonce?: string
   ): VerifiedCaller {
     const activeEntity =
       callerKind === "worker" || callerKind === "do"
         ? this.deps.entityCache?.resolveActive(callerId)
         : undefined;
     const resolvedAgentBinding = agentBinding ?? activeEntity?.agentBinding;
-    const code =
+    const residentCode =
       callerKind === "extension"
         ? (this.deps.resolveExtensionCodeIdentity?.(callerId) ?? null)
         : this.deps.entityCache
@@ -716,7 +723,18 @@ export class RpcServer {
     // An explicitly-passed subject (device/agent credential, §5.1/§5.3) wins;
     // otherwise resolve it from the caller id (§5.2/§5.4).
     const resolvedSubject = subject ?? this.resolveSubject(callerId, callerKind, agentBinding);
-    const executionSession = this.deps.executionSessionForRuntime?.(callerId) ?? null;
+    if (
+      executionSessionNonce !== undefined &&
+      (executionSessionNonce.length < 16 || executionSessionNonce.length > 256)
+    ) {
+      throw createRelayError("Invalid evaluated execution session", "EACCES");
+    }
+    const executionSession = executionSessionNonce
+      ? (this.deps.executionSessionForRuntime?.(callerId, executionSessionNonce) ?? null)
+      : null;
+    if (executionSessionNonce && !executionSession) {
+      throw createRelayError("Evaluated execution session is not active", "EACCES");
+    }
     if (
       executionSession &&
       (executionSession.eval.runtimeId !== callerId ||
@@ -729,6 +747,13 @@ export class RpcServer {
         "EACCES"
       );
     }
+    const code = executionSession
+      ? executionHarnessCodeIdentity({
+          runtime: { id: callerId, kind: callerKind },
+          executionSession,
+          ...(residentCode ? { residentCode } : {}),
+        })
+      : residentCode;
     const contextTestPolicy = activeEntity?.contextId
       ? this.deps.testPolicyForContext?.(activeEntity.contextId)
       : null;
@@ -2637,7 +2662,8 @@ export class RpcServer {
       this.testPolicyFromAuthorityParent(
         callerId,
         (message as InternalRpcRequest | InternalRpcStreamRequest).authorityParentNonce
-      )
+      ),
+      (message as InternalRpcRequest | InternalRpcStreamRequest).executionSessionNonce
     );
     const causalParent = await this.resolveCausalParent(verifiedCaller, message);
     // A causal parent authenticates invocation lineage; it does not change the
@@ -2697,7 +2723,27 @@ export class RpcServer {
     const targetId = envelope.target;
     const auth = this.checkRelayAuth(callerId, callerKind, targetId);
     if (!auth.ok) throw new Error(auth.reason);
-    await this.relayEvent(callerId, callerKind, targetId, message.event, message.payload);
+    const executionSessionNonce = (message as InternalRpcEvent).executionSessionNonce;
+    const attributedCaller =
+      callerKind === "server"
+        ? createHostCaller(callerId, "server", SYSTEM_SUBJECT)
+        : this.verifiedCallerFor(
+            callerId,
+            callerKind,
+            undefined,
+            undefined,
+            undefined,
+            executionSessionNonce
+          );
+    await this.relayEvent(
+      callerId,
+      callerKind,
+      targetId,
+      message.event,
+      message.payload,
+      undefined,
+      attributedCaller
+    );
   }
 
   // ===========================================================================
@@ -3481,7 +3527,8 @@ export class RpcServer {
     targetId: string,
     event: string,
     payload: unknown,
-    targetConnectionId?: string
+    targetConnectionId?: string,
+    authorizingCaller?: VerifiedCaller
   ): Promise<void> {
     const isPanelOrShellTarget = !targetId.startsWith("do:") && !targetId.startsWith("worker:");
     if (isPanelOrShellTarget) {
@@ -3526,9 +3573,10 @@ export class RpcServer {
 
       const { postEventToDurableObject } = await import("./workerdRpcRelay.js");
       const attributedCaller =
-        fromKind === "server"
+        authorizingCaller ??
+        (fromKind === "server"
           ? createHostCaller(fromId, "server", SYSTEM_SUBJECT)
-          : this.verifiedCallerFor(fromId, fromKind);
+          : this.verifiedCallerFor(fromId, fromKind));
       const authenticatedCaller = authenticatedCallerOf(attributedCaller);
       const authorization = await this.directDOAuthorization({
         caller: attributedCaller,

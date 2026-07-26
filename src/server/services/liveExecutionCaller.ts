@@ -3,6 +3,45 @@ import type { VerifiedCaller, VerifiedCodeIdentity } from "@vibestudio/shared/se
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 
 /**
+ * Materialize the code identity of the host-admitted harness for one marked
+ * evaluated effect. The transport runtime remains the concrete EvalDO, but the
+ * code executing inside it is the exact harness sealed into the admission.
+ */
+export function executionHarnessCodeIdentity(input: {
+  runtime: VerifiedCaller["runtime"];
+  executionSession: AgentExecutionSessionFact;
+  residentCode?: VerifiedCodeIdentity;
+}): VerifiedCodeIdentity {
+  const { runtime, executionSession, residentCode } = input;
+  if (runtime.kind !== "do") {
+    throw new Error(`Evaluated execution runtime must be a Durable Object, got ${runtime.kind}`);
+  }
+  const prefix = `code:${executionSession.harness.repoPath}@`;
+  if (!executionSession.harness.principal.startsWith(prefix)) {
+    throw new Error("Evaluated execution harness principal does not match its repository");
+  }
+  const executionDigest = executionSession.harness.principal.slice(prefix.length);
+  if (!executionDigest) {
+    throw new Error("Evaluated execution harness principal has no execution digest");
+  }
+  const residentPrincipal = residentCode?.executionDigest
+    ? `code:${residentCode.repoPath}@${residentCode.executionDigest}`
+    : null;
+  return {
+    callerId: runtime.id,
+    callerKind: "do",
+    repoPath: executionSession.harness.repoPath,
+    effectiveVersion: executionSession.harness.effectiveVersion,
+    executionDigest,
+    requested:
+      residentPrincipal === executionSession.harness.principal
+        ? (residentCode?.requested ?? [])
+        : [],
+    ...(residentCode?.evalOrigin ? { evalOrigin: residentCode.evalOrigin } : {}),
+  };
+}
+
+/**
  * Select the most-specific compatible test policy. A case policy refines its
  * orchestrator policy; unrelated policies are never composable.
  */
@@ -71,10 +110,21 @@ export function resolveLiveExecutionCaller(input: {
     agentBinding: _registeredAgentBinding,
     executionSession: _registeredExecutionSession,
     testPolicy: _registeredTestPolicy,
+    code: registeredCode,
+    codeApproved: registeredCodeApproved,
     ...stable
   } = registered;
+  const code = executionSession
+    ? executionHarnessCodeIdentity({
+        runtime: registered.runtime,
+        executionSession,
+        ...(registeredCode ? { residentCode: registeredCode } : {}),
+      })
+    : registeredCode;
   const resolved: VerifiedCaller = {
     ...stable,
+    ...(code ? { code } : {}),
+    ...(!executionSession && registeredCodeApproved ? { codeApproved: true } : {}),
     ...(agentBinding ? { agentBinding } : {}),
     ...(executionSession ? { executionSession } : {}),
     ...(testPolicy ? { testPolicy } : {}),

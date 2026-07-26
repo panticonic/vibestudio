@@ -100,7 +100,8 @@ type TestRpcServer = {
     callerKind: CallerKind,
     agentBinding?: undefined,
     subject?: undefined,
-    inheritedTestPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicy | null
+    inheritedTestPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicy | null,
+    executionSessionNonce?: string
   ): ReturnType<typeof createVerifiedCaller>;
   beginAuthorityParent(
     receiverRuntimeId: string,
@@ -2520,6 +2521,69 @@ describe("RpcServer relay behavior", () => {
         }),
       })
     );
+  });
+
+  it("attributes only explicitly marked EvalDO effects to the admitted execution", () => {
+    const runtimeId = "do:vibestudio/internal:EvalDO:session-boundary";
+    const nonce = "eval-session-nonce-1234";
+    const session = {
+      v: 1,
+      authoritySessionId: "authority:session-boundary",
+      authoritySessionVersion: 1,
+      mode: "interactive",
+      ownerUser: "user:user-1",
+      workspaceId: "test-workspace",
+      contextId: "ctx:eval-session",
+      agentBinding: null,
+      taskRef: "eval:session-boundary",
+      harness: {
+        principal: `code:workers/system-test-runner@${"b".repeat(64)}`,
+        repoPath: "workers/system-test-runner",
+        effectiveVersion: "ev-runner",
+      },
+      eval: { runtimeId, runId: "run:session-boundary" },
+      causalParent: null,
+      issuedAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+      nonce,
+    } satisfies import("@vibestudio/rpc").AgentExecutionSessionFact;
+    const executionSessionForRuntime = vi.fn(
+      (candidateRuntimeId: string, candidateNonce: string) =>
+        candidateRuntimeId === runtimeId && candidateNonce === nonce ? session : null
+    );
+    const { server, entityCache } = createServer({ executionSessionForRuntime });
+    entityCache._onActivate(
+      makeRecord(runtimeId, "do", {
+        contextId: session.contextId,
+        repoPath: "vibestudio/internal",
+      })
+    );
+
+    const infrastructureCaller = testServer(server).verifiedCallerFor(runtimeId, "do");
+    expect(infrastructureCaller.executionSession).toBeUndefined();
+    expect(executionSessionForRuntime).not.toHaveBeenCalled();
+
+    const evaluatedCaller = testServer(server).verifiedCallerFor(
+      runtimeId,
+      "do",
+      undefined,
+      undefined,
+      undefined,
+      nonce
+    );
+    expect(evaluatedCaller.executionSession).toBe(session);
+    expect(executionSessionForRuntime).toHaveBeenCalledWith(runtimeId, nonce);
+
+    expect(() =>
+      testServer(server).verifiedCallerFor(
+        runtimeId,
+        "do",
+        undefined,
+        undefined,
+        undefined,
+        "wrong-eval-session-nonce"
+      )
+    ).toThrow(/not active/);
   });
 
   it("delegates a test policy only for the exact active invocation without mutating receiver context", () => {

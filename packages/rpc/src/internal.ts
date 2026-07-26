@@ -8,9 +8,11 @@
 export type { DirectAuthorityAttestation } from "./authority.js";
 export type {
   AttestedCaller,
+  InternalRpcEvent,
   InternalRpcRequest,
   InternalRpcStreamRequest,
 } from "./internal-types.js";
+export { bindExecutionSession, executionSessionNonceFor } from "./internal-types.js";
 export { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "./authority.js";
 export { createInternalRpcClient, type InternalRpcClientConfig } from "./client-core.js";
 export {

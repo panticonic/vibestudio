@@ -66,6 +66,7 @@ function createHarness(
     rejectFirstGetRun?: boolean;
     retryGetRunGate?: Promise<void>;
     finiteEvalEntityIds?: ReadonlySet<string>;
+    kernelLeaseError?: Error;
   } = {}
 ) {
   const calls: Array<{ ref: unknown; method: string; args: unknown[] }> = [];
@@ -234,11 +235,39 @@ function createHarness(
     } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
     workspaceId: "ws_1",
     executionSessions,
+    kernelLeases: {
+      touch: vi.fn(async () => {
+        if (options.kernelLeaseError) throw options.kernelLeaseError;
+      }),
+    },
   });
   return { service, calls, executionSessions, retireEntity };
 }
 
 describe("createEvalService", () => {
+  it("closes admission when kernel residency cannot be established", async () => {
+    const ownerId = "session:default";
+    const subKey = "default";
+    const { service, executionSessions } = createHarness(
+      { [ownerId]: "ctx_1" },
+      { kernelLeaseError: new Error("kernel lease unavailable") }
+    );
+
+    await expect(
+      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "run", [
+        {
+          ownerId,
+          contextId: "ctx_1",
+          subKey,
+          code: "return 1;",
+        },
+      ])
+    ).rejects.toThrow("kernel lease unavailable");
+
+    const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${evalKey(ownerId, subKey)}`;
+    expect(executionSessions.resolve(runtimeId)).toBeNull();
+  });
+
   it("runs CLI eval as the selected session owner and context", async () => {
     const { service, calls } = createHarness({ "session:default": "ctx_1" });
 
@@ -411,6 +440,7 @@ describe("createEvalService", () => {
       } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
       workspaceId: "ws",
       executionSessions: new AgentExecutionSessionRegistry(),
+      kernelLeases: { touch: vi.fn(async () => {}) },
     });
 
     await service.handler(
@@ -491,6 +521,7 @@ describe("createEvalService", () => {
       args: [
         expect.objectContaining({
           runId,
+          executionSessionNonce: expect.any(String),
           agentInvocationId,
           channelId: "chan_1",
           agentRef: ownerId,
@@ -698,6 +729,37 @@ describe("createEvalService", () => {
     expect(retireEntity).not.toHaveBeenCalled();
   });
 
+  it("routes control calls to an existing finite scope without reclassifying it", async () => {
+    const ownerId = "session:default";
+    const objectKey = evalKey(ownerId, "finite");
+    const entityId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`;
+    const { service, calls } = createHarness(
+      {
+        [ownerId]: "ctx_1",
+        [entityId]: "ctx_1",
+      },
+      { finiteEvalEntityIds: new Set([entityId]) }
+    );
+
+    await expect(
+      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "getRun", [
+        {
+          ownerId,
+          contextId: "ctx_1",
+          subKey: "finite",
+          runId: "finite-run",
+        },
+      ])
+    ).resolves.toMatchObject({ status: "done" });
+
+    expect(calls.find((call) => call.method === "getRun")).toMatchObject({
+      ref: { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey },
+      args: ["finite-run"],
+    });
+    expect(calls.some((call) => call.method === "entityActivate")).toBe(false);
+    expect(calls.some((call) => call.method === "entityAdvanceExecution")).toBe(false);
+  });
+
   it("refuses to reclassify a persistent eval scope as finite", async () => {
     const ownerId = "session:default";
     const objectKey = evalKey(ownerId, "default");
@@ -853,6 +915,7 @@ function createHeldFailHarness(opts: {
     executionSessions: new AgentExecutionSessionRegistry(),
     recoverUnresponsiveSandbox,
     watchdogGraceMs: 1,
+    kernelLeases: { touch: vi.fn(async () => {}) },
   });
   return { service, calls, ownerId, recoverUnresponsiveSandbox };
 }

@@ -197,6 +197,15 @@ describe("AgentExecutionSessionRegistry admission", () => {
     expect(second.authoritySessionId).not.toBe(first.authoritySessionId);
   });
 
+  it("resolves evaluated effects only with the exact live admission nonce", () => {
+    const registry = new AgentExecutionSessionRegistry();
+    const fact = registry.admit(admission());
+
+    expect(registry.resolveInvocation(fact.eval.runtimeId, fact.nonce)).toBe(fact);
+    expect(registry.resolveInvocation(fact.eval.runtimeId, "another-session-nonce")).toBeNull();
+    expect(registry.resolveInvocation("runtime:eval:other", fact.nonce)).toBeNull();
+  });
+
   it("queues concurrent runs in FIFO order until the prior admission closes", async () => {
     const registry = new AgentExecutionSessionRegistry();
     const first = registry.admit(admission());

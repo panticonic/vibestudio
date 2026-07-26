@@ -117,6 +117,82 @@ describe("EvalDO cancellation + forced recovery", () => {
     ).not.toHaveProperty("event");
   });
 
+  it("holds one notebook kernel across cells until its refreshed idle lease expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const { instance } = await createTestDO(EvalDO);
+      const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
+      Object.defineProperty(instance, "rpc", {
+        value: { call: lifecycleCall },
+        configurable: true,
+      });
+      const first = instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 1_000 });
+      await instance.attachKernelLeaseHolder("kernel-1");
+      const held = instance.holdKernelLease("kernel-1");
+
+      await vi.advanceTimersByTimeAsync(750);
+      const refreshed = instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 1_000 });
+      expect(refreshed.expiresAt).toBeGreaterThan(first.expiresAt);
+
+      await vi.advanceTimersByTimeAsync(750);
+      let settled = false;
+      void held.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(held).resolves.toEqual({ leaseId: "kernel-1", reason: "expired" });
+      expect(lifecycleCall).toHaveBeenNthCalledWith(
+        1,
+        "main",
+        "workspace-state.lifecycleLeaseUpsert",
+        [
+          expect.objectContaining({
+            detail: {
+              kind: "eval-kernel",
+              leaseId: "kernel-1",
+            },
+          }),
+        ]
+      );
+      expect(lifecycleCall).toHaveBeenNthCalledWith(
+        2,
+        "main",
+        "workspace-state.lifecycleLeaseClear",
+        [expect.any(Object)]
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases the inter-cell kernel hold during planned lifecycle shutdown", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
+    Object.defineProperty(instance, "rpc", {
+      value: { call: lifecycleCall },
+      configurable: true,
+    });
+    instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 60_000 });
+    await instance.attachKernelLeaseHolder("kernel-1");
+    const held = instance.holdKernelLease("kernel-1");
+
+    await expect(
+      instance.releaseForLifecycle({
+        epoch: "e1",
+        mode: "suspend",
+        reason: "test",
+        deadlineMs: 1_000,
+      })
+    ).resolves.toEqual({ status: "ready" });
+    await expect(held).resolves.toEqual({ leaseId: "kernel-1", reason: "released" });
+    expect(lifecycleCall).toHaveBeenLastCalledWith("main", "workspace-state.lifecycleLeaseClear", [
+      expect.any(Object),
+    ]);
+  });
+
   it("runs startRun in the DO lifetime and delivers its terminal result directly to its agent", async () => {
     const { instance } = await createTestDO(EvalDO);
     const call = vi.fn(() => Promise.resolve(undefined));
@@ -151,6 +227,56 @@ describe("EvalDO cancellation + forced recovery", () => {
         }),
       ]
     );
+  });
+
+  it("refreshes pending host credentials without changing the semantic run identity", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    seedPendingRun(sql, "credential-redrive", {
+      runId: "credential-redrive",
+      code: "return 7",
+      gatewayToken: "gateway-old",
+      executionSessionNonce: "session-old",
+    });
+    const enqueue = priv<
+      (
+        args: Record<string, unknown> & { runId: string },
+        schedule: boolean
+      ) => Promise<{ runId: string; status: string }>
+    >(instance, "enqueueRun").bind(instance);
+
+    await expect(
+      enqueue(
+        {
+          runId: "credential-redrive",
+          code: "return 7",
+          gatewayToken: "gateway-new",
+          executionSessionNonce: "session-new",
+        },
+        false
+      )
+    ).resolves.toEqual({ runId: "credential-redrive", status: "pending" });
+    const stored = JSON.parse(
+      String(
+        sql.exec(`SELECT args FROM runs WHERE run_id = 'credential-redrive'`).toArray()[0]?.["args"]
+      )
+    ) as Record<string, unknown>;
+    expect(stored).toMatchObject({
+      code: "return 7",
+      gatewayToken: "gateway-new",
+      executionSessionNonce: "session-new",
+    });
+
+    await expect(
+      enqueue(
+        {
+          runId: "credential-redrive",
+          code: "return 8",
+          gatewayToken: "gateway-newer",
+          executionSessionNonce: "session-newer",
+        },
+        false
+      )
+    ).rejects.toThrow(/reused with different input/);
   });
 
   it("pages large scope text losslessly without creating eval runs and persists cleanup", async () => {
@@ -722,6 +848,14 @@ describe("EvalDO cancellation + forced recovery", () => {
 
   it("dispose erases terminal jobs and releases every loaded kernel reference", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
+    const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
+    Object.defineProperty(instance, "rpc", {
+      value: { call: lifecycleCall },
+      configurable: true,
+    });
+    instance.acquireKernelLease({ leaseId: "finite-kernel", idleMs: 60_000 });
+    await instance.attachKernelLeaseHolder("finite-kernel");
+    const held = instance.holdKernelLease("finite-kernel");
     seedPendingRun(sql, "finite");
     sql.exec(
       `INSERT INTO run_progress (run_id, progress, updated_at) VALUES (?, ?, ?)`,
@@ -740,6 +874,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     priv<Record<string, unknown>>(instance, "isolateModuleMap")["package"] = { loaded: true };
 
     await expect(instance.dispose()).resolves.toEqual({ ok: true });
+    await expect(held).resolves.toEqual({ leaseId: "finite-kernel", reason: "released" });
 
     expect(sql.exec(`SELECT COUNT(*) AS count FROM runs`).toArray()[0]).toMatchObject({ count: 0 });
     expect(sql.exec(`SELECT COUNT(*) AS count FROM run_progress`).toArray()[0]).toMatchObject({
@@ -751,6 +886,9 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(priv(instance, "hostedRuntimeIdentity")).toBeNull();
     expect(priv(instance, "moduleMap")).toEqual({});
     expect(Object.keys(priv(instance, "isolateModuleMap"))).toEqual(["node:async_hooks"]);
+    expect(lifecycleCall).toHaveBeenLastCalledWith("main", "workspace-state.lifecycleLeaseClear", [
+      expect.any(Object),
+    ]);
   });
 
   it("keeps orphaned and replacement runs in distinct immutable execution contexts", async () => {

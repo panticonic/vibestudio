@@ -94,6 +94,8 @@ export const evalKernelStatusSchema = z
     /** Exact in-memory notebook incarnation that produced this result. */
     incarnationId: z.string().min(1),
     startedAt: z.number().int().nonnegative(),
+    /** Current 30-minute idle residency deadline, refreshed before each cell. */
+    idleExpiresAt: z.number().int().nonnegative().optional(),
     /** First-result-only lifecycle event for this incarnation. */
     event: z
       .object({

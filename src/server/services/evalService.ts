@@ -16,6 +16,7 @@ import type { RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec"
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
 import { resolveCodeIdentity } from "./principalIdentity.js";
+import { EvalKernelLeaseCoordinator, type EvalKernelLease } from "./evalKernelLease.js";
 
 const DEFAULT_EVAL_WATCHDOG_GRACE_MS = 1_000;
 
@@ -124,8 +125,16 @@ export function createEvalService(deps: {
   recoverUnresponsiveSandbox?: (input: EvalSandboxRecoveryInput) => Promise<void>;
   /** Test seam for the host watchdog's post-deadline scheduling grace. */
   watchdogGraceMs?: number;
+  /** Test seam; production uses one held inter-cell lease per EvalDO. */
+  kernelLeases?: EvalKernelLease;
 }): ServiceDefinition {
   const store = deps.entityStore;
+  const kernelLeases =
+    deps.kernelLeases ??
+    new EvalKernelLeaseCoordinator(deps.doDispatch, {
+      onError: (message, error) =>
+        console.warn(message, error instanceof Error ? error.message : error),
+    });
   const evalExecutionIdentity = internalDOExecutionIdentity(getInternalDOBundle(), EVAL_DO_CLASS);
 
   const evalDoKey = (ownerId: string, subKey: string): string =>
@@ -242,7 +251,7 @@ export function createEvalService(deps: {
     subKey: string,
     ownerUserId: string | undefined,
     agentBinding: RuntimeAgentBinding | undefined,
-    lifecycle: "finite" | undefined
+    requestedLifecycle: "finite" | "persistent" | undefined
   ): Promise<{ objectKey: string }> {
     const { ownerId, contextId } = owner;
     const objectKey = evalDoKey(ownerId, subKey);
@@ -258,20 +267,25 @@ export function createEvalService(deps: {
       active?.stateArgs && typeof active.stateArgs === "object" && !Array.isArray(active.stateArgs)
         ? (active.stateArgs as Record<string, unknown>)
         : null;
-    if (active) {
-      const activeLifecycle = activeStateArgs?.["lifecycle"] === "finite" ? "finite" : "persistent";
-      const requestedLifecycle = lifecycle ?? "persistent";
-      if (activeLifecycle !== requestedLifecycle) {
-        throw new ServiceError(
-          "eval",
-          "run",
-          `Eval scope ${subKey} was created as ${activeLifecycle} and cannot be reclassified as ${requestedLifecycle}`,
-          "EINVAL",
-          undefined,
-          "application"
-        );
-      }
+    const activeLifecycle = active
+      ? activeStateArgs?.["lifecycle"] === "finite"
+        ? "finite"
+        : "persistent"
+      : undefined;
+    if (active && requestedLifecycle && activeLifecycle !== requestedLifecycle) {
+      throw new ServiceError(
+        "eval",
+        "run",
+        `Eval scope ${subKey} was created as ${activeLifecycle} and cannot be reclassified as ${requestedLifecycle}`,
+        "EINVAL",
+        undefined,
+        "application"
+      );
     }
+    // Lookup/control methods do not declare lifecycle intent. Preserve an
+    // existing entity's immutable class; only a missing scope defaults to the
+    // ordinary persistent notebook class.
+    const effectiveLifecycle = requestedLifecycle ?? activeLifecycle ?? "persistent";
     if (
       active &&
       active.contextId === contextId &&
@@ -314,7 +328,7 @@ export function createEvalService(deps: {
         ownerPrincipalId: ownerId,
         subKey,
         agentExecutionAdmission: { v: 1, ownerId },
-        ...(lifecycle ? { lifecycle } : {}),
+        ...(effectiveLifecycle === "finite" ? { lifecycle: "finite" as const } : {}),
       },
     } as const;
     if (active) {
@@ -424,7 +438,7 @@ export function createEvalService(deps: {
       runArgs.subKey ?? "default",
       ctx.caller.subject?.userId,
       agentBinding,
-      runArgs.lifecycle
+      runArgs.lifecycle ?? "persistent"
     );
     const isAgentDo = ctx.caller.runtime.kind === "do" && agentBinding !== undefined;
     const timeoutMs = runArgs.timeoutMs;
@@ -462,7 +476,7 @@ export function createEvalService(deps: {
         (deps.isSystemTestHarness?.(ctx.caller, runId)
           ? deps.executionSessions.createTestPolicy(runId)
           : null));
-    await deps.executionSessions.admitWhenAvailable(
+    const executionSession = await deps.executionSessions.admitWhenAvailable(
       {
         mode: mission ? "mission" : testPolicy ? "test" : "interactive",
         ownerUser: `user:${ctx.caller.subject.userId}`,
@@ -495,6 +509,15 @@ export function createEvalService(deps: {
       ctx.signal
     );
     const evalDoRef = { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey };
+    try {
+      await kernelLeases.touch(evalDoRef);
+    } catch (error) {
+      // Admission and kernel residency are one preparation transaction. If the
+      // lease cannot be established, no run can start and nothing downstream
+      // will reach the normal completion cleanup.
+      deps.executionSessions.close(evalRuntimeId, runId);
+      throw error;
+    }
     return {
       evalDoRef,
       assembledArgs: {
@@ -507,6 +530,7 @@ export function createEvalService(deps: {
         imports: runArgs.imports,
         contextId: owner.contextId,
         gatewayToken: mintGatewayToken(objectKey),
+        executionSessionNonce: executionSession.nonce,
         causalParent: ctx.causalParent,
         agentInvocationId: ctx.causalParent?.invocationId,
         parent,
