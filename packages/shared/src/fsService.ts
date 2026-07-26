@@ -55,6 +55,37 @@ const WORKSPACE_SOURCE_ROOTS = new Set<string>(WORKSPACE_SOURCE_DIRS);
 const CANONICAL_SOURCE_ROOT_BY_LOWER = new Map(
   WORKSPACE_SOURCE_DIRS.map((sourceRoot) => [sourceRoot.toLowerCase(), sourceRoot])
 );
+const DISK_READ_PATH_METHODS = new Set([
+  "readFile",
+  "readdir",
+  "stat",
+  "lstat",
+  "exists",
+  "access",
+  "open",
+  "createReadStream",
+  "copyFile",
+]);
+const AUTHORITY_PATH_METHODS = new Set([
+  "readFile",
+  "writeFile",
+  "appendFile",
+  "readdir",
+  "mkdir",
+  "rmdir",
+  "rm",
+  "stat",
+  "lstat",
+  "exists",
+  "access",
+  "unlink",
+  "truncate",
+  "readlink",
+  "realpath",
+  "chmod",
+  "utimes",
+  "open",
+]);
 
 /** Idle timeout for open file handles (5 minutes). */
 const HANDLE_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -220,18 +251,7 @@ function readScopePath(method: string, args: unknown[]): string | null {
   // NB: `realpath`/`readlink` are path canonicalization (no content read) and are
   // intentionally excluded — path canonicalization alone must not provision a
   // context projection.
-  const READ_PATH_METHODS = new Set([
-    "readFile",
-    "readdir",
-    "stat",
-    "lstat",
-    "exists",
-    "access",
-    "open",
-    "createReadStream",
-    "copyFile", // src = args[0]
-  ]);
-  if (READ_PATH_METHODS.has(method)) {
+  if (DISK_READ_PATH_METHODS.has(method)) {
     const a = args[0];
     return typeof a === "string" ? a : null;
   }
@@ -259,27 +279,7 @@ function authorityPathsForCall(method: string, args: unknown[]): string[] {
   if (method === "symlink") {
     return [args[0], args[1]].filter((item): item is string => typeof item === "string");
   }
-  const PATH_METHODS = new Set([
-    "readFile",
-    "writeFile",
-    "appendFile",
-    "readdir",
-    "mkdir",
-    "rmdir",
-    "rm",
-    "stat",
-    "lstat",
-    "exists",
-    "access",
-    "unlink",
-    "truncate",
-    "readlink",
-    "realpath",
-    "chmod",
-    "utimes",
-    "open",
-  ]);
-  return PATH_METHODS.has(method) && typeof args[0] === "string" ? [args[0]] : [];
+  return AUTHORITY_PATH_METHODS.has(method) && typeof args[0] === "string" ? [args[0]] : [];
 }
 
 function requiresSemanticAuthority(userPath: string): boolean {
