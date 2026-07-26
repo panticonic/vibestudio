@@ -49,8 +49,14 @@ export const evalRunArgsSchema = z
     imports: z.record(z.string()).optional(),
     /** Idempotent run identity (the agent eval gate uses its current invocation id). */
     runId: z.string().optional(),
-    /** Opt-in deadline in ms; the run is aborted after this long. Absent ⇒ unbounded. */
-    timeoutMs: z.number().int().positive().optional(),
+    timeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        "Optional wall-clock deadline in milliseconds. Omit for ordinary work, long-running operations, and calls that may wait for human approval: eval has no implicit deadline. Set only when the task explicitly requires a bound or the code may never settle."
+      ),
     /** Read-only containment: every service call this run makes is dispatched with
      *  `ctx.readOnly`, so the server refuses any method not declared `sensitivity:"read"`. */
     readOnly: z.boolean().optional(),
