@@ -67,6 +67,36 @@ describe("ConnectionRegistry", () => {
     expect(registry.pickPrimary("panel-a")).toBe(later);
   });
 
+  it("keeps primary selection ordered across a large connection set and removal", () => {
+    const registry = createRegistry();
+    const clients = Array.from({ length: 2_000 }, (_, index) =>
+      createClient({
+        callerId: "shared-runtime",
+        connectionId: `conn-${String(1_999 - index).padStart(4, "0")}`,
+        userId: `user-${index}`,
+        authenticatedAt: index % 17,
+      })
+    );
+    for (const client of clients) registry.addClient(client);
+
+    const expected = clients
+      .filter((client) => client.authenticatedAt === 0)
+      .sort((a, b) => a.connectionId.localeCompare(b.connectionId));
+    expect(registry.pickPrimary("shared-runtime")).toBe(expected[0]);
+
+    registry.removeClient(expected[0]!);
+    registry.addClient(
+      createClient({
+        callerId: "shared-runtime",
+        connectionId: "conn-late",
+        userId: "user-late",
+        authenticatedAt: 10_000,
+      })
+    );
+
+    expect(registry.pickPrimary("shared-runtime")).toBe(expected[1]);
+  });
+
   it("atomically replaces a reused connection id and closes its bridge transport", () => {
     const registry = createRegistry();
     const oldClient = createClient({

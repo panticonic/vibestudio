@@ -36,6 +36,12 @@ export class ConnectionRegistry {
   private bridges = new Map<string, Map<string, RpcClient>>();
   private transports = new Map<string, Map<string, WsServerTransportInternal>>();
   /**
+   * Routing repeatedly asks for the oldest live connection. Keep that derived
+   * index coherent at admission/removal instead of allocating and sorting the
+   * caller's full connection set on every RPC dispatch.
+   */
+  private primaryConnections = new Map<string, WsClientState>();
+  /**
    * Reverse index userId -> concrete live connections. The same shared runtime
    * principal can have independently authorized connections for different
    * users, so indexing only callerIds would cross-attribute presence.
@@ -66,11 +72,27 @@ export class ConnectionRegistry {
     );
   }
 
+  private comparePrimary(a: WsClientState, b: WsClientState): number {
+    return a.authenticatedAt - b.authenticatedAt || a.connectionId.localeCompare(b.connectionId);
+  }
+
   pickPrimary(callerId: string): WsClientState | undefined {
-    return this.getCallerConnections(callerId).sort(
-      (a, b) =>
-        a.authenticatedAt - b.authenticatedAt || a.connectionId.localeCompare(b.connectionId)
-    )[0];
+    const cached = this.primaryConnections.get(callerId);
+    if (
+      cached?.ws.readyState === WebSocket.OPEN &&
+      this.callerConnections.get(callerId)?.get(cached.connectionId) === cached
+    ) {
+      return cached;
+    }
+
+    let primary: WsClientState | undefined;
+    for (const client of this.callerConnections.get(callerId)?.values() ?? []) {
+      if (client.ws.readyState !== WebSocket.OPEN) continue;
+      if (!primary || this.comparePrimary(client, primary) < 0) primary = client;
+    }
+    if (primary) this.primaryConnections.set(callerId, primary);
+    else this.primaryConnections.delete(callerId);
+    return primary;
   }
 
   addClient(client: WsClientState): void {
@@ -87,6 +109,13 @@ export class ConnectionRegistry {
     }
     this.clients.set(client.ws, client);
     callerClients.set(client.connectionId, client);
+    const primary = this.primaryConnections.get(client.caller.runtime.id);
+    if (!primary || primary.ws.readyState !== WebSocket.OPEN) {
+      this.primaryConnections.delete(client.caller.runtime.id);
+      this.pickPrimary(client.caller.runtime.id);
+    } else if (this.comparePrimary(client, primary) < 0) {
+      this.primaryConnections.set(client.caller.runtime.id, client);
+    }
     let userClients = this.usersByUserId.get(client.userId);
     if (!userClients) {
       userClients = new Set();
@@ -104,6 +133,9 @@ export class ConnectionRegistry {
       callerClients?.delete(client.connectionId);
       if (callerClients?.size === 0) {
         this.callerConnections.delete(client.caller.runtime.id);
+      }
+      if (this.primaryConnections.get(client.caller.runtime.id) === client) {
+        this.primaryConnections.delete(client.caller.runtime.id);
       }
       const userClients = this.usersByUserId.get(client.userId);
       userClients?.delete(client);
@@ -226,6 +258,7 @@ export class ConnectionRegistry {
     }
     this.clients.clear();
     this.callerConnections.clear();
+    this.primaryConnections.clear();
     this.usersByUserId.clear();
     this.bridges.clear();
     this.transports.clear();

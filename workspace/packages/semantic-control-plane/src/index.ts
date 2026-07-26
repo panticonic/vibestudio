@@ -1924,10 +1924,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
     // causality/ordering bug, never benign redelivery.
     const midBatchReplayed: LogEnvelope[] = [];
     const remaining: typeof prepared = [];
-    for (const event of prepared.slice(replayed.length)) {
-      const existing = existingHead
-        ? this.lineageEventRow(input.logId, input.head, event.envelopeId)
-        : null;
+    for (const [suffixIndex, event] of prepared.slice(replayed.length).entries()) {
+      // The prefix scan stopped precisely because this first suffix event did
+      // not exist. No writes have occurred since, so querying it again in the
+      // mid-batch pass cannot reveal different state.
+      const existing =
+        suffixIndex === 0 || !existingHead
+          ? null
+          : this.lineageEventRow(input.logId, input.head, event.envelopeId);
       if (!existing) {
         remaining.push(event);
         continue;
@@ -1968,7 +1972,13 @@ export class GadWorkspaceDO extends DurableObjectBase {
       );
     }
 
-    const pointer = this.headPointer(input.logId, input.head);
+    // `existingHead` is the authoritative pointer snapshot for this synchronous
+    // transaction. Re-reading the row here and again after our own UPDATE adds
+    // two SQLite round trips to every append without observing any state that
+    // can change independently inside the transaction.
+    const pointer = existingHead
+      ? this.headPointer(input.logId, input.head, existingHead)
+      : { seq: 0, hash: GENESIS_EVENT_HASH, envelopeId: null };
     if (
       replayed.length === 0 &&
       "expectedHeadHash" in input &&
@@ -2081,7 +2091,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
       );
     }
 
-    const finalPointer = this.headPointer(input.logId, input.head);
+    const lastAppended = appended[appended.length - 1];
+    const finalPointer = lastAppended
+      ? {
+          seq: lastAppended.seq,
+          hash: lastAppended.hash,
+          envelopeId: String(lastAppended.envelopeId),
+        }
+      : pointer;
     return {
       logId: input.logId,
       head: input.head,

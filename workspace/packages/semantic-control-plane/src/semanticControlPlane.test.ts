@@ -120,7 +120,7 @@ function expectNoPrivateParticipantMetadata(value: unknown): void {
 function opaque(envelopeId: string, value: unknown, appendedAt = "2026-05-20T12:00:00.000Z") {
   return {
     envelopeId,
-    actor: { kind: "panel", id: "panel:user", participantId: "panel:user" },
+    actor: { kind: "panel" as const, id: "panel:user", participantId: "panel:user" },
     payloadKind: "custom.kind",
     payload: { value },
     appendedAt,
@@ -558,6 +558,72 @@ describe("GadWorkspaceDO unified log and semantic VCS schema", () => {
 });
 
 describe("appendLogEvent core (§3.2)", () => {
+  it("reuses the transactional head snapshot instead of re-reading every fresh append", async () => {
+    const { instance, sql } = await createTestDO(GadWorkspaceDO);
+    const queries: string[] = [];
+    const originalExec = sql.exec;
+    sql.exec = (query, ...bindings) => {
+      queries.push(query);
+      return originalExec(query, ...bindings);
+    };
+
+    const appendCount = 128;
+    for (let index = 0; index < appendCount; index++) {
+      await instance.appendLogEvent({
+        logId: `profiled-log-${index}`,
+        head: "main",
+        logKind: "trajectory",
+        owner,
+        events: [opaque(`profiled-event-${index}`, index)],
+      });
+    }
+
+    expect(
+      queries.filter((query) =>
+        query.includes("SELECT * FROM log_heads WHERE log_id = ? AND head = ?")
+      )
+    ).toHaveLength(appendCount);
+  });
+
+  it("does not repeat the known-missing event lookup on established logs", async () => {
+    const { instance, sql } = await createTestDO(GadWorkspaceDO);
+    await instance.appendLogEvent({
+      logId: "profiled-established-log",
+      head: "main",
+      logKind: "trajectory",
+      owner,
+      events: [opaque("profiled-established-genesis", 0)],
+    });
+
+    const queries: string[] = [];
+    const originalExec = sql.exec;
+    sql.exec = (query, ...bindings) => {
+      queries.push(query);
+      return originalExec(query, ...bindings);
+    };
+    const appendCount = 128;
+    for (let index = 0; index < appendCount; index++) {
+      await instance.appendLogEvent({
+        logId: "profiled-established-log",
+        head: "main",
+        logKind: "trajectory",
+        owner,
+        events: [opaque(`profiled-established-event-${index}`, index)],
+      });
+    }
+
+    expect(
+      queries.filter((query) =>
+        query.includes("SELECT * FROM log_heads WHERE log_id = ? AND head = ?")
+      )
+    ).toHaveLength(appendCount * 2);
+    expect(
+      queries.filter((query) =>
+        query.includes("SELECT * FROM log_events WHERE log_id = ? AND head = ? AND envelope_id = ?")
+      )
+    ).toHaveLength(appendCount);
+  });
+
   it("appends a hash-chained trajectory log starting at seq 1 and publishes via causality edges", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     const result = await call<any>("appendLogEvent", {
