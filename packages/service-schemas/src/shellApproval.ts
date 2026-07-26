@@ -169,8 +169,18 @@ const pendingApprovalBaseShape = {
 export const authorityRowSchema = z
   .object({
     capability: z.string(),
-    domain: z.enum(Object.keys(AUTHORITY_DOMAINS) as [keyof typeof AUTHORITY_DOMAINS, ...(keyof typeof AUTHORITY_DOMAINS)[]]),
-    verb: z.enum(Object.keys(AUTHORITY_VERBS) as [keyof typeof AUTHORITY_VERBS, ...(keyof typeof AUTHORITY_VERBS)[]]),
+    domain: z.enum(
+      Object.keys(AUTHORITY_DOMAINS) as [
+        keyof typeof AUTHORITY_DOMAINS,
+        ...(keyof typeof AUTHORITY_DOMAINS)[],
+      ]
+    ),
+    verb: z.enum(
+      Object.keys(AUTHORITY_VERBS) as [
+        keyof typeof AUTHORITY_VERBS,
+        ...(keyof typeof AUTHORITY_VERBS)[],
+      ]
+    ),
     action: z.string(),
     resource: z.string(),
     resourceScope: AuthorityResourceScopeSchema,
@@ -202,9 +212,7 @@ export const authorityRowDiffSchema = z
     added: z.array(authorityRowSchema),
     removed: z.array(authorityRowSchema),
     unchanged: z.array(authorityRowSchema),
-    retiered: z.array(
-      z.object({ before: authorityRowSchema, after: authorityRowSchema }).strict()
-    ),
+    retiered: z.array(z.object({ before: authorityRowSchema, after: authorityRowSchema }).strict()),
   })
   .strict() satisfies z.ZodType<AuthorityRowDiff>;
 

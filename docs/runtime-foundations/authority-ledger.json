@@ -21681,12 +21681,13 @@
       "method": "publishRepo",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:gitInterop.publishRepo"
+        "key": "git.publish"
       },
       "authorityPrincipals": [
-        "user",
         "code",
-        "host"
+        "host",
+        "session",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -21707,13 +21708,51 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:gitInterop.publishRepo),allOf(capability(user,service:gitInterop.publishRepo),workspace-member),allOf(capability(code,service:gitInterop.publishRepo),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"git.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"git.publish\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"git.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"git.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "prepared-external-repository-publish-transport",
+        "change": "Retiers the transport to open only after moving code-originated publish authority into a schema-owned prepared leaf. User and host callers retain the declared service authority; code callers cannot enter the handler until the exact destination selection is approved."
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
       "capability": "service:gitInterop.publishRepo"
+    },
+    {
+      "id": "host:gitInterop.publishRepo#capability:git.publish",
+      "rpcPlane": "host-service",
+      "owner": "gitInterop",
+      "method": "publishRepo",
+      "capability": "git.publish",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "gitInterop.publishRepo.destination"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"git.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"git.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "exact-destination-gated-git-publish",
+        "change": "Adds a gated code-only prepared authority leaf for one normalized provider, credential selection, and repository name. The registered preparer derives the exact external-repository resource and user-facing change substance before handler entry."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census"
     },
     {
       "id": "host:gitInterop.publishToDisposableRemote",

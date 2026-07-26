@@ -22,6 +22,14 @@
       "review": "bounded-payload-free-scheduler-diagnostics",
       "change": "Adds an open, read-only bounded inspection of host durable-work counters and phase timings. It exposes no work payloads, transcript content, credentials, or mutation authority."
     },
+    "host:gitInterop.publishRepo": {
+      "review": "prepared-external-repository-publish-transport",
+      "change": "Retiers the transport to open only after moving code-originated publish authority into a schema-owned prepared leaf. User and host callers retain the declared service authority; code callers cannot enter the handler until the exact destination selection is approved."
+    },
+    "host:gitInterop.publishRepo#capability:git.publish": {
+      "review": "exact-destination-gated-git-publish",
+      "change": "Adds a gated code-only prepared authority leaf for one normalized provider, credential selection, and repository name. The registered preparer derives the exact external-repository resource and user-facing change substance before handler entry."
+    },
     "host:vcs.listDirectory": {
       "review": "bounded-semantic-immediate-child-read",
       "change": "Adds an open, read-only immediate-child directory projection over the caller's existing semantic VCS read authority. Work is bounded by returned visible entries and does not enumerate descendant file content."
