@@ -32,6 +32,7 @@ import {
   classifyGadAppendError,
   encodeAgenticEventStoredValues,
   hydrateStoredValueRefs,
+  isStoredValueRef,
   type AgenticEvent,
   type LogEnvelope,
   type MessageModelPayload,
@@ -73,6 +74,13 @@ interface ActiveEffectDispatch {
   settled: Promise<void>;
   resolveSettled: () => void;
   progress: { phase: string; startedAt: number };
+}
+
+function containsStoredValueRef(value: unknown): boolean {
+  if (isStoredValueRef(value)) return true;
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(containsStoredValueRef);
+  return Object.values(value as Record<string, unknown>).some(containsStoredValueRef);
 }
 
 /**
@@ -949,7 +957,31 @@ export class AgentLoopDriver {
   }
 
   private async runStep(loop: LoopInstance, incoming: Incoming, retries: number): Promise<void> {
-    const output = loop.step(loop.state, incoming, this.stepCtx(loop.channelId));
+    let semanticIncoming = incoming;
+    if (incoming.type === "event-appended" && containsStoredValueRef(incoming.envelope.payload)) {
+      semanticIncoming = {
+        ...incoming,
+        envelope: {
+          ...incoming.envelope,
+          // The durable fold deliberately retains opaque blob references, but
+          // event cascades are semantic transforms: tool routing and terminal
+          // policies must see the value that was originally journaled. Decode
+          // once at that boundary; anything the cascade appends is encoded
+          // again by append(), preserving one canonical storage representation.
+          payload: await hydrateStoredValueRefs(
+            incoming.envelope.payload,
+            {
+              getText: (digest) => this.executorDeps(loop.channelId).blobstore.getText(digest),
+            },
+            {
+              strict: true,
+              context: `agent-loop cascade ${incoming.envelope.payloadKind}`,
+            }
+          ),
+        },
+      };
+    }
+    const output = loop.step(loop.state, semanticIncoming, this.stepCtx(loop.channelId));
     if (output.append.length === 0 && output.effects.length === 0) return;
     let envelopes: LogEnvelope[];
     try {

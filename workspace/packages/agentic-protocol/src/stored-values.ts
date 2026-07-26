@@ -54,8 +54,9 @@ export interface StorageClassOptions {
  * Storage classes — every payload field is exactly one of:
  *
  * - REFERENCE (listed below): ALWAYS stored as a StoredValueRef, even when
- *   tiny — one code path, no "maybe spilled" states. Folds treat these as
- *   opaque carriers and never read inside them; executors/UI hydrate.
+ *   tiny — one code path, no "maybe spilled" states. Folds retain these as
+ *   opaque carriers. Semantic event cascades, executors, and UI hydrate at
+ *   their explicit read boundaries.
  * - INLINE (everything else): always present verbatim in the envelope — the
  *   ONLY class folds may read. Oversized inline values are a hard
  *   encode-time error at the emitter (InlineValueTooLargeError), never a
