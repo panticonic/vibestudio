@@ -10,8 +10,13 @@ import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import {
   defineServiceMethods,
+  fixedPreparedAuthorityRequirement,
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
+
+export const GIT_PUBLISH_CAPABILITY = "git.publish" as const;
+export const GIT_PUBLISH_REPO_AUTHORITY_RESOLVER = "gitInterop.publishRepo.destination" as const;
 
 // Access descriptors shared across the gitInterop method group. All four
 // methods mutate workspace config (`meta/vibestudio.yml`) and/or reach the
@@ -559,6 +564,22 @@ export const gitInteropMethods = defineServiceMethods({
       "Create a provider repository, configure tracking, export protected main, and push through the configured gitInterop provider.",
     args: z.tuple([gitPublishRepoInputSchema]),
     returns: gitPublishRepoResultSchema,
+    authority: {
+      requirement: requirementForPrincipals(["user", "host", "code"], GIT_PUBLISH_CAPABILITY),
+      resource: { kind: "literal", key: GIT_PUBLISH_CAPABILITY },
+      prepared: {
+        resolver: GIT_PUBLISH_REPO_AUTHORITY_RESOLVER,
+        leaves: [
+          {
+            capability: GIT_PUBLISH_CAPABILITY,
+            requirement: fixedPreparedAuthorityRequirement(
+              requirementForPrincipals(["code"], GIT_PUBLISH_CAPABILITY)
+            ),
+            tier: "gated",
+          },
+        ],
+      },
+    },
     access: UPSTREAM_OPERATION_ACCESS,
     examples: [{ args: [{ repoPath: "projects/bgkit", private: true }] }],
   },

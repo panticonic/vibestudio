@@ -13,6 +13,7 @@ type PromptableHostMethod = {
 const PREPARED_EFFECT_METHODS = [
   "corsApproval.authorize",
   "externalOpen.openExternal",
+  "gitInterop.publishRepo",
   "workerdInspector.getEndpoint",
 ] as const satisfies readonly ReviewedHostMethod[];
 

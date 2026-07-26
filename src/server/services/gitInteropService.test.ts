@@ -100,6 +100,59 @@ function diskConfigPersistence(workspacePath: string) {
 }
 
 describe("gitInteropService", () => {
+  it("prepares one exact, human-readable repository publication approval", () => {
+    const service = createGitInteropService({});
+    const prepare = service.authorityPreparation?.["gitInterop.publishRepo.destination"];
+    const caller = createVerifiedCaller("panel-1", "panel", {
+      callerId: "panel-1",
+      callerKind: "panel",
+      repoPath: "panels/test",
+      effectiveVersion: "ev-panel",
+      executionDigest: "a".repeat(64),
+      requested: [
+        {
+          capability: "git.publish",
+          resource: { kind: "prefix", prefix: "" },
+        },
+      ],
+    });
+
+    expect(
+      prepare?.({ caller }, [
+        {
+          repoPath: "projects/default",
+          provider: "github",
+          name: "vibestudio-default-test",
+          private: true,
+          description: "Default project",
+          branch: "main",
+          autoPush: false,
+        },
+      ])
+    ).toEqual([
+      expect.objectContaining({
+        capability: "git.publish",
+        resourceKey: "external-repository:github:default:vibestudio-default-test",
+        challenge: expect.objectContaining({
+          title: "Create and publish vibestudio-default-test",
+          resource: {
+            type: "external-repository",
+            label: "Destination",
+            value: "GitHub / vibestudio-default-test",
+          },
+          substance: expect.objectContaining({
+            summary: "Create a private GitHub repository and publish projects/default",
+            facts: expect.arrayContaining([
+              { label: "Visibility", value: "Private" },
+              { label: "Publish", value: "projects/default → main" },
+              { label: "Future changes", value: "Push only when requested" },
+            ]),
+          }),
+        }),
+      }),
+    ]);
+  });
+
   it("imports a requested branch and persists it as a shared remote", async () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = { ...BASE_WORKSPACE_CONFIG };

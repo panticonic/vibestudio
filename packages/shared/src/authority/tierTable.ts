@@ -1041,9 +1041,10 @@ export const METHOD_TIERS = {
     rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
   },
   "gitInterop.publishRepo": {
-    tier: "gated",
+    tier: "open",
     session: "family",
-    rationale: "G1: external-system effect or listening surface; §2 default {code, session} family",
+    rationale:
+      "The transport is open; code callers receive one prepared gated git.publish leaf scoped to the exact external repository",
   },
   "gitInterop.publishToDisposableRemote": {
     tier: "gated",

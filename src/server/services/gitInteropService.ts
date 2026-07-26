@@ -19,6 +19,7 @@ import {
   setDeclaredUpstreamInConfig,
   syncDeclaredRemoteForRepo,
   validateWorkspaceGitRemote,
+  validateWorkspaceGitRemoteBranch,
   validateWorkspaceGitRemoteName,
   validateWorkspaceGitUpstream,
 } from "@vibestudio/workspace/remotes";
@@ -30,6 +31,8 @@ import {
 import {
   gitInteropMethods,
   gitInteropProviderMethods,
+  GIT_PUBLISH_CAPABILITY,
+  GIT_PUBLISH_REPO_AUTHORITY_RESOLVER,
   type GitCompleteWorkspaceDependenciesOptions,
   type GitCompleteWorkspaceDependenciesResult,
   type GitDetachUpstreamOptions,
@@ -41,9 +44,11 @@ import {
   type GitInteropProviderMethod,
   type GitInteropProviderOperation,
   type GitInteropProviderResult,
+  type GitPublishRepoInput,
 } from "@vibestudio/service-schemas/gitInterop";
 import type { DisposableGitRemoteManager } from "./disposableGitRemoteManager.js";
 import { deleteDynamicProperty } from "../../lintHelpers";
+import { fixedPreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
 
 type GitInteropServiceDeps = {
   workspacePath?: string;
@@ -97,6 +102,12 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
     description: "External Git interop: declared remotes and remote project imports",
     authority: { principals: ["user", "code", "host"] },
     methods: gitInteropMethods,
+    authorityPreparation: {
+      [GIT_PUBLISH_REPO_AUTHORITY_RESOLVER]: (ctx, [rawInput]) => {
+        if (!ctx.caller.code && !ctx.caller.executionSession) return [];
+        return [publishRepoAuthoritySelection(rawInput as GitPublishRepoInput)];
+      },
+    },
     handler: defineServiceHandler("gitInterop", gitInteropMethods, {
       setSharedRemote: async (ctx, [repoPath, remoteInput]) => {
         if (!deps.workspacePath) throw new Error("No workspace path configured");
@@ -322,6 +333,84 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
         completeWorkspaceDependencies(ctx, deps, options),
     }),
   };
+}
+
+function publishRepoAuthoritySelection(input: GitPublishRepoInput) {
+  const repoPath = normalizeWorkspaceRepoPath(input.repoPath);
+  const provider = input.provider?.trim() || "github";
+  const providerName = providerDisplayName(provider);
+  const repoName = input.name?.trim() || repoPath.split("/").at(-1) || repoPath;
+  if (repoName.includes("/")) {
+    throw new Error(
+      `Repository name "${repoName}" must not contain "/" — the owner is determined by the credential`
+    );
+  }
+  const remote = validateWorkspaceGitRemoteName(input.remote ?? "origin");
+  const branch = validateWorkspaceGitRemoteBranch(input.branch ?? "main");
+  const visibility = input.private === false ? "Public" : "Private";
+  const automaticPushes = input.autoPush === true;
+  const destination = `${providerName} / ${repoName}`;
+  const credentialKey = input.credentialId?.trim() || "default";
+
+  return fixedPreparedAuthoritySelection({
+    capability: GIT_PUBLISH_CAPABILITY,
+    resourceKey: `external-repository:${provider}:${credentialKey}:${repoName}`,
+    challenge: {
+      title: `Create and publish ${repoName}`,
+      description:
+        `Creates a ${visibility.toLowerCase()} repository on ${providerName}, pushes ` +
+        `${repoPath}, and records it as this workspace repository's upstream.`,
+      deniedReason: `Publishing ${repoPath} to ${destination} was not allowed`,
+      dedupKey: `git-publish:${provider}:${credentialKey}:${repoName}`,
+      resource: {
+        type: "external-repository",
+        label: "Destination",
+        value: destination,
+      },
+      operation: {
+        kind: "git" as const,
+        verb: "create and publish a Git repository",
+        object: {
+          type: "external-repository",
+          label: "Repository",
+          value: destination,
+        },
+        groupKey: `git-publish:${provider}:${credentialKey}:${repoName}`,
+      },
+      substance: {
+        kind: "change-set" as const,
+        summary: `Create a ${visibility.toLowerCase()} ${providerName} repository and publish ${repoPath}`,
+        facts: [
+          { label: "Repository", value: destination },
+          { label: "Visibility", value: visibility },
+          { label: "Publish", value: `${repoPath} → ${branch}` },
+          { label: "Workspace tracking", value: `${remote} tracks ${branch}` },
+          {
+            label: "Future changes",
+            value: automaticPushes ? "Push automatically" : "Push only when requested",
+          },
+          ...(input.description?.trim()
+            ? [{ label: "Description", value: input.description.trim() }]
+            : []),
+          ...(input.force === true ? [{ label: "First push", value: "Force update allowed" }] : []),
+        ],
+      },
+      details: [
+        { label: "Workspace repository", value: repoPath },
+        { label: "Provider", value: providerName },
+        { label: "Remote name", value: remote },
+        { label: "Remote branch", value: branch },
+        ...(input.credentialId ? [{ label: "Connected account", value: input.credentialId }] : []),
+      ],
+    },
+  });
+}
+
+function providerDisplayName(provider: string): string {
+  if (provider.toLowerCase() === "github") return "GitHub";
+  return provider
+    .replace(/[-_]+/gu, " ")
+    .replace(/\b\p{L}/gu, (character) => character.toUpperCase());
 }
 
 async function invokeGitProviderOperation<M extends GitInteropProviderOperation>(

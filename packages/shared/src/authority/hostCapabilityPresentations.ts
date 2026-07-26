@@ -328,12 +328,6 @@ export const HOST_CAPABILITY_PRESENTATIONS = {
     description: "Allows {requesterKind} to import a Git project.",
     group: "files",
   },
-  "gitInterop.publishRepo": {
-    title: "Publish a workspace repository",
-    action: "publish a workspace repository",
-    description: "Allows {requesterKind} to publish a workspace repository.",
-    group: "files",
-  },
   "gitInterop.publishToDisposableRemote": {
     title: "Publish to a temporary Git remote",
     action: "publish to a temporary Git remote",
