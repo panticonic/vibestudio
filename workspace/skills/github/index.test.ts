@@ -8,6 +8,7 @@ const runtimeMock = vi.hoisted(() => ({
     revokeCredential: vi.fn(),
     fetch: vi.fn(),
     gitHttp: vi.fn(),
+    forAudience: vi.fn(),
   },
   git: {
     upstreamStatus: vi.fn(),
@@ -34,15 +35,13 @@ const githubCredential: StoredCredentialSummary = {
   id: "cred-github",
   label: "GitHub",
   accountIdentity: { providerUserId: "github-pat", username: "octocat" },
-  audience: [
-    { url: "https://api.github.com/", match: "origin" },
-  ],
+  audience: [{ url: "https://api.github.com/", match: "origin" }],
   injection: {
     type: "header",
     name: "authorization",
     valueTemplate: "Bearer {token}",
   },
-  scopes: ["metadata:read", "contents:read"],
+  scopes: ["metadata:read", "contents:write", "administration:write"],
   lifecycle: { state: "active", canRefresh: false },
   metadata: { providerId: "github" },
 };
@@ -67,6 +66,15 @@ describe("github skill facade", () => {
         headers: {},
         body: (async function* () {})(),
       }),
+    });
+    runtimeMock.credentials.forAudience.mockResolvedValue({
+      credentialId: "cred-github",
+      fetch: vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ login: "octocat", id: 1 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      ),
     });
     runtimeMock.git.upstreamStatus.mockResolvedValue([]);
     runtimeMock.git.publishRepo.mockResolvedValue(undefined);
@@ -93,11 +101,7 @@ describe("github skill facade", () => {
             accessLevel: "collaborate",
             credentialMode: "api-and-git",
           }),
-          scopes: expect.arrayContaining([
-            "contents:write",
-            "issues:write",
-            "pull_requests:write",
-          ]),
+          scopes: expect.arrayContaining(["contents:write", "issues:write", "pull_requests:write"]),
         }),
         fields: [
           expect.objectContaining({
@@ -109,8 +113,23 @@ describe("github skill facade", () => {
     );
   });
 
+  it("persists the selected GitHub token owner", async () => {
+    await requestGitHubTokenCredential({ accessLevel: "publish", targetName: " acme " });
+
+    expect(runtimeMock.credentials.requestCredentialInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        credential: expect.objectContaining({
+          metadata: expect.objectContaining({ targetName: "acme" }),
+        }),
+      })
+    );
+  });
+
   it("requests API PAT material through privileged credential input UI", async () => {
-    await requestGitHubTokenCredential({ mode: "api", presets: ["contents-read", "contents-write"] });
+    await requestGitHubTokenCredential({
+      mode: "api",
+      presets: ["contents-read", "contents-write"],
+    });
 
     expect(runtimeMock.credentials.requestCredentialInput).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -188,7 +207,7 @@ describe("github skill facade", () => {
             accessLevel: "read-only",
             credentialMode: "api-and-git",
             gitRemoteOrigin: "https://github.com/",
-            localBindingCatalog: "github:v1",
+            localBindingCatalog: "github:v2",
           }),
           bindings: expect.arrayContaining([
             expect.objectContaining({ id: "github-user", use: "fetch" }),
@@ -214,13 +233,17 @@ describe("github skill facade", () => {
   });
 
   it("builds a prefilled fine-grained token URL from access level", () => {
-    const url = new URL(buildGitHubTokenSettingsUrl({
-      accessLevel: "code-workflows",
-      expiresIn: 30,
-      targetName: "octo-org",
-    }));
+    const url = new URL(
+      buildGitHubTokenSettingsUrl({
+        accessLevel: "code-workflows",
+        expiresIn: 30,
+        targetName: "octo-org",
+      })
+    );
 
-    expect(url.origin + url.pathname).toBe("https://github.com/settings/personal-access-tokens/new");
+    expect(url.origin + url.pathname).toBe(
+      "https://github.com/settings/personal-access-tokens/new"
+    );
     expect(url.searchParams.get("name")).toBe("Vibestudio");
     expect(url.searchParams.get("target_name")).toBe("octo-org");
     expect(url.searchParams.get("expires_in")).toBe("30");
@@ -248,6 +271,7 @@ describe("github skill facade", () => {
 
     expect(status.stage).toBe("verified");
     expect(status.login).toBe("octocat");
+    expect(status.completedAt).toEqual(expect.any(Number));
     expect(status.verification).toMatchObject({ valid: true, credentialId: "cred-github" });
   });
 
@@ -277,7 +301,10 @@ describe("github skill facade", () => {
     };
     runtimeMock.credentials.gitHttp.mockReturnValue(gitHttp);
 
-    const result = await verifyGitHubGitRemoteAccess("https://github.com/octo/project.git", "cred-github");
+    const result = await verifyGitHubGitRemoteAccess(
+      "https://github.com/octo/project.git",
+      "cred-github"
+    );
 
     expect(result).toMatchObject({
       accessible: true,
@@ -307,7 +334,9 @@ describe("github skill facade", () => {
     await openGitHubTokenSettings();
 
     const opened = new URL(runtimeMock.openExternal.mock.calls[0]![0]);
-    expect(opened.origin + opened.pathname).toBe("https://github.com/settings/personal-access-tokens/new");
+    expect(opened.origin + opened.pathname).toBe(
+      "https://github.com/settings/personal-access-tokens/new"
+    );
     expect(opened.searchParams.get("contents")).toBe("write");
   });
 
@@ -315,7 +344,9 @@ describe("github skill facade", () => {
     await openGitHubTokenSettings({ browser: "internal" });
 
     const [opened, options] = runtimeMock.openPanel.mock.calls[0]!;
-    expect(new URL(opened).origin + new URL(opened).pathname).toBe("https://github.com/settings/personal-access-tokens/new");
+    expect(new URL(opened).origin + new URL(opened).pathname).toBe(
+      "https://github.com/settings/personal-access-tokens/new"
+    );
     expect(options).toEqual({ focus: true, name: "GitHub settings" });
     expect(runtimeMock.openExternal).not.toHaveBeenCalled();
   });
@@ -323,9 +354,7 @@ describe("github skill facade", () => {
   it("can open the classic token page externally", async () => {
     await openGitHubTokenSettings({ tokenKind: "classic", browser: "external" });
 
-    expect(runtimeMock.openExternal).toHaveBeenCalledWith(
-      "https://github.com/settings/tokens/new"
-    );
+    expect(runtimeMock.openExternal).toHaveBeenCalledWith("https://github.com/settings/tokens/new");
   });
 
   it("unwraps canonical runtime git upstream status rows", async () => {
@@ -365,6 +394,7 @@ describe("github skill facade", () => {
   });
 
   it("publishes through the canonical runtime git provider input", async () => {
+    runtimeMock.credentials.listStoredCredentials.mockResolvedValue([githubCredential]);
     const result = {
       repoPath: "projects/demo",
       provider: "github",
@@ -409,5 +439,46 @@ describe("github skill facade", () => {
       authorEmail: "bridge@example.com",
       force: true,
     });
+  });
+
+  it("uses the persisted token owner when publishing without an organization", async () => {
+    runtimeMock.credentials.listStoredCredentials.mockResolvedValue([
+      { ...githubCredential, metadata: { ...githubCredential.metadata, targetName: "acme" } },
+    ]);
+    const result = { repoPath: "projects/demo", provider: "github" };
+    runtimeMock.git.publishRepo.mockResolvedValue(result);
+
+    await publishToGitHub({ repoPath: "projects/demo", name: "demo" });
+
+    expect(runtimeMock.git.publishRepo).toHaveBeenCalledWith({
+      repoPath: "projects/demo",
+      name: "demo",
+      credentialId: "cred-github",
+      organization: "acme",
+      provider: "github",
+    });
+  });
+
+  it("rejects an organization that conflicts with the token owner", async () => {
+    runtimeMock.credentials.listStoredCredentials.mockResolvedValue([
+      { ...githubCredential, metadata: { ...githubCredential.metadata, targetName: "acme" } },
+    ]);
+
+    await expect(
+      publishToGitHub({ repoPath: "projects/demo", name: "demo", organization: "other-org" })
+    ).rejects.toThrow(/does not match the connected token owner "acme"/);
+    expect(runtimeMock.git.publishRepo).not.toHaveBeenCalled();
+  });
+
+  it("does not guess when multiple active GitHub credentials exist", async () => {
+    runtimeMock.credentials.listStoredCredentials.mockResolvedValue([
+      githubCredential,
+      { ...githubCredential, id: "cred-other", label: "Other GitHub" },
+    ]);
+
+    await expect(publishToGitHub({ repoPath: "projects/demo", name: "demo" })).rejects.toThrow(
+      /Multiple active GitHub credentials.*credentialId explicitly/
+    );
+    expect(runtimeMock.git.publishRepo).not.toHaveBeenCalled();
   });
 });

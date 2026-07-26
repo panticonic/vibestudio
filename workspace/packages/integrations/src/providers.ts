@@ -132,6 +132,14 @@ export const githubBindings = {
     injection: bearerTokenInjection,
     grantResource: { type: "url-path-prefix", segmentCount: 1 },
   },
+  organizations: {
+    id: "github-organizations",
+    label: "GitHub organization repositories",
+    use: "fetch",
+    audience: [{ url: "https://api.github.com/orgs/", match: "path-prefix" }],
+    injection: bearerTokenInjection,
+    grantResource: { type: "url-path-prefix", segmentCount: 2 },
+  },
   repos: {
     id: "github-repos",
     label: "GitHub repositories",
@@ -163,6 +171,7 @@ export const githubCredential: UrlCredentialDescriptor = {
   displayName: "GitHub",
   audiences: audiencesFromBindings([
     githubBindings.user,
+    githubBindings.organizations,
     githubBindings.repos,
     githubBindings.uploads,
   ]),

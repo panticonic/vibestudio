@@ -4,6 +4,7 @@ import {
   GITHUB_FINE_GRAINED_BROAD_PERMISSIONS,
   githubBindings,
 } from "@workspace/integrations/providers";
+import { resolveGitHubPublishOperation } from "@workspace/integrations/github";
 
 const GITHUB_PROVIDER_ID = "github";
 const GITHUB_API_ORIGIN = "https://api.github.com";
@@ -69,8 +70,11 @@ export interface GitHubOnboardingStatus {
   connectionId?: string;
   credentialId?: string;
   login?: string;
+  targetName?: string;
   credentials: StoredCredentialSummary[];
   verification?: GitHubVerificationResult;
+  /** Set when this status call performed and passed live verification. */
+  completedAt?: number;
   nextActions: string[];
   warnings: string[];
   error?: string;
@@ -85,6 +89,7 @@ export interface RequestGitHubTokenCredentialOptions {
   mode?: GitHubCredentialMode;
   tokenKind?: GitHubTokenKind;
   accessLevel?: GitHubAccessLevel;
+  targetName?: string;
   presets?: GitHubPermissionPreset[];
   scopes?: string[];
 }
@@ -427,6 +432,7 @@ function buildCredentialRequest(
   const access = accessLevel ? GITHUB_ACCESS_LEVELS[accessLevel] : undefined;
   const mode = opts.mode ?? access?.mode ?? "api";
   const tokenKind = opts.tokenKind ?? "fine-grained";
+  const targetName = opts.targetName?.trim() || undefined;
   const presets = opts.presets ?? access?.presets;
   const scopes = opts.scopes?.length
     ? opts.scopes
@@ -464,9 +470,10 @@ function buildCredentialRequest(
         providerKind: tokenKind === "classic" ? "classic-pat" : "fine-grained-pat",
         credentialMode: mode,
         ...(accessLevel ? { accessLevel } : {}),
+        ...(targetName ? { targetName } : {}),
         upstreamAccessMode:
           tokenKind === "classic" ? "github-classic-broad" : "github-fine-grained-broad",
-        localBindingCatalog: "github:v1",
+        localBindingCatalog: "github:v2",
         permissionPresets: defaultPresets.join(","),
         ...(mode === "api" ? {} : { gitRemoteOrigin: `${GITHUB_GIT_ORIGIN}/` }),
       },
@@ -528,8 +535,13 @@ function buildStatus(input: {
     connectionId: primary?.id,
     credentialId: primary?.id,
     login: input.verification?.login ?? primary?.accountIdentity?.username,
+    targetName:
+      typeof primary?.metadata?.["targetName"] === "string"
+        ? primary.metadata["targetName"]
+        : undefined,
     credentials: input.credentials,
     verification: input.verification,
+    ...(verified ? { completedAt: Date.now() } : {}),
     nextActions: [],
     warnings: input.warnings ?? [],
   };
@@ -706,9 +718,22 @@ export async function upstreamStatus(
 export async function publishToGitHub(
   options: PublishToGitHubOptions
 ): Promise<PublishToGitHubResult> {
+  const explicitOrganization = options.organization?.trim();
+  if (options.organization !== undefined && !explicitOrganization) {
+    throw new Error("GitHub organization must be a non-empty organization name when provided.");
+  }
+
+  const operation = await withCredentialRuntime((api) =>
+    resolveGitHubPublishOperation(api, {
+      ...(options.credentialId ? { credentialId: options.credentialId } : {}),
+      ...(explicitOrganization ? { organization: explicitOrganization } : {}),
+    })
+  );
   return withGitRuntime((api) =>
     api.publishRepo({
       ...options,
+      credentialId: operation.credentialId,
+      ...(operation.organization ? { organization: operation.organization } : {}),
       provider: GITHUB_PROVIDER_ID,
     })
   );
@@ -798,6 +823,8 @@ export function formatGitHubOnboardingStatus(status: GitHubOnboardingStatus): st
   ];
   if (status.connectionId) lines.push(`connectionId=${status.connectionId}`);
   if (status.login) lines.push(`login=${status.login}`);
+  if (status.targetName) lines.push(`targetName=${status.targetName}`);
+  if (status.completedAt) lines.push(`completedAt=${status.completedAt}`);
   if (status.error) lines.push(`error=${status.error}`);
   if (status.warnings.length) lines.push(`warnings=${status.warnings.join("; ")}`);
   if (status.nextActions.length) lines.push(`nextActions=${status.nextActions.join(" | ")}`);

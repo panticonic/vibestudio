@@ -55,6 +55,37 @@ Both routes use `openGitHubTokenSettings()` and preserve the same
 destination-scoped approval. If an internal panel was opened only for setup,
 close it after the user no longer needs it.
 
+The setup surface can optionally preselect an organization owner using GitHub's
+`target_name` URL parameter. The selected owner is also persisted in the
+credential metadata for later inspection. When publishing, that persisted owner
+is the default repository owner, so an organization-targeted token can follow
+the happy path without repeating the organization argument. The user must be
+an organization member, and organization policy or approval may still apply.
+
+When publishing, pass the organization separately from the repository name
+when you want to override the persisted token owner:
+
+```ts
+await publishToGitHub({
+  repoPath: "projects/my-project",
+  name: "my-project",
+  organization: "my-org",
+});
+```
+
+When `organization` is omitted, both `publishToGitHub()` and raw
+`git.publishRepo()` use the persisted PAT owner when the selected credential
+has one, otherwise the authenticated GitHub user. An explicit organization
+must match that owner; this prevents a token targeted at one organization from
+silently attempting publication into another. If multiple active GitHub
+credentials exist, pass `credentialId`; neither path guesses. Both paths
+perform live credential and publish-permission preflight before creating
+anything. Publishing an organization repository uses GitHub's organization
+repository API and Git HTTPS separately. Existing credentials created before
+organization API audience support are upgraded compatibly at request time;
+reconnecting is not required solely because the credential predates that
+binding.
+
 ## Advanced token cases
 
 Use these only after a concrete requirement or failure:
@@ -95,11 +126,10 @@ if (!verification.valid) {
 For clone or pull access to a known remote:
 
 ```ts
-await verifyGitHubGitRemoteAccess(
-  "https://github.com/owner/repository.git",
-  credentialId
-);
+await verifyGitHubGitRemoteAccess("https://github.com/owner/repository.git", credentialId);
 ```
 
 Connection is not verification. Do not mark onboarding complete merely because
-the credential was stored.
+the credential was stored. Call `getGitHubOnboardingStatus({ verify: true })`;
+the returned `completedAt` is the agent-visible completion marker and includes
+the verified credential and token owner.

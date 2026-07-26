@@ -90,6 +90,7 @@ const DEFAULT_RETRY_MAX_DELAY_MS = 1_000;
 const CIRCUIT_FAILURE_THRESHOLD = 5;
 const CIRCUIT_OPEN_MS = 30_000;
 const WEBSOCKET_DIAGNOSTIC_BODY_LIMIT = 512;
+const GITHUB_BINDING_CATALOG_VERSION = "github:v2";
 
 interface GitIntentMetadata {
   force: boolean;
@@ -1114,6 +1115,7 @@ export class EgressProxy {
     if (!credential || !credential.bindings?.length || credential.revokedAt) {
       throw new ForwardRejection(403, "credential-unavailable", "credential-unavailable");
     }
+    credential = await this.upgradeBindingCatalog(credential);
     credential = await this.refreshCredentialForUse(credential);
     if (credential.expiresAt && credential.expiresAt <= Date.now()) {
       throw new ForwardRejection(403, "credential-expired", "credential-expired");
@@ -1240,14 +1242,17 @@ export class EgressProxy {
     if (!listUrlBound) {
       return null;
     }
-    const credentials = (
-      await Promise.resolve(listUrlBound.call(this.deps.credentialStore))
-    ).filter(
+    const credentials = await Promise.all(
+      (await Promise.resolve(listUrlBound.call(this.deps.credentialStore))).map((credential) =>
+        this.upgradeBindingCatalog(credential)
+      )
+    );
+    const matchingCredentials = credentials.filter(
       (credential) =>
         !credential.revokedAt && !!this.findCredentialBinding(credential, targetUrl, use)
     );
-    if (credentials.length === 1) {
-      const credential = credentials[0] ?? null;
+    if (matchingCredentials.length === 1) {
+      const credential = matchingCredentials[0] ?? null;
       if (credential) {
         const binding = this.findCredentialBinding(credential, targetUrl, use);
         if (!binding) {
@@ -1279,7 +1284,7 @@ export class EgressProxy {
       }
       return credential ? this.refreshCredentialForUse(credential) : null;
     }
-    if (credentials.length > 1) {
+    if (matchingCredentials.length > 1) {
       throw new ForwardRejection(
         409,
         "credential-selection-required",
@@ -1537,16 +1542,61 @@ export class EgressProxy {
     return [];
   }
 
+  private async upgradeBindingCatalog(credential: Credential): Promise<Credential> {
+    if (
+      credential.metadata?.["providerId"] !== "github" ||
+      credential.metadata?.["localBindingCatalog"] === GITHUB_BINDING_CATALOG_VERSION
+    ) {
+      return credential;
+    }
+    const bindings = this.credentialBindings(credential);
+    const repos = bindings.find((binding) => binding.id === "github-repos");
+    const hasOrganizations = bindings.some((binding) => binding.id === "github-organizations");
+    if (!repos) return credential;
+    if (hasOrganizations) {
+      const upgraded = {
+        ...credential,
+        metadata: {
+          ...(credential.metadata ?? {}),
+          localBindingCatalog: GITHUB_BINDING_CATALOG_VERSION,
+          updatedAt: String(Date.now()),
+        },
+      };
+      await this.deps.credentialStore.saveUrlBound?.(upgraded as Credential & { id: string });
+      return upgraded;
+    }
+    const upgraded = {
+      ...credential,
+      bindings: [
+        ...bindings,
+        {
+          ...repos,
+          id: "github-organizations",
+          label: "GitHub organization repositories",
+          audience: [{ url: "https://api.github.com/orgs/", match: "path-prefix" as const }],
+        },
+      ],
+      metadata: {
+        ...(credential.metadata ?? {}),
+        localBindingCatalog: GITHUB_BINDING_CATALOG_VERSION,
+        updatedAt: String(Date.now()),
+      },
+    };
+    await this.deps.credentialStore.saveUrlBound?.(upgraded as Credential & { id: string });
+    return upgraded;
+  }
+
   private findCredentialBinding(
     credential: Credential,
     targetUrl: URL,
     use: CredentialBindingUse
   ): CredentialBinding | null {
-    return (
-      this.credentialBindings(credential).find(
-        (binding) => binding.use === use && !!findMatchingUrlAudience(targetUrl, binding.audience)
-      ) ?? null
+    const binding = this.credentialBindings(credential).find(
+      (binding) => binding.use === use && !!findMatchingUrlAudience(targetUrl, binding.audience)
     );
+    if (binding) return binding;
+
+    return null;
   }
 
   private async handleConnect(

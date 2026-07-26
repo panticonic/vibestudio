@@ -95,14 +95,30 @@ Start a phone/laptop pairing server:
 vibestudio remote serve --port 3030
 # or, during source development:
 pnpm cli remote serve --port 3030
-# disposable unattended host with structured pairing handoff:
-pnpm --silent cli remote serve --dev --auto-approve --ready-file /tmp/vibestudio-ready.json
+# disposable host with structured pairing handoff:
+pnpm --silent cli remote serve --dev --ready-file /tmp/vibestudio-ready.json
 ```
 
 The ready file contains one-time root pairing secrets; protect it and delete it
-after redemption. Source-mode `remote serve` rebuilds the internal Durable
-Object bundle before startup. Its disposable `--dev` workspace does not mirror
-test commits back into the source checkout.
+after redemption. `--ready-file` makes pairing unattended; it does not
+auto-approve workspace extensions, tool calls, credentials, or Git publication.
+Source-mode `remote serve` rebuilds the internal Durable Object bundle before
+startup. Its disposable `--dev` workspace does not mirror test commits back
+into the source checkout.
+
+For unattended system tests, use the system-test runner. It installs an
+explicit per-test authority policy and full-auto agent configuration:
+
+```sh
+pnpm server:live --ephemeral --instance system-test
+pnpm cli --instance system-test system-test doctor
+pnpm cli --instance system-test system-test list --json
+pnpm cli --instance system-test system-test run TEST_NAME
+```
+
+The runner’s policy is intentionally separate from remote pairing. Do not use
+an undocumented `remote serve --auto-approve` flag; it is not a supported CLI
+option.
 
 Pair this terminal, choose a workspace, start the terminal app, and mint
 account-bound device links:
