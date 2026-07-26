@@ -9,6 +9,7 @@ import { SERVER_ESM_BANNER } from "./scripts/build-artifact-contracts.mjs";
 import { generateConnectGrammar } from "./scripts/generate-connect-grammar.mjs";
 import { buildWorkerdPrograms } from "./scripts/build-workerd-programs.mjs";
 import { cleanHostBuildOutput } from "./scripts/clean-host-build-output.mjs";
+import { buildInfrastructurePackages } from "./scripts/infrastructure-package-cache.mjs";
 import {
   computeHostBuildFingerprint,
   HOST_BUILD_FINGERPRINT_PATH,
@@ -399,9 +400,7 @@ function copyDirectoryRecursive(srcDir, destDir) {
 async function buildVibestudioPackages() {
   console.log("Building @vibestudio/* infrastructure packages...");
   try {
-    execSync('pnpm --filter "!@vibestudio/headless-host" --filter "@vibestudio/*" build', {
-      stdio: "inherit",
-    });
+    buildInfrastructurePackages();
     console.log("@vibestudio/* packages built successfully!");
   } catch (error) {
     console.error("Failed to build @vibestudio/* packages:", error);

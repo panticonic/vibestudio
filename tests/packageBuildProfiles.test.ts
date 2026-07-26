@@ -4,7 +4,12 @@ import { describe, expect, it } from "vitest";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const PACKAGES_ROOT = path.join(ROOT, "packages");
-const BUILD_PROFILES = ["source-only", "tsc-output", "tsc-build", "custom-bundle"] as const;
+const BUILD_PROFILES = [
+  "source-only",
+  "tsc-output",
+  "tsc-build-incremental",
+  "custom-bundle",
+] as const;
 
 type BuildProfile = (typeof BUILD_PROFILES)[number];
 
@@ -147,8 +152,8 @@ describe("package build profiles", () => {
         return;
       }
 
-      if (profile === "tsc-build") {
-        expect(manifest.scripts?.build).toBe("tsc --build tsconfig.build.json --force");
+      if (profile === "tsc-build-incremental") {
+        expect(manifest.scripts?.build).toBe("tsc --build tsconfig.build.json");
         expect(compilerOptions.composite).toBe(true);
         expect(fs.existsSync(path.join(directory, "build.mjs"))).toBe(false);
         return;

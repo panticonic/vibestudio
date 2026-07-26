@@ -4,7 +4,7 @@
   "description": "TypeScript type checking for Vibestudio panels and workers",
   "type": "module",
   "vibestudio": {
-    "buildProfile": "tsc-build"
+    "buildProfile": "tsc-build-incremental"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

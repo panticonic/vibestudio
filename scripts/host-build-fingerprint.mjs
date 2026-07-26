@@ -29,6 +29,7 @@ const INPUT_FILES = [
   "scripts/ensure-host-build.mjs",
   "scripts/generate-connect-grammar.mjs",
   "scripts/host-build-fingerprint.mjs",
+  "scripts/infrastructure-package-cache.mjs",
   "tsconfig.json",
   "tsconfig.workers.json",
   "workspace/package.json",
