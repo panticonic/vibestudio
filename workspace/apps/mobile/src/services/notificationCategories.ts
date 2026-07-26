@@ -27,24 +27,22 @@ export interface NotificationActionDefinition {
 }
 
 interface NotifeeModule {
-  createChannel?: (channel: {
-    id: string;
-    name: string;
-    importance?: number;
-  }) => Promise<string>;
-  setNotificationCategories?: (categories: Array<{
-    id: string;
-    actions: Array<{
+  createChannel?: (channel: { id: string; name: string; importance?: number }) => Promise<string>;
+  setNotificationCategories?: (
+    categories: Array<{
       id: string;
-      title: string;
-      foreground?: boolean;
-      destructive?: boolean;
-      ios?: {
+      actions: Array<{
+        id: string;
+        title: string;
         foreground?: boolean;
         destructive?: boolean;
-      };
-    }>;
-  }>) => Promise<void>;
+        ios?: {
+          foreground?: boolean;
+          destructive?: boolean;
+        };
+      }>;
+    }>
+  ) => Promise<void>;
   requestPermission?: () => Promise<unknown>;
 }
 
@@ -59,7 +57,9 @@ function getNotifee(): { notifee: NotifeeModule; AndroidImportance?: { HIGH?: nu
       AndroidImportance: mod.AndroidImportance,
     };
   } catch {
-    console.warn("[Notifications] @notifee/react-native not available. Notification categories disabled.");
+    console.warn(
+      "[Notifications] @notifee/react-native not available. Notification categories disabled."
+    );
     return null;
   }
 }
@@ -75,7 +75,7 @@ const ACTION_COPY: Record<NotificationActionId, string> = {
 };
 
 export function getNotificationActionDefinitions(
-  category: string | undefined,
+  category: string | undefined
 ): NotificationActionDefinition[] {
   const ids =
     category === APPROVAL_CATEGORY_INPUT_REQUIRED
@@ -92,17 +92,44 @@ export function getNotificationActionDefinitions(
   }));
 }
 
-export function getAndroidNotificationActions(category: string | undefined): Array<{
+export function getAndroidNotificationActions(
+  category: string | undefined,
+  actionsJson?: string
+): Array<{
   title: string;
   pressAction: { id: string; launchActivity?: string };
 }> {
-  return getNotificationActionDefinitions(category).map((action) => ({
+  const fallback = getNotificationActionDefinitions(category).map((action) => ({
     title: action.title,
     pressAction: {
       id: action.id,
       ...(action.id === "open" ? { launchActivity: "default" } : {}),
     },
   }));
+  if (!actionsJson) return fallback;
+
+  try {
+    const actions = JSON.parse(actionsJson) as unknown;
+    if (!Array.isArray(actions)) return fallback;
+    const parsed = actions
+      .filter(
+        (action): action is { id: string; title: string } =>
+          typeof action === "object" &&
+          action !== null &&
+          typeof (action as { id?: unknown }).id === "string" &&
+          typeof (action as { title?: unknown }).title === "string"
+      )
+      .map((action) => ({
+        title: action.title,
+        pressAction: {
+          id: action.id,
+          ...(action.id === "open" ? { launchActivity: "default" } : {}),
+        },
+      }));
+    return parsed.length > 0 ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export async function setupNotificationCategories(): Promise<void> {
@@ -151,14 +178,16 @@ export async function setupNotificationCategories(): Promise<void> {
       },
       {
         id: APPROVAL_CATEGORY_INPUT_REQUIRED,
-        actions: getNotificationActionDefinitions(APPROVAL_CATEGORY_INPUT_REQUIRED).map((action) => ({
-          id: action.id,
-          title: action.title,
-          foreground: action.foreground,
-          ios: {
+        actions: getNotificationActionDefinitions(APPROVAL_CATEGORY_INPUT_REQUIRED).map(
+          (action) => ({
+            id: action.id,
+            title: action.title,
             foreground: action.foreground,
-          },
-        })),
+            ios: {
+              foreground: action.foreground,
+            },
+          })
+        ),
       },
     ]);
   } catch (error) {

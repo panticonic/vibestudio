@@ -436,6 +436,34 @@ html[data-overlay-dragging] * {
   background: color-mix(in srgb, var(--surface-card) 60%, transparent);
 }
 
+.approval-operation-substance {
+  margin-top: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-3);
+  background: color-mix(in srgb, var(--approval-icon-bg) 38%, var(--surface-card));
+}
+
+.approval-operation-facts {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-2) 0 0;
+}
+
+.approval-operation-fact {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.34fr) minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: baseline;
+}
+
+.approval-operation-fact dt,
+.approval-operation-fact dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 /* One-shot tone-ring flash, remounted (keyed) whenever a fresh approval lands —
    replays even when the new request is queued behind the visible one. */
 .approval-attention-pulse {

@@ -464,6 +464,7 @@ export interface AuthorityChallengePresentation {
     kind: import("./approvals.js").OperationSubstance["kind"];
     summary: string;
     detail?: string;
+    facts?: Array<{ label: string; value: string }>;
   };
   /** Sealed workspace-service categorization. Host-census capabilities ignore
    * caller data and are joined from the static reviewed table instead. */
@@ -1315,6 +1316,7 @@ export class ServiceDispatcher {
                 : preparedTarget
             }`,
           ...(challenge?.substance?.detail ? { detail: challenge.substance.detail } : {}),
+          ...(challenge?.substance?.facts ? { facts: challenge.substance.facts } : {}),
           digest: preparedStateDigest,
         }
       : challenge?.substance

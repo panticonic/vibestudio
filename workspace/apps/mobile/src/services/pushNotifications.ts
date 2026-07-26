@@ -251,7 +251,7 @@ export async function displayApprovalNotification(
     android: {
       channelId: APPROVAL_NOTIFICATION_CHANNEL_ID,
       pressAction: { id: "open", launchActivity: "default" },
-      actions: getAndroidNotificationActions(category),
+      actions: getAndroidNotificationActions(category, data.actionsJson),
     },
     ios: {
       categoryId: category,

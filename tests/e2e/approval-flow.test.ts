@@ -122,6 +122,7 @@ function requestCredentialApproval(queue: ApprovalQueueWithListeners) {
     callerKind: "worker",
     repoPath: "/repo",
     effectiveVersion: "hash-approval-e2e",
+    allowedDecisions: ["once", "session", "version", "deny"],
     credentialId: "github-token",
     credentialLabel: "GitHub",
     audience: [{ url: "https://api.github.com/", match: "origin" }],
@@ -150,8 +151,8 @@ describe("approval flow e2e", () => {
       approvalId: approval!.approvalId,
       approvalKind: "credential",
       actionsJson: JSON.stringify([
-        { id: "once", title: "Once" },
-        { id: "deny", title: "Deny" },
+        { id: "once", title: "Use once" },
+        { id: "deny", title: "Don't allow" },
         { id: "open", title: "Open" },
         { id: "version", title: "Trust this version" },
       ]),

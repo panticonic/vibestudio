@@ -34,6 +34,10 @@ import {
   type CredentialSessionGrantResource,
 } from "./credentialSessionGrants.js";
 import type { CredentialUseGrantStoreLike } from "./credentialUseGrantStore.js";
+import {
+  assertCredentialApprovalDecision,
+  credentialApprovalDecisions,
+} from "./credentialApprovalDecisions.js";
 import { CredentialLifecycleError, type CredentialLifecycle } from "./credentialLifecycle.js";
 import { deleteDynamicProperty } from "../../lintHelpers";
 import type {
@@ -1370,6 +1374,7 @@ export class EgressProxy {
       ...(requestedByUserId ? { requestedByUserId } : {}),
       repoPath: attribution.repoPath,
       effectiveVersion: attribution.effectiveVersion,
+      allowedDecisions: credentialApprovalDecisions(attribution, { onceOnly: force }),
       credentialId: credential.id,
       credentialLabel: credential.label ?? credential.connectionLabel,
       audience: binding.audience,
@@ -1394,10 +1399,8 @@ export class EgressProxy {
         "credential-caller-not-granted"
       );
     }
+    assertCredentialApprovalDecision(attribution, decision, { onceOnly: force });
     if (decision === "once") {
-      return;
-    }
-    if (force) {
       return;
     }
     if (decision === "session") {
@@ -2806,7 +2809,7 @@ function isLoopbackHostname(hostname: string): boolean {
 
 function grantForDecision(
   attribution: RequestAttribution,
-  decision: Exclude<GrantedDecision, "deny" | "once" | "session">,
+  decision: Extract<GrantedDecision, "agent" | "version">,
   grantedAt: number,
   binding: CredentialBinding,
   usage: ReturnType<typeof credentialUseResource>

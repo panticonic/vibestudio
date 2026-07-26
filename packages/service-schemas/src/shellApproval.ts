@@ -450,6 +450,7 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
     .object({
       ...pendingApprovalBaseShape,
       kind: z.literal("credential"),
+      allowedDecisions: z.array(z.enum(["once", "session", "agent", "version", "deny"])),
       credentialId: z.string(),
       credentialLabel: z.string(),
       audience: z.array(audienceSchema),
@@ -523,6 +524,16 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
           kind: z.enum(["change-set", "send", "deletion", "custom"]),
           summary: z.string(),
           detail: z.string().optional(),
+          facts: z
+            .array(
+              z
+                .object({
+                  label: z.string(),
+                  value: z.string(),
+                })
+                .strict()
+            )
+            .optional(),
           digest: z.string(),
         })
         .strict()

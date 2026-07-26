@@ -2266,7 +2266,7 @@ describe("EgressProxy", () => {
   it("remembers eval credential consent for the agent identity without trusting future code", async () => {
     const credential = createCredential({ grants: [] });
     const approvalQueue = {
-      request: vi.fn(async () => "version" as const),
+      request: vi.fn(async () => "agent" as const),
       resolve: vi.fn(),
       resolveMatching: vi.fn(),
       listPending: vi.fn(() => []),

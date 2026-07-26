@@ -1,8 +1,5 @@
 import type { PushApprovalDataPayload } from "@vibestudio/shared/approvalContract";
-import {
-  APPROVAL_CATEGORY_DECIDE,
-  APPROVAL_CATEGORY_INPUT_REQUIRED,
-} from "@vibestudio/shared/approvalContract";
+import { APPROVAL_CATEGORY_DECIDE } from "@vibestudio/shared/approvalContract";
 import {
   APPROVAL_NOTIFICATION_CHANNEL_ID,
   getAndroidNotificationActions,
@@ -58,10 +55,14 @@ let registered = false;
 
 function getMessaging(): MessagingModule | null {
   try {
-    const mod = require("@react-native-firebase/messaging") as { default?: MessagingModule } & MessagingModule;
+    const mod = require("@react-native-firebase/messaging") as {
+      default?: MessagingModule;
+    } & MessagingModule;
     return mod.default ?? mod;
   } catch {
-    console.warn("[PushBackground] Firebase messaging unavailable. Background FCM handler disabled.");
+    console.warn(
+      "[PushBackground] Firebase messaging unavailable. Background FCM handler disabled."
+    );
     return null;
   }
 }
@@ -117,7 +118,7 @@ export function registerBackgroundHandlers(): void {
 
 export async function handleBackgroundMessage(
   message: RemoteMessage,
-  notifee: Pick<NotifeeModule, "displayNotification" | "cancelNotification">,
+  notifee: Pick<NotifeeModule, "displayNotification" | "cancelNotification">
 ): Promise<void> {
   requireApprovedAppCapability("notifications", "background notification message");
   const data = (message.data ?? {}) as PushApprovalDataPayload;
@@ -145,7 +146,7 @@ export async function handleBackgroundMessage(
     android: {
       channelId: APPROVAL_NOTIFICATION_CHANNEL_ID,
       pressAction: { id: "open", launchActivity: "default" },
-      actions: parseAndroidActions(data.actionsJson, category),
+      actions: getAndroidNotificationActions(category, data.actionsJson),
     },
     ios: {
       categoryId: category,
@@ -158,7 +159,7 @@ export async function handleBackgroundNotifeeEvent(
   notifee: Pick<NotifeeModule, "displayNotification" | "cancelNotification"> & {
     displayNotification?: (notification: Record<string, unknown>) => Promise<void>;
   },
-  EventType: Record<string, number>,
+  EventType: Record<string, number>
 ): Promise<void> {
   requireApprovedAppCapability("notifications", "background notification action");
   const notification = event.detail.notification;
@@ -184,31 +185,4 @@ function readApprovalId(notification: NotifeeEvent["detail"]["notification"]): s
   const dataApprovalId = notification?.data?.["approvalId"];
   if (typeof dataApprovalId === "string" && dataApprovalId.length > 0) return dataApprovalId;
   return notification?.id ?? null;
-}
-
-function parseAndroidActions(actionsJson: string | undefined, category: string): Array<{
-  title: string;
-  pressAction: { id: string; launchActivity?: string };
-}> {
-  if (!actionsJson) return getAndroidNotificationActions(category);
-
-  try {
-    const actions = JSON.parse(actionsJson) as Array<{ id?: unknown; title?: unknown }>;
-    if (!Array.isArray(actions)) return getAndroidNotificationActions(category);
-    const parsed = actions
-      .filter((action): action is { id: string; title: string } =>
-        typeof action.id === "string" && typeof action.title === "string")
-      .map((action) => ({
-        title: action.title,
-        pressAction: {
-          id: action.id,
-          ...(action.id === "open" ? { launchActivity: "default" } : {}),
-        },
-      }));
-    return parsed.length > 0 ? parsed : getAndroidNotificationActions(category);
-  } catch {
-    return getAndroidNotificationActions(
-      category === APPROVAL_CATEGORY_INPUT_REQUIRED ? APPROVAL_CATEGORY_INPUT_REQUIRED : APPROVAL_CATEGORY_DECIDE,
-    );
-  }
 }

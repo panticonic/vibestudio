@@ -65,6 +65,20 @@ describe("resolveApprovalCallerTitle", () => {
     ).toBe("Background job");
   });
 
+  it("classifies extension callers even when they have no runtime entity record", () => {
+    const requester = resolveApprovalRequester(
+      { entityCache: new EntityCache(), getTitle: () => undefined },
+      {
+        callerId: "extension:@workspace-extensions/git-bridge",
+        callerKind: "extension",
+        repoPath: "extensions/git-bridge",
+        effectiveVersion: "hash-1",
+      }
+    );
+
+    expect(requester.category).toBe("extension");
+  });
+
   it("builds a structured requester with panel breadcrumbs and eval metadata", () => {
     const entityCache = new EntityCache();
     entityCache._onActivate(record("panel:nav-chat", "panel"));

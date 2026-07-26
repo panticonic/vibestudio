@@ -113,6 +113,7 @@ interface ApprovalQueueRequestBase {
 
 export interface CredentialApprovalQueueRequest extends ApprovalQueueRequestBase {
   kind?: "credential";
+  allowedDecisions: PendingCredentialApproval["allowedDecisions"];
   credentialId: string;
   credentialLabel: string;
   audience: UrlAudience[];
@@ -1025,6 +1026,7 @@ export function createApprovalQueue(deps: {
     return {
       ...base,
       kind: "credential",
+      allowedDecisions: req.allowedDecisions,
       credentialId: req.credentialId,
       credentialLabel: req.credentialLabel,
       audience: req.audience,
@@ -1274,6 +1276,12 @@ export function createApprovalQueue(deps: {
   function enqueueDecision(
     req: DecisionApprovalQueueRequest | BrowserPermissionApprovalQueueRequest
   ): Promise<ApprovalQueueDecision | BrowserPermissionApprovalDecision> {
+    if (
+      "credentialId" in req &&
+      (!Array.isArray(req.allowedDecisions) || req.allowedDecisions.length === 0)
+    ) {
+      throw new Error("Credential approvals must declare their allowed decisions");
+    }
     const dedupKey = dedupKeyFor(req);
     let entry = entriesByDedupKey.get(dedupKey);
     let newEntry = false;
@@ -1713,12 +1721,12 @@ export function createApprovalQueue(deps: {
       const entry = entriesById.get(approvalId);
       if (!entry) return;
       if (
-        entry.approval.kind === "capability" &&
+        (entry.approval.kind === "capability" || entry.approval.kind === "credential") &&
         decision !== "dismiss" &&
         entry.approval.allowedDecisions &&
-        !entry.approval.allowedDecisions.includes(decision)
+        !(entry.approval.allowedDecisions as readonly ApprovalDecision[]).includes(decision)
       ) {
-        throw new Error(`Capability approval does not accept decision '${decision}'`);
+        throw new Error(`${entry.approval.kind} approval does not accept decision '${decision}'`);
       }
       if (
         entry.approval.kind === "browser-permission" &&

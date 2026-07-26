@@ -66,6 +66,10 @@ import {
   type CredentialSessionGrantScope,
 } from "./credentialSessionGrants.js";
 import type { CredentialUseGrantStoreLike } from "./credentialUseGrantStore.js";
+import {
+  assertCredentialApprovalDecision,
+  credentialApprovalDecisions,
+} from "./credentialApprovalDecisions.js";
 import { assertPresent } from "../../lintHelpers";
 import { testPolicyAllowsGatedInvocation } from "./authorityRuntime.js";
 import { serializeGitHttpResponse } from "./gitHttpRpc.js";
@@ -966,6 +970,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (!params.injection) {
       throw new Error("Credential injection is required");
     }
+    const approvalIdentity = resolveApprovalIdentity(ctx);
     const decision = await approvalQueue.request({
       ...(params.signal ? { signal: params.signal } : {}),
       callerId: ctx.caller.runtime.id,
@@ -973,6 +978,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
       repoPath: params.identity.repoPath,
       effectiveVersion: params.identity.effectiveVersion,
+      allowedDecisions: credentialApprovalDecisions(approvalIdentity),
       credentialId: params.credentialId,
       credentialLabel: params.credentialLabel,
       audience: params.audience ?? [],
@@ -1165,6 +1171,9 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
+      allowedDecisions: credentialApprovalDecisions(identity, {
+        onceOnly: usage.gitOperation?.force === true,
+      }),
       credentialId: credential.id,
       credentialLabel: credential.label ?? credential.connectionLabel,
       audience: usage.binding.audience,
@@ -1186,6 +1195,9 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (decision === "deny" || decision === "dismiss") {
       throw new Error("Credential approval denied");
     }
+    assertCredentialApprovalDecision(identity, decision, {
+      onceOnly: usage.gitOperation?.force === true,
+    });
     const now = Date.now();
     if (decision === "once") {
       return;
@@ -1279,6 +1291,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       }
       return;
     }
+    assertCredentialApprovalDecision(identity, decision);
     for (const usage of usageContexts) {
       await persistCredentialUseGrant(
         credential,
@@ -1580,7 +1593,7 @@ function gitRemoteFromUrl(targetUrl: URL): string {
 
 function grantForDecision(
   identity: { repoPath: string; effectiveVersion: string; agentId?: string },
-  decision: Exclude<GrantedDecision, "deny" | "once" | "session">,
+  decision: Extract<GrantedDecision, "agent" | "version">,
   grantedAt: number,
   usage: CredentialUseContext
 ): CredentialUseGrant {

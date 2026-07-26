@@ -139,7 +139,8 @@ function createShellClient(
 
 beforeEach(() => {
   setApprovedAppCapabilities(["notifications", "keychain"]);
-  (NativeModules.VibestudioMobileHost as { firebaseConfigured?: boolean }).firebaseConfigured = true;
+  (NativeModules.VibestudioMobileHost as { firebaseConfigured?: boolean }).firebaseConfigured =
+    true;
   jest.clearAllMocks();
   mockStorage.clear();
   mockListeners.tokenRefresh = undefined;
@@ -319,6 +320,33 @@ describe("pushNotifications", () => {
       "approval notification display requires approved app capability 'notifications'"
     );
     expect(mockNotifee.displayNotification).not.toHaveBeenCalled();
+  });
+
+  it("uses host-authored action labels for foreground Android notifications", async () => {
+    await displayApprovalNotification(
+      {
+        data: {
+          kind: "approval-prompt",
+          approvalId: "approval-1",
+          actionsJson: JSON.stringify([
+            { id: "once", title: "Push once" },
+            { id: "deny", title: "Don't upload" },
+          ]),
+        },
+      },
+      mockNotifee
+    );
+
+    expect(mockNotifee.displayNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        android: expect.objectContaining({
+          actions: [
+            { title: "Push once", pressAction: { id: "once" } },
+            { title: "Don't upload", pressAction: { id: "deny" } },
+          ],
+        }),
+      })
+    );
   });
 
   it.each<RecoveryKind>(["resubscribe", "cold-recover"])(

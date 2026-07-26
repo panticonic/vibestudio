@@ -68,12 +68,12 @@ export const HOST_APPROVAL_COPY = {
     "workspace-app": "App",
     agent: "Agent",
     eval: "Agent",
-    worker: "Agent",
-    "durable-object": "Agent",
+    worker: "Background task",
+    "durable-object": "Service",
     extension: "Extension",
     system: "Workspace",
     "internal-service": "System service",
-    unknown: "Something in your workspace",
+    unknown: "Requester",
   },
 
   operationKinds: {
@@ -319,12 +319,30 @@ export const HOST_APPROVAL_COPY = {
       mixed: { singular: "workspace item", plural: "workspace items" },
     },
     warningEffects: {
-      extension: "an extension with full access to your files, internet, and system",
-      app: "apps that run in your workspace",
-      panel: "panels that appear and work in your workspace",
-      worker: "background tasks that run in your workspace",
-      scheduledJob: "tasks that run on a schedule without asking",
-      agentHeartbeat: "agents that check in periodically and take actions on their own",
+      extension: (count: number) =>
+        count === 1
+          ? "an extension with full access to your files, internet, and system"
+          : `${count} extensions with full access to your files, internet, and system`,
+      app: (count: number) =>
+        count === 1
+          ? "an app that runs in your workspace"
+          : `${count} apps that run in your workspace`,
+      panel: (count: number) =>
+        count === 1
+          ? "a panel that appears and works in your workspace"
+          : `${count} panels that appear and work in your workspace`,
+      worker: (count: number) =>
+        count === 1
+          ? "a background task that runs in your workspace"
+          : `${count} background tasks that run in your workspace`,
+      scheduledJob: (count: number) =>
+        count === 1
+          ? "a task that runs on a schedule without asking"
+          : `${count} tasks that run on a schedule without asking`,
+      agentHeartbeat: (count: number) =>
+        count === 1
+          ? "an agent that checks in periodically and takes actions on its own"
+          : `${count} agents that check in periodically and take actions on their own`,
     },
     warning: (effects: readonly string[]) => {
       if (effects.length === 0) return "Approving this workspace settings change.";
@@ -359,7 +377,9 @@ export const HOST_APPROVAL_COPY = {
             ? nativeCode
               ? "Updates the code for a trusted extension."
               : "Updates the code for a trusted app."
-            : `These ${composition} need your approval before they can start.`,
+            : count === 1
+              ? `This ${singular} needs your approval before it can start.`
+              : `These ${composition} need your approval before they can start.`,
     actionLabels: {
       sourceChange: "Approve update",
       management: "Approve",
@@ -380,12 +400,14 @@ export const HOST_APPROVAL_COPY = {
       rejectManagement: "Reject this change.",
       rejectComposition: (composition: string) => `Don't approve ${composition}.`,
       rejectKind: (component: string, count: number) =>
-        `Don't install these ${component}${count === 1 ? "" : "s"}.`,
+        count === 1 ? `Don't install this ${component}.` : `Don't install these ${component}s.`,
       rejectConfig: "Reject this settings change.",
       scheduledJobs: (count: number) =>
         `Approve ${count} scheduled task${count === 1 ? "" : "s"} to run automatically.`,
       agentHeartbeats: (count: number) =>
-        `Approve ${count} recurring agent check${count === 1 ? "" : "s"} to run on their own.`,
+        `Approve ${count} recurring agent check${count === 1 ? "" : "s"} to run on ${
+          count === 1 ? "its" : "their"
+        } own.`,
       panels: (count: number) =>
         `Approve ${count} panel${count === 1 ? "" : "s"} to run in your workspace.`,
       workers: (count: number) =>
@@ -408,8 +430,8 @@ export const HOST_APPROVAL_COPY = {
       summary: "Changes settings that affect how your workspace starts and runs.",
     },
     repositoryWrite: (destination: string) => ({
-      title: `Save to ${destination}`,
-      summary: `Uploads your changes to ${destination}.`,
+      title: `Save changes to ${destination}`,
+      summary: `Adds the reviewed changes to the protected history for ${destination}.`,
     }),
     sharedRemote: (destination: string, operation: string) => ({
       title: `Change shared sync for ${destination}`,
@@ -432,7 +454,7 @@ export const HOST_APPROVAL_COPY = {
       summary: `Opens developer tools for ${target}.`,
     }),
     contextBoundarySummary: (subject: string) =>
-      `Wants to access ${subject}, including its files and anything running in it.`,
+      `Accesses ${subject}, including its files and anything running in it.`,
     disableService: (service: string) => ({
       title: `Turn off ${service}`,
       summary: `Turns off ${service}. You can re-enable it later.`,
@@ -447,7 +469,7 @@ export const HOST_APPROVAL_COPY = {
     }),
     genericCapability: (target: string) => ({
       title: `Allow ${target}`,
-      summary: `Wants to use ${target}.`,
+      summary: `Uses ${target}.`,
     }),
     setupService: (service: string) => ({
       title: `Set up ${service}`,
@@ -493,7 +515,7 @@ export const HOST_APPROVAL_COPY = {
     }),
     credentialUse: (binding: string, credential: string, target: string) => ({
       title: `Use ${binding}`,
-      summary: `Uses your ${credential} account with ${target}.`,
+      summary: `Uses your ${credential} account to access ${target}.`,
     }),
   },
 } as const;

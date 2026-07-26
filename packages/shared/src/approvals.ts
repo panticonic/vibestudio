@@ -252,6 +252,12 @@ export interface OperationSubstance {
   kind: "change-set" | "send" | "deletion" | "custom";
   summary: string;
   detail?: string;
+  /** Host-verified facts that make the prepared effect scannable without
+   *  exposing transport arguments or asking the UI to interpret JSON. */
+  facts?: Array<{
+    label: string;
+    value: string;
+  }>;
   /** Must equal the prepared-state digest sealed into the invocation snapshot. */
   digest: string;
 }
@@ -491,6 +497,8 @@ export interface PendingApprovalBase {
 
 export interface PendingCredentialApproval extends PendingApprovalBase {
   kind: "credential";
+  /** Host-derived decisions whose scopes the credential grant store can represent exactly. */
+  allowedDecisions: ReadonlyArray<"once" | "session" | "agent" | "version" | "deny">;
   credentialId: string;
   credentialLabel: string;
   audience: UrlAudience[];

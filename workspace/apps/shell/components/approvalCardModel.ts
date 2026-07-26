@@ -5,26 +5,15 @@
  * surface, a separate document with NO RPC). Keeping these helpers here lets the
  * card be hosted in the overlay without dragging in `../shell/client`.
  */
-import type {
-  ApprovalDecision,
-  ApprovalRequesterKind,
-  PendingApproval,
-} from "@vibestudio/shared/approvals";
-import { getApprovalRiskTone, getRequesterCategoryLabel } from "@vibestudio/shared/approvalCopy";
+import type { ApprovalDecision, PendingApproval } from "@vibestudio/shared/approvals";
+import {
+  getApprovalCallerPresentation,
+  getApprovalRiskTone,
+  type ApprovalCallerPresentation,
+} from "@vibestudio/shared/approvalCopy";
 import type { DiffChangedFile, DiffReviewEntry } from "@workspace/ui";
 
-export interface CallerInfo {
-  /** Friendly user-visible label — panel title, worker source basename, etc. */
-  label: string;
-  /** Caller kind, formatted for display ("Panel" / "Worker" / "Service"). */
-  kindLabel: string;
-  /** Caller kind as accepted by the approval payload. */
-  kind: ApprovalRequesterKind;
-  /** Set when this caller refers to a panel that exists in the live tree. */
-  panelId?: string;
-  /** Truncated id, retained for the expandable details panel. */
-  shortId: string;
-}
+export type CallerInfo = ApprovalCallerPresentation;
 
 /** Risk tone → accent token key used by `data-approval-tone` in overrides.css. */
 export type ApprovalTone = "sky" | "amber" | "red";
@@ -184,65 +173,7 @@ export function highestPendingTone(pending: readonly PendingApproval[]): Approva
  * `requester.title`); we fall back to a derived id-ish label.
  */
 export function resolveCallerInfo(approval: PendingApproval): CallerInfo {
-  if (approval.requester) {
-    return {
-      label: approval.requester.title ?? approval.callerTitle ?? prettifyId(approval.callerId),
-      kindLabel: getRequesterCategoryLabel(approval.requester.category),
-      kind: approval.requester.kind,
-      panelId:
-        approval.requester.panel?.id ??
-        (approval.requester.kind === "panel" ? approval.requester.id : undefined),
-      shortId: truncateId(approval.requester.ephemeralInstanceKey),
-    };
-  }
-  const shortId = truncateId(approval.callerId);
-  const serverTitle = approval.callerTitle?.trim() || undefined;
-  if (approval.callerKind === "panel") {
-    return {
-      label: serverTitle ?? prettifyId(approval.callerId),
-      kindLabel: "Panel",
-      kind: "panel",
-      // "Show panel" is offered unconditionally — navigation is a no-op for
-      // unknown ids, so it's safe.
-      panelId: approval.callerId,
-      shortId,
-    };
-  }
-  if (approval.callerKind === "worker") {
-    const fromRepo = basename(approval.repoPath);
-    return {
-      label: serverTitle ?? fromRepo ?? prettifyId(approval.callerId),
-      kindLabel: "Worker",
-      kind: "worker",
-      shortId,
-    };
-  }
-  if (approval.callerKind === "app") {
-    const fromRepo = basename(approval.repoPath);
-    return {
-      label: serverTitle ?? fromRepo ?? prettifyId(approval.callerId),
-      kindLabel: "App",
-      kind: "app",
-      shortId,
-    };
-  }
-  if (approval.callerKind === "system") {
-    return {
-      label: serverTitle ?? "Workspace",
-      kindLabel: "Workspace",
-      kind: "system",
-      shortId,
-    };
-  }
-  // Durable-object service or unknown — show the trailing segment of the id.
-  const id = prettifyId(approval.callerId);
-  const segments = id.split(":");
-  return {
-    label: serverTitle ?? segments[segments.length - 1] ?? id,
-    kindLabel: "Service",
-    kind: "do",
-    shortId,
-  };
+  return getApprovalCallerPresentation(approval);
 }
 
 export type { ApprovalDecision };

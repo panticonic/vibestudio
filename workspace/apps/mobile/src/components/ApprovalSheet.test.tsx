@@ -41,6 +41,10 @@ const consequentialCapability: PendingApproval = {
     kind: "send",
     summary: "Send 1 briefing to Briefings",
     detail: "Subject: Overnight workspace summary",
+    facts: [
+      { label: "Recipient", value: "Briefings" },
+      { label: "Delivery", value: "Send now" },
+    ],
     digest: "prepared:briefing-1",
   },
 };
@@ -48,6 +52,7 @@ const consequentialCapability: PendingApproval = {
 const credential: PendingApproval = {
   ...base,
   kind: "credential",
+  allowedDecisions: ["once", "session", "version", "deny"],
   credentialId: "cred-google",
   credentialLabel: "Google Calendar",
   audience: [{ match: "origin", url: "https://calendar.google.com/" }],
@@ -309,8 +314,22 @@ describe("ApprovalSheet", () => {
     expect(getByText("What exactly")).toBeTruthy();
     expect(getByText("Send 1 briefing to Briefings")).toBeTruthy();
     expect(getByText("Subject: Overnight workspace summary")).toBeTruthy();
+    expect(getByText("Recipient")).toBeTruthy();
+    expect(getByText("Briefings")).toBeTruthy();
+    expect(getByText("Delivery")).toBeTruthy();
+    expect(getByText("Send now")).toBeTruthy();
     fireEvent.press(getByTestId("approval-action-agent"));
     await waitFor(() => expect(onResolve).toHaveBeenCalledWith("approval-1", "agent"));
+  });
+
+  it("renders only the credential lifetimes advertised by the host", () => {
+    const { getByText, queryByTestId } = renderSheet(credential);
+
+    expect(getByText("Connect once")).toBeTruthy();
+    expect(getByText("Connect for now")).toBeTruthy();
+    expect(getByText("Trust this version")).toBeTruthy();
+    expect(queryByTestId("approval-action-task")).toBeNull();
+    expect(queryByTestId("approval-action-agent")).toBeNull();
   });
 
   it.each(["once", "session", "always", "block", "dismiss"] as const)(
@@ -420,8 +439,8 @@ describe("ApprovalSheet", () => {
     const onResolveUserland = jest.fn(async () => undefined);
     const { getByText, getByTestId } = renderSheet(userland, { onResolveUserland });
 
-    expect(getByText("worker")).toBeTruthy();
-    expect(getByText(/Remembered for worker/)).toBeTruthy();
+    expect(getByText("background task")).toBeTruthy();
+    expect(getByText(/Remembered for background task/)).toBeTruthy();
 
     fireEvent.press(getByTestId("approval-userland-allow"));
     await waitFor(() => expect(onResolveUserland).toHaveBeenCalledWith("approval-1", "allow"));

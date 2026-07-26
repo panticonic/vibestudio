@@ -59,6 +59,7 @@ describe("approvalCopy", () => {
       approval: {
         ...base,
         kind: "credential",
+        allowedDecisions: ["once", "session", "version", "deny"],
         credentialId: "cred-google",
         credentialLabel: "Google Calendar",
         audience: [{ match: "origin", url: "https://calendar.google.com/" }],
@@ -77,6 +78,7 @@ describe("approvalCopy", () => {
       approval: {
         ...base,
         kind: "credential",
+        allowedDecisions: ["once", "session", "version", "deny"],
         credentialId: "cred-git",
         credentialLabel: "GitHub PAT",
         audience: [{ match: "origin", url: "https://github.com/" }],
@@ -130,6 +132,7 @@ describe("approvalCopy", () => {
       approval: {
         ...base,
         kind: "credential",
+        allowedDecisions: ["once", "session", "version", "deny"],
         credentialId: "cred-github",
         credentialLabel: "GitHub",
         audience: [{ match: "path-prefix", url: "https://api.github.com/repos/" }],
@@ -206,6 +209,7 @@ describe("approvalCopy", () => {
       approval: {
         ...base,
         kind: "credential",
+        allowedDecisions: ["once", "session", "version", "deny"],
         credentialId: "cred-mismatch",
         credentialLabel: "Google Calendar",
         audience: [{ match: "origin", url: "https://calendar.google.com/" }],
@@ -219,7 +223,8 @@ describe("approvalCopy", () => {
       category: "Connect an account",
       title: "Connect Google Calendar",
       summaryIncludes: "calendar.google.com",
-      warning: "The sign-in site is different from the service's site. Make sure you recognize both.",
+      warning:
+        "The sign-in site is different from the service's site. Make sure you recognize both.",
       risk: "caution",
     },
     {
@@ -247,7 +252,7 @@ describe("approvalCopy", () => {
       category: "App code update",
       title: "Shell app source change",
       summaryIncludes: "trusted workspace app",
-      warning: "You are approving apps that run in your workspace.",
+      warning: "You are approving an app that runs in your workspace.",
       detailsOpen: true,
       risk: "caution",
     },
@@ -276,7 +281,8 @@ describe("approvalCopy", () => {
       category: "Manage extensions",
       title: "Reload extension",
       summaryIncludes: "reload @workspace-extensions/acme",
-      warning: "You are approving an extension with full access to your files, internet, and system.",
+      warning:
+        "You are approving an extension with full access to your files, internet, and system.",
       detailsOpen: true,
       risk: "danger",
     },
@@ -339,7 +345,7 @@ describe("approvalCopy", () => {
         promptOptions: "choices",
         options: [{ value: "allow", label: "Allow", tone: "primary" }],
       },
-      category: "Agent request",
+      category: "Background task request",
       title: "Allow foo?",
       summaryIncludes: "Team X is requesting access to foo.",
     },
@@ -379,9 +385,10 @@ describe("approvalCopy", () => {
 
   it("formats requester category labels", () => {
     expect(getRequesterCategoryLabel("eval")).toBe("Agent");
-    expect(getRequesterCategoryLabel("worker")).toBe("Agent");
-    expect(getRequesterCategoryLabel("durable-object")).toBe("Agent");
+    expect(getRequesterCategoryLabel("worker")).toBe("Background task");
+    expect(getRequesterCategoryLabel("durable-object")).toBe("Service");
     expect(getRequesterCategoryLabel("internal-service")).toBe("System service");
+    expect(getRequesterCategoryLabel("unknown")).toBe("Requester");
   });
 
   it("derives semantic attribution chips, never raw ids", () => {
@@ -398,8 +405,8 @@ describe("approvalCopy", () => {
       target: "me@example.com",
     });
     expect(getApprovalAttribution(byName("credential repo binding"))).toEqual({
-      relation: "with",
-      target: "GitHub repositories at github.com/acme/project",
+      relation: "as",
+      target: "octo",
     });
     // Capability/unit-batch requests have no secondary chip.
     expect(getApprovalAttribution(byName("capability"))).toEqual({});
@@ -479,9 +486,7 @@ describe("approvalCopy", () => {
       "Trust this agent with internet access"
     );
     expect(getStandardActionCopy(evalCredential).version!.label).toBe("Trust this agent");
-    expect(getStandardActionCopy(evalCredential).version!.description).toContain(
-      "this agent"
-    );
+    expect(getStandardActionCopy(evalCredential).version!.description).toContain("this agent");
     expect(getStandardActionCopy(evalCredential).version!.description).toContain(
       "Every eval still receives its own code review"
     );
@@ -553,7 +558,9 @@ describe("approvalCopy", () => {
       ],
     };
 
-    expect(getUnitBatchActionCopy(approval).once.description).toBe("Approve 1 panel and 1 background task.");
+    expect(getUnitBatchActionCopy(approval).once.description).toBe(
+      "Approve 1 panel and 1 background task."
+    );
     expect(getApprovalCopy(approval).title).toBe("Start 1 panel and 1 background task");
     expect(getApprovalCopy(approval).summary).toBe(
       "Review exact versions before first activation."
@@ -566,7 +573,55 @@ describe("approvalCopy", () => {
       ].join(" ")
     ).not.toMatch(/\bunits?\b/iu);
     expect(getApprovalCopy(approval).warning).toBe(
-      "You are approving panels that appear and work in your workspace and background tasks that run in your workspace."
+      "You are approving a panel that appears and works in your workspace and a background task that runs in your workspace."
+    );
+  });
+
+  it("keeps empty and singular autonomous batch copy truthful and grammatical", () => {
+    const empty: Extract<PendingApproval, { kind: "unit-batch" }> = {
+      ...base,
+      kind: "unit-batch",
+      trigger: "meta-change",
+      title: "Workspace settings changed",
+      description: "Updates workspace settings.",
+      units: [],
+    };
+    const scheduled: Extract<PendingApproval, { kind: "unit-batch" }> = {
+      ...empty,
+      units: [
+        {
+          unitKind: "scheduled-job",
+          unitName: "daily-news",
+          displayName: "Daily news",
+          source: { kind: "workspace-repo", repo: "meta", ref: "state:next" },
+          capabilities: [],
+        },
+      ],
+    };
+    const heartbeat: Extract<PendingApproval, { kind: "unit-batch" }> = {
+      ...empty,
+      units: [
+        {
+          unitKind: "agent-heartbeat",
+          unitName: "research-check",
+          displayName: "Research check",
+          source: { kind: "workspace-repo", repo: "meta", ref: "state:next" },
+          capabilities: [],
+        },
+      ],
+    };
+
+    expect(getApprovalCategoryLabel(empty)).toBe("Workspace setup");
+    expect(getApprovalCopy(empty).summary).toBe("Updates workspace settings.");
+    expect(getUnitBatchActionCopy(empty).once).toEqual({
+      label: "Allow",
+      description: "Allow this settings change.",
+    });
+    expect(getUnitBatchActionCopy(scheduled).once.description).toBe(
+      "Approve 1 scheduled task to run automatically."
+    );
+    expect(getUnitBatchActionCopy(heartbeat).once.description).toBe(
+      "Approve 1 recurring agent check to run on its own."
     );
   });
 

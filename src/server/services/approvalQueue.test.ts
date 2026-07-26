@@ -41,6 +41,28 @@ function unitBatchRequest(
 }
 
 describe("approvalQueue", () => {
+  it("fails closed when a credential producer omits its decision contract", () => {
+    const { queue } = createQueue();
+    expect(() =>
+      queue.request({
+        callerId: "worker:1",
+        callerKind: "worker",
+        repoPath: "/repo",
+        effectiveVersion: "hash-1",
+        credentialId: "cred-1",
+        credentialLabel: "GitHub",
+        audience: [{ url: "https://api.github.com/", match: "origin" }],
+        injection: {
+          type: "header",
+          name: "authorization",
+          valueTemplate: "Bearer {token}",
+        },
+        accountIdentity: { providerUserId: "user-1" },
+        scopes: ["repo"],
+      } as never)
+    ).toThrow("Credential approvals must declare their allowed decisions");
+  });
+
   it("settles aborted requests as deny", async () => {
     const { queue } = createQueue();
     const ac = new AbortController();
@@ -49,6 +71,7 @@ describe("approvalQueue", () => {
       callerKind: "worker",
       repoPath: "/repo",
       effectiveVersion: "hash-1",
+      allowedDecisions: ["once", "session", "version", "deny"],
       credentialId: "cred-1",
       credentialLabel: "GitHub",
       audience: [{ url: "https://api.github.com/", match: "origin" }],
@@ -75,6 +98,7 @@ describe("approvalQueue", () => {
       callerKind: "worker",
       repoPath: "/repo",
       effectiveVersion: "hash-1",
+      allowedDecisions: ["once", "session", "version", "deny"],
       credentialId: "cred-1",
       credentialLabel: "GitHub",
       audience: [{ url: "https://api.github.com/", match: "origin" }],
@@ -95,6 +119,36 @@ describe("approvalQueue", () => {
       audience: [{ url: "https://api.github.com/", match: "origin" }],
     });
     queue.resolve(queue.listPending()[0]!.approvalId, "deny");
+    await expect(promise).resolves.toBe("deny");
+  });
+
+  it("rejects credential decisions outside the exact advertised lifetimes", async () => {
+    const { queue } = createQueue();
+    const promise = queue.request({
+      callerId: "worker:1",
+      callerKind: "worker",
+      repoPath: "/repo",
+      effectiveVersion: "hash-1",
+      allowedDecisions: ["once", "session", "version", "deny"],
+      credentialId: "cred-1",
+      credentialLabel: "GitHub",
+      audience: [{ url: "https://api.github.com/", match: "origin" }],
+      injection: {
+        type: "header",
+        name: "authorization",
+        valueTemplate: "Bearer {token}",
+      },
+      accountIdentity: { providerUserId: "user-1" },
+      scopes: ["repo"],
+    });
+    const approvalId = queue.listPending()[0]!.approvalId;
+
+    await expect(queue.resolve(approvalId, "task")).rejects.toThrow(
+      "credential approval does not accept decision 'task'"
+    );
+    expect(queue.listPending()).toHaveLength(1);
+
+    await queue.resolve(approvalId, "deny");
     await expect(promise).resolves.toBe("deny");
   });
 
@@ -458,6 +512,7 @@ describe("approvalQueue", () => {
       callerKind: "worker" as const,
       repoPath: "/repo",
       effectiveVersion: "hash-1",
+      allowedDecisions: ["once", "session", "version", "deny"] as const,
       credentialId: "cred-1",
       credentialLabel: "GitHub",
       audience: [{ url: "https://api.github.com/", match: "origin" as const }],
@@ -487,6 +542,7 @@ describe("approvalQueue", () => {
       callerKind: "worker" as const,
       repoPath: "/repo",
       effectiveVersion: "hash-1",
+      allowedDecisions: ["once", "session", "version", "deny"] as const,
       credentialId: "cred-1",
       credentialLabel: "GitHub",
       audience: [{ url: "https://api.github.com/", match: "origin" as const }],

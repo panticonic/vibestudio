@@ -82,6 +82,7 @@ function categoryForRecord(
     if (fallbackKind === "app") return "workspace-app";
     if (fallbackKind === "worker") return "worker";
     if (fallbackKind === "do") return "durable-object";
+    if (fallbackKind === "extension") return "extension";
     return "unknown";
   }
   if (isEvalRecord(record)) return "eval";

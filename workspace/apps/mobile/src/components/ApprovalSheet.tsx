@@ -35,7 +35,6 @@ import type {
   PendingUserlandApproval,
   UnitBatchEntry,
   UserlandApprovalOption,
-  ApprovalRequesterKind,
 } from "@vibestudio/shared/approvals";
 import { AUTHORITY_DOMAINS } from "@vibestudio/shared/authority/capabilityDomains";
 import { authorityRowKey } from "@vibestudio/shared/authority/authorityRowDiff";
@@ -45,16 +44,18 @@ import {
 } from "@vibestudio/shared/approvalMarkdown";
 import {
   type ApprovalAttribution,
+  type ApprovalCallerPresentation,
   formatAccount,
   formatCredentialInputAudienceSummary,
   formatInjection,
   getApprovalAttribution,
+  getApprovalCallerPresentation,
   getApprovalCopy,
   getApprovalOperationKindLabel,
   getRecommendedStandardDecision,
   getApprovalRiskTone,
   getRequesterCategoryLabel,
-  getStandardActionCopy,
+  getStandardApprovalDecisionActions,
   getUnitBatchActionCopy,
   originForUrl,
   shouldOpenApprovalDetails,
@@ -94,90 +95,14 @@ import {
 import { Badge } from "./ui/primitives";
 import { Toast } from "./Toast";
 
-interface CallerInfo {
-  /** Friendly user-visible label — panel title, worker source basename, etc. */
-  label: string;
-  /** Caller kind, formatted for display ("Panel" / "Worker" / "Service"). */
-  kindLabel: string;
-  /** Caller kind as accepted by the approval payload. */
-  kind: ApprovalRequesterKind;
-  /** Set when this caller refers to a panel that exists in the live tree. */
-  panelId?: string;
-  /** Truncated id, retained for the expandable details panel. */
-  shortId: string;
-}
-
-function basename(path: string): string {
-  if (!path) return "";
-  const trimmed = path.replace(/\/+$/, "");
-  const idx = trimmed.lastIndexOf("/");
-  return idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
-}
+type CallerInfo = ApprovalCallerPresentation;
 
 function prettifyId(callerId: string): string {
   return callerId.replace(/^(do-service:|do:|worker:|panel:)/, "");
 }
 
 function resolveCallerInfo(approval: PendingApproval): CallerInfo {
-  if (approval.requester) {
-    return {
-      label: approval.requester.title ?? approval.callerTitle ?? prettifyId(approval.callerId),
-      kindLabel:
-        approval.requester.category === "unknown"
-          ? (approval.requester.title ?? "App")
-          : getRequesterCategoryLabel(approval.requester.category),
-      kind: approval.requester.kind,
-      panelId:
-        approval.requester.panel?.id ??
-        (approval.requester.kind === "panel" ? approval.requester.id : undefined),
-      shortId: truncateId(approval.requester.ephemeralInstanceKey),
-    };
-  }
-  const shortId = truncateId(approval.callerId);
-  const serverTitle = approval.callerTitle?.trim() || undefined;
-  if (approval.callerKind === "panel") {
-    return {
-      label: serverTitle ?? prettifyId(approval.callerId),
-      kindLabel: "Panel",
-      kind: "panel",
-      panelId: approval.callerId,
-      shortId,
-    };
-  }
-  if (approval.callerKind === "worker") {
-    const fromRepo = basename(approval.repoPath);
-    return {
-      label: serverTitle ?? fromRepo ?? prettifyId(approval.callerId),
-      kindLabel: "Worker",
-      kind: "worker",
-      shortId,
-    };
-  }
-  if (approval.callerKind === "app") {
-    const fromRepo = basename(approval.repoPath);
-    return {
-      label: serverTitle ?? fromRepo ?? prettifyId(approval.callerId),
-      kindLabel: "App",
-      kind: "app",
-      shortId,
-    };
-  }
-  if (approval.callerKind === "system") {
-    return {
-      label: serverTitle ?? "Workspace",
-      kindLabel: "Workspace",
-      kind: "system",
-      shortId,
-    };
-  }
-  const id = prettifyId(approval.callerId);
-  const segments = id.split(":");
-  return {
-    label: serverTitle ?? segments[segments.length - 1] ?? id,
-    kindLabel: "Service",
-    kind: "do",
-    shortId,
-  };
+  return getApprovalCallerPresentation(approval);
 }
 
 export interface ApprovalSheetProps {
@@ -217,8 +142,6 @@ type PendingAction =
   | "mission-review-dismiss";
 
 type ButtonVariant = "primary" | "surface" | "danger" | "dangerPrimary" | "outline";
-
-const SECONDARY_GRANT_DECISIONS = ["session"] as const;
 
 export function ApprovalSheet({
   approvals,
@@ -526,6 +449,16 @@ export function ApprovalSheet({
                         {current.operationSubstance.detail}
                       </Text>
                     ) : null}
+                    {current.operationSubstance.facts?.map((fact) => (
+                      <View key={`${fact.label}:${fact.value}`} style={styles.substanceFact}>
+                        <Text style={[styles.substanceFactLabel, { color: colors.textSecondary }]}>
+                          {fact.label}
+                        </Text>
+                        <Text style={[styles.substanceFactValue, { color: colors.text }]}>
+                          {fact.value}
+                        </Text>
+                      </View>
+                    ))}
                   </View>
                 ) : null}
                 {error ? <InlineError message={error} /> : null}
@@ -1784,115 +1717,64 @@ function StandardActions({
   pendingAction: PendingAction | null;
   onChoose: (decision: ApprovalDecision) => void;
 }) {
-  const copy = getStandardActionCopy(approval);
   const recommendedDecision = getRecommendedStandardDecision(approval);
-  const permits = (decision: ApprovalDecision) =>
-    approval.kind !== "capability" ||
-    approval.allowedDecisions === undefined ||
-    approval.allowedDecisions.includes(decision);
   const isSevereCapability = approval.kind === "capability" && approval.severity === "severe";
-  const critical = approval.kind === "capability" && approval.cardType === "confirm.critical";
-  const agentName =
-    approval.kind === "capability" ? (approval.snapshot?.agentName ?? "this agent") : "this agent";
+  const actions = getStandardApprovalDecisionActions(approval);
+  const primaryActions = actions.filter((action) =>
+    ["once", "version", "deny"].includes(action.decision)
+  );
+  const secondaryActions = actions.filter(
+    (action) => !["once", "version", "deny"].includes(action.decision)
+  );
   return (
     <View style={styles.actionGroups}>
       <View style={styles.actionRow}>
-        {permits("once") ? (
-          <DecisionButton
-            label={critical ? "Confirm" : "Allow once"}
-            description={critical ? "Do this exact action now" : "Allow only this exact request"}
-            variant={recommendedDecision === "once" ? "primary" : "surface"}
-            disabled={busy}
-            loading={pendingAction === "once"}
-            onPress={() => onChoose("once")}
-            testID="approval-action-once"
-          />
-        ) : null}
-        {copy.version && permits("version") && (
-          <DecisionButton
-            label={copy.version.label}
-            description={copy.version.description}
-            variant={
-              recommendedDecision === "version"
-                ? isSevereCapability
-                  ? "dangerPrimary"
-                  : "primary"
-                : "surface"
-            }
-            disabled={busy}
-            loading={pendingAction === "version"}
-            icon={isSevereCapability ? AlertTriangle : CheckCircle2}
-            onPress={() => onChoose("version")}
-            testID="approval-action-version"
-          />
-        )}
-        {permits("deny") ? (
-          <DecisionButton
-            label={critical ? "Cancel" : "Don't allow"}
-            description={copy.denyDescription}
-            variant="danger"
-            disabled={busy}
-            loading={pendingAction === "deny"}
-            icon={XCircle}
-            onPress={() => onChoose("deny")}
-            testID="approval-action-deny"
-          />
-        ) : null}
-      </View>
-      <View style={styles.actionRow}>
-        {SECONDARY_GRANT_DECISIONS.map((decision) => {
-          const decisionCopy = copy[decision];
-          if (!decisionCopy || !permits(decision)) return null;
+        {primaryActions.map((action) => {
+          const recommended = action.decision === recommendedDecision;
           return (
             <DecisionButton
-              key={decision}
-              label={decisionCopy.label}
-              description={decisionCopy.description}
-              variant="outline"
+              key={action.decision}
+              label={action.label}
+              description={action.description}
+              variant={
+                action.decision === "deny"
+                  ? "danger"
+                  : recommended
+                    ? isSevereCapability
+                      ? "dangerPrimary"
+                      : "primary"
+                    : "surface"
+              }
               disabled={busy}
-              loading={pendingAction === decision}
-              onPress={() => onChoose(decision)}
-              testID={`approval-action-${decision}`}
+              loading={pendingAction === action.decision}
+              {...(action.decision === "deny" || isSevereCapability
+                ? { icon: action.decision === "deny" ? XCircle : AlertTriangle }
+                : action.decision === "version"
+                  ? { icon: CheckCircle2 }
+                  : {})}
+              onPress={() => onChoose(action.decision)}
+              testID={`approval-action-${action.decision}`}
             />
           );
         })}
-        {!critical && permits("task") ? (
-          <DecisionButton
-            label="Allow for this task"
-            description="Allow while the agent works on this task"
-            variant="outline"
-            disabled={busy}
-            loading={pendingAction === "task"}
-            onPress={() => onChoose("task")}
-            testID="approval-action-task"
-          />
-        ) : null}
-        {!critical && permits("agent") ? (
-          <DecisionButton
-            label={`Always for ${agentName}`}
-            description="Save this exact access for this agent until you remove it"
-            variant="outline"
-            disabled={busy}
-            loading={pendingAction === "agent"}
-            onPress={() => onChoose("agent")}
-            testID="approval-action-agent"
-          />
-        ) : null}
-        {approval.kind === "capability" &&
-        approval.snapshot &&
-        approval.cardType !== "confirm.critical" &&
-        permits("lock") ? (
-          <DecisionButton
-            label="Don't allow and don't ask again"
-            description="Keep this agent from asking again. Change it in Permissions."
-            variant="danger"
-            disabled={busy}
-            loading={pendingAction === "lock"}
-            icon={XCircle}
-            onPress={() => onChoose("lock")}
-            testID="approval-action-block"
-          />
-        ) : null}
+      </View>
+      <View style={styles.actionRow}>
+        {secondaryActions.map((action) => {
+          const destructive = action.decision === "lock";
+          return (
+            <DecisionButton
+              key={action.decision}
+              label={action.label}
+              description={action.description}
+              variant={destructive ? "danger" : "outline"}
+              disabled={busy}
+              loading={pendingAction === action.decision}
+              {...(destructive ? { icon: XCircle } : {})}
+              onPress={() => onChoose(action.decision)}
+              testID={`approval-action-${action.decision}`}
+            />
+          );
+        })}
       </View>
     </View>
   );
@@ -2405,11 +2287,6 @@ function RememberedHint({
   );
 }
 
-function truncateId(id: string, head = 8, tail = 4): string {
-  if (id.length <= head + tail + 1) return id;
-  return `${id.slice(0, head)}...${id.slice(-tail)}`;
-}
-
 const styles = StyleSheet.create({
   minimizedRoot: {
     ...StyleSheet.absoluteFillObject,
@@ -2531,6 +2408,23 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     marginTop: spacing.md,
     padding: spacing.md,
+  },
+  substanceFact: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    marginTop: 6,
+  },
+  substanceFactLabel: {
+    width: 104,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  substanceFactValue: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "600",
+    lineHeight: 17,
   },
   callerRow: {
     alignItems: "center",

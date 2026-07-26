@@ -530,7 +530,7 @@ describe("approvalPushBridge", () => {
     await expect(promise).resolves.toBe("once");
   });
 
-  it("labels DO-origin approvals accurately in push copy", async () => {
+  it("labels service-origin approvals by their workspace source in push copy", async () => {
     const queue = createQueue();
     const push = createPushMock();
     createApprovalPushBridge({
@@ -550,7 +550,7 @@ describe("approvalPushBridge", () => {
     expect(push.sendToTargets).toHaveBeenCalledWith(
       DELIVERED_TARGETS,
       expect.objectContaining({
-        body: expect.stringContaining("DO"),
+        body: expect.stringContaining("example"),
       })
     );
 

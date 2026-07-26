@@ -58,7 +58,7 @@ import {
   getApprovalOperationKindLabel,
   getRecommendedStandardDecision,
   getRequesterCategoryLabel,
-  getStandardActionCopy,
+  getStandardApprovalDecisionActions,
   getUnitBatchActionCopy,
   originForUrl,
   shouldOpenApprovalDetails,
@@ -296,15 +296,17 @@ export function ApprovalCard({
           </Box>
 
           <Flex direction="column" gap="1" style={{ minWidth: 0, flex: 1 }}>
-            <Flex align="center" gap="2" wrap="wrap" style={{ minWidth: 0 }}>
-              {approval.kind === "capability" && approval.authorityRow ? (
+            {approval.kind === "capability" && approval.authorityRow ? (
+              <Flex>
                 <Badge color="blue" variant="soft">
                   {AUTHORITY_DOMAINS[approval.authorityRow.domain].label}
                   {approval.authorityRow.provenance.surface
                     ? ` · ${approval.authorityRow.provenance.surface}`
                     : ""}
                 </Badge>
-              ) : null}
+              </Flex>
+            ) : null}
+            <Flex align="center" gap="2" wrap="wrap" style={{ minWidth: 0 }}>
               <Text
                 id={`approval-title-${approval.approvalId}`}
                 size="3"
@@ -426,6 +428,24 @@ export function ApprovalCard({
                   <Text as="div" size="1" color="gray" style={{ whiteSpace: "pre-wrap" }}>
                     {approval.operationSubstance.detail}
                   </Text>
+                ) : null}
+                {approval.operationSubstance.facts?.length ? (
+                  <dl className="approval-operation-facts">
+                    {approval.operationSubstance.facts.map((fact) => (
+                      <div key={`${fact.label}:${fact.value}`} className="approval-operation-fact">
+                        <dt>
+                          <Text as="span" size="1" color="gray">
+                            {fact.label}
+                          </Text>
+                        </dt>
+                        <dd>
+                          <Text as="span" size="1" weight="medium">
+                            {fact.value}
+                          </Text>
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
                 ) : null}
               </Box>
             ) : null}
@@ -692,8 +712,6 @@ function CallerChip({ caller, onShow }: { caller: CallerInfo; onShow: () => void
         <span className="approval-caller-chip-kind" aria-hidden="true">
           {caller.kind === "panel" ? (
             <EnterIcon width={11} height={11} />
-          ) : caller.kind === "worker" ? (
-            <PersonIcon width={11} height={11} />
           ) : (
             <GearIcon width={11} height={11} />
           )}
@@ -713,86 +731,38 @@ function StandardApprovalActions({
   decide: (decision: ApprovalDecision) => void;
   onBlock: () => void;
 }) {
-  const copy = getStandardActionCopy(approval);
   const recommendedDecision = getRecommendedStandardDecision(approval);
-  const permits = (decision: ApprovalDecision) =>
-    approval.kind !== "capability" ||
-    approval.allowedDecisions === undefined ||
-    approval.allowedDecisions.includes(decision);
   const isSevereCapability = approval.kind === "capability" && approval.severity === "severe";
-  const critical = approval.kind === "capability" && approval.cardType === "confirm.critical";
-  const agentName =
-    approval.kind === "capability" ? (approval.snapshot?.agentName ?? "this agent") : "this agent";
+  const actions = getStandardApprovalDecisionActions(approval);
   return (
     <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
-      {permits("once") ? (
-        <DecisionButton
-          label={copy.once.label}
-          description={copy.once.description}
-          color={
-            recommendedDecision === "once" ? (isSevereCapability ? "amber" : "sky") : undefined
-          }
-          variant={recommendedDecision === "once" ? "solid" : "surface"}
-          onClick={() => decide("once")}
-        />
-      ) : null}
-      {copy.session && permits("session") && (
-        <DecisionButton
-          label={copy.session.label}
-          description={copy.session.description}
-          variant="surface"
-          onClick={() => decide("session")}
-        />
-      )}
-      {!critical && permits("task") ? (
-        <DecisionButton
-          label="Allow for this task"
-          description="Allow while the agent works on this task"
-          variant="surface"
-          onClick={() => decide("task")}
-        />
-      ) : null}
-      {!critical && permits("agent") ? (
-        <DecisionButton
-          label={`Always for ${agentName}`}
-          description="Save this exact access for this agent until you remove it"
-          variant="surface"
-          onClick={() => decide("agent")}
-        />
-      ) : null}
-      {copy.version && permits("version") && (
-        <DecisionButton
-          label={copy.version.label}
-          description={copy.version.description}
-          color={
-            recommendedDecision === "version" ? (isSevereCapability ? "red" : "sky") : undefined
-          }
-          variant={recommendedDecision === "version" ? "solid" : "surface"}
-          onClick={() => decide("version")}
-        />
-      )}
-      {permits("deny") ? (
-        <DecisionButton
-          label={critical ? "Cancel" : "Don't allow"}
-          description={copy.denyDescription}
-          color="red"
-          icon={<CrossCircledIcon />}
-          style={{ marginLeft: 6 }}
-          onClick={() => decide("deny")}
-        />
-      ) : null}
-      {approval.kind === "capability" &&
-      approval.snapshot &&
-      approval.cardType !== "confirm.critical" &&
-      permits("lock") ? (
-        <DecisionButton
-          label="Don't allow and don't ask again"
-          description="Keep this agent from asking for this access again. Change it in Permissions."
-          color="red"
-          variant="surface"
-          onClick={onBlock}
-        />
-      ) : null}
+      {actions.map((action) => {
+        const recommended = action.decision === recommendedDecision;
+        const destructive = action.decision === "deny" || action.decision === "lock";
+        return (
+          <DecisionButton
+            key={action.decision}
+            label={action.label}
+            description={action.description}
+            color={
+              destructive
+                ? "red"
+                : recommended
+                  ? isSevereCapability && action.decision === "once"
+                    ? "amber"
+                    : isSevereCapability && action.decision === "version"
+                      ? "red"
+                      : "sky"
+                  : undefined
+            }
+            variant={recommended ? "solid" : "surface"}
+            {...(action.decision === "deny"
+              ? { icon: <CrossCircledIcon />, style: { marginLeft: 6 } }
+              : {})}
+            onClick={() => (action.decision === "lock" ? onBlock() : decide(action.decision))}
+          />
+        );
+      })}
       <Tooltip content={HOST_APPROVAL_COPY.chrome.dismiss}>
         <IconButton size="1" variant="ghost" color="gray" onClick={() => decide("dismiss")}>
           <Cross2Icon />

@@ -50,6 +50,7 @@ describe("bootstrap approvals", () => {
   it("includes startup privileged unit approvals and legacy app meta approvals", () => {
     const credentialApproval: PendingApproval = {
       kind: "credential",
+      allowedDecisions: ["once", "session", "version", "deny"],
       approvalId: "credential-1",
       callerId: "worker:chat",
       callerKind: "worker",

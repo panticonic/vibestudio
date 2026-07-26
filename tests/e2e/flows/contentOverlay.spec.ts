@@ -238,6 +238,10 @@ test.describe("Content overlay", () => {
         kind: "send",
         summary: "Send 1 briefing to Briefings",
         detail: "Subject: Overnight workspace summary",
+        facts: [
+          { label: "Recipient", value: "Briefings" },
+          { label: "Delivery", value: "Send now" },
+        ],
         digest: "prepared:e2e-briefing",
       },
     };
@@ -272,6 +276,10 @@ test.describe("Content overlay", () => {
     expect(probe?.text).toContain("What exactly");
     expect(probe?.text).toContain("Send 1 briefing to Briefings");
     expect(probe?.text).toContain("Subject: Overnight workspace summary");
+    expect(probe?.text).toContain("Recipient");
+    expect(probe?.text).toContain("Briefings");
+    expect(probe?.text).toContain("Delivery");
+    expect(probe?.text).toContain("Send now");
     expect(probe?.card?.height ?? 0).toBeGreaterThan(120);
     // The dynamic-agent scope ladder rendered and contains no installed-code
     // trust decision.
@@ -286,8 +294,7 @@ test.describe("Content overlay", () => {
       .poll(
         () =>
           testApp!.app.evaluate(async () => {
-            const api = (globalThis as { __testApi?: { getPanelTree: () => unknown[] } })
-              .__testApi;
+            const api = (globalThis as { __testApi?: { getPanelTree: () => unknown[] } }).__testApi;
             const tree = api?.getPanelTree?.() ?? [];
             return Array.isArray(tree) ? tree.length : 0;
           }),
@@ -380,7 +387,7 @@ test.describe("Content overlay", () => {
       })
       .toContain("Approve mission");
     const missionProbe = await probeOverlay(testApp);
-    expect(missionProbe?.text).toContain("What it’s allowed to do without asking");
+    expect(missionProbe?.text).toContain("What it can do");
     expect(missionProbe?.text).toContain("Publishing & sending");
     expect(missionProbe?.text).toContain("Every day at 02:00");
     expect(missionProbe?.text).toContain("Actions that can’t be undone always wait for you");

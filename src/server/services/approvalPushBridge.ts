@@ -7,7 +7,11 @@ import {
   NOTIFICATION_ACTION_IDS_STANDARD,
   type PushApprovalDataPayload,
 } from "@vibestudio/shared/approvalContract";
-import { getApprovalCopy } from "@vibestudio/shared/approvalCopy";
+import {
+  getApprovalCallerPresentation,
+  getApprovalCopy,
+  getStandardApprovalDecisionActions,
+} from "@vibestudio/shared/approvalCopy";
 import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import type { ApprovalQueueWithListeners } from "./approvalQueue.js";
@@ -46,9 +50,21 @@ interface TrackedApproval {
 
 function categoryFor(approval: PendingApproval): string {
   if (approval.kind === "browser-permission") return APPROVAL_CATEGORY_BROWSER_PERMISSION;
-  return approval.kind === "credential" ||
-    approval.kind === "capability" ||
-    approval.kind === "unit-batch"
+  if (approval.kind !== "credential" && approval.kind !== "capability") {
+    return APPROVAL_CATEGORY_INPUT_REQUIRED;
+  }
+  if (
+    approval.kind === "capability" &&
+    (approval.cardType === "confirm.critical" ||
+      approval.cardType === "permission.outside" ||
+      approval.authorityRow?.flags.irreversible === true)
+  ) {
+    return APPROVAL_CATEGORY_INPUT_REQUIRED;
+  }
+  const decisions = new Set(
+    getStandardApprovalDecisionActions(approval).map((action) => action.decision)
+  );
+  return decisions.has("once") && decisions.has("version") && decisions.has("deny")
     ? APPROVAL_CATEGORY_DECIDE
     : APPROVAL_CATEGORY_INPUT_REQUIRED;
 }
@@ -57,20 +73,10 @@ function actionsFor(approval: PendingApproval): readonly string[] {
   if (approval.kind === "browser-permission") {
     return NOTIFICATION_ACTION_IDS_BROWSER_PERMISSION;
   }
-  if (approval.kind === "unit-batch") {
+  if (categoryFor(approval) === APPROVAL_CATEGORY_INPUT_REQUIRED) {
     return NOTIFICATION_ACTION_IDS_INPUT_REQUIRED;
   }
-  if (
-    approval.kind === "capability" &&
-    (approval.cardType === "confirm.critical" ||
-      approval.cardType === "permission.outside" ||
-      approval.authorityRow?.flags.irreversible === true)
-  ) {
-    return NOTIFICATION_ACTION_IDS_INPUT_REQUIRED;
-  }
-  return approval.kind === "credential" || approval.kind === "capability"
-    ? NOTIFICATION_ACTION_IDS_STANDARD
-    : NOTIFICATION_ACTION_IDS_INPUT_REQUIRED;
+  return NOTIFICATION_ACTION_IDS_STANDARD;
 }
 
 const ACTION_TITLES: Record<string, string> = {
@@ -84,6 +90,15 @@ const ACTION_TITLES: Record<string, string> = {
 };
 
 function actionPayloadFor(approval: PendingApproval): Array<{ id: string; title: string }> {
+  const standardCopy: Map<string, string> | null =
+    approval.kind === "credential" || approval.kind === "capability"
+      ? new Map(
+          getStandardApprovalDecisionActions(approval).map((action) => [
+            action.decision,
+            action.label,
+          ])
+        )
+      : null;
   return actionsFor(approval).map((id) => ({
     id,
     title:
@@ -93,16 +108,13 @@ function actionPayloadFor(approval: PendingApproval): Array<{ id: string; title:
           : approval.trigger === "management"
             ? HOST_APPROVAL_COPY.pushActions.approve
             : HOST_APPROVAL_COPY.pushActions.approveAll
-        : (ACTION_TITLES[id] ?? id),
+        : (standardCopy?.get(id) ?? ACTION_TITLES[id] ?? id),
   }));
 }
 
 function callerLabel(approval: PendingApproval): string {
-  if (approval.callerKind === "app") return "App";
-  if (approval.callerKind === "worker") return "Worker";
-  if (approval.callerKind === "do") return "DO";
-  if (approval.callerKind === "system") return "Workspace";
-  return "Panel";
+  const caller = getApprovalCallerPresentation(approval);
+  return caller.label || caller.kindLabel;
 }
 
 function payloadFor(

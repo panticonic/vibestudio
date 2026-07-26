@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   PendingCapabilityApproval,
   PendingClientConfigApproval,
+  PendingCredentialApproval,
   PendingUnitBatchApproval,
   PendingUserlandApproval,
 } from "@vibestudio/shared/approvals";
@@ -224,6 +225,10 @@ describe("ApprovalCard", () => {
           kind: "send",
           summary: "Send 1 briefing to Briefings",
           detail: "Subject: Overnight workspace summary",
+          facts: [
+            { label: "Recipient", value: "Briefings" },
+            { label: "Delivery", value: "Send now" },
+          ],
           digest: "prepared:briefing-1",
         },
       })
@@ -233,6 +238,10 @@ describe("ApprovalCard", () => {
     expect(screen.getByText("What exactly")).toBeTruthy();
     expect(screen.getByText("Send 1 briefing to Briefings")).toBeTruthy();
     expect(screen.getByText("Subject: Overnight workspace summary")).toBeTruthy();
+    expect(screen.getByText("Recipient")).toBeTruthy();
+    expect(screen.getByText("Briefings")).toBeTruthy();
+    expect(screen.getByText("Delivery")).toBeTruthy();
+    expect(screen.getByText("Send now")).toBeTruthy();
     fireEvent.click(screen.getByText("Allow for this task"));
     expect(emit).toHaveBeenCalledWith({
       type: "decide",
@@ -257,6 +266,7 @@ describe("ApprovalCard", () => {
       accountIdentity: { providerUserId: "account" },
       scopes: [],
       credentialUse: "fetch" as const,
+      allowedDecisions: ["once", "session", "version", "deny"] as const,
     };
     const { emit } = renderCard(credential);
 
@@ -273,6 +283,59 @@ describe("ApprovalCard", () => {
       decision: "version",
       approvalId: "credential",
     });
+  });
+
+  it("describes extension credential access without unknown-requester sentence fragments", () => {
+    const credential: PendingCredentialApproval = {
+      ...capabilityApproval({ approvalId: "github-user", title: "Use GitHub account" }),
+      kind: "credential",
+      callerId: "extension:@workspace-extensions/git-bridge",
+      callerKind: "extension",
+      repoPath: "extensions/git-bridge",
+      credentialId: "github",
+      credentialLabel: "GitHub",
+      audience: [{ match: "path-prefix", url: "https://api.github.com/user/" }],
+      injection: {
+        type: "header",
+        name: "Authorization",
+        valueTemplate: "Bearer {{token}}",
+      },
+      accountIdentity: { providerUserId: "octocat" },
+      scopes: [],
+      credentialUse: "fetch",
+      allowedDecisions: ["once", "session", "version", "deny"],
+      bindingLabel: "GitHub profile and repositories",
+      grantResource: {
+        bindingId: "github-user",
+        resource: "https://api.github.com/user/",
+        action: "use",
+      },
+      requester: {
+        id: "extension:@workspace-extensions/git-bridge",
+        kind: "extension",
+        category: "extension",
+        title: "@workspace-extensions/git-bridge",
+        repoPath: "extensions/git-bridge",
+        effectiveVersion: "ev",
+        stableIdentityKey: "ev",
+        ephemeralInstanceKey: "extension:@workspace-extensions/git-bridge",
+        breadcrumbs: [],
+      },
+    };
+
+    renderCard(credential);
+
+    expect(screen.getByText("extension")).toBeTruthy();
+    expect(screen.getByText("as")).toBeTruthy();
+    expect(screen.getAllByText("octocat").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(
+        "Uses your GitHub account to access GitHub profile and repositories at api.github.com/user."
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText(/something in your workspace/iu)).toBeNull();
+    expect(screen.queryByText("Allow for this task")).toBeNull();
+    expect(screen.queryByText(/Always for/iu)).toBeNull();
   });
 
   it("shows the queue navigator and emits browse intents", () => {
