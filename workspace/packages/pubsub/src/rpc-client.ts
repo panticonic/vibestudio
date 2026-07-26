@@ -275,10 +275,26 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     }
   }
 
+  const storedValueReads = new Map<string, Promise<string | null>>();
+  const readStoredValueText = (digest: string): Promise<string | null> => {
+    const active = storedValueReads.get(digest);
+    if (active) return active;
+    const pending = rpc.call<string | null>("main", "blobstore.getText", [digest]);
+    storedValueReads.set(digest, pending);
+    void pending.then(
+      () => {
+        if (storedValueReads.get(digest) === pending) storedValueReads.delete(digest);
+      },
+      () => {
+        if (storedValueReads.get(digest) === pending) storedValueReads.delete(digest);
+      }
+    );
+    return pending;
+  };
   const hydrateStoredTransportValue = async (value: unknown): Promise<unknown> =>
     hydrateStoredValueRefs(value, {
       getText: async (digest) => {
-        const text = await rpc.call<string | null>("main", "blobstore.getText", [digest]);
+        const text = await readStoredValueText(digest);
         if (text === null) throw new Error(`Stored transport blob is missing: ${digest}`);
         return text;
       },

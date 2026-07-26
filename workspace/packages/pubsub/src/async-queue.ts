@@ -21,10 +21,38 @@
  * ```
  */
 export class AsyncQueue<T> implements AsyncIterable<T> {
-  private values: T[] = [];
-  private resolvers: Array<(value: IteratorResult<T>) => void> = [];
+  private values: Array<T | undefined> = [];
+  private valueHead = 0;
+  private resolvers: Array<((value: IteratorResult<T>) => void) | undefined> = [];
+  private resolverHead = 0;
   private closed = false;
   private closeError: Error | null = null;
+
+  /**
+   * Array.shift() copies every remaining element. Channel replay, token deltas,
+   * and tool progress can build large bursts, so advancing an index keeps
+   * dequeue O(1). Compact only after enough headroom accumulates to keep the
+   * backing arrays bounded with amortized O(1) work.
+   */
+  private compactValues(): void {
+    if (this.valueHead === this.values.length) {
+      this.values = [];
+      this.valueHead = 0;
+    } else if (this.valueHead >= 1_024 && this.valueHead * 2 >= this.values.length) {
+      this.values = this.values.slice(this.valueHead);
+      this.valueHead = 0;
+    }
+  }
+
+  private compactResolvers(): void {
+    if (this.resolverHead === this.resolvers.length) {
+      this.resolvers = [];
+      this.resolverHead = 0;
+    } else if (this.resolverHead >= 1_024 && this.resolverHead * 2 >= this.resolvers.length) {
+      this.resolvers = this.resolvers.slice(this.resolverHead);
+      this.resolverHead = 0;
+    }
+  }
 
   /**
    * Push a value onto the queue.
@@ -35,8 +63,11 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
    */
   push(value: T): void {
     if (this.closed) return;
-    const resolve = this.resolvers.shift();
-    if (resolve) {
+    if (this.resolverHead < this.resolvers.length) {
+      const resolve = this.resolvers[this.resolverHead] as (value: IteratorResult<T>) => void;
+      this.resolvers[this.resolverHead] = undefined;
+      this.resolverHead += 1;
+      this.compactResolvers();
       resolve({ value, done: false });
     } else {
       this.values.push(value);
@@ -54,9 +85,12 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
     if (this.closed) return;
     this.closed = true;
     this.closeError = error ?? null;
-    for (const resolve of this.resolvers.splice(0)) {
+    for (let i = this.resolverHead; i < this.resolvers.length; i++) {
+      const resolve = this.resolvers[i] as (value: IteratorResult<T>) => void;
       resolve({ value: undefined as never, done: true });
     }
+    this.resolvers = [];
+    this.resolverHead = 0;
   }
 
   /**
@@ -70,7 +104,7 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
    * Get the number of buffered values waiting to be consumed.
    */
   get length(): number {
-    return this.values.length;
+    return this.values.length - this.valueHead;
   }
 
   /**
@@ -80,8 +114,12 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
    */
   async *[Symbol.asyncIterator](): AsyncIterableIterator<T> {
     while (true) {
-      if (this.values.length > 0) {
-        yield this.values.shift()!;
+      if (this.valueHead < this.values.length) {
+        const value = this.values[this.valueHead] as T;
+        this.values[this.valueHead] = undefined;
+        this.valueHead += 1;
+        this.compactValues();
+        yield value;
         continue;
       }
       if (this.closed) {

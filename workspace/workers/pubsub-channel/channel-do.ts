@@ -85,7 +85,9 @@ import {
   broadcast,
   buildChannelEvent,
   channelEventToRpcSignal,
+  loadBroadcastParticipants,
   type BroadcastDeps,
+  type BroadcastParticipant,
   type StructuredDeliveryEnvelope,
 } from "./broadcast.js";
 import { ChannelLog, type ChannelReplayContext, type MessageTypeDefinition } from "./log-store.js";
@@ -353,6 +355,7 @@ export class PubSubChannel extends DurableObjectBase {
   private _policyHost: PolicyHost | null = null;
   private _calls: CallTransport | null = null;
   private readonly publishDedupInFlight = new Map<string, Promise<ChannelEvent>>();
+  private broadcastParticipantCache: BroadcastParticipant[] | null = null;
   private readonly subscriptionStreams = new Map<
     string,
     {
@@ -619,13 +622,20 @@ export class PubSubChannel extends DurableObjectBase {
 
   private get broadcastDeps(): BroadcastDeps {
     return {
-      sql: this.sql,
       objectKey: this.objectKey,
+      participants: () => {
+        this.broadcastParticipantCache ??= loadBroadcastParticipants(this.sql);
+        return this.broadcastParticipantCache;
+      },
       deliverParticipant: (participantId, payload) =>
         this.deliverParticipantPayload(participantId, payload),
       enqueueDoEnvelope: (participantId, envelope) =>
         this.enqueueStructuredDelivery(participantId, envelope),
     };
+  }
+
+  private invalidateBroadcastParticipants(): void {
+    this.broadcastParticipantCache = null;
   }
 
   protected override durableWorkQueues(): readonly DurableWorkQueue[] {
@@ -2133,6 +2143,7 @@ export class PubSubChannel extends DurableObjectBase {
       }
       throw err;
     }
+    this.invalidateBroadcastParticipants();
 
     // Publish join presence before building replay so the initial roster snapshot
     // includes self. Replacing a transport generation is an update to the same
@@ -2241,6 +2252,7 @@ export class PubSubChannel extends DurableObjectBase {
         participantId
       );
     });
+    this.invalidateBroadcastParticipants();
     await this.calls.failPendingCallsTargeting(participantId, leaveReason);
     await this.publishPresenceEvent(
       participantId,
@@ -2587,6 +2599,7 @@ export class PubSubChannel extends DurableObjectBase {
       JSON.stringify(stored),
       participantId
     );
+    this.invalidateBroadcastParticipants();
     await this.publishPresenceEvent(participantId, "update", stored);
   }
 
@@ -2623,6 +2636,7 @@ export class PubSubChannel extends DurableObjectBase {
       JSON.stringify(final),
       participantId
     );
+    this.invalidateBroadcastParticipants();
     this.broadcastPresenceSignal(participantId, "update", final);
   }
 
@@ -4423,6 +4437,7 @@ export class PubSubChannel extends DurableObjectBase {
     this.sql.exec(`DELETE FROM invite_index_ops`);
     // Clear operational state + caches
     this.sql.exec(`DELETE FROM participants`);
+    this.invalidateBroadcastParticipants();
     this.sql.exec(`DELETE FROM pending_calls`);
     this.sql.exec(`DELETE FROM dedup_keys`);
     await this.policyHost.rebuildAfterFork();

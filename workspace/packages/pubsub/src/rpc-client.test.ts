@@ -1338,6 +1338,89 @@ describe("connectViaRpc", () => {
       await client.close();
     });
 
+    it("coalesces concurrent reads of the same immutable stored value", async () => {
+      const executeFn = vi.fn().mockResolvedValue({ ok: true });
+      const stored = JSON.stringify({ x: 7 });
+      let releaseRead: ((value: string) => void) | undefined;
+
+      const client = connectViaRpc({
+        rpc: mockRpc as any,
+        channel: CHANNEL,
+        methods: {
+          compute: {
+            description: "compute something",
+            parameters: z
+              .object({
+                left: z.object({ x: z.number() }),
+                right: z.object({ x: z.number() }),
+              })
+              .strict(),
+            execute: executeFn,
+          },
+        },
+      });
+
+      await emitReplayAndReady(emit, []);
+      await client.ready();
+      mockRpc.call.mockClear();
+      mockRpc.call.mockImplementation(async (target: string, method: string) => {
+        if (target === "main" && method === "blobstore.getText") {
+          return await new Promise<string>((resolve) => {
+            releaseRead = resolve;
+          });
+        }
+        return undefined;
+      });
+
+      const ref = {
+        protocol: "vibestudio.blob-ref.v1",
+        digest: "shared-digest",
+        size: stored.length,
+        encoding: "json",
+        originalBytes: stored.length,
+      };
+      emit({
+        stream: "log",
+        phase: "live",
+        id: 202,
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: invocation(
+          "invocation.started",
+          CALL_ID_1,
+          {
+            name: "compute",
+            request: { left: ref, right: ref },
+            transport: {
+              kind: "channel",
+              channelId: CHANNEL,
+              target: { kind: "panel", id: SELF_ID, participantId: SELF_ID },
+              transportCallId: TRANSPORT_ID_1,
+            },
+          },
+          { transportCallId: TRANSPORT_ID_1 }
+        ),
+        senderId: "caller-1",
+        ts: Date.now(),
+      });
+
+      await vi.waitFor(() => {
+        expect(
+          mockRpc.call.mock.calls.filter(
+            (call: unknown[]) => call[0] === "main" && call[1] === "blobstore.getText"
+          )
+        ).toHaveLength(1);
+      });
+      releaseRead?.(stored);
+      await vi.waitFor(() => {
+        expect(executeFn).toHaveBeenCalledWith(
+          { left: { x: 7 }, right: { x: 7 } },
+          expect.objectContaining({ callId: TRANSPORT_ID_1 })
+        );
+      });
+
+      await client.close();
+    });
+
     it("does not time out method execution without a journaled deadline", async () => {
       vi.useFakeTimers();
       const executeFn = vi.fn(() => new Promise(() => undefined));

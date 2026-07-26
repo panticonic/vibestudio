@@ -14,9 +14,14 @@ import type { RpcChannelMessage, RpcSignalMessage } from "@workspace/pubsub";
 
 export type StructuredDeliveryEnvelope = Extract<RpcChannelMessage, { kind: "log" | "signal" }>;
 
+export interface BroadcastParticipant {
+  id: string;
+  structured: boolean;
+}
+
 export interface BroadcastDeps {
-  sql: SqlStorage;
   objectKey: string;
+  participants(): readonly BroadcastParticipant[];
   deliverParticipant(participantId: string, payload: unknown): Promise<void> | void;
   enqueueDoEnvelope(participantId: string, envelope: StructuredDeliveryEnvelope): void;
 }
@@ -36,6 +41,22 @@ function participantReceivesChannelEnvelopes(metadataJson: unknown): boolean {
   }
 }
 
+/**
+ * Build the delivery-only roster projection. The channel activation caches
+ * this projection and invalidates it when membership, transport, or metadata
+ * changes, avoiding a SQL scan and repeated metadata JSON parsing for every
+ * token-delta signal and durable chat event.
+ */
+export function loadBroadcastParticipants(sql: SqlStorage): BroadcastParticipant[] {
+  return sql
+    .exec(`SELECT id, transport, metadata FROM participants`)
+    .toArray()
+    .map((row) => ({
+      id: row["id"] as string,
+      structured: row["transport"] === "do" && participantReceivesChannelEnvelopes(row["metadata"]),
+    }));
+}
+
 // ── Broadcast ────────────────────────────────────────────────────────────────
 
 /**
@@ -49,15 +70,13 @@ export function broadcast(
   senderId: string,
   structuredPublisherId = senderId
 ): void {
-  const participants = deps.sql.exec(`SELECT id, transport, metadata FROM participants`).toArray();
-
   const msg =
     envelope.kind === "log"
       ? channelEventToRpcLog(event, envelope.phase ?? "live", envelope.ref)
       : channelEventToRpcSignal(event, envelope.ref);
 
-  for (const p of participants) {
-    const pid = p["id"] as string;
+  for (const participant of deps.participants()) {
+    const pid = participant.id;
     const data =
       pid === senderId && envelope.ref !== undefined
         ? { channelId: deps.objectKey, message: { ...msg, ref: envelope.ref } }
@@ -65,7 +84,7 @@ export function broadcast(
 
     // Agent vessels receive one structured delivery RPC per participant. Every
     // other session receives bytes on the stream that owns its lifetime.
-    if (p["transport"] === "do" && participantReceivesChannelEnvelopes(p["metadata"])) {
+    if (participant.structured) {
       // A structured publisher has already accepted and journaled this event
       // in its own turn. Calling back into that same Durable Object before the
       // publish RPC can return creates a causal cycle: the recipient cannot
