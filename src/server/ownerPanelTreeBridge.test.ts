@@ -1601,7 +1601,8 @@ describe("seedPanelTreeIfEmpty", () => {
       calls.push(request);
       if (request.method === "roots") return roots;
       if (request.method === "getStateArgs") return stateArgsByRoot[String(request.args[0])] ?? {};
-      return { id: `panel:${request.args[0]}` };
+      const execution = request.args[0] as { surface?: unknown; source?: unknown };
+      return { id: `panel:${String(execution.source)}` };
     };
     return { bridge, calls };
   };
@@ -1616,9 +1617,12 @@ describe("seedPanelTreeIfEmpty", () => {
     const creates = calls.filter((c) => c.method === "create");
     expect(creates).toHaveLength(2);
     expect(creates.every((c) => c.callerId === "server" && c.callerKind === "server")).toBe(true);
-    expect(creates[0]?.args).toEqual(["panels/chat", { stateArgs: undefined, focus: false }]);
+    expect(creates[0]?.args).toEqual([
+      { surface: "code", source: "panels/chat" },
+      { stateArgs: undefined, focus: false },
+    ]);
     expect(creates[1]?.args).toEqual([
-      "panels/notes",
+      { surface: "code", source: "panels/notes" },
       { stateArgs: { folder: "inbox" }, focus: false },
     ]);
   });
@@ -1637,7 +1641,7 @@ describe("seedPanelTreeIfEmpty", () => {
     const creates = calls.filter((c) => c.method === "create");
     expect(creates).toHaveLength(1);
     expect(creates[0]?.args).toEqual([
-      "panels/notes",
+      { surface: "code", source: "panels/notes" },
       { stateArgs: { folder: "inbox" }, focus: false },
     ]);
   });
@@ -1663,7 +1667,10 @@ describe("seedPanelTreeIfEmpty", () => {
     expect(creates).toHaveLength(1);
     expect(creates[0]).toMatchObject({
       subject: { userId: "alice", handle: "alice" },
-      args: ["panels/notes", { stateArgs: undefined, focus: false }],
+      args: [
+        { surface: "code", source: "panels/notes" },
+        { stateArgs: undefined, focus: false },
+      ],
     });
   });
 
@@ -1674,9 +1681,10 @@ describe("seedPanelTreeIfEmpty", () => {
       calls.push(request);
       if (request.method === "roots") return roots;
       if (request.method === "create") {
+        const execution = request.args[0] as { surface?: unknown; source?: unknown };
         roots.push({
           panelId: `panel:${request.subject?.userId}`,
-          source: String(request.args[0]),
+          source: String(execution.source),
           owner: String(request.subject?.userId),
         });
         return { id: roots.at(-1)?.panelId };

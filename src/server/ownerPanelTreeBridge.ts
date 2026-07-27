@@ -336,7 +336,10 @@ export async function seedPanelTreeIfEmpty(
       callerId: "server",
       callerKind: "server",
       method: "create",
-      args: [entry.source, { stateArgs: entry.stateArgs, focus: false }],
+      args: [
+        { surface: "code", source: entry.source },
+        { stateArgs: entry.stateArgs, focus: false },
+      ],
       // Stamp the seeded root under its owner's tree (WP3).
       subject: ownerSubject,
     });
