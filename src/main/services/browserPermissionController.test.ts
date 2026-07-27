@@ -1,11 +1,35 @@
 import { describe, expect, it } from "vitest";
 import {
+  browserSecurityOrigin,
   capabilitiesForCheck,
   capabilitiesForRequest,
   viewMayRequestPeripheral,
 } from "./browserPermissionController.js";
 
 describe("browser permission capability mapping", () => {
+  it("represents tuple and opaque security origins without aliasing opaque documents", () => {
+    expect(browserSecurityOrigin("https://example.com/path", "opaque-a")).toEqual({
+      kind: "tuple",
+      scheme: "https",
+      host: "example.com",
+      port: "443",
+      serialized: "https://example.com",
+    });
+    expect(
+      browserSecurityOrigin(
+        "blob:https://example.com/00000000-0000-0000-0000-000000000000",
+        "opaque-a"
+      )
+    ).toMatchObject({ kind: "tuple", serialized: "https://example.com" });
+    expect(browserSecurityOrigin("data:text/plain,hello", "opaque-a")).toEqual({
+      kind: "opaque",
+      nonce: "opaque-a",
+    });
+    expect(browserSecurityOrigin("data:text/plain,hello", "opaque-b")).not.toEqual(
+      browserSecurityOrigin("data:text/plain,hello", "opaque-a")
+    );
+  });
+
   it("splits media requests into camera and microphone grants", () => {
     expect(
       capabilitiesForRequest("media", {
@@ -35,14 +59,22 @@ describe("browser permission capability mapping", () => {
     ).toEqual([]);
   });
 
-  it("maps only the supported non-media site permissions", () => {
+  it("maps supported non-media site permissions to the canonical grant set", () => {
     expect(capabilitiesForRequest("geolocation", {} as Electron.PermissionRequest)).toEqual([
       "geolocation",
     ]);
     expect(capabilitiesForRequest("notifications", {} as Electron.PermissionRequest)).toEqual([
       "notifications",
     ]);
-    expect(capabilitiesForRequest("clipboard-read", {} as Electron.PermissionRequest)).toEqual([]);
+    expect(capabilitiesForRequest("clipboard-read", {} as Electron.PermissionRequest)).toEqual([
+      "clipboard",
+    ]);
+    expect(
+      capabilitiesForCheck(
+        "clipboard-sanitized-write",
+        {} as Electron.PermissionCheckHandlerHandlerDetails
+      )
+    ).toEqual(["clipboard"]);
   });
 
   it("admits workspace apps only when every peripheral is declared", () => {

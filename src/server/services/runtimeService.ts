@@ -32,14 +32,19 @@ import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import {
   buildWorkspaceContext,
   canonicalEntityId,
+  runtimeEntitySource,
+  type CodeExecution,
   type EntityRecord,
+  type ExternalDocumentExecution,
+  type InertExecution,
   type RuntimeAgentBinding,
   type RuntimeAgentBindingInput,
   type RuntimeEntityCreateSpec,
   type RuntimeEntityHandle,
-  type RuntimePanelEntityCreateSpec,
+  type RuntimeCodeEntityCreateSpec,
   type WorkspaceContext,
 } from "@vibestudio/shared/runtime/entitySpec";
+import { isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 import {
@@ -47,62 +52,29 @@ import {
   type ContextBoundaryAction,
   type ContextBoundaryDeps,
 } from "./contextBoundary.js";
-import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
-import { requireActiveExecutionIdentity } from "../runtimeExecutionIdentity.js";
-import { browserUrlFromPanelSource, isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
+import {
+  parseUnitAuthorityManifest,
+  type UnitAuthorityManifest,
+} from "@vibestudio/shared/authorityManifest";
 
 export interface RuntimeEntityHooks {
-  /** Immutable authority facts sealed into the selected build artifact. */
-
-  /** Prepare runtime resources for a "do" entity. Returns targetId + effectiveVersion. */
-  prepareDurableObject: (args: {
-    source: string;
-    ref: string | undefined;
-    className: string;
-    key: string;
-    contextId: string;
-    stateArgs?: unknown;
-  }) => Promise<PreparedRuntimeExecution & { targetId: string }>;
+  /**
+   * Prepare exactly one incarnation through a surface-correlated contract.
+   * Kind-specific launch coordinates remain in `spec`; the lifecycle consumer
+   * only observes the closed prepared union.
+   */
+  prepare: <S extends RuntimeEntityCreateSpec>(
+    args: RuntimePreparationInput<S>
+  ) => Promise<PreparedFor<S["execution"]>>;
 
   /** Called after the entity row is active but before activation is returned
    * to its creator, so durable-work capability registration precedes work. */
   onDurableObjectActivated?: (record: EntityRecord) => Promise<void>;
 
-  /** Prepare runtime resources for a "worker" entity. */
-  prepareWorker: (args: {
-    source: string;
-    ref: string | undefined;
-    key: string;
-    contextId: string;
-    stateArgs?: unknown;
-    env?: Record<string, string>;
-    /** Launch parent (the verified caller) → worker `PARENT_*` env, so the
-     *  worker's `parent` resolves from the same source as `EntityRecord.parentId`. */
-    parent?: { parentId: string; parentEntityId: string; parentKind?: "panel" | "worker" | "do" };
-  }) => Promise<PreparedRuntimeExecution & { targetId: string }>;
-
-  /** Start the lazy runtime image for a panel entity and resolve its EV. */
-  preparePanel: (args: {
-    source: string;
-    ref: string | undefined;
-    /** Reattach an existing incarnation to its already-selected immutable artifact. */
-    buildKey?: string;
-  }) => Promise<PreparedRuntimeExecution>;
-
-  /** Resolve the exact immutable build for an app entity (no runtime prep). */
-  resolveAppExecution: (args: {
-    source: string;
-    ref: string | undefined;
-  }) => Promise<PreparedRuntimeExecution>;
-
   /** Cleanup hooks invoked on retire — closed at bootstrap. */
   onRetire: (record: EntityRecord) => Promise<void>;
 
-  /**
-   * Release resources owned inside an entity before its durable row is retired.
-   * A failed or rejected receipt leaves the entity active; post-retire host
-   * cleanup is deliberately a separate, retryable phase.
-   */
+  /** Release resources owned inside an entity before its durable row is retired. */
   releaseEntity: (
     record: EntityRecord,
     input: LifecyclePrepareInput
@@ -113,10 +85,6 @@ export interface RuntimeEntityHooks {
   /** Release the process-local retirement seal after retire commits or aborts. */
   releaseEntityRelaySeal?: (entityId: string) => void;
 
-  /**
-   * Clone a DO's durable SQLite storage to a new instance key (server-internal
-   * `workerdManager.cloneDO`). Used by `cloneContext`; never exposed to userland.
-   */
   cloneDurableStorage?: (args: {
     source: string;
     className: string;
@@ -124,18 +92,59 @@ export interface RuntimeEntityHooks {
     toKey: string;
   }) => Promise<void>;
 
-  /**
-   * Delete a DO's durable SQLite storage (server-internal
-   * `workerdManager.destroyDO`). Used by `cloneContext` rollback + `destroyContext`;
-   * never exposed to userland. (Plain `retireEntity` deliberately leaves storage
-   * intact for re-attach — only a full context destroy reclaims it.)
-   */
   destroyDurableStorage?: (args: {
     source: string;
     className: string;
     key: string;
   }) => Promise<void>;
 }
+
+export interface RuntimePreparationInput<S extends RuntimeEntityCreateSpec> {
+  spec: S;
+  key: string;
+  contextId: string;
+  existingBuildKey?: string;
+  parent?: {
+    parentId: string;
+    parentEntityId: string;
+    parentKind?: "panel" | "worker" | "do";
+  };
+}
+
+export interface PreparedCodeIncarnation {
+  surface: "code";
+  target: { id: string };
+  effectiveVersion: string;
+  buildKey: string;
+  executionDigest: string;
+  authority: UnitAuthorityManifest;
+}
+
+export interface PreparedExternalIncarnation {
+  surface: "external";
+  target: { id: string };
+  document: {
+    requestedUrl: string;
+  };
+}
+
+export interface PreparedInertIncarnation {
+  surface: "inert";
+  target: { id: string };
+}
+
+export type PreparedIncarnation =
+  | PreparedCodeIncarnation
+  | PreparedExternalIncarnation
+  | PreparedInertIncarnation;
+
+export type PreparedFor<E> = E extends CodeExecution
+  ? PreparedCodeIncarnation
+  : E extends ExternalDocumentExecution
+    ? PreparedExternalIncarnation
+    : E extends InertExecution
+      ? PreparedInertIncarnation
+      : never;
 
 export interface RuntimeServiceInternal {
   createEntity(caller: VerifiedCaller, spec: RuntimeEntityCreateSpec): Promise<RuntimeEntityHandle>;
@@ -408,7 +417,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     const canonicalId = spec.key
       ? canonicalEntityId({
           kind: spec.kind,
-          source: "source" in spec ? spec.source : undefined,
+          source: runtimeEntitySource(spec),
           className: spec.kind === "do" ? spec.className : undefined,
           key: spec.key,
         })
@@ -428,9 +437,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     return canonicalId ? serializeByKey(creationChains, canonicalId, create) : create();
   }
 
-  const panelHandle = (record: EntityRecord): RuntimeEntityHandle => ({
+  const entityHandle = (record: EntityRecord, targetId = record.id): RuntimeEntityHandle => ({
     id: record.id,
-    kind: "panel",
+    kind: record.kind as RuntimeEntityHandle["kind"],
     source: record.source,
     ...(record.activeBuildKey ? { buildKey: record.activeBuildKey } : {}),
     ...(record.activeExecutionDigest ? { executionDigest: record.activeExecutionDigest } : {}),
@@ -440,51 +449,57 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         }
       : {}),
     contextId: record.contextId,
-    targetId: record.id,
+    targetId,
   });
 
   /**
-   * Commit only the panel's durable coordinates. The preparing record is not an
-   * executable principal, so a host may safely attach a native view while build
-   * preparation continues.
+   * Commit only a code-backed entity's durable coordinates. A preparing record
+   * is not an executable principal.
    */
-  async function reservePanelEntity(
+  async function reserveEntity(
     caller: VerifiedCaller,
-    spec: RuntimePanelEntityCreateSpec
+    spec: RuntimeCodeEntityCreateSpec
   ): Promise<RuntimeEntityHandle> {
     if (!isTrustedRuntimeHost(caller)) {
-      throw new Error("Deferred panel runtime entities are host-managed");
+      throw new Error("Deferred runtime entities are host-managed");
     }
-    // Reservation exists to pin an immutable build before activation, which a
-    // host-rendered document has none of: browser panels go through
-    // createEntity instead.
-    if (browserUrlFromPanelSource(spec.source) !== null) {
-      throw new Error(`Browser panel sources are created directly, not reserved: ${spec.source}`);
-    }
-    // A panel without an explicit shared context gets a fresh semantic world.
-    // The bridge retains the verified creator id under host attestation, so the
-    // runtime can attach that world to the creator's context without exposing a
-    // forgeable ownership coordinate in the public panel spec.
+    assertCreateEntityAllowed(caller, spec);
     const explicitContextId = spec.contextId;
     const key = spec.key ?? randomUUID();
-    // The panel key is the durable reservation identity. Derive the implicit
-    // context from that same identity so an ambiguous transport retry reaches
-    // the exact reservation already committed by WorkspaceDO instead of
-    // inventing a conflicting semantic world.
+    const canonicalId = canonicalEntityId({
+      kind: spec.kind,
+      source: spec.execution.source,
+      className: spec.kind === "do" ? spec.className : undefined,
+      key,
+    });
+    const requestedContextId =
+      explicitContextId == null || explicitContextId === "" ? undefined : explicitContextId;
+    const externalAgentBinding = await resolveAgentBinding(
+      caller,
+      "reserveEntity",
+      requestedContextId,
+      bindingFromSpec(spec)
+    );
     const contextId =
-      explicitContextId != null && explicitContextId !== ""
-        ? explicitContextId
-        : deriveContextId(`panel-reservation:${canonicalEntityId({ kind: "panel", key })}`);
+      externalAgentBinding?.contextId ??
+      requestedContextId ??
+      deriveContextId(`entity-reservation:${canonicalId}`);
     const hasExplicitContext = explicitContextId != null && explicitContextId !== "";
     const ownerContextId = hasExplicitContext
       ? null
       : await store.resolveContext(caller.runtime.id);
-    const record = await store.reservePanel({
-      kind: "panel",
-      source: { repoPath: spec.source, effectiveVersion: "" },
+    const selfAgentChannelId = selfAgentChannelFromSpec(spec);
+    const agentBinding = selfAgentChannelId
+      ? { entityId: canonicalId, contextId, channelId: selfAgentChannelId }
+      : externalAgentBinding;
+    const record = await store.reserve({
+      kind: spec.kind,
+      source: { repoPath: spec.execution.source, effectiveVersion: "" },
       contextId,
+      className: spec.kind === "do" ? spec.className : undefined,
       key,
-      stateArgs: spec.stateArgs,
+      stateArgs: "stateArgs" in spec ? spec.stateArgs : undefined,
+      agentBinding,
       parentId: caller.runtime.id,
       ownerUserId: caller.subject?.userId,
       ...(ownerContextId && ownerContextId !== contextId
@@ -496,72 +511,85 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           }
         : {}),
     });
-    return panelHandle(record);
+    return entityHandle(record);
   }
 
   /**
-   * Complete one reserved panel incarnation in place. Build preparation and
-   * semantic-context materialization are independent and therefore run
-   * concurrently; the single durable advance is the activation boundary.
+   * Complete one reserved code-backed incarnation in place.
    */
-  async function activatePanelEntity(
+  async function activateReservedEntity(
     caller: VerifiedCaller,
-    spec: RuntimePanelEntityCreateSpec
+    spec: RuntimeCodeEntityCreateSpec
   ): Promise<RuntimeEntityHandle> {
     if (!isTrustedRuntimeHost(caller)) {
-      throw new Error("Deferred panel runtime entities are host-managed");
+      throw new Error("Deferred runtime entities are host-managed");
     }
     if (!spec.key) {
-      throw new Error("activatePanelEntity requires the reserved panel key");
+      throw new Error("activateReservedEntity requires the reserved entity key");
     }
-    const canonicalId = canonicalEntityId({ kind: "panel", key: spec.key });
+    const canonicalId = canonicalEntityId({
+      kind: spec.kind,
+      source: spec.execution.source,
+      className: spec.kind === "do" ? spec.className : undefined,
+      key: spec.key,
+    });
     const existing = await store.resolveRecord(canonicalId);
-    if (!existing || existing.kind !== "panel") {
-      throw new Error(`Unknown reserved panel entity ${canonicalId}`);
+    if (!existing || existing.kind !== spec.kind) {
+      throw new Error(`Unknown reserved entity ${canonicalId}`);
     }
-    if (existing.source.repoPath !== spec.source) {
+    if (existing.source.repoPath !== spec.execution.source) {
       throw new Error(
-        `Reserved panel ${canonicalId} belongs to ${existing.source.repoPath}, not ${spec.source}`
+        `Reserved entity ${canonicalId} belongs to ${existing.source.repoPath}, not ${spec.execution.source}`
       );
     }
-    if (
-      existing.status === "active" &&
-      existing.activeBuildKey &&
-      existing.activeExecutionDigest &&
-      existing.activeAuthority
-    ) {
-      return panelHandle(existing);
+    if (spec.kind === "do" && existing.className !== spec.className) {
+      throw new Error(
+        `Reserved entity ${canonicalId} belongs to class ${existing.className}, not ${spec.className}`
+      );
     }
-    if (existing.status !== "preparing") {
-      throw new Error(`Reserved panel ${canonicalId} is ${existing.status}`);
+    if (existing.status !== "preparing" && existing.status !== "active") {
+      throw new Error(`Reserved entity ${canonicalId} is ${existing.status}`);
     }
 
     const [prepared] = await Promise.all([
-      deps.hooks.preparePanel({ source: spec.source, ref: spec.ref }),
+      deps.hooks.prepare({
+        spec,
+        key: spec.key,
+        contextId: existing.contextId,
+      }),
       setUpContext(existing.contextId),
     ]);
-    if (!prepared.buildKey || !/^[0-9a-f]{64}$/.test(prepared.buildKey)) {
+    if (prepared.surface !== "code") {
+      throw new Error(`Reserved entity ${canonicalId} did not prepare a code incarnation`);
+    }
+    if (!/^[0-9a-f]{64}$/.test(prepared.buildKey)) {
       throw new Error(
-        `Panel ${canonicalId} preparation did not select an immutable BuildV2 artifact`
+        `${spec.kind} ${canonicalId} preparation did not select an immutable BuildV2 artifact`
       );
     }
-    const { activeExecutionDigest, activeAuthority } = requireActiveExecutionIdentity(
-      prepared,
-      `panel ${canonicalId}`
+    if (!/^[0-9a-f]{64}$/.test(prepared.executionDigest)) {
+      throw new Error(`${spec.kind} ${canonicalId} is missing a canonical execution digest`);
+    }
+    const activeAuthority = parseUnitAuthorityManifest(
+      prepared.authority,
+      `${spec.kind} ${canonicalId} authority`
     );
     const record = await store.advanceExecution({
-      kind: "panel",
-      source: { repoPath: spec.source, effectiveVersion: prepared.effectiveVersion },
+      kind: spec.kind,
+      source: { repoPath: spec.execution.source, effectiveVersion: prepared.effectiveVersion },
       activeBuildKey: prepared.buildKey,
-      activeExecutionDigest,
+      activeExecutionDigest: prepared.executionDigest,
       activeAuthority,
       contextId: existing.contextId,
+      className: existing.className,
       key: existing.key,
       stateArgs: existing.stateArgs,
+      agentBinding: existing.agentBinding,
       parentId: existing.parentId,
       ownerUserId: existing.ownerUserId,
     });
-    return panelHandle(record);
+    if (record.kind === "do") await deps.hooks.onDurableObjectActivated?.(record);
+    return entityHandle(record, prepared.target.id);
   }
 
   /**
@@ -579,130 +607,58 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   ): Promise<RuntimeEntityHandle> {
     let contextId = initialContextId;
     const key = spec.key ?? randomUUID();
+    const source = runtimeEntitySource(spec);
+    const canonicalId = canonicalEntityId({
+      kind: spec.kind,
+      source,
+      className: spec.kind === "do" ? spec.className : undefined,
+      key,
+    });
+    if (spec.execution.surface === "external" && !isOpenPanelBrowserUrl(spec.execution.url)) {
+      throw new Error(`Invalid external browser panel URL: ${spec.execution.url}`);
+    }
+    const existing = await store.resolveRecord(canonicalId);
 
-    let canonicalId: string;
-    let effectiveVersion: string;
+    // Entity identity columns are write-once, so re-attaching an inert session
+    // without an explicit context must reuse its original context coordinate.
+    if (spec.kind === "session" && (spec.contextId == null || spec.contextId === "") && existing) {
+      contextId = existing.contextId;
+    }
+
+    const parentKind = caller.runtime.kind;
+    const prepared = (await deps.hooks.prepare({
+      spec,
+      key,
+      contextId,
+      ...(existing?.activeBuildKey ? { existingBuildKey: existing.activeBuildKey } : {}),
+      parent: {
+        parentId: caller.runtime.id,
+        parentEntityId: caller.runtime.id,
+        parentKind:
+          parentKind === "panel" || parentKind === "worker" || parentKind === "do"
+            ? parentKind
+            : undefined,
+      },
+    })) as PreparedIncarnation;
+    if (prepared.surface !== spec.execution.surface) {
+      throw new Error(
+        `Runtime preparation surface mismatch for ${canonicalId}: requested ${spec.execution.surface}, prepared ${prepared.surface}`
+      );
+    }
+
+    let effectiveVersion = existing?.status === "retired" ? existing.source.effectiveVersion : "";
     let buildKey: string | undefined;
     let executionDigest: string | undefined;
     let activeAuthority: UnitAuthorityManifest | undefined;
-    let targetId: string;
-    let existing: EntityRecord | null = null;
-
-    if (spec.kind === "do") {
-      canonicalId = canonicalEntityId({
-        kind: "do",
-        source: spec.source,
-        className: spec.className,
-        key,
-      });
-      existing = await store.resolveRecord(canonicalId);
-      const prepared = await deps.hooks.prepareDurableObject({
-        source: spec.source,
-        ref: spec.ref,
-        className: spec.className,
-        key,
-        contextId,
-        stateArgs: spec.stateArgs,
-      });
-      effectiveVersion =
-        existing?.status === "retired"
-          ? existing.source.effectiveVersion
-          : prepared.effectiveVersion;
-      buildKey = prepared.buildKey;
-      ({ activeExecutionDigest: executionDigest, activeAuthority } = requireActiveExecutionIdentity(
-        prepared,
-        `Durable Object ${canonicalId}`
-      ));
-      targetId = prepared.targetId;
-    } else if (spec.kind === "worker") {
-      canonicalId = canonicalEntityId({ kind: "worker", source: spec.source, key });
-      existing = await store.resolveRecord(canonicalId);
-      const parentKind = caller.runtime.kind;
-      const prepared = await deps.hooks.prepareWorker({
-        source: spec.source,
-        ref: spec.ref,
-        key,
-        contextId,
-        stateArgs: spec.stateArgs,
-        env: spec.env,
-        // Same launch parent recorded on the entity (parentId below), threaded to
-        // the worker's PARENT_* env so its `parent` runtime API resolves.
-        parent: {
-          parentId: caller.runtime.id,
-          parentEntityId: caller.runtime.id,
-          parentKind:
-            parentKind === "panel" || parentKind === "worker" || parentKind === "do"
-              ? parentKind
-              : undefined,
-        },
-      });
-      effectiveVersion =
-        existing?.status === "retired"
-          ? existing.source.effectiveVersion
-          : prepared.effectiveVersion;
-      buildKey = prepared.buildKey;
-      ({ activeExecutionDigest: executionDigest, activeAuthority } = requireActiveExecutionIdentity(
-        prepared,
-        `worker ${canonicalId}`
-      ));
-      targetId = prepared.targetId;
-    } else if (spec.kind === "app") {
-      canonicalId = canonicalEntityId({ kind: "app", source: spec.source, key });
-      existing = await store.resolveRecord(canonicalId);
-      const prepared = await deps.hooks.resolveAppExecution({
-        source: spec.source,
-        ref: spec.ref,
-      });
-      effectiveVersion =
-        existing?.status === "retired"
-          ? existing.source.effectiveVersion
-          : prepared.effectiveVersion;
-      buildKey = prepared.buildKey;
-      ({ activeExecutionDigest: executionDigest, activeAuthority } = requireActiveExecutionIdentity(
-        prepared,
-        `app ${canonicalId}`
-      ));
-      targetId = canonicalId;
-    } else if (spec.kind === "session") {
-      canonicalId = canonicalEntityId({ kind: "session", key });
-      existing = await store.resolveRecord(canonicalId);
-      // Entity identity columns are write-once, so re-attaching to an
-      // existing session key must reuse its contextId — a freshly minted one
-      // would throw IDENTITY_COLLISION even against a retired row. The
-      // context folder is re-materialized below if it was removed.
-      if ((spec.contextId == null || spec.contextId === "") && existing) {
-        contextId = existing.contextId;
+    if (prepared.surface === "code") {
+      if (!/^[0-9a-f]{64}$/.test(prepared.buildKey)) {
+        throw new Error(`${spec.kind} ${canonicalId} did not select an immutable BuildV2 artifact`);
       }
-      // Inert kind: no workerd/panel runtime. The only phase-4 prep is
-      // eagerly materializing the context folder so host callers (e.g.
-      // agent CLIs) get a working tree immediately.
-      await deps.contextFolders.ensureContextFolder(contextId);
-      effectiveVersion = existing?.status === "retired" ? existing.source.effectiveVersion : "";
-      targetId = canonicalId;
-    } else if (browserUrlFromPanelSource(spec.source) !== null) {
-      // Browser panels are host-rendered external documents, not workspace
-      // code. They take a durable entity so slot lineage, contexts, and leases
-      // work exactly as they do for code panels — but there is no build
-      // artifact, execution digest, or authority manifest to seal, because
-      // nothing of ours executes. Requiring one here rejected every browser
-      // panel outright.
-      const externalUrl = browserUrlFromPanelSource(spec.source) ?? "";
-      if (!isOpenPanelBrowserUrl(externalUrl)) {
-        throw new Error(`Invalid external browser panel source: ${spec.source}`);
+      if (!/^[0-9a-f]{64}$/.test(prepared.executionDigest)) {
+        throw new Error(`${spec.kind} ${canonicalId} is missing a canonical execution digest`);
       }
-      canonicalId = canonicalEntityId({ kind: "panel", key });
-      existing = await store.resolveRecord(canonicalId);
-      effectiveVersion = existing?.status === "retired" ? existing.source.effectiveVersion : "";
-      targetId = canonicalId;
-    } else {
-      canonicalId = canonicalEntityId({ kind: "panel", key });
-      existing = await store.resolveRecord(canonicalId);
-      const prepared = await deps.hooks.preparePanel({
-        source: spec.source,
-        ref: spec.ref,
-        ...(existing?.activeBuildKey ? { buildKey: existing.activeBuildKey } : {}),
-      });
       if (
+        spec.kind === "panel" &&
         existing &&
         !existing.activeBuildKey &&
         prepared.effectiveVersion !== existing.source.effectiveVersion
@@ -711,22 +667,22 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           `Cannot reactivate legacy panel ${canonicalId}: its immutable build key is unknown and current source resolves to a different effective version`
         );
       }
-      effectiveVersion =
-        existing?.status === "retired"
-          ? existing.source.effectiveVersion
-          : prepared.effectiveVersion;
-      if (!prepared.buildKey || !/^[0-9a-f]{64}$/.test(prepared.buildKey)) {
-        throw new Error(
-          `Panel ${canonicalId} preparation did not select an immutable BuildV2 artifact`
-        );
-      }
+      if (existing?.status !== "retired") effectiveVersion = prepared.effectiveVersion;
       buildKey = prepared.buildKey;
-      ({ activeExecutionDigest: executionDigest, activeAuthority } = requireActiveExecutionIdentity(
-        prepared,
-        `panel ${canonicalId}`
-      ));
-      targetId = canonicalId;
+      executionDigest = prepared.executionDigest;
+      activeAuthority = parseUnitAuthorityManifest(
+        prepared.authority,
+        `${spec.kind} ${canonicalId} authority`
+      );
+    } else if (prepared.surface === "external") {
+      if (spec.execution.surface !== "external") {
+        throw new Error(`External preparation did not match ${canonicalId}'s execution surface`);
+      }
+      if (prepared.document.requestedUrl !== spec.execution.url) {
+        throw new Error(`External preparation changed the requested document for ${canonicalId}`);
+      }
     }
+    const targetId = prepared.target.id;
 
     // A context is a GAD-owned semantic workspace frontier shared by every
     // runtime entity attached to the same context id.
@@ -741,7 +697,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       : externalAgentBinding;
     const activateInput = {
       kind: spec.kind,
-      source: { repoPath: spec.source, effectiveVersion },
+      source: { repoPath: source, effectiveVersion },
       activeBuildKey: buildKey,
       activeExecutionDigest: executionDigest,
       activeAuthority,
@@ -907,7 +863,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       }
       return {
         kind: "do",
-        source: src.source.repoPath,
+        execution: { surface: "code", source: src.source.repoPath },
         className: src.className,
         key: newKey,
         contextId,
@@ -916,7 +872,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     }
     return {
       kind: "worker",
-      source: src.source.repoPath,
+      execution: { surface: "code", source: src.source.repoPath },
       key: newKey,
       contextId,
       stateArgs: src.stateArgs,
@@ -1350,9 +1306,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         return prepareContextBoundary(ctx.caller, spec.contextId, {
           kind: "runtime",
           verb: `Create ${spec.kind}`,
-          targetLabel: spec.source,
+          targetLabel: runtimeEntitySource(spec),
           targetLabelName: "Source",
-          groupKey: `context-boundary:${spec.contextId}:${spec.source}`,
+          groupKey: `context-boundary:${spec.contextId}:${runtimeEntitySource(spec)}`,
           ...(ctx.signal ? { signal: ctx.signal } : {}),
         });
       },
@@ -1447,8 +1403,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     },
     handler: defineServiceHandler("runtime", runtimeMethods, {
       createEntity: (ctx, [spec]) => createEntity(ctx.caller, spec),
-      reservePanelEntity: (ctx, [spec]) => reservePanelEntity(ctx.caller, spec),
-      activatePanelEntity: (ctx, [spec]) => activatePanelEntity(ctx.caller, spec),
+      reserveEntity: (ctx, [spec]) =>
+        reserveEntity(ctx.caller, spec as RuntimeCodeEntityCreateSpec),
+      activateReservedEntity: (ctx, [spec]) =>
+        activateReservedEntity(ctx.caller, spec as RuntimeCodeEntityCreateSpec),
       retireEntity: async (ctx, [{ id, removeContext }]) => {
         await retireEntity(id, removeContext);
       },

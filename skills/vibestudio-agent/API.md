@@ -94,6 +94,18 @@ Authority principals: `code`, `host`, `user`
 | `blobstore.delete` | Delete a blob by digest; returns true if it existed. Destructive, admin-only. |
 | `blobstore.list` | List blob digests, optionally filtered by hex prefix and capped by limit. Admin-only. |
 
+## `browserPermissions`
+
+Owner-scoped browser website permission grants
+
+Authority principals: `user`
+
+| Method | Description |
+|--------|-------------|
+| `browserPermissions.snapshot` | Read the current origin-scoped website permission projection. |
+| `browserPermissions.request` | Request owner approval for origin-scoped website capabilities. |
+| `browserPermissions.revoke` | Revoke remembered website permission grants for an origin. |
+
 ## `build`
 
 Build system (getBuild, getBuildNpm, recompute, gc, getAboutPages)
@@ -216,7 +228,7 @@ Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `externalOpen.openExternal` | Open an http(s) or mailto URL in the host OS browser; approval-gated for code callers, returning the persisted approval decision when one was made. |
+| `externalOpen.openExternal` | Open an http(s) URL in the host browser or an OS-protocol URL in its registered application; approval-gated for code callers, returning the persisted approval decision when one was made. |
 
 ## `fs`
 
@@ -411,7 +423,7 @@ Authority principals: `code`, `host`, `user`
 | `panelTree.roots` | List all root-level panels in the tree. |
 | `panelTree.getTreeSnapshot` | Return a full snapshot of the panel tree (revision plus root panels). |
 | `panelTree.getFocusedPanelId` | Return the id of the currently focused panel, or null if none is focused. |
-| `panelTree.create` | Internal structural primitive: durably create a panel and return its initial observation while boot continues. Application callers use openPanel, which waits for boot readiness. |
+| `panelTree.create` | Internal structural primitive: durably create an explicitly declared code or external-document panel and return its initial observation while boot continues. Application callers use openPanel, which waits for boot readiness. |
 | `panelTree.focus` | Focus a panel and return only after its current attempt is boot-ready; throws the canonical structured failure otherwise. |
 | `panelTree.observe` | Return the canonical current panel attempt, including exact provenance, host/boot state, and structured failure. |
 | `panelTree.diagnose` | Return one bounded diagnostic packet with the canonical observation, host lifecycle/console history, and a document capture when ready. |

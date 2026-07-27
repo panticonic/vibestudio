@@ -167,14 +167,15 @@ function createOrchestrator(
     // it. This lets the desktop orchestrator's panelTree create/close paths
     // resolve in tests.
     if (service === "panelTree" && method === "create") {
-      const [src, opts] = (args ?? []) as [
-        string,
+      const [execution, opts] = (args ?? []) as [
+        { surface: "code"; source: string } | { surface: "external"; url: string },
         { parentId?: string | null; name?: string } | undefined,
       ];
-      const isBrowser = /^https?:\/\//i.test(String(src));
+      const isBrowser = execution.surface === "external";
       const id = `panel:tree/created-${++createCounter}`;
       const contextId = `ctx-${id}`;
-      const snapshotSource = isBrowser ? `browser:${src}` : String(src);
+      const snapshotSource =
+        execution.surface === "external" ? `browser:${execution.url}` : execution.source;
       registry.addPanel(
         makePanel(id, [], {
           snapshot: { source: snapshotSource, contextId, options: {} },
@@ -629,7 +630,7 @@ describe("PanelOrchestrator.createPanel", () => {
     await orchestrator.createPanel(caller.id, "panels/created-panel");
 
     expect(serverClient.call).toHaveBeenCalledWith("panelTree", "create", [
-      "panels/created-panel",
+      { surface: "code", source: "panels/created-panel" },
       expect.objectContaining({ parentId: caller.id, focus: true }),
     ]);
     expect(serverClient.callAs).not.toHaveBeenCalledWith(
@@ -668,7 +669,7 @@ describe("PanelOrchestrator.createPanel", () => {
     );
 
     expect(serverClient.callAs).toHaveBeenCalledWith(scopedCaller, "panelTree", "create", [
-      "panels/created-panel",
+      { surface: "code", source: "panels/created-panel" },
       expect.objectContaining({ parentId: caller.id }),
     ]);
     expect(panelView.createViewForPanel).toHaveBeenCalledWith(
@@ -742,7 +743,7 @@ describe("PanelOrchestrator.createPanel", () => {
     );
 
     expect(serverClient.callAs).toHaveBeenCalledWith(scopedCaller, "panelTree", "create", [
-      "https://example.com/",
+      { surface: "external", url: "https://example.com/" },
       expect.objectContaining({ parentId: caller.id, focus: false }),
     ]);
     const acquireCallIndex = serverClient.call.mock.calls.findIndex(
@@ -823,7 +824,7 @@ describe("PanelOrchestrator.createPanel", () => {
     await orchestrator.createBrowserUrlPanel(caller.id, "https://example.com/");
 
     expect(serverClient.call).toHaveBeenCalledWith("panelTree", "create", [
-      "https://example.com/",
+      { surface: "external", url: "https://example.com/" },
       expect.objectContaining({ parentId: caller.id }),
     ]);
     expect(serverClient.callAs).not.toHaveBeenCalled();

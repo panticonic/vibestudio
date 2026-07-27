@@ -612,6 +612,9 @@ function createCdpRegistrationAdapter() {
     cleanupPanelAccess(panelId: string): void {
       cdpHostProvider?.cleanupPanelAccess(panelId);
     },
+    isTargetUnderAutomation(panelId: string): boolean {
+      return cdpHostProvider?.isTargetUnderAutomation(panelId) ?? false;
+    },
     getAccessibilityTree(panelId: string): Promise<unknown[]> {
       if (cdpHostProvider) return cdpHostProvider.getAccessibilityTree(panelId);
       return Promise.resolve([]);
@@ -1668,6 +1671,8 @@ app.on("ready", async () => {
     "fullscreen",
     "openExternal",
     "display-capture",
+    "clipboard-read",
+    "clipboard-sanitized-write",
   ]);
 
   const capabilityForElectronPermission = (
@@ -1678,6 +1683,9 @@ app.on("ready", async () => {
         return "notifications";
       case "openExternal":
         return "open-external";
+      case "clipboard-read":
+      case "clipboard-sanitized-write":
+        return "clipboard";
       case "fullscreen":
       case "pointerLock":
       case "display-capture":
@@ -1726,7 +1734,11 @@ app.on("ready", async () => {
       if (SENSITIVE_PERMISSIONS.has(permission)) {
         if (
           browserPermissionController &&
-          (permission === "media" || permission === "geolocation" || permission === "notifications")
+          (permission === "media" ||
+            permission === "geolocation" ||
+            permission === "notifications" ||
+            permission === "clipboard-read" ||
+            permission === "clipboard-sanitized-write")
         ) {
           browserPermissionController.requestPermission(contents, permission, callback, details);
           return;
@@ -1759,7 +1771,11 @@ app.on("ready", async () => {
       if (SENSITIVE_PERMISSIONS.has(permission)) {
         if (
           browserPermissionController &&
-          (permission === "media" || permission === "geolocation" || permission === "notifications")
+          (permission === "media" ||
+            permission === "geolocation" ||
+            permission === "notifications" ||
+            permission === "clipboard-read" ||
+            permission === "clipboard-sanitized-write")
         ) {
           return browserPermissionController.checkPermission(
             contents,
@@ -2635,6 +2651,9 @@ app.on("ready", async () => {
             eventService,
             getViewManager,
             autofillOverlayPreloadPath: path.join(__dirname, "autofillOverlayPreload.cjs"),
+            requestSiteCapability: (contents, capability) =>
+              browserPermissionController?.requestSiteCapability(contents, capability) ??
+              Promise.resolve(false),
           });
           const { CanonicalBrowserFaviconObserver } =
             await import("./services/browserFaviconObserver.js");
@@ -2698,6 +2717,8 @@ app.on("ready", async () => {
                 serverClient: sc,
                 eventService,
                 getViewManager: () => applicationWindow.viewManager,
+                isTargetUnderAutomation: (targetId) =>
+                  cdpHostProvider?.isTargetUnderAutomation(targetId) ?? false,
               });
               await permissionController.start();
               browserPermissionController = permissionController;
@@ -2725,6 +2746,9 @@ app.on("ready", async () => {
                 browserData: browserDataClient,
                 eventService,
                 getViewManager: () => applicationWindow.viewManager,
+                requestSiteCapability: (contents, capability) =>
+                  browserPermissionController?.requestSiteCapability(contents, capability) ??
+                  Promise.resolve(false),
               });
               await manager.start();
               browserDownloadManager = manager;
@@ -2975,6 +2999,7 @@ app.on("ready", async () => {
       cdpHost: createCdpRegistrationAdapter(),
       formFillManager,
       browserFaviconObserver,
+      getBrowserPermissionController: () => browserPermissionController,
     });
     if (IS_HEADLESS_HOST) {
       performance.mark("startup:window-created");

@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@vibestudio/durable/test-utils";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
-import { createRuntimeService } from "./runtimeService.js";
+import { createRuntimeService, type RuntimeEntityHooks } from "./runtimeService.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { WorkspaceEntityStore } from "../workspaceEntityStore.js";
@@ -95,19 +95,37 @@ function makeDODispatch(instance: WorkspaceDO): {
 
 interface BuildDepsOptions {
   approvalDecision?: Awaited<ReturnType<ApprovalQueue["request"]>>;
-  prepareDurableObject?: NonNullable<
-    Parameters<typeof createRuntimeService>[0]["hooks"]
-  >["prepareDurableObject"];
-  prepareWorker?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["prepareWorker"];
+  prepareDurableObject?: (args: {
+    source: string;
+    ref?: string;
+    className: string;
+    key: string;
+    contextId: string;
+    stateArgs?: unknown;
+  }) => Promise<Record<string, unknown>>;
+  prepareWorker?: (args: {
+    source: string;
+    ref?: string;
+    key: string;
+    contextId: string;
+    stateArgs?: unknown;
+    env?: Record<string, string>;
+    parent?: unknown;
+  }) => Promise<Record<string, unknown>>;
   onRetire?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["onRetire"];
   releaseEntity?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["releaseEntity"];
   releaseEntityRelaySeal?: Parameters<
     typeof createRuntimeService
   >[0]["hooks"]["releaseEntityRelaySeal"];
-  preparePanel?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["preparePanel"];
-  resolveAppExecution?: NonNullable<
-    Parameters<typeof createRuntimeService>[0]["hooks"]
-  >["resolveAppExecution"];
+  preparePanel?: (args: {
+    source: string;
+    ref?: string;
+    buildKey?: string;
+  }) => Promise<Record<string, unknown>>;
+  resolveAppExecution?: (args: {
+    source: string;
+    ref?: string;
+  }) => Promise<Record<string, unknown>>;
   setEntityTitle?: Parameters<typeof createRuntimeService>[0]["setEntityTitle"];
   semanticContexts?: Partial<Parameters<typeof createRuntimeService>[0]["semanticContexts"]>;
   cloneDurableStorage?: NonNullable<
@@ -181,10 +199,61 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
   const service = createRuntimeService({
     entityStore,
     hooks: {
-      prepareDurableObject,
-      prepareWorker,
-      preparePanel,
-      resolveAppExecution,
+      prepare: (async ({ spec, key, contextId, existingBuildKey, parent }) => {
+        const targetId = canonicalEntityId({
+          kind: spec.kind,
+          source:
+            spec.kind === "session"
+              ? spec.source
+              : spec.execution.surface === "external"
+                ? `browser:${spec.execution.url}`
+                : spec.execution.source,
+          className: spec.kind === "do" ? spec.className : undefined,
+          key,
+        });
+        if (spec.execution.surface === "external") {
+          return {
+            surface: "external",
+            target: { id: targetId },
+            document: { requestedUrl: spec.execution.url },
+          };
+        }
+        if (spec.execution.surface === "inert") {
+          await contextFolders.ensureContextFolder(contextId);
+          return { surface: "inert", target: { id: targetId } };
+        }
+        const args = {
+          source: spec.execution.source,
+          ref: spec.execution.ref,
+          key,
+          contextId,
+          ...("stateArgs" in spec ? { stateArgs: spec.stateArgs } : {}),
+        };
+        const raw =
+          spec.kind === "do"
+            ? await prepareDurableObject({ ...args, className: spec.className })
+            : spec.kind === "worker"
+              ? await prepareWorker({ ...args, env: spec.env, parent })
+              : spec.kind === "app"
+                ? await resolveAppExecution({
+                    source: spec.execution.source,
+                    ref: spec.execution.ref,
+                  })
+                : await preparePanel({
+                    source: spec.execution.source,
+                    ref: spec.execution.ref,
+                    ...(existingBuildKey ? { buildKey: existingBuildKey } : {}),
+                  });
+        const rawTargetId = "targetId" in raw ? raw["targetId"] : undefined;
+        return {
+          surface: "code",
+          target: { id: String(rawTargetId ?? targetId) },
+          effectiveVersion: raw.effectiveVersion,
+          buildKey: raw.buildKey,
+          executionDigest: raw.executionDigest,
+          authority: { requests: raw.authorityRequests },
+        };
+      }) as RuntimeEntityHooks["prepare"],
       onRetire,
       releaseEntity,
       releaseEntityRelaySeal: opts.releaseEntityRelaySeal,
@@ -305,29 +374,75 @@ const serverCaller = createVerifiedCaller("server", "server");
 const extensionCaller = (id = "extension:agent-launcher") => createVerifiedCaller(id, "extension");
 
 const doCreateSpec = (
-  overrides: Partial<Extract<RuntimeEntityCreateSpec, { kind: "do" }>> = {}
-): RuntimeEntityCreateSpec => ({
-  kind: "do",
-  source: "workers/example",
-  className: "MyDO",
-  key: "k1",
-  ...overrides,
-});
+  overrides: Partial<Omit<Extract<RuntimeEntityCreateSpec, { kind: "do" }>, "execution">> & {
+    source?: string;
+    ref?: string;
+    execution?: Extract<RuntimeEntityCreateSpec, { kind: "do" }>["execution"];
+  } = {}
+): RuntimeEntityCreateSpec => {
+  const { source = "workers/example", ref, execution, ...rest } = overrides;
+  return {
+    kind: "do",
+    execution: execution ?? { surface: "code", source, ...(ref ? { ref } : {}) },
+    className: "MyDO",
+    key: "k1",
+    ...rest,
+  };
+};
 
 describe("runtimeService deferred panel activation", () => {
+  it("uses the same reservation lifecycle for non-panel code entities", async () => {
+    const { service, instance, prepareWorker } = await buildDeps();
+    const spec = {
+      kind: "worker" as const,
+      execution: { surface: "code" as const, source: "workers/example" },
+      contextId: "ctx-worker-reserved",
+      key: "reserved-worker",
+      env: { MODE: "deferred" },
+    };
+
+    const reserved = (await service.handler({ caller: serverCaller }, "reserveEntity", [spec])) as {
+      id: string;
+      kind: string;
+      contextId: string;
+    };
+    expect(reserved.kind).toBe("worker");
+    expect(instance.entityResolve(reserved.id)).toMatchObject({
+      kind: "worker",
+      status: "preparing",
+      contextId: "ctx-worker-reserved",
+    });
+
+    const active = (await service.handler({ caller: serverCaller }, "activateReservedEntity", [
+      spec,
+    ])) as { id: string; targetId: string; buildKey: string };
+    expect(active.id).toBe(reserved.id);
+    expect(active.targetId).toBe("target:worker:workers/example:reserved-worker");
+    expect(active.buildKey).toBe(sealedExecution.buildKey);
+    expect(instance.entityResolve(active.id)).toMatchObject({
+      kind: "worker",
+      status: "active",
+      activeBuildKey: sealedExecution.buildKey,
+    });
+    expect(prepareWorker).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "workers/example", env: { MODE: "deferred" } })
+    );
+  });
+
   it("publishes stable coordinates before preparation and activates the same entity later", async () => {
     const { service, instance, entityCache, preparePanel } = await buildDeps();
     const spec = {
       kind: "panel" as const,
-      source: "panels/editor",
+      execution: { surface: "code", source: "panels/editor" },
       contextId: "ctx-panel",
       key: "nav-reserved",
       stateArgs: { document: "readme" },
     };
 
-    const reserved = (await service.handler({ caller: serverCaller }, "reservePanelEntity", [
-      spec,
-    ])) as { id: string; buildKey?: string };
+    const reserved = (await service.handler({ caller: serverCaller }, "reserveEntity", [spec])) as {
+      id: string;
+      buildKey?: string;
+    };
     expect(reserved.id).toBe(canonicalEntityId({ kind: "panel", key: spec.key }));
     expect(reserved.buildKey).toBeUndefined();
     expect(instance.entityResolve(reserved.id)).toMatchObject({
@@ -337,7 +452,7 @@ describe("runtimeService deferred panel activation", () => {
     expect(entityCache.resolveActive(reserved.id)).toBeNull();
     expect(preparePanel).not.toHaveBeenCalled();
 
-    const active = (await service.handler({ caller: serverCaller }, "activatePanelEntity", [
+    const active = (await service.handler({ caller: serverCaller }, "activateReservedEntity", [
       spec,
     ])) as { id: string; buildKey?: string };
     expect(active).toMatchObject({ id: reserved.id, buildKey: "b".repeat(64) });
@@ -355,15 +470,19 @@ describe("runtimeService deferred panel activation", () => {
     const creator = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "panel",
-        source: "panels/creator",
+        execution: { surface: "code", source: "panels/creator" },
         contextId: "ctx-creator",
         key: "creator",
       },
     ])) as { id: string };
     const mediatedCreator = createVerifiedCaller(creator.id, "server");
 
-    const reserved = (await service.handler({ caller: mediatedCreator }, "reservePanelEntity", [
-      { kind: "panel", source: "panels/child", key: "child" },
+    const reserved = (await service.handler({ caller: mediatedCreator }, "reserveEntity", [
+      {
+        kind: "panel",
+        execution: { surface: "code", source: "panels/child" },
+        key: "child",
+      },
     ])) as { id: string; contextId: string };
 
     expect(reserved.contextId).not.toBe("ctx-creator");
@@ -382,14 +501,20 @@ describe("runtimeService deferred panel activation", () => {
 
   it("reuses the exact implicit panel context when a stable reservation is retried", async () => {
     const { service, instance } = await buildDeps();
-    const spec = { kind: "panel" as const, source: "panels/child", key: "stable-child" };
+    const spec = {
+      kind: "panel" as const,
+      execution: { surface: "code" as const, source: "panels/child" },
+      key: "stable-child",
+    };
 
-    const first = (await service.handler({ caller: serverCaller }, "reservePanelEntity", [
-      spec,
-    ])) as { id: string; contextId: string };
-    const second = (await service.handler({ caller: serverCaller }, "reservePanelEntity", [
-      spec,
-    ])) as { id: string; contextId: string };
+    const first = (await service.handler({ caller: serverCaller }, "reserveEntity", [spec])) as {
+      id: string;
+      contextId: string;
+    };
+    const second = (await service.handler({ caller: serverCaller }, "reserveEntity", [spec])) as {
+      id: string;
+      contextId: string;
+    };
 
     expect(second).toEqual(first);
     expect(instance.entityResolve(first.id)).toMatchObject({
@@ -403,13 +528,13 @@ describe("runtimeService deferred panel activation", () => {
     const { service, instance, releaseEntity, preparePanel } = await buildDeps();
     const spec = {
       kind: "panel" as const,
-      source: "panels/editor",
+      execution: { surface: "code", source: "panels/editor" },
       contextId: "ctx-panel",
       key: "nav-cancelled",
     };
-    const reserved = (await service.handler({ caller: serverCaller }, "reservePanelEntity", [
-      spec,
-    ])) as { id: string };
+    const reserved = (await service.handler({ caller: serverCaller }, "reserveEntity", [spec])) as {
+      id: string;
+    };
 
     await service.handler({ caller: serverCaller }, "retireEntity", [{ id: reserved.id }]);
 
@@ -466,7 +591,7 @@ describe("runtimeService.createEntity (do kind)", () => {
     const prepareDurableObject = vi.fn(async () => ({
       targetId: "target:MyDO:k1",
       effectiveVersion: "ev-do",
-      executionDigest: "a".repeat(64),
+      ...sealedExecution,
       authorityRequests,
     }));
     const { service, instance, entityCache } = await buildDeps({ prepareDurableObject });
@@ -491,7 +616,7 @@ describe("runtimeService.createEntity (do kind)", () => {
     const prepareDurableObject = vi.fn(async () => ({
       targetId: "target:MyDO:k1",
       effectiveVersion: "ev-do",
-      executionDigest: "a".repeat(64),
+      ...sealedExecution,
       authorityRequests: undefined,
     }));
     const { service, instance } = await buildDeps({ prepareDurableObject });
@@ -551,6 +676,7 @@ describe("runtimeService.createEntity (do kind)", () => {
     const session = (await service.handler({ caller }, "createEntity", [
       {
         kind: "session",
+        execution: { surface: "inert" },
         source: "agent-launcher",
         key: "s-bound",
         contextId: "ctx-bound",
@@ -580,6 +706,7 @@ describe("runtimeService.createEntity (do kind)", () => {
     const session = (await service.handler({ caller: owner }, "createEntity", [
       {
         kind: "session",
+        execution: { surface: "inert" },
         source: "agent-launcher",
         key: "s-owned",
         contextId: "ctx-owned",
@@ -667,7 +794,7 @@ describe("runtimeService.createEntity (do kind)", () => {
     const { service, instance } = await buildDeps({ preparePanel });
     const spec: RuntimeEntityCreateSpec = {
       kind: "panel",
-      source: "panels/example",
+      execution: { surface: "code", source: "panels/example" },
       key: "nav-1",
       contextId: "ctx-x",
     };
@@ -702,7 +829,7 @@ describe("runtimeService.createEntity (do kind)", () => {
       service.handler({ caller: serverCaller }, "createEntity", [
         {
           kind: "panel",
-          source: "panels/example",
+          execution: { surface: "code", source: "panels/example" },
           key: "nav-without-build",
           contextId: "ctx-x",
         },
@@ -720,7 +847,7 @@ describe("runtimeService.createEntity (do kind)", () => {
     const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "panel",
-        source: "browser:https://example.com/",
+        execution: { surface: "external", url: "https://example.com/" },
         key: "nav-browser-panel",
         contextId: "ctx-browser",
       },
@@ -738,26 +865,26 @@ describe("runtimeService.createEntity (do kind)", () => {
       service.handler({ caller: serverCaller }, "createEntity", [
         {
           kind: "panel",
-          source: "browser:javascript:alert(1)",
+          execution: { surface: "external", url: "javascript:alert(1)" },
           key: "nav-bad-browser-panel",
           contextId: "ctx-bad",
         },
       ])
-    ).rejects.toThrow(/Invalid external browser panel source/);
+    ).rejects.toThrow(/Invalid external browser panel URL/);
   });
 
   it("refuses to reserve a browser source, which has no build to pin", async () => {
     const { service } = await buildDeps({});
     await expect(
-      service.handler({ caller: serverCaller }, "reservePanelEntity", [
+      service.handler({ caller: serverCaller }, "reserveEntity", [
         {
           kind: "panel",
-          source: "browser:https://example.com/",
+          execution: { surface: "external", url: "https://example.com/" },
           key: "nav-reserved-browser",
           contextId: "ctx-reserve",
         },
       ])
-    ).rejects.toThrow(/created directly, not reserved/);
+    ).rejects.toThrow(/Invalid literal value/);
   });
 
   it("creates app entities as first-class runtime records", async () => {
@@ -768,7 +895,7 @@ describe("runtimeService.createEntity (do kind)", () => {
     const { service, entityCache } = await buildDeps({ resolveAppExecution });
     const spec: RuntimeEntityCreateSpec = {
       kind: "app",
-      source: "apps/shell",
+      execution: { surface: "code", source: "apps/shell" },
       key: "desktop",
       contextId: "ctx-app",
       stateArgs: { window: "main" },
@@ -806,7 +933,7 @@ describe("runtimeService.createEntity (do kind)", () => {
     const { service } = await buildDeps();
     const spec: RuntimeEntityCreateSpec = {
       kind: "app",
-      source: "apps/shell",
+      execution: { surface: "code", source: "apps/shell" },
       key: "desktop",
       contextId: "ctx-app",
     };
@@ -824,7 +951,7 @@ describe("runtimeService.createEntity (do kind)", () => {
     const { service, instance } = await buildDeps({ resolveAppExecution });
     const spec: RuntimeEntityCreateSpec = {
       kind: "app",
-      source: "apps/shell",
+      execution: { surface: "code", source: "apps/shell" },
       key: "desktop",
       contextId: "ctx-app",
     };
@@ -877,7 +1004,13 @@ describe("runtimeService.createEntity context policy", () => {
     const { service } = await buildDeps();
     const caller = extensionCaller();
     const bound = (await service.handler({ caller }, "createEntity", [
-      { kind: "session", source: "agent-cli", key: "bound", contextId: "ctx-bound" },
+      {
+        kind: "session",
+        execution: { surface: "inert" },
+        source: "agent-cli",
+        key: "bound",
+        contextId: "ctx-bound",
+      },
     ])) as { id: string };
 
     const handle = (await service.handler({ caller }, "createEntity", [
@@ -1068,10 +1201,13 @@ describe("runtimeService.createEntity build refs", () => {
     await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "panel",
-        source: "panels/chat",
+        execution: {
+          surface: "code",
+          source: "panels/chat",
+          ref: "state:panel-commit",
+        },
         key: "chat",
         contextId: "ctx-branch",
-        ref: "state:panel-commit",
       } satisfies RuntimeEntityCreateSpec,
     ]);
 
@@ -1087,7 +1223,7 @@ describe("runtimeService.createEntity build refs", () => {
     await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "worker",
-        source: "workers/agent",
+        execution: { surface: "code", source: "workers/agent" },
         key: "agent",
         contextId: "ctx-branch",
       } satisfies RuntimeEntityCreateSpec,
@@ -1107,10 +1243,13 @@ describe("runtimeService.createEntity build refs", () => {
     await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "worker",
-        source: "workers/agent",
+        execution: {
+          surface: "code",
+          source: "workers/agent",
+          ref: "ctx:ctx-branch",
+        },
         key: "agent",
         contextId: "ctx-branch",
-        ref: "ctx:ctx-branch",
       } satisfies RuntimeEntityCreateSpec,
     ]);
 
@@ -1349,7 +1488,7 @@ describe("runtimeService singleton DO + cross-panel sharing", () => {
 
     const spec: RuntimeEntityCreateSpec = {
       kind: "do",
-      source: "workers/example-store",
+      execution: { surface: "code", source: "workers/example-store" },
       className: "ExampleStoreDO",
       key: "workspace-example",
       contextId: singletonContextId,
@@ -1403,7 +1542,7 @@ describe("runtimeService singleton DO + cross-panel sharing", () => {
     const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "do",
-        source: "workers/example-store",
+        execution: { surface: "code", source: "workers/example-store" },
         className: "ExampleStoreDO",
         key: "workspace-example",
         contextId: singletonContextId,
@@ -1447,7 +1586,7 @@ describe("runtimeService singleton DO + cross-panel sharing", () => {
     const agent = (await service.handler({ caller: panel }, "createEntity", [
       {
         kind: "do",
-        source: "workers/agent",
+        execution: { surface: "code", source: "workers/agent" },
         className: "AgentDO",
         key: "agent-1",
         contextId: "ctx-host",
@@ -1466,6 +1605,7 @@ describe("runtimeService session entities", () => {
     kind: "session",
     source: "agent-cli",
     ...overrides,
+    execution: overrides.execution ?? { surface: "inert" },
   });
 
   it("creates an inert session entity and eagerly materializes its context folder", async () => {
@@ -1539,7 +1679,12 @@ describe("runtimeService session entities", () => {
     ])) as { id: string; contextId: string };
     // Create a worker too, so kind filtering is observable.
     await service.handler({ caller: serverCaller }, "createEntity", [
-      { kind: "worker", source: "workers/w", key: "w1", contextId: "ctx-w" },
+      {
+        kind: "worker",
+        execution: { surface: "code", source: "workers/w" },
+        key: "w1",
+        contextId: "ctx-w",
+      },
     ]);
 
     const resolved = await service.handler({ caller: shellCaller }, "resolveContext", [handle.id]);
@@ -1596,7 +1741,12 @@ describe("runtimeService session entities", () => {
       sessionSpec({ key: "s-shared", contextId: "ctx-shared" }),
     ])) as { id: string };
     await service.handler({ caller: serverCaller }, "createEntity", [
-      { kind: "worker", source: "workers/w", key: "w-shared", contextId: "ctx-shared" },
+      {
+        kind: "worker",
+        execution: { surface: "code", source: "workers/w" },
+        key: "w-shared",
+        contextId: "ctx-shared",
+      },
     ]);
 
     await service.handler({ caller: shellCaller }, "retireEntity", [
@@ -1680,7 +1830,7 @@ describe("runtimeService session entities", () => {
     const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "do",
-        source: "workers/agent-worker",
+        execution: { surface: "code", source: "workers/agent-worker" },
         className: "AiChatWorker",
         key: "self-bound",
         contextId: "ctx-agent",
@@ -1700,6 +1850,7 @@ describe("runtimeService session entities", () => {
     const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "session",
+        execution: { surface: "inert" },
         source: "claude-code",
         key: "external-agent",
         contextId: "ctx-external",
@@ -1721,7 +1872,7 @@ describe("runtimeService session entities", () => {
       service.handler({ caller: serverCaller }, "createEntity", [
         {
           kind: "do",
-          source: "workers/agent-worker",
+          execution: { surface: "code", source: "workers/agent-worker" },
           className: "AiChatWorker",
           key: "ambiguous-binding",
           contextId: "ctx-agent",
@@ -1737,7 +1888,7 @@ describe("runtimeService session entities", () => {
     const parent = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "panel",
-        source: "panels/context-owner",
+        execution: { surface: "code", source: "panels/context-owner" },
         key: "owner",
         contextId: "ctx-parent",
       },
@@ -1762,7 +1913,7 @@ describe("runtimeService session entities", () => {
     const upstream = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "do",
-        source: "workers/orchestrator",
+        execution: { surface: "code", source: "workers/orchestrator" },
         className: "Orchestrator",
         key: "delegating-owner",
         contextId: "ctx-upstream",
@@ -1802,7 +1953,7 @@ describe("runtimeService session entities", () => {
     const upstream = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "do",
-        source: "workers/orchestrator",
+        execution: { surface: "code", source: "workers/orchestrator" },
         className: "Orchestrator",
         key: "repeat-owner",
         contextId: "ctx-repeat-upstream",
@@ -1859,14 +2010,20 @@ async function seedConversation(
   const ch = (await service.handler({ caller: parent }, "createEntity", [
     {
       kind: "do",
-      source: "workers/pubsub-channel",
+      execution: { surface: "code", source: "workers/pubsub-channel" },
       className: "PubSubChannel",
       key: "ch-1",
       contextId,
     },
   ])) as { id: string };
   const agent = (await service.handler({ caller: parent }, "createEntity", [
-    { kind: "do", source: "workers/agent", className: "AgentDO", key: "agent-1", contextId },
+    {
+      kind: "do",
+      execution: { surface: "code", source: "workers/agent" },
+      className: "AgentDO",
+      key: "agent-1",
+      contextId,
+    },
   ])) as { id: string };
   return { ch, agent };
 }
@@ -1879,7 +2036,13 @@ async function seedDO(
   parent = serverCaller
 ) {
   return (await service.handler({ caller: parent }, "createEntity", [
-    { kind: "do", source: "workers/agent", className: "AgentDO", key, contextId },
+    {
+      kind: "do",
+      execution: { surface: "code", source: "workers/agent" },
+      className: "AgentDO",
+      key,
+      contextId,
+    },
   ])) as { id: string };
 }
 
@@ -1939,7 +2102,6 @@ describe("runtimeService.cloneContext", () => {
     const chMap = result.entities.find((e) => e.sourceId === ch.id)!;
     expect(chMap).toMatchObject({
       kind: "do",
-      source: "workers/pubsub-channel",
       className: "PubSubChannel",
       sourceKey: "ch-1",
     });
@@ -2195,7 +2357,7 @@ describe("runtimeService.destroyContext", () => {
     const owned = (await service.handler({ caller }, "createEntity", [
       {
         kind: "do",
-        source: "workers/agent",
+        execution: { surface: "code", source: "workers/agent" },
         className: "AgentDO",
         key: "a",
         contextId: "ctx-owned",
@@ -2216,7 +2378,7 @@ describe("runtimeService.destroyContext", () => {
     const owned = (await service.handler({ caller }, "createEntity", [
       {
         kind: "do",
-        source: "workers/agent",
+        execution: { surface: "code", source: "workers/agent" },
         className: "AgentDO",
         key: "retired-owner-proof",
         contextId: "ctx-retired-owned",
@@ -2240,7 +2402,7 @@ describe("runtimeService.destroyContext", () => {
     const root = (await service.handler({ caller }, "createEntity", [
       {
         kind: "do",
-        source: "workers/agent",
+        execution: { surface: "code", source: "workers/agent" },
         className: "AgentDO",
         key: "headless-root",
         contextId: "ctx-owned-tree",
@@ -2250,7 +2412,7 @@ describe("runtimeService.destroyContext", () => {
     const child = (await service.handler({ caller: childCaller }, "createEntity", [
       {
         kind: "do",
-        source: "vibestudio/internal",
+        execution: { surface: "code", source: "vibestudio/internal" },
         className: "EvalDO",
         key: "agent-eval",
         contextId: "ctx-owned-tree",

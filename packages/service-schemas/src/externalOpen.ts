@@ -51,7 +51,7 @@ export const openExternalResultSchema = z.object({
 export const externalOpenMethods = defineServiceMethods({
   openExternal: {
     description:
-      "Open an http(s) or mailto URL in the host OS browser; approval-gated for code callers, returning the persisted approval decision when one was made.",
+      "Open an http(s) URL in the host browser or an OS-protocol URL in its registered application; approval-gated for code callers, returning the persisted approval decision when one was made.",
     args: z.tuple([z.string(), openExternalOptionsSchema.optional()]),
     returns: openExternalResultSchema,
     authority: {

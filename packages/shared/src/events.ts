@@ -5,7 +5,7 @@
  * Keep them in sync by importing from this single source of truth.
  */
 
-import type { PendingApproval } from "./approvals.js";
+import type { BrowserSitePermissionCapability, PendingApproval } from "./approvals.js";
 import type {
   HostTarget,
   HostTargetLaunchResult,
@@ -56,6 +56,7 @@ export type EventName =
   | "browser-panel:open"
   | "browser-import-progress"
   | "browser-data-changed"
+  | "browser-permissions:changed"
   | "autofill:save-prompt"
   | "autofill:form-fill-save-prompt"
   | "notification:show"
@@ -304,6 +305,16 @@ export interface EventPayloads {
   "host-targets:changed": HostTargetChangedPayload;
   "host-target-launch:session-changed": HostTargetLaunchSessionSnapshot;
   "shell-approval:pending-changed": { pending: PendingApproval[] };
+  "browser-permissions:changed": {
+    environmentKey: string;
+    grants: Array<{
+      origin: string;
+      capability: BrowserSitePermissionCapability;
+      decision: "allow" | "block";
+      scope: "session" | "always" | "block";
+      updatedAt: number;
+    }>;
+  };
   "workspace:revision-bumped": { workspaceId: string; revision: number };
   /**
    * The server asks the attached desktop shell to run an interactive session
@@ -383,6 +394,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "browser-panel:open",
   "browser-import-progress",
   "browser-data-changed",
+  "browser-permissions:changed",
   "autofill:save-prompt",
   "autofill:form-fill-save-prompt",
   "notification:show",

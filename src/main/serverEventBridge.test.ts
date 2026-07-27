@@ -232,7 +232,7 @@ describe("createServerEventBridge", () => {
     });
     await vi.waitFor(() =>
       expect(serverClient.call).toHaveBeenCalledWith("panelTree", "create", [
-        "https://example.com/",
+        { surface: "external", url: "https://example.com/" },
         { parentId: "panel:tree/slot-a", focus: true },
       ])
     );

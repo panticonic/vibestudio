@@ -28,15 +28,16 @@ function createRpcCall() {
   return vi.fn(async (_target: string, method: string, args: unknown[]) => {
     switch (method) {
       case "panelTree.create": {
-        const source = args[0] as string;
+        const execution = args[0] as
+          | { surface: "code"; source: string }
+          | { surface: "external"; url: string };
+        const source = execution.surface === "external" ? execution.url : execution.source;
+        const isBrowser = execution.surface === "external";
         return {
-          id: source.startsWith("http") ? "browser-1" : "panel-1",
+          id: isBrowser ? "browser-1" : "panel-1",
           title: "Created",
-          kind: source.startsWith("http") ? "browser" : "workspace",
-          observation: readyObservation(
-            source.startsWith("http") ? "browser-1" : "panel-1",
-            source
-          ),
+          kind: isBrowser ? "browser" : "workspace",
+          observation: readyObservation(isBrowser ? "browser-1" : "panel-1", source),
         };
       }
       case "panelTree.list": {
@@ -185,16 +186,20 @@ describe("PanelHandle", () => {
     });
 
     expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.create", [
-      "panels/child",
+      { surface: "code", source: "panels/child" },
       { parentId: "panel-self" },
     ]);
     expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.create", [
-      "panels/root",
+      { surface: "code", source: "panels/root" },
       { parentId: null },
     ]);
     expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.create", [
-      "panels/context",
-      { contextId: "ctx-next", ref: "ctx:ctx-next", parentId: "panel-self" },
+      {
+        surface: "code",
+        source: "panels/context",
+        ref: "ctx:ctx-next",
+      },
+      { contextId: "ctx-next", parentId: "panel-self" },
     ]);
   });
 

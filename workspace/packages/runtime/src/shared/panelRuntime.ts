@@ -1,5 +1,6 @@
 import type { RpcClient } from "@vibestudio/rpc";
 import type { PanelLifecycleResult, PanelPlacementHint } from "@vibestudio/shared/types";
+import { isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
 import {
   panelFailure,
   PanelOperationError,
@@ -334,6 +335,14 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
   ): Promise<PanelHandle> => {
     const parentId =
       openOptions?.parentId !== undefined ? openOptions.parentId : defaultOpenParentId();
+    const execution = isOpenPanelBrowserUrl(source)
+      ? ({ surface: "external", url: source } as const)
+      : ({
+          surface: "code",
+          source,
+          ...(openOptions?.ref ? { ref: openOptions.ref } : {}),
+        } as const);
+    const { ref: _ref, ...createOptions } = openOptions ?? {};
     const result = await callPanel<{
       id: string;
       title: string;
@@ -344,7 +353,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       effectiveVersion?: string | null;
       buildKey?: string | null;
       observation: PanelObservation;
-    }>("create", [source, { ...openOptions, parentId }]);
+    }>("create", [execution, { ...createOptions, parentId }]);
     const handle = hydrate({
       panelId: result.id,
       title: result.title,

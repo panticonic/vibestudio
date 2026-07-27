@@ -21,14 +21,14 @@ import {
   type CredentialUseGrantStoreLike,
 } from "./credentialUseGrantStore.js";
 import { browserEnvironmentIdentityFromContext } from "../browserEnvironmentIdentity.js";
-import type { BrowserPermissionGrantStore } from "./browserPermissionsService.js";
+import type { BrowserPermissionGrantProjection } from "./browserPermissionsService.js";
 
 const SERVICE = "permissions";
 
 export function createPermissionsService(deps: {
   capabilityGrants: CapabilityGrantStore;
   credentialUseGrants: CredentialUseGrantStoreLike;
-  browserPermissions: BrowserPermissionGrantStore;
+  browserPermissions: BrowserPermissionGrantProjection;
   workspaceId: string;
   pendingAcquisitionCount?: () => number;
   activeAgentBindingCount?: () => number;
@@ -51,7 +51,7 @@ export function createPermissionsService(deps: {
     methods: permissionsMethods,
     handler: defineServiceHandler(SERVICE, permissionsMethods, {
       list: async (ctx) => {
-        await deps.browserPermissions.ensureLoaded();
+        await deps.browserPermissions.ensureMigrated();
         const identity = browserEnvironmentIdentityFromContext(deps.workspaceId, ctx);
         const reviewingUserId = ctx.caller.subject?.userId;
         const capability: SavedPermissionGrant[] = deps.capabilityGrants
@@ -107,42 +107,71 @@ export function createPermissionsService(deps: {
             revokeEffect:
               "Future account use will ask again; an active request from this agent is stopped.",
           }));
-        const browserSites: SavedPermissionGrant[] = deps.browserPermissions
-          .list(identity.environmentKey, identity.ownerUserId)
-          .map((grant) => ({
-            id: deps.browserPermissions.idFor(identity.environmentKey, identity.ownerUserId, grant),
-            kind: "browser-site",
-            callerLabel: grant.origin,
-            scopeLabel:
-              grant.decision === "block"
-                ? "Blocked for this browser environment"
-                : grant.scope === "session"
-                  ? "Allowed for this session"
-                  : "Always allowed",
-            capability: `Website ${grant.capability}`,
-            resource: grant.origin,
-            grantedAt: grant.updatedAt,
-            why:
-              grant.decision === "block"
-                ? "Keeps this website from asking for the same browser access."
-                : "Lets this website use the selected browser feature.",
-            approvedBy: "You",
-            duration:
-              grant.scope === "session"
-                ? "Until this browser session ends or you revoke it"
+        const siteGrants = new Map<string, ReturnType<BrowserPermissionGrantProjection["list"]>>();
+        for (const grant of deps.browserPermissions.list(
+          identity.environmentKey,
+          identity.ownerUserId
+        )) {
+          const grants = siteGrants.get(grant.origin);
+          if (grants) grants.push(grant);
+          else siteGrants.set(grant.origin, [grant]);
+        }
+        const browserSites: SavedPermissionGrant[] = [...siteGrants.entries()].map(
+          ([origin, grants]) => {
+            const representative = grants[0];
+            if (!representative) throw new Error(`Browser site grant set is empty: ${origin}`);
+            const blocked = grants.filter((grant) => grant.decision === "block");
+            const allowed = grants.filter((grant) => grant.decision === "allow");
+            const labels = [
+              ...(allowed.length > 0
+                ? [
+                    `allows ${allowed
+                      .map((grant) => grant.capability)
+                      .sort()
+                      .join(", ")}`,
+                  ]
+                : []),
+              ...(blocked.length > 0
+                ? [
+                    `blocks ${blocked
+                      .map((grant) => grant.capability)
+                      .sort()
+                      .join(", ")}`,
+                  ]
+                : []),
+            ];
+            const hasSessionGrant = grants.some((grant) => grant.scope === "session");
+            return {
+              id: deps.browserPermissions.idFor(
+                identity.environmentKey,
+                identity.ownerUserId,
+                representative
+              ),
+              kind: "browser-site",
+              callerLabel: origin,
+              scopeLabel: labels.join("; "),
+              capability: "Website capabilities",
+              resource: origin,
+              grantedAt: Math.max(...grants.map((grant) => grant.updatedAt)),
+              why: "Records which browser features this website may use.",
+              approvedBy: "You",
+              duration: hasSessionGrant
+                ? "Session choices end with this browser session; durable choices last until revoked"
                 : "Until you revoke it",
-            revokeEffect:
-              "The website loses saved access and must ask again before using this feature.",
-          }));
+              revokeEffect:
+                "Every saved decision for this website is removed, so each feature must ask again.",
+            };
+          }
+        );
         return [...capability, ...userland, ...credentialUse, ...browserSites].sort(
           (a, b) => (b.grantedAt ?? 0) - (a.grantedAt ?? 0)
         );
       },
       revoke: async (ctx, [{ kind, id }]) => {
         if (kind === "browser-site") {
-          await deps.browserPermissions.ensureLoaded();
+          await deps.browserPermissions.ensureMigrated();
           const identity = browserEnvironmentIdentityFromContext(deps.workspaceId, ctx);
-          const removed = await deps.browserPermissions.revokeById(
+          const removed = deps.browserPermissions.revokeById(
             identity.environmentKey,
             identity.ownerUserId,
             id

@@ -141,6 +141,8 @@ interface FormFillPanelState {
     selector: string;
   };
   pendingFormFill?: PendingFormFillSnapshot;
+  authorizedOrigin?: string;
+  authorization?: { origin: string; promise: Promise<boolean> };
 }
 
 interface PendingCredential {
@@ -171,6 +173,10 @@ export class FormFillManager {
   private formFillStore: FormFillStoreLike;
   private eventService: EventService;
   private getViewManager: () => ViewManager;
+  private requestSiteCapability: (
+    contents: WebContents,
+    capability: "autofill"
+  ) => Promise<boolean>;
   private overlay: AutofillOverlay;
   private activeOverlayWcId: number | null = null;
   private activeOverlayKind: "password" | "value" | null = null;
@@ -184,10 +190,12 @@ export class FormFillManager {
     eventService: EventService;
     getViewManager: () => ViewManager;
     autofillOverlayPreloadPath: string;
+    requestSiteCapability(contents: WebContents, capability: "autofill"): Promise<boolean>;
   }) {
     this.formFillStore = deps.formFillStore;
     this.eventService = deps.eventService;
     this.getViewManager = deps.getViewManager;
+    this.requestSiteCapability = deps.requestSiteCapability;
     this.overlay = new AutofillOverlay(deps.autofillOverlayPreloadPath);
 
     this.overlay.setCallbacks({
@@ -260,7 +268,9 @@ export class FormFillManager {
       const currentOrigin = this.deriveOrigin(webContents);
       if (currentOrigin && currentOrigin !== state.origin) {
         state.origin = currentOrigin;
-        void this.refreshCredentialsForOrigin(currentOrigin);
+        state.credentials = [];
+        state.authorizedOrigin = undefined;
+        state.authorization = undefined;
       }
 
       this.injectContentScript(webContentsId, webContents);
@@ -276,7 +286,9 @@ export class FormFillManager {
       if (newOrigin && newOrigin !== state.origin) {
         // New origin — refresh credentials
         state.origin = newOrigin;
-        void this.refreshCredentialsForOrigin(newOrigin);
+        state.credentials = [];
+        state.authorizedOrigin = undefined;
+        state.authorization = undefined;
         state.signalCounts = { strong: 0, medium: 0, weak: 0 };
         state.hasPendingSnapshot = false;
         state.pendingFormFill = undefined;
@@ -496,7 +508,15 @@ export class FormFillManager {
     const currentOrigin = this.deriveOrigin(wc);
     if (currentOrigin && currentOrigin !== state.origin) {
       state.origin = currentOrigin;
-      await this.refreshCredentialsForOrigin(currentOrigin);
+      state.credentials = [];
+      state.authorizedOrigin = undefined;
+      state.authorization = undefined;
+    }
+    if (
+      (pulled.fields || pulled.focus || pulled.pending || pulled.formPending) &&
+      !(await this.ensureAutofillAuthorized(wcId, wc, state))
+    ) {
+      return;
     }
 
     // Handle field detection — accept new fields or field type changes (SPA transitions)
@@ -1120,6 +1140,33 @@ export class FormFillManager {
         state.credentials = freshCredentials;
       }
     }
+  }
+
+  private async ensureAutofillAuthorized(
+    wcId: number,
+    wc: WebContents,
+    state: FormFillPanelState
+  ): Promise<boolean> {
+    const origin = state.origin;
+    if (!origin || wc.isDestroyed()) return false;
+    if (state.authorizedOrigin === origin) return true;
+    if (state.authorization?.origin === origin) return state.authorization.promise;
+
+    const promise = this.requestSiteCapability(wc, "autofill")
+      .then(async (granted) => {
+        const current = this.panelState.get(wcId);
+        if (!granted || current !== state || wc.isDestroyed() || this.deriveOrigin(wc) !== origin) {
+          return false;
+        }
+        state.authorizedOrigin = origin;
+        await this.refreshCredentialsForOrigin(origin);
+        return true;
+      })
+      .finally(() => {
+        if (state.authorization?.promise === promise) state.authorization = undefined;
+      });
+    state.authorization = { origin, promise };
+    return promise;
   }
 
   private deriveOrigin(wc: WebContents): string | null {

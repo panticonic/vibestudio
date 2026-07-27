@@ -133,11 +133,30 @@ const RuntimeAgentBindingSchema = z
     "Host-verified binding input for runtimes that relay an external agent/session. The host derives context from the bound entity."
   );
 
+export const CodeExecutionSchema = z
+  .object({
+    surface: z.literal("code"),
+    source: z.string().describe("Workspace-relative executable source repo path."),
+    ref: BuildRefSchema.optional(),
+  })
+  .strict();
+
+export const ExternalDocumentExecutionSchema = z
+  .object({
+    surface: z.literal("external"),
+    url: z.string().describe("Requested external document URL."),
+  })
+  .strict();
+
+export const InertExecutionSchema = z.object({ surface: z.literal("inert") }).strict();
+
 export const PanelEntityCreateSpecSchema = z
   .object({
     kind: z.literal("panel"),
-    source: z.string().describe("Workspace-relative panel source repo path."),
-    ref: BuildRefSchema.optional(),
+    execution: z.discriminatedUnion("surface", [
+      CodeExecutionSchema,
+      ExternalDocumentExecutionSchema,
+    ]),
     contextId: z
       .string()
       .nullable()
@@ -151,6 +170,7 @@ export const PanelEntityCreateSpecSchema = z
   .strict();
 
 const PanelReservationSpecSchema = PanelEntityCreateSpecSchema.extend({
+  execution: CodeExecutionSchema,
   contextId: z
     .string()
     .nullable()
@@ -164,8 +184,7 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
   PanelEntityCreateSpecSchema,
   z.object({
     kind: z.literal("app"),
-    source: z.string().describe("Workspace-relative app source repo path."),
-    ref: BuildRefSchema.optional(),
+    execution: CodeExecutionSchema,
     contextId: z
       .string()
       .nullable()
@@ -178,8 +197,7 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("worker"),
-    source: z.string().describe("Workspace-relative worker source repo path."),
-    ref: BuildRefSchema.optional(),
+    execution: CodeExecutionSchema,
     contextId: z
       .string()
       .nullable()
@@ -205,8 +223,7 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("do"),
-    source: z.string().describe("Workspace-relative DO source repo path."),
-    ref: BuildRefSchema.optional(),
+    execution: CodeExecutionSchema,
     className: z.string().describe("Durable Object class name exported by the source."),
     key: z.string().optional().describe("Stable instance key; omit to mint a random UUID."),
     contextId: z
@@ -229,6 +246,7 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("session"),
+    execution: InertExecutionSchema,
     source: z.string().describe("Logical session source label (e.g. an agent CLI name)."),
     contextId: z
       .string()
@@ -246,6 +264,13 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
         "Channel served by this external-agent session. The host records the derived self entity/context/channel binding on the session."
       ),
   }),
+]);
+
+const CodeEntityReservationSpecSchema = z.union([
+  PanelReservationSpecSchema,
+  CreateEntitySpecSchema.options[1],
+  CreateEntitySpecSchema.options[2],
+  CreateEntitySpecSchema.options[3],
 ]);
 
 /** Wire shape of a full logical workspace context branch. */
@@ -367,22 +392,41 @@ export const runtimeMethods = defineServiceMethods({
       ],
     },
     examples: [
-      { args: [{ kind: "do", source: "workers/agent", className: "AgentDO", key: "agent-1" }] },
-      { args: [{ kind: "session", source: "agent-cli", key: "s1", title: "My agent session" }] },
+      {
+        args: [
+          {
+            kind: "do",
+            execution: { surface: "code", source: "workers/agent" },
+            className: "AgentDO",
+            key: "agent-1",
+          },
+        ],
+      },
+      {
+        args: [
+          {
+            kind: "session",
+            execution: { surface: "inert" },
+            source: "agent-cli",
+            key: "s1",
+            title: "My agent session",
+          },
+        ],
+      },
     ],
   },
-  reservePanelEntity: {
+  reserveEntity: {
     description:
-      "Reserve a panel's stable durable identity and context without waiting for its immutable runtime image. Omitted contextId atomically creates a fresh lifecycle-owned panel context; an explicit contextId shares that existing context. Reserved entities are non-executable until activatePanelEntity completes.",
-    args: z.tuple([PanelReservationSpecSchema]),
+      "Reserve a code-backed entity's stable durable identity and context without waiting for its immutable runtime image. Omitted contextId deterministically creates a fresh lifecycle-owned context; an explicit contextId shares that existing context. Reserved entities are non-executable until activateReservedEntity completes.",
+    args: z.tuple([CodeEntityReservationSpecSchema]),
     returns: RuntimeEntityHandleSchema,
     authority: { principals: ["host"] },
     access: { sensitivity: "write" },
   },
-  activatePanelEntity: {
+  activateReservedEntity: {
     description:
-      "Prepare and atomically activate the immutable runtime image for a previously reserved panel entity.",
-    args: z.tuple([PanelEntityCreateSpecSchema]),
+      "Prepare and atomically activate the immutable runtime image for a previously reserved code-backed entity.",
+    args: z.tuple([CodeEntityReservationSpecSchema]),
     returns: RuntimeEntityHandleSchema,
     authority: { principals: ["host"] },
     access: { sensitivity: "write" },

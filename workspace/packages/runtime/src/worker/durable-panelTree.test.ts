@@ -328,7 +328,7 @@ describe("DurableObjectBase panelTree handles", () => {
         type: "call",
         targetId: "main",
         method: "panelTree.create",
-        args: ["panels/new", { parentId: null }],
+        args: [{ surface: "code", source: "panels/new" }, { parentId: null }],
       },
     ]);
   });
@@ -395,7 +395,10 @@ describe("DurableObjectBase panelTree handles", () => {
         type: "call",
         targetId: "main",
         method: "panelTree.create",
-        args: ["panels/new", { focus: true, parentId: null }],
+        args: [
+          { surface: "code", source: "panels/new" },
+          { focus: true, parentId: null },
+        ],
       },
       {
         type: "call",

@@ -21,7 +21,11 @@ import {
   generateContextId,
   resolveSource,
 } from "@vibestudio/shared/panelFactory";
-import { isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
+import {
+  browserUrlFromPanelSource,
+  isOpenPanelBrowserUrl,
+  panelSourceFromBrowserUrl,
+} from "@vibestudio/shared/panelChrome";
 import {
   createSnapshot,
   getCurrentSnapshot,
@@ -34,8 +38,8 @@ import {
 import { between as rankBetween, first as firstRank } from "@vibestudio/shared/lexorank";
 import {
   canonicalEntityId,
+  type RuntimeCodePanelEntityCreateSpec,
   type RuntimeEntityHandle,
-  type RuntimePanelEntityCreateSpec,
 } from "@vibestudio/shared/runtime/entitySpec";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
@@ -51,15 +55,17 @@ import { aboutPanelSource, isAboutSource } from "@vibestudio/workspace-contracts
 const log = createDevLogger("PanelManager");
 
 function browserNavigationSource(source: string): string | null {
-  const url = source.startsWith("browser:") ? source.slice("browser:".length) : source;
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return null;
+  const url = browserUrlFromPanelSource(source) ?? source;
+  if (!isOpenPanelBrowserUrl(url)) return null;
+  return panelSourceFromBrowserUrl(new URL(url).toString());
+}
+
+function panelExecutionForSource(source: string, ref?: string) {
+  const browserUrl = browserUrlFromPanelSource(source);
+  if (browserUrl !== null) {
+    return { surface: "external" as const, url: browserUrl };
   }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
-  return `browser:${parsed.toString()}`;
+  return { surface: "code" as const, source, ...(ref ? { ref } : {}) };
 }
 
 // =============================================================================
@@ -73,6 +79,14 @@ export interface PanelManagerServerInfo {
     aliases?: readonly string[];
     workspace?: string;
   };
+}
+
+export interface PanelIncarnationChurnSnapshot {
+  committed: number;
+  retired: number;
+  retirementFailures: number;
+  outstanding: number;
+  byCause: Readonly<Record<"create" | "navigate" | "history" | "replace", number>>;
 }
 
 export interface CreatePanelOptions {
@@ -238,6 +252,12 @@ export class PanelManager {
     Map<string, PanelSnapshot["options"]>
   >();
   private appliedForestRevision: number | null = null;
+  private readonly incarnationChurn = {
+    committed: 0,
+    retired: 0,
+    retirementFailures: 0,
+    byCause: { create: 0, navigate: 0, history: 0, replace: 0 },
+  };
 
   constructor(deps: PanelManagerDeps) {
     this.registry = deps.registry;
@@ -253,6 +273,33 @@ export class PanelManager {
     this.allowMissingManifests = deps.allowMissingManifests ?? false;
     this.grantConnectionImpl = deps.grantConnection;
     this.transferRuntimeLeaseImpl = deps.transferRuntimeLease;
+  }
+
+  getIncarnationChurnSnapshot(): PanelIncarnationChurnSnapshot {
+    return {
+      ...this.incarnationChurn,
+      outstanding: this.incarnationChurn.committed - this.incarnationChurn.retired,
+      byCause: { ...this.incarnationChurn.byCause },
+    };
+  }
+
+  private recordIncarnationCommit(cause: keyof PanelIncarnationChurnSnapshot["byCause"]): void {
+    this.incarnationChurn.committed += 1;
+    this.incarnationChurn.byCause[cause] += 1;
+    if (this.incarnationChurn.committed % 25 === 0) this.logIncarnationChurn();
+  }
+
+  private recordIncarnationRetirement(failed: boolean): void {
+    if (failed) {
+      this.incarnationChurn.retirementFailures += 1;
+      this.logIncarnationChurn();
+      return;
+    }
+    this.incarnationChurn.retired += 1;
+  }
+
+  private logIncarnationChurn(): void {
+    log.info(`Panel incarnation churn ${JSON.stringify(this.getIncarnationChurnSnapshot())}`);
   }
 
   // ===========================================================================
@@ -308,7 +355,38 @@ export class PanelManager {
   // Create
   // ===========================================================================
 
+  async createExecution(
+    execution:
+      | { surface: "code"; source: string; ref?: string }
+      | { surface: "external"; url: string },
+    opts?: CreatePanelOptions
+  ): Promise<CreatePanelResult & { url?: string }> {
+    if (execution.surface === "external") {
+      return this.createExternalPanel(opts?.parentId ?? null, execution.url, {
+        title: opts?.title,
+        slug: opts?.slug,
+        name: opts?.name,
+        addAsRoot: opts?.addAsRoot,
+        ownerUserId: opts?.ownerUserId,
+      });
+    }
+    return this.createCodePanel(execution.source, {
+      ...opts,
+      ...(execution.ref ? { ref: execution.ref } : {}),
+    });
+  }
+
   async create(source: string, opts?: CreatePanelOptions): Promise<CreatePanelResult> {
+    return this.createExecution(
+      { surface: "code", source, ...(opts?.ref ? { ref: opts.ref } : {}) },
+      opts
+    );
+  }
+
+  private async createCodePanel(
+    source: string,
+    opts?: CreatePanelOptions
+  ): Promise<CreatePanelResult> {
     const { relativePath, absolutePath } = resolveSource(source, this.workspacePath);
     const allowMissing = Boolean(opts?.contextId) || this.allowMissingManifests;
     const manifest = this.resolveManifest(absolutePath, relativePath, allowMissing);
@@ -338,15 +416,14 @@ export class PanelManager {
     const stateArgsPayload = validatedStateArgs ?? {};
     const positionId = this.rankForAppend(opts?.parentId ?? null);
 
-    const entitySpec: RuntimePanelEntityCreateSpec = {
+    const entitySpec: RuntimeCodePanelEntityCreateSpec = {
       kind: "panel",
-      source: relativePath,
+      execution: { surface: "code", source: relativePath, ...(opts?.ref ? { ref: opts.ref } : {}) },
       key: historyEntryKey,
       ...(opts?.contextId ? { contextId: opts.contextId } : {}),
       stateArgs: stateArgsPayload,
-      ref: opts?.ref,
     };
-    const handle = await this.runtime.reservePanelEntity(entitySpec);
+    const handle = await this.runtime.reserveEntity(entitySpec);
     const entityId = asPanelEntityId(handle.id);
     const contextId = handle.contextId;
 
@@ -386,6 +463,7 @@ export class PanelManager {
       await this.runtime.retireEntity(handle.id).catch(() => {});
       throw error;
     }
+    this.recordIncarnationCommit("create");
 
     this.recordOptionsForEntry(slotId, historyEntryKey, snapshot.options);
     this.currentEntityBySlot.set(slotId, entityId);
@@ -440,24 +518,27 @@ export class PanelManager {
     const snapshot = getCurrentSnapshot(panel);
     return this.activateReservedPanel(slotId, asPanelEntityId(panel.runtimeEntityId), {
       kind: "panel",
-      source: snapshot.source,
+      execution: {
+        surface: "code",
+        source: snapshot.source,
+        ...(snapshot.options.ref ? { ref: snapshot.options.ref } : {}),
+      },
       key: slot.current_entry_key,
       contextId: snapshot.contextId,
       stateArgs: getPanelStateArgs(panel) ?? {},
-      ref: snapshot.options.ref,
     });
   }
 
   private activateReservedPanel(
     slotId: PanelSlotId,
     entityId: PanelEntityId,
-    spec: RuntimePanelEntityCreateSpec
+    spec: RuntimeCodePanelEntityCreateSpec
   ): Promise<RuntimeEntityHandle> {
     const existing = this.panelPreparationBySlot.get(slotId);
     if (existing) return existing;
     let preparation!: Promise<RuntimeEntityHandle>;
     preparation = this.runtime
-      .activatePanelEntity(spec)
+      .activateReservedEntity(spec)
       .then((activeHandle) => {
         this.currentEntitySourceBySlot.set(slotId, activeHandle.source);
         const livePanel = this.registry.getPanel(slotId);
@@ -486,6 +567,31 @@ export class PanelManager {
   }
 
   async createBrowser(
+    parentId: PanelSlotId | null,
+    url: string,
+    opts?: {
+      title?: string;
+      slug?: string;
+      name?: string;
+      addAsRoot?: boolean;
+      ownerUserId?: string;
+    }
+  ): Promise<CreatePanelResult & { url: string }> {
+    return this.createExecution(
+      { surface: "external", url },
+      {
+        parentId: parentId ?? undefined,
+        isRoot: parentId == null,
+        title: opts?.title,
+        slug: opts?.slug,
+        name: opts?.name,
+        addAsRoot: opts?.addAsRoot,
+        ownerUserId: opts?.ownerUserId,
+      }
+    ) as Promise<CreatePanelResult & { url: string }>;
+  }
+
+  private async createExternalPanel(
     parentId: PanelSlotId | null,
     url: string,
     opts?: {
@@ -534,7 +640,7 @@ export class PanelManager {
 
     const handle = await this.runtime.createEntity({
       kind: "panel",
-      source: browserSource,
+      execution: { surface: "external", url },
       key: historyEntryKey,
       contextId,
     });
@@ -806,11 +912,10 @@ export class PanelManager {
     const stateArgsPayload = (nextSnapshot.stateArgs ?? {}) as Record<string, unknown>;
     const handle = await this.runtime.createEntity({
       kind: "panel",
-      source: nextSnapshot.source,
+      execution: panelExecutionForSource(nextSnapshot.source, nextSnapshot.options.ref),
       key: historyEntryKey,
       contextId: nextSnapshot.contextId,
       stateArgs: stateArgsPayload,
-      ref: nextSnapshot.options.ref,
     });
     const entityId = asPanelEntityId(handle.id);
 
@@ -829,6 +934,7 @@ export class PanelManager {
         },
       },
     });
+    this.recordIncarnationCommit("navigate");
 
     this.recordOptionsForEntry(slotId, historyEntryKey, nextSnapshot.options);
     this.currentEntityBySlot.set(slotId, entityId);
@@ -850,13 +956,17 @@ export class PanelManager {
 
     if (transition.previousEntityId !== entityId) {
       this.transferRuntimeLease(slotId, transition.previousEntityId, entityId);
-      await this.runtime.retireEntity(transition.previousEntityId).catch((error: unknown) => {
-        log.warn(
-          `Failed to retire panel entity ${transition.previousEntityId} on navigate: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      });
+      await this.runtime.retireEntity(transition.previousEntityId).then(
+        () => this.recordIncarnationRetirement(false),
+        (error: unknown) => {
+          this.recordIncarnationRetirement(true);
+          log.warn(
+            `Failed to retire panel entity ${transition.previousEntityId} on navigate: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+      );
     }
 
     return {
@@ -914,11 +1024,10 @@ export class PanelManager {
     const stateArgsPayload = (targetSnapshot.stateArgs ?? {}) as Record<string, unknown>;
     const handle = await this.runtime.createEntity({
       kind: "panel",
-      source: targetSnapshot.source,
+      execution: panelExecutionForSource(targetSnapshot.source, targetSnapshot.options.ref),
       key: targetEntryKey,
       contextId: targetSnapshot.contextId,
       stateArgs: stateArgsPayload,
-      ref: targetSnapshot.options.ref,
     });
     const entityId = asPanelEntityId(handle.id);
     if (entityId !== targetEntityId) {
@@ -931,6 +1040,7 @@ export class PanelManager {
       expectedCurrentEntityId: currentEntityId,
       mutation: { kind: "select", entryKey: targetEntryKey },
     });
+    this.recordIncarnationCommit("history");
     this.currentEntityBySlot.set(slotId, entityId);
     this.currentEntitySourceBySlot.set(slotId, handle.source);
 
@@ -949,13 +1059,17 @@ export class PanelManager {
     }
     if (transition.previousEntityId !== entityId) {
       this.transferRuntimeLease(slotId, transition.previousEntityId, entityId);
-      await this.runtime.retireEntity(transition.previousEntityId).catch((error: unknown) => {
-        log.warn(
-          `Failed to retire panel entity ${transition.previousEntityId} on history navigate: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      });
+      await this.runtime.retireEntity(transition.previousEntityId).then(
+        () => this.recordIncarnationRetirement(false),
+        (error: unknown) => {
+          this.recordIncarnationRetirement(true);
+          log.warn(
+            `Failed to retire panel entity ${transition.previousEntityId} on history navigate: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+      );
     }
     return this.registry.getPanel(slotId) ?? null;
   }
@@ -1473,11 +1587,10 @@ export class PanelManager {
     const stateArgsPayload = (nextSnapshot.stateArgs ?? {}) as Record<string, unknown>;
     const handle = await this.runtime.createEntity({
       kind: "panel",
-      source: nextSnapshot.source,
+      execution: panelExecutionForSource(nextSnapshot.source, nextSnapshot.options.ref),
       key: newEntryKey,
       contextId: nextSnapshot.contextId,
       stateArgs: stateArgsPayload,
-      ref: nextSnapshot.options.ref,
     });
     const entityId = asPanelEntityId(handle.id);
     let transition: SlotCommitPreparedNavigationResult;
@@ -1497,6 +1610,7 @@ export class PanelManager {
           },
         },
       });
+      this.recordIncarnationCommit("replace");
     } catch (commitError) {
       try {
         await this.runtime.retireEntity(entityId);
@@ -1533,13 +1647,17 @@ export class PanelManager {
     }
     if (transition.previousEntityId !== entityId) {
       this.transferRuntimeLease(slotId, transition.previousEntityId, entityId);
-      await this.runtime.retireEntity(transition.previousEntityId).catch((error: unknown) => {
-        log.warn(
-          `Failed to retire panel entity ${transition.previousEntityId} on replace-current: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      });
+      await this.runtime.retireEntity(transition.previousEntityId).then(
+        () => this.recordIncarnationRetirement(false),
+        (error: unknown) => {
+          this.recordIncarnationRetirement(true);
+          log.warn(
+            `Failed to retire panel entity ${transition.previousEntityId} on replace-current: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+      );
     }
   }
 

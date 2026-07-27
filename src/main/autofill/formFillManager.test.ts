@@ -165,6 +165,7 @@ function createManager(
     eventService: eventService as unknown as EventService,
     getViewManager: () => viewManager as unknown as ViewManager,
     autofillOverlayPreloadPath: "/fake/preload.js",
+    requestSiteCapability: vi.fn(async () => true),
   });
 
   return { manager, passwordStore, eventService, viewManager };

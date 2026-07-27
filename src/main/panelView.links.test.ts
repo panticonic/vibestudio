@@ -84,6 +84,7 @@ function createHarness(
     updatePanelTitle: vi.fn(async () => undefined),
   };
   const sendPanelEvent = vi.fn();
+  const openExternal = vi.fn(async () => undefined);
   const panelView = new PanelView({
     viewManager,
     panelRegistry,
@@ -99,10 +100,12 @@ function createHarness(
     },
     panelOrchestrator,
     sendPanelEvent,
+    openExternal,
+    requestSiteCapability: vi.fn(async () => true),
     appPreloadPath: "/app-preload.js",
   } as never);
 
-  return { panelId, panelView, panelOrchestrator, sendPanelEvent, ...wc };
+  return { panelId, panelView, panelOrchestrator, sendPanelEvent, openExternal, ...wc };
 }
 
 describe("PanelView plain panel links", () => {
@@ -327,6 +330,35 @@ describe("PanelView plain panel links", () => {
       );
     });
     expect(panelOrchestrator.createPanel).not.toHaveBeenCalled();
+  });
+
+  it("hands OS protocol links to the confirmed external-open path", async () => {
+    const { panelId, panelView, windowOpen, openExternal, panelOrchestrator } = createHarness();
+    await panelView.createViewForPanel(panelId, "http://127.0.0.1:1234/about/new/", "ctx-current");
+
+    expect(windowOpen({ url: "mailto:hello@example.com" })).toEqual({ action: "deny" });
+
+    await vi.waitFor(() => {
+      expect(openExternal).toHaveBeenCalledWith("mailto:hello@example.com");
+    });
+    expect(panelOrchestrator.createBrowserUrlPanel).not.toHaveBeenCalled();
+  });
+
+  it("refuses file and JavaScript links without navigating or opening externally", async () => {
+    const { panelId, panelView, windowOpen, openExternal, panelOrchestrator, sendPanelEvent } =
+      createHarness();
+    await panelView.createViewForPanel(panelId, "http://127.0.0.1:1234/about/new/", "ctx-current");
+
+    expect(windowOpen({ url: "file:///etc/passwd" })).toEqual({ action: "deny" });
+    expect(windowOpen({ url: "javascript:alert(1)" })).toEqual({ action: "deny" });
+
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(panelOrchestrator.createBrowserUrlPanel).not.toHaveBeenCalled();
+    expect(sendPanelEvent).toHaveBeenCalledWith(
+      panelId,
+      "runtime:child-creation-error",
+      expect.objectContaining({ url: "file:///etc/passwd" })
+    );
   });
 
   it("opens managed links from app views as app-scoped root panels", async () => {

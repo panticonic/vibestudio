@@ -6,6 +6,10 @@ export const BrowserPermissionCapabilitySchema = z.enum([
   "microphone",
   "geolocation",
   "notifications",
+  "downloads",
+  "clipboard",
+  "autofill",
+  "popups",
 ]);
 export const BrowserPermissionDecisionSchema = z.enum([
   "once",
@@ -25,19 +29,20 @@ export const BrowserPermissionGrantSchema = z.object({
 export const browserPermissionsMethods = defineServiceMethods({
   snapshot: {
     description: "Read the current origin-scoped website permission projection.",
-    args: z.tuple([]),
+    args: z.tuple([z.object({ sessionEpoch: z.string().min(16).max(200) }).strict()]),
     returns: z.object({
       environmentKey: z.string(),
       grants: z.array(BrowserPermissionGrantSchema),
     }),
     access: { sensitivity: "read" },
-    authority: { principals: ["host"] },
+    authority: { principals: ["user"] },
   },
   request: {
     description: "Request owner approval for origin-scoped website capabilities.",
     args: z.tuple([
       z.object({
         panelId: z.string().min(1),
+        sessionEpoch: z.string().min(16).max(200),
         origin: z.string(),
         topLevelUrl: z.string(),
         capabilities: z.array(BrowserPermissionCapabilitySchema).min(1),
@@ -50,18 +55,19 @@ export const browserPermissionsMethods = defineServiceMethods({
       grants: z.array(BrowserPermissionGrantSchema),
     }),
     access: { sensitivity: "write" },
-    authority: { principals: ["host"] },
+    authority: { principals: ["user"] },
   },
   revoke: {
     description: "Revoke remembered website permission grants for an origin.",
     args: z.tuple([
       z.object({
         origin: z.string(),
+        sessionEpoch: z.string().min(16).max(200),
         capability: BrowserPermissionCapabilitySchema.optional(),
       }),
     ]),
     returns: z.number().int().nonnegative(),
     access: { sensitivity: "destructive" },
-    authority: { principals: ["host"] },
+    authority: { principals: ["user"] },
   },
 });

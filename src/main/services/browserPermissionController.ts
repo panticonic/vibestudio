@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   systemPreferences,
   type MediaAccessPermissionRequest,
@@ -7,12 +8,22 @@ import {
   type WebContents,
 } from "electron";
 import { browserPermissionsMethods } from "@vibestudio/service-schemas/browserPermissions";
+import type { BrowserSitePermissionCapability } from "@vibestudio/shared/approvals";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ServerClient } from "../serverClient.js";
 import type { ViewManager } from "../viewManager.js";
 
-export type BrowserPermissionCapability = "camera" | "microphone" | "geolocation" | "notifications";
+export type BrowserPermissionCapability = BrowserSitePermissionCapability;
+export type BrowserSecurityOrigin =
+  | {
+      kind: "tuple";
+      scheme: "http" | "https";
+      host: string;
+      port: string;
+      serialized: string;
+    }
+  | { kind: "opaque"; nonce: string };
 
 type PermissionGrant = {
   origin: string;
@@ -22,7 +33,13 @@ type PermissionGrant = {
   updatedAt: number;
 };
 
-const SENSITIVE_PERMISSIONS = new Set(["geolocation", "notifications", "media"]);
+const SENSITIVE_PERMISSIONS = new Set([
+  "geolocation",
+  "notifications",
+  "media",
+  "clipboard-read",
+  "clipboard-sanitized-write",
+]);
 
 /**
  * Connects one canonical browser environment to Electron's permission hooks.
@@ -33,8 +50,11 @@ const SENSITIVE_PERMISSIONS = new Set(["geolocation", "notifications", "media"])
 export class BrowserPermissionController {
   private readonly grants = new Map<string, PermissionGrant>();
   private readonly client;
+  private readonly sessionEpoch = randomUUID();
+  private readonly automationTaint = new Set<number>();
+  private environmentKey: string | null = null;
   private stopped = false;
-  private refreshTimer: ReturnType<typeof setInterval> | null = null;
+  private releaseGrantEvents: (() => void) | null = null;
 
   constructor(
     private readonly deps: {
@@ -42,6 +62,7 @@ export class BrowserPermissionController {
       serverClient: ServerClient;
       eventService: EventService;
       getViewManager(): ViewManager | null;
+      isTargetUnderAutomation(targetId: string): boolean;
     }
   ) {
     this.client = createTypedServiceClient(
@@ -52,27 +73,42 @@ export class BrowserPermissionController {
   }
 
   async start(): Promise<void> {
-    await this.refresh();
     this.stopped = false;
-    this.refreshTimer = setInterval(() => void this.refresh().catch(() => {}), 5_000);
+    this.releaseGrantEvents = this.deps.serverClient.onDirectEvent(
+      "browser-permissions:changed",
+      ({ environmentKey, grants }) => {
+        if (environmentKey === this.environmentKey) this.replaceProjection(grants);
+      }
+    );
+    try {
+      await this.refresh();
+    } catch (error) {
+      this.releaseGrantEvents();
+      this.releaseGrantEvents = null;
+      throw error;
+    }
   }
 
   stop(): void {
     this.stopped = true;
-    if (this.refreshTimer) clearInterval(this.refreshTimer);
-    this.refreshTimer = null;
+    this.releaseGrantEvents?.();
+    this.releaseGrantEvents = null;
     this.grants.clear();
+    this.automationTaint.clear();
+    this.environmentKey = null;
   }
 
   async refresh(): Promise<void> {
-    const snapshot = await this.client.snapshot();
+    const snapshot = await this.client.snapshot({ sessionEpoch: this.sessionEpoch });
+    this.environmentKey = snapshot.environmentKey;
     this.replaceProjection(snapshot.grants);
   }
 
   isGranted(origin: string, capability: BrowserPermissionCapability): boolean {
-    const normalized = webOrigin(origin);
+    const normalized = browserSecurityOrigin(origin, "notification");
     return Boolean(
-      normalized && this.grants.get(grantKey(normalized, capability))?.decision === "allow"
+      normalized.kind === "tuple" &&
+      this.grants.get(grantKey(normalized.serialized, capability))?.decision === "allow"
     );
   }
 
@@ -90,16 +126,31 @@ export class BrowserPermissionController {
     if (!SENSITIVE_PERMISSIONS.has(permission)) return false;
     if (!contents) return false;
 
-    const topLevelOrigin = webOrigin(contents.getURL());
-    const origin = webOrigin(details.securityOrigin ?? details.requestingUrl ?? requestingOrigin);
-    if (!origin || origin !== topLevelOrigin) return false;
+    const topLevelOrigin = browserSecurityOrigin(
+      contents.getURL(),
+      `contents:${contents.id}:top-level`
+    );
+    const origin = browserSecurityOrigin(
+      details.securityOrigin ?? details.requestingUrl ?? requestingOrigin,
+      `contents:${contents.id}:request`
+    );
+    if (
+      origin.kind !== "tuple" ||
+      topLevelOrigin.kind !== "tuple" ||
+      origin.serialized !== topLevelOrigin.serialized
+    ) {
+      return false;
+    }
 
     const capabilities = capabilitiesForCheck(permission, details);
     if (!this.mayRequest(contents, capabilities)) return false;
+    const panelId = this.deps.getViewManager()?.findViewIdByWebContentsId(contents.id);
+    if (!panelId || this.isAutomationTainted(contents, panelId)) return false;
     return (
       capabilities.length > 0 &&
       capabilities.every(
-        (capability) => this.grants.get(grantKey(origin, capability))?.decision === "allow"
+        (capability) =>
+          this.grants.get(grantKey(origin.serialized, capability))?.decision === "allow"
       )
     );
   };
@@ -126,16 +177,21 @@ export class BrowserPermissionController {
     }
     const panelId = this.deps.getViewManager()?.findViewIdByWebContentsId(contents.id);
     const topLevelUrl = contents.getURL();
-    const topLevelOrigin = webOrigin(topLevelUrl);
+    const topLevelOrigin = browserSecurityOrigin(topLevelUrl, `contents:${contents.id}:top-level`);
     const mediaDetails = details as MediaAccessPermissionRequest;
-    const origin = webOrigin(mediaDetails.securityOrigin ?? details.requestingUrl);
+    const origin = browserSecurityOrigin(
+      mediaDetails.securityOrigin ?? details.requestingUrl,
+      `contents:${contents.id}:request`
+    );
     const capabilities = capabilitiesForRequest(permission, details);
     if (
       !panelId ||
-      !origin ||
-      origin !== topLevelOrigin ||
+      origin.kind !== "tuple" ||
+      topLevelOrigin.kind !== "tuple" ||
+      origin.serialized !== topLevelOrigin.serialized ||
       capabilities.length === 0 ||
-      !this.mayRequest(contents, capabilities)
+      !this.mayRequest(contents, capabilities) ||
+      this.isAutomationTainted(contents, panelId)
     ) {
       this.notifyDenied(
         panelId ?? null,
@@ -156,10 +212,53 @@ export class BrowserPermissionController {
       return;
     }
 
+    void this.requestOriginCapabilities(
+      contents,
+      panelId,
+      topLevelUrl,
+      origin.serialized,
+      capabilities
+    ).then(finish);
+  };
+
+  /**
+   * Authorize a browser feature whose enforcement hook is not one of
+   * Electron's permission callbacks (downloads, autofill, and popups).
+   */
+  async requestSiteCapability(
+    contents: WebContents,
+    capability: Extract<BrowserPermissionCapability, "downloads" | "autofill" | "popups">
+  ): Promise<boolean> {
+    if (this.stopped || contents.isDestroyed()) return false;
+    const panelId = this.deps.getViewManager()?.findViewIdByWebContentsId(contents.id);
+    const topLevelUrl = contents.getURL();
+    const origin = browserSecurityOrigin(topLevelUrl, `contents:${contents.id}:top-level`);
+    if (
+      !panelId ||
+      origin.kind !== "tuple" ||
+      !this.isBrowserPanel(contents) ||
+      this.isAutomationTainted(contents, panelId)
+    ) {
+      this.notifyDenied(panelId ?? null, [capability]);
+      return false;
+    }
+    return this.requestOriginCapabilities(contents, panelId, topLevelUrl, origin.serialized, [
+      capability,
+    ]);
+  }
+
+  private async requestOriginCapabilities(
+    contents: WebContents,
+    panelId: string,
+    topLevelUrl: string,
+    origin: string,
+    capabilities: BrowserPermissionCapability[]
+  ): Promise<boolean> {
     const abort = new AbortController();
+    let cancelled = false;
     const cancel = () => {
+      cancelled = true;
       abort.abort();
-      finish(false);
     };
     const onNavigation = (
       _event: Electron.Event,
@@ -172,8 +271,8 @@ export class BrowserPermissionController {
     contents.on("did-start-navigation", onNavigation);
     contents.once("destroyed", cancel);
 
-    void this.deps.serverClient
-      .call(
+    try {
+      const raw = await this.deps.serverClient.call(
         "browserPermissions",
         "request",
         [
@@ -181,46 +280,46 @@ export class BrowserPermissionController {
             panelId,
             origin,
             topLevelUrl,
+            sessionEpoch: this.sessionEpoch,
             capabilities,
             deviceLabel: capabilities.map(capabilityLabel).join(" and "),
           },
         ],
         { signal: abort.signal }
-      )
-      .then((raw) => browserPermissionsMethods.request.returns.parse(raw))
-      .then((result) => {
-        if (
-          abort.signal.aborted ||
-          this.stopped ||
-          contents.isDestroyed() ||
-          webOrigin(contents.getURL()) !== origin
-        ) {
-          finish(false);
-          return;
-        }
-        this.replaceProjection(result.grants);
-        if (!result.granted) {
-          this.notifyDenied(panelId, capabilities);
-        }
-        finish(result.granted);
-      })
-      .catch((error: unknown) => {
-        if (!abort.signal.aborted) {
-          this.notifyDenied(
-            panelId,
-            capabilities,
-            error instanceof Error ? error.message : String(error)
-          );
-        }
-        finish(false);
-      })
-      .finally(() => {
-        if (!contents.isDestroyed()) {
-          contents.off("did-start-navigation", onNavigation);
-          contents.off("destroyed", cancel);
-        }
-      });
-  };
+      );
+      const result = browserPermissionsMethods.request.returns.parse(raw);
+      const currentOrigin = browserSecurityOrigin(
+        contents.getURL(),
+        `contents:${contents.id}:top-level`
+      );
+      if (
+        cancelled ||
+        this.stopped ||
+        contents.isDestroyed() ||
+        currentOrigin.kind !== "tuple" ||
+        currentOrigin.serialized !== origin
+      ) {
+        return false;
+      }
+      this.replaceProjection(result.grants);
+      if (!result.granted) this.notifyDenied(panelId, capabilities);
+      return result.granted;
+    } catch (error) {
+      if (!cancelled) {
+        this.notifyDenied(
+          panelId,
+          capabilities,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+      return false;
+    } finally {
+      if (!contents.isDestroyed()) {
+        contents.off("did-start-navigation", onNavigation);
+        contents.off("destroyed", cancel);
+      }
+    }
+  }
 
   private replaceProjection(grants: PermissionGrant[]): void {
     this.grants.clear();
@@ -242,6 +341,11 @@ export class BrowserPermissionController {
     const panelId = manager?.findViewIdByWebContentsId(contents.id);
     const info = panelId ? manager?.getViewInfo(panelId) : null;
     return viewMayRequestPeripheral(info, capabilities);
+  }
+
+  private isAutomationTainted(contents: WebContents, panelId: string): boolean {
+    if (this.deps.isTargetUnderAutomation(panelId)) this.automationTaint.add(contents.id);
+    return this.automationTaint.has(contents.id);
   }
 
   private notifyDenied(
@@ -283,6 +387,9 @@ export function capabilitiesForRequest(
   details: PermissionRequest
 ): BrowserPermissionCapability[] {
   if (permission === "geolocation" || permission === "notifications") return [permission];
+  if (permission === "clipboard-read" || permission === "clipboard-sanitized-write") {
+    return ["clipboard"];
+  }
   const mediaTypes = (details as MediaAccessPermissionRequest).mediaTypes;
   if (permission !== "media" || !mediaTypes?.length) return [];
   return [
@@ -297,6 +404,9 @@ export function capabilitiesForCheck(
   details: PermissionCheckHandlerHandlerDetails
 ): BrowserPermissionCapability[] {
   if (permission === "geolocation" || permission === "notifications") return [permission];
+  if (permission === "clipboard-read" || permission === "clipboard-sanitized-write") {
+    return ["clipboard"];
+  }
   if (permission !== "media") return [];
   if (details.mediaType === "video") return ["camera"];
   if (details.mediaType === "audio") return ["microphone"];
@@ -307,13 +417,27 @@ function grantKey(origin: string, capability: BrowserPermissionCapability): stri
   return `${origin}\0${capability}`;
 }
 
-function webOrigin(value: string | undefined): string | null {
-  if (!value) return null;
+export function browserSecurityOrigin(
+  value: string | undefined,
+  opaqueNonce: string
+): BrowserSecurityOrigin {
+  if (!value) return { kind: "opaque", nonce: opaqueNonce };
   try {
     const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:" ? url.origin : null;
+    if (url.origin === "null") return { kind: "opaque", nonce: opaqueNonce };
+    const origin = new URL(url.origin);
+    if (origin.protocol !== "http:" && origin.protocol !== "https:") {
+      return { kind: "opaque", nonce: opaqueNonce };
+    }
+    return {
+      kind: "tuple",
+      scheme: origin.protocol.slice(0, -1) as "http" | "https",
+      host: origin.hostname,
+      port: origin.port || (origin.protocol === "https:" ? "443" : "80"),
+      serialized: origin.origin,
+    };
   } catch {
-    return null;
+    return { kind: "opaque", nonce: opaqueNonce };
   }
 }
 
@@ -327,6 +451,14 @@ function capabilityLabel(capability: BrowserPermissionCapability): string {
       return "Location";
     case "notifications":
       return "Notifications";
+    case "downloads":
+      return "Downloads";
+    case "clipboard":
+      return "Clipboard";
+    case "autofill":
+      return "Autofill";
+    case "popups":
+      return "Popups";
   }
 }
 

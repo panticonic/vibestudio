@@ -1332,13 +1332,13 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "direct:src/server/internalDOs/workspaceDO.ts:entityReservePanel",
+    id: "direct:src/server/internalDOs/workspaceDO.ts:entityReserve",
     rpcPlane: "workspace-do",
     capability: "workspace.runtime-state.manage",
     authorityPrincipals: ["host"],
     owner: "src/server/internalDOs/workspaceDO.ts",
     source: "product/bootstrap",
-    method: "entityReservePanel",
+    method: "entityReserve",
     sensitivity: "write",
     resourceDerivation: {
       kind: "direct-target",
@@ -5724,7 +5724,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     id: "host:browserPermissions.request",
     rpcPlane: "host-service",
     capability: "service:browserPermissions.request",
-    authorityPrincipals: ["host"],
+    authorityPrincipals: ["user"],
     owner: "browserPermissions",
     method: "request",
     sensitivity: "write",
@@ -5737,7 +5737,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     id: "host:browserPermissions.revoke",
     rpcPlane: "host-service",
     capability: "service:browserPermissions.revoke",
-    authorityPrincipals: ["host"],
+    authorityPrincipals: ["user"],
     owner: "browserPermissions",
     method: "revoke",
     sensitivity: "destructive",
@@ -5750,7 +5750,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     id: "host:browserPermissions.snapshot",
     rpcPlane: "host-service",
     capability: "service:browserPermissions.snapshot",
-    authorityPrincipals: ["host"],
+    authorityPrincipals: ["user"],
     owner: "browserPermissions",
     method: "snapshot",
     sensitivity: "read",
@@ -9493,16 +9493,16 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:runtime.activatePanelEntity",
+    id: "host:runtime.activateReservedEntity",
     rpcPlane: "host-service",
-    capability: "service:runtime.activatePanelEntity",
+    capability: "service:runtime.activateReservedEntity",
     authorityPrincipals: ["host"],
     owner: "runtime",
-    method: "activatePanelEntity",
+    method: "activateReservedEntity",
     sensitivity: "write",
     resourceDerivation: {
       kind: "literal",
-      key: "service:runtime.activatePanelEntity",
+      key: "service:runtime.activateReservedEntity",
     },
   },
   {
@@ -9675,16 +9675,16 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:runtime.reservePanelEntity",
+    id: "host:runtime.reserveEntity",
     rpcPlane: "host-service",
-    capability: "service:runtime.reservePanelEntity",
+    capability: "service:runtime.reserveEntity",
     authorityPrincipals: ["host"],
     owner: "runtime",
-    method: "reservePanelEntity",
+    method: "reserveEntity",
     sensitivity: "write",
     resourceDerivation: {
       kind: "literal",
-      key: "service:runtime.reservePanelEntity",
+      key: "service:runtime.reserveEntity",
     },
   },
   {
@@ -12526,7 +12526,7 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "runtime",
-    method: "activatePanelEntity",
+    method: "activateReservedEntity",
   },
   {
     service: "runtime",
@@ -12562,7 +12562,7 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "runtime",
-    method: "reservePanelEntity",
+    method: "reserveEntity",
   },
   {
     service: "runtime",

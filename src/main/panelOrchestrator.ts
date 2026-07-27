@@ -35,6 +35,7 @@ import type {
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import type { PanelRestorePolicy } from "@vibestudio/workspace-contracts/types";
 import { buildPanelUrl } from "@vibestudio/shared/panelFactory";
+import { browserUrlFromPanelSource, isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
 import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { PanelPinStoreApi } from "./panelPinStore.js";
 import { getPanelSource, getPanelContextId, getPanelRef } from "@vibestudio/shared/panel/accessors";
@@ -193,14 +194,15 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
    * updates inside attachCreatedPanel have a registry target.
    */
   private async createViaPanelTree(
-    source: string,
+    execution:
+      | { surface: "code"; source: string; ref?: string }
+      | { surface: "external"; url: string },
     createOpts: {
       parentId?: string | null;
       title?: string;
       slug?: string;
       name?: string;
       contextId?: string;
-      ref?: string;
       stateArgs?: Record<string, unknown>;
       placement?: PanelPlacementHint;
       focus?: boolean;
@@ -208,7 +210,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     attachOpts: { focus?: boolean },
     callPanelTree: PanelTreeCall
   ): Promise<{ id: string; title: string }> {
-    const result = (await callPanelTree("create", [source, createOpts])) as {
+    const result = (await callPanelTree("create", [execution, createOpts])) as {
       id: string;
       title: string;
       contextId?: string;
@@ -268,14 +270,17 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     // otherwise this is a new root panel.
     const caller = this.registry.getPanel(callerId);
     return this.createViaPanelTree(
-      source,
+      {
+        surface: "code",
+        source,
+        ...(options?.ref ? { ref: options.ref } : {}),
+      },
       {
         parentId: options?.isRoot ? null : caller ? asPanelSlotId(callerId) : null,
         title: options?.title,
         slug: options?.slug,
         name: options?.name,
         contextId: options?.contextId,
-        ref: options?.ref,
         stateArgs,
         ...(options?.placement ? { placement: options.placement } : {}),
         focus: options?.focus !== false,
@@ -341,9 +346,8 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     },
     caller?: ScopedServerCaller
   ): Promise<{ id: string; title: string }> {
-    // Defensive: reject non-string or non-http(s) URLs early
-    if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
-      throw new Error(`Invalid browser panel URL (must be http/https string): ${String(url)}`);
+    if (typeof url !== "string" || !isOpenPanelBrowserUrl(url)) {
+      throw new Error(`Invalid browser panel URL: ${String(url)}`);
     }
     const callerPanel = this.registry.getPanel(callerId);
     const parentId =
@@ -351,7 +355,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         ? asPanelSlotId(callerId)
         : this.registry.findParentId(callerId);
     return this.createViaPanelTree(
-      url,
+      { surface: "external", url },
       {
         parentId,
         title: options?.title,
@@ -1212,8 +1216,9 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     if (!panel) return null;
 
     const source = getPanelSource(panel);
-    if (source.startsWith("browser:")) {
-      return source.slice("browser:".length);
+    const browserUrl = browserUrlFromPanelSource(source);
+    if (browserUrl !== null) {
+      return browserUrl;
     }
 
     return buildPanelUrl({

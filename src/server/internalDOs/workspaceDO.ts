@@ -19,7 +19,7 @@ import {
   type EntityActivationInput,
   type EntityKind,
   type EntityRecord,
-  type PanelReservationInput,
+  type EntityReservationInput,
 } from "../../../packages/shared/src/runtime/entitySpec.js";
 import {
   parseUnitAuthorityManifest,
@@ -831,9 +831,8 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /**
-   * Reserve a panel incarnation before its immutable execution image is ready.
-   * The row is durable and can be referenced by a slot immediately, but the
-   * `preparing` status keeps it out of every active-principal query.
+   * Reserve a code-backed incarnation before its immutable execution image is
+   * ready. The `preparing` status keeps it out of active-principal queries.
    */
   @rpc({
     principals: ["host"],
@@ -841,24 +840,25 @@ export class WorkspaceDO extends DurableObjectBase {
     tier: "gated",
     sensitivity: "write",
   })
-  entityReservePanel(input: PanelReservationInput): EntityRecord {
-    if (input.kind !== "panel") {
-      throw new Error("entityReservePanel only accepts panel entities");
+  entityReserve(input: EntityReservationInput): EntityRecord {
+    if (!["panel", "app", "worker", "do"].includes(input.kind)) {
+      throw new Error("entityReserve only accepts code-backed entity kinds");
     }
     if (input.activeBuildKey || input.activeExecutionDigest || input.activeAuthority) {
-      throw new Error("A panel reservation cannot carry an execution identity");
+      throw new Error("An entity reservation cannot carry an execution identity");
     }
     return this.ctx.storage.transactionSync(() => {
       const id = canonicalEntityId({
         kind: input.kind,
         source: input.source.repoPath,
+        className: input.className,
         key: input.key,
       });
       const existing = this.readEntityRow(id);
       if (existing) {
         this.assertIdentityMatches(id, existing, input);
         if (existing.status === "retired") {
-          throw new Error(`Cannot reserve retired panel entity ${id}`);
+          throw new Error(`Cannot reserve retired entity ${id}`);
         }
         if (input.lifecycleOwner) {
           this.upsertContextEdge({
@@ -878,12 +878,18 @@ export class WorkspaceDO extends DurableObjectBase {
           active_execution_digest, active_authority, context_id, class_name, key,
           state_args, agent_entity_id, agent_channel_id, parent_id, owner_user_id,
           created_at, status, retired_at, cleanup_complete, error
-        ) VALUES (?, 'panel', ?, '', NULL, NULL, NULL, ?, NULL, ?, ?, NULL, NULL, ?, ?, ?, 'preparing', NULL, 1, NULL)`,
+        ) VALUES (?, ?, ?, '', NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', NULL, 1, NULL)`,
         id,
+        input.kind,
         input.source.repoPath,
         input.contextId,
+        input.className ?? null,
         input.key,
         input.stateArgs === undefined ? null : JSON.stringify(input.stateArgs),
+        input.agentBinding === undefined || input.agentBinding.entityId === id
+          ? null
+          : input.agentBinding.entityId,
+        input.agentBinding?.channelId ?? null,
         input.parentId ?? null,
         input.ownerUserId ?? null,
         now
@@ -897,7 +903,7 @@ export class WorkspaceDO extends DurableObjectBase {
         });
       }
       const row = this.readEntityRow(id);
-      if (!row) throw new Error(`entityReservePanel: failed to read row after insert: ${id}`);
+      if (!row) throw new Error(`entityReserve: failed to read row after insert: ${id}`);
       return this.rowToEntity(row);
     });
   }

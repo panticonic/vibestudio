@@ -152,8 +152,23 @@ describe("externalOpenService", () => {
     const service = createExternalOpenService({ eventService: new EventService() });
     const prepare = service.authorityPreparation?.["externalOpen.openExternal.target"];
     expect(() => prepare?.({ caller: panelCaller() }, ["file:///etc/passwd"])).toThrow(
-      "openExternal only supports http(s) and mailto URLs"
+      "openExternal refuses panel, file, data, and JavaScript URLs"
     );
+  });
+
+  it("scopes OS-protocol approvals to the exact scheme", () => {
+    const service = createExternalOpenService({ eventService: new EventService() });
+    const prepare = service.authorityPreparation?.["externalOpen.openExternal.target"];
+
+    expect(prepare?.({ caller: panelCaller() }, ["tel:+4912345"])).toEqual([
+      expect.objectContaining({
+        capability: "external.open",
+        resourceKey: "tel:",
+        challenge: expect.objectContaining({
+          resource: expect.objectContaining({ value: "tel:" }),
+        }),
+      }),
+    ]);
   });
 
   it("validates OAuth redirect binding during preparation", async () => {

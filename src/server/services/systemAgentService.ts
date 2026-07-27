@@ -68,19 +68,17 @@ export function createSystemAgentService(deps: SystemAgentServiceDeps): ServiceD
       await deps.runtime.createContext({ caller }, { contextId });
       const channel = await deps.runtime.createEntity(caller, {
         kind: "do",
-        source: CHANNEL_SOURCE,
+        execution: { surface: "code", source: CHANNEL_SOURCE, ref: productSnapshotState },
         className: CHANNEL_CLASS,
         key: channelId,
         contextId,
-        ref: productSnapshotState,
       });
       const agent = await deps.runtime.createEntity(caller, {
         kind: "do",
-        source: AGENT_SOURCE,
+        execution: { surface: "code", source: AGENT_SOURCE, ref: productSnapshotState },
         className: AGENT_CLASS,
         key: agentKey,
         contextId,
-        ref: productSnapshotState,
         agentChannelId: channelId,
       });
       if (

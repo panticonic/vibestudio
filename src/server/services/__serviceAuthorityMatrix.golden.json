@@ -389,14 +389,14 @@
   "browserPermissions": {
     "service": {
       "principals": [
-        "host"
+        "user"
       ]
     },
     "methods": {
       "request": {
         "authority": {
           "principals": [
-            "host"
+            "user"
           ]
         },
         "access": {
@@ -406,7 +406,7 @@
       "revoke": {
         "authority": {
           "principals": [
-            "host"
+            "user"
           ]
         },
         "access": {
@@ -416,7 +416,7 @@
       "snapshot": {
         "authority": {
           "principals": [
-            "host"
+            "user"
           ]
         },
         "access": {
@@ -6088,7 +6088,7 @@
       ]
     },
     "methods": {
-      "activatePanelEntity": {
+      "activateReservedEntity": {
         "authority": {
           "principals": [
             "host"
@@ -6805,7 +6805,7 @@
           "sensitivity": "write"
         }
       },
-      "reservePanelEntity": {
+      "reserveEntity": {
         "authority": {
           "principals": [
             "host"

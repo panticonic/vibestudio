@@ -194,10 +194,7 @@ export async function activate(ctx: ExtensionContextLike) {
   >();
   const targetByEnvironment = new Map<string, string>();
   const unregisterServerHosts = new Map<string, () => void>();
-  const desktopHosts = new Map<
-    string,
-    { hostId: string; unregister: () => void }
-  >();
+  const desktopHosts = new Map<string, { hostId: string; unregister: () => void }>();
   const hostLabels = new Map<string, string>();
   const sourceBrowsers = new Map<string, string>();
   const provider = new LocalBrowserImportProvider();
@@ -210,10 +207,9 @@ export async function activate(ctx: ExtensionContextLike) {
     const userId = invocation?.caller.userId?.trim();
     const workspaceId = invocation?.caller.workspaceId?.trim();
     if (!userId || !workspaceId || userId === "system") {
-      throw Object.assign(
-        new Error("Browser data requires a verified user and workspace"),
-        { code: "ENOCALLER" }
-      );
+      throw Object.assign(new Error("Browser data requires a verified user and workspace"), {
+        code: "ENOCALLER",
+      });
     }
     const cacheKey = `${workspaceId}\x00${userId}`;
     let pending = resolvedStores.get(cacheKey);
@@ -221,8 +217,7 @@ export async function activate(ctx: ExtensionContextLike) {
       pending = ctx.workers
         .resolveDurableObject(DO_SOURCE, DO_CLASS, DO_RESOLUTION_SENTINEL)
         .then((target) => {
-          const environmentKey =
-            target.objectKey ?? target.targetId.split(":").at(-1) ?? "";
+          const environmentKey = target.objectKey ?? target.targetId.split(":").at(-1) ?? "";
           if (!environmentKey || environmentKey === DO_RESOLUTION_SENTINEL) {
             throw new Error("Server did not derive a browser environment key");
           }
@@ -338,9 +333,8 @@ export async function activate(ctx: ExtensionContextLike) {
       const current = desktopHosts.get(identity.environmentKey);
       if (current?.hostId === summary.hostId) return summary;
       current?.unregister();
-      const remoteProvider = new RemoteBrowserImportProvider(
-        (method, ...args) =>
-          ctx.rpc.call("main", `browserEnvironment.${method}`, ...args)
+      const remoteProvider = new RemoteBrowserImportProvider((method, ...args) =>
+        ctx.rpc.call("main", `browserEnvironment.${method}`, ...args)
       );
       const unregister = coordinator.registerHost({
         ...summary,
@@ -369,10 +363,9 @@ export async function activate(ctx: ExtensionContextLike) {
     const caller = ctx.invocation.current()?.caller;
     if (caller && TRUSTED_CALLER_KINDS.has(caller.callerKind)) return;
     if (!caller || caller.callerKind === "http") {
-      throw Object.assign(
-        new Error(`browser-data.${method} requires an interactive caller`),
-        { code: "ENOCALLER" }
-      );
+      throw Object.assign(new Error(`browser-data.${method} requires an interactive caller`), {
+        code: "ENOCALLER",
+      });
     }
     const label = METHOD_LABELS[method] ?? humanizeMethod(method);
     const dangerous = DANGEROUS_METHODS.has(method);
@@ -380,9 +373,7 @@ export async function activate(ctx: ExtensionContextLike) {
       subject: { id: `browser-data:${method}`, label },
       title: `${label}?`,
       summary: `${caller.callerTitle ?? caller.callerKind} wants to ${label.toLowerCase()}.`,
-      ...(dangerous
-        ? { warning: "This action reads or changes personal browser data." }
-        : {}),
+      ...(dangerous ? { warning: "This action reads or changes personal browser data." } : {}),
       details: [{ label: "Requested by", value: caller.callerTitle ?? caller.callerKind }],
       severity: dangerous ? "dangerous" : "standard",
       defaultAction: "deny",
@@ -401,10 +392,7 @@ export async function activate(ctx: ExtensionContextLike) {
   };
 
   const guarded =
-    <Args extends unknown[], Result>(
-      method: string,
-      fn: (...args: Args) => Promise<Result>
-    ) =>
+    <Args extends unknown[], Result>(method: string, fn: (...args: Args) => Promise<Result>) =>
     async (...args: Args): Promise<Result> => {
       if (GATED_METHODS.has(method)) await requireApproval(method);
       return fn(...args);
@@ -414,11 +402,7 @@ export async function activate(ctx: ExtensionContextLike) {
     const { identity } = await currentIdentity();
     return callStoreForIdentity<T>(identity, method, ...args);
   };
-  const mutate = async <T>(
-    dataType: string,
-    method: string,
-    ...args: unknown[]
-  ): Promise<T> => {
+  const mutate = async <T>(dataType: string, method: string, ...args: unknown[]): Promise<T> => {
     const result = await callStore<T>(method, ...args);
     ctx.emit("data-changed", { dataType });
     return result;
@@ -489,19 +473,16 @@ export async function activate(ctx: ExtensionContextLike) {
       const live = coordinator.listJobs(identity);
       return live.length > 0 ? live : callStore("listImportJobs");
     }),
-    listOpenTabs: guarded(
-      "listOpenTabs",
-      async (request: { hostId: string; sourceId: string }) => {
-        const { identity } = await currentIdentity();
-        await ensureImportHosts(identity);
-        return coordinator.listOpenTabs(
-          identity,
-          request.hostId,
-          request.sourceId,
-          ctx.invocation.signal?.() ?? undefined
-        );
-      }
-    ),
+    listOpenTabs: guarded("listOpenTabs", async (request: { hostId: string; sourceId: string }) => {
+      const { identity } = await currentIdentity();
+      await ensureImportHosts(identity);
+      return coordinator.listOpenTabs(
+        identity,
+        request.hostId,
+        request.sourceId,
+        ctx.invocation.signal?.() ?? undefined
+      );
+    }),
     openTabsAsPanels: guarded(
       "openTabsAsPanels",
       async (request: {
@@ -568,25 +549,18 @@ export async function activate(ctx: ExtensionContextLike) {
     deleteHistoryRange: guarded("deleteHistoryRange", async (start: number, end: number) =>
       mutate("history", "deleteHistoryRange", start, end)
     ),
-    clearAllHistory: guarded("clearAllHistory", async () =>
-      mutate("history", "clearAllHistory")
-    ),
+    clearAllHistory: guarded("clearAllHistory", async () => mutate("history", "clearAllHistory")),
     searchHistory: guarded("searchHistory", async (query: string, limit?: number) =>
       callStore("searchHistory", query, limit)
     ),
-    searchHistoryForAutocomplete: guarded(
-      "searchHistoryForAutocomplete",
-      async (query: unknown) => callStore("searchHistoryForAutocomplete", query)
+    searchHistoryForAutocomplete: guarded("searchHistoryForAutocomplete", async (query: unknown) =>
+      callStore("searchHistoryForAutocomplete", query)
     ),
-    recordHistoryVisit: guarded(
-      "recordHistoryVisit",
-      async (request: RecordHistoryVisitRequest) =>
-        mutate("history", "recordHistoryVisit", validateHistoryVisit(request))
+    recordHistoryVisit: guarded("recordHistoryVisit", async (request: RecordHistoryVisitRequest) =>
+      mutate("history", "recordHistoryVisit", validateHistoryVisit(request))
     ),
-    updateHistoryTitle: guarded(
-      "updateHistoryTitle",
-      async (request: UpdateHistoryTitleRequest) =>
-        mutate("history", "updateHistoryTitle", validateHistoryTitle(request))
+    updateHistoryTitle: guarded("updateHistoryTitle", async (request: UpdateHistoryTitleRequest) =>
+      mutate("history", "updateHistoryTitle", validateHistoryTitle(request))
     ),
 
     getPasswords: guarded("getPasswords", async () => callStore("getPasswords")),
@@ -618,17 +592,14 @@ export async function activate(ctx: ExtensionContextLike) {
       mutate("passwords", "removeNeverSave", origin)
     ),
 
-    getFormFillSuggestions: guarded(
-      "getFormFillSuggestions",
-      async (query: unknown) => callStore("getFormFillSuggestions", query)
+    getFormFillSuggestions: guarded("getFormFillSuggestions", async (query: unknown) =>
+      callStore("getFormFillSuggestions", query)
     ),
     addFormFillValue: guarded("addFormFillValue", async (value: FormFillValueInput) =>
       mutate("formFill", "addFormFillValue", value)
     ),
-    updateFormFillValue: guarded(
-      "updateFormFillValue",
-      async (id: number, partial: unknown) =>
-        mutate("formFill", "updateFormFillValue", id, partial)
+    updateFormFillValue: guarded("updateFormFillValue", async (id: number, partial: unknown) =>
+      mutate("formFill", "updateFormFillValue", id, partial)
     ),
     markFormFillValueUsed: guarded("markFormFillValueUsed", async (id: number) =>
       mutate("formFill", "markFormFillValueUsed", id)
@@ -657,9 +628,7 @@ export async function activate(ctx: ExtensionContextLike) {
     clearCookiesForOrigin: guarded("clearCookiesForOrigin", async (origin: string) =>
       mutate("cookies", "clearCookiesForOrigin", origin)
     ),
-    clearAllCookies: guarded("clearAllCookies", async () =>
-      mutate("cookies", "clearAllCookies")
-    ),
+    clearAllCookies: guarded("clearAllCookies", async () => mutate("cookies", "clearAllCookies")),
     endBrowserSession: guarded("endBrowserSession", async () =>
       mutate("cookies", "endBrowserSession")
     ),
@@ -725,31 +694,20 @@ export async function activate(ctx: ExtensionContextLike) {
       callStore("getPageFavicon", pageUrl)
     ),
 
-    exportBookmarks: guarded(
-      "exportBookmarks",
-      async (format: "html" | "json" | "chrome-json") =>
-        exportBookmarks(
-          format,
-          await callStore<Array<Record<string, unknown>>>("getAllBookmarks")
-        )
+    exportBookmarks: guarded("exportBookmarks", async (format: "html" | "json" | "chrome-json") =>
+      exportBookmarks(format, await callStore<Array<Record<string, unknown>>>("getAllBookmarks"))
     ),
     exportPasswords: guarded(
       "exportPasswords",
       async (format: "csv-chrome" | "csv-firefox" | "json") =>
-        exportPasswords(
-          format,
-          await callStore<Array<Record<string, unknown>>>("getPasswords")
-        )
+        exportPasswords(format, await callStore<Array<Record<string, unknown>>>("getPasswords"))
     ),
-    exportCookies: guarded(
-      "exportCookies",
-      async (format: "json" | "netscape-txt") => {
-        const snapshot = await callStore<{
-          cookies: Array<Record<string, unknown>>;
-        }>("getCookieSnapshot", {});
-        return exportCookies(format, snapshot.cookies);
-      }
-    ),
+    exportCookies: guarded("exportCookies", async (format: "json" | "netscape-txt") => {
+      const snapshot = await callStore<{
+        cookies: Array<Record<string, unknown>>;
+      }>("getCookieSnapshot", {});
+      return exportCookies(format, snapshot.cookies);
+    }),
   };
 
   return { providerContracts: { browserData } };
@@ -819,7 +777,7 @@ async function openTabsAsPanels(
       const created = await ctx.rpc.call<{ id: string; title: string }>(
         "main",
         "panelTree.create",
-        "about/collection",
+        { surface: "code", source: "about/collection" },
         {
           ...(callerId ? { parentId: callerId } : {}),
           title,
@@ -845,13 +803,18 @@ async function openTabsAsPanels(
     const parentId = await collectionFor(tab);
     const name = (tab.title?.trim() || hostnameFromUrl(tab.url) || "Imported Tab").slice(0, 80);
     const create = (under: string | undefined) =>
-      ctx.rpc.call<{ id: string; title: string }>("main", "panelTree.create", tab.url, {
-        ...(under ? { parentId: under } : {}),
-        // A label, not an id: page titles repeat constantly ("New Tab"), and
-        // as an id segment they collided.
-        title: name,
-        focus: false,
-      });
+      ctx.rpc.call<{ id: string; title: string }>(
+        "main",
+        "panelTree.create",
+        { surface: "external", url: tab.url },
+        {
+          ...(under ? { parentId: under } : {}),
+          // A label, not an id: page titles repeat constantly ("New Tab"), and
+          // as an id segment they collided.
+          title: name,
+          focus: false,
+        }
+      );
     try {
       let created: { id: string; title: string };
       let landedIn = parentId;
@@ -877,7 +840,10 @@ async function openTabsAsPanels(
     }
   }
   for (const reason of collectionErrors) {
-    skipped.push({ url: "(collection)", reason: `Tabs opened outside their collection: ${reason}` });
+    skipped.push({
+      url: "(collection)",
+      reason: `Tabs opened outside their collection: ${reason}`,
+    });
   }
   // Creating the parent must precede creating its first child, so a failed
   // first child can leave a zero-member collection. Roll those containers back
@@ -908,9 +874,7 @@ function parentPanelIdFromInvocation(
   invocation: ReturnType<InvocationLike["current"]>
 ): string | undefined {
   const caller = invocation?.chainCaller ?? invocation?.caller;
-  return caller &&
-    ["panel", "app", "worker", "do"].includes(caller.callerKind) &&
-    caller.callerId
+  return caller && ["panel", "app", "worker", "do"].includes(caller.callerKind) && caller.callerId
     ? caller.callerId
     : undefined;
 }
@@ -952,7 +916,9 @@ function exportBookmarks(
     title: String(row["title"] ?? ""),
     url: String(row["url"] ?? ""),
     dateAdded: Number(row["date_added"] ?? Date.now()),
-    folder: String(row["folder_path"] ?? "/").split("/").filter(Boolean),
+    folder: String(row["folder_path"] ?? "/")
+      .split("/")
+      .filter(Boolean),
     tags: row["tags"] ? String(row["tags"]).split(",").filter(Boolean) : undefined,
     keyword: row["keyword"] ? String(row["keyword"]) : undefined,
   }));
@@ -987,8 +953,7 @@ function exportCookies(
     domain: String(row["domain"] ?? ""),
     hostOnly: Boolean(row["hostOnly"]),
     path: String(row["path"] ?? "/"),
-    expirationDate:
-      row["expirationDate"] == null ? undefined : Number(row["expirationDate"]),
+    expirationDate: row["expirationDate"] == null ? undefined : Number(row["expirationDate"]),
     secure: Boolean(row["secure"]),
     httpOnly: Boolean(row["httpOnly"]),
     sameSite: String(row["sameSite"] ?? "unspecified") as ImportedCookie["sameSite"],
@@ -1018,9 +983,7 @@ function reportImportHealth(ctx: ExtensionContextLike, job: ImportJobSnapshot): 
 
 function normalizedPlatform(): "darwin" | "linux" | "win32" {
   const platform = (globalThis as { process?: { platform?: string } }).process?.platform;
-  return platform === "darwin" || platform === "win32"
-    ? platform
-    : "linux";
+  return platform === "darwin" || platform === "win32" ? platform : "linux";
 }
 
 function hostnameFromUrl(raw: string): string | null {

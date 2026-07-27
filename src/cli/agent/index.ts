@@ -118,6 +118,7 @@ async function ensureAgentSessionWithCredentials(
   const runtime = typedClient("runtime", runtimeMethods, client);
   const handle = (await runtime.createEntity({
     kind: "session",
+    execution: { surface: "inert" },
     source: "agent-cli",
     key: name,
     title: name,

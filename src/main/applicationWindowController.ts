@@ -1,4 +1,4 @@
-import { app, BaseWindow, nativeTheme } from "electron";
+import { app, BaseWindow, dialog, nativeTheme, shell } from "electron";
 import * as path from "node:path";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
@@ -8,6 +8,7 @@ import { PanelView } from "./panelView.js";
 import type { PanelOrchestrator } from "./panelOrchestrator.js";
 import type { FormFillManager } from "./autofill/formFillManager.js";
 import type { BrowserFaviconObserver } from "./services/browserFaviconObserver.js";
+import type { BrowserPermissionController } from "./services/browserPermissionController.js";
 import type { ApprovalAttention } from "./approvalAttention.js";
 import type { SessionConnection } from "./serverSession.js";
 import { BrowserHistoryRecorder } from "./browserHistoryRecorder.js";
@@ -28,6 +29,7 @@ interface CdpRegistrationAdapter {
   registerTarget(panelId: string, contentsId: number): void;
   unregisterTarget(panelId: string): void;
   cleanupPanelAccess(panelId: string): void;
+  isTargetUnderAutomation(targetId: string): boolean;
 }
 
 export interface WorkspaceWindowServices {
@@ -37,6 +39,7 @@ export interface WorkspaceWindowServices {
   cdpHost: CdpRegistrationAdapter;
   formFillManager: FormFillManager | null;
   browserFaviconObserver: BrowserFaviconObserver | null;
+  getBrowserPermissionController(): BrowserPermissionController | null;
 }
 
 export interface ApplicationWindowControllerDeps {
@@ -251,6 +254,22 @@ export class ApplicationWindowController {
           ttl: 10_000,
         });
       },
+      openExternal: async (url) => {
+        const result = await dialog.showMessageBox(window, {
+          type: "question",
+          title: "Open external application?",
+          message: "This link opens outside Vibestudio.",
+          detail: url,
+          buttons: ["Open", "Cancel"],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true,
+        });
+        if (result.response === 0) await shell.openExternal(url);
+      },
+      requestSiteCapability: (contents, capability) =>
+        services.getBrowserPermissionController()?.requestSiteCapability(contents, capability) ??
+        Promise.resolve(false),
       onPanelResponsivenessChanged: (panelId, responsive) => {
         this.deps.eventService.emit("panel-responsiveness-changed", { panelId, responsive });
       },

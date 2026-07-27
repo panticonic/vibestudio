@@ -26,17 +26,17 @@ describe("shared shell service adapters", () => {
     const client = createRuntimeClient(call);
     const spec = {
       kind: "panel" as const,
-      source: "panels/a",
+      execution: { surface: "code" as const, source: "panels/a" },
       contextId: "ctx:a",
       key: "entry:a",
     };
 
-    await client.reservePanelEntity(spec);
-    await client.activatePanelEntity(spec);
+    await client.reserveEntity(spec);
+    await client.activateReservedEntity(spec);
 
     expect(call.mock.calls).toEqual([
-      ["runtime", "reservePanelEntity", [spec]],
-      ["runtime", "activatePanelEntity", [spec]],
+      ["runtime", "reserveEntity", [spec]],
+      ["runtime", "activateReservedEntity", [spec]],
     ]);
   });
 });

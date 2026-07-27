@@ -274,9 +274,12 @@ export const panel = {
     }
   ) => panelTreeClient.updatePanelState(panelId, state),
   createAboutPanel: (page: string) =>
-    panelTreeClient.create(`about/${page}`, {
-      focus: true,
-    }),
+    panelTreeClient.create(
+      { surface: "code", source: `about/${page}` },
+      {
+        focus: true,
+      }
+    ),
   /** Create a panel from any source path (not prefixed with "about/"). */
   navigate: (
     panelId: string,
@@ -301,17 +304,19 @@ export const panel = {
       focus?: boolean;
     }
   ) =>
-    panelTreeClient.create(source, {
-      title: options?.title,
-      slug: options?.slug,
-      name: options?.name,
-      ref: options?.ref,
-      contextId: options?.contextId,
-      parentId: options?.isRoot === false ? undefined : null,
-      focus: options?.focus ?? true,
-      stateArgs: options?.stateArgs,
-      placement: options?.placement,
-    }),
+    panelTreeClient.create(
+      { surface: "code", source, ...(options?.ref ? { ref: options.ref } : {}) },
+      {
+        title: options?.title,
+        slug: options?.slug,
+        name: options?.name,
+        contextId: options?.contextId,
+        parentId: options?.isRoot === false ? undefined : null,
+        focus: options?.focus ?? true,
+        stateArgs: options?.stateArgs,
+        placement: options?.placement,
+      }
+    ),
   createChild: (
     parentId: string,
     source: string,
@@ -326,17 +331,19 @@ export const panel = {
       placement?: PanelPlacementHint;
     }
   ) =>
-    panelTreeClient.create(source, {
-      parentId,
-      title: options?.title,
-      slug: options?.slug,
-      name: options?.name,
-      focus: options?.focus,
-      ref: options?.ref,
-      contextId: options?.contextId,
-      stateArgs: options?.stateArgs,
-      placement: options?.placement,
-    }),
+    panelTreeClient.create(
+      { surface: "code", source, ...(options?.ref ? { ref: options.ref } : {}) },
+      {
+        parentId,
+        title: options?.title,
+        slug: options?.slug,
+        name: options?.name,
+        focus: options?.focus,
+        contextId: options?.contextId,
+        stateArgs: options?.stateArgs,
+        placement: options?.placement,
+      }
+    ),
   createBrowser: (
     url: string,
     options?: {
@@ -346,13 +353,16 @@ export const panel = {
       focus?: boolean;
     }
   ) =>
-    panelTreeClient.create(url, {
-      parentId: null,
-      title: options?.title,
-      slug: options?.slug,
-      name: options?.name,
-      focus: options?.focus,
-    }),
+    panelTreeClient.create(
+      { surface: "external", url },
+      {
+        parentId: null,
+        title: options?.title,
+        slug: options?.slug,
+        name: options?.name,
+        focus: options?.focus,
+      }
+    ),
   createBrowserChild: (
     parentId: string,
     url: string,
@@ -363,13 +373,16 @@ export const panel = {
       focus?: boolean;
     }
   ) =>
-    panelTreeClient.create(url, {
-      parentId,
-      title: options?.title,
-      slug: options?.slug,
-      name: options?.name,
-      focus: options?.focus,
-    }),
+    panelTreeClient.create(
+      { surface: "external", url },
+      {
+        parentId,
+        title: options?.title,
+        slug: options?.slug,
+        name: options?.name,
+        focus: options?.focus,
+      }
+    ),
   movePanel: (request: MovePanelRequest) => panelTreeClient.movePanel(request),
   getCollapsedIds: () => panelTreeClient.getCollapsedIds(),
   setCollapsed: (panelId: string, collapsed: boolean) =>
@@ -795,13 +808,16 @@ export const userNotifications = {
     if (!contextId) {
       throw new Error("This conversation is not ready yet. Please try again in a moment.");
     }
-    return panelTreeClient.create("panels/chat", {
-      parentId: null,
-      focus: true,
-      contextId,
-      name: config?.title?.trim() || undefined,
-      stateArgs: { channelName: channelId },
-    });
+    return panelTreeClient.create(
+      { surface: "code", source: "panels/chat" },
+      {
+        parentId: null,
+        focus: true,
+        contextId,
+        name: config?.title?.trim() || undefined,
+        stateArgs: { channelName: channelId },
+      }
+    );
   },
 };
 // =============================================================================

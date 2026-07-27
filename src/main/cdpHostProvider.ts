@@ -109,6 +109,7 @@ interface ProviderMessage {
   method?: string;
   params?: Record<string, unknown>;
   sessionId?: string;
+  active?: boolean;
 }
 
 export class CdpHostProvider {
@@ -224,6 +225,10 @@ export class CdpHostProvider {
   cleanupPanelAccess(_panelId: string): void {
     // Access grants live on the server-side broker. The Electron provider only
     // owns local webContents registration and debugger lifecycle.
+  }
+
+  isTargetUnderAutomation(targetId: string): boolean {
+    return this.activeCdpTargets.has(targetId);
   }
 
   async getAccessibilityTree(targetId: string): Promise<unknown[]> {
@@ -366,6 +371,12 @@ export class CdpHostProvider {
     switch (message.type) {
       case "cdp:command":
         await this.handleCdpCommand(message);
+        return;
+      case "cdp:control":
+        if (typeof message.targetId === "string") {
+          if (message.active) this.activeCdpTargets.add(message.targetId);
+          else this.activeCdpTargets.delete(message.targetId);
+        }
         return;
       case "cdp:detach":
         if (typeof message.targetId === "string") {

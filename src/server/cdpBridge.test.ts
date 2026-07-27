@@ -267,6 +267,11 @@ describe("CdpBridge authentication", () => {
 
     const endpoint = await waitForEndpoint(harness);
     const client = await connectInspectionClient(harness, endpoint);
+    await expect(waitForJson(provider)).resolves.toMatchObject({
+      type: "cdp:control",
+      targetId: "panel:tree/browser-1",
+      active: true,
+    });
 
     client.send(
       JSON.stringify({ id: 7, method: "Runtime.evaluate", params: { expression: "2+2" } })
@@ -286,6 +291,11 @@ describe("CdpBridge authentication", () => {
 
     const endpoint = await waitForEndpoint(harness);
     const client = await connectInspectionClient(harness, endpoint);
+    await expect(waitForJson(provider)).resolves.toMatchObject({
+      type: "cdp:control",
+      targetId: "panel:tree/browser-1",
+      active: true,
+    });
 
     client.send(
       JSON.stringify({
@@ -611,6 +621,11 @@ describe("CdpBridge authentication", () => {
 
     const endpoint = await waitForEndpoint(harness);
     const client = await connectInspectionClient(harness, endpoint);
+    await expect(waitForJson(provider)).resolves.toMatchObject({
+      type: "cdp:control",
+      targetId: "panel:tree/browser-1",
+      active: true,
+    });
 
     harness.bridge.handleRuntimeLeaseChanged(
       leaseChangedEvent("panel:tree/browser-1", "desktop-host", "desktop-host")
@@ -632,6 +647,11 @@ describe("CdpBridge authentication", () => {
 
     const endpoint = await waitForEndpoint(harness);
     const client = await connectInspectionClient(harness, endpoint);
+    await expect(waitForJson(provider)).resolves.toMatchObject({
+      type: "cdp:control",
+      targetId: "panel:tree/browser-1",
+      active: true,
+    });
 
     harness.bridge.handleRuntimeLeaseChanged(
       leaseChangedEvent("panel:tree/browser-1", "desktop-host", "desktop-host", {
@@ -922,6 +942,11 @@ describe("CdpBridge authentication", () => {
 
     const endpoint = await waitForEndpoint(harness);
     const client = await connectInspectionClient(harness, endpoint);
+    await expect(waitForJson(provider)).resolves.toMatchObject({
+      type: "cdp:control",
+      targetId: "panel:tree/browser-1",
+      active: true,
+    });
 
     client.send(JSON.stringify({ id: 42, method: "Runtime.evaluate" }));
     const command = await waitForJson(provider);

@@ -2,23 +2,24 @@ import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 
 vi.mock("@vibestudio/browser-import", async () => {
-  const actual =
-    await vi.importActual<typeof import("@vibestudio/browser-import")>(
-      "@vibestudio/browser-import"
-    );
+  const actual = await vi.importActual<typeof import("@vibestudio/browser-import")>(
+    "@vibestudio/browser-import"
+  );
   return {
     ...actual,
     LocalBrowserImportProvider: class {
       async listSources() {
-        return [{
-          sourceId: "opaque-chrome",
-          browser: "chrome",
-          displayName: "Chrome",
-          status: "readable",
-          localDataSetCount: 2,
-          supportedDataTypes: ["bookmarks", "history"],
-          warnings: [],
-        }];
+        return [
+          {
+            sourceId: "opaque-chrome",
+            browser: "chrome",
+            displayName: "Chrome",
+            status: "readable",
+            localDataSetCount: 2,
+            supportedDataTypes: ["bookmarks", "history"],
+            warnings: [],
+          },
+        ];
       }
       async preview() {
         return { dataTypes: [], openTabCount: 2, localDataSetCount: 2, warnings: [] };
@@ -46,13 +47,15 @@ vi.mock("@vibestudio/browser-import", async () => {
           });
         }
         return {
-          dataTypes: [{
-            dataType: "bookmarks",
-            itemsProcessed: 1,
-            stored: 1,
-            skipped: 0,
-            errors: 0,
-          }],
+          dataTypes: [
+            {
+              dataType: "bookmarks",
+              itemsProcessed: 1,
+              stored: 1,
+              skipped: 0,
+              errors: 0,
+            },
+          ],
           warnings: [],
         };
       }
@@ -155,16 +158,16 @@ describe("@workspace-extensions/browser-data", () => {
   it("matches the manifest-declared provider and contains no retired import methods", async () => {
     const { ctx } = makeContext();
     const activated = await activate(ctx as never);
-    const manifest = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as {
+    const manifest = JSON.parse(
+      readFileSync(new URL("./package.json", import.meta.url), "utf8")
+    ) as {
       vibestudio: { extension: { providerContracts: { browserData: { methods: string[] } } } };
     };
     const methods = Object.keys(activated.providerContracts.browserData);
     expect(methods).toEqual(manifest.vibestudio.extension.providerContracts.browserData.methods);
-    expect(methods).not.toEqual(expect.arrayContaining([
-      "detectBrowsers",
-      "getProfileImportState",
-      "getAutofillSuggestions",
-    ]));
+    expect(methods).not.toEqual(
+      expect.arrayContaining(["detectBrowsers", "getProfileImportState", "getAutofillSuggestions"])
+    );
   });
 
   it("requires a verified user and workspace", async () => {
@@ -232,7 +235,9 @@ describe("@workspace-extensions/browser-data", () => {
     const api = (await activate(ctx as never)).providerContracts.browserData;
     await expect(api.getPasswords()).rejects.toMatchObject({ code: "EACCES" });
     expect(approvalsRequest).toHaveBeenCalledWith(
-      expect.objectContaining({ subject: { id: "browser-data:getPasswords", label: expect.any(String) } })
+      expect.objectContaining({
+        subject: { id: "browser-data:getPasswords", label: expect.any(String) },
+      })
     );
   });
 
@@ -258,9 +263,9 @@ describe("@workspace-extensions/browser-data", () => {
     });
     expect(["queued", "discovering", "reading"]).toContain(result.phase);
     await vi.waitFor(async () => {
-      expect(
-        (await api.getImportJob(result.jobId) as { phase?: string } | null)?.phase
-      ).toBe("complete");
+      expect(((await api.getImportJob(result.jobId)) as { phase?: string } | null)?.phase).toBe(
+        "complete"
+      );
     });
     expect(rpcCall).toHaveBeenCalledWith(
       "do:vibestudio/internal:BrowserDataDO:environment-key",
@@ -273,7 +278,10 @@ describe("@workspace-extensions/browser-data", () => {
       "recordImportBatch",
       expect.objectContaining({ dataType: "bookmarks", batchIndex: 0 })
     );
-    expect(emit).toHaveBeenCalledWith("import-complete", expect.objectContaining({ phase: "complete" }));
+    expect(emit).toHaveBeenCalledWith(
+      "import-complete",
+      expect.objectContaining({ phase: "complete" })
+    );
     expect(health.healthy).toHaveBeenLastCalledWith({ summary: "Browser data import completed" });
   });
 
@@ -288,11 +296,16 @@ describe("@workspace-extensions/browser-data", () => {
         selection: ["tab-1", "tab-2"],
       })
     ).resolves.toMatchObject({ tabsFound: 2, panelsOpened: 1 });
-    expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.create", "https://example.com/", {
-      parentId: "panel-parent",
-      title: "Example",
-      focus: false,
-    });
+    expect(rpcCall).toHaveBeenCalledWith(
+      "main",
+      "panelTree.create",
+      { surface: "external", url: "https://example.com/" },
+      {
+        parentId: "panel-parent",
+        title: "Example",
+        focus: false,
+      }
+    );
   });
 
   it("nests tabs under one collection panel per source window when grouping", async () => {
@@ -311,7 +324,10 @@ describe("@workspace-extensions/browser-data", () => {
     expect(result.collections.map((entry) => entry.panelsOpened)).toEqual([1, 1]);
 
     const collectionCalls = rpcCall.mock.calls.filter(
-      (call) => call[1] === "panelTree.create" && call[2] === "about/collection"
+      (call) =>
+        call[1] === "panelTree.create" &&
+        (call[2] as { surface?: string; source?: string })?.surface === "code" &&
+        (call[2] as { source?: string }).source === "about/collection"
     );
     expect(collectionCalls).toHaveLength(2);
     // `name` would mint the panel's id segment, not a label: the collection
@@ -330,7 +346,11 @@ describe("@workspace-extensions/browser-data", () => {
 
     // Each tab is parented to its window's collection, not to the caller.
     const tabParents = rpcCall.mock.calls
-      .filter((call) => call[1] === "panelTree.create" && String(call[2]).startsWith("https://"))
+      .filter(
+        (call) =>
+          call[1] === "panelTree.create" &&
+          (call[2] as { surface?: string })?.surface === "external"
+      )
       .map((call) => (call[3] as { parentId?: string }).parentId);
     expect(new Set(tabParents).size).toBe(2);
     expect(tabParents).not.toContain("panel-parent");
@@ -346,8 +366,13 @@ describe("@workspace-extensions/browser-data", () => {
     const passthrough = rpcCall.getMockImplementation()!;
     rpcCall.mockImplementation(async (targetId: string, method: string, ...args: unknown[]) => {
       if (method !== "panelTree.create") return passthrough(targetId, method, ...args);
-      const [source, options] = args as [string, { parentId?: string }];
-      if (source === "about/collection") return { id: "collection-1", title: "Collection" };
+      const [execution, options] = args as [
+        { surface: "code"; source: string } | { surface: "external"; url: string },
+        { parentId?: string },
+      ];
+      if (execution.surface === "code" && execution.source === "about/collection") {
+        return { id: "collection-1", title: "Collection" };
+      }
       if (options?.parentId === "collection-1") {
         throw new Error("Server auth failed: Not a member of this workspace");
       }
@@ -381,7 +406,11 @@ describe("@workspace-extensions/browser-data", () => {
     });
     expect(result.collections).toEqual([]);
     expect(
-      rpcCall.mock.calls.filter((call) => call[2] === "about/collection")
+      rpcCall.mock.calls.filter(
+        (call) =>
+          (call[2] as { surface?: string; source?: string })?.surface === "code" &&
+          (call[2] as { source?: string }).source === "about/collection"
+      )
     ).toHaveLength(0);
   });
 });

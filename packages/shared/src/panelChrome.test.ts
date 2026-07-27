@@ -4,6 +4,7 @@ import {
   buildAddressAutocompleteItems,
   buildPanelChromeState,
   canonicalizeUrlForAddress,
+  classifyPanelUrl,
   collectBrowserAddressSuggestionsFromPanels,
   mergeBrowserAddressSuggestions,
   normalizeBrowserAddressSuggestions,
@@ -54,10 +55,44 @@ describe("panelChrome", () => {
     expect(isOpenPanelBrowserUrl("https://example.com")).toBe(true);
     expect(isOpenPanelBrowserUrl("http://example.com")).toBe(true);
     expect(isOpenPanelBrowserUrl("data:text/html,<button>Click</button>")).toBe(true);
+    expect(
+      isOpenPanelBrowserUrl("blob:https://example.com/00000000-0000-0000-0000-000000000000")
+    ).toBe(true);
     expect(isOpenPanelBrowserUrl("about:blank")).toBe(true);
     expect(isOpenPanelBrowserUrl("about:blank#ready")).toBe(true);
     expect(isOpenPanelBrowserUrl("panels/chat")).toBe(false);
     expect(isOpenPanelBrowserUrl("javascript:alert(1)")).toBe(false);
+  });
+
+  it("classifies panel, managed, OS, and refused schemes centrally", () => {
+    expect(classifyPanelUrl("https://example.com")).toEqual({
+      disposition: "browser-panel",
+      scheme: "https:",
+    });
+    expect(classifyPanelUrl("vibestudio://panel?v=1&source=about%2Fhelp")).toEqual({
+      disposition: "managed",
+      scheme: "vibestudio:",
+    });
+    expect(classifyPanelUrl("mailto:hello@example.com")).toEqual({
+      disposition: "external",
+      scheme: "mailto:",
+    });
+    expect(classifyPanelUrl("tel:+4912345")).toEqual({
+      disposition: "external",
+      scheme: "tel:",
+    });
+    expect(classifyPanelUrl("file:///etc/passwd")).toMatchObject({
+      disposition: "refused",
+      scheme: "file:",
+    });
+    expect(classifyPanelUrl("javascript:alert(1)")).toMatchObject({
+      disposition: "refused",
+      scheme: "javascript:",
+    });
+    expect(classifyPanelUrl("about:config")).toMatchObject({
+      disposition: "refused",
+      scheme: "about:",
+    });
   });
 
   it("parses address input into panel sources, urls, or searches", () => {

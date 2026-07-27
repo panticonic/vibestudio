@@ -593,6 +593,11 @@ export class CdpBridge {
           source: msg.source,
         };
         this.targetRegistry.set(msg.targetId, registration);
+        if ((this.clientConnections.get(msg.targetId)?.size ?? 0) > 0) {
+          providerWs.send(
+            JSON.stringify({ type: "cdp:control", targetId: msg.targetId, active: true })
+          );
+        }
         log.info(
           `Target registered: ${msg.targetId} (tab ${msg.tabId}${
             hostConnectionId ? `, host ${hostConnectionId}` : ""
@@ -767,6 +772,10 @@ export class CdpBridge {
         this.onTargetClientPinChange?.(targetId, true);
       } catch (err) {
         log.warn(`onTargetClientPinChange(pin) failed for ${targetId}: ${String(err)}`);
+      }
+      const provider = this.providerForTarget(targetId);
+      if (provider?.readyState === WebSocket.OPEN) {
+        provider.send(JSON.stringify({ type: "cdp:control", targetId, active: true }));
       }
     }
 

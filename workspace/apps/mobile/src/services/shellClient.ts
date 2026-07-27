@@ -299,7 +299,7 @@ class MobilePanels implements PanelHost {
     title: string;
   }> {
     const result = await this.callPanelTree<{ id: string; title: string }>("create", [
-      `about/${page}`,
+      { surface: "code", source: `about/${page}` },
       { focus: true },
     ]);
     this.deps.navigateToPanel(result.id);
@@ -319,7 +319,7 @@ class MobilePanels implements PanelHost {
     title: string;
   }> {
     const result = await this.callPanelTree<{ id: string; title: string }>("create", [
-      source,
+      { surface: "code", source },
       {
         title: options?.title,
         slug: options?.slug,
@@ -352,7 +352,7 @@ class MobilePanels implements PanelHost {
     title: string;
   }> {
     const result = await this.callPanelTree<{ id: string; title: string }>("create", [
-      source,
+      { surface: "code", source, ...(options?.ref ? { ref: options.ref } : {}) },
       {
         parentId,
         title: options?.title,
@@ -360,7 +360,6 @@ class MobilePanels implements PanelHost {
         name: options?.name,
         focus: options?.focus,
         contextId: options?.contextId,
-        ref: options?.ref,
         stateArgs: options?.stateArgs,
       },
     ]);
@@ -381,7 +380,7 @@ class MobilePanels implements PanelHost {
     title: string;
   }> {
     const result = await this.callPanelTree<{ id: string; title: string }>("create", [
-      url,
+      { surface: "external", url },
       {
         parentId: parentId ?? undefined,
         title: options?.title,
@@ -409,10 +408,9 @@ class MobilePanels implements PanelHost {
     title: string;
   }> {
     const result = await this.callPanelTree<{ id: string; title: string }>("create", [
-      source,
+      { surface: "code", source, ...(options?.ref ? { ref: options.ref } : {}) },
       {
         parentId: null,
-        ref: options?.ref,
         contextId: options?.contextId,
         title: options?.title,
         slug: options?.slug,

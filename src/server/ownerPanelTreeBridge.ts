@@ -36,7 +36,6 @@ import {
   getPanelSource,
   getPanelStateArgs,
 } from "@vibestudio/shared/panel/accessors";
-import { isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
 import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { PanelSlotId } from "@vibestudio/shared/panel/ids";
 import { resolveOwningPanelSlot } from "@vibestudio/shared/panel/owningPanelSlot";
@@ -462,8 +461,9 @@ export async function createServerPanelTreeBridge(
   const runtime: RuntimeClient = {
     createEntity: (spec: RuntimeEntityCreateSpec) =>
       callRuntime<RuntimeEntityHandle>("createEntity", [spec]),
-    reservePanelEntity: (spec) => callRuntime<RuntimeEntityHandle>("reservePanelEntity", [spec]),
-    activatePanelEntity: (spec) => callRuntime<RuntimeEntityHandle>("activatePanelEntity", [spec]),
+    reserveEntity: (spec) => callRuntime<RuntimeEntityHandle>("reserveEntity", [spec]),
+    activateReservedEntity: (spec) =>
+      callRuntime<RuntimeEntityHandle>("activateReservedEntity", [spec]),
     retireEntity: (id) => callRuntime<undefined>("retireEntity", [{ id }]),
   };
   const searchIndex: PanelSearchIndex = {
@@ -1110,7 +1110,10 @@ export async function createServerPanelTreeBridge(
       }
       case "create": {
         await sync();
-        const source = String(args[0]);
+        const execution = args[0] as
+          | { surface: "code"; source: string; ref?: string }
+          | { surface: "external"; url: string };
+        const source = execution.surface === "external" ? execution.url : execution.source;
         const options = (args[1] ?? {}) as {
           parentId?: string | null;
           title?: string;
@@ -1118,7 +1121,6 @@ export async function createServerPanelTreeBridge(
           name?: string;
           focus?: boolean;
           contextId?: string;
-          ref?: string;
           stateArgs?: Record<string, unknown>;
           placement?: import("@vibestudio/shared/types").PanelPlacementHint;
         };
@@ -1152,7 +1154,7 @@ export async function createServerPanelTreeBridge(
               provenance: {
                 source,
                 contextId: typeof options.contextId === "string" ? options.contextId : "unassigned",
-                requestedRef: options.ref ?? "main",
+                requestedRef: execution.surface === "code" ? (execution.ref ?? "main") : "external",
               },
               details: {
                 callerId: request.callerId,
@@ -1165,7 +1167,7 @@ export async function createServerPanelTreeBridge(
             error
           );
         }
-        const isBrowser = isOpenPanelBrowserUrl(source);
+        const isBrowser = execution.surface === "external";
         // A null parent means a root panel. addPanel() treats a null parent
         // WITHOUT addAsRoot as "replace the tree with this single panel", so root
         // creates MUST set addAsRoot/isRoot — otherwise a root create would wipe
@@ -1173,21 +1175,13 @@ export async function createServerPanelTreeBridge(
         const isRoot = parentId == null;
         // WP3: stamp the acting user (threaded on the bridge request) as owner.
         const ownerUserId = request.subject?.userId;
-        const created = isBrowser
-          ? await panelManager.createBrowser(parentId ?? null, source, {
-              ...(options.title !== undefined ? { title: options.title } : {}),
-              ...(options.slug !== undefined ? { slug: options.slug } : {}),
-              name: options.name,
-              addAsRoot: isRoot,
-              ...(ownerUserId ? { ownerUserId } : {}),
-            })
-          : await panelManager.create(source, {
-              ...options,
-              parentId,
-              isRoot,
-              addAsRoot: isRoot,
-              ...(ownerUserId ? { ownerUserId } : {}),
-            });
+        const created = await panelManager.createExecution(execution, {
+          ...options,
+          parentId,
+          isRoot,
+          addAsRoot: isRoot,
+          ...(ownerUserId ? { ownerUserId } : {}),
+        });
         emitTreeSnapshot();
         const createdPanel = registry.getPanel(created.panelId);
         let resolvedPlacement = options.placement;
@@ -1253,7 +1247,9 @@ export async function createServerPanelTreeBridge(
                   attemptId: current?.attemptId,
                   source: current?.source ?? created.source,
                   contextId: current?.contextId ?? created.contextId,
-                  requestedRef: current?.requestedRef ?? options.ref ?? "main",
+                  requestedRef:
+                    current?.requestedRef ??
+                    (execution.surface === "code" ? (execution.ref ?? "main") : "external"),
                   effectiveVersion: current?.effectiveVersion ?? null,
                   buildKey: current?.buildKey ?? null,
                 },

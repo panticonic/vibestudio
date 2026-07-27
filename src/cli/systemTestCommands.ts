@@ -67,7 +67,7 @@ async function systemTestRunnerFor(scope: SessionScope): Promise<RuntimeEntityHa
   const runtime = typedClient("runtime", runtimeMethods, scope.client);
   return runtime.createEntity({
     kind: "do",
-    source: SYSTEM_TEST_RUNNER_SOURCE,
+    execution: { surface: "code", source: SYSTEM_TEST_RUNNER_SOURCE },
     className: SYSTEM_TEST_RUNNER_CLASS,
     key: `cli-${scope.session.scopeKey}`,
     contextId: scope.contextId,

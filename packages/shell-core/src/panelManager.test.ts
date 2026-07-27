@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { PanelManager } from "./panelManager.js";
-import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
+import { canonicalEntityId, runtimeEntitySource } from "@vibestudio/shared/runtime/entitySpec";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
 import type {
   EntityRecord,
@@ -269,7 +269,7 @@ function createWorkspaceMemory() {
       const key = spec.key ?? "auto-key";
       const id = canonicalEntityId({
         kind: spec.kind,
-        source: spec.source,
+        source: runtimeEntitySource(spec),
         className: spec.kind === "do" ? spec.className : undefined,
         key,
       });
@@ -280,7 +280,7 @@ function createWorkspaceMemory() {
         entities.set(id, {
           id,
           kind: spec.kind,
-          source: spec.source,
+          source: runtimeEntitySource(spec),
           contextId: spec.contextId ?? "ctx-default",
           status: "active",
           key,
@@ -294,7 +294,7 @@ function createWorkspaceMemory() {
       return {
         id,
         kind: spec.kind,
-        source: { repoPath: spec.source, effectiveVersion: "test" },
+        source: { repoPath: runtimeEntitySource(spec), effectiveVersion: "test" },
         contextId: spec.contextId ?? "ctx-default",
         targetId: id,
         buildKey: "b".repeat(64),
@@ -302,13 +302,13 @@ function createWorkspaceMemory() {
         authorityRequests: [],
       };
     },
-    async reservePanelEntity(spec) {
+    async reserveEntity(spec) {
       const key = spec.key ?? "auto-key";
       const id = canonicalEntityId({ kind: "panel", key });
       entities.set(id, {
         id,
         kind: "panel",
-        source: spec.source,
+        source: spec.execution.source,
         contextId: spec.contextId ?? "ctx-default",
         status: "preparing",
         key,
@@ -321,13 +321,13 @@ function createWorkspaceMemory() {
       return {
         id,
         kind: "panel",
-        source: { repoPath: spec.source, effectiveVersion: "" },
+        source: { repoPath: spec.execution.source, effectiveVersion: "" },
         contextId: spec.contextId ?? "ctx-default",
         targetId: id,
       };
     },
-    async activatePanelEntity(spec) {
-      if (!spec.key) throw new Error("activatePanelEntity requires a reserved key");
+    async activateReservedEntity(spec) {
+      if (!spec.key) throw new Error("activateReservedEntity requires a reserved key");
       const id = canonicalEntityId({ kind: "panel", key: spec.key });
       const entity = entities.get(id);
       if (!entity || entity.status !== "preparing") {
@@ -340,7 +340,7 @@ function createWorkspaceMemory() {
       return {
         id,
         kind: "panel",
-        source: { repoPath: spec.source, effectiveVersion: "test" },
+        source: { repoPath: spec.execution.source, effectiveVersion: "test" },
         contextId: entity.contextId,
         targetId: id,
         buildKey: entity.activeBuildKey,
@@ -694,8 +694,8 @@ describe("PanelManager", () => {
 
     const registry = new PanelRegistry({});
     const { deps } = makeManagerDeps(workspacePath);
-    const reservePanelEntity = vi.spyOn(deps.runtime, "reservePanelEntity");
-    const activatePanelEntity = vi.spyOn(deps.runtime, "activatePanelEntity");
+    const reserveEntity = vi.spyOn(deps.runtime, "reserveEntity");
+    const activateReservedEntity = vi.spyOn(deps.runtime, "activateReservedEntity");
     const manager = new PanelManager({ registry, ...deps });
 
     const created = await manager.create("panels/example", {
@@ -705,20 +705,26 @@ describe("PanelManager", () => {
     });
 
     await created.preparation;
-    expect(reservePanelEntity).toHaveBeenCalledWith(
+    expect(reserveEntity).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "panel",
-        source: "panels/example",
-        ref: "ctx:panel-dev",
+        execution: {
+          surface: "code",
+          source: "panels/example",
+          ref: "ctx:panel-dev",
+        },
       })
     );
-    expect(reservePanelEntity.mock.calls[0]?.[0]).not.toHaveProperty("contextId");
+    expect(reserveEntity.mock.calls[0]?.[0]).not.toHaveProperty("contextId");
     expect(created.contextId).toBe("ctx-default");
-    expect(activatePanelEntity).toHaveBeenCalledWith(
+    expect(activateReservedEntity).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "panel",
-        source: "panels/example",
-        ref: "ctx:panel-dev",
+        execution: {
+          surface: "code",
+          source: "panels/example",
+          ref: "ctx:panel-dev",
+        },
       })
     );
     expect(getCurrentSnapshot(registry.getPanel(created.panelId)!).options.ref).toBe(
@@ -1274,6 +1280,13 @@ describe("PanelManager", () => {
       "panels/chat",
       "browser:https://example.org/",
     ]);
+    expect(manager.getIncarnationChurnSnapshot()).toMatchObject({
+      committed: 2,
+      retired: 1,
+      retirementFailures: 0,
+      outstanding: 1,
+      byCause: { create: 1, navigate: 1 },
+    });
   });
 
   it("keeps selected descendant path local while using collision-free sibling ranks", async () => {
@@ -1564,7 +1577,7 @@ describe("PanelManager", () => {
     });
     const worker = await deps.runtime.createEntity({
       kind: "worker",
-      source: "workers/agent",
+      execution: { surface: "code", source: "workers/agent" },
       key: "agent",
       contextId: "ctx-shared",
     });
@@ -1680,9 +1693,9 @@ describe("PanelManager", () => {
 
   it("returns preparing slots and their pending UX directly from the aggregate", async () => {
     const { mem, deps } = makeManagerDeps("/tmp/workspace");
-    const reserved = await mem.runtime.reservePanelEntity({
+    const reserved = await mem.runtime.reserveEntity({
       kind: "panel",
-      source: "panels/preparing",
+      execution: { surface: "code", source: "panels/preparing" },
       key: "preparing-entry",
       contextId: "ctx-preparing",
     });

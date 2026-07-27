@@ -110,7 +110,13 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
     ctx: ServiceContext,
     args: unknown[]
   ): Promise<PanelAccessPermissionTarget> {
-    const source = typeof args[0] === "string" ? args[0] : undefined;
+    const execution = toOptionsRecord(args[0]);
+    const source =
+      execution["surface"] === "code" && typeof execution["source"] === "string"
+        ? execution["source"]
+        : execution["surface"] === "external" && typeof execution["url"] === "string"
+          ? execution["url"]
+          : undefined;
     const options = (args[1] ?? {}) as { parentId?: string | null; contextId?: string | null };
     const requestedContextId =
       typeof options.contextId === "string" && options.contextId.length > 0
@@ -152,10 +158,15 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
 
   async function validatePanelSourceBeforeMutation(method: string, args: unknown[]): Promise<void> {
     if (!deps.validateOpenPanelSource) return;
-    if (method === "create" && typeof args[0] === "string") {
+    const execution = toOptionsRecord(args[0]);
+    if (
+      method === "create" &&
+      execution["surface"] === "code" &&
+      typeof execution["source"] === "string"
+    ) {
       await deps.validateOpenPanelSource({
         method,
-        source: args[0],
+        source: execution["source"],
         options: toOptionsRecord(args[1]),
       });
       return;

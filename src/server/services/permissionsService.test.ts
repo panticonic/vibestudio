@@ -58,9 +58,9 @@ function createHarness() {
       },
     },
     browserPermissions: {
-      ensureLoaded: vi.fn(async () => undefined),
+      ensureMigrated: vi.fn(async () => undefined),
       list: vi.fn(() => []),
-      revokeById: vi.fn(async () => false),
+      revokeById: vi.fn(() => false),
       idFor: vi.fn(() => "browser"),
     } as never,
     workspaceId: "workspace-test",

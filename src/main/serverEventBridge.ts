@@ -240,7 +240,7 @@ export function createServerEventBridge(
       }
       void client
         .call("panelTree", "create", [
-          request.url,
+          { surface: "external", url: request.url },
           { parentId: request.parentPanelId, focus: true },
         ])
         .catch(async (error: unknown) => {

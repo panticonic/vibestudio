@@ -87,6 +87,20 @@ describe("CdpHostProvider", () => {
     vi.useRealTimers();
   });
 
+  it("tracks live automation control independently of debugger commands", async () => {
+    const { provider } = createHarness();
+
+    await provider.handleProviderMessageForTest({
+      type: "cdp:control",
+      targetId: "panel-1",
+      active: true,
+    });
+    expect(provider.isTargetUnderAutomation("panel-1")).toBe(true);
+
+    await provider.handleProviderMessageForTest({ type: "cdp:detach", targetId: "panel-1" });
+    expect(provider.isTargetUnderAutomation("panel-1")).toBe(false);
+  });
+
   it("authenticates during upgrade and registers targets when the socket opens", () => {
     const { provider, socket, getSocketProtocols } = createHarness();
 

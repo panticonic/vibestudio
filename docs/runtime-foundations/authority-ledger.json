@@ -4011,11 +4011,11 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
-      "id": "direct:src/server/internalDOs/workspaceDO.ts:entityReservePanel",
+      "id": "direct:src/server/internalDOs/workspaceDO.ts:entityReserve",
       "rpcPlane": "workspace-do",
       "owner": "src/server/internalDOs/workspaceDO.ts",
       "source": "product/bootstrap",
-      "method": "entityReservePanel",
+      "method": "entityReserve",
       "resourceDerivation": {
         "kind": "direct-target",
         "owner": "src/server/internalDOs/workspaceDO.ts"
@@ -4044,10 +4044,10 @@
         "exact-resource-scope",
         "next-dispatch-revocation"
       ],
-      "r3aRequirement": "capability(host,rpc:entityReservePanel)",
+      "r3aRequirement": "capability(host,rpc:entityReserve)",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "host-only-generic-entity-reservation",
+        "change": "Generalizes the WorkspaceDO reservation write from panels to the enumerated buildable entity kinds. The host supplies the already validated immutable identity fields, and the receiver atomically creates or returns the exact reserved entity without executing code or widening caller authority."
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
@@ -17270,7 +17270,7 @@
         "key": "service:browserPermissions.request"
       },
       "authorityPrincipals": [
-        "host"
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -17291,10 +17291,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserPermissions.request)",
+      "r3aRequirement": "allOf(capability(user,service:browserPermissions.request),workspace-member)",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "verified-user-browser-permission-consent",
+        "change": "Moves site permission decisions under the verified environment owner's authority. The exact environment, browser-session epoch, and origin are receiver-derived or validated, and the interactive approval remains mandatory when no matching user grant exists."
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
       "capability": "service:browserPermissions.request"
@@ -17309,7 +17309,7 @@
         "key": "service:browserPermissions.revoke"
       },
       "authorityPrincipals": [
-        "host"
+        "user"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -17330,10 +17330,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserPermissions.revoke)",
+      "r3aRequirement": "allOf(capability(user,service:browserPermissions.revoke),workspace-member)",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "verified-user-browser-grant-revocation",
+        "change": "Allows a verified user to revoke only that user's exact-origin browser grants in the current workspace environment. Code and anonymous principals remain excluded."
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
       "capability": "service:browserPermissions.revoke"
@@ -17348,7 +17348,7 @@
         "key": "service:browserPermissions.snapshot"
       },
       "authorityPrincipals": [
-        "host"
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -17369,10 +17369,10 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserPermissions.snapshot)",
+      "r3aRequirement": "allOf(capability(user,service:browserPermissions.snapshot),workspace-member)",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "verified-user-browser-grant-projection",
+        "change": "Replaces an unusable host-only read with a verified-user read of that same user's exact-origin browser grants in the current workspace environment. Code and anonymous principals remain excluded."
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
       "capability": "service:browserPermissions.snapshot"
@@ -29057,13 +29057,13 @@
       "capability": "service:remoteCred.relaunch"
     },
     {
-      "id": "host:runtime.activatePanelEntity",
+      "id": "host:runtime.activateReservedEntity",
       "rpcPlane": "host-service",
       "owner": "runtime",
-      "method": "activatePanelEntity",
+      "method": "activateReservedEntity",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:runtime.activatePanelEntity"
+        "key": "service:runtime.activateReservedEntity"
       },
       "authorityPrincipals": [
         "host"
@@ -29087,13 +29087,13 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:runtime.activatePanelEntity)",
+      "r3aRequirement": "capability(host,service:runtime.activateReservedEntity)",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "host-only-sealed-reservation-activation",
+        "change": "Generalizes activation of an existing host-owned reservation to every code-backed runtime kind. The receiver requires an exact match with the reserved kind, class, and source, validates the prepared build digest and authority manifest, then advances that same durable identity through the normal activation lifecycle."
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
-      "capability": "service:runtime.activatePanelEntity"
+      "capability": "service:runtime.activateReservedEntity"
     },
     {
       "id": "host:runtime.cloneContext",
@@ -29628,13 +29628,13 @@
       "capability": "service:runtime.recordContextEdge"
     },
     {
-      "id": "host:runtime.reservePanelEntity",
+      "id": "host:runtime.reserveEntity",
       "rpcPlane": "host-service",
       "owner": "runtime",
-      "method": "reservePanelEntity",
+      "method": "reserveEntity",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:runtime.reservePanelEntity"
+        "key": "service:runtime.reserveEntity"
       },
       "authorityPrincipals": [
         "host"
@@ -29658,13 +29658,13 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:runtime.reservePanelEntity)",
+      "r3aRequirement": "capability(host,service:runtime.reserveEntity)",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "host-only-buildable-entity-reservation",
+        "change": "Generalizes the existing host-only two-phase panel reservation to every code-backed runtime kind. The receiver derives a deterministic reservation identity from the immutable code execution spec, preserves the declared kind and class, and creates no active execution before the matching activation call."
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
-      "capability": "service:runtime.reservePanelEntity"
+      "capability": "service:runtime.reserveEntity"
     },
     {
       "id": "host:runtime.resolveContext",

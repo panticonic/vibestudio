@@ -45,7 +45,7 @@ async function createDbAtSchemaVersion(schemaVersion: number) {
   return db;
 }
 
-function panelInput(overrides: Partial<Parameters<WorkspaceDO["entityReservePanel"]>[0]> = {}) {
+function panelInput(overrides: Partial<Parameters<WorkspaceDO["entityReserve"]>[0]> = {}) {
   return {
     kind: "panel" as const,
     source: { repoPath: SOURCE, effectiveVersion: VERSION },
@@ -204,7 +204,7 @@ describe("WorkspaceDO.entityActivate", () => {
   });
 
   it("reserves a non-executable panel and activates that same incarnation in place", () => {
-    const reserved = instance.entityReservePanel(
+    const reserved = instance.entityReserve(
       panelInput({ source: { repoPath: SOURCE, effectiveVersion: "" } })
     );
 
@@ -228,8 +228,37 @@ describe("WorkspaceDO.entityActivate", () => {
     expect(instance.entityResolveActive(reserved.id)?.id).toBe(reserved.id);
   });
 
+  it("reserves every code-backed kind through the same durable operation", () => {
+    const input = {
+      kind: "worker" as const,
+      source: { repoPath: "workers/example", effectiveVersion: "" },
+      contextId: "ctx-worker",
+      key: "worker-1",
+    };
+    const reserved = instance.entityReserve(input);
+
+    expect(reserved).toMatchObject({
+      id: canonicalEntityId({
+        kind: "worker",
+        source: "workers/example",
+        key: "worker-1",
+      }),
+      kind: "worker",
+      status: "preparing",
+    });
+    expect(
+      instance.entityAdvanceExecution({
+        ...input,
+        source: { repoPath: "workers/example", effectiveVersion: "ev-worker" },
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: ACTIVE_AUTHORITY,
+      })
+    ).toMatchObject({ kind: "worker", status: "active" });
+  });
+
   it("commits a fresh panel's lifecycle owner in the reservation transaction", () => {
-    const reserved = instance.entityReservePanel(
+    const reserved = instance.entityReserve(
       panelInput({
         source: { repoPath: SOURCE, effectiveVersion: "" },
         lifecycleOwner: { contextId: "ctx-owner", entityId: "do:creator" },
@@ -246,7 +275,7 @@ describe("WorkspaceDO.entityActivate", () => {
   });
 
   it("rejects a second lifecycle parent and rolls back the conflicting reservation", () => {
-    instance.entityReservePanel(
+    instance.entityReserve(
       panelInput({
         source: { repoPath: SOURCE, effectiveVersion: "" },
         lifecycleOwner: { contextId: "ctx-owner-a", entityId: "do:creator-a" },
@@ -254,7 +283,7 @@ describe("WorkspaceDO.entityActivate", () => {
     );
 
     expect(() =>
-      instance.entityReservePanel(
+      instance.entityReserve(
         panelInput({
           source: { repoPath: "panels/other", effectiveVersion: "" },
           key: "entry-2",

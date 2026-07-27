@@ -34,6 +34,7 @@ export class BrowserDownloadManager {
       browserData: Pick<BrowserDataClient, "listDownloadRecords" | "upsertDownloadRecord">;
       eventService: EventService;
       getViewManager(): ViewManager | null;
+      requestSiteCapability(contents: WebContents, capability: "downloads"): Promise<boolean>;
     }
   ) {}
 
@@ -88,6 +89,21 @@ export class BrowserDownloadManager {
     item: DownloadItem,
     contents: WebContents
   ): void => {
+    item.pause();
+    void this.deps
+      .requestSiteCapability(contents, "downloads")
+      .then((granted) => {
+        if (!granted || contents.isDestroyed() || !item.canResume()) {
+          item.cancel();
+          return;
+        }
+        this.beginDownload(item, contents);
+        item.resume();
+      })
+      .catch(() => item.cancel());
+  };
+
+  private beginDownload(item: DownloadItem, contents: WebContents): void {
     const id = randomUUID();
     const url = item.getURL();
     const panelId = this.deps.getViewManager()?.findViewIdByWebContentsId(contents.id) ?? undefined;
@@ -134,7 +150,7 @@ export class BrowserDownloadManager {
       this.live.delete(id);
       this.notify(record);
     });
-  };
+  }
 
   private update(live: LiveDownload, state: BrowserDownloadState): void {
     live.record.state = state;

@@ -156,7 +156,15 @@ describe("vibestudio agent commands", () => {
     expect(rpcBodies).toEqual([
       {
         method: "runtime.createEntity",
-        args: [{ kind: "session", source: "agent-cli", key: "work", title: "work" }],
+        args: [
+          {
+            kind: "session",
+            execution: { surface: "inert" },
+            source: "agent-cli",
+            key: "work",
+            title: "work",
+          },
+        ],
       },
     ]);
     const filePath = sessionFile(tmpDir, "work");

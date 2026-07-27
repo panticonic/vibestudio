@@ -29,7 +29,7 @@ import type {
   EntityActivationInput,
   EntityKind,
   EntityRecord,
-  PanelReservationInput,
+  EntityReservationInput,
 } from "@vibestudio/shared/runtime/entitySpec";
 import type {
   ContextEdge,
@@ -80,8 +80,8 @@ export class WorkspaceEntityStore {
    * Connection grants and code-principal resolution remain fail-closed until
    * advanceExecution() commits the sealed runtime image.
    */
-  async reservePanel(input: PanelReservationInput): Promise<EntityRecord> {
-    const record = await this.dispatch<EntityRecord>("entityReservePanel", input);
+  async reserve(input: EntityReservationInput): Promise<EntityRecord> {
+    const record = await this.dispatch<EntityRecord>("entityReserve", input);
     this.deps.entityCache._onActivate(record);
     return record;
   }

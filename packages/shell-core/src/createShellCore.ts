@@ -60,10 +60,9 @@ export function createRuntimeClient(callService: ShellServiceCall): RuntimeClien
     callService(service, method, args) as Promise<T>;
   return {
     createEntity: (spec) => call<RuntimeEntityHandle>("runtime", "createEntity", [spec]),
-    reservePanelEntity: (spec) =>
-      call<RuntimeEntityHandle>("runtime", "reservePanelEntity", [spec]),
-    activatePanelEntity: (spec) =>
-      call<RuntimeEntityHandle>("runtime", "activatePanelEntity", [spec]),
+    reserveEntity: (spec) => call<RuntimeEntityHandle>("runtime", "reserveEntity", [spec]),
+    activateReservedEntity: (spec) =>
+      call<RuntimeEntityHandle>("runtime", "activateReservedEntity", [spec]),
     retireEntity: (id) => call<void>("runtime", "retireEntity", [{ id }]),
   };
 }

@@ -19,6 +19,8 @@ import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/service-schemas/gitInterop";
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import { isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
+import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import { createHostCaller, type VerifiedCodeIdentity } from "@vibestudio/shared/serviceDispatcher";
 import { parseDoTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 import { isCallerKind } from "@vibestudio/shared/principalKinds";
@@ -33,6 +35,7 @@ import { createGitInteropProviderInvoker } from "./gitInteropProviderInvoker.js"
 import { retireRoutedReach } from "./routedReachRetirement.js";
 import { createWorkspaceChildHubPort } from "./workspaceChildHubPort.js";
 import { declaredWorkspaceServiceActivationInput } from "./runtimeExecutionIdentity.js";
+import type { PreparedCodeIncarnation, RuntimeEntityHooks } from "./services/runtimeService.js";
 import {
   releaseDurableObjectRelaySeal,
   sealAndDrainDurableObjectRelays,
@@ -1957,14 +1960,18 @@ async function main() {
       deviceLabelFor: (deviceId) => identityDb.getDevice(deviceId)?.label,
     })
   );
-  const { BrowserPermissionGrantStore, createBrowserPermissionsService } =
+  const { BrowserPermissionGrantProjection, createBrowserPermissionsService } =
     await import("./services/browserPermissionsService.js");
-  const browserPermissionGrantStore = new BrowserPermissionGrantStore(statePath);
+  const browserPermissionGrantStore = new BrowserPermissionGrantProjection(
+    capabilityGrantStore,
+    statePath
+  );
   container.registerRpc(
     createBrowserPermissionsService({
       approvalQueue,
       workspaceId,
       grantStore: browserPermissionGrantStore,
+      eventService,
     })
   );
   const { createCorsApprovalService } = await import("./services/corsApprovalService.js");
@@ -2331,7 +2338,6 @@ async function main() {
           resolve<{ server: import("./panelHttpServer.js").PanelHttpServer }>("panelHttpServer")
         );
         primePanelRuntimeImage = async (source, ref) => {
-          if (source.startsWith("browser:")) return;
           await panelHttpServer.primeBuild(source, ref, async () => {
             const binding = await buildSystem.bindRuntimeImage(source, ref);
             const build = buildSystem.getBuildByKey(binding.buildKey);
@@ -2384,7 +2390,115 @@ async function main() {
             },
           },
           hooks: {
-            prepareDurableObject: (args) => workerdManager.ensureDurableObjectEntity(args),
+            prepare: (async ({ spec, key, contextId, existingBuildKey, parent }) => {
+              const targetId = canonicalEntityId({
+                kind: spec.kind,
+                source:
+                  spec.kind === "session"
+                    ? spec.source
+                    : spec.execution.surface === "external"
+                      ? `browser:${spec.execution.url}`
+                      : spec.execution.source,
+                className: spec.kind === "do" ? spec.className : undefined,
+                key,
+              });
+              if (spec.execution.surface === "external") {
+                if (!isOpenPanelBrowserUrl(spec.execution.url)) {
+                  throw new Error(`Invalid external browser panel URL: ${spec.execution.url}`);
+                }
+                return {
+                  surface: "external",
+                  target: { id: targetId },
+                  document: { requestedUrl: spec.execution.url },
+                };
+              }
+              if (spec.execution.surface === "inert") {
+                await contextFolderManager.ensureContextFolder(contextId);
+                return { surface: "inert", target: { id: targetId } };
+              }
+
+              const source = spec.execution.source;
+              const ref = spec.execution.ref;
+              let prepared: {
+                effectiveVersion: string;
+                buildKey?: string;
+                executionDigest?: string;
+                authorityRequests?: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
+                targetId?: string;
+              };
+              if (spec.kind === "do") {
+                prepared = await workerdManager.ensureDurableObjectEntity({
+                  source,
+                  ref,
+                  className: spec.className,
+                  key,
+                  contextId,
+                  stateArgs: spec.stateArgs,
+                });
+              } else if (spec.kind === "worker") {
+                prepared = await workerdManager.startWorker({
+                  source,
+                  ref,
+                  key,
+                  contextId,
+                  stateArgs: spec.stateArgs,
+                  env: spec.env,
+                  parent,
+                });
+              } else if (spec.kind === "app") {
+                prepared = await resolveBuildExecution(source, ref);
+              } else if (spec.kind === "panel") {
+                if (existingBuildKey) {
+                  const build = buildSystem.getBuildByKey(existingBuildKey);
+                  if (!build) {
+                    throw new Error(
+                      `Activated panel build ${existingBuildKey} for ${source} is unavailable from the immutable build store`
+                    );
+                  }
+                  if (build.metadata.kind !== "panel" || build.metadata.sourcePath !== source) {
+                    throw new Error(
+                      `Activated panel build ${existingBuildKey} does not belong to panel source ${source}`
+                    );
+                  }
+                  prepared = {
+                    effectiveVersion: build.metadata.ev,
+                    buildKey: existingBuildKey,
+                    executionDigest: build.metadata.execution?.executionDigest,
+                    authorityRequests: build.metadata.authority?.requests,
+                  };
+                } else {
+                  const binding = await buildSystem.bindRuntimeImage(source, ref);
+                  prepared = {
+                    effectiveVersion: binding.effectiveVersion,
+                    buildKey: binding.buildKey,
+                    executionDigest: binding.executionDigest,
+                    authorityRequests: binding.authorityRequests,
+                  };
+                }
+              } else {
+                throw new Error(`Inert session ${targetId} cannot request code preparation`);
+              }
+              if (!prepared.buildKey || !/^[0-9a-f]{64}$/.test(prepared.buildKey)) {
+                throw new Error(
+                  `${spec.kind} ${targetId} did not select an immutable BuildV2 artifact`
+                );
+              }
+              if (!prepared.executionDigest || !/^[0-9a-f]{64}$/.test(prepared.executionDigest)) {
+                throw new Error(`${spec.kind} ${targetId} has no sealed execution digest`);
+              }
+              const result: PreparedCodeIncarnation = {
+                surface: "code",
+                target: { id: prepared.targetId ?? targetId },
+                effectiveVersion: prepared.effectiveVersion,
+                buildKey: prepared.buildKey,
+                executionDigest: prepared.executionDigest,
+                authority: parseUnitAuthorityManifest(
+                  { requests: prepared.authorityRequests },
+                  `${spec.kind} ${targetId} authority`
+                ),
+              };
+              return result;
+            }) as RuntimeEntityHooks["prepare"],
             onDurableObjectActivated: async (record) => {
               if (!record.className) return;
               const owner = {
@@ -2407,7 +2521,6 @@ async function main() {
                 { ...owner, queues }
               );
             },
-            prepareWorker: (args) => workerdManager.startWorker(args),
             // Server-internal DO-storage primitives for cloneContext/destroyContext.
             // cloneDO/destroyDO are NOT exposed to userland — only the runtime
             // service (here) drives them, behind the context-boundary gate.
@@ -2417,43 +2530,6 @@ async function main() {
             destroyDurableStorage: async ({ source, className, key }) => {
               await workerdManager.destroyDO({ source, className, objectKey: key });
             },
-            preparePanel: async ({ source, ref, buildKey }) => {
-              if (source.startsWith("browser:")) return { effectiveVersion: "" };
-              if (buildKey) {
-                const build = buildSystem.getBuildByKey(buildKey);
-                if (!build) {
-                  throw new Error(
-                    `Activated panel build ${buildKey} for ${source} is unavailable from the immutable build store`
-                  );
-                }
-                if (build.metadata.kind !== "panel" || build.metadata.sourcePath !== source) {
-                  throw new Error(
-                    `Activated panel build ${buildKey} does not belong to panel source ${source}`
-                  );
-                }
-                const authority = build.metadata.authority;
-                const executionDigest = build.metadata.execution?.executionDigest;
-                if (!authority || !executionDigest) {
-                  throw new Error(
-                    `Activated panel build ${buildKey} has incomplete sealed identity`
-                  );
-                }
-                return {
-                  effectiveVersion: build.metadata.ev,
-                  buildKey,
-                  executionDigest,
-                  authorityRequests: authority.requests,
-                };
-              }
-              const binding = await buildSystem.bindRuntimeImage(source, ref);
-              return {
-                effectiveVersion: binding.effectiveVersion,
-                buildKey: binding.buildKey,
-                executionDigest: binding.executionDigest,
-                authorityRequests: binding.authorityRequests,
-              };
-            },
-            resolveAppExecution: ({ source, ref }) => resolveBuildExecution(source, ref),
             releaseEntity: async (record, input) => {
               if (record.kind !== "do") return { status: "ready" };
               if (!record.className) {
@@ -4883,7 +4959,9 @@ async function main() {
   // durable hydration gives restored trees the same lazy dependency behavior
   // without treating manifest initPanels as a build-time special case.
   for (const record of entityCache.listActive()) {
-    if (record.kind === "panel") void primePanelRuntimeImage(record.source.repoPath);
+    if (record.kind === "panel" && record.activeBuildKey) {
+      void primePanelRuntimeImage(record.source.repoPath);
+    }
   }
   // Admit server-driven alarms only after every persisted runtime incarnation
   // has reproduced its exact sealed class image and lifecycle recovery has run.

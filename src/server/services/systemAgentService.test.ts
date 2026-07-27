@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import type { RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
+import type {
+  RuntimeEntityCreateSpec,
+  RuntimeEntityHandle,
+} from "@vibestudio/shared/runtime/entitySpec";
 import { createSystemAgentService } from "./systemAgentService.js";
 
 const SNAPSHOT = `state:${"a".repeat(64)}`;
@@ -20,16 +23,18 @@ function fixture() {
   const createEntity = vi.fn(
     async (
       _caller: VerifiedCaller,
-      spec: { source: string; className?: string; key?: string; contextId?: string | null }
+      spec: RuntimeEntityCreateSpec
     ): Promise<RuntimeEntityHandle> => {
-      const isAgent = spec.source === "workers/system-agent";
-      const id = `do:${spec.source}:${spec.className}:${spec.key}`;
+      if (spec.kind !== "do") throw new Error("expected a durable object");
+      const source = spec.execution.source;
+      const isAgent = source === "workers/system-agent";
+      const id = `do:${source}:${spec.className}:${spec.key}`;
       return {
         id,
         targetId: id,
         kind: "do",
         source: {
-          repoPath: spec.source,
+          repoPath: source,
           effectiveVersion: isAgent ? AGENT_EV : "c".repeat(64),
         },
         contextId: spec.contextId!,
@@ -80,8 +85,12 @@ describe("systemAgent service", () => {
       1,
       chromeCaller("alice"),
       expect.objectContaining({
-        source: "workers/pubsub-channel",
-        ref: SNAPSHOT,
+        kind: "do",
+        execution: {
+          surface: "code",
+          source: "workers/pubsub-channel",
+          ref: SNAPSHOT,
+        },
         contextId: result.contextId,
         key: result.channelId,
       })
@@ -96,8 +105,12 @@ describe("systemAgent service", () => {
       2,
       chromeCaller("alice"),
       expect.objectContaining({
-        source: "workers/system-agent",
-        ref: SNAPSHOT,
+        kind: "do",
+        execution: {
+          surface: "code",
+          source: "workers/system-agent",
+          ref: SNAPSHOT,
+        },
         contextId: result.contextId,
         agentChannelId: result.channelId,
       })

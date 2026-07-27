@@ -142,17 +142,72 @@ export type AddressInputResult =
   | { type: "search"; query: string };
 
 const BROWSER_SOURCE_PREFIX = "browser:";
-const SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
-const OPEN_PANEL_BROWSER_URL_RE = /^(?:https?:\/\/|data:|about:blank(?:[?#].*)?$)/i;
+const SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 const PANEL_SOURCE_RE = /^(?:about|panels|packages|apps|templates|workers|skills|projects)\//;
 const DEFAULT_SEARCH_TEMPLATE = "https://www.google.com/search?q=%s";
+
+export type PanelUrlDisposition = "browser-panel" | "managed" | "external" | "refused";
+
+export interface PanelUrlPolicyDecision {
+  disposition: PanelUrlDisposition;
+  scheme?: string;
+  reason?: string;
+}
+
+const PANEL_URL_SCHEME_POLICY: Readonly<Record<string, Exclude<PanelUrlDisposition, "managed">>> = {
+  "http:": "browser-panel",
+  "https:": "browser-panel",
+  "data:": "browser-panel",
+  "blob:": "browser-panel",
+  "file:": "refused",
+  "javascript:": "refused",
+};
+
+/** Classify an absolute URL at the panel boundary using the shared scheme policy. */
+export function classifyPanelUrl(rawUrl: string): PanelUrlPolicyDecision {
+  const value = rawUrl.trim();
+  if (!value) return { disposition: "refused", reason: "URL is empty" };
+
+  if (tryParsePanelLocationLink(value) || /^vibestudio:/i.test(value)) {
+    return { disposition: "managed", scheme: "vibestudio:" };
+  }
+
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return { disposition: "refused", reason: "URL must be absolute" };
+  }
+
+  const scheme = url.protocol.toLowerCase();
+  if (scheme === "about:") {
+    return /^about:blank(?:[?#].*)?$/i.test(value)
+      ? { disposition: "browser-panel", scheme }
+      : {
+          disposition: "refused",
+          scheme,
+          reason: "Only about:blank may be opened in a browser panel",
+        };
+  }
+
+  const disposition = PANEL_URL_SCHEME_POLICY[scheme] ?? "external";
+  if (disposition !== "refused") return { disposition, scheme };
+  return {
+    disposition,
+    scheme,
+    reason:
+      scheme === "file:"
+        ? "Local file URLs are not available to panels"
+        : "JavaScript URLs are not allowed",
+  };
+}
 
 export function isBrowserPanelSource(source: string): boolean {
   return source.startsWith(BROWSER_SOURCE_PREFIX);
 }
 
 export function isOpenPanelBrowserUrl(source: string): boolean {
-  return OPEN_PANEL_BROWSER_URL_RE.test(source.trim());
+  return classifyPanelUrl(source).disposition === "browser-panel";
 }
 
 export function browserUrlFromPanelSource(source: string): string | null {
@@ -197,7 +252,9 @@ export function parseAddressInput(input: string): AddressInputResult | null {
   }
 
   if (SCHEME_RE.test(trimmed)) {
-    if (/^https?:\/\//i.test(trimmed)) return { type: "browser-url", url: trimmed };
+    if (classifyPanelUrl(trimmed).disposition === "browser-panel") {
+      return { type: "browser-url", url: trimmed };
+    }
     return { type: "search", query: trimmed };
   }
 

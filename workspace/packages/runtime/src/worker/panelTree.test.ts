@@ -369,7 +369,7 @@ describe("worker panelTree handles", () => {
         type: "call",
         targetId: "main",
         method: "panelTree.create",
-        args: ["panels/new", { parentId: "parent-slot" }],
+        args: [{ surface: "code", source: "panels/new" }, { parentId: "parent-slot" }],
       },
     ]);
   });
@@ -429,7 +429,7 @@ describe("worker panelTree handles", () => {
         targetId: "main",
         method: "panelTree.create",
         args: [
-          "panels/direct",
+          { surface: "code", source: "panels/direct" },
           {
             focus: true,
             parentId: "parent-slot",

@@ -1,5 +1,6 @@
 import type { EventService } from "@vibestudio/shared/eventsService";
 import { assertAllowedOAuthExternalUrl } from "@vibestudio/shared/externalOpen";
+import { classifyPanelUrl } from "@vibestudio/shared/panelChrome";
 import type { OpenExternalOptions, OpenExternalResult } from "@vibestudio/shared/externalOpen";
 import {
   EXTERNAL_OPEN_AUTHORITY_RESOLVER,
@@ -16,8 +17,6 @@ import {
   describeCapability,
   type CapabilityRequesterKind,
 } from "@vibestudio/shared/authorityPresentation";
-
-const OPEN_EXTERNAL_ALLOWED_SCHEMES = new Set(["http:", "https:", "mailto:"]);
 
 export interface ExternalOpenServiceDeps {
   eventService: EventService;
@@ -107,8 +106,10 @@ function normalizeExternalUrl(rawUrl: string): URL {
   } catch {
     throw new Error("openExternal requires an absolute URL");
   }
-  if (!OPEN_EXTERNAL_ALLOWED_SCHEMES.has(url.protocol)) {
-    throw new Error("openExternal only supports http(s) and mailto URLs");
+  const policy = classifyPanelUrl(url.toString());
+  const isWebUrl = url.protocol === "http:" || url.protocol === "https:";
+  if (!isWebUrl && policy.disposition !== "external") {
+    throw new Error("openExternal refuses panel, file, data, and JavaScript URLs");
   }
   if (url.protocol === "http:" || url.protocol === "https:") {
     url.hash = "";
@@ -122,8 +123,13 @@ function resourceForExternalUrl(url: URL): {
   label: string;
   value: string;
 } {
-  if (url.protocol === "mailto:") {
-    return { key: "mailto:", type: "url-origin", label: "Scheme", value: "mailto:" };
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return {
+      key: url.protocol,
+      type: "url-origin",
+      label: "Scheme",
+      value: url.protocol,
+    };
   }
   return { key: url.origin, type: "url-origin", label: "Origin", value: url.origin };
 }

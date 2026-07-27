@@ -9,9 +9,9 @@
 
 import type {
   EntityRecord,
+  RuntimeCodeEntityCreateSpec,
   RuntimeEntityCreateSpec,
   RuntimeEntityHandle,
-  RuntimePanelEntityCreateSpec,
 } from "@vibestudio/shared/runtime/entitySpec";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
 import type {
@@ -100,7 +100,7 @@ export interface WorkspaceStateClient {
  */
 export interface RuntimeClient {
   createEntity(spec: RuntimeEntityCreateSpec): Promise<RuntimeEntityHandle>;
-  reservePanelEntity(spec: RuntimePanelEntityCreateSpec): Promise<RuntimeEntityHandle>;
-  activatePanelEntity(spec: RuntimePanelEntityCreateSpec): Promise<RuntimeEntityHandle>;
+  reserveEntity(spec: RuntimeCodeEntityCreateSpec): Promise<RuntimeEntityHandle>;
+  activateReservedEntity(spec: RuntimeCodeEntityCreateSpec): Promise<RuntimeEntityHandle>;
   retireEntity(id: string): Promise<void>;
 }

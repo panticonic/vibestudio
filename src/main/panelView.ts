@@ -30,7 +30,11 @@ import {
   type PanelLocation,
 } from "@vibestudio/shared/panelLocation";
 import { selectedWorkspaceNameFromUrl } from "@vibestudio/shared/connect";
-import { isBrowserPanelSource, panelSourceFromBrowserUrl } from "@vibestudio/shared/panelChrome";
+import {
+  classifyPanelUrl,
+  isBrowserPanelSource,
+  panelSourceFromBrowserUrl,
+} from "@vibestudio/shared/panelChrome";
 import type { PanelNavigationState, PanelPlacementHint } from "@vibestudio/shared/types";
 import { logMemorySnapshot } from "./memoryMonitor.js";
 import type { BrowserHistoryRecorder, BrowserNavigationIntent } from "./browserHistoryRecorder.js";
@@ -115,6 +119,11 @@ export class PanelView implements PanelViewLike {
   private readonly managedWorkspace?: string;
   private sendPanelEvent?: (panelId: string, event: string, payload: unknown) => void;
   private onPanelLinkError?: (panelId: string, url: string, message: string) => void;
+  private openExternal?: (url: string) => Promise<void>;
+  private requestSiteCapability: (
+    contents: Electron.WebContents,
+    capability: "popups"
+  ) => Promise<boolean>;
   private onPanelResponsivenessChanged?: (panelId: string, responsive: boolean) => void;
   private formFillManager?: FormFillManagerLike;
   private browserFaviconObserver?: BrowserFaviconObserverLike;
@@ -152,6 +161,8 @@ export class PanelView implements PanelViewLike {
     panelOrchestrator: PanelOrchestratorLike;
     sendPanelEvent?: (panelId: string, event: string, payload: unknown) => void;
     onPanelLinkError?: (panelId: string, url: string, message: string) => void;
+    openExternal?: (url: string) => Promise<void>;
+    requestSiteCapability(contents: Electron.WebContents, capability: "popups"): Promise<boolean>;
     onPanelResponsivenessChanged?: (panelId: string, responsive: boolean) => void;
     formFillManager?: FormFillManagerLike;
     browserFaviconObserver?: BrowserFaviconObserverLike;
@@ -173,6 +184,8 @@ export class PanelView implements PanelViewLike {
       : undefined;
     this.sendPanelEvent = deps.sendPanelEvent;
     this.onPanelLinkError = deps.onPanelLinkError;
+    this.openExternal = deps.openExternal;
+    this.requestSiteCapability = deps.requestSiteCapability;
     this.onPanelResponsivenessChanged = deps.onPanelResponsivenessChanged;
     this.formFillManager = deps.formFillManager;
     this.browserFaviconObserver = deps.browserFaviconObserver;
@@ -525,7 +538,10 @@ export class PanelView implements PanelViewLike {
         const panel = this.panelRegistry.getPanel(panelId);
         if (!panel) return;
         const currentSource = getPanelSource(panel);
-        if (isBrowserPanelSource(currentSource) && /^https?:\/\//i.test(url)) {
+        if (
+          isBrowserPanelSource(currentSource) &&
+          classifyPanelUrl(url).disposition === "browser-panel"
+        ) {
           this.browserHistoryRecorder?.recordNavigation(panelId, url, panel.navigation?.pageTitle);
           const nextSource = panelSourceFromBrowserUrl(url);
           if (nextSource !== currentSource) {
@@ -536,7 +552,7 @@ export class PanelView implements PanelViewLike {
           return;
         }
 
-        if (/^https?:\/\//i.test(url) && !this.isManagedUrl(url)) {
+        if (classifyPanelUrl(url).disposition === "browser-panel" && !this.isManagedUrl(url)) {
           this.handlePanelLinkError(
             panelId,
             new Error("Unexpected raw external main-frame navigation"),
@@ -732,17 +748,24 @@ export class PanelView implements PanelViewLike {
         );
         return { action: "deny" as const };
       }
-      if (/^https?:\/\//i.test(url)) {
-        void this.openBrowserLink(panelId, url, details.disposition).catch((err: unknown) =>
-          this.handlePanelLinkError(panelId, err, url)
+      const policy = classifyPanelUrl(url);
+      if (policy.disposition === "browser-panel") {
+        void this.allowPopup(panelId, contents)
+          .then((allowed) =>
+            allowed ? this.openBrowserLink(panelId, url, details.disposition) : undefined
+          )
+          .catch((err: unknown) => this.handlePanelLinkError(panelId, err, url));
+      } else if (policy.disposition === "external") {
+        void this.allowPopup(panelId, contents)
+          .then((allowed) => (allowed ? this.openExternalLink(url) : undefined))
+          .catch((err: unknown) => this.handlePanelLinkError(panelId, err, url));
+      } else {
+        this.handlePanelLinkError(
+          panelId,
+          new Error(policy.reason ?? "This link type is not supported"),
+          url
         );
-        return { action: "deny" as const };
       }
-      this.handlePanelLinkError(
-        panelId,
-        new Error("This link type is not supported. Use an http(s) or Vibestudio panel link."),
-        url
-      );
       return { action: "deny" as const };
     });
   }
@@ -764,10 +787,21 @@ export class PanelView implements PanelViewLike {
         return;
       }
       if (!this.isManagedUrl(url)) {
-        if (/^https?:\/\//i.test(url)) {
-          event.preventDefault();
+        event.preventDefault();
+        const policy = classifyPanelUrl(url);
+        if (policy.disposition === "browser-panel") {
           void this.openBrowserLink(panelId, url).catch((err: unknown) =>
             this.handlePanelLinkError(panelId, err, url)
+          );
+        } else if (policy.disposition === "external") {
+          void this.openExternalLink(url).catch((err: unknown) =>
+            this.handlePanelLinkError(panelId, err, url)
+          );
+        } else {
+          this.handlePanelLinkError(
+            panelId,
+            new Error(policy.reason ?? "This link type is not supported"),
+            url
           );
         }
         return;
@@ -821,6 +855,17 @@ export class PanelView implements PanelViewLike {
       if (contents && !contents.isDestroyed()) contents.off("will-navigate", handler);
       this.linkInterceptionHandlers.delete(panelId);
     }
+  }
+
+  private async openExternalLink(url: string): Promise<void> {
+    if (!this.openExternal) throw new Error("External link handling is unavailable");
+    await this.openExternal(url);
+  }
+
+  private async allowPopup(panelId: string, contents: Electron.WebContents): Promise<boolean> {
+    const panel = this.panelRegistry.getPanel(panelId);
+    if (!panel || !isBrowserPanelSource(getPanelSource(panel))) return true;
+    return this.requestSiteCapability(contents, "popups");
   }
 
   private getHostedViewInfo(viewId: string): { type?: string } | null {

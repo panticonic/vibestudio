@@ -1,13 +1,17 @@
-import { promises as fs } from "node:fs";
 import { createHash } from "node:crypto";
+import { promises as fs } from "node:fs";
 import path from "node:path";
+import type { AuthorityGrant } from "@vibestudio/rpc";
+import type { BrowserSitePermissionCapability } from "@vibestudio/shared/approvals";
+import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { browserPermissionsMethods } from "@vibestudio/service-schemas/browserPermissions";
 import { browserEnvironmentIdentityFromContext } from "../browserEnvironmentIdentity.js";
 import type { ApprovalQueue, BrowserPermissionApprovalDecision } from "./approvalQueue.js";
+import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 
-export type BrowserPermissionCapability = "camera" | "microphone" | "geolocation" | "notifications";
+export type BrowserPermissionCapability = BrowserSitePermissionCapability;
 export type BrowserPermissionGrant = {
   origin: string;
   capability: BrowserPermissionCapability;
@@ -16,170 +20,270 @@ export type BrowserPermissionGrant = {
   updatedAt: number;
 };
 
-export class BrowserPermissionGrantStore {
-  private readonly durable = new Map<string, BrowserPermissionGrant>();
-  private readonly session = new Map<string, BrowserPermissionGrant>();
-  private readonly filePath: string;
-  private loaded: Promise<void> | null = null;
-  private persist: Promise<void> = Promise.resolve();
+const CAPABILITY_PREFIX = "browser.";
+const RESOURCE_PREFIX = "browser-origin:v1:";
+const PERSISTENT_EPOCH = "persistent";
 
-  constructor(statePath: string) {
-    this.filePath = path.join(statePath, "browser-permission-grants.json");
+type ParsedBrowserGrant = BrowserPermissionGrant & {
+  environmentKey: string;
+  ownerUserId: string;
+  sessionEpoch: string | null;
+  authorityGrantId: string;
+};
+
+/**
+ * Browser permission view over the canonical authority store. The adapter owns
+ * only browser-specific resource encoding and projection; it does not persist
+ * a second source of authority.
+ */
+export class BrowserPermissionGrantProjection {
+  private migration: Promise<void> | null = null;
+
+  constructor(
+    private readonly grants: CapabilityGrantStore,
+    private readonly statePath: string
+  ) {}
+
+  ensureMigrated(): Promise<void> {
+    if (!this.migration) this.migration = this.migrateLegacyJson();
+    return this.migration;
   }
 
-  async ensureLoaded(): Promise<void> {
-    if (this.loaded) return this.loaded;
-    this.loaded = (async () => {
-      try {
-        const parsed = JSON.parse(await fs.readFile(this.filePath, "utf8")) as {
-          version?: unknown;
-          grants?: Array<
-            BrowserPermissionGrant & { environmentKey?: string; ownerUserId?: string }
-          >;
-        };
-        if (parsed.version !== 1 || !Array.isArray(parsed.grants)) return;
-        for (const grant of parsed.grants) {
-          if (
-            typeof grant.environmentKey !== "string" ||
-            typeof grant.ownerUserId !== "string" ||
-            !isCapability(grant.capability) ||
-            (grant.decision !== "allow" && grant.decision !== "block") ||
-            (grant.scope !== "always" && grant.scope !== "block")
-          )
-            continue;
-          try {
-            const origin = normalizeWebOrigin(grant.origin);
-            this.durable.set(
-              key(grant.environmentKey, grant.ownerUserId, origin, grant.capability),
-              { ...grant, origin }
-            );
-          } catch {
-            // Ignore malformed persisted grants; permission state fails closed.
-          }
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  list(
+    environmentKey: string,
+    ownerUserId: string,
+    sessionEpoch?: string
+  ): BrowserPermissionGrant[] {
+    const selected = new Map<string, ParsedBrowserGrant>();
+    for (const grant of this.parsedActiveGrants()) {
+      if (
+        grant.environmentKey !== environmentKey ||
+        grant.ownerUserId !== ownerUserId ||
+        (grant.sessionEpoch !== null &&
+          sessionEpoch !== undefined &&
+          grant.sessionEpoch !== sessionEpoch)
+      ) {
+        continue;
       }
-    })();
-    return this.loaded;
-  }
-
-  list(environmentKey: string, ownerUserId: string): BrowserPermissionGrant[] {
-    const prefix = `${environmentKey}\0${ownerUserId}\0`;
-    const merged = new Map<string, BrowserPermissionGrant>();
-    for (const target of [this.durable, this.session]) {
-      for (const [compound, grant] of target) {
-        if (compound.startsWith(prefix)) merged.set(compound, { ...grant });
-      }
+      const compound = `${grant.origin}\0${grant.capability}`;
+      const prior = selected.get(compound);
+      if (!prior || grant.decision === "block") selected.set(compound, grant);
     }
-    return [...merged.values()];
+    return [...selected.values()].map(({ origin, capability, decision, scope, updatedAt }) => ({
+      origin,
+      capability,
+      decision,
+      scope,
+      updatedAt,
+    }));
   }
 
   get(
     environmentKey: string,
     ownerUserId: string,
+    sessionEpoch: string,
     origin: string,
     capability: BrowserPermissionCapability
   ): BrowserPermissionGrant | undefined {
-    const compound = key(environmentKey, ownerUserId, origin, capability);
-    return this.session.get(compound) ?? this.durable.get(compound);
+    return this.list(environmentKey, ownerUserId, sessionEpoch).find(
+      (grant) => grant.origin === origin && grant.capability === capability
+    );
   }
 
-  async remember(
+  remember(
     environmentKey: string,
     ownerUserId: string,
+    sessionEpoch: string,
     grants: BrowserPermissionGrant[]
-  ): Promise<void> {
+  ): void {
+    const subject = userSubject(ownerUserId);
     for (const grant of grants) {
-      const target = grant.scope === "session" ? this.session : this.durable;
-      target.set(key(environmentKey, ownerUserId, grant.origin, grant.capability), grant);
+      this.revokeMatching(
+        (candidate) =>
+          candidate.environmentKey === environmentKey &&
+          candidate.ownerUserId === ownerUserId &&
+          candidate.origin === grant.origin &&
+          candidate.capability === grant.capability
+      );
+      const epoch = grant.scope === "session" ? sessionEpoch : PERSISTENT_EPOCH;
+      this.grants.issue({
+        effect: grant.decision === "block" ? "deny" : "allow",
+        capability: `${CAPABILITY_PREFIX}${grant.capability}`,
+        resource: {
+          kind: "exact",
+          key: browserPermissionResourceKey(environmentKey, epoch, grant.origin),
+        },
+        subject,
+        constraints: { lineageAtConsent: [] },
+        issuedBy: subject,
+        provenance: "acquisition",
+        createdAt: grant.updatedAt,
+        scope: "system",
+        decidedBy: subject,
+        decisionSurface: "browser-permission",
+      });
     }
-    if (grants.some((grant) => grant.scope !== "session")) await this.save();
   }
 
-  async revoke(
+  revoke(
     environmentKey: string,
     ownerUserId: string,
     origin: string,
     capability?: BrowserPermissionCapability
-  ): Promise<number> {
-    let count = 0;
-    for (const target of [this.session, this.durable]) {
-      for (const [compound, grant] of target) {
-        if (
-          compound.startsWith(`${environmentKey}\0${ownerUserId}\0`) &&
-          grant.origin === origin &&
-          (!capability || grant.capability === capability)
-        ) {
-          target.delete(compound);
-          count += 1;
-        }
-      }
-    }
-    await this.save();
-    return count;
+  ): number {
+    return this.revokeMatching(
+      (grant) =>
+        grant.environmentKey === environmentKey &&
+        grant.ownerUserId === ownerUserId &&
+        grant.origin === origin &&
+        (!capability || grant.capability === capability)
+    );
+  }
+
+  cleanupPreviousSessions(
+    environmentKey: string,
+    ownerUserId: string,
+    currentEpoch: string
+  ): number {
+    return this.revokeMatching(
+      (grant) =>
+        grant.environmentKey === environmentKey &&
+        grant.ownerUserId === ownerUserId &&
+        grant.sessionEpoch !== null &&
+        grant.sessionEpoch !== currentEpoch
+    );
   }
 
   idFor(environmentKey: string, ownerUserId: string, grant: BrowserPermissionGrant): string {
     return createHash("sha256")
-      .update(key(environmentKey, ownerUserId, grant.origin, grant.capability))
+      .update(`${environmentKey}\0${ownerUserId}\0${grant.origin}`)
       .digest("base64url");
   }
 
-  async revokeById(environmentKey: string, ownerUserId: string, id: string): Promise<boolean> {
-    for (const grant of this.list(environmentKey, ownerUserId)) {
-      if (this.idFor(environmentKey, ownerUserId, grant) === id) {
-        await this.revoke(environmentKey, ownerUserId, grant.origin, grant.capability);
-        return true;
+  revokeById(environmentKey: string, ownerUserId: string, id: string): boolean {
+    const grant = this.list(environmentKey, ownerUserId).find(
+      (candidate) => this.idFor(environmentKey, ownerUserId, candidate) === id
+    );
+    return grant ? this.revoke(environmentKey, ownerUserId, grant.origin) > 0 : false;
+  }
+
+  private parsedActiveGrants(): ParsedBrowserGrant[] {
+    return this.grants
+      .listActiveAuthorityGrants()
+      .flatMap((grant) => parseBrowserGrant(grant) ?? []);
+  }
+
+  private revokeMatching(predicate: (grant: ParsedBrowserGrant) => boolean): number {
+    let count = 0;
+    for (const grant of this.parsedActiveGrants()) {
+      if (predicate(grant) && this.grants.revoke(grant.authorityGrantId)) count += 1;
+    }
+    return count;
+  }
+
+  private async migrateLegacyJson(): Promise<void> {
+    const legacyPath = path.join(this.statePath, "browser-permission-grants.json");
+    let parsed: {
+      version?: unknown;
+      grants?: Array<BrowserPermissionGrant & { environmentKey?: string; ownerUserId?: string }>;
+    };
+    try {
+      parsed = JSON.parse(await fs.readFile(legacyPath, "utf8")) as typeof parsed;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (parsed.version === 1 && Array.isArray(parsed.grants)) {
+      const existingIds = new Set(
+        this.grants
+          .listAuthorityGrants()
+          .map((grant) => grant.id)
+          .filter(Boolean)
+      );
+      for (const grant of parsed.grants) {
+        if (
+          typeof grant.environmentKey !== "string" ||
+          typeof grant.ownerUserId !== "string" ||
+          !isCapability(grant.capability) ||
+          (grant.decision !== "allow" && grant.decision !== "block") ||
+          (grant.scope !== "always" && grant.scope !== "block")
+        ) {
+          continue;
+        }
+        let origin: string;
+        try {
+          origin = normalizeWebOrigin(grant.origin);
+        } catch {
+          continue;
+        }
+        const id = `browser-legacy-${createHash("sha256")
+          .update(`${grant.environmentKey}\0${grant.ownerUserId}\0${origin}\0${grant.capability}`)
+          .digest("base64url")}`;
+        if (existingIds.has(id)) continue;
+        const subject = userSubject(grant.ownerUserId);
+        this.grants.issue({
+          id,
+          effect: grant.decision === "block" ? "deny" : "allow",
+          capability: `${CAPABILITY_PREFIX}${grant.capability}`,
+          resource: {
+            kind: "exact",
+            key: browserPermissionResourceKey(grant.environmentKey, PERSISTENT_EPOCH, origin),
+          },
+          subject,
+          constraints: { lineageAtConsent: [] },
+          issuedBy: subject,
+          provenance: "acquisition",
+          createdAt: grant.updatedAt,
+          scope: "system",
+          decidedBy: subject,
+          decisionSurface: "browser-permission-migration",
+        });
       }
     }
-    return false;
-  }
-
-  private durableEntries(): Array<
-    BrowserPermissionGrant & { environmentKey: string; ownerUserId: string }
-  > {
-    return [...this.durable.entries()].map(([compound, grant]) => {
-      const [environmentKey, ownerUserId] = compound.split("\0", 2) as [string, string];
-      return { ...grant, environmentKey, ownerUserId };
-    });
-  }
-
-  private save(): Promise<void> {
-    const write = async () => {
-      await fs.mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
-      const temporary = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
-      await fs.writeFile(temporary, JSON.stringify({ version: 1, grants: this.durableEntries() }), {
-        mode: 0o600,
-      });
-      await fs.rename(temporary, this.filePath);
-    };
-    this.persist = this.persist.then(write, write);
-    return this.persist;
+    await fs.rename(legacyPath, `${legacyPath}.migrated`);
   }
 }
 
 export function createBrowserPermissionsService(deps: {
   approvalQueue: ApprovalQueue;
   workspaceId: string;
-  grantStore: BrowserPermissionGrantStore;
+  grantStore: BrowserPermissionGrantProjection;
+  eventService: Pick<EventService, "emitToUser">;
 }): ServiceDefinition {
+  const publish = (
+    environmentKey: string,
+    ownerUserId: string,
+    sessionEpoch: string
+  ): BrowserPermissionGrant[] => {
+    const grants = deps.grantStore.list(environmentKey, ownerUserId, sessionEpoch);
+    deps.eventService.emitToUser(ownerUserId, "browser-permissions:changed", {
+      environmentKey,
+      grants,
+    });
+    return grants;
+  };
+
   return {
     name: "browserPermissions",
     description: "Owner-scoped browser website permission grants",
-    authority: { principals: ["host"] },
+    authority: { principals: ["user"] },
     methods: browserPermissionsMethods,
     handler: defineServiceHandler("browserPermissions", browserPermissionsMethods, {
-      snapshot: async (ctx) => {
-        await deps.grantStore.ensureLoaded();
+      snapshot: async (ctx, [{ sessionEpoch }]) => {
+        await deps.grantStore.ensureMigrated();
         const identity = browserEnvironmentIdentityFromContext(deps.workspaceId, ctx);
+        deps.grantStore.cleanupPreviousSessions(
+          identity.environmentKey,
+          identity.ownerUserId,
+          sessionEpoch
+        );
         return {
           environmentKey: identity.environmentKey,
-          grants: deps.grantStore.list(identity.environmentKey, identity.ownerUserId),
+          grants: deps.grantStore.list(identity.environmentKey, identity.ownerUserId, sessionEpoch),
         };
       },
       request: async (ctx, [request]) => {
-        await deps.grantStore.ensureLoaded();
+        await deps.grantStore.ensureMigrated();
         const identity = browserEnvironmentIdentityFromContext(deps.workspaceId, ctx);
         const origin = normalizeWebOrigin(request.origin);
         const topLevelUrl = new URL(request.topLevelUrl);
@@ -188,20 +292,34 @@ export function createBrowserPermissionsService(deps: {
         }
         const capabilities = [...new Set(request.capabilities)];
         const existing = capabilities.map((capability) =>
-          deps.grantStore.get(identity.environmentKey, identity.ownerUserId, origin, capability)
+          deps.grantStore.get(
+            identity.environmentKey,
+            identity.ownerUserId,
+            request.sessionEpoch,
+            origin,
+            capability
+          )
         );
         if (existing.some((grant) => grant?.decision === "block")) {
           return {
             decision: "block" as const,
             granted: false,
-            grants: deps.grantStore.list(identity.environmentKey, identity.ownerUserId),
+            grants: deps.grantStore.list(
+              identity.environmentKey,
+              identity.ownerUserId,
+              request.sessionEpoch
+            ),
           };
         }
         if (existing.every((grant) => grant?.decision === "allow")) {
           return {
             decision: "session" as const,
             granted: true,
-            grants: deps.grantStore.list(identity.environmentKey, identity.ownerUserId),
+            grants: deps.grantStore.list(
+              identity.environmentKey,
+              identity.ownerUserId,
+              request.sessionEpoch
+            ),
           };
         }
         const requestDecision = deps.approvalQueue.requestBrowserPermission;
@@ -225,9 +343,10 @@ export function createBrowserPermissionsService(deps: {
         });
         const granted = decision === "once" || decision === "session" || decision === "always";
         if (decision === "session" || decision === "always" || decision === "block") {
-          await deps.grantStore.remember(
+          deps.grantStore.remember(
             identity.environmentKey,
             identity.ownerUserId,
+            request.sessionEpoch,
             capabilities.map((capability) => ({
               origin,
               capability,
@@ -240,31 +359,76 @@ export function createBrowserPermissionsService(deps: {
         return {
           decision: decision satisfies BrowserPermissionApprovalDecision,
           granted,
-          grants: deps.grantStore.list(identity.environmentKey, identity.ownerUserId),
+          grants: publish(identity.environmentKey, identity.ownerUserId, request.sessionEpoch),
         };
       },
       revoke: async (ctx, [request]) => {
-        await deps.grantStore.ensureLoaded();
+        await deps.grantStore.ensureMigrated();
         const identity = browserEnvironmentIdentityFromContext(deps.workspaceId, ctx);
         const origin = normalizeWebOrigin(request.origin);
-        return deps.grantStore.revoke(
+        const removed = deps.grantStore.revoke(
           identity.environmentKey,
           identity.ownerUserId,
           origin,
           request.capability
         );
+        publish(identity.environmentKey, identity.ownerUserId, request.sessionEpoch);
+        return removed;
       },
     }),
   };
 }
 
-function key(
+function browserPermissionResourceKey(
   environmentKey: string,
-  ownerUserId: string,
-  origin: string,
-  capability: BrowserPermissionCapability
-) {
-  return `${environmentKey}\0${ownerUserId}\0${origin}\0${capability}`;
+  epoch: string,
+  origin: string
+): string {
+  return `${RESOURCE_PREFIX}${encode(environmentKey)}:${encode(epoch)}:${encode(origin)}`;
+}
+
+function parseBrowserGrant(grant: AuthorityGrant): ParsedBrowserGrant | null {
+  if (
+    !grant.id ||
+    !grant.subject.startsWith("user:") ||
+    !grant.capability.startsWith(CAPABILITY_PREFIX) ||
+    grant.resource.kind !== "exact" ||
+    !grant.resource.key.startsWith(RESOURCE_PREFIX)
+  ) {
+    return null;
+  }
+  const capability = grant.capability.slice(CAPABILITY_PREFIX.length);
+  if (!isCapability(capability)) return null;
+  const encoded = grant.resource.key.slice(RESOURCE_PREFIX.length).split(":");
+  if (encoded.length !== 3) return null;
+  try {
+    const [environmentKey, epoch, origin] = encoded.map(decode) as [string, string, string];
+    return {
+      environmentKey,
+      ownerUserId: grant.subject.slice("user:".length),
+      sessionEpoch: epoch === PERSISTENT_EPOCH ? null : epoch,
+      authorityGrantId: grant.id,
+      origin: normalizeWebOrigin(origin),
+      capability,
+      decision: grant.effect === "deny" ? "block" : "allow",
+      scope: grant.effect === "deny" ? "block" : epoch === PERSISTENT_EPOCH ? "always" : "session",
+      updatedAt: grant.createdAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function encode(value: string): string {
+  return Buffer.from(value, "utf8").toString("base64url");
+}
+
+function decode(value: string): string {
+  return Buffer.from(value, "base64url").toString("utf8");
+}
+
+function userSubject(ownerUserId: string): `user:${string}` {
+  return `user:${ownerUserId}`;
 }
 
 function normalizeWebOrigin(value: string): string {
@@ -277,5 +441,14 @@ function normalizeWebOrigin(value: string): string {
 }
 
 function isCapability(value: unknown): value is BrowserPermissionCapability {
-  return ["camera", "microphone", "geolocation", "notifications"].includes(String(value));
+  return [
+    "camera",
+    "microphone",
+    "geolocation",
+    "notifications",
+    "downloads",
+    "clipboard",
+    "autofill",
+    "popups",
+  ].includes(String(value));
 }

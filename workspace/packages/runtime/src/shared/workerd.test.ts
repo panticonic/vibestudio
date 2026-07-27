@@ -61,7 +61,7 @@ describe("createWorkerdClient", () => {
     expect(mock.rpc.call).toHaveBeenCalledWith("main", "runtime.createEntity", [
       {
         kind: "worker",
-        source: "workers/example",
+        execution: { surface: "code", source: "workers/example" },
         key: "probe",
         contextId: "ctx-1",
         env: { NON_SECRET_PROBE: "configured" },

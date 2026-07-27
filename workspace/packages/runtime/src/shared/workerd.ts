@@ -58,8 +58,10 @@ export interface WorkerSourceInfo {
 
 export type WorkerCreateOptions = Omit<
   Extract<RuntimeEntityCreateSpec, { kind: "worker" }>,
-  "kind" | "source"
->;
+  "kind" | "execution"
+> & {
+  ref?: string;
+};
 
 export type WorkerEntityHandle = RuntimeEntityHandle & { kind: "worker" };
 
@@ -163,10 +165,16 @@ export function createWorkerdClient(rpc: RpcCaller): WorkerdClient {
 
   return {
     listSources: () => callWorkers<WorkerSourceInfo[]>("listSources"),
-    create: (source, options = {}) =>
-      rpc.call<WorkerEntityHandle>("main", "runtime.createEntity", [
-        { kind: "worker", source, ...options },
-      ]),
+    create: (source, options = {}) => {
+      const { ref, ...entityOptions } = options;
+      return rpc.call<WorkerEntityHandle>("main", "runtime.createEntity", [
+        {
+          kind: "worker",
+          execution: { surface: "code", source, ...(ref ? { ref } : {}) },
+          ...entityOptions,
+        },
+      ]);
+    },
     list: () => rpc.call<WorkerEntityInfo[]>("main", "runtime.listEntities", [{ kind: "worker" }]),
     destroy: (entity) =>
       rpc.call<void>("main", "runtime.retireEntity", [

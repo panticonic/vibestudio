@@ -24,6 +24,7 @@ import {
   PanelTreeSnapshotSchema,
 } from "@vibestudio/shared/panelContracts";
 import { JsonObjectSchema, JsonValueSchema } from "@vibestudio/shared/wireValues";
+import { CodeExecutionSchema, ExternalDocumentExecutionSchema } from "./runtime.js";
 
 // Access descriptors classify panel-tree operations. The service and method
 // authority declarations own their compositional principal requirements.
@@ -91,6 +92,10 @@ export const PanelPlacementHintSchema = z.object({
   minWidth: z.number().positive().optional().describe("Minimum column width in px."),
 });
 const StateArgsSchema = z.record(z.unknown());
+export const PanelExecutionSchema = z.discriminatedUnion("surface", [
+  CodeExecutionSchema,
+  ExternalDocumentExecutionSchema,
+]);
 // The list/handle APIs intentionally expose lightweight slot metadata, not the
 // recursive persisted Panel record used by getTreeSnapshot. Keeping these wire
 // contracts distinct prevents handle hydration from being coupled to internal
@@ -191,7 +196,6 @@ export const PanelTreeCreateOptionsSchema = z
       .string()
       .optional()
       .describe("Storage-isolation context id to create the panel in."),
-    ref: z.string().optional().describe("Optional git-style ref / version pin for the source."),
     stateArgs: StateArgsSchema.optional().describe(
       "Initial validated state-args passed to the panel runtime."
     ),
@@ -259,12 +263,12 @@ export const panelTreeMethods = defineServiceMethods({
   },
   create: {
     description:
-      "Internal structural primitive: durably create a panel and return its initial observation while boot continues. Application callers use openPanel, which waits for boot readiness.",
-    args: z.tuple([z.string(), PanelTreeCreateOptionsSchema]),
+      "Internal structural primitive: durably create an explicitly declared code or external-document panel and return its initial observation while boot continues. Application callers use openPanel, which waits for boot readiness.",
+    args: z.tuple([PanelExecutionSchema, PanelTreeCreateOptionsSchema]),
     returns: CreateResultSchema,
     authority: panelBoundaryAuthority("create"),
     access: WRITE_ACCESS,
-    examples: [{ args: ["panels/chat", { focus: true }] }],
+    examples: [{ args: [{ surface: "code", source: "panels/chat" }, { focus: true }] }],
   },
   ensureLoaded: {
     description:

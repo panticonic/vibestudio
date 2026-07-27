@@ -469,19 +469,19 @@ export const METHOD_TIERS = {
     tier: "open",
     session: "family",
     rationale:
-      "Host-principal-only read of browser permission grants; the authority principal gate keeps prompts/code out.",
+      "Verified-user read of that user's exact-origin browser grants; code and anonymous callers remain excluded.",
   },
   "browserPermissions.request": {
     tier: "open",
     session: "family",
     rationale:
-      "Host-principal-only permission prompt flow; user consent happens in the shell approval UI itself.",
+      "Verified-user browser permission prompt flow; the decision is stored as a user grant and code callers remain excluded.",
   },
   "browserPermissions.revoke": {
     tier: "open",
     session: "family",
     rationale:
-      "Host-principal-only revocation of browser permission grants, driven by explicit shell UI.",
+      "Verified-user revocation of that user's exact-origin browser grants, driven by explicit shell UI.",
   },
   "build.getBuildReport": {
     tier: "open",
@@ -1875,11 +1875,11 @@ export const METHOD_TIERS = {
     session: "family",
     rationale: "G2: credential mediation; §2 default {code, session} family",
   },
-  "runtime.activatePanelEntity": {
+  "runtime.activateReservedEntity": {
     tier: "open",
     session: "codeOnly",
     rationale:
-      "Host-only panel lifecycle plumbing activates an already reserved panel; the method declaration excludes userland callers",
+      "Host-only lifecycle plumbing activates an already reserved code-backed entity; the method declaration excludes userland callers",
   },
   "runtime.cloneContext": {
     tier: "gated",
@@ -1927,11 +1927,11 @@ export const METHOD_TIERS = {
     rationale:
       "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
   },
-  "runtime.reservePanelEntity": {
+  "runtime.reserveEntity": {
     tier: "open",
     session: "codeOnly",
     rationale:
-      "Host-only panel lifecycle plumbing reserves a non-executable identity; the method declaration excludes userland callers",
+      "Host-only lifecycle plumbing reserves a non-executable code-backed identity; the method declaration excludes userland callers",
   },
   "runtime.resolveContext": {
     tier: "open",

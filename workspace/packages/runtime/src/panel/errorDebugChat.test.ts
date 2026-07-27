@@ -120,7 +120,7 @@ describe("panel error diagnostic chat launcher", () => {
 
     expect(result).toMatchObject({ panelId: "debug-chat", title: "Agentic Chat" });
     expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.create", [
-      "panels/chat",
+      { surface: "code", source: "panels/chat" },
       expect.objectContaining({
         parentId: "spectrolite",
         focus: true,

@@ -399,7 +399,7 @@ describe("panelTreeService", () => {
 
     await expect(
       dispatchPanelTree(service, deps, ctx(), "create", [
-        "panels/child",
+        { surface: "code", source: "panels/child" },
         { parentId: "parent", contextId: "ctx-foreign" },
       ])
     ).resolves.toMatchObject({ id: "created", title: "Created", kind: "workspace" });
@@ -431,7 +431,10 @@ describe("panelTreeService", () => {
       callerId: "panel:requester",
       callerKind: "panel",
       method: "create",
-      args: ["panels/child", { parentId: "parent", contextId: "ctx-foreign" }],
+      args: [
+        { surface: "code", source: "panels/child" },
+        { parentId: "parent", contextId: "ctx-foreign" },
+      ],
     });
   });
 
@@ -446,7 +449,10 @@ describe("panelTreeService", () => {
     const service = createPanelTreeService(deps);
 
     await expect(
-      service.handler(ctx(), "create", ["panels/child", { parentId: "parent" }])
+      service.handler(ctx(), "create", [
+        { surface: "code", source: "panels/child" },
+        { parentId: "parent" },
+      ])
     ).resolves.toMatchObject({ id: "created", title: "Created", kind: "workspace" });
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
@@ -463,7 +469,10 @@ describe("panelTreeService", () => {
     );
 
     await expect(
-      service.handler(ctx(), "create", ["panels/missing", { parentId: "parent" }])
+      service.handler(ctx(), "create", [
+        { surface: "code", source: "panels/missing" },
+        { parentId: "parent" },
+      ])
     ).rejects.toThrow("Unknown build unit: panels/missing");
 
     expect(validateOpenPanelSource).toHaveBeenCalledWith({
@@ -493,7 +502,7 @@ describe("panelTreeService", () => {
 
     await expect(
       dispatchPanelTree(service, deps, ctx(), "create", [
-        "panels/child",
+        { surface: "code", source: "panels/child" },
         { parentId: "parent", contextId: "ctx-foreign" },
       ])
     ).rejects.toThrow(/denied/i);
@@ -520,7 +529,9 @@ describe("panelTreeService", () => {
       treeDeps({ approvalQueue, resolveRequesterPanel, bridge })
     );
 
-    await expect(service.handler(ctx(), "create", ["panels/child", {}])).resolves.toMatchObject({
+    await expect(
+      service.handler(ctx(), "create", [{ surface: "code", source: "panels/child" }, {}])
+    ).resolves.toMatchObject({
       id: "created",
       title: "Created",
       kind: "workspace",
@@ -532,7 +543,7 @@ describe("panelTreeService", () => {
       callerId: "panel:requester",
       callerKind: "panel",
       method: "create",
-      args: ["panels/child", {}],
+      args: [{ surface: "code", source: "panels/child" }, {}],
     });
   });
 
@@ -602,7 +613,7 @@ describe("panelTreeService", () => {
     ).rejects.toThrow(/stateArgs\.contextId cannot select a workspace branch/);
     await expect(
       service.handler(ctx(), "create", [
-        "panels/chat",
+        { surface: "code", source: "panels/chat" },
         { contextId: "ctx-other", stateArgs: { contextId: "ctx-other" } },
       ])
     ).rejects.toThrow(/stateArgs\.contextId cannot select a workspace branch/);

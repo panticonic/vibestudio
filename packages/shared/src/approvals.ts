@@ -661,7 +661,11 @@ export type BrowserSitePermissionCapability =
   | "camera"
   | "microphone"
   | "geolocation"
-  | "notifications";
+  | "notifications"
+  | "downloads"
+  | "clipboard"
+  | "autofill"
+  | "popups";
 
 export interface PendingBrowserPermissionApproval extends PendingApprovalBase {
   kind: "browser-permission";

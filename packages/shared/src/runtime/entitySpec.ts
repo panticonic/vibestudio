@@ -279,14 +279,15 @@ export interface EntityActivationInput {
 }
 
 /**
- * Durable input for reserving a panel before its executable image is ready.
+ * Durable input for reserving a code-backed entity before its executable image
+ * is ready.
  *
  * A panel whose context was minted for this launch is born as a lifecycle
  * child of the verified creator's context in the same transaction as its
  * entity row. Explicitly shared contexts omit this field and retain their
  * existing ownership.
  */
-export interface PanelReservationInput extends EntityActivationInput {
+export interface EntityReservationInput extends EntityActivationInput {
   lifecycleOwner?: {
     contextId: string;
     entityId: string;
@@ -303,57 +304,92 @@ export interface PanelReservationInput extends EntityActivationInput {
  */
 export type RuntimeEntityBuildRef = string;
 
+/** Workspace-authored executable image selected from an immutable build. */
+export interface CodeExecution {
+  surface: "code";
+  source: RepoPath;
+  ref?: RuntimeEntityBuildRef;
+}
+
+/**
+ * Host-rendered document. The URL is the requested navigation coordinate; the
+ * live committed security origin remains a host fact and must be read from the
+ * Electron frame at the point of enforcement.
+ */
+export interface ExternalDocumentExecution {
+  surface: "external";
+  url: string;
+}
+
+/** Entity with identity and lifecycle but no executable image. */
+export interface InertExecution {
+  surface: "inert";
+}
+
+interface RuntimeEntityCreateCommon {
+  contextId?: string | null;
+  key?: string;
+}
+
 export type RuntimeEntityCreateSpec =
-  | {
+  | (RuntimeEntityCreateCommon & {
       kind: "panel";
-      source: string;
-      ref?: RuntimeEntityBuildRef;
-      contextId?: string | null;
-      key?: string;
+      execution: CodeExecution | ExternalDocumentExecution;
       stateArgs?: unknown;
-    }
-  | {
+    })
+  | (RuntimeEntityCreateCommon & {
       kind: "app";
-      source: string;
-      ref?: RuntimeEntityBuildRef;
-      contextId?: string | null;
-      key?: string;
+      execution: CodeExecution;
       stateArgs?: unknown;
-    }
-  | {
+    })
+  | (RuntimeEntityCreateCommon & {
       kind: "worker";
-      source: string;
-      ref?: RuntimeEntityBuildRef;
-      contextId?: string | null;
-      key?: string;
+      execution: CodeExecution;
       stateArgs?: unknown;
       env?: Record<string, string>;
       agentBinding?: RuntimeAgentBindingInput;
       agentChannelId?: string;
-    }
-  | {
+    })
+  | (RuntimeEntityCreateCommon & {
       kind: "do";
-      source: string;
-      ref?: RuntimeEntityBuildRef;
+      execution: CodeExecution;
       className: string;
-      key?: string;
-      contextId?: string | null;
       stateArgs?: unknown;
       agentBinding?: RuntimeAgentBindingInput;
       agentChannelId?: string;
-    }
-  | {
+    })
+  | (RuntimeEntityCreateCommon & {
       /** Inert session entity: identity, context, and optional external-agent binding. */
       kind: "session";
+      execution: InertExecution;
+      /** Logical provenance label, not an executable source coordinate. */
       source: string;
-      contextId?: string | null;
-      key?: string;
       title?: string;
       /** Channel this session's external agent identity serves. */
       agentChannelId?: string;
-    };
+    });
 
 export type RuntimePanelEntityCreateSpec = Extract<RuntimeEntityCreateSpec, { kind: "panel" }>;
+export type RuntimeCodePanelEntityCreateSpec = Omit<RuntimePanelEntityCreateSpec, "execution"> & {
+  execution: CodeExecution;
+};
+export type RuntimeCodeEntityCreateSpec =
+  | RuntimeCodePanelEntityCreateSpec
+  | Extract<RuntimeEntityCreateSpec, { kind: "app" | "worker" | "do" }>;
+
+/** Durable source coordinate retained by the current entity-store schema. */
+export function runtimeEntitySource(spec: RuntimeEntityCreateSpec): string {
+  if (spec.kind === "session") return spec.source;
+  return spec.execution.surface === "external"
+    ? `browser:${spec.execution.url}`
+    : spec.execution.source;
+}
+
+export function runtimeEntityBuildRef(
+  spec: RuntimeEntityCreateSpec
+): RuntimeEntityBuildRef | undefined {
+  return spec.execution.surface === "code" ? spec.execution.ref : undefined;
+}
 
 export interface RuntimeEntityHandle {
   id: string;

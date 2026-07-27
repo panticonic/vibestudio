@@ -991,14 +991,18 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
           }
         }
       }
-      if (service === "runtime" && method === "reservePanelEntity") {
-        const spec = args[0] as { source: string; contextId?: string; key: string };
+      if (service === "runtime" && method === "reserveEntity") {
+        const spec = args[0] as {
+          execution: { source: string };
+          contextId?: string;
+          key: string;
+        };
         const id = `panel:nav-new-${++entityCounter}`;
         const contextId = spec.contextId ?? `ctx-created-${entityCounter}`;
         const record = {
           id,
           kind: "panel",
-          source: { repoPath: spec.source, effectiveVersion: "" },
+          source: { repoPath: spec.execution.source, effectiveVersion: "" },
           contextId,
           key: spec.key,
           createdAt: 2,
@@ -1014,13 +1018,17 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
           targetId: id,
         };
       }
-      if (service === "runtime" && method === "activatePanelEntity") {
-        const spec = args[0] as { source: string; contextId: string; key: string };
+      if (service === "runtime" && method === "activateReservedEntity") {
+        const spec = args[0] as {
+          execution: { source: string };
+          contextId: string;
+          key: string;
+        };
         const record = [...entities.values()].find((candidate) => candidate["key"] === spec.key);
         if (!record) throw new Error("missing reserved panel");
         await activationGate;
         record["status"] = "active";
-        record["source"] = { repoPath: spec.source, effectiveVersion: "ev" };
+        record["source"] = { repoPath: spec.execution.source, effectiveVersion: "ev" };
         record["activeBuildKey"] = "b".repeat(64);
         record["activeExecutionDigest"] = "e".repeat(64);
         record["activeAuthority"] = { requests: [] };
@@ -1095,7 +1103,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       callerId: "server",
       callerKind: "server",
       method: "create",
-      args: ["panels/new", { focus: true }],
+      args: [{ surface: "code", source: "panels/new" }, { focus: true }],
     });
     const rootResult = await createPromise;
     expect(rootResult).toMatchObject({
@@ -1234,14 +1242,18 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
             }
           }
         }
-        if (service === "runtime" && method === "reservePanelEntity") {
-          const spec = args[0] as { source: string; contextId?: string; key: string };
+        if (service === "runtime" && method === "reserveEntity") {
+          const spec = args[0] as {
+            execution: { source: string };
+            contextId?: string;
+            key: string;
+          };
           const id = `panel:nav-new-${++entityCounter}`;
           const contextId = spec.contextId ?? `ctx-created-${entityCounter}`;
           const record = {
             id,
             kind: "panel",
-            source: { repoPath: spec.source, effectiveVersion: "" },
+            source: { repoPath: spec.execution.source, effectiveVersion: "" },
             contextId,
             key: spec.key,
             parentId: ctx.caller.runtime.id,
@@ -1259,12 +1271,16 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
             targetId: id,
           };
         }
-        if (service === "runtime" && method === "activatePanelEntity") {
-          const spec = args[0] as { source: string; contextId: string; key: string };
+        if (service === "runtime" && method === "activateReservedEntity") {
+          const spec = args[0] as {
+            execution: { source: string };
+            contextId: string;
+            key: string;
+          };
           const record = [...entities.values()].find((candidate) => candidate["key"] === spec.key);
           if (!record) throw new Error("missing reserved panel");
           record["status"] = "active";
-          record["source"] = { repoPath: spec.source, effectiveVersion: "ev-child" };
+          record["source"] = { repoPath: spec.execution.source, effectiveVersion: "ev-child" };
           record["activeBuildKey"] = "b".repeat(64);
           record["activeExecutionDigest"] = "e".repeat(64);
           record["activeAuthority"] = { requests: [] };
@@ -1342,7 +1358,10 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       callerKind: "panel",
       subject: { userId: "usr_alice", handle: "alice" },
       method: "create",
-      args: ["panels/child", { placement: { disposition: "side", minWidth: 480 } }],
+      args: [
+        { surface: "code", source: "panels/child" },
+        { placement: { disposition: "side", minWidth: 480 } },
+      ],
     });
 
     expect(result).toMatchObject({
@@ -1364,7 +1383,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       ownerUserId: "usr_alice",
     });
     const runtimeCreate = dispatch.mock.calls.find(
-      ([, service, method]) => service === "runtime" && method === "reservePanelEntity"
+      ([, service, method]) => service === "runtime" && method === "reserveEntity"
     );
     expect(runtimeCreate?.[0].caller).toMatchObject({
       runtime: { id: parentEntityId, kind: "server" },

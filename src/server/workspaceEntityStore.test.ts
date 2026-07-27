@@ -48,11 +48,11 @@ describe("WorkspaceEntityStore", () => {
       status: "active" as const,
     };
     const { store, entityCache, calls } = makeStore({
-      entityReservePanel: () => reserved,
+      entityReserve: () => reserved,
       entityAdvanceExecution: () => active,
     });
 
-    await store.reservePanel({
+    await store.reserve({
       kind: "panel",
       source: reserved.source,
       contextId: reserved.contextId,
@@ -70,10 +70,7 @@ describe("WorkspaceEntityStore", () => {
       key: active.key,
     });
     expect(entityCache.resolveActive(active.id)).toEqual(active);
-    expect(calls.map((call) => call.method)).toEqual([
-      "entityReservePanel",
-      "entityAdvanceExecution",
-    ]);
+    expect(calls.map((call) => call.method)).toEqual(["entityReserve", "entityAdvanceExecution"]);
   });
 
   it("activate pairs the durable write with the cache mirror atomically", async () => {
