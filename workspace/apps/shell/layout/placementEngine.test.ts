@@ -341,7 +341,7 @@ describe("open-child (rule 2)", () => {
   });
 
   it("side: replaces in the parent's pane when the fit test fails (D4)", () => {
-    // Two columns at min width already consume 840; adding 420 more exceeds 1000.
+    // Two columns at min width already consume 920; adding 460 more exceeds 1000.
     const layout = layoutOf(["A"], ["D"]);
     const next = applyLayoutAction(
       layout,
@@ -357,7 +357,7 @@ describe("open-child (rule 2)", () => {
   it("side: fit test respects per-panel min widths from hints", () => {
     const layout = layoutOf(["A"]);
     const env = makeEnv({ viewportWidth: 1000, minWidths: { B: 700 } });
-    // 420 + 700 > 1000 → replace.
+    // 460 + 700 > 1000 → replace.
     const next = applyLayoutAction(
       layout,
       { type: "open-child", panelId: "B", parentId: "A" },
@@ -856,8 +856,8 @@ describe("computeViewport (§3.1 / D10)", () => {
   it("parks the far columns and keeps the focused column resident", () => {
     const layout = layoutOf(["A"], ["B"], ["C"], ["D"]);
     layout.focusedPaneId = "pane-3-0";
-    // 2 columns fit (840 <= 1000 < 1260).
-    const vp = computeViewport(layout, makeEnv({ viewportWidth: 1000 }));
+    // 2 columns fit (920 <= 1200 < 1380).
+    const vp = computeViewport(layout, makeEnv({ viewportWidth: 1200 }));
     expect(vp.residentColumnIds).toEqual(["col-2", "col-3"]);
     expect(vp.parkedLeft).toEqual(["col-0", "col-1"]);
     expect(vp.parkedRight).toEqual([]);
@@ -866,7 +866,7 @@ describe("computeViewport (§3.1 / D10)", () => {
   it("anchors on a middle focused column, extending right first", () => {
     const layout = layoutOf(["A"], ["B"], ["C"], ["D"]);
     layout.focusedPaneId = "pane-1-0";
-    const vp = computeViewport(layout, makeEnv({ viewportWidth: 1000 }));
+    const vp = computeViewport(layout, makeEnv({ viewportWidth: 1200 }));
     expect(vp.residentColumnIds).toContain("col-1");
     expect(vp.residentColumnIds).toHaveLength(2);
     expect([...vp.parkedLeft, ...vp.residentColumnIds, ...vp.parkedRight]).toEqual([
@@ -879,7 +879,7 @@ describe("computeViewport (§3.1 / D10)", () => {
 
   it("respects per-panel min widths when computing residency", () => {
     const layout = layoutOf(["A"], ["B"]);
-    const vp = computeViewport(layout, makeEnv({ viewportWidth: 1000, minWidths: { B: 900 } }));
+    const vp = computeViewport(layout, makeEnv({ viewportWidth: 1200, minWidths: { B: 900 } }));
     expect(vp.residentColumnIds).toEqual(["col-0"]);
     expect(vp.parkedRight).toEqual(["col-1"]);
   });

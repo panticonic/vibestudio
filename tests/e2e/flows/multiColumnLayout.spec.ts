@@ -290,7 +290,7 @@ test.describe("Multi-column panel layout", () => {
       }
       const panel1 = readiness.panelId;
 
-      // Wide window so two ≥420px columns fit beside the sidebar.
+      // Wide window so two ≥460px columns fit beside the sidebar.
       await setWindowSize(app, 1600, 1000);
 
       let wcId = 0;
@@ -399,7 +399,7 @@ test.describe("Multi-column panel layout", () => {
 
       // ---- Scenario 3: park via window shrink, un-park via edge tab ------
       await test.step("window shrink parks a column and clears its slot; edge tab rebinds it", async () => {
-        await setWindowSize(app, 780, 900); // below SINGLE_COLUMN_BREAKPOINT (900)
+        await setWindowSize(app, 780, 900); // below SINGLE_COLUMN_BREAKPOINT (1100)
 
         let parkedPanelId = "";
         await expect
