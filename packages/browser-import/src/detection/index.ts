@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import type { DetectedBrowser } from "../types.js";
-import { BROWSER_PATHS, getBrowserDataDir } from "./paths.js";
+import { BROWSER_PATHS, getBrowserDataDirs, packagingLabel } from "./paths.js";
 import { detectFirefoxProfiles, detectFirefoxVersion } from "./firefox.js";
 import { detectChromiumProfiles, detectChromiumVersion } from "./chromium.js";
 import { detectSafari } from "./safari.js";
@@ -33,30 +33,44 @@ export function detectBrowsers(): DetectedBrowser[] {
         continue;
       }
 
-      const dataDir = getBrowserDataDir(entry);
-      if (!dataDir || !fs.existsSync(dataDir)) continue;
+      // One browser can be installed several ways at once (native + Flatpak +
+      // Snap). Each root with profiles is its own source, so a stale native
+      // install cannot hide the packaging the user actually runs.
+      const found: Array<DetectedBrowser & { root: { path: string; label?: string } }> = [];
+      for (const root of getBrowserDataDirs(entry)) {
+        const dataDir = root.path;
+        if (!fs.existsSync(dataDir)) continue;
 
-      let profiles;
-      let version: string | undefined;
+        const profiles =
+          entry.family === "firefox"
+            ? detectFirefoxProfiles(dataDir)
+            : detectChromiumProfiles(dataDir);
+        if (profiles.length === 0) continue;
+        const version =
+          entry.family === "firefox"
+            ? detectFirefoxVersion(dataDir)
+            : detectChromiumVersion(dataDir);
 
-      if (entry.family === "firefox") {
-        profiles = detectFirefoxProfiles(dataDir);
-        version = detectFirefoxVersion(dataDir);
-      } else {
-        profiles = detectChromiumProfiles(dataDir);
-        version = detectChromiumVersion(dataDir);
+        found.push({
+          name: entry.name,
+          family: entry.family,
+          displayName: entry.displayName,
+          version,
+          dataDir,
+          profiles,
+          root,
+        });
       }
 
-      if (profiles.length === 0) continue;
-
-      browsers.push({
-        name: entry.name,
-        family: entry.family,
-        displayName: entry.displayName,
-        version,
-        dataDir,
-        profiles,
-      });
+      // Only disambiguate when it is actually ambiguous: a lone Flatpak install
+      // is just "Google Chrome" to the person using it.
+      if (found.length > 1) {
+        for (const browser of found) {
+          const label = packagingLabel(browser.root);
+          if (label) browser.displayName = `${browser.displayName} (${label})`;
+        }
+      }
+      browsers.push(...found.map(({ root: _root, ...browser }) => browser));
     } catch {
       // Non-fatal: skip this browser
     }

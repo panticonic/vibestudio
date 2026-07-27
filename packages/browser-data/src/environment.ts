@@ -167,8 +167,33 @@ export const BrowserImportSelectionSchema = z
   })
   .strict();
 
+export interface ImportCategoryBreakdownGroup {
+  /** Display label: a site host, or a category-specific bucket name. */
+  label: string;
+  count: number;
+}
+
+/**
+ * Aggregate shape of one category's readable items, so the migration UI can
+ * answer "what exactly am I importing?" before anything is written. Buckets are
+ * counts over already-public keys (hosts, field names) — never secret values.
+ */
+export interface ImportCategoryBreakdown {
+  dataType: BrowserImportDataType;
+  /** How items were bucketed, so the UI can label the drill-down. */
+  groupedBy: "site" | "kind";
+  total: number;
+  /** Largest buckets first, capped; the tail is folded into the counters below. */
+  groups: ImportCategoryBreakdownGroup[];
+  /** Buckets not listed in `groups`. */
+  otherGroups: number;
+  /** Items inside those unlisted buckets. */
+  otherItems: number;
+}
+
 export interface ImportPreviewSummary {
   dataTypes: ImportCategoryProgress[];
+  breakdowns: ImportCategoryBreakdown[];
   openTabCount: number;
   localDataSetCount: number;
   warnings: string[];
@@ -186,7 +211,26 @@ export interface ImportedBrowserOpenTab {
   active: boolean;
   pinned?: boolean;
   lastAccessed?: number;
+  /**
+   * Opaque identifier for the source browser window this tab belongs to. Tabs
+   * sharing a `windowId` were open side by side; the value carries no profile
+   * path or window handle, only grouping identity.
+   */
+  windowId: string;
+  /** 1-based window position, stable across profiles, for display ("Window 2"). */
+  windowOrdinal: number;
+  /**
+   * How this tab relates to what the user would actually see:
+   * `open` — the profile is running and the tab is open right now;
+   * `restores` — the browser is closed, but launching it reopens this window;
+   * `saved` — a stored session that will not come back on its own (another
+   * profile launches by default, or session restore is switched off).
+   */
+  sessionState: BrowserTabSessionState;
 }
+
+export const BROWSER_TAB_SESSION_STATES = ["open", "restores", "saved"] as const;
+export type BrowserTabSessionState = (typeof BROWSER_TAB_SESSION_STATES)[number];
 
 export interface ImportBatch {
   jobId: string;
@@ -384,12 +428,24 @@ export const FormFillSuggestionQuerySchema = z
   })
   .strict();
 
+/**
+ * A page's icon as it travels between processes.
+ *
+ * Raster data is base64, not `Uint8Array`: every producer and consumer of this
+ * type is on the far side of a JSON-encoded RPC hop, where a typed array
+ * serializes to `{"0":137,"1":80,…}` — roughly six bytes of JSON per byte of
+ * image, arriving as a plain object rather than a `Uint8Array`. Bulk favicon
+ * imports blew past the 16 MiB websocket frame cap that way and closed the
+ * connection mid-import. The store decodes to real BLOBs on write.
+ */
 export interface PageFavicon {
   pageUrl: string;
   origin: string;
   sourceUrl?: string;
-  png16?: Uint8Array;
-  png32?: Uint8Array;
+  /** base64-encoded PNG, 16px variant. */
+  png16?: string;
+  /** base64-encoded PNG, 32px variant. */
+  png32?: string;
   mimeType: "image/png";
   updatedAt: number;
 }
@@ -427,8 +483,8 @@ export const PageFaviconSchema = z
     pageUrl: z.string().url().max(16_384),
     origin: z.string().url().max(4_096),
     sourceUrl: z.string().url().max(16_384).optional(),
-    png16: z.instanceof(Uint8Array).optional(),
-    png32: z.instanceof(Uint8Array).optional(),
+    png16: z.string().base64().optional(),
+    png32: z.string().base64().optional(),
     mimeType: z.literal("image/png"),
     updatedAt: z.number().finite(),
   })

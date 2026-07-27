@@ -53,6 +53,17 @@ const ImportSummarySchema = z.object({
   warnings: z.array(z.string()),
 });
 
+const ImportCategoryBreakdownSchema = z.object({
+  dataType: BrowserImportDataTypeSchema,
+  groupedBy: z.enum(["site", "kind"]),
+  total: z.number().int().nonnegative(),
+  groups: z.array(
+    z.object({ label: z.string(), count: z.number().int().nonnegative() })
+  ),
+  otherGroups: z.number().int().nonnegative(),
+  otherItems: z.number().int().nonnegative(),
+});
+
 const ImportedOpenTabSchema = z.object({
   tabId: z.string(),
   url: z.string().url(),
@@ -60,6 +71,9 @@ const ImportedOpenTabSchema = z.object({
   active: z.boolean(),
   pinned: z.boolean().optional(),
   lastAccessed: z.number().optional(),
+  windowId: z.string(),
+  windowOrdinal: z.number().int().positive(),
+  sessionState: z.enum(["open", "restores", "saved"]),
 });
 
 const ImportProviderFrameSchema = z.discriminatedUnion("type", [
@@ -94,6 +108,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     description: "Preview normalized import counts without exposing browser secrets.",
     args: z.tuple([z.string().min(1), z.array(BrowserImportDataTypeSchema).min(1)]),
     returns: ImportSummarySchema.extend({
+      breakdowns: z.array(ImportCategoryBreakdownSchema),
       openTabCount: z.number().int().nonnegative(),
       localDataSetCount: z.number().int().nonnegative(),
     }),

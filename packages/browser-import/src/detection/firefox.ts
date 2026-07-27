@@ -92,8 +92,14 @@ function parseProfilesIni(content: string, baseDir: string): DetectedProfile[] {
 
     if (!fs.existsSync(fullPath)) continue;
 
+    // `installs.ini` records the profile this installation actually launches and
+    // supersedes the legacy `Default=1` flag in profiles.ini. Honouring both at
+    // once marked two profiles default, which made an abandoned profile claim it
+    // would reopen on launch.
     const isDefault =
-      section["Default"] === "1" || installDefaults.has(profilePath);
+      installDefaults.size > 0
+        ? installDefaults.has(profilePath)
+        : section["Default"] === "1";
 
     profiles.push({
       id: profilePath,

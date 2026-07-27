@@ -98,6 +98,8 @@ export type {
   FormFillValueInput,
   ImportBatch,
   ImportBatchSink,
+  ImportCategoryBreakdown,
+  ImportCategoryBreakdownGroup,
   ImportCategoryProgress,
   ImportedBrowserOpenTab,
   ImportHostPlatform,

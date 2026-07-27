@@ -264,6 +264,12 @@ export const BrowserOpenTabsRequestSchema = z
 export interface OpenTabsAsPanelsResult {
   tabsFound: number;
   panelsOpened: number;
+  /** Collection panels created to hold the opened tabs, when grouping was requested. */
+  collections: Array<{
+    id: string;
+    title: string;
+    panelsOpened: number;
+  }>;
   panels: Array<{
     id: string;
     title: string;

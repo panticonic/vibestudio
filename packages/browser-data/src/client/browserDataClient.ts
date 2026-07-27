@@ -8,6 +8,7 @@ import type {
   BrowserImportSource,
   FormFillSuggestionQuery,
   FormFillValueInput,
+  ImportCategoryBreakdown,
   ImportedBrowserOpenTab,
   ImportHostSummary,
   ImportJobSnapshot,
@@ -36,6 +37,8 @@ interface RpcLike {
 
 export interface ImportPreview {
   job: ImportJobSnapshot;
+  /** Per-category aggregates backing the review step's drill-down. */
+  breakdowns: ImportCategoryBreakdown[];
   openTabCount: number;
   localDataSetCount: number;
 }
@@ -54,6 +57,8 @@ export interface BrowserDataClient {
     hostId: string;
     sourceId: string;
     selection: string[];
+    /** "window" nests the opened tabs under one collection panel per source window. */
+    groupBy?: "window" | "none";
   }): Promise<OpenTabsAsPanelsResult>;
   getSitePreferences(
     origin: string

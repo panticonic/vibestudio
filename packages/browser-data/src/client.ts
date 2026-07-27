@@ -10,6 +10,8 @@ export type {
   BrowserImportSource,
   FormFillSuggestionQuery,
   FormFillValueInput,
+  ImportCategoryBreakdown,
+  ImportCategoryBreakdownGroup,
   ImportedBrowserOpenTab,
   ImportHostSummary,
   ImportJobSnapshot,

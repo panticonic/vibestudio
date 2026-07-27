@@ -20,6 +20,7 @@ function provider(): BrowserImportProvider {
     listSources: vi.fn(async () => []),
     preview: vi.fn(async () => ({
       dataTypes: [],
+      breakdowns: [],
       warnings: [],
       openTabCount: 0,
       localDataSetCount: 1,

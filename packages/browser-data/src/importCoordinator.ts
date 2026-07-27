@@ -132,6 +132,7 @@ export class BrowserImportCoordinator {
       await this.persist(identity, job);
       return {
         job: this.clone(job),
+        breakdowns: summary.breakdowns,
         openTabCount: summary.openTabCount,
         localDataSetCount: summary.localDataSetCount,
       };

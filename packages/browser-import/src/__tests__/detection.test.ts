@@ -6,6 +6,7 @@ import * as os from "os";
 // Test Firefox profiles.ini parsing
 import { detectFirefoxProfiles } from "../detection/firefox.js";
 import { detectChromiumProfiles } from "../detection/chromium.js";
+import { BROWSER_PATHS, getBrowserDataDirs, packagingLabel } from "../detection/paths.js";
 
 describe("Firefox profile detection", () => {
   let tmpDir: string;
@@ -47,6 +48,37 @@ Path=efgh5678.dev-edition
     expect(profiles[0]!.isDefault).toBe(true);
     expect(profiles[1]!.displayName).toBe("dev-edition");
     expect(profiles[1]!.isDefault).toBe(false);
+  });
+
+  it("lets installs.ini override the legacy Default flag", () => {
+    // The installation launches `live`; `stale` still carries Default=1 from an
+    // older Firefox. Honouring both marked two profiles default, so an
+    // abandoned profile claimed it would reopen on launch.
+    fs.writeFileSync(
+      path.join(tmpDir, "profiles.ini"),
+      `
+[Profile0]
+Name=stale
+IsRelative=1
+Path=aaaa1111.stale
+Default=1
+
+[Profile1]
+Name=live
+IsRelative=1
+Path=bbbb2222.live
+`
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "installs.ini"),
+      "[Install0]\nDefault=bbbb2222.live\nLocked=1\n"
+    );
+    fs.mkdirSync(path.join(tmpDir, "aaaa1111.stale"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "bbbb2222.live"), { recursive: true });
+
+    const profiles = detectFirefoxProfiles(tmpDir);
+    expect(profiles.filter((profile) => profile.isDefault)).toHaveLength(1);
+    expect(profiles.find((profile) => profile.isDefault)?.displayName).toBe("live");
   });
 
   it("returns empty array for missing profiles.ini", () => {
@@ -186,5 +218,33 @@ describe("Chromium profile detection", () => {
     const profiles = detectChromiumProfiles(tmpDir);
     expect(profiles).toHaveLength(1);
     expect(profiles[0]!.id).toBe("Profile 1");
+  });
+});
+
+describe("packaged browser roots", () => {
+  it("offers sandboxed roots alongside the native one on Linux", () => {
+    if (process.platform !== "linux") return;
+    const chrome = BROWSER_PATHS.find((entry) => entry.name === "chrome");
+    const roots = getBrowserDataDirs(chrome!).map((root) => root.path);
+    // A stale native install must not be the only place we look: Flatpak
+    // redirects the entire config tree.
+    expect(roots.length).toBeGreaterThan(1);
+    expect(roots.some((root) => root.includes("/.var/app/com.google.Chrome/"))).toBe(true);
+  });
+
+  it("names the packaging, preferring an explicit label over the path shape", () => {
+    expect(packagingLabel({ path: "/home/u/.var/app/com.google.Chrome/config/google-chrome" })).toBe(
+      "Flatpak"
+    );
+    expect(packagingLabel({ path: "/home/u/snap/chromium/common/chromium" })).toBe("Snap");
+    expect(packagingLabel({ path: "/home/u/.config/google-chrome" })).toBeUndefined();
+    expect(
+      packagingLabel({ path: "/home/u/.var/app/io.github.x/config/chromium", label: "ungoogled, Flatpak" })
+    ).toBe("ungoogled, Flatpak");
+  });
+
+  it("returns a single root for browsers with one location", () => {
+    const entry = { name: "chrome" as const, family: "chromium" as const, displayName: "x", linux: "/one" };
+    expect(getBrowserDataDirs(entry)).toEqual([{ path: "/one" }]);
   });
 });

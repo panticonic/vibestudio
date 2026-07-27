@@ -86,8 +86,9 @@ export interface StoredPageFavicon {
   page_url: string;
   origin: string;
   source_url: string | null;
-  png16: Uint8Array | null;
-  png32: Uint8Array | null;
+  /** base64-encoded PNG; see PageFavicon for why raster data is not raw bytes. */
+  png16: string | null;
+  png32: string | null;
   mime_type: "image/png";
   updated_at: number;
 }

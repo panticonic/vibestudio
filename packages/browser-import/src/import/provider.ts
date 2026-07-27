@@ -6,6 +6,7 @@ import type {
   FormFillType,
   FormFillValueInput,
   ImportBatchSink,
+  ImportCategoryBreakdown,
   ImportCategoryProgress,
   ImportedBrowserOpenTab,
   ImportPreviewSink,
@@ -25,6 +26,8 @@ import { createCryptoProvider } from "../crypto/index.js";
 import { detectBrowsers } from "../detection/index.js";
 import { getReader } from "../readers/index.js";
 import { readOpenTabs } from "../readers/openTabs.js";
+import { profileSessionState } from "../readers/profileSession.js";
+import { computeCategoryBreakdown } from "./breakdown.js";
 
 const IMPORT_BATCH_SIZE = 250;
 const MAX_FAVICON_BYTES = 128 * 1024;
@@ -83,6 +86,7 @@ export class LocalBrowserImportProvider implements BrowserImportProvider {
   ): Promise<ImportPreviewSummary> {
     const source = await this.resolveSource(sourceId, signal);
     const progress: ImportCategoryProgress[] = [];
+    const breakdowns: ImportCategoryBreakdown[] = [];
     const warnings = [...source.source.warnings];
     for (const dataType of dataTypes) {
       this.throwIfAborted(signal);
@@ -97,11 +101,13 @@ export class LocalBrowserImportProvider implements BrowserImportProvider {
         0
       );
       progress.push(category);
+      breakdowns.push(computeCategoryBreakdown(dataType, result.items));
       await sink.progress(category);
       await sink.sample(dataType, this.maskedSamples(dataType, result.items));
     }
     return {
       dataTypes: progress,
+      breakdowns,
       openTabCount: (await this.listOpenTabs(sourceId, signal)).length,
       localDataSetCount: source.browser.profiles.length,
       warnings,
@@ -164,10 +170,30 @@ export class LocalBrowserImportProvider implements BrowserImportProvider {
   async listOpenTabs(sourceId: string, signal: AbortSignal): Promise<ImportedBrowserOpenTab[]> {
     const source = await this.resolveSource(sourceId, signal);
     const tabs: ImportedBrowserOpenTab[] = [];
-    for (const [profileIndex, profile] of this.orderedProfiles(source.browser).entries()) {
+    // Window ordinals run across profiles in read order so the panel can label
+    // groups "Window 1..N" without ever seeing a profile path or window handle.
+    const ordinalByWindow = new Map<string, number>();
+    // Every profile the browser has ever used keeps a session store, so reading
+    // all of them merges long-closed windows into "open tabs". Classify each
+    // profile instead: when something is running, only that is genuinely open;
+    // otherwise report what a launch would restore, and what merely sits saved.
+    const profiles = this.orderedProfiles(source.browser).map((profile) => ({
+      profile,
+      sessionState: profileSessionState(source.browser.family, profile),
+    }));
+    const readable = profiles.some((entry) => entry.sessionState === "open")
+      ? profiles.filter((entry) => entry.sessionState === "open")
+      : profiles;
+    for (const [profileIndex, { profile, sessionState }] of readable.entries()) {
       this.throwIfAborted(signal);
       const profileTabs = readOpenTabs({ browser: source.browser.name, profile });
       for (const tab of profileTabs) {
+        const windowKey = `${profileIndex}\x00${tab.windowIndex}`;
+        let windowOrdinal = ordinalByWindow.get(windowKey);
+        if (windowOrdinal === undefined) {
+          windowOrdinal = ordinalByWindow.size + 1;
+          ordinalByWindow.set(windowKey, windowOrdinal);
+        }
         tabs.push({
           tabId: this.opaqueId(
             `${sourceId}\x00${profileIndex}\x00${tab.windowIndex}\x00${tab.tabIndex}\x00${tab.url}`
@@ -177,6 +203,9 @@ export class LocalBrowserImportProvider implements BrowserImportProvider {
           active: tab.active,
           ...(tab.pinned !== undefined ? { pinned: tab.pinned } : {}),
           ...(tab.lastAccessed !== undefined ? { lastAccessed: tab.lastAccessed } : {}),
+          windowId: this.opaqueId(`${sourceId}\x00${windowKey}`),
+          windowOrdinal,
+          sessionState,
         });
       }
     }
@@ -398,12 +427,12 @@ export class LocalBrowserImportProvider implements BrowserImportProvider {
     try {
       const page = new URL(icon.url);
       if (page.protocol !== "http:" && page.protocol !== "https:") return null;
-      const bytes = new Uint8Array(icon.data);
+      // One icon, stored once. This used to be assigned to both png16 and
+      // png32, doubling every payload for an image that was never resized.
       return {
         pageUrl: page.href,
         origin: page.origin,
-        png16: bytes,
-        png32: bytes,
+        png32: icon.data.toString("base64"),
         mimeType: "image/png",
         updatedAt: Date.now(),
       };
