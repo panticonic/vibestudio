@@ -6,7 +6,7 @@
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { ExtensionHost } from "@vibestudio/extension-host";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { createEvalService } from "./evalService.js";
@@ -126,16 +126,24 @@ async function collectAuthorityMatrix(): Promise<AuthorityMatrix> {
 }
 
 describe("host service authority matrix", () => {
-  it("matches the reviewed compositional-authority census", async () => {
-    const matrix = await collectAuthorityMatrix();
+  let matrix: AuthorityMatrix;
+
+  beforeAll(async () => {
+    // Service discovery dynamically imports the complete host registry. Build
+    // the immutable census once for this suite so individual assertion
+    // deadlines measure the assertions rather than repository-wide discovery
+    // under Vitest's concurrent host load.
+    matrix = await collectAuthorityMatrix();
+  });
+
+  it("matches the reviewed compositional-authority census", () => {
     if (process.env["UPDATE_GOLDEN"]) {
       writeFileSync(goldenPath, `${JSON.stringify(matrix, null, 2)}\n`);
     }
     expect(matrix).toEqual(JSON.parse(readFileSync(goldenPath, "utf8")) as AuthorityMatrix);
   });
 
-  it("has no empty defaults, implicit methods, or caller-kind declarations", async () => {
-    const matrix = await collectAuthorityMatrix();
+  it("has no empty defaults, implicit methods, or caller-kind declarations", () => {
     expect(Object.keys(matrix).length).toBeGreaterThan(0);
     for (const [service, entry] of Object.entries(matrix)) {
       const principals = (entry.service as { principals?: unknown[] }).principals;

@@ -2,10 +2,7 @@ import { describe, expect, it } from "vitest";
 import initSqlJs from "sql.js";
 import { createTestDO } from "@vibestudio/durable/test-utils";
 import { WebhookStoreDO } from "./webhookStoreDO.js";
-import {
-  WEBHOOK_DEFAULT_MAX_BODY_BYTES,
-  type WebhookIngressSubscription,
-} from "../../../packages/shared/src/webhooks/ingress.js";
+import type { WebhookIngressSubscription } from "../../../packages/shared/src/webhooks/ingress.js";
 
 type CreateInput = Omit<WebhookIngressSubscription, "subscriptionId" | "createdAt" | "updatedAt">;
 
@@ -21,7 +18,7 @@ function input(overrides: Partial<CreateInput> = {}): CreateInput {
       method: "onPush",
     },
     delivery: overrides.delivery ?? { mode: "relay" },
-    maxBodyBytes: overrides.maxBodyBytes ?? WEBHOOK_DEFAULT_MAX_BODY_BYTES,
+    bodyBudget: overrides.bodyBudget ?? { mode: "fixed", maxBodyBytes: 1_500_000 },
     payload: overrides.payload ?? { type: "json" },
     verifier: overrides.verifier ?? {
       type: "hmac-sha256",
@@ -93,6 +90,76 @@ async function v1Database(replay: unknown) {
   return { db, target, verifier };
 }
 
+async function v2Database() {
+  const SQL = await initSqlJs();
+  const db = new SQL.Database();
+  db.run(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+  db.run(`INSERT INTO state (key, value) VALUES ('schema_version', '2')`);
+  db.run(`
+    CREATE TABLE webhook_ingress_subscriptions (
+      subscription_id TEXT PRIMARY KEY,
+      label TEXT,
+      owner_caller_id TEXT NOT NULL,
+      owner_caller_kind TEXT NOT NULL,
+      target_json TEXT NOT NULL,
+      delivery_json TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      verifier_json TEXT NOT NULL,
+      replay_json TEXT,
+      response_json TEXT NOT NULL,
+      public_url TEXT NOT NULL,
+      revoked_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+  const common = {
+    target: JSON.stringify({
+      source: "workspace/workers/github",
+      className: "GithubDO",
+      objectKey: "main",
+      method: "onPush",
+    }),
+    payload: JSON.stringify({ type: "json" }),
+    verifier: JSON.stringify({
+      type: "hmac-sha256",
+      headerName: "X-Hub-Signature-256",
+      secret: "preserve-me",
+    }),
+    response: JSON.stringify({
+      successStatus: 202,
+      malformedPayload: "ack",
+      dispatchError: "retry",
+    }),
+  };
+  for (const mode of ["relay", "direct"] as const) {
+    db.run(
+      `INSERT INTO webhook_ingress_subscriptions (
+         subscription_id, label, owner_caller_id, owner_caller_kind, target_json,
+         delivery_json, payload_json, verifier_json, replay_json, response_json,
+         public_url, revoked_at, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        `${mode}-subscription`,
+        mode,
+        "panel-owner",
+        "panel",
+        common.target,
+        JSON.stringify({ mode }),
+        common.payload,
+        common.verifier,
+        null,
+        common.response,
+        `https://example.test/${mode}`,
+        null,
+        10,
+        20,
+      ]
+    );
+  }
+  return db;
+}
+
 describe("WebhookStoreDO", () => {
   it("migrates v1 subscriptions without losing identity, secrets, or replay behavior", async () => {
     const { db, target, verifier } = await v1Database({
@@ -107,7 +174,7 @@ describe("WebhookStoreDO", () => {
         target,
         verifier,
         delivery: { mode: "relay" },
-        maxBodyBytes: WEBHOOK_DEFAULT_MAX_BODY_BYTES,
+        bodyBudget: { mode: "transport-default" },
         payload: { type: "json" },
         replay: { key: { type: "header", name: "X-Delivery-Id" }, ttlMs: 1234 },
         response: { successStatus: 202, malformedPayload: "ack", dispatchError: "retry" },
@@ -119,11 +186,31 @@ describe("WebhookStoreDO", () => {
     expect(sql.exec(`PRAGMA table_info(webhook_ingress_subscriptions)`).toArray()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "delivery_json", notnull: 1 }),
-        expect.objectContaining({ name: "max_body_bytes", notnull: 1 }),
+        expect.objectContaining({ name: "body_budget_json", notnull: 1 }),
         expect.objectContaining({ name: "payload_json", notnull: 1 }),
         expect.objectContaining({ name: "response_json", notnull: 1 }),
       ])
     );
+  });
+
+  it("migrates legacy budgets according to their delivery transport without changing URLs", async () => {
+    const db = await v2Database();
+
+    const { instance } = await createTestDO(WebhookStoreDO, undefined, { db });
+    expect(instance.list()).toEqual([
+      expect.objectContaining({
+        subscriptionId: "relay-subscription",
+        delivery: { mode: "relay" },
+        bodyBudget: { mode: "transport-default" },
+        publicUrl: "https://example.test/relay",
+      }),
+      expect.objectContaining({
+        subscriptionId: "direct-subscription",
+        delivery: { mode: "direct" },
+        bodyBudget: { mode: "transport-default" },
+        publicUrl: "https://example.test/direct",
+      }),
+    ]);
   });
 
   it.each([
@@ -163,7 +250,7 @@ describe("WebhookStoreDO", () => {
     expect(fetched).toMatchObject({
       subscriptionId: a.subscriptionId,
       label: "alpha",
-      maxBodyBytes: WEBHOOK_DEFAULT_MAX_BODY_BYTES,
+      bodyBudget: { mode: "fixed", maxBodyBytes: 1_500_000 },
     });
 
     const all = await call<WebhookIngressSubscription[]>("list");

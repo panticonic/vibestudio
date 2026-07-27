@@ -287,10 +287,14 @@ export VIBESTUDIO_RELAY_SIGNING_SECRET='<same secret configured on the relay wor
 Both variables are required together; the home server and relay worker must use
 the same signing secret.
 
-Webhook subscriptions default to a 1,500,000-byte request-body budget. Relay
-subscriptions may choose a smaller budget but cannot exceed that relay limit.
-Direct subscriptions can opt into a larger `maxBodyBytes` value up to the
-home server's configured ceiling:
+Relay webhook subscriptions default to their 1,500,000-byte transport ceiling
+and may choose a smaller budget. Direct subscriptions default to the home
+server's configured ceiling and may choose a smaller explicit `maxBodyBytes`.
+An omitted limit is stored as a transport-default policy, so changing the host
+ceiling updates existing direct subscriptions without changing their ids or
+public URLs. Explicit subscription limits remain fixed caps; if the host ceiling
+is lowered beneath one, the lower host ceiling applies without disabling the
+subscription:
 
 ```bash
 export VIBESTUDIO_WEBHOOK_DIRECT_MAX_BODY_BYTES=16777216

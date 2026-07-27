@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import {
+  WEBHOOK_DEFAULT_DIRECT_MAX_BODY_BYTES,
   WEBHOOK_DEFAULT_MAX_BODY_BYTES,
   WEBHOOK_HARD_MAX_BODY_BYTES,
 } from "@vibestudio/shared/webhooks/limits";
@@ -77,6 +78,16 @@ export const webhookDeliverySchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("direct") }).strict(),
 ]);
 
+export const webhookBodyBudgetSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("transport-default") }).strict(),
+  z
+    .object({
+      mode: z.literal("fixed"),
+      maxBodyBytes: z.number().int().positive().max(WEBHOOK_HARD_MAX_BODY_BYTES),
+    })
+    .strict(),
+]);
+
 export const webhookPayloadFormatSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("raw") }).strict(),
   z.object({ type: z.literal("json") }).strict(),
@@ -108,9 +119,9 @@ export const createWebhookIngressSubscriptionSchema = z
       .int()
       .positive()
       .max(WEBHOOK_HARD_MAX_BODY_BYTES)
-      .default(WEBHOOK_DEFAULT_MAX_BODY_BYTES)
+      .optional()
       .describe(
-        `Per-subscription decoded request-body budget in bytes. Defaults to ${WEBHOOK_DEFAULT_MAX_BODY_BYTES}; larger values require direct delivery and must fit the host's configured ceiling.`
+        `Per-subscription decoded request-body budget in bytes. Relay defaults to ${WEBHOOK_DEFAULT_MAX_BODY_BYTES}; direct defaults to the host's configured ceiling (${WEBHOOK_DEFAULT_DIRECT_MAX_BODY_BYTES} bytes by default).`
       ),
     payload: webhookPayloadFormatSchema.describe("How the verified request body is decoded."),
     verifier: webhookVerifierSchema.describe(
@@ -216,6 +227,7 @@ export const webhookIngressSubscriptionSummarySchema = z
     ownerCallerKind: z.string(),
     target: webhookTargetSchema,
     delivery: webhookDeliverySchema,
+    bodyBudget: webhookBodyBudgetSchema,
     maxBodyBytes: z.number().int().positive().max(WEBHOOK_HARD_MAX_BODY_BYTES),
     payload: webhookPayloadFormatSchema,
     verifier: redactedWebhookVerifierSchema,
@@ -247,7 +259,7 @@ export const webhookIngressMethods = defineServiceMethods({
     returns: webhookIngressSubscriptionSummarySchema,
     agentFacing: false,
     access: { sensitivity: "write" },
-    description: `Create an owner-scoped public webhook subscription targeting a method in the caller's own source. maxBodyBytes defaults to ${WEBHOOK_DEFAULT_MAX_BODY_BYTES}; larger bounded payloads require direct delivery and must fit the host's configured ceiling. In agent eval, use agent.describe().identity for target.source, target.className, and target.objectKey.`,
+    description: `Create an owner-scoped public webhook subscription targeting a method in the caller's own source. Omitted maxBodyBytes uses the relay ceiling (${WEBHOOK_DEFAULT_MAX_BODY_BYTES}) for relay delivery and the configured host ceiling for direct delivery (${WEBHOOK_DEFAULT_DIRECT_MAX_BODY_BYTES} bytes by default). In agent eval, use agent.describe().identity for target.source, target.className, and target.objectKey.`,
   },
   listSubscriptions: {
     args: z.union([z.tuple([]), z.tuple([listWebhookIngressSubscriptionsOptionsSchema])]),

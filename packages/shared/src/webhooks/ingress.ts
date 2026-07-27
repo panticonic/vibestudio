@@ -54,6 +54,15 @@ export interface WebhookTarget {
 
 export type WebhookDeliveryConfig = { mode: "relay" } | { mode: "direct" };
 
+/**
+ * Stored body-budget intent. Transport defaults remain semantic so an
+ * operator can change the direct-ingress ceiling without rewriting every
+ * subscription or changing its public URL.
+ */
+export type WebhookBodyBudget =
+  | { mode: "transport-default" }
+  | { mode: "fixed"; maxBodyBytes: number };
+
 export type WebhookPayloadFormat =
   | { type: "raw" }
   | { type: "json" }
@@ -111,8 +120,8 @@ export interface CreateWebhookIngressSubscriptionRequest {
   delivery: WebhookDeliveryConfig;
   /**
    * Maximum decoded request-body bytes accepted for this subscription.
-   * Defaults to 1,500,000. Values above that default require direct delivery
-   * and are bounded by the host's configured direct-ingress ceiling.
+   * Relay defaults to its 1,500,000-byte transport ceiling. Direct delivery
+   * defaults to the host's configured direct-ingress ceiling.
    */
   maxBodyBytes?: number;
   payload: WebhookPayloadFormat;
@@ -133,7 +142,7 @@ export interface WebhookIngressSubscription {
   ownerCallerKind: string;
   target: WebhookTarget;
   delivery: WebhookDeliveryConfig;
-  maxBodyBytes: number;
+  bodyBudget: WebhookBodyBudget;
   payload: WebhookPayloadFormat;
   verifier: WebhookVerifierConfig;
   replay?: WebhookReplayConfig;
@@ -148,6 +157,8 @@ export interface WebhookIngressSubscriptionSummary extends Omit<
   WebhookIngressSubscription,
   "verifier"
 > {
+  /** Effective limit on this host at the time the summary was produced. */
+  maxBodyBytes: number;
   verifier: Omit<WebhookVerifierConfig, "secret" | "token"> & {
     hasSecret: boolean;
   };
@@ -159,18 +170,19 @@ export interface RotateWebhookIngressSecretResult {
 }
 
 export function summarizeWebhookIngressSubscription(
-  subscription: WebhookIngressSubscription
+  subscription: WebhookIngressSubscription,
+  maxBodyBytes: number
 ): WebhookIngressSubscriptionSummary {
   const { verifier, ...rest } = subscription;
   if (verifier.type === "bearer" || verifier.type === "query-token") {
     const { token: _token, ...safe } = verifier;
-    return { ...rest, verifier: { ...safe, hasSecret: Boolean(_token) } };
+    return { ...rest, maxBodyBytes, verifier: { ...safe, hasSecret: Boolean(_token) } };
   }
   if (verifier.type === "oidc-jwt") {
-    return { ...rest, verifier: { ...verifier, hasSecret: false } };
+    return { ...rest, maxBodyBytes, verifier: { ...verifier, hasSecret: false } };
   }
   const { secret: _secret, ...safe } = verifier;
-  return { ...rest, verifier: { ...safe, hasSecret: Boolean(_secret) } };
+  return { ...rest, maxBodyBytes, verifier: { ...safe, hasSecret: Boolean(_secret) } };
 }
 
 export function verifyWebhookPayload(

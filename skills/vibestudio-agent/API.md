@@ -475,6 +475,17 @@ Authority principals: `host`, `user`
 | `presence.markPanelsOwned` |  |
 | `presence.getPanelActiveOwner` |  |
 
+## `push`
+
+Push notification device registration and delivery
+
+Authority principals: `code`, `host`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `push.register` | Register a device's push token for a client id, persisting it so it survives server restarts. |
+| `push.unregister` | Remove the persisted push registration for a client id; returns whether one existed. |
+
 ## `runtime`
 
 Runtime entity creation and retirement
@@ -533,7 +544,7 @@ Authority principals: `code`, `host`, `user`
 | `shellApproval.submitClientConfig` | Submit the user-entered client-configuration field values for a pending approval, fulfilling its config request. |
 | `shellApproval.submitCredentialInput` | Submit the user-entered credential/secret field values for a pending approval, fulfilling its credential-input request. |
 | `shellApproval.submitSecretInput` | Submit the user-entered secret field values for a pending secret-input approval, fulfilling its feedback-form request. |
-| `shellApproval.getUserlandSealedDetail` | Fetch one complete host-sealed detail for a pending userland approval. The digest must be named by that approval; content disappears when the request settles. |
+| `shellApproval.getUserlandSealedDetail` | Fetch one bounded human-review detail for a pending userland approval. The digest must name a review-disclosed detail on that approval; sealed-only invocation payloads are never exposed, and content disappears when the request settles. |
 | `shellApproval.listPending` | List the approvals currently awaiting a decision, used to rehydrate the consent approval bar on mount. |
 
 ## `shellPresence`
@@ -584,6 +595,19 @@ Authority principals: `code`, `host`, `user`
 | `vcs.readFile` | Read one file from an exact semantic state. |
 | `vcs.listDirectory` | Page immediate visible children of one workspace directory with stable identities and attached name provenance. |
 | `vcs.listFiles` | Page the exact path-to-file manifest of one repository at one semantic state. |
+
+## `webhookIngress`
+
+Generic public webhook ingress subscriptions
+
+Authority principals: `code`, `host`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `webhookIngress.createSubscription` | Create an owner-scoped public webhook subscription targeting a method in the caller's own source. Omitted maxBodyBytes uses the relay ceiling (1500000) for relay delivery and the configured host ceiling for direct delivery (16777216 bytes by default). In agent eval, use agent.describe().identity for target.source, target.className, and target.objectKey. |
+| `webhookIngress.listSubscriptions` | List the caller's active webhook subscriptions (secrets redacted). Pass includeRevoked:true only for audit/history views. |
+| `webhookIngress.revokeSubscription` | Revoke one caller-owned webhook subscription idempotently. |
+| `webhookIngress.rotateSecret` | Rotate a caller-owned subscription secret, generating a strong secret when one is omitted. |
 
 ## `workerdInspector`
 

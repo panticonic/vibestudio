@@ -20,6 +20,7 @@ import {
   WEBHOOK_DEFAULT_DIRECT_MAX_BODY_BYTES,
   WEBHOOK_HARD_MAX_BODY_BYTES,
   WEBHOOK_RELAY_MAX_BODY_BYTES,
+  type WebhookBodyBudget,
   type CreateWebhookIngressSubscriptionRequest,
   type RotateWebhookIngressSecretRequest,
   type RotateWebhookIngressSecretResult,
@@ -174,6 +175,13 @@ export interface WebhookIngressServiceDeps {
   relayRegistrar?: WebhookRelayRegistrar;
 }
 
+export const webhookIngressServiceDocumentation = {
+  name: "webhookIngress",
+  description: "Generic public webhook ingress subscriptions",
+  authority: { principals: ["user", "host", "code"] },
+  methods: webhookIngressMethods,
+} satisfies Omit<ServiceDefinition, "handler">;
+
 export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}): {
   definition: ServiceDefinition;
   routes: ServiceRouteDecl[];
@@ -205,7 +213,13 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
   const jwksCache = new Map<string, { expiresAt: number; keys: JwkWithKeyId[] }>();
 
   function toSummary(subscription: WebhookIngressSubscription): WebhookIngressSubscriptionSummary {
-    return summarizeWebhookIngressSubscription(subscription);
+    const maxBodyBytes = resolveStoredBodyBudget(subscription, directMaxBodyBytes);
+    if (maxBodyBytes === null) {
+      throw new Error(
+        `webhook subscription ${subscription.subscriptionId} has an invalid body budget`
+      );
+    }
+    return summarizeWebhookIngressSubscription(subscription, maxBodyBytes);
   }
 
   type ResolvedCallerScope = {
@@ -260,14 +274,26 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     input: CreateWebhookIngressSubscriptionRequest
   ): Promise<WebhookIngressSubscriptionSummary> {
     const parsed = createSubscriptionSchema.parse(input);
+    const bodyBudget: WebhookBodyBudget =
+      parsed.maxBodyBytes === undefined
+        ? { mode: "transport-default" }
+        : { mode: "fixed", maxBodyBytes: parsed.maxBodyBytes };
     const scope = await callerScope(ctx);
     await ensureTargetIsCallerSource(ctx, parsed.target, scope);
-    if (parsed.delivery.mode === "relay" && parsed.maxBodyBytes > WEBHOOK_RELAY_MAX_BODY_BYTES) {
+    if (
+      parsed.delivery.mode === "relay" &&
+      parsed.maxBodyBytes !== undefined &&
+      parsed.maxBodyBytes > WEBHOOK_RELAY_MAX_BODY_BYTES
+    ) {
       throw new Error(
         `relay webhook subscriptions support at most ${WEBHOOK_RELAY_MAX_BODY_BYTES} body bytes; use direct delivery for a larger per-subscription budget (this host allows up to ${directMaxBodyBytes})`
       );
     }
-    if (parsed.delivery.mode === "direct" && parsed.maxBodyBytes > directMaxBodyBytes) {
+    if (
+      parsed.delivery.mode === "direct" &&
+      parsed.maxBodyBytes !== undefined &&
+      parsed.maxBodyBytes > directMaxBodyBytes
+    ) {
       throw new Error(
         `direct webhook maxBodyBytes ${parsed.maxBodyBytes} exceeds this host's configured ceiling of ${directMaxBodyBytes}; lower maxBodyBytes or raise VIBESTUDIO_WEBHOOK_DIRECT_MAX_BODY_BYTES (hard maximum ${WEBHOOK_HARD_MAX_BODY_BYTES})`
       );
@@ -287,7 +313,7 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
       ownerCallerKind: scope.ownerCallerKind,
       target: parsed.target,
       delivery: parsed.delivery,
-      maxBodyBytes: parsed.maxBodyBytes,
+      bodyBudget,
       payload: parsed.payload,
       verifier: parsed.verifier,
       replay: parsed.replay,
@@ -429,7 +455,8 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     if (subscription.delivery.mode !== "relay") {
       return remember({ ok: false, permanent: true, reason: "subscription-not-relay" });
     }
-    if (!hasValidStoredBodyBudget(subscription, directMaxBodyBytes)) {
+    const maxBodyBytes = resolveStoredBodyBudget(subscription, directMaxBodyBytes);
+    if (maxBodyBytes === null) {
       return remember({
         ok: false,
         permanent: true,
@@ -437,7 +464,7 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
       });
     }
     const decodedBodyBytes = decodedBase64ByteLength(frame.bodyBase64 ?? "");
-    if (decodedBodyBytes === null || decodedBodyBytes > subscription.maxBodyBytes) {
+    if (decodedBodyBytes === null || decodedBodyBytes > maxBodyBytes) {
       return remember({ ok: false, permanent: true, reason: "webhook-body-too-large" });
     }
     const rawBody = Buffer.from(frame.bodyBase64 ?? "", "base64");
@@ -529,18 +556,18 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
       req.resume();
       return sendJson(res, 404, { error: "webhook subscription not found" });
     }
-    if (!hasValidStoredBodyBudget(subscription, directMaxBodyBytes)) {
+    const maxBodyBytes = resolveStoredBodyBudget(subscription, directMaxBodyBytes);
+    if (maxBodyBytes === null) {
       req.resume();
       return sendJson(res, 500, {
         code: "WEBHOOK_SUBSCRIPTION_INVALID_BODY_BUDGET",
-        error:
-          "Webhook subscription has no valid bounded maxBodyBytes contract; recreate the subscription.",
+        error: "Webhook subscription has an invalid body-budget policy.",
         subscriptionId,
       });
     }
     let rawBody: Buffer;
     try {
-      rawBody = await readRawBody(req, subscription.maxBodyBytes);
+      rawBody = await readRawBody(req, maxBodyBytes);
     } catch (error) {
       if (error instanceof WebhookBodyTooLargeError) {
         return sendJson(res, 413, {
@@ -645,10 +672,7 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
   }
 
   const definition: ServiceDefinition = {
-    name: "webhookIngress",
-    description: "Generic public webhook ingress subscriptions",
-    authority: { principals: ["user", "host", "code"] },
-    methods: webhookIngressMethods,
+    ...webhookIngressServiceDocumentation,
     handler: defineServiceHandler("webhookIngress", webhookIngressMethods, {
       createSubscription: (ctx, [input]) => createSubscription(ctx, input),
       listSubscriptions: (ctx, [input]) => listSubscriptions(ctx, input ?? {}),
@@ -856,15 +880,27 @@ function validateDirectMaxBodyBytes(value: number): number {
   return value;
 }
 
-function hasValidStoredBodyBudget(
+function resolveStoredBodyBudget(
   subscription: WebhookIngressSubscription,
   directMaxBodyBytes: number
-): boolean {
-  const value = subscription.maxBodyBytes;
-  if (!Number.isSafeInteger(value) || value <= 0) return false;
-  return subscription.delivery.mode === "relay"
-    ? value <= WEBHOOK_RELAY_MAX_BODY_BYTES
-    : value <= directMaxBodyBytes;
+): number | null {
+  return resolveBodyBudget(subscription.delivery, subscription.bodyBudget, directMaxBodyBytes);
+}
+
+function resolveBodyBudget(
+  delivery: WebhookIngressSubscription["delivery"],
+  policy: WebhookBodyBudget,
+  directMaxBodyBytes: number
+): number | null {
+  const transportMax =
+    delivery.mode === "relay" ? WEBHOOK_RELAY_MAX_BODY_BYTES : directMaxBodyBytes;
+  if (!policy || typeof policy !== "object") return null;
+  if (policy.mode === "transport-default") return transportMax;
+  return policy.mode === "fixed" &&
+    Number.isSafeInteger(policy.maxBodyBytes) &&
+    policy.maxBodyBytes > 0
+    ? Math.min(policy.maxBodyBytes, transportMax)
+    : null;
 }
 
 function decodedBase64ByteLength(value: string): number | null {

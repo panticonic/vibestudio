@@ -111,6 +111,13 @@ interface PushServiceDeps {
   metrics?: PushMetrics;
 }
 
+export const pushServiceDocumentation = {
+  name: "push",
+  description: "Push notification device registration and delivery",
+  authority: { principals: ["user", "code", "host"] },
+  methods: pushMethods,
+} satisfies Omit<ServiceDefinition, "handler">;
+
 const PUSH_DATABASE_SCHEMA: CanonicalSqliteSchema = {
   version: 1,
   objects: [
@@ -521,10 +528,7 @@ export function createPushService(deps: PushServiceDeps = {}): PushServiceResult
   };
 
   const definition: ServiceDefinition = {
-    name: "push",
-    description: "Push notification device registration and delivery",
-    authority: { principals: ["user", "code", "host"] },
-    methods: pushMethods,
+    ...pushServiceDocumentation,
     handler: defineServiceHandler("push", pushMethods, {
       register: (ctx, [opts]) => {
         // Single source of truth for routing (WP4 §4.2 / INV-3): the owning

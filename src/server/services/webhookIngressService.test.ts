@@ -428,6 +428,87 @@ describe("webhookIngressService — public ingress route", () => {
     expect(unregistered).toEqual([sub.subscriptionId]);
   });
 
+  it("defaults each delivery mode to its transport-specific body ceiling", async () => {
+    const directMaxBodyBytes = 2_000_000;
+    const { svc } = setup({ directMaxBodyBytes });
+    const relay = await provision(
+      svc,
+      { type: "hmac-sha256", headerName: "X-Sig", secret: "relay" },
+      undefined,
+      { delivery: { mode: "relay" } }
+    );
+    const direct = await provision(
+      svc,
+      { type: "hmac-sha256", headerName: "X-Sig", secret: "direct" },
+      undefined,
+      { delivery: { mode: "direct" } }
+    );
+
+    expect(relay.maxBodyBytes).toBe(WEBHOOK_DEFAULT_MAX_BODY_BYTES);
+    expect(direct.maxBodyBytes).toBe(directMaxBodyBytes);
+    expect(relay.bodyBudget).toEqual({ mode: "transport-default" });
+    expect(direct.bodyBudget).toEqual({ mode: "transport-default" });
+  });
+
+  it("resolves a stored direct transport default against the current host ceiling", async () => {
+    const { svc, store } = setup({ directMaxBodyBytes: 2_000_000 });
+    const created = await provision(
+      svc,
+      { type: "hmac-sha256", headerName: "X-Sig", secret: "direct" },
+      undefined,
+      { delivery: { mode: "direct" } }
+    );
+    expect(created.maxBodyBytes).toBe(2_000_000);
+
+    const restarted = createWebhookIngressService({
+      relaySigningSecret: RELAY_SECRET,
+      relayOrigin: RELAY_BASE_URL,
+      directPublicBaseUrl: DIRECT_BASE_URL,
+      directMaxBodyBytes: 8_000_000,
+      store,
+    });
+    const [afterRestart] = (await restarted.definition.handler(
+      shellCtx(),
+      "listSubscriptions",
+      []
+    )) as WebhookIngressSubscriptionSummary[];
+
+    expect(afterRestart).toMatchObject({
+      subscriptionId: created.subscriptionId,
+      publicUrl: created.publicUrl,
+      bodyBudget: { mode: "transport-default" },
+      maxBodyBytes: 8_000_000,
+    });
+  });
+
+  it("keeps a fixed direct budget usable when the operator lowers the host ceiling", async () => {
+    const { svc, store } = setup({ directMaxBodyBytes: 8_000_000 });
+    const created = await provision(
+      svc,
+      { type: "hmac-sha256", headerName: "X-Sig", secret: "direct" },
+      undefined,
+      { delivery: { mode: "direct" }, maxBodyBytes: 8_000_000 }
+    );
+    const restarted = createWebhookIngressService({
+      relaySigningSecret: RELAY_SECRET,
+      relayOrigin: RELAY_BASE_URL,
+      directPublicBaseUrl: DIRECT_BASE_URL,
+      directMaxBodyBytes: 2_000_000,
+      store,
+    });
+    const [afterRestart] = (await restarted.definition.handler(
+      shellCtx(),
+      "listSubscriptions",
+      []
+    )) as WebhookIngressSubscriptionSummary[];
+
+    expect(afterRestart).toMatchObject({
+      subscriptionId: created.subscriptionId,
+      bodyBudget: { mode: "fixed", maxBodyBytes: 8_000_000 },
+      maxBodyBytes: 2_000_000,
+    });
+  });
+
   it("requires larger per-subscription budgets to use direct delivery", async () => {
     const { svc } = setup();
     await expect(
@@ -617,7 +698,11 @@ describe("webhookIngressService — public ingress route", () => {
       svc,
       { type: "query-token", paramName: "token", token: "tok" },
       { key: { type: "body-sha256" }, ttlMs: 60_000 },
-      { delivery: { mode: "direct" }, payload: { type: "json" } }
+      {
+        delivery: { mode: "direct" },
+        maxBodyBytes: WEBHOOK_DEFAULT_MAX_BODY_BYTES,
+        payload: { type: "json" },
+      }
     );
     const handler = findRoute(svc);
     const { req, res, captured } = createMockReqRes(
@@ -651,7 +736,11 @@ describe("webhookIngressService — public ingress route", () => {
       svc,
       { type: "query-token", paramName: "token", token: "tok" },
       { key: { type: "body-sha256" }, ttlMs: 60_000 },
-      { delivery: { mode: "direct" }, payload: { type: "raw" } }
+      {
+        delivery: { mode: "direct" },
+        maxBodyBytes: WEBHOOK_DEFAULT_MAX_BODY_BYTES,
+        payload: { type: "raw" },
+      }
     );
     const handler = findRoute(svc);
     const oversized = Buffer.alloc(WEBHOOK_DEFAULT_MAX_BODY_BYTES + 1);

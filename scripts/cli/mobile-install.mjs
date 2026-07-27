@@ -39,7 +39,7 @@ const defaultReleaseBaseUrl = `https://github.com/vibestudio/vibestudio/releases
 const defaultArtifactUrl =
   process.env.VIBESTUDIO_MOBILE_APK_URL ?? `${defaultReleaseBaseUrl}/${releaseArtifactName}`;
 const defaultChecksumUrl =
-  process.env.VIBESTUDIO_MOBILE_CHECKSUMS_URL ?? `${defaultReleaseBaseUrl}/SHA256SUMS`;
+  process.env.VIBESTUDIO_MOBILE_CHECKSUMS_URL ?? `${defaultReleaseBaseUrl}/SHA256SUMS-android`;
 const platformToolsVersion = "36.0.0";
 const platformToolsPins = {
   linux: {
@@ -159,7 +159,7 @@ Options:
   --device <serial>    Target a specific adb device.
   --simulator          iOS: build/install to the booted simulator.
   --artifact-url <url> Android: prebuilt APK URL. Defaults to the release artifact.
-  --checksum-url <url> Android: release SHA256SUMS URL. Defaults to the release checksum file.
+  --checksum-url <url> Android: release SHA256SUMS-android URL. Defaults to the release checksum file.
   --artifact-sha256 <hash>
                        Android: expected APK SHA-256. Overrides --checksum-url.
   --package <id>       Android package id to reset/launch.

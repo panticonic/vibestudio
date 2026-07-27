@@ -4,10 +4,7 @@ import {
   type DurableObjectContext,
   type DurableObjectSchemaMigration,
 } from "@vibestudio/durable";
-import {
-  WEBHOOK_DEFAULT_MAX_BODY_BYTES,
-  type WebhookIngressSubscription,
-} from "../../../packages/shared/src/webhooks/ingress.js";
+import type { WebhookIngressSubscription } from "../../../packages/shared/src/webhooks/ingress.js";
 
 interface WebhookIngressSubscriptionRow {
   subscription_id: string;
@@ -16,7 +13,7 @@ interface WebhookIngressSubscriptionRow {
   owner_caller_kind: WebhookIngressSubscription["ownerCallerKind"];
   target_json: string;
   delivery_json: string;
-  max_body_bytes: number;
+  body_budget_json: string;
   payload_json: string;
   verifier_json: string;
   replay_json: string | null;
@@ -48,7 +45,7 @@ export class WebhookStoreDO extends DurableObjectBase {
         owner_caller_kind TEXT NOT NULL,
         target_json TEXT NOT NULL,
         delivery_json TEXT NOT NULL,
-        max_body_bytes INTEGER NOT NULL,
+        body_budget_json TEXT NOT NULL,
         payload_json TEXT NOT NULL,
         verifier_json TEXT NOT NULL,
         replay_json TEXT,
@@ -151,7 +148,8 @@ export class WebhookStoreDO extends DurableObjectBase {
         migrate: (sql) => {
           sql.exec(
             `ALTER TABLE webhook_ingress_subscriptions
-             ADD COLUMN max_body_bytes INTEGER NOT NULL DEFAULT ${WEBHOOK_DEFAULT_MAX_BODY_BYTES}`
+             ADD COLUMN body_budget_json TEXT NOT NULL
+             DEFAULT '${JSON.stringify({ mode: "transport-default" })}'`
           );
         },
       },
@@ -170,7 +168,7 @@ export class WebhookStoreDO extends DurableObjectBase {
         .toArray()
         .map((column) => String(column["name"]))
     );
-    for (const column of ["delivery_json", "max_body_bytes", "payload_json", "response_json"]) {
+    for (const column of ["delivery_json", "body_budget_json", "payload_json", "response_json"]) {
       if (!columns.has(column)) {
         throw new Error(
           `${this.constructor.name} schema validation failed: webhook_ingress_subscriptions.${column} is missing`
@@ -236,7 +234,7 @@ export class WebhookStoreDO extends DurableObjectBase {
       `
         INSERT INTO webhook_ingress_subscriptions (
           subscription_id, label, owner_caller_id, owner_caller_kind,
-          target_json, delivery_json, max_body_bytes, payload_json, verifier_json,
+          target_json, delivery_json, body_budget_json, payload_json, verifier_json,
           replay_json, response_json, public_url, revoked_at, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(subscription_id) DO UPDATE SET
@@ -245,7 +243,7 @@ export class WebhookStoreDO extends DurableObjectBase {
           owner_caller_kind = excluded.owner_caller_kind,
           target_json = excluded.target_json,
           delivery_json = excluded.delivery_json,
-          max_body_bytes = excluded.max_body_bytes,
+          body_budget_json = excluded.body_budget_json,
           payload_json = excluded.payload_json,
           verifier_json = excluded.verifier_json,
           replay_json = excluded.replay_json,
@@ -260,7 +258,7 @@ export class WebhookStoreDO extends DurableObjectBase {
       subscription.ownerCallerKind,
       JSON.stringify(subscription.target),
       JSON.stringify(subscription.delivery),
-      subscription.maxBodyBytes,
+      JSON.stringify(subscription.bodyBudget),
       JSON.stringify(subscription.payload),
       JSON.stringify(subscription.verifier),
       subscription.replay ? JSON.stringify(subscription.replay) : null,
@@ -281,7 +279,7 @@ export class WebhookStoreDO extends DurableObjectBase {
         owner_caller_kind,
         target_json,
         delivery_json,
-        max_body_bytes,
+        body_budget_json,
         payload_json,
         verifier_json,
         replay_json,
@@ -304,7 +302,7 @@ export class WebhookStoreDO extends DurableObjectBase {
       ownerCallerKind: row.owner_caller_kind,
       target: JSON.parse(row.target_json) as WebhookIngressSubscription["target"],
       delivery: JSON.parse(row.delivery_json) as WebhookIngressSubscription["delivery"],
-      maxBodyBytes: row.max_body_bytes,
+      bodyBudget: JSON.parse(row.body_budget_json) as WebhookIngressSubscription["bodyBudget"],
       payload: JSON.parse(row.payload_json) as WebhookIngressSubscription["payload"],
       verifier: JSON.parse(row.verifier_json) as WebhookIngressSubscription["verifier"],
       replay: row.replay_json

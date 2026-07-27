@@ -3,11 +3,12 @@
  * agent CLI — statically from the server service registry.
  *
  * Like scripts/generate-runtime-docs.mjs this runs without a live server:
- * every src/server/services/*Service(Def).ts module is imported (via tsx),
- * its exported `create*` factories are invoked with inert proxy deps (deps
- * are only used inside handler closures), and the resulting
- * ServiceDefinitions are filtered to the ones admitting the authenticated
- * user principal carried by a paired CLI session.
+ * every src/server/services/*Service(Def).ts module is imported (via tsx).
+ * Services whose construction has real side effects or validates deployment
+ * configuration export a static `*ServiceDocumentation` object. Remaining
+ * `create*` factories are invoked with inert proxy deps. The resulting
+ * definitions are filtered to the ones admitting the authenticated user
+ * principal carried by a paired CLI session.
  *
  * Usage:
  *   pnpm generate:agent-docs          # rewrite API.md
@@ -53,6 +54,19 @@ function isServiceDefinition(value) {
   );
 }
 
+function isServiceDocumentation(value) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    typeof value.name === "string" &&
+    value.methods !== null &&
+    typeof value.methods === "object" &&
+    value.authority !== null &&
+    typeof value.authority === "object" &&
+    !("handler" in value)
+  );
+}
+
 async function collectServiceDefinitions() {
   const files = fs
     .readdirSync(servicesDir)
@@ -60,21 +74,51 @@ async function collectServiceDefinitions() {
     .sort();
 
   const defs = new Map();
+  const constructionFailures = [];
   for (const file of files) {
     const mod = await tsImport(path.join(servicesDir, file), import.meta.url);
+    const documentationExports = Object.entries(mod).filter(([exportName]) =>
+      exportName.endsWith("ServiceDocumentation")
+    );
+    const malformedDocumentation = documentationExports.filter(
+      ([, candidate]) => !isServiceDocumentation(candidate)
+    );
+    if (malformedDocumentation.length > 0) {
+      throw new Error(
+        `${file} exports malformed service documentation: ${malformedDocumentation
+          .map(([exportName]) => exportName)
+          .join(", ")}`
+      );
+    }
+    const documented = documentationExports.map(([, candidate]) => candidate);
+    for (const candidate of documented) defs.set(candidate.name, candidate);
+    // Static documentation is the explicit, side-effect-free contract for
+    // this module. Do not also instantiate its runtime factory.
+    if (documented.length > 0) continue;
+
     for (const [exportName, exported] of Object.entries(mod)) {
       if (typeof exported !== "function" || !exportName.startsWith("create")) continue;
       let result;
       try {
         result = exported(inertDeps());
         if (result && typeof result.then === "function") result = await result;
-      } catch {
-        continue; // factory needed real deps at construction time
+      } catch (error) {
+        constructionFailures.push(
+          `${file}:${exportName}: ${error instanceof Error ? error.message : String(error)}`
+        );
+        continue;
       }
       for (const candidate of [result, result?.definition]) {
         if (isServiceDefinition(candidate)) defs.set(candidate.name, candidate);
       }
     }
+  }
+  if (constructionFailures.length > 0) {
+    throw new Error(
+      "Service documentation discovery could not safely construct these factories. " +
+        "Export a side-effect-free *ServiceDocumentation object from each module:\n" +
+        constructionFailures.map((failure) => `- ${failure}`).join("\n")
+    );
   }
   return [...defs.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
