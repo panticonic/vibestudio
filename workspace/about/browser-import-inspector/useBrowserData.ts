@@ -13,7 +13,17 @@ import { browserData } from "@workspace/runtime";
 import { type AsyncState, classifyError } from "./format";
 
 export { browserData };
-export { classifyError, relativeTime, mask, DATA_TYPES } from "./format";
+export {
+  classifyError,
+  relativeTime,
+  mask,
+  DATA_TYPES,
+  prettyHost,
+  prettyPath,
+  hueFor,
+  initialsFor,
+  plural,
+} from "./format";
 export type { AsyncState, AsyncStatus } from "./format";
 
 /** Run `fn` whenever `deps` change; expose status + a manual `reload`. */

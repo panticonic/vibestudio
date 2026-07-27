@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { classifyError, relativeTime, mask } from "./format";
+import {
+  classifyError,
+  hueFor,
+  initialsFor,
+  mask,
+  plural,
+  prettyHost,
+  prettyPath,
+  relativeTime,
+} from "./format";
 
 describe("classifyError", () => {
   it("maps EACCES to denied", () => {
@@ -40,5 +49,52 @@ describe("mask", () => {
   });
   it("returns empty for empty input", () => {
     expect(mask("", false)).toBe("");
+  });
+});
+
+describe("prettyHost / prettyPath", () => {
+  it("strips the scheme and www", () => {
+    expect(prettyHost("https://www.reddit.com/r/LocalLLaMA")).toBe("reddit.com");
+  });
+  it("keeps the path but drops a bare slash", () => {
+    expect(prettyPath("https://example.com/a/b?c=1")).toBe("/a/b?c=1");
+    expect(prettyPath("https://example.com/")).toBe("");
+  });
+  it("survives non-URL strings like about:newtab", () => {
+    expect(prettyHost("about:newtab")).toBe("about:newtab");
+    expect(prettyPath("about:newtab")).toBe("");
+  });
+});
+
+describe("hueFor", () => {
+  it("is stable and in range", () => {
+    expect(hueFor("github.com")).toBe(hueFor("github.com"));
+    expect(hueFor("github.com")).toBeGreaterThanOrEqual(0);
+    expect(hueFor("github.com")).toBeLessThan(360);
+  });
+  it("separates different hosts", () => {
+    expect(hueFor("github.com")).not.toBe(hueFor("reddit.com"));
+  });
+});
+
+describe("initialsFor", () => {
+  it("takes the first two letters of the label", () => {
+    expect(initialsFor("github.com")).toBe("GI");
+  });
+  it("splits hyphenated labels", () => {
+    expect(initialsFor("my-site.com")).toBe("MS");
+  });
+  it("falls back for empty input", () => {
+    expect(initialsFor("")).toBe("?");
+  });
+});
+
+describe("plural", () => {
+  it("uses the singular for one", () => {
+    expect(plural(1, "tab")).toBe("1 tab");
+    expect(plural(2, "tab")).toBe("2 tabs");
+  });
+  it("accepts an irregular plural", () => {
+    expect(plural(3, "category", "categories")).toBe("3 categories");
   });
 });

@@ -504,7 +504,12 @@ export async function activate(ctx: ExtensionContextLike) {
     ),
     openTabsAsPanels: guarded(
       "openTabsAsPanels",
-      async (request: { hostId: string; sourceId: string; selection: string[] }) => {
+      async (request: {
+        hostId: string;
+        sourceId: string;
+        selection: string[];
+        groupBy?: "window" | "none";
+      }) => {
         const { identity } = await currentIdentity();
         await ensureImportHosts(identity);
         const tabs = await coordinator.listOpenTabs(
@@ -513,12 +518,19 @@ export async function activate(ctx: ExtensionContextLike) {
           request.sourceId,
           ctx.invocation.signal?.() ?? undefined
         );
-        return openTabsAsPanels(
+        const chosen =
           request.selection.length > 0
             ? tabs.filter((tab) => request.selection.includes(tab.tabId))
-            : tabs,
-          ctx
+            : tabs;
+        if (request.groupBy !== "window") return openTabsAsPanels(chosen, ctx);
+        const sources = await coordinator.listSources(
+          identity,
+          request.hostId,
+          ctx.invocation.signal?.() ?? undefined
         );
+        const sourceName =
+          sources.find((source) => source.sourceId === request.sourceId)?.displayName ?? "Browser";
+        return openTabsAsPanels(chosen, ctx, { groupBy: "window", sourceName });
       }
     ),
     getSitePreferences: guarded("getSitePreferences", async (origin: string) =>
@@ -776,30 +788,86 @@ async function storeImportBatch(
   }
 }
 
+interface OpenableTab {
+  url: string;
+  title?: string;
+  windowId?: string;
+  windowOrdinal?: number;
+}
+
 async function openTabsAsPanels(
-  tabs: Array<{ url: string; title?: string }>,
-  ctx: ExtensionContextLike
+  tabs: OpenableTab[],
+  ctx: ExtensionContextLike,
+  grouping?: { groupBy: "window"; sourceName: string }
 ) {
-  const parentId = parentPanelIdFromInvocation(ctx.invocation.current());
+  const callerId = parentPanelIdFromInvocation(ctx.invocation.current());
   const panels: Array<{ id: string; title: string; url: string }> = [];
+  const collections: Array<{ id: string; title: string; panelsOpened: number }> = [];
   const skipped: Array<{ url: string; reason: string }> = [];
+  // One collection panel per source window, created lazily so a window whose
+  // tabs all fail to open does not leave an empty collection behind.
+  const collectionByWindow = new Map<string, string | null>();
+  // Reasons a collection could not hold its tabs, surfaced once rather than per tab.
+  const collectionErrors = new Set<string>();
+
+  const collectionFor = async (tab: OpenableTab): Promise<string | undefined> => {
+    if (!grouping || !tab.windowId) return callerId;
+    const cached = collectionByWindow.get(tab.windowId);
+    if (cached !== undefined) return cached ?? callerId;
+    const title = `${grouping.sourceName} · Window ${tab.windowOrdinal ?? collectionByWindow.size + 1}`;
+    try {
+      const created = await ctx.rpc.call<{ id: string; title: string }>(
+        "main",
+        "panelTree.create",
+        "about/collection",
+        {
+          ...(callerId ? { parentId: callerId } : {}),
+          title,
+          focus: false,
+          stateArgs: { title, origin: `${grouping.sourceName} · imported open tabs` },
+        }
+      );
+      collectionByWindow.set(tab.windowId, created.id);
+      collections.push({ id: created.id, title: created.title, panelsOpened: 0 });
+      return created.id;
+    } catch {
+      // Fall back to a flat open rather than losing the tabs entirely.
+      collectionByWindow.set(tab.windowId, null);
+      return callerId;
+    }
+  };
+
   for (const tab of tabs) {
     if (!/^https?:\/\//i.test(tab.url)) {
       skipped.push({ url: tab.url, reason: "unsupported browser-panel URL scheme" });
       continue;
     }
+    const parentId = await collectionFor(tab);
+    const name = (tab.title?.trim() || hostnameFromUrl(tab.url) || "Imported Tab").slice(0, 80);
+    const create = (under: string | undefined) =>
+      ctx.rpc.call<{ id: string; title: string }>("main", "panelTree.create", tab.url, {
+        ...(under ? { parentId: under } : {}),
+        // A label, not an id: page titles repeat constantly ("New Tab"), and
+        // as an id segment they collided.
+        title: name,
+        focus: false,
+      });
     try {
-      const created = await ctx.rpc.call<{ id: string; title: string }>(
-        "main",
-        "panelTree.create",
-        tab.url,
-        {
-          ...(parentId ? { parentId } : {}),
-          name: (tab.title?.trim() || hostnameFromUrl(tab.url) || "Imported Tab").slice(0, 80),
-          focus: false,
-        }
-      );
+      let created: { id: string; title: string };
+      let landedIn = parentId;
+      try {
+        created = await create(parentId);
+      } catch (error) {
+        // A collection that cannot host children must not take the tabs down
+        // with it — retry flat under the caller before giving up on the tab.
+        if (parentId === callerId) throw error;
+        created = await create(callerId);
+        landedIn = callerId;
+        collectionErrors.add(error instanceof Error ? error.message : String(error));
+      }
       panels.push({ id: created.id, title: created.title, url: tab.url });
+      const collection = collections.find((entry) => entry.id === landedIn);
+      if (collection) collection.panelsOpened += 1;
     } catch (error) {
       skipped.push({
         url: tab.url,
@@ -807,9 +875,13 @@ async function openTabsAsPanels(
       });
     }
   }
+  for (const reason of collectionErrors) {
+    skipped.push({ url: "(collection)", reason: `Tabs opened outside their collection: ${reason}` });
+  }
   return {
     tabsFound: tabs.length,
     panelsOpened: panels.length,
+    collections: collections.filter((entry) => entry.panelsOpened > 0),
     panels,
     skipped,
   };
