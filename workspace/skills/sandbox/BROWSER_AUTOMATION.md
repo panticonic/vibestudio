@@ -101,6 +101,11 @@ parent chat panel, or any workspace panel discovered from `panelTree` unless
 the requested task is to replace that exact panel. Open a browser panel for web
 navigation instead.
 
+The panel slot is durably created before application readiness settles. If
+`openPanel()` throws `PanelOperationError`, use
+`error.failure.provenance.panelId` to inspect or close that committed slot;
+blindly repeating `openPanel()` creates a duplicate.
+
 ## Panel Ownership
 
 Panels opened by the workflow are owned by it. Hold handles in your component's

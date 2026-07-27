@@ -411,7 +411,7 @@ Authority principals: `code`, `host`, `user`
 | `panelTree.roots` | List all root-level panels in the tree. |
 | `panelTree.getTreeSnapshot` | Return a full snapshot of the panel tree (revision plus root panels). |
 | `panelTree.getFocusedPanelId` | Return the id of the currently focused panel, or null if none is focused. |
-| `panelTree.create` | Create a new panel from a workspace source path, optionally nested under a parent and focused. |
+| `panelTree.create` | Internal structural primitive: durably create a panel and return its initial observation while boot continues. Application callers use openPanel, which waits for boot readiness. |
 | `panelTree.focus` | Focus a panel and return only after its current attempt is boot-ready; throws the canonical structured failure otherwise. |
 | `panelTree.observe` | Return the canonical current panel attempt, including exact provenance, host/boot state, and structured failure. |
 | `panelTree.diagnose` | Return one bounded diagnostic packet with the canonical observation, host lifecycle/console history, and a document capture when ready. |

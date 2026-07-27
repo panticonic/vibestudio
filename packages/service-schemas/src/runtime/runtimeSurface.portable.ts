@@ -338,7 +338,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
     "Call `await openExternal(url, options?)` from `@workspace/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides."
   ),
   openPanel: valueEntry(
-    "Open a workspace or browser panel and return a PanelHandle only after application boot-ready."
+    "Create a workspace or browser panel and return its handle after application boot-ready. The slot commits before readiness; on PanelOperationError, inspect failure.provenance.panelId instead of blindly repeating creation."
   ),
   listPanels: valueEntry("List open panels."),
   getPanelHandle: valueEntry("Get a handle to a panel by id."),

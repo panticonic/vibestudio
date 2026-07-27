@@ -31,6 +31,22 @@ const log = createDevLogger("CdpBridge");
 const NAV_COMMAND_TIMEOUT_MS = 30_000;
 const MODEL_AWARE_HOST_COMMANDS = new Set(["navigatePanel", "navigatePanelHistory", "reloadPanel"]);
 
+export const CDP_TARGET_LIFECYCLE_REASONS = {
+  closed: "CDP target closed",
+  hostChanged: "CDP target host changed",
+  runtimeChanged: "CDP target runtime changed",
+} as const;
+
+/**
+ * A command can lose the target it was reading while the same panel slot
+ * moves between hosts or runtime incarnations. That invalidates the command's
+ * snapshot, not the panel lifecycle itself.
+ */
+export function isCdpTargetLifecycleTransitionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return Object.values(CDP_TARGET_LIFECYCLE_REASONS).some((reason) => reason === message);
+}
+
 interface CdpBridgeOptions {
   adminToken: string;
   cdpGrants?: CdpGrantService;
@@ -411,8 +427,8 @@ export class CdpBridge {
       event.previous &&
       event.next &&
       event.previous.hostConnectionId === event.next.hostConnectionId
-        ? "CDP target runtime changed"
-        : "CDP target host changed";
+        ? CDP_TARGET_LIFECYCLE_REASONS.runtimeChanged
+        : CDP_TARGET_LIFECYCLE_REASONS.hostChanged;
     if (event.previous) {
       this.detachTargetFromHost(event.slotId, event.previous.hostConnectionId, reason);
     }
@@ -612,19 +628,19 @@ export class CdpBridge {
             this.sendErrorToClient(
               pending.ws,
               pending.clientId,
-              "CDP target closed",
+              CDP_TARGET_LIFECYCLE_REASONS.closed,
               pending.sessionId
             );
             this.pendingCommands.delete(requestId);
           }
         }
-        this.rejectPendingTargetCommands(msg.targetId, "CDP target closed");
+        this.rejectPendingTargetCommands(msg.targetId, CDP_TARGET_LIFECYCLE_REASONS.closed);
 
         // Close client connections for this target.
         const connections = this.clientConnections.get(msg.targetId);
         if (connections) {
           for (const ws of connections) {
-            ws.close(1000, "CDP target closed");
+            ws.close(1000, CDP_TARGET_LIFECYCLE_REASONS.closed);
           }
           this.clientConnections.delete(msg.targetId);
         }
@@ -1017,7 +1033,8 @@ export class CdpBridge {
   private rejectPendingTargetCommands(targetId: string, reason: string): void {
     for (const [requestId, pending] of this.pendingNavCommands) {
       if (pending.targetId !== targetId) continue;
-      if (pending.resilientToTargetClose && reason === "CDP target closed") continue;
+      if (pending.resilientToTargetClose && reason === CDP_TARGET_LIFECYCLE_REASONS.closed)
+        continue;
       clearTimeout(pending.timer);
       pending.reject(new Error(reason));
       this.pendingNavCommands.delete(requestId);

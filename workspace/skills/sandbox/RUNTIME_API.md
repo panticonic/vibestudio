@@ -45,7 +45,7 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `approvals` | namespace | `request`, `revoke`, `list` |  |
 | `notifications` | namespace | `show`, `dismiss` |  |
 | `workspace` | namespace | `getInfo`, `getActive`, `getConfig`, `validateConfig`, `setInitPanels`, `setConfigField`, `getAgentsMd`, `listSkills`, `readSkill`, `sourceTree`, `ensureContextFolder`, `findUnitForPath`, `units`, `recurring`, `heartbeats`, `hostTargets`, `projects` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; import top-level panelTree for panel-tree handles. |
-| `openPanel` | value |  | Create a child panel and return its handle only after the exact attempt is application boot-ready; throws structured PanelOperationError on failure. options.placement accepts disposition "side" (default), "replace", or "split-below", plus preferredWidth/minWidth. |
+| `openPanel` | value |  | Create a panel and return its handle after the exact attempt is application boot-ready. It defaults under the caller and focused; use parentId:null for a root or focus:false for background creation. The slot commits before readiness, so on PanelOperationError inspect failure.provenance.panelId instead of blindly retrying. options.placement accepts "side" (default), "replace", or "split-below". |
 | `listPanels` | value |  |  |
 | `getPanelHandle` | value |  |  |
 | `panelTree` | namespace | `self`, `get`, `list`, `roots`, `children`, `parent`, `navigate` | Top-level export, not workspace.panelTree. self/get are synchronous handle factories. navigate/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. Use list/roots/children/get for existing panels and openPanel to create. |

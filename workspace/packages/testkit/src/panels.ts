@@ -7,21 +7,12 @@
  * direct CDP is for input, viewport emulation and layout measurement.
  */
 import { openPanel as runtimeOpenPanel, panelTree } from "@workspace/runtime";
-import type { PanelHandle } from "@workspace/runtime";
+import type { OpenPanelOptions as RuntimeOpenPanelOptions, PanelHandle } from "@workspace/runtime";
 import { activeTestContext } from "./run.js";
 import { withCdpSession } from "./cdp.js";
 import { TestAssertionError } from "./expect.js";
 
-export interface OpenPanelOptions {
-  parentId?: string | null;
-  name?: string;
-  focus?: boolean;
-  /** Runtime storage/filesystem context for the opened panel. */
-  contextId?: string;
-  /** Optional code-build ref; contextId alone never selects code provenance. */
-  ref?: string;
-  stateArgs?: Record<string, unknown>;
-}
+export type OpenPanelOptions = RuntimeOpenPanelOptions;
 
 function assertNotSelf(handle: PanelHandle | string): void {
   const id = typeof handle === "string" ? handle : handle.id;
@@ -99,14 +90,7 @@ export async function waitFor<T>(
 
 /** Open a panel and auto-watch it. The runtime returns only after application boot-ready. */
 export async function openPanel(source: string, opts: OpenPanelOptions = {}): Promise<PanelHandle> {
-  const handle = await runtimeOpenPanel(source, {
-    parentId: opts.parentId,
-    name: opts.name,
-    focus: opts.focus,
-    contextId: opts.contextId,
-    ref: opts.ref,
-    stateArgs: opts.stateArgs,
-  });
+  const handle = await runtimeOpenPanel(source, opts);
   activeTestContext()?.supervisor.watchPanel(handle);
   return handle;
 }

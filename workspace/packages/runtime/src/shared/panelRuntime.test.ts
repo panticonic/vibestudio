@@ -69,6 +69,23 @@ describe("panel runtime openPanel lifecycle", () => {
     ]);
   });
 
+  it("keeps observing across a nonterminal target handoff", async () => {
+    const { runtime, call } = runtimeWith(observation("building"), [
+      observation("loading"),
+      observation("ready"),
+    ]);
+
+    await expect(runtime.openPanel("panels/new")).resolves.toMatchObject({
+      id: "panel:tree/new",
+      source: "panels/new",
+    });
+    expect(call.mock.calls.map((entry) => entry[1])).toEqual([
+      "panelTree.create",
+      "panelTree.observe",
+      "panelTree.observe",
+    ]);
+  });
+
   it("rejects with the exact structured asynchronous lifecycle failure", async () => {
     const failure = panelFailure({
       code: "host_unavailable",

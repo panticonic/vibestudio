@@ -40,7 +40,7 @@ export const panelRuntimeSurface: RuntimeSurface = {
       "workspace"
     ),
     openPanel: valueEntry(
-      'Create a child panel and return its handle only after the exact attempt is application boot-ready; throws structured PanelOperationError on failure. options.placement accepts disposition "side" (default), "replace", or "split-below", plus preferredWidth/minWidth.'
+      'Create a panel and return its handle after the exact attempt is application boot-ready. It defaults under the caller and focused; use parentId:null for a root or focus:false for background creation. The slot commits before readiness, so on PanelOperationError inspect failure.provenance.panelId instead of blindly retrying. options.placement accepts "side" (default), "replace", or "split-below".'
     ),
     listPanels: valueEntry(),
     getPanelHandle: valueEntry(),

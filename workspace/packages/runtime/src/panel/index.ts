@@ -31,6 +31,7 @@ export type {
   WorkspaceServiceInfo,
   WorkerSourceInfo,
 } from "../shared/workerd.js";
+export type { OpenPanelOptions, PanelRuntimeTree } from "../shared/panelRuntime.js";
 export type * from "../shared/gad.js";
 export type {
   UserlandApprovalChoice,
