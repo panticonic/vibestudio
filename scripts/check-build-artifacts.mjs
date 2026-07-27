@@ -23,11 +23,16 @@ const contracts = [
     path: "dist/server-electron.cjs",
     runtime: "Electron utilityProcess",
     format: "cjs",
-    mustContain: ['"use strict"', 'import("esbuild-svelte")'],
+    mustContain: ['"use strict"', 'import("esbuild-svelte")', 'require("node-pty")'],
     forbidden: [
       {
         pattern: "throw Error('Dynamic require of \"",
         reason: "CJS utility-process server should have native require.",
+      },
+      {
+        pattern: "node_modules/node-pty/lib/unixTerminal.js",
+        reason:
+          "node-pty must stay external so its loader resolves pty.node relative to the installed package.",
       },
     ],
   },
@@ -36,6 +41,14 @@ const contracts = [
     runtime: "standalone Node server",
     format: "esm",
     mustContain: [SERVER_ESM_BANNER, 'import("esbuild-svelte")'],
+    mustContainAny: [['from "node-pty"', 'from"node-pty"']],
+    forbidden: [
+      {
+        pattern: "node_modules/node-pty/lib/unixTerminal.js",
+        reason:
+          "node-pty must stay external so its loader resolves pty.node relative to the installed package.",
+      },
+    ],
   },
   {
     path: "src/server/buildV2/builder.ts",
@@ -147,6 +160,15 @@ function checkContract(contract) {
     if (!source.includes(expected)) {
       throw new Error(
         `${contract.path} (${contract.runtime}) is missing expected text: ${expected}`
+      );
+    }
+  }
+  for (const alternatives of contract.mustContainAny ?? []) {
+    if (!alternatives.some((expected) => source.includes(expected))) {
+      throw new Error(
+        `${contract.path} (${contract.runtime}) is missing every expected alternative: ${alternatives.join(
+          ", "
+        )}`
       );
     }
   }

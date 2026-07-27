@@ -90,6 +90,7 @@ declare const __filename: string;
 
 const HUB_PROCESS_LEASE_TTL_MS = 30_000;
 const HUB_PROCESS_LEASE_HEARTBEAT_MS = 5_000;
+const WORKSPACE_STARTUP_STDERR_LIMIT_BYTES = 32 * 1024;
 
 export function isHubControlHttpPath(pathname: string): boolean {
   return pathname === "/rpc" || pathname === RPC_WEBSOCKET_ADMISSION_PATH;
@@ -2300,9 +2301,20 @@ async function startWorkspaceRuntime(
   child.stdout?.on("data", (chunk) =>
     forwardOutput(process.stdout, `[workspace:${advertisedName}] `, chunk)
   );
-  child.stderr?.on("data", (chunk) =>
-    forwardOutput(process.stderr, `[workspace:${advertisedName}:err] `, chunk)
-  );
+  let retainStartupStderr = true;
+  let startupStderrTail = Buffer.alloc(0);
+  child.stderr?.on("data", (chunk) => {
+    if (retainStartupStderr) {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      startupStderrTail = Buffer.concat([startupStderrTail, bytes]);
+      if (startupStderrTail.byteLength > WORKSPACE_STARTUP_STDERR_LIMIT_BYTES) {
+        startupStderrTail = startupStderrTail.subarray(
+          startupStderrTail.byteLength - WORKSPACE_STARTUP_STDERR_LIMIT_BYTES
+        );
+      }
+    }
+    forwardOutput(process.stderr, `[workspace:${advertisedName}:err] `, chunk);
+  });
   child.on("exit", (code, signal) => {
     void handleWorkspaceChildExit(state, {
       advertisedName,
@@ -2323,7 +2335,11 @@ async function startWorkspaceRuntime(
   let ready: Record<string, unknown>;
   let port: number;
   try {
-    ready = WorkspaceChildReadySchema.parse(await waitForReadyFile(readyFile, child));
+    ready = WorkspaceChildReadySchema.parse(
+      await waitForWorkspaceReadyFile(readyFile, child, () =>
+        startupStderrTail.toString("utf8").trim()
+      )
+    );
     if (ready["workspaceName"] !== childWorkspaceName || ready["workspaceId"] !== workspaceId) {
       throw new Error(
         `Workspace "${advertisedName}" ready identity does not match its spawn ` +
@@ -2338,6 +2354,8 @@ async function startWorkspaceRuntime(
     state.workspaceChildTokens.delete(runtimeToken);
     throw error;
   } finally {
+    retainStartupStderr = false;
+    startupStderrTail = Buffer.alloc(0);
     fs.rmSync(readyDir, { recursive: true, force: true });
   }
   return {
@@ -2536,9 +2554,10 @@ export async function terminateWorkspaceChild(
   await (deps.reap ?? reapWorkspaceChildProcessGroup)(child);
 }
 
-async function waitForReadyFile(
+export async function waitForWorkspaceReadyFile(
   readyFile: string,
-  child: ChildProcess
+  child: Pick<ChildProcess, "exitCode" | "signalCode">,
+  startupDiagnostic: () => string = () => ""
 ): Promise<Record<string, unknown>> {
   // Readiness is a state transition, not a duration. Cold protected-root
   // validation can legitimately take several minutes and already emits
@@ -2546,8 +2565,14 @@ async function waitForReadyFile(
   // not kill a live, progressing workspace because a machine-local deadline
   // happened to expire.
   for (;;) {
-    if (child.exitCode !== null) {
-      throw new Error(`Workspace runtime exited before readiness (code ${child.exitCode})`);
+    if (child.exitCode !== null || child.signalCode !== null) {
+      const outcome =
+        child.exitCode !== null ? `code ${child.exitCode}` : `signal ${child.signalCode}`;
+      const diagnostic = startupDiagnostic();
+      throw new Error(
+        `Workspace runtime exited before readiness (${outcome})` +
+          (diagnostic ? `\n\nRecent workspace stderr:\n${diagnostic}` : "")
+      );
     }
     try {
       return JSON.parse(fs.readFileSync(readyFile, "utf8")) as Record<string, unknown>;

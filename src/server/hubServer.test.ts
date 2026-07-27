@@ -31,6 +31,7 @@ import {
   selectBootstrapWorkspace,
   signalWorkspaceChildTree,
   terminateWorkspaceChild,
+  waitForWorkspaceReadyFile,
   type HubRuntimeState,
   type WorkspaceRuntime,
 } from "./hubServer.js";
@@ -168,6 +169,30 @@ describe("workspace child process-tree ownership", () => {
     await terminateWorkspaceChild(child, { reap: async () => undefined });
 
     expect(child.kill).not.toHaveBeenCalled();
+  });
+});
+
+describe("workspace child startup diagnostics", () => {
+  it("surfaces the child stderr that explains an early exit", async () => {
+    await expect(
+      waitForWorkspaceReadyFile(
+        path.join(os.tmpdir(), "vibestudio-never-ready.json"),
+        { exitCode: 1, signalCode: null },
+        () => "Fatal: Failed to load native module: pty.node"
+      )
+    ).rejects.toThrow(
+      "Workspace runtime exited before readiness (code 1)\n\n" +
+        "Recent workspace stderr:\nFatal: Failed to load native module: pty.node"
+    );
+  });
+
+  it("reports signal termination even when no numeric exit code exists", async () => {
+    await expect(
+      waitForWorkspaceReadyFile(path.join(os.tmpdir(), "vibestudio-never-ready.json"), {
+        exitCode: null,
+        signalCode: "SIGKILL",
+      })
+    ).rejects.toThrow("Workspace runtime exited before readiness (signal SIGKILL)");
   });
 });
 

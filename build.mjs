@@ -116,6 +116,9 @@ const serverElectronConfig = {
     "esbuild",
     "esbuild-svelte",
     "node-datachannel",
+    // Native addon loaders must resolve relative to their installed package;
+    // bundling their JavaScript moves that base to dist/ and strands pty.node.
+    "node-pty",
     "@vibestudio/extension-host",
     "@vibestudio/typecheck",
     "typescript",
@@ -201,6 +204,8 @@ const serverConfig = {
   external: [
     "esbuild",
     "esbuild-svelte",
+    // Keep the native loader beside node-pty's build/prebuild directories.
+    "node-pty",
     "@vibestudio/extension-host",
     "@vibestudio/typecheck",
     "typescript",
