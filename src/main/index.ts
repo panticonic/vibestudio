@@ -2419,17 +2419,22 @@ app.on("ready", async () => {
     const cdpHostConnectionId = panelOrchestrator.getRuntimeClientSessionId();
     cdpHostProvider = new CdpHostProvider({
       serverUrl: conn.gatewayConfig.serverUrl,
-      authToken: () => conn.getCdpAuthToken(),
+      transport:
+        conn.connectionMode === "remote"
+          ? {
+              kind: "preauthenticated",
+              createSocket: () =>
+                new RemoteCdpHostProviderSocket({
+                  serverClient: conn.serverClient,
+                  hostConnectionId: cdpHostConnectionId,
+                }),
+            }
+          : {
+              kind: "authenticated-websocket",
+              authToken: () => conn.getCdpAuthToken(),
+            },
       hostConnectionId: cdpHostConnectionId,
       getViewManager: () => applicationWindow.viewManager,
-      socketFactory:
-        conn.connectionMode === "remote"
-          ? () =>
-              new RemoteCdpHostProviderSocket({
-                serverClient: conn.serverClient,
-                hostConnectionId: cdpHostConnectionId,
-              })
-          : undefined,
       diagnosticsStore: new RuntimeDiagnosticsStore({
         statePath: serverSession.statePath,
       }),

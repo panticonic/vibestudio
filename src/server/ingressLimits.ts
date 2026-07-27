@@ -16,6 +16,8 @@ export const RPC_WS_ADMISSION_MAX_OUTSTANDING_GRANTS = 1024;
 export const RPC_WS_ADMISSION_GRANT_TTL_MS = 15_000;
 export const RPC_WS_PAIRING_REPLAY_TTL_MS = 30_000;
 export const RPC_WS_ADMISSION_RETRY_AFTER_MS = 1_000;
+/** Bound async credential redemption so unauthenticated requests cannot retain admission slots. */
+export const RPC_WS_ADMISSION_RESOLUTION_TIMEOUT_MS = 8_000;
 export const RPC_WS_ADMISSION_MAX_CLIENT_LABEL_BYTES = 256;
 export const CDP_WEBSOCKET_MAX_PAYLOAD_BYTES = 256 * 1024 * 1024;
 

@@ -3,6 +3,7 @@ import type { ClientPlatform } from "./wsProtocol.js";
 export const RPC_WEBSOCKET_ADMISSION_PATH = "/rpc/ws-admission";
 export const RPC_CLIENT_LABEL_HEADER = "x-vibestudio-rpc-client-label";
 export const RPC_CLIENT_PLATFORM_HEADER = "x-vibestudio-rpc-client-platform";
+export const RPC_WEBSOCKET_ADMISSION_TIMEOUT_MS = 10_000;
 
 export function encodeRpcClientLabelHeader(label: string): string {
   return encodeURIComponent(label);
@@ -15,6 +16,15 @@ export function decodeRpcClientLabelHeader(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Empty optional metadata has one wire representation: absent. Keeping this
+ * normalization shared prevents admission headers and the subsequent auth
+ * frame from binding different values for the same client.
+ */
+export function normalizeRpcClientLabel(label: string | undefined): string | undefined {
+  return label === undefined || label.length === 0 ? undefined : label;
 }
 
 export interface RpcWebSocketAdmissionRequest {
@@ -74,18 +84,46 @@ export function rpcWebSocketAdmissionUrl(webSocketUrl: string): string {
 
 export async function requestRpcWebSocketAdmission(
   url: string,
-  request: RpcWebSocketAdmissionRequest
+  request: RpcWebSocketAdmissionRequest,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {}
 ): Promise<RpcWebSocketAdmissionResponse> {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${request.credential}`,
-      ...(request.clientLabel
-        ? { [RPC_CLIENT_LABEL_HEADER]: encodeRpcClientLabelHeader(request.clientLabel) }
-        : {}),
-      ...(request.clientPlatform ? { [RPC_CLIENT_PLATFORM_HEADER]: request.clientPlatform } : {}),
-    },
-  });
+  const timeoutMs = options.timeoutMs ?? RPC_WEBSOCKET_ADMISSION_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new TypeError("RPC WebSocket admission timeout must be a positive finite number");
+  }
+  const controller = new AbortController();
+  let timedOut = false;
+  const forwardAbort = (): void => controller.abort(options.signal?.reason);
+  if (options.signal?.aborted) forwardAbort();
+  else options.signal?.addEventListener("abort", forwardAbort, { once: true });
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new Error(`RPC WebSocket admission timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+
+  let response: Response;
+  try {
+    const clientLabel = normalizeRpcClientLabel(request.clientLabel);
+    response = await fetch(url, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${request.credential}`,
+        ...(clientLabel
+          ? { [RPC_CLIENT_LABEL_HEADER]: encodeRpcClientLabelHeader(clientLabel) }
+          : {}),
+        ...(request.clientPlatform ? { [RPC_CLIENT_PLATFORM_HEADER]: request.clientPlatform } : {}),
+      },
+    });
+  } catch (error) {
+    if (timedOut) {
+      throw new Error(`RPC WebSocket admission timed out after ${timeoutMs}ms`, { cause: error });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", forwardAbort);
+  }
   let body: unknown;
   try {
     body = await response.json();

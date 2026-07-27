@@ -53,7 +53,15 @@ function createHarness(serverUrl = "ws://127.0.0.1:1234") {
   }));
   const provider = new CdpHostProvider({
     serverUrl,
-    authToken: "token",
+    transport: {
+      kind: "authenticated-websocket",
+      authToken: "token",
+      socketFactory: (url, protocols) => {
+        socketUrl = url;
+        socketProtocols = protocols;
+        return socket;
+      },
+    },
     hostConnectionId: "host-a",
     getViewManager: () =>
       ({
@@ -61,11 +69,6 @@ function createHarness(serverUrl = "ws://127.0.0.1:1234") {
         openDevTools,
         captureView,
       }) as never,
-    socketFactory: (url, protocols) => {
-      socketUrl = url;
-      socketProtocols = protocols;
-      return socket;
-    },
   });
   return {
     provider,
@@ -126,6 +129,24 @@ describe("CdpHostProvider", () => {
     expect(getSocketUrl()).toBe(
       "wss://server.example/_workspace/dev/api/cdp-host?hostConnectionId=host-a"
     );
+  });
+
+  it("uses an explicitly preauthenticated transport without reading or encoding a token", () => {
+    const socket = new FakeSocket();
+    const createSocket = vi.fn(() => socket);
+    const provider = new CdpHostProvider({
+      serverUrl: "https://server.example/_workspace/dev",
+      transport: { kind: "preauthenticated", createSocket },
+      hostConnectionId: "host-remote",
+      getViewManager: () => null,
+    });
+
+    expect(() => provider.start()).not.toThrow();
+    expect(createSocket).toHaveBeenCalledWith(
+      "wss://server.example/_workspace/dev/api/cdp-host?hostConnectionId=host-remote"
+    );
+
+    provider.stop();
   });
 
   it("forwards broker CDP commands to webContents.debugger", async () => {
@@ -684,11 +705,14 @@ describe("CdpHostProvider", () => {
     const onHostCommand = vi.fn(async () => ({ rebuilt: true }));
     const provider = new CdpHostProvider({
       serverUrl: "ws://127.0.0.1:1234",
-      authToken: "token",
+      transport: {
+        kind: "authenticated-websocket",
+        authToken: "token",
+        socketFactory: () => socket,
+      },
       hostConnectionId: "host-a",
       getViewManager: () => null,
       onHostCommand,
-      socketFactory: () => socket,
     });
     provider.start();
     socket.emit("open");
@@ -715,15 +739,18 @@ describe("CdpHostProvider", () => {
     const sockets: FakeSocket[] = [];
     const provider = new CdpHostProvider({
       serverUrl: "ws://127.0.0.1:1234",
-      authToken: "token",
+      transport: {
+        kind: "authenticated-websocket",
+        authToken: "token",
+        socketFactory: () => {
+          const socket = new FakeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+      },
       hostConnectionId: "host-a",
       getViewManager: () => null,
       reconnectDelayMs: 25,
-      socketFactory: () => {
-        const socket = new FakeSocket();
-        sockets.push(socket);
-        return socket;
-      },
     });
 
     provider.registerTarget("panel-1", 42);
@@ -748,15 +775,18 @@ describe("CdpHostProvider", () => {
     const sockets: FakeSocket[] = [];
     const provider = new CdpHostProvider({
       serverUrl: "ws://127.0.0.1:1234",
-      authToken: "token",
+      transport: {
+        kind: "authenticated-websocket",
+        authToken: "token",
+        socketFactory: () => {
+          const socket = new FakeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+      },
       hostConnectionId: "host-a",
       getViewManager: () => null,
       reconnectDelayMs: 25,
-      socketFactory: () => {
-        const socket = new FakeSocket();
-        sockets.push(socket);
-        return socket;
-      },
     });
 
     provider.start();

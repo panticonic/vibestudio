@@ -70,10 +70,22 @@ export interface PanelConsoleHistoryOptions {
 
 export interface CdpHostProviderOptions {
   serverUrl: string;
-  authToken: string | (() => string);
+  transport:
+    | {
+        kind: "authenticated-websocket";
+        authToken: string | (() => string);
+        socketFactory?: (url: string, protocols: string[]) => CdpHostProviderSocket;
+      }
+    | {
+        /**
+         * The injected transport has already authenticated its RPC channel.
+         * It must not manufacture or accept a bearer WebSocket subprotocol.
+         */
+        kind: "preauthenticated";
+        createSocket: (url: string) => CdpHostProviderSocket;
+      };
   hostConnectionId: string;
   getViewManager: () => ViewManager | null;
-  socketFactory?: (url: string, protocols: string[]) => CdpHostProviderSocket;
   reconnectDelayMs?: number;
   diagnosticsStore?: RuntimeDiagnosticsStore;
   onHostCommand?: (targetId: string, action: string, args: unknown[]) => unknown | Promise<unknown>;
@@ -142,10 +154,21 @@ export class CdpHostProvider {
       return;
     }
     const url = serverCdpHostWsUrl(this.options.serverUrl, this.options.hostConnectionId);
-    const protocols = [webSocketAuthProtocol("cdp-host", this.authToken())];
+    const transport = this.options.transport;
     const socket: CdpHostProviderSocket =
-      this.options.socketFactory?.(url, protocols) ??
-      (new WebSocket(url, protocols) as CdpHostProviderSocket);
+      transport.kind === "preauthenticated"
+        ? transport.createSocket(url)
+        : (() => {
+            const token =
+              typeof transport.authToken === "function"
+                ? transport.authToken()
+                : transport.authToken;
+            const protocols = [webSocketAuthProtocol("cdp-host", token)];
+            return (
+              transport.socketFactory?.(url, protocols) ??
+              (new WebSocket(url, protocols) as CdpHostProviderSocket)
+            );
+          })();
     this.socket = socket;
     this.authenticated = false;
 
@@ -823,12 +846,6 @@ export class CdpHostProvider {
   private send(message: Record<string, unknown>): void {
     if (this.socket?.readyState !== WebSocket.OPEN) return;
     this.socket.send(JSON.stringify(message));
-  }
-
-  private authToken(): string {
-    return typeof this.options.authToken === "function"
-      ? this.options.authToken()
-      : this.options.authToken;
   }
 
   private scheduleReconnect(): void {

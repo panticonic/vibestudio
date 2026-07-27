@@ -1,6 +1,31 @@
+import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WorkerdInspectorBridge } from "./workerdInspectorBridge.js";
+import { WebSocket } from "ws";
+import {
+  WORKERD_INSPECTOR_PENDING_COMMAND_MAX_BYTES,
+  WorkerdInspectorBridge,
+} from "./workerdInspectorBridge.js";
 import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
+
+class FakeInspectorSocket extends EventEmitter {
+  readyState: number = WebSocket.CONNECTING;
+  sent: string[] = [];
+  close = vi.fn((_code?: number, _reason?: string) => {
+    this.readyState = WebSocket.CLOSED;
+    this.emit("close");
+  });
+  terminate = vi.fn(() => {
+    this.readyState = WebSocket.CLOSED;
+    this.emit("close");
+  });
+  send(data: string): void {
+    this.sent.push(data);
+  }
+  open(): void {
+    this.readyState = WebSocket.OPEN;
+    this.emit("open");
+  }
+}
 
 describe("WorkerdInspectorBridge", () => {
   let bridge: WorkerdInspectorBridge | null = null;
@@ -111,5 +136,76 @@ describe("WorkerdInspectorBridge", () => {
 
     expect(wss.handleUpgrade).toHaveBeenCalledOnce();
     expect(socket.write).not.toHaveBeenCalled();
+  });
+
+  it("preserves commands sent while the upstream inspector socket is opening", () => {
+    const client = new FakeInspectorSocket();
+    client.readyState = WebSocket.OPEN;
+    const upstream = new FakeInspectorSocket();
+    bridge = new WorkerdInspectorBridge({
+      getInspectorUrl: () => "http://127.0.0.1:9229",
+      port: 4100,
+      createUpstreamSocket: (url) => {
+        expect(url).toBe("ws://127.0.0.1:9229/core:user:worker-host");
+        return upstream as never;
+      },
+    });
+    const endpoint = bridge.getEndpoint("core:user:worker-host", "panel:x");
+    const socket = { write: vi.fn(), destroy: vi.fn() };
+    const wss = {
+      handleUpgrade: vi.fn((_req, _socket, _head, accept) => accept(client)),
+    };
+
+    bridge.handleUpgrade(
+      {
+        url: "/workerd-inspector/core%3Auser%3Aworker-host",
+        headers: {
+          "sec-websocket-protocol": webSocketAuthProtocol("inspection", endpoint?.token ?? ""),
+        },
+      } as never,
+      socket as never,
+      Buffer.alloc(0),
+      wss as never
+    );
+
+    client.emit("message", JSON.stringify({ id: 1, method: "Runtime.enable" }));
+    expect(upstream.sent).toEqual([]);
+
+    upstream.open();
+    expect(upstream.sent).toEqual([JSON.stringify({ id: 1, method: "Runtime.enable" })]);
+  });
+
+  it("closes a client that exceeds the bounded pre-ready command queue", () => {
+    const client = new FakeInspectorSocket();
+    client.readyState = WebSocket.OPEN;
+    const upstream = new FakeInspectorSocket();
+    bridge = new WorkerdInspectorBridge({
+      getInspectorUrl: () => "http://127.0.0.1:9229",
+      port: 4100,
+      createUpstreamSocket: () => upstream as never,
+    });
+    const endpoint = bridge.getEndpoint("core:user:worker-host", "panel:x");
+    const wss = {
+      handleUpgrade: vi.fn((_req, _socket, _head, accept) => accept(client)),
+    };
+
+    bridge.handleUpgrade(
+      {
+        url: "/workerd-inspector/core%3Auser%3Aworker-host",
+        headers: {
+          "sec-websocket-protocol": webSocketAuthProtocol("inspection", endpoint?.token ?? ""),
+        },
+      } as never,
+      { write: vi.fn(), destroy: vi.fn() } as never,
+      Buffer.alloc(0),
+      wss as never
+    );
+    client.emit("message", "x".repeat(WORKERD_INSPECTOR_PENDING_COMMAND_MAX_BYTES + 1));
+
+    expect(client.close).toHaveBeenCalledWith(
+      1009,
+      "Inspector command queue exceeded readiness limit"
+    );
+    expect(upstream.terminate).toHaveBeenCalledOnce();
   });
 });

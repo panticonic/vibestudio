@@ -23,6 +23,8 @@ import { parseWebSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAu
 const log = createDevLogger("WorkerdInspectorBridge");
 
 export const WORKERD_INSPECTOR_PATH_PREFIX = "/workerd-inspector/";
+export const WORKERD_INSPECTOR_PENDING_COMMAND_MAX_MESSAGES = 256;
+export const WORKERD_INSPECTOR_PENDING_COMMAND_MAX_BYTES = 1024 * 1024;
 
 export interface WorkerdInspectorTarget {
   id: string;
@@ -38,6 +40,8 @@ export interface WorkerdInspectorBridgeOptions {
   protocol?: "http" | "https";
   externalHost?: string;
   port: number;
+  /** Test seam for the server-owned upstream inspector transport. */
+  createUpstreamSocket?: (url: string) => WebSocket;
 }
 
 interface ProxiedSession {
@@ -138,7 +142,8 @@ export class WorkerdInspectorBridge {
   closeAll(): void {
     for (const session of this.sessions) {
       session.client.close(1012, "workerd restarting");
-      session.upstream.close();
+      if (session.upstream.readyState === WebSocket.CONNECTING) session.upstream.terminate();
+      else if (session.upstream.readyState === WebSocket.OPEN) session.upstream.close();
     }
     this.sessions.clear();
   }
@@ -150,27 +155,55 @@ export class WorkerdInspectorBridge {
 
   private proxy(client: WebSocket, targetPath: string, inspectorBase: string): void {
     const upstreamUrl = `${inspectorBase.replace(/^http/, "ws")}/${targetPath}`;
-    const upstream = new WebSocket(upstreamUrl);
+    const upstream = this.options.createUpstreamSocket?.(upstreamUrl) ?? new WebSocket(upstreamUrl);
     const session: ProxiedSession = { client, upstream };
     this.sessions.add(session);
+    const pendingCommands: string[] = [];
+    let pendingCommandBytes = 0;
+    let tornDown = false;
 
     const teardown = (): void => {
+      if (tornDown) return;
+      tornDown = true;
       this.sessions.delete(session);
       if (client.readyState === WebSocket.OPEN) client.close();
       if (upstream.readyState === WebSocket.OPEN) upstream.close();
+      else if (upstream.readyState === WebSocket.CONNECTING) upstream.terminate();
     };
 
+    // Install both directions immediately. The downstream upgrade completes
+    // before the loopback inspector connection can open, and real CDP clients
+    // send commands as soon as their socket opens.
+    client.on("message", (data) => {
+      const message = typeof data === "string" ? data : data.toString();
+      if (upstream.readyState === WebSocket.OPEN) {
+        upstream.send(message);
+        return;
+      }
+      if (upstream.readyState !== WebSocket.CONNECTING) return;
+      const messageBytes = Buffer.byteLength(message, "utf8");
+      if (
+        pendingCommands.length >= WORKERD_INSPECTOR_PENDING_COMMAND_MAX_MESSAGES ||
+        pendingCommandBytes + messageBytes > WORKERD_INSPECTOR_PENDING_COMMAND_MAX_BYTES
+      ) {
+        log.warn(`pending inspector command limit exceeded for ${targetPath}`);
+        client.close(1009, "Inspector command queue exceeded readiness limit");
+        teardown();
+        return;
+      }
+      pendingCommands.push(message);
+      pendingCommandBytes += messageBytes;
+    });
+    upstream.on("message", (data) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(typeof data === "string" ? data : data.toString());
+      }
+    });
     upstream.on("open", () => {
-      client.on("message", (data) => {
-        if (upstream.readyState === WebSocket.OPEN) {
-          upstream.send(typeof data === "string" ? data : data.toString());
-        }
-      });
-      upstream.on("message", (data) => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(typeof data === "string" ? data : data.toString());
-        }
-      });
+      if (tornDown) return;
+      for (const message of pendingCommands) upstream.send(message);
+      pendingCommands.length = 0;
+      pendingCommandBytes = 0;
     });
     upstream.on("error", (error) => {
       log.warn(`upstream inspector socket error for ${targetPath}: ${String(error)}`);

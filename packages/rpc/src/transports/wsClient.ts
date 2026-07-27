@@ -14,6 +14,7 @@ import type { WsLike, WsTransportAdapter } from "../protocol/wsAdapter.js";
 import { TERMINAL_CLOSE_CODES } from "../protocol/closeCodes.js";
 import { RPC_CONTRACT_VERSION } from "../protocol/contractVersion.js";
 import {
+  normalizeRpcClientLabel,
   requestRpcWebSocketAdmission,
   rpcWebSocketAdmissionUrl,
 } from "../protocol/rpcWebSocketAdmission.js";
@@ -65,6 +66,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
   let status: RpcConnectionStatus = "disconnected";
   let reconnectAttempt = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let admissionAbortController: AbortController | null = null;
   let generation = 0;
   let hasConnectedBefore = false;
   let lastSeenBootId: string | null = null;
@@ -278,7 +280,27 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       return;
     }
 
-    const authFields = config.getAuthMessageFields?.();
+    const requestedAuthFields = config.getAuthMessageFields?.() ?? {};
+    const {
+      connectionId: refreshedConnectionId,
+      clientLabel: requestedClientLabel,
+      clientSessionId,
+      clientPlatform,
+    } = requestedAuthFields;
+    const clientLabel = normalizeRpcClientLabel(requestedClientLabel);
+    const effectiveConnectionId =
+      typeof refreshedConnectionId === "string" && refreshedConnectionId.length > 0
+        ? refreshedConnectionId
+        : connectionId;
+    const authFields = {
+      ...(clientLabel === undefined ? {} : { clientLabel }),
+      ...(clientSessionId === undefined ? {} : { clientSessionId }),
+      ...(clientPlatform === undefined ? {} : { clientPlatform }),
+      connectionId: effectiveConnectionId,
+    };
+    admissionAbortController?.abort();
+    const attemptAdmissionController = new AbortController();
+    admissionAbortController = attemptAdmissionController;
     let admission;
     try {
       admission = await (config.adapter.requestAdmission ?? requestRpcWebSocketAdmission)(
@@ -287,12 +309,18 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
           credential: token,
           ...(authFields?.clientLabel ? { clientLabel: authFields.clientLabel } : {}),
           ...(authFields?.clientPlatform ? { clientPlatform: authFields.clientPlatform } : {}),
-        }
+        },
+        { signal: attemptAdmissionController.signal }
       );
     } catch (error) {
+      if (closed || socketGeneration !== generation) return;
       console.warn(`[${prefix}] RPC WebSocket admission request failed:`, error);
       scheduleReconnect(socketGeneration);
       return;
+    } finally {
+      if (admissionAbortController === attemptAdmissionController) {
+        admissionAbortController = null;
+      }
     }
     if (closed || socketGeneration !== generation) return;
     if (!admission.ok) {
@@ -329,10 +357,9 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       nextSocket.send(
         JSON.stringify({
           type: "ws:auth",
-          ...authFields,
           contractVersion: RPC_CONTRACT_VERSION,
           token: admissionGrant,
-          connectionId,
+          ...authFields,
         } satisfies WsClientMessage)
       );
     };
@@ -409,11 +436,13 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     async close(): Promise<void> {
       closed = true;
       clearReconnectTimer();
+      admissionAbortController?.abort();
+      admissionAbortController = null;
       const current = socket;
       socket = null;
       authenticated = false;
       setStatus("disconnected");
-      if (!current || current.readyState !== OPEN) return;
+      if (!current || current.readyState >= 2) return;
       await new Promise<void>((resolve) => {
         const done = (): void => resolve();
         current.onclose = done;

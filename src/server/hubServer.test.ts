@@ -27,12 +27,21 @@ import {
   revokeHubDevice,
   revokeHubUser,
   restoreRoutedWorkspaceRuntimes,
+  isHubControlHttpPath,
   selectBootstrapWorkspace,
   signalWorkspaceChildTree,
   terminateWorkspaceChild,
   type HubRuntimeState,
   type WorkspaceRuntime,
 } from "./hubServer.js";
+
+describe("hub control HTTP routing", () => {
+  it("routes both RPC dispatch and pre-upgrade admission to the control server", () => {
+    expect(isHubControlHttpPath("/rpc")).toBe(true);
+    expect(isHubControlHttpPath("/rpc/ws-admission")).toBe(true);
+    expect(isHubControlHttpPath("/rpc/other")).toBe(false);
+  });
+});
 
 describe("hub bootstrap workspace selection", () => {
   it("uses the most recently opened registered workspace instead of assuming default", () => {

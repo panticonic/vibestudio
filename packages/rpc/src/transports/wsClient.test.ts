@@ -128,6 +128,84 @@ describe("wsClientTransport", () => {
     await connected;
   });
 
+  it("uses refreshed connection metadata consistently for admission and authentication", async () => {
+    const sockets: FakeSocket[] = [];
+    const requests: Array<{ clientLabel?: string; clientPlatform?: string }> = [];
+    const transport = wsClientTransport({
+      adapter: {
+        requestAdmission: async (_url, request) => {
+          requests.push(request);
+          return { ok: true, grant: "grant", expiresAt: Date.now() + 15_000 };
+        },
+        createSocket: () => {
+          const socket = new FakeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        getAuthToken: async () => "token",
+        now: () => Date.now(),
+      },
+      getWsUrl: () => "wss://server.example/rpc",
+      selfId: "panel:nav-test",
+      connectionId: "stale-connection",
+      getAuthMessageFields: () => ({
+        connectionId: "refreshed-connection",
+        clientLabel: "",
+        clientPlatform: "desktop",
+      }),
+    });
+
+    transport.connect();
+    await flushAsyncWork();
+    sockets[0]!.open();
+
+    expect(requests).toEqual([
+      {
+        credential: "token",
+        clientPlatform: "desktop",
+      },
+    ]);
+    expect(JSON.parse(sockets[0]!.sent[0]!)).toMatchObject({
+      connectionId: "refreshed-connection",
+      clientPlatform: "desktop",
+    });
+    expect(JSON.parse(sockets[0]!.sent[0]!)).not.toHaveProperty("clientLabel");
+  });
+
+  it("aborts an in-flight admission attempt when the transport closes", async () => {
+    let admissionSignal: AbortSignal | undefined;
+    const transport = wsClientTransport({
+      adapter: {
+        requestAdmission: async (_url, _request, options) => {
+          admissionSignal = options?.signal;
+          return await new Promise(() => {});
+        },
+        createSocket: () => new FakeSocket(),
+        getAuthToken: async () => "token",
+        now: () => Date.now(),
+      },
+      getWsUrl: () => "wss://server.example/rpc",
+      selfId: "app:mobile:test",
+    });
+
+    transport.connect();
+    await flushAsyncWork();
+    expect(admissionSignal?.aborted).toBe(false);
+
+    await transport.close();
+    expect(admissionSignal?.aborted).toBe(true);
+  });
+
+  it("closes a socket whose upgrade is still connecting", async () => {
+    const { sockets, transport } = createTransportHarness();
+    transport.connect();
+    await flushAsyncWork();
+
+    expect(sockets[0]?.readyState).toBe(0);
+    await transport.close();
+    expect(sockets[0]?.readyState).toBe(3);
+  });
+
   it("rejects a server with a mismatched RPC contract", async () => {
     const { sockets, transport } = createTransportHarness();
     const connected = transport.connectAndWait();

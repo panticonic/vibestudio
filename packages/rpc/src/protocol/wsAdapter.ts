@@ -17,7 +17,8 @@ export interface WsTransportAdapter {
   createSocket(url: string, protocols: string[]): WsLike;
   requestAdmission?(
     url: string,
-    request: RpcWebSocketAdmissionRequest
+    request: RpcWebSocketAdmissionRequest,
+    options?: { signal?: AbortSignal }
   ): Promise<RpcWebSocketAdmissionResponse>;
   getAuthToken(): Promise<string>;
   refreshAuthToken?(): Promise<string>;

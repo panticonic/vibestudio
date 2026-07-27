@@ -83,11 +83,16 @@ import { EventService } from "@vibestudio/shared/eventsService";
 import { authorizeVerifiedCaller } from "./services/authorityRuntime.js";
 import { defineServiceHandler, mapServiceHandlers } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { RPC_WEBSOCKET_ADMISSION_PATH } from "@vibestudio/rpc/protocol/rpcWebSocketAdmission";
 
 declare const __filename: string;
 
 const HUB_PROCESS_LEASE_TTL_MS = 30_000;
 const HUB_PROCESS_LEASE_HEARTBEAT_MS = 5_000;
+
+export function isHubControlHttpPath(pathname: string): boolean {
+  return pathname === "/rpc" || pathname === RPC_WEBSOCKET_ADMISSION_PATH;
+}
 
 export interface HubServerArgs {
   appRoot?: string;
@@ -2597,7 +2602,7 @@ async function startHubGateway(input: {
         await handleInternalRoute(state, url.pathname.slice("/_r/s/internal/".length), req, res);
         return;
       }
-      if (url.pathname === "/rpc") {
+      if (isHubControlHttpPath(url.pathname)) {
         const control = state.controlTransport;
         if (!control) {
           sendText(res, 503, "Hub control starting");

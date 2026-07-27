@@ -136,7 +136,15 @@ export class WsRpcClient {
         createSocket: (url, protocols) => new NodeWsLike(new WebSocket(url, protocols)),
       },
     });
-    await transport.connectAndWait();
+    try {
+      await transport.connectAndWait();
+    } catch (error) {
+      // A CLI connection attempt is owned by this one-shot client. Unlike the
+      // shared UI transport, it must not retain background retries after the
+      // command has already reported failure.
+      await transport.close();
+      throw error;
+    }
     const core = createRpcClient({
       selfId: this.config.callerId,
       callerKind: this.config.callerKind,

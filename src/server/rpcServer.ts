@@ -80,6 +80,7 @@ import {
   RPC_WS_ADMISSION_MAX_CLIENT_LABEL_BYTES,
   RPC_WS_ADMISSION_MAX_OUTSTANDING_GRANTS,
   RPC_WS_ADMISSION_MAX_PENDING_RESOLUTIONS,
+  RPC_WS_ADMISSION_RESOLUTION_TIMEOUT_MS,
   RPC_WS_ADMISSION_RETRY_AFTER_MS,
   RPC_WS_PAIRING_REPLAY_TTL_MS,
   RPC_WEBSOCKET_MAX_PAYLOAD_BYTES,
@@ -88,6 +89,7 @@ import {
 import { parseWebSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 import {
   RPC_CLIENT_LABEL_HEADER,
+  normalizeRpcClientLabel,
   RPC_CLIENT_PLATFORM_HEADER,
   RPC_WEBSOCKET_ADMISSION_PATH,
   decodeRpcClientLabelHeader,
@@ -109,6 +111,21 @@ function refineTestPolicy(
     throw createRelayError("Nested invocation test policy conflicts with live execution", "EACCES");
   }
   return refined;
+}
+
+export async function awaitRpcAdmissionResolution<T>(
+  resolution: T | PromiseLike<T>,
+  timeoutMs: number = RPC_WS_ADMISSION_RESOLUTION_TIMEOUT_MS
+): Promise<{ status: "resolved"; value: T } | { status: "timed-out" }> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  return await Promise.race([
+    Promise.resolve(resolution).then((value) => ({ status: "resolved" as const, value })),
+    new Promise<{ status: "timed-out" }>((resolve) => {
+      timeoutHandle = setTimeout(() => resolve({ status: "timed-out" }), timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  });
 }
 import { callerKindForPrincipalKind } from "@vibestudio/shared/principalKinds";
 import { resolveCodeIdentity } from "./services/principalIdentity.js";
@@ -1278,7 +1295,7 @@ export class RpcServer {
       }
       if (
         upgradeAdmission &&
-        (msg.clientLabel !== upgradeAdmission.clientLabel ||
+        (normalizeRpcClientLabel(msg.clientLabel) !== upgradeAdmission.clientLabel ||
           msg.clientPlatform !== upgradeAdmission.clientPlatform)
       ) {
         ws.close(4006, "RPC authentication metadata does not match admission grant");
@@ -1301,7 +1318,7 @@ export class RpcServer {
         ws,
         msg.token,
         msg.connectionId,
-        msg.clientLabel,
+        normalizeRpcClientLabel(msg.clientLabel),
         msg.clientSessionId,
         msg.clientPlatform,
         upgradeAdmission?.resolved
@@ -4010,12 +4027,14 @@ export class RpcServer {
         ? authorization.slice("Bearer ".length)
         : "";
     const encodedClientLabel = req.headers[RPC_CLIENT_LABEL_HEADER];
-    const clientLabel =
+    const decodedClientLabel =
       typeof encodedClientLabel === "string"
         ? decodeRpcClientLabelHeader(encodedClientLabel)
         : encodedClientLabel === undefined
           ? undefined
           : null;
+    const clientLabel =
+      decodedClientLabel === null ? null : normalizeRpcClientLabel(decodedClientLabel);
     const rawClientPlatform = req.headers[RPC_CLIENT_PLATFORM_HEADER];
     const clientPlatform =
       rawClientPlatform === "desktop" ||
@@ -4091,7 +4110,19 @@ export class RpcServer {
     // Reserve capacity before any async pairing/device-store operation begins.
     this.pendingWsAdmissionResolutions += 1;
     try {
-      const resolution = await this.resolveRpcCredential(credential, clientLabel, clientPlatform);
+      const boundedResolution = await awaitRpcAdmissionResolution(
+        this.resolveRpcCredential(credential, clientLabel, clientPlatform)
+      );
+      if (boundedResolution.status === "timed-out") {
+        this.wsAdmissionFailure(res, 503, {
+          ok: false,
+          code: "server_unavailable",
+          message: "RPC credential verification timed out; retry shortly",
+          retryAfterMs: RPC_WS_ADMISSION_RETRY_AFTER_MS,
+        });
+        return;
+      }
+      const resolution = boundedResolution.value;
       if (this.stopped) {
         this.wsAdmissionFailure(res, 503, {
           ok: false,
