@@ -84,7 +84,7 @@ await git.setUpstream("projects/bgkit", {
   autoPush: false,
 });
 
-const status = await git.upstreamStatus(["projects/bgkit"]);
+const status = await git.upstreamStatus(["projects/bgkit"], { fetch: true });
 await git.pullUpstream("projects/bgkit", { dryRun: true });
 await git.pushUpstream("projects/bgkit");
 ```
@@ -92,8 +92,13 @@ await git.pushUpstream("projects/bgkit");
 An empty repository array means all configured upstreams:
 
 ```ts
-const statuses = await git.upstreamStatus([]);
+const statuses = await git.upstreamStatus([], { fetch: true });
 ```
+
+Use `fetch: true` at an operational decision boundary so ahead/behind and
+divergence reflect the remote now. Use `fetch: false` only for an intentionally
+local observation, such as checking the candidate returned by the import call
+that just ran.
 
 Important runtime methods:
 
@@ -101,6 +106,7 @@ Important runtime methods:
 | ---------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `setSharedRemote` / `removeSharedRemote` | Change shared remote declarations through approved workspace config APIs.                    |
 | `setUpstream` / `removeUpstream`         | Change a repository's selected remote and branch.                                            |
+| `detachUpstream`                         | Atomically remove tracking and optionally its declared remote.                               |
 | `setAutoPush`                            | Toggle an optional outgoing push after an already-published main event is exported.          |
 | `upstreamStatus`                         | Compare the protected-main export with its declared upstream and expose pending candidates.  |
 | `pushUpstream`                           | Export the current protected-main snapshot and push it; refuse unresolved import candidates. |
@@ -110,6 +116,23 @@ Important runtime methods:
 | `commitMapping`                          | Read Git commit to semantic-event mappings from export trailers.                             |
 | `createDisposableRemote`                 | Create a short-lived credential-free smart-HTTP remote.                                      |
 | `publishToDisposableRemote`              | Export, push, verify, and clean up a disposable remote.                                      |
+| `pushDisposableRemote`                   | Push to an existing host-managed disposable remote without changing tracking.                |
+| `inspectDisposableRemote`                | Read a disposable remote's exact branch head and commit count.                               |
+| `removeDisposableRemote`                 | Delete a disposable remote before automatic expiry.                                          |
+
+The CLI exposes the same host-mediated workflow:
+
+```bash
+vibestudio vcs git status --repo projects/bgkit
+vibestudio vcs git pull --repo projects/bgkit --dry-run
+vibestudio vcs git pull --repo projects/bgkit
+vibestudio vcs git push --repo projects/bgkit
+```
+
+`vibestudio vcs git status` fetches before reporting. Use `--credential ID` to
+select a stored credential or `--anonymous` to forbid credential resolution.
+Run `vibestudio vcs git --help` for enable, disable, publish, import, auto-push,
+and remote-declaration commands.
 
 For a generic public import:
 
@@ -184,17 +207,21 @@ await git.setSharedRemote("projects/example", {
 await git.setUpstream("projects/example", {
   remote: "origin",
   branch: disposable.branch,
+  credentialId: null,
   autoPush: false,
 });
 await git.pushUpstream("projects/example");
 const received = await git.inspectDisposableRemote(disposable.url);
+await git.detachUpstream("projects/example", { forgetRemote: true });
 await git.removeDisposableRemote(disposable.url);
 ```
 
 `publishToDisposableRemote` always creates and deletes its own separate remote.
 It cannot initialize a URL returned by `createDisposableRemote`; use
 `pushUpstream` after declaring that exact URL when later calls must observe the
-same Git history.
+same Git history. Detach the temporary upstream and shared remote before
+deleting the disposable endpoint so workspace configuration never retains a
+dead URL.
 
 ## Import rules
 
@@ -287,7 +314,7 @@ await serverLog.query({ tag: "BuildV2" });
 
 ## Divergence and recovery
 
-1. Run `upstreamStatus`.
+1. Run `upstreamStatus([repo], { fetch: true })`.
 2. If it reports `integration-required`, use its exact candidate context and
    event IDs. Compare that event from the intended working context, integrate
    ordinary changes incrementally, run checks, commit the complete local chain,

@@ -19,8 +19,10 @@ should not be copied into prompts or maintained as parallel prose constants.
   commit, incremental integration, exact-event publication, move/copy identity,
   counteractions, causal/blame walks, honest import boundaries (including mixed
   native-edited and untouched imported spans), freshness, and idempotency.
-- `git-interop`: external Git status, credentials, imports, and disposable
-  remote publication; this is separate from workspace VCS.
+- `git-interop`: fresh external status, credential selection, canonical
+  imports, commit mappings, and disposable-remote lifecycles that require
+  managed edit → semantic commit → protected publication → Git export/push;
+  this is separate from workspace VCS.
 - `panels`, `interaction-surfaces`, `cdp-gad-diagnostics`: panel lifecycle,
   visual/DOM behavior, interaction affordances, and browser diagnostics.
 - `workers`, `rpc-communication`, `agentic-runtime`: worker/DO lifecycle,

@@ -15,16 +15,19 @@ Use the friendly tool for a session, managed path, or known semantic identity:
 
 ```ts
 provenance({ target: "session" });
+provenance({ target: "packages/example" });
 provenance({ target: "packages/example/src/index.ts" });
 provenance({ target: "change:…" });
 ```
 
-The tool resolves a managed path to the current exact state and stable file
-identity, inspects the selected node, then calls `vcs.neighbors`. Its compact
-`node · …` line appears before the direct edges so intent, command state, and
-invocation metadata are visible without a second lookup. For a file it also
-shows a small exact `vcs.history` preview of the changes that touched that stable
-identity; continue from a returned change node into the causal graph.
+An exact managed repository-root path resolves to its typed repository node at
+the current working head. A managed file path resolves to the stable file
+identity at that same exact state. The tool inspects the selected node, then
+calls `vcs.neighbors`; its compact `node · …` line appears before the direct
+edges so intent, command state, and invocation metadata are visible without a
+second lookup. For a file it also shows a small exact `vcs.history` preview of
+the changes that touched that stable identity; continue from a returned change
+node into the causal graph.
 
 It accepts these semantic shorthands:
 `event:`, `application:`, `work-unit:`, `change:`, `decision:`, and `command:`.

@@ -132,6 +132,31 @@ const result = await git.completeWorkspaceDependencies({
 console.log(result.imported, result.skipped, result.failed);
 ```
 
+## Ongoing synchronization
+
+Keep semantic workspace publication and external Git push as separate,
+observable boundaries:
+
+1. Run `git.upstreamStatus([repo], { fetch: true })` before deciding what to do.
+2. For local managed work, edit, check, commit, and publish through semantic
+   VCS first. Then call `git.pushUpstream(repo)` to export protected main and
+   push the resulting Git commit.
+3. If the remote is ahead or diverged, preview with
+   `git.pullUpstream(repo, { dryRun: true })`, then pull once. The pull returns a
+   committed candidate and does not advance protected main.
+4. Compare and integrate that exact candidate in small steps, check, commit the
+   complete chain, and explicitly publish it through semantic VCS.
+5. Fetch status again. Only call `git.pushUpstream(repo)` after the
+   `integration-required` candidate has cleared.
+
+Pass a credential ID to require that URL-bound credential, omit
+`credentialId` to allow host resolution, or pass `credentialId: null` to require
+anonymous HTTP. Never infer that a public URL means anonymous operation.
+
+Load [Git Bridge](../../extensions/git-bridge/SKILL.md) for remote declaration,
+CLI equivalents, disposable remotes, exact status states, and the full
+divergence playbook.
+
 ## Startup Behavior
 
 On server startup, Vibestudio asks the configured Git provider for

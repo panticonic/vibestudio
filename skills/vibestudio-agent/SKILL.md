@@ -56,6 +56,13 @@ falling back to token metadata.
   explicit advisory checks or post-publication projections; failed activation
   retains the previous runnable artifact. See [FILES.md](FILES.md) for CLI transport and
   [BUILDING.md](BUILDING.md) for build/publication boundaries.
+- **Git is an external bridge, not another workspace VCS.** Before configuring,
+  importing, publishing, pulling, or pushing a workspace-managed Git remote,
+  also fetch `skills/git-bridge` with
+  `vibestudio agent skills skills/git-bridge`. Managed edits must be committed
+  and published through semantic VCS before `vibestudio vcs git push` exports
+  them. A Git pull creates a semantic candidate that must return through the
+  ordinary compare/integrate/commit/push workflow.
 
 ## Quick start
 
@@ -169,19 +176,41 @@ Two directions, both one-way:
 
 ## Command groups
 
-| Group                | Commands                                                                                                              | Purpose                                                                                                                                       |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vibestudio remote`  | `pair`, `invite-user`, `pair-device`, `add-member`, `remove-member`, `list-users`, `list-devices`, `revoke-device`, `status`, `workspaces`, `select`, `terminal`, `host`, `logout`, `deploy`, `doctor`, `repair-identity`, `serve` | Stable-hub pairing, account/workspace/device administration, and remote clients |
-| `vibestudio agent`   | `attach`, `status`, `detach`, `sessions`, `call`, `services`, `skills`, `logs`, `skill`                               | Sessions, raw RPC, introspection                                                                                                              |
-| `vibestudio fs`      | `ls`, `read`, `write`, `rm`, `mkdir`, `stat`, `grep`, `glob`                                                          | Files in the session context; use VCS move/copy commands for managed identity changes                                                         |
-| `vibestudio eval`    | `run`, `repl-reset`                                                                                                   | Sandboxed TS/JS against the server — **the full-power surface** (see below)                                                                   |
-| `vibestudio channel` | `list`, `history`, `send`, `tail`, `roster`                                                                           | Conversation channels: read/post messages, follow live, inspect the roster                                                                    |
-| `vibestudio context` | `mirror`                                                                                                              | Export a context snapshot into a local directory and write its identity binding                                                               |
-| `vibestudio vcs`     | `status`, `compare`, `integrate`, `revert`, `history`, `blame`, `commit`, `discard`, `move-file`, `copy-file`, `push` | Event/application semantic VCS; read the canonical workspace `skills/vibestudio-vcs` package before use                                       |
-| `vibestudio panel`   | `list`, `screenshot`, `console`                                                                                       | Look at running UI: enumerate live panels, capture one to an image file, read its console/errors — the frontend-dev feedback loop (see below) |
+| Group                | Commands                                                                                                                                                                                                                           | Purpose                                                                                                                                       |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vibestudio remote`  | `pair`, `invite-user`, `pair-device`, `add-member`, `remove-member`, `list-users`, `list-devices`, `revoke-device`, `status`, `workspaces`, `select`, `terminal`, `host`, `logout`, `deploy`, `doctor`, `repair-identity`, `serve` | Stable-hub pairing, account/workspace/device administration, and remote clients                                                               |
+| `vibestudio agent`   | `attach`, `status`, `detach`, `sessions`, `call`, `services`, `skills`, `logs`, `skill`                                                                                                                                            | Sessions, raw RPC, introspection                                                                                                              |
+| `vibestudio fs`      | `ls`, `read`, `write`, `rm`, `mkdir`, `stat`, `grep`, `glob`                                                                                                                                                                       | Files in the session context; use VCS move/copy commands for managed identity changes                                                         |
+| `vibestudio eval`    | `run`, `repl-reset`                                                                                                                                                                                                                | Sandboxed TS/JS against the server — **the full-power surface** (see below)                                                                   |
+| `vibestudio channel` | `list`, `history`, `send`, `tail`, `roster`                                                                                                                                                                                        | Conversation channels: read/post messages, follow live, inspect the roster                                                                    |
+| `vibestudio context` | `mirror`                                                                                                                                                                                                                           | Export a context snapshot into a local directory and write its identity binding                                                               |
+| `vibestudio vcs`     | `status`, `compare`, `integrate`, `revert`, `history`, `blame`, `commit`, `discard`, `move-file`, `copy-file`, `push`, `git …`                                                                                                     | Semantic VCS plus host-mediated external Git interchange; read `skills/vibestudio-vcs` and, for `git …`, `skills/git-bridge`                  |
+| `vibestudio panel`   | `list`, `screenshot`, `console`                                                                                                                                                                                                    | Look at running UI: enumerate live panels, capture one to an image file, read its console/errors — the frontend-dev feedback loop (see below) |
 
 `--help` works at the group level (`vibestudio fs --help`) and per command
 (`vibestudio fs write --help`).
+
+### External Git from the CLI
+
+Use the nested Git commands for workspace-managed upstreams:
+
+```bash
+vibestudio vcs git status --repo projects/example
+vibestudio vcs git publish --repo projects/example --private
+vibestudio vcs git remote set --repo projects/example --url https://github.com/owner/example.git
+vibestudio vcs git enable --repo projects/example --credential cred_github_...
+vibestudio vcs git pull --repo projects/example --dry-run
+vibestudio vcs git push --repo projects/example
+```
+
+`status` fetches before reporting. `--credential ID` selects a stored
+credential; `--anonymous` explicitly prevents URL-based credential resolution.
+For outgoing changes, edit, `vibestudio vcs commit`, and `vibestudio vcs push`
+first; then run `vibestudio vcs git push`. For incoming changes, run
+`vibestudio vcs git pull`. It returns an unpublished candidate: compare and
+integrate that exact event, commit, and publish through semantic VCS before
+exporting it back to Git. Never repair divergence by editing the server's
+operational checkout or by creating an untracked Git merge there.
 
 There is no dedicated worker command: the workerd service is not
 shell-callable, so create workers (and DOs) via RPC —
