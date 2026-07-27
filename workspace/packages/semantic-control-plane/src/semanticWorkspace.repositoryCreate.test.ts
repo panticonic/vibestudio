@@ -113,5 +113,55 @@ describe("SemanticWorkspace repository creation", () => {
     expect(
       sql.exec(`SELECT kind FROM gad_work_units WHERE work_unit_id = ?`, result.workUnitId).one()
     ).toEqual({ kind: "lifecycle" });
+
+    await expect(
+      semantic.dispatch("edit", {
+        ingress,
+        input: {
+          contextId: "context:test",
+          commandId: "command:duplicate-project",
+          expectedWorkingHead: result.workingHead,
+          changes: [
+            {
+              kind: "repository-create",
+              repoPath: "projects/notes",
+              files: [
+                {
+                  path: "other.txt",
+                  content: { kind: "text", text: "other" },
+                  mode: 0o644,
+                },
+              ],
+            },
+          ],
+        },
+      })
+    ).rejects.toMatchObject({
+      code: "DestinationOccupied",
+      errorData: { code: "DestinationOccupied" },
+    });
+
+    await expect(
+      semantic.dispatch("edit", {
+        ingress,
+        input: {
+          contextId: "context:test",
+          commandId: "command:duplicate-file",
+          expectedWorkingHead: result.workingHead,
+          changes: [
+            {
+              kind: "file-create",
+              repositoryId: repository.repositoryId,
+              path: "README.md",
+              content: { kind: "text", text: "replacement" },
+              mode: 0o644,
+            },
+          ],
+        },
+      })
+    ).rejects.toMatchObject({
+      code: "DestinationOccupied",
+      errorData: { code: "DestinationOccupied" },
+    });
   });
 });

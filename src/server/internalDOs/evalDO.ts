@@ -31,6 +31,9 @@ import { ConsoleStreamer } from "./consoleStreamer.js";
 import {
   describeEvalBindingIndex,
   describeEvalBindingSurface,
+  describeEvalMethod,
+  EVAL_RUNTIME_METHOD_NOTES,
+  evalRuntimeServiceName,
   invalidHelpArgumentResponse,
 } from "./evalSurfaceHelp.js";
 import { createEvalNodeCompat } from "./evalNodeCompat.js";
@@ -618,15 +621,22 @@ export class EvalDO extends DurableObjectBase {
     const liveMethods = Object.keys(obj).filter((k) => typeof obj[k] === "function");
     if (liveMethods.length === 0) return null;
     let serviceMethods: Record<string, unknown> = {};
+    const serviceName = evalRuntimeServiceName(name);
     try {
-      const svc = (await docs.describeService(name)) as {
+      const svc = (await docs.describeService(serviceName)) as {
         methods?: Record<string, unknown>;
       };
       serviceMethods = svc?.methods ?? {};
     } catch {
       // Not an RPC service (or not describable) — reflection alone still gives the truthful surface.
     }
-    return describeEvalBindingSurface(name, liveMethods, serviceMethods);
+    return describeEvalBindingSurface(
+      name,
+      liveMethods,
+      serviceMethods,
+      EVAL_RUNTIME_METHOD_NOTES,
+      serviceName
+    );
   }
 
   /**
@@ -1642,11 +1652,7 @@ export class EvalDO extends DurableObjectBase {
               if (described && typeof described === "object") {
                 const surface = described as { methods?: Record<string, unknown> };
                 if (surface.methods?.[methodName]) {
-                  return {
-                    name: serviceName,
-                    surface: "injected-runtime-method",
-                    method: surface.methods[methodName],
-                  };
+                  return describeEvalMethod(serviceName, surface.methods[methodName]);
                 }
                 return {
                   name: serviceName,

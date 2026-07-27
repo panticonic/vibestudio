@@ -51,6 +51,7 @@ export type SemanticVcsErrorCode =
   | "DependencyBlocked"
   | "IntegrationIncomplete"
   | "CommandIdReuse"
+  | "DestinationOccupied"
   | "IntegrityFailure"
   | "ScopeTooLarge";
 

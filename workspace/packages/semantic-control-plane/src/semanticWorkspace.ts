@@ -1658,7 +1658,7 @@ export class SemanticWorkspace {
       if (change.kind === "repository-create") {
         if (this.deps.store.facts.repositoryAtPath(root, change.repoPath)) {
           throw new SemanticVcsError(
-            "RevisionChanged",
+            "DestinationOccupied",
             `Repository destination ${change.repoPath} is occupied`
           );
         }
@@ -1734,7 +1734,10 @@ export class SemanticWorkspace {
       if (change.kind === "file-create") {
         assertSemanticVcsPathAdmissible(change.path);
         if (this.deps.store.facts.fileAtPath(root, change.repositoryId, change.path)) {
-          throw new SemanticVcsError("RevisionChanged", `Destination ${change.path} is occupied`);
+          throw new SemanticVcsError(
+            "DestinationOccupied",
+            `Destination ${change.path} is occupied`
+          );
         }
         const bytes = contentBytes(change.content);
         const contentHash = sha256Hex(bytes);
@@ -1906,7 +1909,7 @@ export class SemanticWorkspace {
             )
           ) {
             throw new SemanticVcsError(
-              "RevisionChanged",
+              "DestinationOccupied",
               `Destination ${move.destinationPath} is occupied`
             );
           }
@@ -1935,7 +1938,7 @@ export class SemanticWorkspace {
           const repository = this.presentRepository(root, move.repositoryId);
           if (this.deps.store.facts.repositoryAtPath(root, move.destinationPath)) {
             throw new SemanticVcsError(
-              "RevisionChanged",
+              "DestinationOccupied",
               `Repository path ${move.destinationPath} is occupied`
             );
           }
@@ -2015,7 +2018,7 @@ export class SemanticWorkspace {
           )
         ) {
           throw new SemanticVcsError(
-            "RevisionChanged",
+            "DestinationOccupied",
             `Destination ${copy.destination.path} is occupied`
           );
         }

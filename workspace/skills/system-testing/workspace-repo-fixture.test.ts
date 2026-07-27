@@ -575,6 +575,27 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     expect(fake.destroyContext).toHaveBeenCalledWith("context:1");
   });
 
+  it("makes a generic content project visibly existing with one harmless seed file", async () => {
+    const fake = createPort();
+    const fixture = new WorkspaceRepoFixtureLifecycle(
+      fake.port,
+      "content-test",
+      "system-test-content",
+      CONTENT
+    );
+
+    const state = await fixture.prepare();
+
+    expect(state).toMatchObject({
+      repositoryId: "repository:fixture",
+      repoPath: "projects/system-test-content",
+      seedFilePaths: ["README.md"],
+    });
+    expect(fake.putText).toHaveBeenCalledWith(
+      "# system-test-content\n\nDisposable system-test project.\n"
+    );
+  });
+
   it("imports a buildable snapshot with exact CAS-backed file metadata", async () => {
     const fake = createPort();
     const fixture = new WorkspaceRepoFixtureLifecycle(
@@ -595,6 +616,9 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
       importChangeIds: ["change:repository", "change:package", "change:source"],
     });
     expect(fake.putText).toHaveBeenCalledTimes(2);
+    expect(fake.putText).toHaveBeenCalledWith(
+      expect.stringContaining('export const fixtureNeighbor = "untouched";')
+    );
     expect(fake.importSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({
         expectedWorkingHead: event("event:main"),

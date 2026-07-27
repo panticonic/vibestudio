@@ -19,6 +19,7 @@ import {
   requireMoveCopyEvidence,
   requireRevertEvidence,
   requireVcsEvidence,
+  successfulReadMemoryEpisodeGroups,
   successfulReadMemoryEpisodes,
 } from "./_helpers.js";
 
@@ -195,7 +196,7 @@ async function orchestrateReadMemory(
 }
 
 function requireDistinctMixedBlameSpans(result: TestExecutionResult) {
-  const explicitSpans = getToolCalls(result).flatMap((call) => {
+  const explicitSpanGroups = getToolCalls(result).flatMap((call) => {
     if (
       call.name !== "vcs" ||
       call.arguments?.["operation"] !== "blame" ||
@@ -209,51 +210,58 @@ function requireDistinctMixedBlameSpans(result: TestExecutionResult) {
       ? call.execution.result["details"]
       : call.execution.result;
     const value = isRecord(details["result"]) ? details["result"] : details;
-    return Array.isArray(value["spans"]) ? value["spans"].filter(isRecord) : [];
+    return Array.isArray(value["spans"]) ? [value["spans"].filter(isRecord)] : [];
   });
-  const attachedSpans = successfulReadMemoryEpisodes(result).flatMap((episode) =>
-    Array.isArray(episode["ranges"])
-      ? episode["ranges"].filter(isRecord).map(
-          (range): Record<string, unknown> => ({
-            ...episode,
-            start: range["start"],
-            end: range["end"],
-          })
-        )
-      : []
+  const attachedSpanGroups = successfulReadMemoryEpisodeGroups(result).map((episodes) =>
+    episodes.flatMap((episode) =>
+      Array.isArray(episode["ranges"])
+        ? episode["ranges"].filter(isRecord).map(
+            (range): Record<string, unknown> => ({
+              ...episode,
+              start: range["start"],
+              end: range["end"],
+            })
+          )
+        : []
+    )
   );
-  const spans = [...explicitSpans, ...attachedSpans];
-  const authored = spans.find((span) => span["stop"] === "authored");
-  const imported = spans.find((span) => span["stop"] === "import-boundary");
-  const authoredChange = authored?.["change"];
-  const importedChange = imported?.["change"];
-  const authoredWork = authored?.["workUnit"];
-  const importedWork = imported?.["workUnit"];
-  const authoredCommand = authored?.["command"];
-  const importedCommand = imported?.["command"];
-  if (
-    !authored ||
-    !imported ||
-    !isRecord(authoredChange) ||
-    !isRecord(importedChange) ||
-    !isRecord(authoredWork) ||
-    !isRecord(importedWork) ||
-    !isRecord(authoredCommand) ||
-    !isRecord(importedCommand) ||
-    !Number.isInteger(authored["start"]) ||
-    !Number.isInteger(authored["end"]) ||
-    !Number.isInteger(imported["start"]) ||
-    !Number.isInteger(imported["end"]) ||
-    authoredChange["changeId"] === importedChange["changeId"] ||
-    authoredWork["workUnitId"] === importedWork["workUnitId"] ||
-    authoredCommand["commandId"] === importedCommand["commandId"] ||
-    Math.max(authored["start"] as number, imported["start"] as number) <
-      Math.min(authored["end"] as number, imported["end"] as number)
-  ) {
+  const sameObservationContainsDistinctOrigins = [
+    ...explicitSpanGroups,
+    ...attachedSpanGroups,
+  ].some((spans) => {
+    const authored = spans.find((span) => span["stop"] === "authored");
+    const imported = spans.find((span) => span["stop"] === "import-boundary");
+    const authoredChange = authored?.["change"];
+    const importedChange = imported?.["change"];
+    const authoredWork = authored?.["workUnit"];
+    const importedWork = imported?.["workUnit"];
+    const authoredCommand = authored?.["command"];
+    const importedCommand = imported?.["command"];
+    return Boolean(
+      authored &&
+        imported &&
+        isRecord(authoredChange) &&
+        isRecord(importedChange) &&
+        isRecord(authoredWork) &&
+        isRecord(importedWork) &&
+        isRecord(authoredCommand) &&
+        isRecord(importedCommand) &&
+        Number.isInteger(authored["start"]) &&
+        Number.isInteger(authored["end"]) &&
+        Number.isInteger(imported["start"]) &&
+        Number.isInteger(imported["end"]) &&
+        authoredChange["changeId"] !== importedChange["changeId"] &&
+        authoredWork["workUnitId"] !== importedWork["workUnitId"] &&
+        authoredCommand["commandId"] !== importedCommand["commandId"] &&
+        Math.max(authored["start"] as number, imported["start"] as number) >=
+          Math.min(authored["end"] as number, imported["end"] as number)
+    );
+  });
+  if (!sameObservationContainsDistinctOrigins) {
     return {
       passed: false,
       reason:
-        "Canonical blame results did not expose distinct, non-overlapping native-authored and import-boundary spans",
+        "No single canonical blame observation exposed distinct, non-overlapping native-authored and import-boundary spans",
     };
   }
   return { passed: true, reason: undefined };
@@ -373,7 +381,7 @@ export const vcsAdvancedTests: TestCase[] = [
     category: "vcs-advanced",
     workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "Demonstrate semantic command idempotency in the disposable project as if the first response were lost: submit one exact VCS edit command, retry the identical request with the identical command identity, and prove both terminals name one application, work unit, and change with no duplicate history.",
+      "Demonstrate semantic command idempotency in the disposable project as if the first response were lost: retain one exact VCS edit request, submit it twice unchanged, and show that both terminals name the same application, work unit, and change. Those equal canonical terminals are the proof; stop without a deeper history walk.",
     validate: (result) => {
       const base = checked(result, ["vcs.edit"]);
       return base.passed ? requireCommandIdempotencyEvidence(result) : base;

@@ -64,6 +64,33 @@ describe("Git interop agentic validators", () => {
         ])
       )
     ).toEqual({ passed: true });
+    const boundedProjection = invocation(
+      "bounded-status",
+      "eval",
+      {
+        code:
+          "const statuses = await git.upstreamStatus([]); return statuses.map(s => ({ repo: s.repoPath, state: s.state, remote: s.remote, branch: s.branch }));",
+      },
+      {
+        details: {
+          returnValue: [
+            {
+              repo: "projects/example",
+              state: "not-materialized",
+              remote: "origin",
+              branch: "main",
+            },
+          ],
+        },
+      }
+    );
+    expect(
+      test.validate(
+        execution("1 tracked repository: projects/example is not-materialized.", [
+          boundedProjection,
+        ])
+      )
+    ).toEqual({ passed: true });
     expect(test.validate(execution("1 repository is in sync.", [call])).passed).toBe(false);
   });
 
@@ -134,6 +161,17 @@ describe("Git interop agentic validators", () => {
     ];
     const final = "After the push, the disposable remote was at def456 and was cleaned up.";
     expect(test.validate(execution(final, managedCalls))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+    expect(
+      test.validate(
+        execution(
+          "After the push, the same remote advanced to def456 and the repository is local-only.",
+          managedCalls
+        )
+      )
+    ).toEqual({
       passed: true,
       reason: undefined,
     });
@@ -215,23 +253,96 @@ describe("Git interop agentic validators", () => {
         )
       )
     ).toEqual({ passed: true });
+    const naturallyProjected = invocation(
+      "naturally-projected-mapping",
+      "eval",
+      {
+        code: [
+          "const published = await git.publishToDisposableRemote('packages/example');",
+          "const mapping = await git.commitMapping('packages/example');",
+          "return { published, count: mapping.length, first: mapping[0] };",
+        ].join(" "),
+      },
+      {
+        details: {
+          returnValue: {
+            published,
+            count: 1,
+            first: rows[0],
+          },
+        },
+      }
+    );
+    expect(
+      test.validate(
+        execution(
+          "There is 1 mapping: workspace event event:one maps to Git commit abc123.",
+          [...managed.slice(0, 3), naturallyProjected]
+        )
+      )
+    ).toEqual({ passed: true });
+    const headedProjection = invocation(
+      "headed-mapping",
+      "eval",
+      {
+        code: [
+          "const published = await git.publishToDisposableRemote('packages/example');",
+          "const mapping = await git.commitMapping('packages/example');",
+          "return { published, mappingCount: mapping.length, head: mapping[0] };",
+        ].join(" "),
+      },
+      {
+        details: {
+          returnValue: {
+            published,
+            mappingCount: 1,
+            head: rows[0],
+          },
+        },
+      }
+    );
+    expect(
+      test.validate(
+        execution(
+          "There is 1 mapping: workspace event event:one maps to Git commit abc123.",
+          [...managed.slice(0, 3), headedProjection]
+        )
+      )
+    ).toEqual({ passed: true });
+    expect(
+      test.validate(
+        execution(
+          "There is 1 mapping: workspace event event:one maps to Git commit abc123.",
+          [
+            managed[0]!,
+            invocation("commit-shorthand", "vcs", { message: "mapping milestone" }, {}),
+            ...managed.slice(2),
+          ]
+        )
+      )
+    ).toEqual({ passed: true });
   });
 
   it("requires an exact unpublished Git candidate joined to its semantic import boundary", () => {
     const test = gitInteropTests.find(({ name }) => name === "git-import-project")!;
-    expect(test.prompt).toBe(
-      "Can you bring a small credential-free Git project into this workspace and tell me where it landed and whether it is already published?"
-    );
-    expect(test.prompt).not.toMatch(
-      /importProject|upstreamStatus|candidate|contextId|eventId|importSnapshot|provenance/iu
-    );
-    expect(test.expectedToolFailures).toEqual([
-      { name: "web_search", errorIncludes: "DDG_BLOCKED" },
-    ]);
+    expect(test.orchestrate).toBeTypeOf("function");
+    expect(test.workspaceRepoFixture).toMatchObject({
+      kind: "buildable-package",
+      section: "packages",
+    });
+    expect(test.expectedToolFailures).toBeUndefined();
 
+    const remote = {
+      id: "remote:import",
+      name: "import-fixture",
+      url: "https://example.test/import.git",
+      branch: "main",
+      expiresAt: Date.now() + 60_000,
+    };
+    const inspected = { ...remote, headCommit: "abc123", commitCount: 1 };
     const imported = {
       path: "projects/example",
-      remote: { name: "origin", url: "https://example.test/import.git", branch: "main" },
+      remote: { name: "origin", url: remote.url, branch: remote.branch },
       candidate: {
         contextId: "git-bridge:projects/example",
         eventId: "event:git-import",
@@ -269,14 +380,6 @@ describe("Git interop agentic validators", () => {
         },
       },
     };
-    const gitCall = invocation(
-      "git-import",
-      "eval",
-      {
-        code: "const imported = await git.importProject(request); const status = await git.upstreamStatus([imported.path]); return { imported, status };",
-      },
-      { imported, status: [status] }
-    );
     const inspections = [
       invocation(
         "inspect-event",
@@ -327,20 +430,90 @@ describe("Git interop agentic validators", () => {
       ),
     ];
     const final = `The Git project landed at ${imported.path}; its imported candidate ${imported.candidate.eventId} is not yet published.`;
+    const managed = [
+      invocation("edit", "edit", { path: "packages/example/src/index.ts" }, {}),
+      invocation("commit", "vcs", { message: "generated import fixture" }, {}),
+      invocation("gad-push", "vcs", { operation: "push" }, {}),
+    ];
+    const lifecycleCode = [
+      "const remote = await git.createDisposableRemote({ name: 'import-fixture' });",
+      "await git.pushDisposableRemote(sourcePath, remote.url, remote.branch);",
+      "const inspected = await git.inspectDisposableRemote(remote.url);",
+      "const imported = await git.importProject(request);",
+      "const status = await git.upstreamStatus([imported.path], { fetch: false });",
+      "await git.detachUpstream(imported.path, { forgetRemote: true });",
+      "const removed = await git.removeDisposableRemote(remote.url);",
+      "return { remote, inspected, imported, status, removed };",
+    ].join(" ");
+    const lifecycleResult = {
+      remote,
+      inspected,
+      imported,
+      status: [status],
+      removed: { removed: true },
+    };
+    const selfVerifiedLifecycleResult = {
+      ...lifecycleResult,
+      imported: selfVerifiedImport,
+    };
 
-    expect(test.validate(execution(final, [gitCall, ...inspections]))).toEqual({
+    const lifecycleCall = invocation(
+      "git-import",
+      "eval",
+      { code: lifecycleCode },
+      { details: { returnValue: lifecycleResult } }
+    );
+    const unrelatedEarlierRemote = invocation(
+      "earlier-disposable",
+      "eval",
+      { code: "return await git.createDisposableRemote();" },
+      {
+        details: {
+          returnValue: {
+            ...remote,
+            id: "remote:unrelated",
+            url: "https://example.test/unrelated.git",
+          },
+        },
+      }
+    );
+    expect(
+      test.validate(
+        execution(final, [...managed, unrelatedEarlierRemote, lifecycleCall, ...inspections])
+      )
+    ).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+    expect(
+      test.validate(
+        execution(
+          `Imported path: \`${imported.path}\`\nCandidate event ID: \`${imported.candidate.eventId}\`\nPublished: **No**`,
+          [...managed, lifecycleCall, ...inspections]
+        )
+      )
+    ).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+    expect(
+      test.validate(
+        execution(
+          `Imported path: \`${imported.path}\`\nCandidate event ID: \`${imported.candidate.eventId}\`\n**Published?** No`,
+          [...managed, lifecycleCall, ...inspections]
+        )
+      )
+    ).toEqual({
       passed: true,
       reason: undefined,
     });
     const selfVerifiedGitCall = invocation(
       "git-import-self-verified",
       "eval",
-      {
-        code: "const imported = await git.importProject(request); const status = await git.upstreamStatus([imported.path]); return { imported, status };",
-      },
-      { imported: selfVerifiedImport, status: [status] }
+      { code: lifecycleCode },
+      { details: { returnValue: selfVerifiedLifecycleResult } }
     );
-    expect(test.validate(execution(final, [selfVerifiedGitCall]))).toEqual({
+    expect(test.validate(execution(final, [...managed, selfVerifiedGitCall]))).toEqual({
       passed: true,
       reason: undefined,
     });
@@ -349,14 +522,19 @@ describe("Git interop agentic validators", () => {
       "eval",
       {
         code: [
+          "const remote = await rpc.call('main', 'gitInterop.createDisposableRemote', [options]);",
+          "await rpc.call('main', 'gitInterop.pushDisposableRemote', [sourcePath, remote.url, remote.branch]);",
+          "const inspected = await rpc.call('main', 'gitInterop.inspectDisposableRemote', [remote.url]);",
           "const imported = await rpc.call('main', 'gitInterop.importProject', [request]);",
           "const status = await rpc.call('main', 'gitInterop.upstreamStatus', [[imported.path]]);",
-          "return { imported, status };",
+          "await rpc.call('main', 'gitInterop.detachUpstream', [imported.path, { forgetRemote: true }]);",
+          "const removed = await rpc.call('main', 'gitInterop.removeDisposableRemote', [remote.url]);",
+          "return { remote, inspected, imported, status, removed };",
         ].join(" "),
       },
-      { imported, status: [status] }
+      { details: { returnValue: lifecycleResult } }
     );
-    expect(test.validate(execution(final, [rawRpcGitCall, ...inspections]))).toEqual({
+    expect(test.validate(execution(final, [...managed, rawRpcGitCall, ...inspections]))).toEqual({
       passed: true,
       reason: undefined,
     });
@@ -364,7 +542,7 @@ describe("Git interop agentic validators", () => {
       test.validate(
         execution(
           `The Git project landed at ${imported.path}; its imported candidate is not yet published.`,
-          [gitCall, ...inspections]
+          [...managed, lifecycleCall, ...inspections]
         )
       ).passed
     ).toBe(false);
@@ -372,39 +550,47 @@ describe("Git interop agentic validators", () => {
       test.validate(
         execution(
           `The Git project landed at ${imported.path}; its imported candidate event:other is not yet published.`,
-          [gitCall, ...inspections]
+          [...managed, lifecycleCall, ...inspections]
         )
       ).passed
     ).toBe(false);
     expect(
       test.validate(
         execution(final, [
-          invocation(
-            "source-token-only",
-            "eval",
-            {
-              code: "await git.importProject(request); await git.upstreamStatus([]);",
+          ...managed,
+          invocation("source-token-only", "eval", { code: lifecycleCode }, {
+            details: {
+              returnValue: {
+                remote,
+                inspected,
+                imported: true,
+                removed: { removed: true },
+              },
             },
-            { imported: true }
-          ),
+          }),
           ...inspections,
         ])
       ).passed
     ).toBe(false);
-    expect(test.validate(execution(final, [gitCall])).passed).toBe(false);
+    expect(test.validate(execution(final, [...managed, lifecycleCall])).passed).toBe(false);
 
     const mismatchedStatus = structuredClone(status);
     mismatchedStatus.candidate.eventId = "event:other";
     expect(
       test.validate(
         execution(final, [
+          ...managed,
           {
-            ...gitCall,
+            ...lifecycleCall,
             invocation: {
-              ...gitCall.invocation,
+              ...lifecycleCall.invocation,
               execution: {
-                ...gitCall.invocation.execution,
-                result: { imported, status: [mismatchedStatus] },
+                ...lifecycleCall.invocation.execution,
+                result: {
+                  details: {
+                    returnValue: { ...lifecycleResult, status: [mismatchedStatus] },
+                  },
+                },
               },
             },
           },
@@ -418,7 +604,9 @@ describe("Git interop agentic validators", () => {
       node: { value: { externalSnapshot: typeof snapshot } };
     };
     workResult.node.value.externalSnapshot.sourceKind = "generated";
-    expect(test.validate(execution(final, [gitCall, ...wrongWork])).passed).toBe(false);
+    expect(
+      test.validate(execution(final, [...managed, lifecycleCall, ...wrongWork])).passed
+    ).toBe(false);
     expect(
       test.validate(execution("The Git import is unavailable in this deployment.")).passed
     ).toBe(false);

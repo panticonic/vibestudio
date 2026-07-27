@@ -69,7 +69,7 @@ export function createEditTool(
     name: "edit",
     label: "edit",
     description:
-      "Replace exact text in a file. Every call must include path, oldText, and newText together; oldText must match exactly (including whitespace). Use write instead when replacing the whole file.",
+      "Replace exact text in a file. Every call must include path, oldText, and newText together; oldText must match exactly (including whitespace). Use write instead when replacing the whole file. To undo a managed semantic change, use vcs({ operation: \"revert\", changeIds: [...] }); editing the bytes back creates unrelated new intent.",
     parameters: editSchema,
     execute: async (_toolCallId, input, signal) => {
       const { path, oldText, newText } = input;

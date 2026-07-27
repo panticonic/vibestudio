@@ -5,6 +5,7 @@ import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
 import type {
   VcsCompareResult,
   VcsDiscardResult,
+  VcsHistoryResult,
   VcsWorkingMutationResult,
 } from "@vibestudio/service-schemas/vcs";
 import {
@@ -17,6 +18,7 @@ import {
   type ToolVcs,
   type ToolMutationContext,
 } from "./tool-vcs.js";
+import { commitWorkspace } from "./commit.js";
 
 const agentEvidenceSchema = Type.Union([
   Type.Object(
@@ -63,7 +65,52 @@ const agentEvidenceSchema = Type.Union([
 ]);
 
 const workspaceVcsSchema = Type.Union([
-  Type.Object({ operation: Type.Literal("status") }, { additionalProperties: false }),
+  Type.Object(
+    {
+      operation: Type.Optional(Type.Literal("status")),
+      path: Type.Optional(
+        Type.Union([Type.Literal(""), Type.Literal(".")], {
+          description:
+            "Optional spelling of the workspace root. Status is context-wide; omit path for the shortest call.",
+        })
+      ),
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      operation: Type.Literal("history"),
+      path: Type.Optional(
+        Type.String({
+          minLength: 1,
+          description: "Workspace file path whose semantic changes should be listed.",
+        })
+      ),
+      direction: Type.Optional(Type.Union([Type.Literal("past"), Type.Literal("future")])),
+      after: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      operation: Type.Optional(Type.Literal("commit")),
+      message: Type.String({
+        minLength: 1,
+        description:
+          "Durable intent summary for the one atomic workspace event. Supplying a message without operation also selects commit.",
+      }),
+      integratesEventIds: Type.Optional(
+        Type.Array(Type.String({ minLength: 1 }), {
+          minItems: 1,
+          maxItems: 200,
+          description:
+            "Exact source events to add as parents after vcs compare reports every effective source change accounted for.",
+        })
+      ),
+    },
+    { additionalProperties: false }
+  ),
   Type.Object(
     {
       operation: Type.Literal("compare"),
@@ -163,11 +210,31 @@ const workspaceVcsSchema = Type.Union([
     },
     { additionalProperties: false }
   ),
-  Type.Object({ operation: Type.Literal("push") }, { additionalProperties: false }),
+  Type.Object(
+    {
+      operation: Type.Literal("push"),
+      message: Type.Optional(
+        Type.String({
+          minLength: 1,
+          description:
+            "Optional publication rationale retained on the causal tool invocation; it does not create or rename a workspace event.",
+        })
+      ),
+    },
+    { additionalProperties: false }
+  ),
 ]);
 
 export type WorkspaceVcsToolInput =
-  | { operation: "status" }
+  | { operation?: "status"; path?: "" | "." }
+  | {
+      operation: "history";
+      path?: string;
+      direction?: "past" | "future";
+      after?: string;
+      limit?: number;
+    }
+  | { operation?: "commit"; message: string; integratesEventIds?: string[] }
   | {
       operation: "compare";
       sourceEventId: string;
@@ -192,7 +259,7 @@ export type WorkspaceVcsToolInput =
       after?: string;
       limit?: number;
     }
-  | { operation: "push" };
+  | { operation: "push"; message?: string };
 
 export interface WorkspaceVcsToolDetails {
   operation: WorkspaceVcsToolInput["operation"];
@@ -202,6 +269,8 @@ export interface WorkspaceVcsToolDetails {
 export type ToolWorkflowVcs = Pick<
   ToolVcs,
   | "status"
+  | "history"
+  | "commit"
   | "compare"
   | "integrate"
   | "revert"
@@ -250,6 +319,15 @@ function mutationText(verb: string, result: VcsWorkingMutationResult): string {
   );
 }
 
+function historyText(result: VcsHistoryResult): string {
+  const lines = result.entries.map(
+    (entry) =>
+      `${JSON.stringify(entry.node)} · ${entry.createdAt ?? "time unknown"} · ${entry.summary}`
+  );
+  if (result.nextCursor) lines.push(`More history: rerun history with after=${result.nextCursor}`);
+  return lines.join("\n") || "No semantic history entries at this root.";
+}
+
 export function createWorkspaceVcsTool(
   cwd: string,
   vcs: ToolWorkflowVcs,
@@ -259,7 +337,7 @@ export function createWorkspaceVcsTool(
     name: "vcs",
     label: "vcs",
     description:
-      "Orient, compare, incrementally integrate, revert, discard, blame, or push the semantic workspace. Edits/moves/copies and commit have dedicated tools.",
+      "Orient, inspect history, commit, compare, incrementally integrate, revert, discard, blame, or push the semantic workspace. Empty input means status; a message without an operation means commit. A focused commit tool is also available; both commit forms perform the same atomic operation.",
     parameters: workspaceVcsSchema,
     execute: async (
       _toolCallId,
@@ -269,7 +347,14 @@ export function createWorkspaceVcsTool(
       if (signal?.aborted) throw new Error("Operation aborted");
       const contextId = toolContextId(context);
       // AgentTool invokes execute only after validating the TypeBox union.
-      const command = input as WorkspaceVcsToolInput;
+      const rawCommand = input as WorkspaceVcsToolInput;
+      const command = (
+        rawCommand.operation
+          ? rawCommand
+          : "message" in rawCommand
+            ? { ...rawCommand, operation: "commit" as const }
+            : { operation: "status" as const }
+      ) as WorkspaceVcsToolInput & { operation: WorkspaceVcsToolInput["operation"] };
 
       if (command.operation === "status") {
         const result = await vcs.status({ contextId });
@@ -281,6 +366,50 @@ export function createWorkspaceVcsTool(
             `${result.workingCounts.changes} changes).`,
           result
         );
+      }
+
+      if (command.operation === "commit") {
+        const result = await commitWorkspace(vcs, context, command, signal);
+        return resultOf(
+          command.operation,
+          `Committed workspace event ${result.event.eventId} locally with ${result.committedApplicationIds.length} application${result.committedApplicationIds.length === 1 ? "" : "s"}. Protected main was not changed; publication is a separate vcs push operation.`,
+          result
+        );
+      }
+
+      if (command.operation === "history") {
+        const limit = command.limit ?? 100;
+        const cursor = command.after;
+        if (command.path) {
+          if (command.direction === "future") {
+            throw new Error(
+              "File history starts from the current exact file identity and only supports past direction"
+            );
+          }
+          const state = await resolveToolWorkingState(vcs, context);
+          const file = await resolveToolFile(vcs, state, toVcsPath(command.path, cwd));
+          if (!file) throw new Error(`No managed file at ${command.path}`);
+          const result = await vcs.history({
+            root: {
+              kind: "file",
+              state,
+              repositoryId: file.repositoryId,
+              fileId: file.fileId,
+            },
+            direction: "past",
+            ...(cursor ? { cursor } : {}),
+            limit,
+          });
+          return resultOf(command.operation, historyText(result), result);
+        }
+        const status = await vcs.status({ contextId });
+        const result = await vcs.history({
+          root: status.committed,
+          direction: command.direction ?? "past",
+          ...(cursor ? { cursor } : {}),
+          limit,
+        });
+        return resultOf(command.operation, historyText(result), result);
       }
 
       if (command.operation === "compare") {

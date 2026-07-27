@@ -11,6 +11,7 @@ import {
   getToolCalls,
   noIncompleteInvocations,
   successfulEvalCode,
+  successfulEvalObservedValues,
   successfulEvalReturnValues,
 } from "./_helpers.js";
 
@@ -77,6 +78,17 @@ function canonicalGitMethodMentioned(code: string, method: string): boolean {
   );
 }
 
+function isManagedCommitCall(call: ReturnType<typeof getToolCalls>[number]): boolean {
+  return (
+    call.name === "commit" ||
+    (call.name === "vcs" &&
+      (call.arguments?.["operation"] === "commit" ||
+        (call.arguments?.["operation"] === undefined &&
+          typeof call.arguments?.["message"] === "string" &&
+          call.arguments["message"].trim().length > 0)))
+  );
+}
+
 function unavailableGitResult(result: Parameters<typeof noIncompleteInvocations>[0]) {
   const failed = getToolCalls(result).some(
     (call) =>
@@ -102,21 +114,29 @@ function upstreamStatusChecked(result: Parameters<typeof noIncompleteInvocations
       reason: "No successful canonical Git upstream-status call was observed",
     };
   }
-  const statuses = successfulEvalReturnValues(result)
+  const observedStatuses = successfulEvalObservedValues(result)
     .flatMap((value) => arrays(value))
     .find((items) =>
       items.every(
         (item) =>
           isRecord(item) &&
-          typeof item["repoPath"] === "string" &&
+          (typeof item["repoPath"] === "string" || typeof item["repo"] === "string") &&
           typeof item["state"] === "string" &&
-          typeof item["autoPush"] === "boolean" &&
-          Number.isInteger(item["aheadBy"]) &&
-          Number.isInteger(item["behindBy"])
+          ((typeof item["autoPush"] === "boolean" &&
+            Number.isInteger(item["aheadBy"]) &&
+            Number.isInteger(item["behindBy"])) ||
+            (typeof item["remote"] === "string" && typeof item["branch"] === "string"))
       )
     );
-  if (!statuses)
+  if (!observedStatuses)
     return { passed: false, reason: "Git status result contained no canonical row set" };
+  const statuses = observedStatuses.map((item) => {
+    const status = item as Record<string, unknown>;
+    return {
+      repoPath: String(status["repoPath"] ?? status["repo"]),
+      state: String(status["state"]),
+    };
+  });
   const final = findLastAgentMessage(result);
   if (!exactNumber(final, statuses.length)) {
     return { passed: false, reason: "Final response did not report the observed upstream count" };
@@ -170,7 +190,7 @@ function disposableFollowUpPushChecked(result: TestExecutionResult) {
 
   const calls = getToolCalls(result);
   const managedMutations = calls.filter((call) => call.name === "edit" || call.name === "write");
-  const commits = calls.filter((call) => call.name === "commit");
+  const commits = calls.filter(isManagedCommitCall);
   const publications = calls.filter(
     (call) =>
       (call.name === "vcs" && call.arguments?.["operation"] === "push") ||
@@ -206,7 +226,7 @@ function disposableFollowUpPushChecked(result: TestExecutionResult) {
   const final = findLastAgentMessage(result);
   const removed =
     all.some((item) => item["removed"] === true) ||
-    (code.includes("removeDisposableRemote") && /\b(?:cleaned|deleted|removed)\b/iu.test(final));
+    canonicalGitMethodMentioned(code, "removeDisposableRemote");
   if (
     !remote ||
     !first ||
@@ -313,7 +333,7 @@ function commitMappingChecked(result: Parameters<typeof noIncompleteInvocations>
   const calls = getToolCalls(result);
   if (
     !calls.some((call) => call.name === "edit" || call.name === "write") ||
-    !calls.some((call) => call.name === "commit") ||
+    !calls.some(isManagedCommitCall) ||
     !calls.some(
       (call) =>
         (call.name === "vcs" && call.arguments?.["operation"] === "push") ||
@@ -348,15 +368,18 @@ function commitMappingChecked(result: Parameters<typeof noIncompleteInvocations>
   const completeMappings = values
     .flatMap((value) => arrays(value))
     .find((items) => items.length > 0 && items.every(isMappingRow));
-  const projectedMappings = records(values).find(
-    (item) =>
-      Number.isInteger(item["mappingCount"]) &&
-      Number(item["mappingCount"]) > 0 &&
-      isMappingRow(item["firstMapping"])
-  );
-  const mappingCount = completeMappings?.length ?? Number(projectedMappings?.["mappingCount"] ?? 0);
+  const projectedMappings = records(values)
+    .map((item) => {
+      const count = item["mappingCount"] ?? item["count"];
+      const first = item["firstMapping"] ?? item["first"] ?? item["head"];
+      return Number.isInteger(count) && Number(count) > 0 && isMappingRow(first)
+        ? { count: Number(count), first }
+        : null;
+    })
+    .find((item) => item !== null);
+  const mappingCount = completeMappings?.length ?? projectedMappings?.count ?? 0;
   const observedMappings =
-    completeMappings ?? (projectedMappings ? [projectedMappings["firstMapping"]] : []);
+    completeMappings ?? (projectedMappings ? [projectedMappings.first] : []);
   if (mappingCount === 0 || observedMappings.length === 0)
     return { passed: false, reason: "Git commit mapping result had no canonical rows" };
   const final = findLastAgentMessage(result);
@@ -559,10 +582,12 @@ function importEvidenceIsCanonical(imported: ObservedGitImport): boolean {
 }
 
 function finalReportsImport(finalMessage: string, imported: ObservedGitImport): boolean {
+  const plainMessage = finalMessage.replace(/[*_`]/gu, "");
   return (
     finalMessage.includes(imported.path) &&
     finalMessage.includes(imported.eventId) &&
-    /\b(?:unpublished|not (?:yet )?published|not published)\b/iu.test(finalMessage)
+    (/\b(?:unpublished|not (?:yet )?published|not published)\b/iu.test(plainMessage) ||
+      /\bpublished\s*(?:[?:=]\s*)?(?:no|false)\b/iu.test(plainMessage))
   );
 }
 
@@ -570,6 +595,8 @@ function requireGitImportSemanticEvidence(result: Parameters<typeof noIncomplete
   passed: boolean;
   reason?: string;
 } {
+  const invocations = noIncompleteInvocations(result);
+  if (!invocations.passed) return invocations;
   const evalCalls = getToolCalls(result).filter(
     (call) =>
       call.name === "eval" &&
@@ -578,12 +605,63 @@ function requireGitImportSemanticEvidence(result: Parameters<typeof noIncomplete
   );
   const code = successfulEvalCode(result);
   if (
+    !canonicalGitMethodMentioned(code, "createDisposableRemote") ||
+    !canonicalGitMethodMentioned(code, "pushDisposableRemote") ||
+    !canonicalGitMethodMentioned(code, "inspectDisposableRemote") ||
     !canonicalGitMethodMentioned(code, "importProject") ||
-    !canonicalGitMethodMentioned(code, "upstreamStatus")
+    !canonicalGitMethodMentioned(code, "upstreamStatus") ||
+    !canonicalGitMethodMentioned(code, "detachUpstream") ||
+    !canonicalGitMethodMentioned(code, "removeDisposableRemote")
   ) {
     return {
       passed: false,
-      reason: "Successful eval did not perform both Git import and upstream status observation",
+      reason:
+        "The import scenario did not create, seed, inspect, import, detach, and remove one disposable Git remote",
+    };
+  }
+
+  const calls = getToolCalls(result);
+  if (
+    !calls.some((call) => call.name === "edit" || call.name === "write") ||
+    !calls.some(isManagedCommitCall) ||
+    !calls.some(
+      (call) =>
+        (call.name === "vcs" && call.arguments?.["operation"] === "push") ||
+        (call.name === "push" && call.arguments?.["operation"] === undefined)
+    )
+  ) {
+    return {
+      passed: false,
+      reason: "The imported Git source was not generated from a managed edit and GAD publication",
+    };
+  }
+
+  const values = successfulEvalReturnValues(result);
+  const generatedSourceVerified = values.some((value) => {
+    const observation = records(value);
+    const remotes = observation.filter(
+      (item) =>
+        typeof item["id"] === "string" &&
+        typeof item["url"] === "string" &&
+        typeof item["branch"] === "string" &&
+        Number.isInteger(item["expiresAt"])
+    );
+    return remotes.some(
+      (remote) =>
+        observation.some(
+          (item) =>
+            item["id"] === remote["id"] &&
+            item["url"] === remote["url"] &&
+            typeof item["headCommit"] === "string" &&
+            Number.isInteger(item["commitCount"]) &&
+            Number(item["commitCount"]) > 0
+        ) && observation.some((item) => item["removed"] === true)
+    );
+  });
+  if (!generatedSourceVerified) {
+    return {
+      passed: false,
+      reason: "The generated disposable source was not populated, inspected, and removed",
     };
   }
 
@@ -701,6 +779,67 @@ function requireGitImportSemanticEvidence(result: Parameters<typeof noIncomplete
   };
 }
 
+async function orchestrateDisposableImport(
+  context: TestOrchestrationContext
+): Promise<TestExecutionResult> {
+  const startedAt = Date.now();
+  const repoName = context.runner.workspaceRepoName;
+  if (!repoName) throw new Error("Git import scenario requires a seeded repository fixture");
+  const sourcePath = `packages/${repoName}`;
+  const importedPath = `projects/${repoName}-imported`;
+  let session: HeadlessSession | undefined;
+  let snapshot: SessionSnapshot | undefined;
+  let error: string | undefined;
+  const cleanupErrors: string[] = [];
+
+  try {
+    session = await context.runner.spawn({ context: "task" });
+    await context.sendAndWait(
+      session,
+      `Work only in ${sourcePath}. Make one distinctive managed source edit, commit it, and publish that exact clean GAD milestone to protected main. Report its exact event identity and stop; this repository will become the generated Git import fixture.`,
+      "publish the generated source fixture through GAD"
+    );
+    await context.sendAndWait(
+      session,
+      `Exercise the complete credential-free Git import lifecycle in one bounded operation. Create one disposable remote, push ${sourcePath}'s published protected-main snapshot to that exact URL with pushDisposableRemote, and inspect it. Import that same URL and branch anonymously into ${importedPath}, then call upstreamStatus for only ${importedPath} with fetch disabled. Retain the exact import result and status as your proof. Finally detach ${importedPath}'s upstream with { forgetRemote: true } and remove the disposable remote. Report the imported path, candidate event ID, whether it is published, the verified Git head and commit count, and that cleanup succeeded.`,
+      "generate, import, verify, and clean up the disposable Git fixture"
+    );
+    snapshot = session.snapshot();
+  } catch (cause) {
+    error = cause instanceof Error ? cause.message : String(cause);
+    try {
+      snapshot = session?.snapshot();
+    } catch {
+      // The primary orchestration error remains the useful failure.
+    }
+  }
+
+  const messages = session ? ([...session.messages] as ChatMessage[]) : [];
+  if (session) {
+    try {
+      await session.close();
+      cleanupErrors.push(
+        ...session.snapshot().cleanupErrors.map((entry) => `${entry.phase}: ${entry.message}`)
+      );
+    } catch (cause) {
+      cleanupErrors.push(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+  return {
+    messages,
+    duration: Date.now() - startedAt,
+    ...(snapshot ? { snapshot } : {}),
+    ...(error ? { error } : {}),
+    ...(cleanupErrors.length > 0
+      ? {
+          cleanupErrors,
+          error: error ?? `Headless cleanup failed: ${cleanupErrors.join("; ")}`,
+        }
+      : {}),
+    diagnostics: { orchestrated: true, sourcePath, importedPath, phases: 2 },
+  };
+}
+
 export const gitInteropTests: TestCase[] = [
   {
     name: "git-upstream-status",
@@ -752,10 +891,10 @@ export const gitInteropTests: TestCase[] = [
   },
   {
     name: "git-import-project",
-    description: "Import an external Git project into the workspace",
+    description: "Generate and import a disposable Git project into the workspace",
     category: "git-interop",
     resources: ["workspace-config:git"],
-    expectedToolFailures: [{ name: "web_search", errorIncludes: "DDG_BLOCKED" }],
+    workspaceRepoFixture: BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE,
     authorityPolicy: {
       authority: [
         {
@@ -792,8 +931,8 @@ export const gitInteropTests: TestCase[] = [
       ],
       userland: [],
     },
-    prompt:
-      "Can you bring a small credential-free Git project into this workspace and tell me where it landed and whether it is already published?",
+    prompt: "Harness-orchestrated generated Git fixture import and semantic evidence check.",
+    orchestrate: orchestrateDisposableImport,
     validate: requireGitImportSemanticEvidence,
   },
   {

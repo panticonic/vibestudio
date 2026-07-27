@@ -740,7 +740,14 @@ function repositorySeedFiles(
   fixture: WorkspaceRepoFixtureSpec
 ): Array<{ path: string; content: string }> {
   if (fixture.kind === "created-repository") return [];
-  if (fixture.kind === "content") return [];
+  if (fixture.kind === "content") {
+    return [
+      {
+        path: "README.md",
+        content: `# ${repoName}\n\nDisposable system-test project.\n`,
+      },
+    ];
+  }
   if (fixture.kind === "buildable-worker") {
     return [
       {
@@ -875,7 +882,14 @@ function repositorySeedFiles(
         2
       )}\n`,
     },
-    { path: "src/index.ts", content: 'export const fixtureValue = "baseline";\n' },
+    {
+      path: "src/index.ts",
+      content: [
+        'export const fixtureValue = "baseline";',
+        'export const fixtureNeighbor = "untouched";',
+        "",
+      ].join("\n"),
+    },
   ];
 }
 

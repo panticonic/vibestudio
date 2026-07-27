@@ -31,6 +31,7 @@ describe("canonical edit tool", () => {
       ],
     });
     expect(result.details.storage).toBe("vcs");
+    expect(tool.description).toContain('vcs({ operation: "revert"');
   });
 
   it("reports ambiguous text without mutating", async () => {

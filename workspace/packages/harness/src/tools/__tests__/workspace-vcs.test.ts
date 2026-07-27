@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { Value } from "@sinclair/typebox/value";
 import { createWorkspaceVcsTool, type ToolWorkflowVcs } from "../workspace-vcs.js";
 
 function fixture() {
@@ -32,6 +33,22 @@ function fixture() {
         kind: "text-edit" as const,
         summary: "Update the source",
         disposition: { status: "actionable" as const, applicability: "applicable" as const },
+      },
+    ],
+    nextCursor: null,
+  }));
+  const commit = vi.fn(async (input: Parameters<ToolWorkflowVcs["commit"]>[0]) => ({
+    contextId: input.contextId,
+    event: { kind: "event" as const, eventId: "event:new-commit" },
+    committedApplicationIds: ["application:working"],
+  }));
+  const history = vi.fn(async (input: Parameters<ToolWorkflowVcs["history"]>[0]) => ({
+    root: input.root,
+    entries: [
+      {
+        node: { kind: "change" as const, changeId: "change:history" },
+        createdAt: "2026-07-27T00:00:00.000Z",
+        summary: "Changed the fixture",
       },
     ],
     nextCursor: null,
@@ -88,7 +105,9 @@ function fixture() {
   }));
   const vcs = {
     status,
+    history,
     compare,
+    commit,
     integrate,
     revert,
     discard,
@@ -135,7 +154,7 @@ function fixture() {
       content: { kind: "text" as const, text: "hello" },
     })),
   } as unknown as ToolWorkflowVcs;
-  return { vcs, status, compare, integrate, discard, blame, push, working };
+  return { vcs, status, history, compare, commit, integrate, discard, blame, push, working };
 }
 
 describe("workspace VCS agent tool", () => {
@@ -151,6 +170,18 @@ describe("workspace VCS agent tool", () => {
       type: "text",
       text: expect.stringContaining("dirty"),
     });
+    expect(Value.Check(tool.parameters, {})).toBe(true);
+    const defaultStatus = await tool.execute("call:default-status", {});
+    expect(defaultStatus.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("dirty"),
+    });
+    expect(Value.Check(tool.parameters, { path: "" })).toBe(true);
+    const rootStatus = await tool.execute("call:root-status", { path: "" });
+    expect(rootStatus.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("dirty"),
+    });
 
     const compared = await tool.execute("call:compare", {
       operation: "compare",
@@ -162,6 +193,88 @@ describe("workspace VCS agent tool", () => {
     expect(compared.content[0]).toMatchObject({
       type: "text",
       text: expect.stringContaining("change:source"),
+    });
+  });
+
+  it("lists friendly file history from the current exact working state", async () => {
+    const f = fixture();
+    const tool = createWorkspaceVcsTool("/", f.vcs, {
+      contextId: "context:test",
+      commandId: "command:history",
+    });
+
+    const result = await tool.execute("call:history", {
+      operation: "history",
+      path: "packages/demo/a.ts",
+    });
+
+    expect(
+      Value.Check(tool.parameters, {
+        operation: "history",
+        path: "packages/demo/a.ts",
+      })
+    ).toBe(true);
+    expect(f.history).toHaveBeenCalledWith({
+      root: {
+        kind: "file",
+        state: f.working,
+        repositoryId: "repository:packages/demo",
+        fileId: "file:demo",
+      },
+      direction: "past",
+      limit: 100,
+    });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("change:history"),
+    });
+  });
+
+  it("commits through the intuitive multiplexed VCS surface", async () => {
+    const f = fixture();
+    const tool = createWorkspaceVcsTool("/", f.vcs, {
+      contextId: "context:test",
+      commandId: "command:commit",
+    });
+
+    expect(
+      Value.Check(tool.parameters, {
+        operation: "commit",
+        message: "Capture the semantic milestone",
+      })
+    ).toBe(true);
+    const result = await tool.execute("call:commit", {
+      operation: "commit",
+      message: "Capture the semantic milestone",
+    });
+
+    expect(f.commit).toHaveBeenCalledWith({
+      contextId: "context:test",
+      expectedWorkingHead: f.working,
+      commandId: "command:commit",
+      message: "Capture the semantic milestone",
+    });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("event:new-commit"),
+    });
+
+    expect(
+      Value.Check(tool.parameters, {
+        message: "Capture the shorthand semantic milestone",
+        integratesEventIds: ["event:source"],
+      })
+    ).toBe(true);
+    await tool.execute("call:inferred-commit", {
+      message: "Capture the shorthand semantic milestone",
+      integratesEventIds: ["event:source"],
+    });
+    expect(f.commit).toHaveBeenLastCalledWith({
+      contextId: "context:test",
+      expectedWorkingHead: f.working,
+      commandId: "command:commit",
+      message: "Capture the shorthand semantic milestone",
+      integratesEventIds: ["event:source"],
     });
   });
 
@@ -366,6 +479,23 @@ describe("workspace VCS agent tool", () => {
     });
     await tool.execute("call:push", { operation: "push" });
     expect(f.push).toHaveBeenCalledWith({
+      commandId: "command:push",
+      contextId: "context:test",
+      expectedCommittedEventId: "event:committed",
+      expectedMainEventId: "event:main",
+    });
+
+    expect(
+      Value.Check(tool.parameters, {
+        operation: "push",
+        message: "Publish the verified milestone",
+      })
+    ).toBe(true);
+    await tool.execute("call:push-with-rationale", {
+      operation: "push",
+      message: "Publish the verified milestone",
+    });
+    expect(f.push).toHaveBeenLastCalledWith({
       commandId: "command:push",
       contextId: "context:test",
       expectedCommittedEventId: "event:committed",

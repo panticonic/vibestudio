@@ -80,6 +80,20 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
   },
 };
 
+/**
+ * Public eval namespaces whose ergonomic name intentionally differs from the
+ * canonical RPC service they type-wrap. Keeping aliases at the reflection
+ * boundary lets help derive method contracts from the same schema as the
+ * runtime client.
+ */
+export const EVAL_RUNTIME_SERVICE_NAMES: Readonly<Record<string, string>> = {
+  git: "gitInterop",
+};
+
+export function evalRuntimeServiceName(bindingName: string): string {
+  return EVAL_RUNTIME_SERVICE_NAMES[bindingName] ?? bindingName;
+}
+
 export interface InjectedSurfaceDescription {
   name: string;
   surface: "injected-runtime";
@@ -93,6 +107,113 @@ export interface InjectedSurfaceIndexDescription {
   note: string;
   methods: Array<{ name: string; description: string }>;
   next: string;
+}
+
+export interface InjectedSurfaceMethodDescription {
+  name: string;
+  surface: "injected-runtime-method";
+  description?: string;
+  call: string;
+  arguments: string[];
+  returns?: string;
+  access?: unknown;
+  errors?: unknown;
+  seeAlso?: unknown;
+  note: string;
+}
+
+type JsonSchema = Record<string, unknown>;
+
+function schemaType(schema: unknown, depth = 0): string {
+  if (!schema || typeof schema !== "object" || depth > 24) return "unknown";
+  const value = schema as JsonSchema;
+  if (value["nullable"] === true) {
+    const inner = { ...value };
+    delete inner["nullable"];
+    return `${schemaType(inner, depth + 1)} | null`;
+  }
+  if (Array.isArray(value["enum"])) {
+    return (value["enum"] as unknown[]).map((item) => JSON.stringify(item)).join(" | ");
+  }
+  if ("const" in value) return JSON.stringify(value["const"]);
+  const union = (value["anyOf"] ?? value["oneOf"]) as unknown[] | undefined;
+  if (Array.isArray(union)) {
+    return union.map((item) => schemaType(item, depth + 1)).join(" | ");
+  }
+  if (Array.isArray(value["allOf"])) {
+    return (value["allOf"] as unknown[]).map((item) => schemaType(item, depth + 1)).join(" & ");
+  }
+  const type = value["type"];
+  if (Array.isArray(type)) return type.map(String).join(" | ");
+  if (type === "string") return "string";
+  if (type === "integer") return "integer";
+  if (type === "number") return "number";
+  if (type === "boolean") return "boolean";
+  if (type === "null") return "null";
+  if (type === "array") {
+    if (Array.isArray(value["items"])) {
+      return `[${(value["items"] as unknown[])
+        .map((item) => schemaType(item, depth + 1))
+        .join(", ")}]`;
+    }
+    return `(${schemaType(value["items"], depth + 1)})[]`;
+  }
+  const properties = value["properties"];
+  if (properties && typeof properties === "object") {
+    const required = new Set(
+      Array.isArray(value["required"]) ? (value["required"] as string[]) : []
+    );
+    const fields = Object.entries(properties as Record<string, unknown>).map(
+      ([name, property]) =>
+        `${name}${required.has(name) ? "" : "?"}: ${schemaType(property, depth + 1)}`
+    );
+    return `{ ${fields.join("; ")} }`;
+  }
+  if (typeof value["$ref"] === "string") {
+    return (value["$ref"] as string).split("/").at(-1) ?? "unknown";
+  }
+  return typeof type === "string" ? type : "unknown";
+}
+
+function methodArgumentTypes(argsSchema: unknown): string[] {
+  if (!argsSchema || typeof argsSchema !== "object") return [];
+  const schema = argsSchema as JsonSchema;
+  const tuple = schema["prefixItems"] ?? schema["items"];
+  if (schema["type"] === "array" && Array.isArray(tuple)) {
+    return (tuple as unknown[]).map((item) => schemaType(item));
+  }
+  return [schemaType(schema)];
+}
+
+/**
+ * Project a method's machine JSON Schema into a shallow, faithful contract.
+ *
+ * Eval transport serialization is deliberately depth-bounded. Returning raw
+ * schemas made nested discriminated unions look incomplete precisely when an
+ * agent asked for exact help. Strings preserve the whole type while keeping
+ * the normal help path much smaller than the raw catalog entry.
+ */
+export function describeEvalMethod(
+  qualifiedName: string,
+  method: unknown
+): InjectedSurfaceMethodDescription {
+  const source = method && typeof method === "object" ? (method as Record<string, unknown>) : {};
+  const args = methodArgumentTypes(source["argsSchema"]);
+  const parameterNames = args.map((_, index) => (args.length === 1 ? "input" : `arg${index}`));
+  return {
+    name: qualifiedName,
+    surface: "injected-runtime-method",
+    ...(typeof source["description"] === "string"
+      ? { description: source["description"] as string }
+      : {}),
+    call: `await ${qualifiedName}(${parameterNames.join(", ")})`,
+    arguments: args,
+    ...(source["returnsSchema"] ? { returns: schemaType(source["returnsSchema"]) } : {}),
+    ...("access" in source ? { access: source["access"] } : {}),
+    ...("errors" in source ? { errors: source["errors"] } : {}),
+    ...("seeAlso" in source ? { seeAlso: source["seeAlso"] } : {}),
+    note: "Compact exact types for the injected call. Use the docs service only when machine-readable JSON Schema is needed.",
+  };
 }
 
 export function invalidHelpArgumentResponse(value: unknown): Record<string, unknown> {
@@ -125,7 +246,8 @@ export function describeEvalBindingSurface(
   name: string,
   liveMethodNames: string[],
   serviceMethods: Record<string, unknown>,
-  notes: Record<string, { description: string }> = EVAL_RUNTIME_METHOD_NOTES
+  notes: Record<string, { description: string }> = EVAL_RUNTIME_METHOD_NOTES,
+  serviceName = name
 ): InjectedSurfaceDescription | null {
   if (liveMethodNames.length === 0) return null;
   const methods: Record<string, unknown> = {};
@@ -141,7 +263,7 @@ export function describeEvalBindingSurface(
     surface: "injected-runtime",
     note:
       `Methods on the injected \`${name}\` binding — what eval code calls directly. The raw ` +
-      `\`${name}\` RPC service (via \`rpc.call("main", "${name}.…", [...])\`) may differ. ` +
+      `\`${serviceName}\` RPC service (via \`rpc.call("main", "${serviceName}.…", [...])\`) may differ. ` +
       `When a service name also exists as a runtime binding, \`services.${name}\` is this ` +
       `ergonomic client; use \`rpc.call\` for raw service-only methods. Low-level wire methods ` +
       `are intentionally hidden behind these wrappers.`,

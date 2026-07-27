@@ -11,6 +11,8 @@ import {
   noFailedInvocations,
   requireEvalResultEvidence,
   requireVcsEvidence,
+  successfulEvalCode,
+  successfulEvalObservedValues,
 } from "./_helpers.js";
 
 function executionWithProjectedInvocation(
@@ -251,5 +253,63 @@ describe("system-testing validation helpers", () => {
       reason: undefined,
     });
     expect(requireEvalResultEvidence(result, ["sourceBasis"]).passed).toBe(false);
+  });
+
+  it("uses the captured source for a successful file-backed eval", () => {
+    const result = {
+      duration: 0,
+      messages: [
+        { kind: "message", senderId: "user", complete: true, content: "prompt" },
+        {
+          kind: "message",
+          senderId: "agent",
+          complete: true,
+          contentType: "invocation",
+          invocation: {
+            id: "write-source",
+            name: "write",
+            arguments: {
+              path: ".tmp/check.ts",
+              content: "return await git.commitMapping('packages/example');",
+            },
+            execution: { status: "complete", isError: false },
+          },
+        },
+        {
+          kind: "message",
+          senderId: "agent",
+          complete: true,
+          contentType: "invocation",
+          invocation: {
+            id: "run-source",
+            name: "eval",
+            arguments: { path: ".tmp/check.ts" },
+            execution: { status: "complete", isError: false },
+          },
+        },
+      ],
+    } as TestExecutionResult;
+
+    expect(successfulEvalCode(result)).toContain("git.commitMapping");
+  });
+
+  it("treats structured eval console output as observed runtime evidence", () => {
+    const result = executionWithInvocationResult("complete", {
+      details: {
+        success: true,
+        console:
+          'Count=1\n[{"repoPath":"projects/demo","state":"not-materialized","autoPush":false,"aheadBy":0,"behindBy":0}]',
+      },
+    });
+
+    expect(successfulEvalObservedValues(result)).toContainEqual([
+      {
+        repoPath: "projects/demo",
+        state: "not-materialized",
+        autoPush: false,
+        aheadBy: 0,
+        behindBy: 0,
+      },
+    ]);
   });
 });

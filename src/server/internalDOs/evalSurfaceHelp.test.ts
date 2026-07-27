@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   describeEvalBindingSurface,
   describeEvalBindingIndex,
+  describeEvalMethod,
   EVAL_RUNTIME_METHOD_NOTES,
+  evalRuntimeServiceName,
   invalidHelpArgumentResponse,
 } from "./evalSurfaceHelp.js";
 
@@ -34,6 +36,25 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
   it("reuses the RPC-service schema for methods with no override (rich arg info preserved)", () => {
     const out = describeEvalBindingSurface("fs", ["readFile"], fsService);
     expect(out!.methods["readFile"]).toBe(fsService.readFile);
+  });
+
+  it("maps ergonomic Git help to the canonical gitInterop service contract", () => {
+    const importSchema = {
+      description: "Import an external Git project.",
+      argsSchema: { type: "array", items: [{ type: "object" }] },
+    };
+    const out = describeEvalBindingSurface(
+      "git",
+      ["importProject"],
+      { importProject: importSchema },
+      EVAL_RUNTIME_METHOD_NOTES,
+      evalRuntimeServiceName("git")
+    );
+
+    expect(evalRuntimeServiceName("git")).toBe("gitInterop");
+    expect(evalRuntimeServiceName("vcs")).toBe("vcs");
+    expect(out!.methods["importProject"]).toBe(importSchema);
+    expect(out!.note).toContain('rpc.call("main", "gitInterop.…"');
   });
 
   it("documents the runtime-only blobstore byte helpers without inventing wire methods", () => {
@@ -151,6 +172,86 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
       ],
       next: 'Call help("vcs.<method>") for that method\'s exact arguments, return schema, and typed errors.',
     });
+  });
+});
+
+describe("describeEvalMethod", () => {
+  it("renders nested discriminated unions completely without returning a deep raw schema", () => {
+    const result = describeEvalMethod("vcs.edit", {
+      description: "Author exact edits.",
+      access: { sensitivity: "write" },
+      errors: [{ code: "RevisionChanged", description: "The basis advanced." }],
+      seeAlso: ["vcs.revert"],
+      argsSchema: {
+        type: "array",
+        items: [
+          {
+            type: "object",
+            properties: {
+              commandId: { type: "string" },
+              changes: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "object",
+                      properties: {
+                        kind: { type: "string", enum: ["text-edit"] },
+                        edits: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: {
+                              start: { type: "integer" },
+                              end: { type: "integer" },
+                              text: { type: "string" },
+                            },
+                            required: ["start", "end", "text"],
+                          },
+                        },
+                      },
+                      required: ["kind", "edits"],
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        kind: { type: "string", enum: ["file-delete"] },
+                        fileId: { type: "string" },
+                      },
+                      required: ["kind", "fileId"],
+                    },
+                  ],
+                },
+              },
+            },
+            required: ["commandId", "changes"],
+          },
+        ],
+      },
+      returnsSchema: {
+        type: "object",
+        properties: { applicationId: { type: "string" } },
+        required: ["applicationId"],
+      },
+    });
+
+    expect(result).toEqual({
+      name: "vcs.edit",
+      surface: "injected-runtime-method",
+      description: "Author exact edits.",
+      call: "await vcs.edit(input)",
+      arguments: [
+        '{ commandId: string; changes: ({ kind: "text-edit"; edits: ({ start: integer; end: integer; text: string })[] } | { kind: "file-delete"; fileId: string })[] }',
+      ],
+      returns: "{ applicationId: string }",
+      access: { sensitivity: "write" },
+      errors: [{ code: "RevisionChanged", description: "The basis advanced." }],
+      seeAlso: ["vcs.revert"],
+      note: "Compact exact types for the injected call. Use the docs service only when machine-readable JSON Schema is needed.",
+    });
+    expect(JSON.stringify(result)).not.toContain("Max depth exceeded");
+    expect(result).not.toHaveProperty("argsSchema");
+    expect(result).not.toHaveProperty("returnsSchema");
   });
 });
 

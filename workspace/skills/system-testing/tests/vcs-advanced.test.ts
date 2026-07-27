@@ -256,6 +256,210 @@ describe("reduced VCS agentic catalog", () => {
       ]
     );
     expect(test.validate(result)).toEqual({ passed: true, reason: undefined });
+
+    const naturalSingleCell = execution(
+      "The rejected stale request had no effect, and the fresh retry succeeded.",
+      [
+        invocation(
+          "natural-recovery",
+          "eval",
+          [
+            "const advance = await vcs.edit({ commandId: crypto.randomUUID(), expectedWorkingHead: base, changes });",
+            "try { await vcs.edit({ commandId: crypto.randomUUID(), expectedWorkingHead: base, changes }); } catch (error) { staleError = { code: error.code }; }",
+            "const statusAfterStale = await vcs.status({ contextId });",
+            "const recovered = await vcs.edit({ commandId: crypto.randomUUID(), expectedWorkingHead: statusAfterStale.workingHead, changes });",
+            "const statusFinal = await vcs.status({ contextId });",
+          ].join("\n"),
+          {
+            advance: {
+              commandId: "command:advance",
+              contextId: "context:test",
+              workUnitId: "work:advance",
+              applicationId: "application:advanced",
+              workingHead: { kind: "application", applicationId: "application:advanced" },
+            },
+            staleError: { code: "RevisionChanged" },
+            statusAfterStale: beforeStale,
+            recovered: {
+              commandId: "command:recovered",
+              contextId: "context:test",
+              workUnitId: "work:recovered",
+              applicationId: "application:recovered",
+              workingHead: recoveredHead,
+            },
+            statusFinal: {
+              ...beforeStale,
+              workingHead: recoveredHead,
+              workingCounts: { applications: 3, workUnits: 3, changes: 3 },
+            },
+          }
+        ),
+      ]
+    );
+    expect(test.validate(naturalSingleCell)).toEqual({ passed: true, reason: undefined });
+
+    const rawRpcSingleCell = execution(
+      "The rejected stale request had no effect, and the fresh retry succeeded.",
+      [
+        invocation(
+          "raw-rpc-recovery",
+          "eval",
+          [
+            "const advance2 = await rpc.call('main', 'vcs.edit', [{ commandId: 'command:advance', expectedWorkingHead: base, changes }]);",
+            "try { await rpc.call('main', 'vcs.edit', [{ commandId: 'command:stale', expectedWorkingHead: base, changes }]); } catch (error) { stale = { code: error.code }; }",
+            "const statusAfterStale = await rpc.call('main', 'vcs.status', [{ contextId }]);",
+            "const retry4 = await rpc.call('main', 'vcs.edit', [{ commandId: 'command:fresh', expectedWorkingHead: statusAfterStale.workingHead, changes }]);",
+            "const statusFinal = await rpc.call('main', 'vcs.status', [{ contextId }]);",
+          ].join("\n"),
+          {
+            advance2: {
+              commandId: "command:advance",
+              workUnitId: "work:advance",
+              applicationId: "application:advanced",
+              workingHead: { applicationId: "application:advanced", kind: "application" },
+            },
+            stale: { code: "RevisionChanged" },
+            statusAfterStale: beforeStale,
+            retry4: {
+              commandId: "command:fresh",
+              workUnitId: "work:fresh",
+              applicationId: "application:recovered",
+              workingHead: { applicationId: "application:recovered", kind: "application" },
+            },
+            statusFinal: {
+              ...beforeStale,
+              workingHead: { kind: "application", applicationId: "application:recovered" },
+              workingCounts: { applications: 3, workUnits: 3, changes: 3 },
+            },
+          }
+        ),
+      ]
+    );
+    expect(test.validate(rawRpcSingleCell)).toEqual({ passed: true, reason: undefined });
+
+    const conciseNaturalShape = execution(
+      "The rejected stale request had no effect, and the fresh retry succeeded.",
+      [
+        invocation(
+          "concise-natural-recovery",
+          "eval",
+          [
+            'const cmd = (label) => `demo:${label}:${Date.now()}:${Math.random()}`;',
+            'const first = await rpc.call("main", "vcs.edit", [{ commandId: cmd("advance"), expectedWorkingHead: staleBasis, changes }]);',
+            'try { await rpc.call("main", "vcs.edit", [{ commandId: cmd("stale"), expectedWorkingHead: staleBasis, changes }]); } catch (error) { staleError = { code: error.code }; }',
+            'const afterRefusal = await rpc.call("main", "vcs.status", [{ contextId }]);',
+            'const fresh = await rpc.call("main", "vcs.edit", [{ commandId: cmd("fresh"), expectedWorkingHead: first.workingHead, changes }]);',
+            'const final = await rpc.call("main", "vcs.status", [{ contextId }]);',
+          ].join("\n"),
+          {
+            first: {
+              commandId: "command:advance",
+              workUnitId: "work:advance",
+              applicationId: "application:advanced",
+              workingHead: { applicationId: "application:advanced", kind: "application" },
+            },
+            staleError: { code: "RevisionChanged" },
+            afterRefusal: beforeStale,
+            fresh: {
+              commandId: "command:fresh",
+              workUnitId: "work:fresh",
+              applicationId: "application:recovered",
+              workingHead: { applicationId: "application:recovered", kind: "application" },
+            },
+            final: {
+              ...beforeStale,
+              workingHead: { kind: "application", applicationId: "application:recovered" },
+              workingCounts: { applications: 3, workUnits: 3, changes: 3 },
+            },
+          }
+        ),
+      ]
+    );
+    expect(test.validate(conciseNaturalShape)).toEqual({ passed: true, reason: undefined });
+
+    const splitCellProof = execution(
+      "The rejected stale request had no effect, and the fresh retry succeeded.",
+      [
+        invocation(
+          "advance-cell",
+          "eval",
+          "const first = await vcs.edit({ commandId: 'command:advance', expectedWorkingHead: base, changes });",
+          {
+            first: {
+              commandId: "command:advance",
+              workUnitId: "work:advance",
+              applicationId: "application:advanced",
+              workingHead: { applicationId: "application:advanced", kind: "application" },
+            },
+          }
+        ),
+        invocation(
+          "refusal-and-recovery-cell",
+          "eval",
+          [
+            "try { await vcs.edit({ commandId: 'command:stale', expectedWorkingHead: base, changes }); } catch (error) { staleError = { code: error.code }; }",
+            "const afterRefusalStatus = await vcs.status({ contextId });",
+            "const freshResult = await vcs.edit({ commandId: 'command:fresh', expectedWorkingHead: afterRefusalStatus.workingHead, changes });",
+            "const finalStatus = await vcs.status({ contextId });",
+          ].join("\n"),
+          {
+            staleError: { code: "RevisionChanged" },
+            afterRefusalStatus: beforeStale,
+            freshResult: {
+              commandId: "command:fresh",
+              workUnitId: "work:fresh",
+              applicationId: "application:recovered",
+              workingHead: { applicationId: "application:recovered", kind: "application" },
+            },
+            finalStatus: {
+              ...beforeStale,
+              workingHead: { kind: "application", applicationId: "application:recovered" },
+              workingCounts: { applications: 3, workUnits: 3, changes: 3 },
+            },
+          }
+        ),
+      ]
+    );
+    expect(test.validate(splitCellProof)).toEqual({ passed: true, reason: undefined });
+
+    const neutralStatusNames = execution(
+      "The rejected stale request had no effect, and the fresh retry succeeded.",
+      [
+        invocation(
+          "neutral-status-names",
+          "eval",
+          [
+            "const first = await vcs.edit({ commandId: cmd1, expectedWorkingHead: basis, changes });",
+            "try { await vcs.edit({ commandId: cmd2, expectedWorkingHead: basis, changes }); } catch (error) { staleError = { code: error.code }; }",
+            "const status1 = await vcs.status({ contextId });",
+            "const fresh = await vcs.edit({ commandId: cmd3, expectedWorkingHead: status1.workingHead, changes });",
+            "const finalStatus = await vcs.status({ contextId });",
+          ].join("\n"),
+          {
+            first: {
+              commandId: "command:advance",
+              workUnitId: "work:advance",
+              applicationId: "application:advanced",
+              workingHead: { applicationId: "application:advanced", kind: "application" },
+            },
+            staleError: { code: "RevisionChanged" },
+            status1: beforeStale,
+            fresh: {
+              commandId: "command:fresh",
+              workUnitId: "work:fresh",
+              applicationId: "application:recovered",
+              workingHead: { applicationId: "application:recovered", kind: "application" },
+            },
+            finalStatus: {
+              ...beforeStale,
+              workingHead: { kind: "application", applicationId: "application:recovered" },
+              workingCounts: { applications: 3, workUnits: 3, changes: 3 },
+            },
+          }
+        ),
+      ]
+    );
+    expect(test.validate(neutralStatusNames)).toEqual({ passed: true, reason: undefined });
   });
 
   it("proves an identical uncertain command retry from canonical results", () => {
@@ -281,7 +485,7 @@ describe("reduced VCS agentic catalog", () => {
         workingCounts: { applications: 1, workUnits: 1, changes: 1 },
       },
     };
-    const call = (returnValue: typeof proof) =>
+    const call = (returnValue: unknown) =>
       invocation(
         "idempotency",
         "eval",
@@ -304,6 +508,16 @@ describe("reduced VCS agentic catalog", () => {
       passed: true,
       reason: undefined,
     });
+    expect(
+      test.validate(
+        execution(final, [
+          call({
+            first: mutation,
+            retry: structuredClone(mutation),
+          }),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
 
     const duplicate = structuredClone(proof);
     duplicate.retry.applicationId = "application:duplicate";
@@ -427,6 +641,7 @@ describe("reduced VCS agentic catalog", () => {
     };
     finalRead.details["provenance"] = {
       status: "attached",
+      state: { kind: "event", eventId: "event:restored" },
       episodes: [
         {
           change: { kind: "change", changeId: "change:counteraction" },
@@ -435,6 +650,82 @@ describe("reduced VCS agentic catalog", () => {
       ],
     };
     expect(test.validate(execution(final, attachedCounteraction))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+
+    const committedReadWithoutStatus = structuredClone(attachedCounteraction);
+    committedReadWithoutStatus.splice(4, 1);
+    committedReadWithoutStatus.unshift(
+      invocation(
+        "initial-status",
+        "vcs",
+        { operation: "status" },
+        {
+          operation: "status",
+          result: {
+            clean: true,
+            committed: { kind: "event", eventId: "event:base" },
+            workingHead: { kind: "event", eventId: "event:base" },
+            workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+          },
+        }
+      )
+    );
+    expect(test.validate(execution(final, committedReadWithoutStatus))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+
+    const inverseEffectProof = structuredClone(calls);
+    inverseEffectProof.pop();
+    inverseEffectProof.splice(
+      4,
+      0,
+      invocation(
+        "original-change",
+        "provenance",
+        { target: "change:original" },
+        {
+          node: {
+            kind: "change",
+            value: {
+              changeId: "change:original",
+              effects: [
+                {
+                  kind: "content",
+                  fileId: "file:value",
+                  beforeContentHash: "hash:one",
+                  afterContentHash: "hash:two",
+                },
+              ],
+            },
+          },
+        }
+      ),
+      invocation(
+        "counteraction-change",
+        "provenance",
+        { target: "change:counteraction" },
+        {
+          node: {
+            kind: "change",
+            value: {
+              changeId: "change:counteraction",
+              effects: [
+                {
+                  kind: "content",
+                  fileId: "file:value",
+                  beforeContentHash: "hash:two",
+                  afterContentHash: "hash:one",
+                },
+              ],
+            },
+          },
+        }
+      )
+    );
+    expect(test.validate(execution(final, inverseEffectProof))).toEqual({
       passed: true,
       reason: undefined,
     });
@@ -849,7 +1140,12 @@ describe("reduced VCS agentic catalog", () => {
       stop: "import-boundary",
     };
     const calls = [
-      invocation("native-blame", "vcs", { operation: "blame" }, { spans: [nativeSpan] }),
+      invocation(
+        "mixed-blame",
+        "vcs",
+        { operation: "blame" },
+        { spans: [nativeSpan, importSpan] }
+      ),
       invocation("import-blame", "vcs", { operation: "blame" }, { spans: [importSpan] }),
       invocation(
         "native-walk",

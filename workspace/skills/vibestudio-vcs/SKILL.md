@@ -60,8 +60,11 @@ Treat source history and provenance as one small, walkable graph.
 ## Use the shortest workflow
 
 Inside a workspace agent, use the compact `vcs` tool for `status`, `compare`,
-one-step `integrate`, `revert`, whole-chain `discard`, path-friendly `blame`, and `push`. Its input is
-always `{ operation: ... }`; it is not the lower-level `vcs.*` service client. Use the
+one-step `integrate`, `revert`, whole-chain `discard`, path-friendly `blame`, and `push`.
+`vcs({})` is the shortest status/orientation call. Every other workflow may use
+`{ operation: ... }`; supplying `{ message, integratesEventIds? }` without an
+operation unambiguously selects commit. This is not the lower-level `vcs.*`
+service client. Use the
 dedicated `edit`, `write`, `move_file`, `copy_file`, and `commit` tools for the
 common authoring actions. This workflow uses agent adapters; the later public
 contract section separately lists the canonical `vcs.*` service methods used by
@@ -72,10 +75,14 @@ human/UI or lifecycle client may instead issue a command whose causal walk ends
 honestly at that command. Never invent a wrapper agent or adapter invocation to
 make a direct operation appear agent-authored.
 
-1. Call `vcs({ operation: "status" })`. The tool binds the current context and
+1. Call `vcs({})` (or explicit `vcs({ operation: "status" })`). A root spelling such as
+   `vcs({ path: "" })` is equivalent. The tool binds the current context and
    returns `workingHead`, `committed`, and `mainEventId` in its details.
 2. Read or list managed files at that exact state. Keep repository and file IDs
-   returned by the service.
+   returned by the service. For a quick memory timeline, use
+   `vcs({ operation: "history", path })`; omit `path` for committed workspace
+   event history. Use the lower-level provenance tools only when the next
+   decision needs an exact graph walk.
 3. Author ordinary content changes with the focused `write`/`edit` tools. Use
    `move_file`/`copy_file` for identity operations. Use
    `vcs({ operation: "revert", changeIds: [...] })` to counteract named changes.
@@ -94,7 +101,8 @@ make a direct operation appear agent-authored.
 5. Run relevant typechecks, tests, or explicit context builds while the work
    remains local. These checks are advisory observations, not publication
    authority.
-6. Call `commit({ message })` to commit the complete local chain. Commit derives
+6. Call `commit({ message })` or `vcs({ message })` to commit the complete local
+   chain; both are the same atomic operation. Commit derives
    every integration source from the chain's recorded decisions, so several
    subagent integrations can become one multi-parent event. If an agent tool
    call also passes `integratesEventIds`, its exact set must match those
@@ -103,6 +111,8 @@ make a direct operation appear agent-authored.
    the complete local chain is unwanted instead, call `vcs({ operation: "discard" })`; it derives the
    live head and command identity exactly like the other compact mutations.
 7. Call `vcs({ operation: "push" })` only when the user wants the clean committed event published.
+   An optional `message` records publication rationale on the causal tool invocation; it does not
+   create, rename, or amend the already-committed event.
    Push validates semantic ancestry and integration, obtains approval, and
    atomically advances protected refs. It neither runs nor certifies a build.
 
@@ -111,7 +121,11 @@ basis. Agent tools derive both from the current invocation and live context;
 do not add either field to an agent-tool input. When making a direct causally bound service
 call, mint it once and retain it. Reuse that ID only when retrying an identical
 request whose response is uncertain. If re-observation changes the request or
-its expected working head, use a new command ID.
+its expected working head, use a new command ID. For an uncertain-response
+retry, retain the immutable request and compare the two canonical terminals;
+matching application, work-unit, and change identities are sufficient proof.
+Return that proof before optional inspection instead of deep-walking history
+automatically.
 
 Branch on typed error codes. On `RevisionChanged`, call `status`, re-read the
 affected facts, and re-plan from the returned working head. Never parse a

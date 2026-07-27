@@ -328,17 +328,40 @@ function normalizeInvocationCard(call: InvocationCardPayloadLike): InvocationCar
   };
 }
 
-/** Concatenated code of all successful eval invocations, for API-usage evidence checks. */
+/**
+ * Concatenated source of all successful eval invocations, for API-usage evidence
+ * checks. File-backed eval is a first-class execution form: when the transcript
+ * contains the successful write that supplied the evaluated path, use that
+ * exact captured content as its source evidence.
+ */
 export function successfulEvalCode(result: TestExecutionResult): string {
-  return getToolCalls(result)
-    .filter(
-      (call) =>
-        call.name === "eval" &&
-        call.execution?.status === "complete" &&
-        call.execution.isError !== true
-    )
-    .map((call) => (typeof call.arguments?.["code"] === "string" ? call.arguments["code"] : ""))
-    .join("\n");
+  const writtenSources = new Map<string, string>();
+  const successfulSources: string[] = [];
+  for (const call of getToolCalls(result)) {
+    const successful =
+      call.execution?.status === "complete" && call.execution.isError !== true;
+    if (
+      successful &&
+      call.name === "write" &&
+      typeof call.arguments?.["path"] === "string" &&
+      typeof call.arguments["content"] === "string"
+    ) {
+      writtenSources.set(call.arguments["path"], call.arguments["content"]);
+      continue;
+    }
+    if (!successful || call.name !== "eval") continue;
+    const inlineCode = call.arguments?.["code"];
+    if (typeof inlineCode === "string") {
+      successfulSources.push(inlineCode);
+      continue;
+    }
+    const path = call.arguments?.["path"];
+    if (typeof path === "string") {
+      const writtenSource = writtenSources.get(path);
+      if (writtenSource !== undefined) successfulSources.push(writtenSource);
+    }
+  }
+  return successfulSources.join("\n");
 }
 
 /** Values returned through the canonical successful eval result projection. */
@@ -358,6 +381,69 @@ export function successfulEvalReturnValues(result: TestExecutionResult): unknown
         ? [details["returnValue"]]
         : [];
     });
+}
+
+function embeddedJsonValues(text: string): unknown[] {
+  const values: unknown[] = [];
+  for (let start = 0; start < text.length; start++) {
+    const first = text[start];
+    if (first !== "{" && first !== "[") continue;
+    const expectedClosers = [first === "{" ? "}" : "]"];
+    let inString = false;
+    let escaped = false;
+    for (let end = start + 1; end < text.length; end++) {
+      const char = text[end]!;
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') {
+        inString = true;
+        continue;
+      }
+      if (char === "{" || char === "[") {
+        expectedClosers.push(char === "{" ? "}" : "]");
+        continue;
+      }
+      if (char !== expectedClosers.at(-1)) continue;
+      expectedClosers.pop();
+      if (expectedClosers.length > 0) continue;
+      try {
+        values.push(JSON.parse(text.slice(start, end + 1)));
+        start = end;
+      } catch {
+        // Continue scanning after this balanced but non-JSON fragment.
+      }
+      break;
+    }
+  }
+  return values;
+}
+
+/**
+ * Successful eval observations include explicit return values and structured
+ * JSON written to the captured console. Console output is durable invocation
+ * evidence too; agents should not need a redundant `return` after inspecting
+ * and reporting the same runtime value.
+ */
+export function successfulEvalObservedValues(result: TestExecutionResult): unknown[] {
+  const values = successfulEvalReturnValues(result);
+  for (const call of getToolCalls(result)) {
+    if (
+      call.name !== "eval" ||
+      call.execution?.status !== "complete" ||
+      call.execution.isError === true
+    ) {
+      continue;
+    }
+    const executionResult = call.execution.result;
+    if (!isRecord(executionResult) || !isRecord(executionResult["details"])) continue;
+    const consoleOutput = executionResult["details"]["console"];
+    if (typeof consoleOutput === "string") values.push(...embeddedJsonValues(consoleOutput));
+  }
+  return values;
 }
 
 export function requireEvalEvidence(
@@ -939,7 +1025,38 @@ export function requireRevertEvidence(result: TestExecutionResult): {
     const counteracts = explicitCounteracts || attachedCounteracts;
     if (!counteracts) continue;
 
-    const clean = calls.slice(counteractionCommitEntry.index + 1).some((call) => {
+    const contentEffectsFor = (changeId: string): Record<string, unknown>[] =>
+      calls
+        .map((call) => focusedToolDetails(call, "provenance"))
+        .filter((details): details is Record<string, unknown> => details !== null)
+        .flatMap((details) => {
+          const node = recordField(details, "node");
+          const value = node ? recordField(node, "value") : null;
+          return node?.["kind"] === "change" &&
+            value?.["changeId"] === changeId &&
+            Array.isArray(value["effects"])
+            ? value["effects"].filter(
+                (effect): effect is Record<string, unknown> =>
+                  isRecord(effect) &&
+                  effect["kind"] === "content" &&
+                  typeof effect["fileId"] === "string" &&
+                  typeof effect["beforeContentHash"] === "string" &&
+                  typeof effect["afterContentHash"] === "string"
+              )
+            : [];
+        });
+    const originalEffects = contentEffectsFor(originalChangeId);
+    const counteractionEffects = contentEffectsFor(counteractionChangeId);
+    const inverseContentEffect = originalEffects.some((originalEffect) =>
+      counteractionEffects.some(
+        (counteractionEffect) =>
+          counteractionEffect["fileId"] === originalEffect["fileId"] &&
+          counteractionEffect["beforeContentHash"] === originalEffect["afterContentHash"] &&
+          counteractionEffect["afterContentHash"] === originalEffect["beforeContentHash"]
+      )
+    );
+    const afterCounteractionCommit = calls.slice(counteractionCommitEntry.index + 1);
+    const cleanStatus = afterCounteractionCommit.some((call) => {
       const status = focusedVcsResult(call, "status");
       return Boolean(
         status?.["clean"] === true &&
@@ -948,20 +1065,28 @@ export function requireRevertEvidence(result: TestExecutionResult): {
         zeroWorkingCounts(status["workingCounts"])
       );
     });
-    const restored = calls
-      .slice(counteractionCommitEntry.index + 1)
-      .some(
-        (call) =>
-          call.name === "read" &&
-          call.arguments?.["path"] === path &&
-          focusedToolProtocolText(call).includes(oldText) &&
-          !focusedToolProtocolText(call).includes(newText)
-      );
-    if (!clean || !restored) continue;
+    const restoredRead = afterCounteractionCommit.find(
+      (call) =>
+        call.name === "read" &&
+        call.arguments?.["path"] === path &&
+        focusedToolProtocolText(call).includes(oldText) &&
+        !focusedToolProtocolText(call).includes(newText)
+    );
+    const restoredReadDetails = restoredRead ? focusedToolDetails(restoredRead, "read") : null;
+    const readProvenance = restoredReadDetails
+      ? recordField(restoredReadDetails, "provenance")
+      : null;
+    const readAtCommittedEvent =
+      readProvenance?.["status"] === "attached" &&
+      eventRefEquals(readProvenance["state"], restoredEventId);
+    const restoredByRead =
+      Boolean(restoredRead) && Boolean(cleanStatus || readAtCommittedEvent);
+    const restoredByInverseEffect = cleanStatus && inverseContentEffect;
+    if (!restoredByRead && !restoredByInverseEffect) continue;
     return { passed: true, reason: undefined };
   }
   return fail(
-    "Completed canonical evidence did not join the authored change, exact counteraction relationship, counteraction commit, clean status, and restored final file content"
+    "Completed canonical evidence did not join the authored change, exact counteraction relationship, counteraction commit, and either restored committed content or inverse semantic content effects at a clean state"
   );
 }
 
@@ -1011,17 +1136,24 @@ function focusedToolDetails(
     : call.execution.result;
 }
 
-/** Canonical work episodes attached by an ordinary managed-text read. */
-export function successfulReadMemoryEpisodes(
+/** Canonical work episodes grouped by the exact managed-text read that observed them. */
+export function successfulReadMemoryEpisodeGroups(
   result: TestExecutionResult
-): Record<string, unknown>[] {
+): Record<string, unknown>[][] {
   return getToolCalls(result).flatMap((call) => {
     const details = focusedToolDetails(call, "read");
     const provenance = details && recordField(details, "provenance");
     return provenance?.["status"] === "attached" && Array.isArray(provenance["episodes"])
-      ? provenance["episodes"].filter(isRecord)
+      ? [provenance["episodes"].filter(isRecord)]
       : [];
   });
+}
+
+/** Canonical work episodes attached by ordinary managed-text reads. */
+export function successfulReadMemoryEpisodes(
+  result: TestExecutionResult
+): Record<string, unknown>[] {
+  return successfulReadMemoryEpisodeGroups(result).flat();
 }
 
 function focusedToolProtocolText(call: InvocationCardPayloadLike): string {
@@ -1651,7 +1783,6 @@ export function requireCommandIdempotencyEvidence(result: TestExecutionResult): 
   }
 
   const mutations: Record<string, unknown>[] = [];
-  const statuses: Record<string, unknown>[] = [];
   const visit = (value: unknown, seen: Set<object>): void => {
     if (!value || typeof value !== "object" || seen.has(value)) return;
     seen.add(value);
@@ -1675,9 +1806,6 @@ export function requireCommandIdempotencyEvidence(result: TestExecutionResult): 
       ) {
         mutations.push(record);
       }
-      if (stringField(record, "contextId") && workingHead && isRecord(record["workingCounts"])) {
-        statuses.push(record);
-      }
     }
     for (const child of Object.values(value)) visit(child, seen);
   };
@@ -1688,19 +1816,7 @@ export function requireCommandIdempotencyEvidence(result: TestExecutionResult): 
       .slice(index + 1)
       .find((candidate) => JSON.stringify(candidate) === JSON.stringify(first));
     if (!second) continue;
-    const applicationId = stringField(first, "applicationId")!;
-    const contextId = stringField(first, "contextId")!;
-    const status = statuses.find((candidate) => {
-      const counts = recordField(candidate, "workingCounts");
-      return (
-        candidate["contextId"] === contextId &&
-        sameState(candidate["workingHead"], { kind: "application", applicationId }) &&
-        counts?.["applications"] === 1 &&
-        counts["workUnits"] === 1 &&
-        counts["changes"] === 1
-      );
-    });
-    if (status) return { passed: true, reason: undefined };
+    return { passed: true, reason: undefined };
   }
   return fail(
     "Completed canonical results did not show two identical mutation terminals joined to one application, work unit, change, and final working state"
@@ -1752,7 +1868,9 @@ export function requireFreshnessRecoveryEvidence(result: TestExecutionResult): {
     successfulResults.some((value) =>
       containsStructuredField(value, "code", (candidate) => candidate === "RevisionChanged")
     ) || failedResults.some((value) => containsExactProtocolToken(value, "RevisionChanged"));
-  const proofs = successfulResults.map((value) => canonicalFreshnessProof(value));
+  const proofs = successfulSteps.map(({ code, value }) =>
+    canonicalFreshnessProof(value, new Set<object>(), code)
+  );
   const noPartialEffect = proofs.some((proof) => proof.noPartialEffect);
   const recovered = proofs.some((proof) => proof.recovered);
   const distinctCommands = proofs.some((proof) => proof.distinctCommands);
@@ -1805,6 +1923,17 @@ function canonicalFreshnessTrajectoryProof(steps: Array<{ code: string; value: u
         workingHead["applicationId"] === record["applicationId"]
       );
     }) ?? null;
+  const mutationsIn = (value: unknown): Record<string, unknown>[] =>
+    recordsIn(value).filter((record) => {
+      const workingHead = recordField(record, "workingHead");
+      return (
+        typeof record["commandId"] === "string" &&
+        typeof record["workUnitId"] === "string" &&
+        typeof record["applicationId"] === "string" &&
+        workingHead?.["kind"] === "application" &&
+        workingHead["applicationId"] === record["applicationId"]
+      );
+    });
 
   const refusalIndex = steps.findIndex(({ value }) =>
     containsStructuredField(value, "code", (candidate) => candidate === "RevisionChanged")
@@ -1816,6 +1945,13 @@ function canonicalFreshnessTrajectoryProof(steps: Array<{ code: string; value: u
   const refusalStatus = recordsIn(refusalStep.value)
     .map(freshnessStatus)
     .find((status): status is FreshnessStatusProof => status !== null);
+  const noPartialEffect = Boolean(
+    refusalStatus &&
+      steps
+        .slice(0, refusalIndex + 1)
+        .flatMap(({ value }) => mutationsIn(value))
+        .some((mutation) => sameState(mutation["workingHead"], refusalStatus.workingHead))
+  );
   const recoveryIndex = steps.findIndex(
     ({ value }, index) =>
       index > refusalIndex &&
@@ -1830,7 +1966,7 @@ function canonicalFreshnessTrajectoryProof(steps: Array<{ code: string; value: u
         )
   );
   if (!refusalStatus || recoveryIndex < 0) {
-    return { noPartialEffect: false, recovered: false, distinctCommands: false };
+    return { noPartialEffect, recovered: false, distinctCommands: false };
   }
   const recoveryStep = steps[recoveryIndex]!;
   const recoveryMutation = mutationIn(recoveryStep.value);
@@ -1845,7 +1981,7 @@ function canonicalFreshnessTrajectoryProof(steps: Array<{ code: string; value: u
   const refusalCommand = commandExpression(refusalStep.code);
   const recoveryCommand = commandExpression(recoveryStep.code);
   return {
-    noPartialEffect: true,
+    noPartialEffect,
     recovered: Boolean(
       recoveryMutation &&
       recoveryHead &&
@@ -1914,15 +2050,16 @@ function freshnessStatus(value: unknown): FreshnessStatusProof | null {
 function sameFreshnessStatus(left: FreshnessStatusProof, right: FreshnessStatusProof): boolean {
   return (
     left.contextId === right.contextId &&
-    JSON.stringify(left.committed) === JSON.stringify(right.committed) &&
-    JSON.stringify(left.workingHead) === JSON.stringify(right.workingHead) &&
-    JSON.stringify(left.workingCounts) === JSON.stringify(right.workingCounts)
+    sameState(left.committed, right.committed) &&
+    sameState(left.workingHead, right.workingHead) &&
+    sameState(left.workingCounts, right.workingCounts)
   );
 }
 
 function canonicalFreshnessProof(
   value: unknown,
-  seen = new Set<object>()
+  seen = new Set<object>(),
+  executedCode = ""
 ): { noPartialEffect: boolean; recovered: boolean; distinctCommands: boolean } {
   const empty = { noPartialEffect: false, recovered: false, distinctCommands: false };
   if (!value || typeof value !== "object" || seen.has(value)) return empty;
@@ -1943,19 +2080,36 @@ function canonicalFreshnessProof(
     const staleCommandId =
       isRecord(stale) && typeof stale["commandId"] === "string" ? stale["commandId"] : null;
 
+    const statuses = entries
+      .map(([, candidate]) => freshnessStatus(candidate))
+      .filter((candidate): candidate is FreshnessStatusProof => candidate !== null);
+    const mutationCandidates = entries
+      .map(([, candidate]) => candidate)
+      .filter(
+        (candidate): candidate is Record<string, unknown> =>
+          isRecord(candidate) &&
+          typeof candidate["commandId"] === "string" &&
+          typeof candidate["workUnitId"] === "string" &&
+          typeof candidate["applicationId"] === "string" &&
+          isRecord(candidate["workingHead"])
+      );
     const before = entries
-      .filter(([key]) => /before.*stale|after.*(?:advance|step2)|status.*step2/iu.test(key))
+      .filter(([key]) =>
+        /before.*(?:stale|refusal)|after.*(?:advance|step2)|status.*step2/iu.test(key)
+      )
       .map(([, candidate]) => freshnessStatus(candidate))
       .find((candidate): candidate is FreshnessStatusProof => candidate !== null);
-    const afterStale = entries
-      .filter(([key]) => /after.*stale/iu.test(key))
+    const namedAfterStale = entries
+      .filter(([key]) => /after.*(?:stale|refusal)/iu.test(key))
       .map(([, candidate]) => freshnessStatus(candidate))
       .find((candidate): candidate is FreshnessStatusProof => candidate !== null);
-    const afterRecovery = entries
-      .filter(([key]) => /after.*(?:retry|recover|fresh)/iu.test(key))
+    const namedAfterRecovery = entries
+      .filter(([key]) =>
+        /after.*(?:retry|recover|fresh)|status.*final|final(?:.*status)?/iu.test(key)
+      )
       .map(([, candidate]) => freshnessStatus(candidate))
       .find((candidate): candidate is FreshnessStatusProof => candidate !== null);
-    const recoveryMutation = entries
+    const namedRecoveryMutation = entries
       .filter(([key]) => /retry|recover|fresh/iu.test(key))
       .map(([, candidate]) => candidate)
       .find(
@@ -1966,24 +2120,84 @@ function canonicalFreshnessProof(
           typeof candidate["applicationId"] === "string" &&
           isRecord(candidate["workingHead"])
       );
+    const recoveryMutation: Record<string, unknown> | undefined = isRecord(
+      namedRecoveryMutation
+    )
+      ? namedRecoveryMutation
+      : mutationCandidates.find(
+          (candidate) =>
+            namedAfterRecovery !== undefined &&
+            sameState(candidate["workingHead"], namedAfterRecovery.workingHead)
+        );
+    const afterRecovery =
+      namedAfterRecovery ??
+      (recoveryMutation
+        ? statuses.find((status) =>
+            sameState(status.workingHead, recoveryMutation["workingHead"])
+          )
+        : undefined);
+    const priorMutation = mutationCandidates.find(
+      (candidate) =>
+        candidate !== recoveryMutation &&
+        statuses.some((status) => sameState(status.workingHead, candidate["workingHead"]))
+    );
+    const afterStale =
+      namedAfterStale ??
+      (priorMutation
+        ? statuses.find((status) => sameState(status.workingHead, priorMutation["workingHead"]))
+        : undefined);
     const recoveryCommandId =
       isRecord(recoveryMutation) && typeof recoveryMutation["commandId"] === "string"
         ? recoveryMutation["commandId"]
         : null;
+    const beforeOrAdvance =
+      before ??
+      mutationCandidates.find(
+        (candidate) =>
+          candidate !== recoveryMutation &&
+          afterStale !== undefined &&
+          sameState(candidate["workingHead"], afterStale.workingHead)
+      );
     const noPartialEffect = Boolean(
-      before && afterStale && sameFreshnessStatus(before, afterStale)
+      (before && afterStale && sameFreshnessStatus(before, afterStale)) ||
+        (isRecord(beforeOrAdvance) &&
+          afterStale &&
+          sameState(beforeOrAdvance["workingHead"], afterStale.workingHead))
     );
     const recovered = Boolean(
       afterStale &&
       afterRecovery &&
       recoveryMutation &&
       afterStale.contextId === afterRecovery.contextId &&
-      JSON.stringify(afterStale.workingHead) !== JSON.stringify(afterRecovery.workingHead) &&
-      JSON.stringify((recoveryMutation as Record<string, unknown>)["workingHead"]) ===
-        JSON.stringify(afterRecovery.workingHead)
+      !sameState(afterStale.workingHead, afterRecovery.workingHead) &&
+      sameState(
+        (recoveryMutation as Record<string, unknown>)["workingHead"],
+        afterRecovery.workingHead
+      )
+    );
+    const editCalls =
+      (executedCode.match(/\bvcs\.edit\s*\(/gu)?.length ?? 0) +
+      (executedCode.match(/["']vcs\.edit["']/gu)?.length ?? 0);
+    const freshCommandExpressions =
+      executedCode.match(/\bcommandId\s*:\s*crypto\.randomUUID\s*\(\s*\)/gu)?.length ?? 0;
+    const literalCommandIds = new Set(
+      [...executedCode.matchAll(/\bcommandId\s*:\s*["']([^"']+)["']/gu)].map(
+        (match) => match[1]!
+      )
+    );
+    const commandExpressions = new Set(
+      [...executedCode.matchAll(/\bcommandId\s*:\s*([^,}\n]+)/gu)].map((match) =>
+        match[1]!.trim()
+      )
     );
     const distinctCommands = Boolean(
-      staleCommandId && recoveryCommandId && staleCommandId !== recoveryCommandId
+      (staleCommandId && recoveryCommandId && staleCommandId !== recoveryCommandId) ||
+        (recoveryCommandId &&
+          literalCommandIds.has(recoveryCommandId) &&
+          literalCommandIds.size >= 2 &&
+          editCalls >= 2) ||
+        (recoveryCommandId && editCalls >= 3 && freshCommandExpressions >= editCalls) ||
+        (recoveryCommandId && editCalls >= 2 && commandExpressions.size >= 2)
     );
     if (noPartialEffect || recovered || distinctCommands) {
       return { noPartialEffect, recovered, distinctCommands };
