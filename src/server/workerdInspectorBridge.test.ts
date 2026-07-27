@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkerdInspectorBridge } from "./workerdInspectorBridge.js";
+import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 
 describe("WorkerdInspectorBridge", () => {
   let bridge: WorkerdInspectorBridge | null = null;
@@ -58,5 +59,57 @@ describe("WorkerdInspectorBridge", () => {
       "wss://vibestudio.local:4100/workerd-inspector/core%3Auser%2Fworker%20host"
     );
     expect(endpoint?.token).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("rejects an invalid credential before allocating a WebSocket receiver", () => {
+    bridge = new WorkerdInspectorBridge({
+      getInspectorUrl: () => "http://127.0.0.1:9229",
+      port: 4100,
+    });
+    const socket = { write: vi.fn(), destroy: vi.fn() };
+    const wss = { handleUpgrade: vi.fn() };
+
+    bridge.handleUpgrade(
+      {
+        url: "/workerd-inspector/core%3Auser%3Aworker-host",
+        headers: {
+          "sec-websocket-protocol": webSocketAuthProtocol("inspection", "invalid"),
+        },
+      } as never,
+      socket as never,
+      Buffer.alloc(0),
+      wss as never
+    );
+
+    expect(wss.handleUpgrade).not.toHaveBeenCalled();
+    expect(socket.write).toHaveBeenCalledWith(
+      "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n"
+    );
+    expect(socket.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("redeems a valid grant before handing the upgrade to ws", () => {
+    bridge = new WorkerdInspectorBridge({
+      getInspectorUrl: () => "http://127.0.0.1:9229",
+      port: 4100,
+    });
+    const endpoint = bridge.getEndpoint("core:user:worker-host", "panel:x");
+    const socket = { write: vi.fn(), destroy: vi.fn() };
+    const wss = { handleUpgrade: vi.fn() };
+
+    bridge.handleUpgrade(
+      {
+        url: "/workerd-inspector/core%3Auser%3Aworker-host",
+        headers: {
+          "sec-websocket-protocol": webSocketAuthProtocol("inspection", endpoint?.token ?? ""),
+        },
+      } as never,
+      socket as never,
+      Buffer.alloc(0),
+      wss as never
+    );
+
+    expect(wss.handleUpgrade).toHaveBeenCalledOnce();
+    expect(socket.write).not.toHaveBeenCalled();
   });
 });

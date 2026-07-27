@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { createServer, type Server } from "node:http";
 import * as esbuild from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
@@ -51,12 +52,15 @@ describe("extension child runtime process", () => {
   let root: string | null = null;
   let proc: ProcessAdapter | null = null;
   let server: WebSocketServer | null = null;
+  let httpServer: Server | null = null;
 
   afterEach(async () => {
     proc?.kill();
     proc = null;
     await new Promise<void>((resolve) => server?.close(() => resolve()) ?? resolve());
     server = null;
+    await new Promise<void>((resolve) => httpServer?.close(() => resolve()) ?? resolve());
+    httpServer = null;
     if (root) fs.rmSync(root, { recursive: true, force: true });
     root = null;
   });
@@ -104,12 +108,34 @@ describe("extension child runtime process", () => {
       logLevel: "silent",
     });
 
-    server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-    await new Promise<void>((resolve, reject) => {
-      server!.once("listening", resolve);
-      server!.once("error", reject);
+    const admissionGrant = "extension-admission-grant";
+    httpServer = createServer((req, res) => {
+      if (req.method === "POST" && req.url === "/rpc/ws-admission") {
+        expect(req.headers.authorization).toBe("Bearer test-token");
+        res.writeHead(201, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ok: true,
+            grant: admissionGrant,
+            expiresAt: Date.now() + 15_000,
+          })
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
     });
-    const address = server.address();
+    server = new WebSocketServer({ noServer: true });
+    httpServer.on("upgrade", (req, socket, head) => {
+      expect(req.headers["sec-websocket-protocol"]).toContain("vibestudio.auth.rpc.");
+      server!.handleUpgrade(req, socket, head, (ws) => server!.emit("connection", ws, req));
+    });
+    httpServer.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve, reject) => {
+      httpServer!.once("listening", resolve);
+      httpServer!.once("error", reject);
+    });
+    const address = httpServer.address();
     if (!address || typeof address === "string") throw new Error("WebSocket server did not bind");
     const gatewayUrl = `http://127.0.0.1:${address.port}`;
 
@@ -121,6 +147,7 @@ describe("extension child runtime process", () => {
             try {
               const message = JSON.parse(String(raw)) as WsClientMessage;
               if (message.type === "ws:auth") {
+                expect(message.token).toBe(admissionGrant);
                 ws.send(
                   JSON.stringify({
                     type: "ws:auth-result",

@@ -7,11 +7,10 @@
  * streaming without a WebRTC pairing blob. Used for one-shot commands that need
  * push (`channel tail`, `logs --follow`) and by the linked-agent bridge.
  *
- * Auth: the first frame is `ws:auth` carrying a redeemable token —
- * `refresh:<deviceId>:<token>` for a paired device, or `agent:<agentId>:<token>`
- * for an entity-scoped agent credential. The server's WS-auth redeemer resolves
- * either into the connection's principal + kind (see authService
- * createWorkspaceCredentialRedeemer); the client never asserts its own identity.
+ * Auth: a bounded HTTP admission request redeems the device/agent credential
+ * before WebSocket allocation and returns a short-lived one-use grant. The first
+ * `ws:auth` frame binds that grant to contract negotiation; the client never
+ * asserts its own identity.
  */
 
 import {
@@ -32,7 +31,7 @@ export interface WsClientConfig {
   callerId: string;
   /** Caller kind carried on outbound envelopes. */
   callerKind: CallerKind;
-  /** Produce the redeemable ws:auth token (`refresh:…` or `agent:…`). */
+  /** Produce the credential exchanged for a one-use WebSocket admission grant. */
   getToken: () => Promise<string> | string;
   connectionId?: string;
   clientLabel?: string;
@@ -134,7 +133,7 @@ export class WsRpcClient {
       adapter: {
         now: () => Date.now(),
         getAuthToken: async () => await this.config.getToken(),
-        createSocket: (url) => new NodeWsLike(new WebSocket(url)),
+        createSocket: (url, protocols) => new NodeWsLike(new WebSocket(url, protocols)),
       },
     });
     await transport.connectAndWait();

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Theme } from "@radix-ui/themes";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -29,6 +29,7 @@ function userlandApproval(
     subject: partial.subject ?? { id: "sub-1", label: "Subject" },
     title: partial.title,
     summary: partial.summary,
+    sealedDetails: partial.sealedDetails,
     promptOptions: partial.promptOptions ?? "choices",
     options: partial.options ?? [{ value: "ok", label: "OK", tone: "primary" }],
     approvalId: partial.approvalId,
@@ -118,7 +119,11 @@ function clientConfigApproval(
 
 function renderCard(
   approval: Parameters<typeof resolveCallerInfo>[0],
-  opts: { queue?: Parameters<typeof ApprovalCard>[0]["queue"]; decisionError?: string | null } = {}
+  opts: {
+    queue?: Parameters<typeof ApprovalCard>[0]["queue"];
+    decisionError?: string | null;
+    fetchContent?: Parameters<typeof ApprovalCard>[0]["fetchContent"];
+  } = {}
 ) {
   const emit = vi.fn<(intent: ApprovalCardIntent) => void>();
   render(
@@ -128,6 +133,7 @@ function renderCard(
         caller={resolveCallerInfo(approval)}
         queue={opts.queue ?? null}
         decisionError={opts.decisionError ?? null}
+        fetchContent={opts.fetchContent}
         emit={emit}
       />
     </Theme>
@@ -136,6 +142,28 @@ function renderCard(
 }
 
 describe("ApprovalCard", () => {
+  it("lazily renders complete host-sealed content beyond inline detail limits", async () => {
+    const suffix = "dangerous-suffix-after-one-thousand";
+    const content = `${"x".repeat(1_100)}${suffix}`;
+    const digest = "a".repeat(64);
+    const fetchContent = vi.fn(async () => content);
+    renderCard(
+      userlandApproval({
+        approvalId: "sealed-plan",
+        title: "Run a command",
+        sealedDetails: [
+          { label: "Complete execution plan", digest, byteLength: content.length, format: "code" },
+        ],
+      }),
+      { fetchContent }
+    );
+
+    fireEvent.click(screen.getByText("Inspect complete execution plan"));
+    await waitFor(() => expect(fetchContent).toHaveBeenCalledWith(digest));
+    expect(screen.getByText((value) => value.endsWith(suffix))).toBeTruthy();
+    expect(screen.getByText(new RegExp(`sha256:${digest}`))).toBeTruthy();
+  });
+
   it("exposes a labelled, described dialog and assertive decision errors with long copy", () => {
     const title =
       "Autoriser la publication de cette très longue synthèse dans l’espace de travail partagé";

@@ -17,6 +17,9 @@ import {
   summarizeWebhookIngressSubscription,
   timingSafeStringEqual,
   verifyWebhookPayload,
+  WEBHOOK_DEFAULT_DIRECT_MAX_BODY_BYTES,
+  WEBHOOK_HARD_MAX_BODY_BYTES,
+  WEBHOOK_RELAY_MAX_BODY_BYTES,
   type CreateWebhookIngressSubscriptionRequest,
   type RotateWebhookIngressSecretRequest,
   type RotateWebhookIngressSecretResult,
@@ -153,6 +156,8 @@ export interface WebhookIngressServiceDeps {
   /** Server-internal path for the infrastructure-owned WebhookStoreDO. */
   doDispatch?: DoDispatcher;
   now?: () => number;
+  /** Effective direct-ingress ceiling after operator configuration validation. */
+  directMaxBodyBytes?: number;
   /**
    * Resolve a trusted internal runtime (currently an owner-scoped EvalDO) to
    * the runtime on whose behalf its ergonomic client operates. The resolver is
@@ -191,6 +196,10 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     ? normalizeBaseUrl(deps.directPublicBaseUrl)
     : null;
   const now = deps.now ?? Date.now;
+  const directMaxBodyBytes =
+    deps.directMaxBodyBytes === undefined
+      ? WEBHOOK_DEFAULT_DIRECT_MAX_BODY_BYTES
+      : validateDirectMaxBodyBytes(deps.directMaxBodyBytes);
   const seenReplayKeys = new Map<string, number>();
   const seenDeliveries = new Map<string, { ack: WebhookAck; expiresAt: number }>();
   const jwksCache = new Map<string, { expiresAt: number; keys: JwkWithKeyId[] }>();
@@ -250,9 +259,19 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     ctx: ServiceContext,
     input: CreateWebhookIngressSubscriptionRequest
   ): Promise<WebhookIngressSubscriptionSummary> {
-    const parsed = createSubscriptionSchema.parse(input) as CreateWebhookIngressSubscriptionRequest;
+    const parsed = createSubscriptionSchema.parse(input);
     const scope = await callerScope(ctx);
     await ensureTargetIsCallerSource(ctx, parsed.target, scope);
+    if (parsed.delivery.mode === "relay" && parsed.maxBodyBytes > WEBHOOK_RELAY_MAX_BODY_BYTES) {
+      throw new Error(
+        `relay webhook subscriptions support at most ${WEBHOOK_RELAY_MAX_BODY_BYTES} body bytes; use direct delivery for a larger per-subscription budget (this host allows up to ${directMaxBodyBytes})`
+      );
+    }
+    if (parsed.delivery.mode === "direct" && parsed.maxBodyBytes > directMaxBodyBytes) {
+      throw new Error(
+        `direct webhook maxBodyBytes ${parsed.maxBodyBytes} exceeds this host's configured ceiling of ${directMaxBodyBytes}; lower maxBodyBytes or raise VIBESTUDIO_WEBHOOK_DIRECT_MAX_BODY_BYTES (hard maximum ${WEBHOOK_HARD_MAX_BODY_BYTES})`
+      );
+    }
     const resolvedBase = parsed.delivery.mode === "direct" ? directPublicBaseUrl : relayOrigin;
     if (resolvedBase === null || resolvedBase === undefined) {
       throw new Error(
@@ -268,6 +287,7 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
       ownerCallerKind: scope.ownerCallerKind,
       target: parsed.target,
       delivery: parsed.delivery,
+      maxBodyBytes: parsed.maxBodyBytes,
       payload: parsed.payload,
       verifier: parsed.verifier,
       replay: parsed.replay,
@@ -402,16 +422,27 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
       return ack;
     };
 
-    const rawBody = Buffer.from(frame.bodyBase64 ?? "", "base64");
-    if (!verifyRelayFrameEnvelope(frame, rawBody)) {
-      return remember({ ok: false, permanent: true, reason: "invalid-relay-envelope" });
-    }
     const subscription = await store.get(frame.subscriptionId);
     if (!subscription || subscription.revokedAt) {
       return remember({ ok: false, permanent: true, reason: "subscription-not-found" });
     }
     if (subscription.delivery.mode !== "relay") {
       return remember({ ok: false, permanent: true, reason: "subscription-not-relay" });
+    }
+    if (!hasValidStoredBodyBudget(subscription, directMaxBodyBytes)) {
+      return remember({
+        ok: false,
+        permanent: true,
+        reason: "invalid-subscription-body-budget",
+      });
+    }
+    const decodedBodyBytes = decodedBase64ByteLength(frame.bodyBase64 ?? "");
+    if (decodedBodyBytes === null || decodedBodyBytes > subscription.maxBodyBytes) {
+      return remember({ ok: false, permanent: true, reason: "webhook-body-too-large" });
+    }
+    const rawBody = Buffer.from(frame.bodyBase64 ?? "", "base64");
+    if (!verifyRelayFrameEnvelope(frame, rawBody)) {
+      return remember({ ok: false, permanent: true, reason: "invalid-relay-envelope" });
     }
 
     const headers = frame.headers ?? {};
@@ -483,18 +514,47 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
   ): Promise<void> {
     const subscriptionId = params["subscriptionId"];
     if (!subscriptionId) {
+      req.resume();
       return sendJson(res, 400, { error: "missing subscriptionId" });
     }
-    const rawBody = await readRawBody(req);
     const subscription = await store.get(subscriptionId);
     if (!subscription || subscription.revokedAt) {
+      req.resume();
       return sendJson(res, 404, { error: "webhook subscription not found" });
     }
     // The co-located HTTP route serves DIRECT subscriptions only. Relay-mode
     // deliveries ride the authenticated backhaul; accepting one here (with no
     // relay envelope) would be an unauthenticated inbound path — reject it.
     if (subscription.delivery.mode !== "direct") {
+      req.resume();
       return sendJson(res, 404, { error: "webhook subscription not found" });
+    }
+    if (!hasValidStoredBodyBudget(subscription, directMaxBodyBytes)) {
+      req.resume();
+      return sendJson(res, 500, {
+        code: "WEBHOOK_SUBSCRIPTION_INVALID_BODY_BUDGET",
+        error:
+          "Webhook subscription has no valid bounded maxBodyBytes contract; recreate the subscription.",
+        subscriptionId,
+      });
+    }
+    let rawBody: Buffer;
+    try {
+      rawBody = await readRawBody(req, subscription.maxBodyBytes);
+    } catch (error) {
+      if (error instanceof WebhookBodyTooLargeError) {
+        return sendJson(res, 413, {
+          code: "WEBHOOK_BODY_TOO_LARGE",
+          error:
+            `Webhook payload exceeds this subscription's ${error.maxBytes}-byte budget. ` +
+            `Recreate the direct subscription with a larger maxBodyBytes (up to this host's ${directMaxBodyBytes}-byte ceiling) or reduce the provider payload.`,
+          subscriptionId,
+          maxBodyBytes: error.maxBytes,
+          observedBytes: error.observedBytes,
+          hostMaxBodyBytes: directMaxBodyBytes,
+        });
+      }
+      throw error;
     }
     if (!(await verifySubscriptionRequest(subscription, req, rawBody))) {
       return sendJson(res, 401, { error: "invalid webhook signature" });
@@ -777,12 +837,104 @@ function normalizeBaseUrl(value: string): string {
   return value.endsWith("/") ? value.slice(0, -1) : value;
 }
 
-function readRawBody(req: IncomingMessage): Promise<Buffer> {
+export function resolveWebhookDirectMaxBodyBytes(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return WEBHOOK_DEFAULT_DIRECT_MAX_BODY_BYTES;
+  const parsed = Number(raw);
+  return validateDirectMaxBodyBytes(parsed);
+}
+
+function validateDirectMaxBodyBytes(value: number): number {
+  if (
+    !Number.isSafeInteger(value) ||
+    value < WEBHOOK_RELAY_MAX_BODY_BYTES ||
+    value > WEBHOOK_HARD_MAX_BODY_BYTES
+  ) {
+    throw new Error(
+      `VIBESTUDIO_WEBHOOK_DIRECT_MAX_BODY_BYTES must be an integer from ${WEBHOOK_RELAY_MAX_BODY_BYTES} through ${WEBHOOK_HARD_MAX_BODY_BYTES}; current delivery events retain the raw body and rawBodyBase64 in memory`
+    );
+  }
+  return value;
+}
+
+function hasValidStoredBodyBudget(
+  subscription: WebhookIngressSubscription,
+  directMaxBodyBytes: number
+): boolean {
+  const value = subscription.maxBodyBytes;
+  if (!Number.isSafeInteger(value) || value <= 0) return false;
+  return subscription.delivery.mode === "relay"
+    ? value <= WEBHOOK_RELAY_MAX_BODY_BYTES
+    : value <= directMaxBodyBytes;
+}
+
+function decodedBase64ByteLength(value: string): number | null {
+  if (value.length % 4 === 1 || /[^A-Za-z0-9+/=_-]/.test(value)) return null;
+  const normalizedLength = value.replace(/=+$/, "").length;
+  return Math.floor((normalizedLength * 3) / 4);
+}
+
+class WebhookBodyTooLargeError extends Error {
+  constructor(
+    readonly maxBytes: number,
+    readonly observedBytes: number
+  ) {
+    super(`Webhook body exceeds ${maxBytes} bytes`);
+    this.name = "WebhookBodyTooLargeError";
+  }
+}
+
+function readRawBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", reject);
+    let total = 0;
+    let settled = false;
+
+    const cleanup = () => {
+      req.off("data", onData);
+      req.off("end", onEnd);
+      req.off("error", onError);
+    };
+    const failTooLarge = (observedBytes: number) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      // Drain without retaining data so a keep-alive connection remains
+      // well-formed while the handler returns a useful 413 response.
+      req.once("error", () => undefined);
+      req.resume();
+      reject(new WebhookBodyTooLargeError(maxBytes, observedBytes));
+    };
+    const onData = (chunk: Buffer | string) => {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += bytes.byteLength;
+      if (total > maxBytes) {
+        failTooLarge(total);
+        return;
+      }
+      chunks.push(bytes);
+    };
+    const onEnd = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(Buffer.concat(chunks, total));
+    };
+    const onError = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    const declaredLength = Number(req.headers["content-length"]);
+    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+      failTooLarge(declaredLength);
+      return;
+    }
+
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("error", onError);
   });
 }
 

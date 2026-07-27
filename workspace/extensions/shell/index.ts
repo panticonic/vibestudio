@@ -1,12 +1,19 @@
 import * as path from "node:path";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
-import type { ExtensionContext, UserlandApprovalRequest } from "@vibestudio/extension";
+import type {
+  ExtensionContext,
+  UserlandApprovalChoice,
+  UserlandApprovalRequest,
+} from "@vibestudio/extension";
 import {
   buildContextAttachApproval,
   buildExecApproval,
+  buildExecPlan,
   buildOpenApproval,
   buildUrlOpenApproval,
+  execPlanDigest,
+  serializeExecPlan,
 } from "./approvals.js";
 import { runExec } from "./exec.js";
 import { SessionManager } from "./sessionManager.js";
@@ -19,6 +26,7 @@ import {
   execRequestSchema,
   launchAdapterSchema,
   openRequestSchema,
+  sealedExecPlanSchema,
   unregisterLaunchAdapterSchema,
 } from "./types.js";
 
@@ -41,19 +49,45 @@ function resolveWithin(root: string, input?: string): string {
   return resolved;
 }
 
-function cleanEnv(extra: Record<string, string>): Record<string, string> {
-  const env: Record<string, string> = {};
+function cleanEnv(extra: Record<string, string>): {
+  effective: Record<string, string>;
+  overrides: Record<string, string>;
+  profile: {
+    id: "vibestudio.shell.host-minimal.v1";
+    label: string;
+    revision: string;
+  };
+} {
+  const effective: Record<string, string> = Object.create(null);
   for (const key of ["PATH", "HOME", "LANG", "TERM"]) {
     const value = process.env[key];
-    if (value) env[key] = value;
+    if (value) effective[key] = value;
   }
   for (const [key, value] of Object.entries(process.env)) {
-    if (key.startsWith("LC_") && value) env[key] = value;
+    if (key.startsWith("LC_") && value) effective[key] = value;
   }
+  const overrides: Record<string, string> = Object.create(null);
   for (const [key, value] of Object.entries(extra)) {
-    if (!BLOCKED_ENV.test(key)) env[key] = value;
+    if (BLOCKED_ENV.test(key)) continue;
+    overrides[key] = value;
+    effective[key] = value;
   }
-  return env;
+  const inheritedEntries = Object.entries(effective)
+    .filter(([key]) => !Object.hasOwn(overrides, key))
+    .sort(([left], [right]) => left.localeCompare(right));
+  const revision = createHash("sha256")
+    .update(JSON.stringify(inheritedEntries), "utf8")
+    .digest("hex")
+    .slice(0, 12);
+  return {
+    effective,
+    overrides,
+    profile: {
+      id: "vibestudio.shell.host-minimal.v1",
+      label: "Minimal host shell environment",
+      revision,
+    },
+  };
 }
 
 function normalizeScratchExt(ext: string): string {
@@ -103,7 +137,7 @@ async function requireApproval(
   ctx: ExtensionContext,
   kind: "exec" | "open",
   req: UserlandApprovalRequest
-): Promise<void> {
+): Promise<UserlandApprovalChoice> {
   const choice = await ctx.approvals.request(req);
   if (choice.kind === "uncallable") {
     throw error("ENOCALLER", "shell extension requires a panel or worker caller");
@@ -114,6 +148,7 @@ async function requireApproval(
   if (choice.choice === "deny") {
     throw error("EACCES", `shell.${kind} denied by user`);
   }
+  return choice;
 }
 
 /** Public API surface of this extension — the awaited return of {@link activate}. */
@@ -289,7 +324,7 @@ export async function activate(ctx: ExtensionContext) {
         decision: "allow",
         caller: owner.callerId,
       });
-      const snugEnv = snug.envForSession(cleanEnv({}));
+      const snugEnv = snug.envForSession(cleanEnv({}).effective);
       try {
         const launch = await prepareVscodeShellIntegrationLaunch({
           command,
@@ -409,7 +444,7 @@ export async function activate(ctx: ExtensionContext) {
       );
       const root = await confinementRoot(parsed.contextId);
       const cwd = resolveWithin(root, parsed.cwd);
-      const env = cleanEnv(parsed.env);
+      const environment = cleanEnv(parsed.env);
       const {
         env: _env,
         cwd: _cwd,
@@ -417,17 +452,33 @@ export async function activate(ctx: ExtensionContext) {
         contextAttachToken: _contextAttachToken,
         ...execReq
       } = parsed;
-      await requireApproval(
-        ctx,
-        "exec",
-        buildExecApproval({
-          command: parsed.command,
-          args: parsed.args,
-          cwd,
-          shell: parsed.shell,
-        })
-      );
-      return runExec({ ...execReq, cwd, env });
+      const plan = buildExecPlan({
+        intent: parsed.intent,
+        cwd,
+        environment,
+        timeoutMs: execReq.timeoutMs,
+        ...(execReq.stdin !== undefined ? { stdin: execReq.stdin } : {}),
+        maxOutputBytes: execReq.maxOutputBytes,
+      });
+      const planContent = serializeExecPlan(plan);
+      const planDigest = execPlanDigest(planContent);
+      const approval = await requireApproval(ctx, "exec", buildExecApproval(plan));
+      if (approval.kind !== "choice") {
+        throw error("EACCES", "shell.exec denied by user");
+      }
+      const sealed = approval.sealedDetails?.find((detail) => detail.digest === planDigest);
+      if (!sealed || execPlanDigest(sealed.content) !== planDigest) {
+        throw error("EINTEGRITY", "Approved execution plan seal is missing or invalid");
+      }
+      const approvedPlan = sealedExecPlanSchema.parse(JSON.parse(sealed.content));
+      return runExec({
+        intent: approvedPlan.intent,
+        cwd: approvedPlan.cwd,
+        env: Object.fromEntries(approvedPlan.environment.effective),
+        timeoutMs: approvedPlan.timeoutMs,
+        ...(approvedPlan.stdin !== undefined ? { stdin: approvedPlan.stdin } : {}),
+        maxOutputBytes: approvedPlan.maxOutputBytes,
+      });
     },
 
     async open(raw: unknown) {
@@ -511,7 +562,9 @@ export async function activate(ctx: ExtensionContext) {
             label: parsed.label,
           })
         );
-        const { env, token } = snug.envForSession(cleanEnv({ ...parsed.env, ...handlerEnv }));
+        const { env, token } = snug.envForSession(
+          cleanEnv({ ...parsed.env, ...handlerEnv }).effective
+        );
         snugToken = token;
         const launch = await prepareVscodeShellIntegrationLaunch({
           command,
@@ -601,7 +654,7 @@ export async function activate(ctx: ExtensionContext) {
 
     async restart(sessionId: string, opts?: { cols?: number; rows?: number }) {
       const session = sessions.requireOwner(sessionId, currentOwner(ctx).callerId);
-      const snugEnv = snug.envForSession(cleanEnv({}));
+      const snugEnv = snug.envForSession(cleanEnv({}).effective);
       try {
         const [command, ...args] = session.command.argv;
         const launch = await prepareVscodeShellIntegrationLaunch({

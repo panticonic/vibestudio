@@ -12,42 +12,48 @@ on:
       - "packages/shared/**"
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   build-android:
     name: Build Android APK/AAB
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
         with:
           distribution: zulu
           java-version: 17
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
       - name: Get pnpm store directory
         shell: bash
         run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
 
       - name: Cache pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ env.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-mobile-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-pnpm-mobile-
 
       - name: Cache Gradle
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.gradle/caches
@@ -69,7 +75,7 @@ jobs:
           fi
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
 
       - name: Install Android SDK components
         run: |
@@ -79,6 +85,7 @@ jobs:
         id: signing
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           IS_MOBILE_TAG: ${{ startsWith(github.ref, 'refs/tags/mobile-v') }}
         run: |
           # We deliberately only write the keystore file and the
@@ -99,7 +106,7 @@ jobs:
             echo "has_keystore=true" >> "$GITHUB_OUTPUT"
             echo "$KEYSTORE_BASE64" | base64 -d > apps/mobile/android/app/release.keystore
             echo "RELEASE_STORE_FILE=release.keystore" >> apps/mobile/android/gradle.properties
-            echo "RELEASE_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> apps/mobile/android/gradle.properties
+            echo "RELEASE_KEY_ALIAS=$RELEASE_KEY_ALIAS" >> apps/mobile/android/gradle.properties
           fi
 
       - name: Build release APK and AAB
@@ -120,55 +127,80 @@ jobs:
         working-directory: apps/mobile/android
         run: ./gradlew assembleRelease bundleRelease --no-daemon
 
+      - name: Remove release signing material
+        if: ${{ always() && steps.signing.outputs.has_keystore == 'true' }}
+        run: |
+          rm -f apps/mobile/android/app/release.keystore
+          sed -i '/^RELEASE_STORE_FILE=/d; /^RELEASE_KEY_ALIAS=/d' apps/mobile/android/gradle.properties
+
       - name: Generate checksums
         run: |
-          mkdir -p apps/mobile/android/app/build/outputs/release-artifacts
-          find apps/mobile/android/app/build/outputs -type f \( -name "*.apk" -o -name "*.aab" \) -print0 \
+          cd apps/mobile/android/app/build/outputs
+          mkdir -p release-artifacts
+          find . -type f \( -name "*.apk" -o -name "*.aab" \) -print0 \
             | sort -z \
             | xargs -0 sha256sum \
-            > apps/mobile/android/app/build/outputs/release-artifacts/SHA256SUMS
+            > release-artifacts/SHA256SUMS-android
+          test -s release-artifacts/SHA256SUMS-android
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: vibestudio-mobile-${{ github.sha }}
           path: |
             apps/mobile/android/app/build/outputs/apk/release/*.apk
             apps/mobile/android/app/build/outputs/bundle/release/*.aab
-            apps/mobile/android/app/build/outputs/release-artifacts/SHA256SUMS
+            apps/mobile/android/app/build/outputs/release-artifacts/SHA256SUMS-android
+          if-no-files-found: error
           retention-days: 30
 
+  publish-android:
+    name: Verify and publish Android release
+    needs: build-android
+    if: ${{ startsWith(github.ref, 'refs/tags/mobile-v') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download immutable Android release candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: vibestudio-mobile-${{ github.sha }}
+          path: release-candidate
+
+      - name: Verify Android release checksums
+        working-directory: release-candidate
+        run: sha256sum --check release-artifacts/SHA256SUMS-android
+
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/mobile-v')
-        # Pinned to a commit SHA (resolved from the v2 tag at audit time,
-        # = v2.6.2) so a force-moved major tag cannot silently swap in
-        # malicious action code that would have access to GITHUB_TOKEN
-        # (contents: write) and could tamper with the release artifact.
-        # Refresh via Dependabot.
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: |
-            apps/mobile/android/app/build/outputs/apk/release/*.apk
-            apps/mobile/android/app/build/outputs/bundle/release/*.aab
-            apps/mobile/android/app/build/outputs/release-artifacts/SHA256SUMS
+            release-candidate/apk/release/*.apk
+            release-candidate/bundle/release/*.aab
+            release-candidate/release-artifacts/SHA256SUMS-android
           generate_release_notes: true
 
   build-ios:
     name: Build iOS shell
     runs-on: macos-15
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

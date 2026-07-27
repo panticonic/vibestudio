@@ -3,13 +3,14 @@
  * (src/server/cdpBridge.ts), a port of Electron's CdpHostProvider transport
  * (src/main/cdpHostProvider.ts) without the webContents specifics.
  *
- * Connects to ws(s)://server[/_workspace/name]/api/cdp-host?hostConnectionId=..., authenticates
- * with {"type":"vibestudio:cdp-auth", token}, re-registers all targets on every
- * auth-ok (reconnects), and dispatches server commands to injected handlers.
+ * Connects to ws(s)://server[/_workspace/name]/api/cdp-host?hostConnectionId=...,
+ * authenticates during the HTTP upgrade, re-registers all targets on every
+ * connection, and dispatches server commands to injected handlers.
  */
 import { WebSocket } from "ws";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { serverCdpHostWsUrl } from "@vibestudio/shared/connect";
+import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 
 const log = createDevLogger("HeadlessHost:bridge");
 
@@ -54,10 +55,9 @@ interface BridgeMessage {
 
 export type CdpHostBridgeDiagnosticState =
   | "idle"
+  | "acquiring-credential"
   | "connecting"
-  | "open"
-  | "authenticating"
-  | "authenticated"
+  | "admitted"
   | "closed"
   | "error"
   | "retrying";
@@ -66,9 +66,6 @@ export interface CdpHostBridgeDiagnostic {
   state: CdpHostBridgeDiagnosticState;
   attempt: number;
   url: string;
-  opened: boolean;
-  authSent: boolean;
-  authenticated: boolean;
   lastError?: string;
   lastCloseCode?: number;
   lastCloseReason?: string;
@@ -79,7 +76,7 @@ export interface CdpHostBridgeDiagnostic {
 export class CdpHostBridgeClient {
   private socket: CdpHostBridgeSocket | null = null;
   private stopped = false;
-  private authenticated = false;
+  private admitted = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly targets = new Map<
     string,
@@ -89,9 +86,6 @@ export class CdpHostBridgeClient {
     state: "idle",
     attempt: 0,
     url: "",
-    opened: false,
-    authSent: false,
-    authenticated: false,
   };
 
   constructor(
@@ -102,7 +96,7 @@ export class CdpHostBridgeClient {
       handlers: HostBridgeHandlers;
       onAuthenticated?: () => void;
       onDiagnostic?: (diagnostic: CdpHostBridgeDiagnostic) => void;
-      socketFactory?: (url: string) => CdpHostBridgeSocket;
+      socketFactory?: (url: string, protocols: string[]) => CdpHostBridgeSocket;
     }
   ) {}
 
@@ -117,11 +111,11 @@ export class CdpHostBridgeClient {
     this.reconnectTimer = null;
     this.socket?.close(1000, "host shutting down");
     this.socket = null;
-    this.authenticated = false;
+    this.admitted = false;
   }
 
   isConnected(): boolean {
-    return this.authenticated && this.socket?.readyState === WebSocket.OPEN;
+    return this.admitted && this.socket?.readyState === WebSocket.OPEN;
   }
 
   getDiagnostic(): CdpHostBridgeDiagnostic {
@@ -151,46 +145,61 @@ export class CdpHostBridgeClient {
   }
 
   private connect(): void {
+    void this.connectWithToken();
+  }
+
+  private async connectWithToken(): Promise<void> {
     if (this.stopped) return;
     const url = this.wsUrl();
     this.updateDiagnostic({
-      state: "connecting",
+      state: "acquiring-credential",
       attempt: this.diagnostic.attempt + 1,
       url,
-      opened: false,
-      authSent: false,
-      authenticated: false,
+      lastError: undefined,
+      lastCloseCode: undefined,
+      lastCloseReason: undefined,
       nextRetryMs: undefined,
     });
+    let token: string;
+    try {
+      token = await this.opts.getToken();
+    } catch (error) {
+      const message = errorMessage(error);
+      this.updateDiagnostic({ state: "error", lastError: `failed to get token: ${message}` });
+      log.warn(`failed to get bridge token: ${message}`);
+      this.scheduleReconnect();
+      return;
+    }
+    if (this.stopped) return;
+    this.updateDiagnostic({ state: "connecting" });
+    const protocols = [webSocketAuthProtocol("cdp-host", token)];
     const socket =
-      this.opts.socketFactory?.(url) ?? new WebSocket(url, { maxPayload: 256 * 1024 * 1024 });
+      this.opts.socketFactory?.(url, protocols) ??
+      new WebSocket(url, protocols, { maxPayload: 256 * 1024 * 1024 });
     this.socket = socket;
-    this.authenticated = false;
+    this.admitted = false;
 
     socket.on("open", () => {
-      this.updateDiagnostic({ state: "open", opened: true });
-      void (async () => {
-        try {
-          const token = await this.opts.getToken();
-          socket.send(JSON.stringify({ type: "vibestudio:cdp-auth", token }));
-          this.updateDiagnostic({ state: "authenticating", authSent: true });
-        } catch (error) {
-          const message = errorMessage(error);
-          this.updateDiagnostic({ state: "error", lastError: `failed to get token: ${message}` });
-          log.warn(`failed to get bridge token: ${message}`);
-          socket.close();
-        }
-      })();
+      this.admitted = true;
+      this.updateDiagnostic({ state: "admitted" });
+      for (const [targetId, registration] of this.targets) {
+        this.send({
+          type: "cdp:register",
+          targetId,
+          tabId: registration.tabId,
+          ...registration.metadata,
+        });
+      }
+      this.opts.onAuthenticated?.();
     });
     socket.on("message", (data) => {
       void this.handleMessage(String(data));
     });
     socket.on("close", (code, reason) => {
-      this.authenticated = false;
+      this.admitted = false;
       if (this.socket === socket) this.socket = null;
       this.updateDiagnostic({
         state: "closed",
-        authenticated: false,
         lastCloseCode: typeof code === "number" ? code : undefined,
         lastCloseReason: closeReasonText(reason),
       });
@@ -227,21 +236,6 @@ export class CdpHostBridgeClient {
     }
     if (message.type) this.updateDiagnostic({ lastMessageType: message.type });
     switch (message.type) {
-      case "vibestudio:cdp-auth-ok": {
-        this.authenticated = true;
-        this.updateDiagnostic({ state: "authenticated", authenticated: true });
-        // Re-register every hosted target (initial connect and reconnects).
-        for (const [targetId, registration] of this.targets) {
-          this.send({
-            type: "cdp:register",
-            targetId,
-            tabId: registration.tabId,
-            ...registration.metadata,
-          });
-        }
-        this.opts.onAuthenticated?.();
-        return;
-      }
       case "cdp:command": {
         const { requestId, targetId, method, params, sessionId } = message;
         if (!requestId || !targetId || !method) return;

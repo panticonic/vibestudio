@@ -11,6 +11,7 @@ import { describe, it, expect } from "vitest";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "http";
 import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
+import { CDP_WEBSOCKET_MAX_PAYLOAD_BYTES } from "./ingressLimits.js";
 
 // ---------------------------------------------------------------------------
 // extractSourcePath is module-private, so we test the regex logic directly.
@@ -87,7 +88,8 @@ vi.mock("fs", () => ({
 }));
 
 vi.mock("ws", () => ({
-  WebSocketServer: vi.fn().mockImplementation(() => ({
+  WebSocketServer: vi.fn().mockImplementation((options) => ({
+    options,
     on: vi.fn(),
     close: vi.fn(),
   })),
@@ -183,6 +185,17 @@ describe("PanelHttpServer build cache", () => {
       builtAt: "2026-07-21T00:00:00.000Z",
     },
   } as unknown as import("./buildV2/buildStore.js").BuildResult;
+
+  it("keeps the legitimate CDP data-plane payload budget explicit", async () => {
+    const server = new PanelHttpServer();
+    server.initHandlers();
+    const internal = server as unknown as {
+      wss: { options: { maxPayload: number } };
+    };
+
+    expect(internal.wss.options.maxPayload).toBe(CDP_WEBSOCKET_MAX_PAYLOAD_BYTES);
+    await server.stop();
+  });
 
   it("storeBuild caches by source, hasBuild returns true", () => {
     const server = new PanelHttpServer();

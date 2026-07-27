@@ -39,7 +39,7 @@ async function connect() {
     adapter: {
       now: () => Date.now(),
       getAuthToken: async () => token,
-      createSocket: (url) => new NodeWsLike(new WebSocket(url)),
+      createSocket: (url, protocols) => new NodeWsLike(new WebSocket(url, protocols)),
     },
   });
   const rpc: RpcClient = createRpcClient({

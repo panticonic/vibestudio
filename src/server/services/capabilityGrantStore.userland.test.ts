@@ -113,4 +113,43 @@ describe("CapabilityGrantStore userland decisions", () => {
     expect(store.lookupUserland(workerAlpha, "extension-choice")).toBeNull();
     store.close();
   });
+
+  it("keeps sealed-review and unsealed grants mutually non-reusable", async () => {
+    const store = new CapabilityGrantStore({ statePath: tempDir() });
+    const sealedDigest = "a".repeat(64);
+    await store.recordUserland(
+      workerAlpha,
+      { id: "review-bound" },
+      "allow",
+      10,
+      undefined,
+      "caller",
+      undefined,
+      sealedDigest
+    );
+
+    expect(
+      store.lookupUserland(workerAlpha, "review-bound", undefined, sealedDigest)
+    ).toMatchObject({
+      choice: "allow",
+      reviewDigest: sealedDigest,
+    });
+    expect(store.lookupUserland(workerAlpha, "review-bound")).toBeNull();
+
+    await store.recordUserland(workerAlpha, { id: "review-bound" }, "allow", 11);
+    const unsealed = store.lookupUserland(workerAlpha, "review-bound");
+    expect(unsealed).toMatchObject({ choice: "allow" });
+    expect(unsealed).not.toHaveProperty("reviewDigest");
+    expect(
+      store.lookupUserland(workerAlpha, "review-bound", undefined, sealedDigest)
+    ).toMatchObject({
+      reviewDigest: sealedDigest,
+    });
+    expect(store.listUserland(workerAlpha)).toHaveLength(2);
+
+    await expect(store.revokeUserland(workerAlpha, "review-bound")).resolves.toBe(true);
+    expect(store.lookupUserland(workerAlpha, "review-bound")).toBeNull();
+    expect(store.lookupUserland(workerAlpha, "review-bound", undefined, sealedDigest)).toBeNull();
+    store.close();
+  });
 });

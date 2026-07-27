@@ -114,7 +114,7 @@
     "@xterm/headless": "^5.5.0",
     "ink": "^6.0.0",
     "react": "^19.0.0",
-    "ws": "^8.18.3"
+    "ws": "^8.21.1"
   },
   "devDependencies": {
     "vitest": "^3.2.4"

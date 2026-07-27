@@ -1,4 +1,5 @@
 import { readFile, stat, mkdtemp, mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -10,9 +11,17 @@ import type { SessionInfoEvent } from "./types.js";
 async function makeApi(approval: "allow" | "deny" | Array<"allow" | "deny"> = "allow") {
   const root = await mkdtemp(join(tmpdir(), "vibestudio-shell-test-"));
   const approvals = Array.isArray(approval) ? [...approval] : undefined;
-  const request = vi.fn(async (_req: UserlandApprovalRequest) => ({
+  const request = vi.fn(async (req: UserlandApprovalRequest) => ({
     kind: "choice" as const,
     choice: approvals?.shift() ?? approval,
+    ...(req.sealedDetails?.length
+      ? {
+          sealedDetails: req.sealedDetails.map((detail) => ({
+            digest: createHash("sha256").update(detail.content, "utf8").digest("hex"),
+            content: detail.content,
+          })),
+        }
+      : {}),
   }));
   const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   // Materialize a per-context folder on demand, mirroring the host capability.
@@ -71,16 +80,18 @@ async function makeApi(approval: "allow" | "deny" | Array<"allow" | "deny"> = "a
 describe("@workspace-extensions/shell", () => {
   it("rejects cwd escapes before requesting approval", async () => {
     const { api, request } = await makeApi();
-    await expect(api.exec({ command: "pwd", cwd: "../../" })).rejects.toMatchObject({
-      code: "EACCES",
-    });
+    await expect(
+      api.exec({ intent: { kind: "argv", executable: "pwd" }, cwd: "../../" })
+    ).rejects.toMatchObject({ code: "EACCES" });
     expect(request).not.toHaveBeenCalled();
   });
 
   it("maps denied exec approval to EACCES before spawning", async () => {
     const { api, request } = await makeApi("deny");
     await expect(
-      api.exec({ command: "node", args: ["-e", "console.log('nope')"] })
+      api.exec({
+        intent: { kind: "argv", executable: "node", args: ["-e", "console.log('nope')"] },
+      })
     ).rejects.toMatchObject({ code: "EACCES" });
     expect(request).toHaveBeenCalledTimes(1);
   });
@@ -89,8 +100,11 @@ describe("@workspace-extensions/shell", () => {
     const { api, request } = await makeApi("allow");
     await expect(
       api.exec({
-        command: "node",
-        args: ["-e", "", "x".repeat(600)],
+        intent: {
+          kind: "argv",
+          executable: "node",
+          args: ["-e", "", "x".repeat(600)],
+        },
       })
     ).resolves.toMatchObject({ exitCode: 0 });
 
@@ -126,13 +140,120 @@ describe("@workspace-extensions/shell", () => {
   });
 
   it("runs approved argv-style exec without invoking a shell", async () => {
-    const { api } = await makeApi("allow");
+    const { api, request } = await makeApi("allow");
     const result = await api.exec({
-      command: "node",
-      args: ["-e", "console.log(process.argv[1])", "hello;not-a-shell"],
+      intent: {
+        kind: "argv",
+        executable: "node",
+        args: ["-e", "console.log(process.argv[1])", "hello;not-a-shell"],
+      },
     });
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe("hello;not-a-shell");
+    const sealedPlan = request.mock.calls[0]![0].sealedDetails?.[0]?.content;
+    expect(sealedPlan).toContain('"hello;not-a-shell"');
+  });
+
+  it("executes and approves exact script bytes without reconstructing them from argv", async () => {
+    const { api, request } = await makeApi("allow");
+    const script = "printf 'first '; printf '%s' 'second;still-data'";
+    const result = await api.exec({ intent: { kind: "script", script } });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("first second;still-data");
+    expect(request.mock.calls[0]![0]).toMatchObject({
+      warning: expect.stringContaining("complete sealed script"),
+      sealedDetails: [
+        expect.objectContaining({
+          label: "Complete execution plan",
+          content: expect.stringContaining(script),
+        }),
+      ],
+    });
+  });
+
+  it("seals, returns, and executes a complete script with a dangerous suffix past 1,000 chars", async () => {
+    const { api, request } = await makeApi("allow");
+    const dangerousSuffix = "printf '%s' 'reviewed-dangerous-suffix'";
+    const script = `${"#".repeat(1_200)}\n${dangerousSuffix}`;
+    const result = await api.exec({ intent: { kind: "script", script } });
+
+    expect(result.stdout).toBe("reviewed-dangerous-suffix");
+    const approval = request.mock.calls[0]![0];
+    const content = approval.sealedDetails?.[0]?.content;
+    expect(content).toContain(dangerousSuffix);
+    expect(content?.length).toBeGreaterThan(1_000);
+    const digest = createHash("sha256").update(content!, "utf8").digest("hex");
+    expect(approval.details).toContainEqual(
+      expect.objectContaining({ label: "Plan digest", value: `sha256:${digest}` })
+    );
+  });
+
+  it("binds resolved cwd and exact effective environment into the approval subject", async () => {
+    const { api, request, root } = await makeApi("allow");
+    await mkdir(join(root, "nested"));
+    await api.exec({
+      intent: {
+        kind: "argv",
+        executable: "node",
+        args: ["-e", "process.stdout.write(process.env.EXEC_MODE ?? '')"],
+      },
+    });
+    const first = request.mock.calls[0]![0];
+    expect(first.details?.some((detail) => detail.label === "Overrides preview")).toBe(false);
+    expect(first.details).toContainEqual(
+      expect.objectContaining({
+        label: "Environment profile",
+        value: expect.stringMatching(/revision [0-9a-f]{12}$/),
+      })
+    );
+
+    await api.exec({
+      intent: {
+        kind: "argv",
+        executable: "node",
+        args: ["-e", "process.stdout.write(process.env.EXEC_MODE ?? '')"],
+      },
+      cwd: "nested",
+    });
+    const second = request.mock.calls[1]![0];
+    expect(second.subject.id).not.toBe(first.subject.id);
+    expect(second.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Folder", value: join(root, "nested") }),
+      ])
+    );
+
+    const thirdResult = await api.exec({
+      intent: {
+        kind: "argv",
+        executable: "node",
+        args: ["-e", "process.stdout.write(process.env.EXEC_MODE ?? '')"],
+      },
+      cwd: "nested",
+      env: { EXEC_MODE: "reviewed-value" },
+    });
+    const third = request.mock.calls[2]![0];
+
+    expect(thirdResult.stdout).toBe("reviewed-value");
+    expect(third.subject.id).not.toBe(second.subject.id);
+    expect(third.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Folder", value: join(root, "nested") }),
+        expect.objectContaining({
+          label: "Overrides preview",
+          value: expect.stringContaining('"EXEC_MODE"="reviewed-value"'),
+        }),
+      ])
+    );
+  });
+
+  it("rejects the removed command/args/shell exec shape", async () => {
+    const { api, request } = await makeApi("allow");
+    await expect(
+      api.exec({ command: "echo", args: ["legacy"], shell: true } as never)
+    ).rejects.toThrow();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("stashes scratch files inside the workspace with a hard size cap", async () => {

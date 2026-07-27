@@ -9,22 +9,20 @@
  *
  * The inspector socket binds loopback and is unreachable from userland
  * (workers egress through the proxy; panels are not server-local), so this
- * bridge is the only programmatic path. Clients authenticate with the same
- * first-message frame as the CDP bridge ({type:"vibestudio:cdp-auth",token}),
- * redeeming single-use grants minted by the workerdInspector service after
- * its approval check. The client↔upstream protocol is plain V8 inspector
- * JSON, relayed verbatim.
+ * bridge is the only programmatic path. Clients authenticate before upgrade
+ * with the same opaque grant transport as the CDP bridge. The client↔upstream
+ * protocol is plain V8 inspector JSON, relayed verbatim.
  */
 import { WebSocket, type WebSocketServer } from "ws";
 import type { IncomingMessage } from "http";
 import type { Duplex } from "stream";
-import { CdpGrantService } from "@vibestudio/shared/cdpGrants";
+import { CDP_INTERNAL_GRANT_HEADER, CdpGrantService } from "@vibestudio/shared/cdpGrants";
 import { createDevLogger } from "@vibestudio/dev-log";
+import { parseWebSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 
 const log = createDevLogger("WorkerdInspectorBridge");
 
 export const WORKERD_INSPECTOR_PATH_PREFIX = "/workerd-inspector/";
-const AUTH_TIMEOUT_MS = 5_000;
 
 export interface WorkerdInspectorTarget {
   id: string;
@@ -122,8 +120,17 @@ export class WorkerdInspectorBridge {
       return;
     }
 
+    const internalGrant = req.headers[CDP_INTERNAL_GRANT_HEADER];
+    const token =
+      (typeof internalGrant === "string" ? internalGrant : null) ??
+      parseWebSocketAuthProtocol(req.headers["sec-websocket-protocol"], "inspection");
+    if (!token || !this.grants.redeem(token, `workerd-inspector:${targetPath}`)) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     wss.handleUpgrade(req, socket, head, (client) => {
-      void this.authenticateAndProxy(client, targetPath, inspectorBase);
+      this.proxy(client, targetPath, inspectorBase);
     });
   }
 
@@ -141,16 +148,7 @@ export class WorkerdInspectorBridge {
     this.grants.stop();
   }
 
-  private async authenticateAndProxy(
-    client: WebSocket,
-    targetPath: string,
-    inspectorBase: string
-  ): Promise<void> {
-    const authed = await this.awaitAuth(client, targetPath);
-    if (!authed) {
-      client.close(4401, "authentication failed");
-      return;
-    }
+  private proxy(client: WebSocket, targetPath: string, inspectorBase: string): void {
     const upstreamUrl = `${inspectorBase.replace(/^http/, "ws")}/${targetPath}`;
     const upstream = new WebSocket(upstreamUrl);
     const session: ProxiedSession = { client, upstream };
@@ -163,7 +161,6 @@ export class WorkerdInspectorBridge {
     };
 
     upstream.on("open", () => {
-      client.send(JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
       client.on("message", (data) => {
         if (upstream.readyState === WebSocket.OPEN) {
           upstream.send(typeof data === "string" ? data : data.toString());
@@ -182,39 +179,5 @@ export class WorkerdInspectorBridge {
     upstream.on("close", teardown);
     client.on("close", teardown);
     client.on("error", teardown);
-  }
-
-  private awaitAuth(client: WebSocket, targetPath: string): Promise<boolean> {
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        cleanup();
-        resolve(false);
-      }, AUTH_TIMEOUT_MS);
-      const onMessage = (data: unknown): void => {
-        cleanup();
-        try {
-          const parsed = JSON.parse(String(data)) as { type?: string; token?: string };
-          if (parsed.type !== "vibestudio:cdp-auth" || !parsed.token) {
-            resolve(false);
-            return;
-          }
-          const grant = this.grants.redeem(parsed.token, `workerd-inspector:${targetPath}`);
-          resolve(Boolean(grant));
-        } catch {
-          resolve(false);
-        }
-      };
-      const onClose = (): void => {
-        cleanup();
-        resolve(false);
-      };
-      const cleanup = (): void => {
-        clearTimeout(timer);
-        client.off("message", onMessage);
-        client.off("close", onClose);
-      };
-      client.once("message", onMessage);
-      client.once("close", onClose);
-    });
   }
 }

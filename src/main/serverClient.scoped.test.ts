@@ -11,7 +11,24 @@ afterEach(async () => {
 });
 
 async function startRpcHarness() {
-  const server = createServer();
+  const admissionCredentials = new Map<string, string>();
+  let admissionSequence = 0;
+  const server = createServer((req, res) => {
+    if (req.method !== "POST" || req.url !== "/rpc/ws-admission") {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+    const authorization = req.headers.authorization;
+    const credential =
+      typeof authorization === "string" && authorization.startsWith("Bearer ")
+        ? authorization.slice("Bearer ".length)
+        : "";
+    const grant = `admission-${++admissionSequence}`;
+    admissionCredentials.set(grant, credential);
+    res.writeHead(201, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, grant, expiresAt: Date.now() + 15_000 }));
+  });
   const wss = new WebSocketServer({ noServer: true });
   const grantRequests: unknown[][] = [];
   const scopedRequests: Array<{ callerId: string; callerKind: string; method: string }> = [];
@@ -39,12 +56,13 @@ async function startRpcHarness() {
           };
         };
         if (msg.type === "ws:auth") {
-          const shell = msg.token === "shell-token";
-          const app = msg.token === "app-grant";
-          const panel = msg.token === "panel-grant";
+          const credential = admissionCredentials.get(msg.token ?? "");
+          const shell = credential === "shell-token";
+          const app = credential === "app-grant";
+          const panel = credential === "panel-grant";
           // A pairing code redeems into a shell principal and rides the freshly
           // issued device credential back on the auth-result (rpcServer.handleAuth).
-          const pairing = msg.token === "pairing-code";
+          const pairing = credential === "pairing-code";
           callerId = shell
             ? "electron-main"
             : app

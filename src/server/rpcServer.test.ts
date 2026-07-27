@@ -32,6 +32,11 @@ import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import { SessionWebSocketShim, type PipeChannels } from "./webrtcSessionShim.js";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import { EventService } from "@vibestudio/shared/eventsService";
+import {
+  RPC_MAX_PENDING_AUTHENTICATIONS,
+  RPC_WEBSOCKET_MAX_PAYLOAD_BYTES,
+} from "./ingressLimits.js";
+import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 
 function makeRecord(
   id: string,
@@ -3843,11 +3848,14 @@ describe("RpcServer caller retirement", () => {
 
 describe("RpcServer terminal lifecycle", () => {
   it("can own a gateway WebSocket upgrade without a second RPC path", () => {
-    const { server } = createServer();
+    const { server, tokenManager } = createServer();
+    const token = tokenManager.ensureToken("worker:upgrade-test", "worker");
+    const grant = "admission-grant";
     server.initHandlers();
     const waitingSocket = createTestWs();
     const internal = server as unknown as {
       wss: {
+        options: { maxPayload: number };
         handleUpgrade(
           req: IncomingMessage,
           socket: Duplex,
@@ -3859,11 +3867,178 @@ describe("RpcServer terminal lifecycle", () => {
     const upgrade = vi
       .spyOn(internal.wss, "handleUpgrade")
       .mockImplementation((_req, _socket, _head, done) => done(waitingSocket as never));
+    (
+      server as unknown as {
+        wsAdmissionGrants: Map<string, unknown>;
+      }
+    ).wsAdmissionGrants.set(grant, {
+      grant,
+      expiresAt: Date.now() + 15_000,
+      resolved: {
+        entry: tokenManager.validateToken(token),
+        isValidAtUpgrade: () => true,
+      },
+    });
 
-    server.handleGatewayWsUpgrade({} as IncomingMessage, {} as Duplex, Buffer.alloc(0));
+    server.handleGatewayWsUpgrade(
+      {
+        headers: {
+          "sec-websocket-protocol": webSocketAuthProtocol("rpc", grant),
+        },
+      } as IncomingMessage,
+      {} as Duplex,
+      Buffer.alloc(0)
+    );
 
     expect(upgrade).toHaveBeenCalledOnce();
+    expect(internal.wss.options.maxPayload).toBe(RPC_WEBSOCKET_MAX_PAYLOAD_BYTES);
     expect(testServer(server).pendingAuthentications.has(waitingSocket)).toBe(true);
+  });
+
+  it("rejects RPC upgrades without a credential before ws allocates a receiver", () => {
+    const { server } = createServer();
+    server.initHandlers();
+    const socket = { write: vi.fn(), destroy: vi.fn() };
+    const internal = server as unknown as { wss: { handleUpgrade: ReturnType<typeof vi.fn> } };
+    const upgrade = vi.spyOn(internal.wss, "handleUpgrade");
+
+    server.handleGatewayWsUpgrade(
+      { headers: {} } as IncomingMessage,
+      socket as unknown as Duplex,
+      Buffer.alloc(0)
+    );
+
+    expect(upgrade).not.toHaveBeenCalled();
+    expect(socket.write).toHaveBeenCalledWith(
+      "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n"
+    );
+    expect(socket.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a valid caller bearer sent directly through the legacy upgrade path", () => {
+    const { server, tokenManager } = createServer();
+    const token = tokenManager.ensureToken("worker:no-direct-upgrade", "worker");
+    server.initHandlers();
+    const socket = { write: vi.fn(), destroy: vi.fn() };
+    const internal = server as unknown as { wss: { handleUpgrade: ReturnType<typeof vi.fn> } };
+    const upgrade = vi.spyOn(internal.wss, "handleUpgrade");
+
+    server.handleGatewayWsUpgrade(
+      {
+        headers: {
+          "sec-websocket-protocol": webSocketAuthProtocol("rpc", token),
+        },
+      } as IncomingMessage,
+      socket as unknown as Duplex,
+      Buffer.alloc(0)
+    );
+
+    expect(upgrade).not.toHaveBeenCalled();
+    expect(socket.write).toHaveBeenCalledWith(
+      "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n"
+    );
+  });
+
+  it("prunes an expired admission grant before WebSocket receiver allocation", () => {
+    const { server, tokenManager } = createServer();
+    const token = tokenManager.ensureToken("worker:expired-admission", "worker");
+    const grant = "expired-grant";
+    server.initHandlers();
+    const admissionGrants = (
+      server as unknown as {
+        wsAdmissionGrants: Map<string, unknown>;
+      }
+    ).wsAdmissionGrants;
+    admissionGrants.set(grant, {
+      grant,
+      expiresAt: Date.now() - 1,
+      resolved: {
+        entry: tokenManager.validateToken(token),
+        isValidAtUpgrade: () => true,
+      },
+    });
+    const socket = { write: vi.fn(), destroy: vi.fn() };
+    const internal = server as unknown as { wss: { handleUpgrade: ReturnType<typeof vi.fn> } };
+    const upgrade = vi.spyOn(internal.wss, "handleUpgrade");
+
+    server.handleGatewayWsUpgrade(
+      {
+        headers: {
+          "sec-websocket-protocol": webSocketAuthProtocol("rpc", grant),
+        },
+      } as IncomingMessage,
+      socket as unknown as Duplex,
+      Buffer.alloc(0)
+    );
+
+    expect(upgrade).not.toHaveBeenCalled();
+    expect(admissionGrants.has(grant)).toBe(false);
+  });
+
+  it("consumes an admission grant once before allocating a receiver", () => {
+    const { server, tokenManager } = createServer();
+    server.initHandlers();
+    const token = tokenManager.ensureToken("worker:one-use-admission", "worker");
+    const grant = "one-use-grant";
+    (
+      server as unknown as {
+        wsAdmissionGrants: Map<string, unknown>;
+      }
+    ).wsAdmissionGrants.set(grant, {
+      grant,
+      expiresAt: Date.now() + 15_000,
+      resolved: {
+        entry: tokenManager.validateToken(token),
+        isValidAtUpgrade: () => true,
+      },
+    });
+    const socket = { write: vi.fn(), destroy: vi.fn() };
+    const internal = server as unknown as { wss: { handleUpgrade: ReturnType<typeof vi.fn> } };
+    const upgrade = vi.spyOn(internal.wss, "handleUpgrade").mockImplementation(() => undefined);
+
+    server.handleGatewayWsUpgrade(
+      {
+        headers: {
+          "sec-websocket-protocol": webSocketAuthProtocol("rpc", grant),
+        },
+      } as IncomingMessage,
+      socket as unknown as Duplex,
+      Buffer.alloc(0)
+    );
+    expect(upgrade).toHaveBeenCalledOnce();
+
+    server.handleGatewayWsUpgrade(
+      {
+        headers: {
+          "sec-websocket-protocol": webSocketAuthProtocol("rpc", grant),
+        },
+      } as IncomingMessage,
+      socket as unknown as Duplex,
+      Buffer.alloc(0)
+    );
+    expect(upgrade).toHaveBeenCalledOnce();
+    expect(socket.write).toHaveBeenCalledWith(
+      "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n"
+    );
+    expect(socket.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("bounds unauthenticated RPC connections before allocating another timer", async () => {
+    const { server } = createServer();
+    for (let i = 0; i < RPC_MAX_PENDING_AUTHENTICATIONS; i += 1) {
+      testServer(server).pendingAuthentications.set({ id: i }, null);
+    }
+    const rejected = createTestWs();
+
+    testServer(server).handleConnection(rejected);
+
+    expect(rejected.close).toHaveBeenCalledWith(
+      1013,
+      "Too many pending RPC authentications; retry shortly"
+    );
+    expect(testServer(server).pendingAuthentications.size).toBe(RPC_MAX_PENDING_AUTHENTICATIONS);
+    testServer(server).pendingAuthentications.clear();
+    await server.stop();
   });
 
   it("releases owned work and ignores delayed socket closes after idempotent stop", async () => {
@@ -3873,7 +4048,7 @@ describe("RpcServer terminal lifecycle", () => {
     server.initHandlers();
 
     const waitingSocket = createTestWs();
-    server.handleGatewayWsConnection(waitingSocket as never);
+    testServer(server).handleConnection(waitingSocket);
     expect(testServer(server).pendingAuthentications.size).toBe(1);
 
     const client = createClient("panel:nav-a");
@@ -3896,7 +4071,7 @@ describe("RpcServer terminal lifecycle", () => {
 
     expect(() => server.initHandlers()).toThrow("cannot be restarted");
     const lateSocket = createTestWs();
-    server.handleGatewayWsConnection(lateSocket as never);
+    testServer(server).handleConnection(lateSocket);
     expect(lateSocket.close).toHaveBeenCalledWith(1001, "Server shutting down");
   });
 });

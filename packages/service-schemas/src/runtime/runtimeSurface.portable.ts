@@ -380,7 +380,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   ),
   webhooks: namespaceEntry(
     WEBHOOKS_MEMBERS,
-    "Ergonomic owner-scoped webhook lifecycle, identical in panels, workers, DOs, and agent eval: createSubscription(request), listSubscriptions(), rotateSecret(subscriptionId, secret?), and revokeSubscription(subscriptionId). Agent eval delegates ownership and target-source checks to its host-verified owning runtime. Secrets are redacted from listings.",
+    "Ergonomic owner-scoped webhook lifecycle, identical in panels, workers, DOs, and agent eval: createSubscription(request), listSubscriptions(), rotateSecret(subscriptionId, secret?), and revokeSubscription(subscriptionId). Each subscription has an explicit maxBodyBytes budget; the safe default is 1,500,000 bytes, while larger bounded payloads require direct delivery and must fit the operator-configured host ceiling. Delivery events currently include rawBodyBase64, so the host ceiling also bounds that in-memory expansion. Agent eval delegates ownership and target-source checks to its host-verified owning runtime. Secrets are redacted from listings.",
     // Internal schema source only. The catalog projects these method schemas as
     // runtime:webhooks.* entries; the raw transport remains non-agent-facing.
     "webhookIngress"

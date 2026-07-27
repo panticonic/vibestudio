@@ -9,17 +9,19 @@ on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write # create the GitHub Release and upload installer assets
+# Jobs opt into only the token authority they need. Artifact upload/download uses
+# GitHub's run-scoped artifact token, not a repository-write GITHUB_TOKEN.
+permissions: {}
 
 jobs:
   github-release:
     name: Create GitHub release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: GitHub Release
-        # Pinned to a commit SHA (v2.6.2) — refresh via Dependabot. Matches build-mobile.yml.
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           generate_release_notes: true
           body: |
@@ -33,60 +35,183 @@ jobs:
             Requires Node.js 22.13+. Native installers (DMG/AppImage/deb) are attached when available.
 
   linux-installers:
-    name: Linux installers (AppImage/deb)
+    name: Build Linux installers (AppImage/deb)
     needs: github-release
     if: ${{ vars.RELEASE_LINUX == 'true' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
           cache-dependency-path: |
             pnpm-lock.yaml
             workspace/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --dir workspace install --frozen-lockfile
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install workspace dependencies
+        run: pnpm --dir workspace install --frozen-lockfile
+
       - name: Set version from tag
         run: node scripts/set-version-from-tag.mjs "${GITHUB_REF_NAME}"
-      - run: pnpm dist:linux # = pnpm build && electron-builder --linux
-      - name: Attach installers to the release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+
+      - name: Build Linux installers
+        run: pnpm dist:linux
+
+      - name: Generate installer checksums
+        run: |
+          cd release
+          find . -maxdepth 1 -type f \( -name "*.AppImage" -o -name "*.deb" \) -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            > SHA256SUMS-linux
+          test -s SHA256SUMS-linux
+
+      - name: Upload immutable Linux release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: vibestudio-linux-${{ github.sha }}
+          path: |
+            release/*.AppImage
+            release/*.deb
+            release/SHA256SUMS-linux
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-linux:
+    name: Verify and publish Linux installers
+    needs: [github-release, linux-installers]
+    if: ${{ vars.RELEASE_LINUX == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download immutable Linux release candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: vibestudio-linux-${{ github.sha }}
+          path: release
+
+      - name: Verify Linux installer checksums
+        working-directory: release
+        run: sha256sum --check SHA256SUMS-linux
+
+      - name: Attach Linux installers to the release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: |
             release/*.AppImage
             release/*.deb
+            release/SHA256SUMS-linux
 
   mac-dmg:
-    name: macOS signed DMG
+    name: Build, sign, and notarize macOS DMG
     needs: github-release
     if: ${{ vars.RELEASE_MAC == 'true' }}
     runs-on: macos-latest
-    env:
-      # Developer ID signing + notarization (electron-builder reads these).
-      CSC_LINK: ${{ secrets.APPLE_CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
           cache-dependency-path: |
             pnpm-lock.yaml
             workspace/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --dir workspace install --frozen-lockfile
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install workspace dependencies
+        run: pnpm --dir workspace install --frozen-lockfile
+
       - name: Set version from tag
         run: node scripts/set-version-from-tag.mjs "${GITHUB_REF_NAME}"
-      - run: pnpm dist:mac # = pnpm build && electron-builder --mac (signed + notarized)
-      - name: Attach DMG to the release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+
+      # Compile before any signing secret enters the environment. electron-builder
+      # currently couples macOS packaging, signing, and notarization in one command,
+      # so only that irreducible step receives the Apple credentials.
+      - name: Build application
+        run: pnpm build
+
+      - name: Package, sign, and notarize macOS installers
+        env:
+          CSC_LINK: ${{ secrets.APPLE_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          test -n "$CSC_LINK"
+          test -n "$CSC_KEY_PASSWORD"
+          test -n "$APPLE_ID"
+          test -n "$APPLE_APP_SPECIFIC_PASSWORD"
+          test -n "$APPLE_TEAM_ID"
+          pnpm exec electron-builder --mac
+
+      - name: Generate DMG checksums
+        run: |
+          cd release
+          find . -maxdepth 1 -type f -name "*.dmg" -print0 \
+            | sort -z \
+            | xargs -0 shasum -a 256 \
+            > SHA256SUMS-macos
+          test -s SHA256SUMS-macos
+
+      - name: Upload immutable macOS release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          files: release/*.dmg
+          name: vibestudio-macos-${{ github.sha }}
+          path: |
+            release/*.dmg
+            release/SHA256SUMS-macos
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-macos:
+    name: Verify and publish macOS DMG
+    needs: [github-release, mac-dmg]
+    if: ${{ vars.RELEASE_MAC == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download immutable macOS release candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: vibestudio-macos-${{ github.sha }}
+          path: release
+
+      - name: Verify DMG checksums
+        working-directory: release
+        run: sha256sum --check SHA256SUMS-macos
+
+      - name: Attach DMG to the release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: |
+            release/*.dmg
+            release/SHA256SUMS-macos

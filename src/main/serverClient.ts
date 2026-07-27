@@ -195,7 +195,7 @@ export async function createServerClient(
             return activeAuthToken;
           }
         : undefined,
-      createSocket: (url) => new NodeWsLike(new WebSocket(url)),
+      createSocket: (url, protocols) => new NodeWsLike(new WebSocket(url, protocols)),
     },
   });
   transport.onStatusChange?.((status) => {
@@ -241,7 +241,7 @@ export async function createServerClient(
       adapter: {
         now: () => Date.now(),
         getAuthToken: async () => grant.token,
-        createSocket: (url) => new NodeWsLike(new WebSocket(url)),
+        createSocket: (url, protocols) => new NodeWsLike(new WebSocket(url, protocols)),
       },
     });
     const scopedRpc = createRpcClient({
@@ -354,7 +354,7 @@ export async function createServerClient(
         adapter: {
           now: () => Date.now(),
           getAuthToken: async () => (await authClient.grantConnection(runtimeEntityId)).token,
-          createSocket: (url) => new NodeWsLike(new WebSocket(url)),
+          createSocket: (url, protocols) => new NodeWsLike(new WebSocket(url, protocols)),
         },
       });
       await panelTransport.connectAndWait();

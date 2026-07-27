@@ -7,7 +7,7 @@
  */
 
 import { WebSocketServer, WebSocket } from "ws";
-import { randomUUID } from "crypto";
+import { createHmac, randomBytes, randomUUID } from "crypto";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import type { ExtensionInvocation } from "@vibestudio/extension";
@@ -73,6 +73,28 @@ import type { EventService } from "@vibestudio/shared/eventsService";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import {
+  AUTHENTICATION_FRAME_MAX_BYTES,
+  RPC_MAX_PENDING_AUTHENTICATIONS,
+  RPC_WS_ADMISSION_GRANT_TTL_MS,
+  RPC_WS_ADMISSION_MAX_CLIENT_LABEL_BYTES,
+  RPC_WS_ADMISSION_MAX_OUTSTANDING_GRANTS,
+  RPC_WS_ADMISSION_MAX_PENDING_RESOLUTIONS,
+  RPC_WS_ADMISSION_RETRY_AFTER_MS,
+  RPC_WS_PAIRING_REPLAY_TTL_MS,
+  RPC_WEBSOCKET_MAX_PAYLOAD_BYTES,
+  rawWebSocketDataByteLength,
+} from "./ingressLimits.js";
+import { parseWebSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
+import {
+  RPC_CLIENT_LABEL_HEADER,
+  RPC_CLIENT_PLATFORM_HEADER,
+  RPC_WEBSOCKET_ADMISSION_PATH,
+  decodeRpcClientLabelHeader,
+  type RpcWebSocketAdmissionFailure,
+  type RpcWebSocketAdmissionResponse,
+} from "@vibestudio/rpc/protocol/rpcWebSocketAdmission";
+import { constantTimeStringEqual } from "@vibestudio/shared/tokenManager";
 import {
   executionHarnessCodeIdentity,
   refineExecutionTestPolicy,
@@ -215,6 +237,49 @@ interface PendingToolCall {
   reject: (error: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
   clientWs: WebSocket;
+}
+
+interface ResolvedRpcCredential {
+  entry: import("@vibestudio/shared/tokenManager").TokenEntry;
+  deviceCredential?: DeviceCredential;
+  pairingContext?: PairingContext;
+  agentBinding?: import("@vibestudio/identity/types").AgentBinding;
+  subject?: UserSubject;
+  authorizedBy?: string;
+  isValidAtUpgrade: () => boolean;
+}
+
+interface RedeemedRpcPairingCredential {
+  callerId: string;
+  callerKind: CallerKind;
+  deviceCredential?: DeviceCredential;
+  pairingContext?: PairingContext;
+  agentBinding?: import("@vibestudio/identity/types").AgentBinding;
+  subject?: UserSubject;
+}
+
+type RpcCredentialResolution =
+  | { ok: true; resolved: ResolvedRpcCredential }
+  | {
+      ok: false;
+      code: "invalid_credential" | "admin_credential";
+      message: string;
+    };
+
+interface RpcWebSocketAdmissionGrant {
+  grant: string;
+  expiresAt: number;
+  resolved: ResolvedRpcCredential;
+  clientLabel?: string;
+  clientPlatform?: ClientPlatform;
+}
+
+interface RpcPairingAdmissionReplay {
+  resolved: ResolvedRpcCredential;
+  clientLabel?: string;
+  clientPlatform?: ClientPlatform;
+  grant: string;
+  expiresAt: number;
 }
 
 type RelayAuthCheck = { ok: true } | { ok: false; reason: string };
@@ -382,6 +447,10 @@ export class RpcServer {
     WebSocket,
     ReturnType<typeof setTimeout> | null
   >();
+  private pendingWsAdmissionResolutions = 0;
+  private readonly wsAdmissionGrants = new Map<string, RpcWebSocketAdmissionGrant>();
+  private readonly pairingAdmissionReplayKey = randomBytes(32);
+  private readonly pairingAdmissionReplays = new Map<string, RpcPairingAdmissionReplay>();
   /** Requests whose response still has to be queued before revocation may close the socket. */
   private readonly activeInboundRequests = new Map<WebSocket, number>();
   /** Exact unary requests owned by each authenticated socket. */
@@ -1125,23 +1194,45 @@ export class RpcServer {
     if (this.handlersInitialized) return;
     this.handlersInitialized = true;
 
-    // WSS in noServer mode — gateway calls handleUpgrade then
-    // handleGatewayWsConnection. Origin allow-listing for this path is
-    // enforced by the gateway's own upgrade handler (see gateway.ts).
-    this.wss = new WebSocketServer({ noServer: true });
+    // RPC WebSockets carry control envelopes. Large payloads use the streaming
+    // and WebRTC bulk lanes instead of consuming one monolithic WS message.
+    // Origin allow-listing remains at the gateway upgrade boundary.
+    this.wss = new WebSocketServer({
+      noServer: true,
+      maxPayload: RPC_WEBSOCKET_MAX_PAYLOAD_BYTES,
+    });
 
     // Register revocation-driven disconnect
     this.disposeTokenRevocationListener = this.deps.tokenManager.onRevoke((callerId) => {
+      for (const [grant, admission] of this.wsAdmissionGrants) {
+        if (admission.resolved.entry.callerId === callerId) {
+          this.wsAdmissionGrants.delete(grant);
+        }
+      }
+      for (const [digest, replay] of this.pairingAdmissionReplays) {
+        if (replay.resolved.entry.callerId === callerId) {
+          this.pairingAdmissionReplays.delete(digest);
+        }
+      }
       void this.retireCaller(callerId);
     });
   }
   private handlersInitialized = false;
 
-  private handleConnection(ws: WebSocket): void {
+  private handleConnection(ws: WebSocket, upgradeAdmission?: RpcWebSocketAdmissionGrant): void {
     if (this.stopped) {
       ws.close(1001, "Server shutting down");
       return;
     }
+    if (this.pendingAuthentications.size >= RPC_MAX_PENDING_AUTHENTICATIONS) {
+      ws.close(1013, "Too many pending RPC authentications; retry shortly");
+      return;
+    }
+    ws.on("error", (error) => {
+      log.warn("RPC WebSocket transport error", {
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    });
     // Expect first message to be ws:auth
     let authTimeout: ReturnType<typeof setTimeout> | null = setTimeout(() => {
       ws.close(4003, "Auth timeout");
@@ -1156,6 +1247,14 @@ export class RpcServer {
       }
       ws.off("message", onFirstMessage);
 
+      // This is a protocol-shape check. Every gateway WebSocket credential was
+      // resolved by the bounded HTTP admission exchange before upgrade.
+      const authFrameBytes = rawWebSocketDataByteLength(data);
+      if (authFrameBytes > AUTHENTICATION_FRAME_MAX_BYTES) {
+        ws.close(1009, `RPC authentication frame exceeds ${AUTHENTICATION_FRAME_MAX_BYTES} bytes`);
+        return;
+      }
+
       let msg: WsClientMessage;
       try {
         msg = JSON.parse(data.toString()) as WsClientMessage;
@@ -1166,6 +1265,23 @@ export class RpcServer {
 
       if (msg.type !== "ws:auth") {
         ws.close(4005, "Expected ws:auth as first message");
+        return;
+      }
+
+      if (
+        upgradeAdmission &&
+        (typeof msg.token !== "string" ||
+          !constantTimeStringEqual(msg.token, upgradeAdmission.grant))
+      ) {
+        ws.close(4006, "RPC upgrade credential does not match authentication frame");
+        return;
+      }
+      if (
+        upgradeAdmission &&
+        (msg.clientLabel !== upgradeAdmission.clientLabel ||
+          msg.clientPlatform !== upgradeAdmission.clientPlatform)
+      ) {
+        ws.close(4006, "RPC authentication metadata does not match admission grant");
         return;
       }
 
@@ -1187,10 +1303,13 @@ export class RpcServer {
         msg.connectionId,
         msg.clientLabel,
         msg.clientSessionId,
-        msg.clientPlatform
+        msg.clientPlatform,
+        upgradeAdmission?.resolved
       )
         .catch((error) => this.abortFailedAuthentication(ws, error))
-        .finally(() => this.pendingAuthentications.delete(ws));
+        .finally(() => {
+          this.pendingAuthentications.delete(ws);
+        });
     };
 
     ws.on("message", onFirstMessage);
@@ -1203,112 +1322,134 @@ export class RpcServer {
     });
   }
 
+  private resolveRpcCredential(
+    token: unknown,
+    clientLabel?: string,
+    clientPlatform?: ClientPlatform
+  ): RpcCredentialResolution | Promise<RpcCredentialResolution> {
+    if (typeof token !== "string" || token.length === 0) {
+      return {
+        ok: false,
+        code: "invalid_credential",
+        message: "Missing or invalid auth token",
+      };
+    }
+    if (this.deps.tokenManager.validateAdminToken(token)) {
+      return { ok: false, code: "admin_credential", message: ADMIN_RPC_AUTH_ERROR };
+    }
+
+    const connectionGrant =
+      this.deps.connectionGrants?.redeem(token) ??
+      this.deps.connectionGrants?.validate(token) ??
+      null;
+    let entry: import("@vibestudio/shared/tokenManager").TokenEntry | null;
+    let agentBinding: import("@vibestudio/identity/types").AgentBinding | undefined;
+    let subject: UserSubject | undefined;
+    let resolvedFromTokenManager = false;
+    try {
+      entry = connectionGrant
+        ? {
+            callerId: connectionGrant.principalId,
+            callerKind: this.callerKindForRuntimePrincipal(connectionGrant.principalId),
+          }
+        : this.deps.tokenManager.validateToken(token);
+      resolvedFromTokenManager = !connectionGrant && entry !== null;
+      if (entry?.agentBinding) agentBinding = entry.agentBinding;
+      if (connectionGrant && entry?.callerKind === "app") {
+        subject = this.subjectForGrantIssuer(connectionGrant.issuedBy) ?? undefined;
+      }
+    } catch {
+      entry = null;
+    }
+
+    const finish = (paired: RedeemedRpcPairingCredential | null): RpcCredentialResolution => {
+      if (paired) {
+        entry = { callerId: paired.callerId, callerKind: paired.callerKind };
+        agentBinding = paired.agentBinding;
+        subject = paired.subject;
+      }
+      if (!entry) {
+        return { ok: false, code: "invalid_credential", message: "Invalid token" };
+      }
+      const resolvedEntry = entry;
+      const isValidAtUpgrade = (): boolean => {
+        if (connectionGrant) {
+          const current = this.deps.connectionGrants?.validate(token);
+          return (
+            current?.principalId === resolvedEntry.callerId &&
+            current.principalKind === resolvedEntry.callerKind
+          );
+        }
+        if (resolvedFromTokenManager) {
+          const current = this.deps.tokenManager.validateToken(token);
+          return (
+            current?.callerId === resolvedEntry.callerId &&
+            current.callerKind === resolvedEntry.callerKind
+          );
+        }
+        try {
+          const caller = this.verifiedCallerFor(
+            resolvedEntry.callerId,
+            resolvedEntry.callerKind,
+            agentBinding,
+            subject
+          );
+          return this.deps.liveCallerGate?.(caller) ?? true;
+        } catch {
+          return false;
+        }
+      };
+      return {
+        ok: true,
+        resolved: {
+          entry: resolvedEntry,
+          ...(paired?.deviceCredential ? { deviceCredential: paired.deviceCredential } : {}),
+          ...(paired?.pairingContext ? { pairingContext: paired.pairingContext } : {}),
+          ...(agentBinding ? { agentBinding } : {}),
+          ...(subject ? { subject } : {}),
+          ...(connectionGrant?.issuedBy ? { authorizedBy: connectionGrant.issuedBy } : {}),
+          isValidAtUpgrade,
+        },
+      };
+    };
+    if (entry) return finish(null);
+    if (!this.deps.redeemPairingCredential) return finish(null);
+    try {
+      return Promise.resolve(
+        this.deps.redeemPairingCredential(token, { clientLabel, clientPlatform })
+      ).then(
+        (paired) => finish(paired),
+        () => finish(null)
+      );
+    } catch {
+      return finish(null);
+    }
+  }
+
   private async handleAuth(
     ws: WebSocket,
     token: unknown,
     requestedConnectionId?: string,
     clientLabel?: string,
     clientSessionId?: string,
-    clientPlatform?: ClientPlatform
+    clientPlatform?: ClientPlatform,
+    preResolved?: ResolvedRpcCredential
   ): Promise<void> {
     if (this.stopped) {
       ws.close(1001, "Server shutting down");
       return;
     }
     if (ws.readyState !== WebSocket.OPEN) return;
-    // Both the WebSocket and WebRTC handshakes reach this method, and neither
-    // transport guarantees that a malformed open frame contains a string token.
-    // Reject before any credential parser calls string methods on the value.
-    if (typeof token !== "string" || token.length === 0) {
-      log.warn("rejecting ws:auth: missing or non-string token", {
-        clientLabel: clientLabel ?? null,
-        clientPlatform: clientPlatform ?? null,
-      });
-      const msg: WsServerMessage = {
-        type: "ws:auth-result",
-        success: false,
-        error: "Missing or invalid auth token",
-      };
-      ws.send(JSON.stringify(msg));
-      ws.close(4006, "Missing or invalid auth token");
-      return;
-    }
-    // Admin tokens are management-only. RPC clients must use caller tokens.
-    if (this.deps.tokenManager.validateAdminToken(token)) {
-      const msg: WsServerMessage = {
-        type: "ws:auth-result",
-        success: false,
-        error: ADMIN_RPC_AUTH_ERROR,
-      };
-      ws.send(JSON.stringify(msg));
-      ws.close(4006, "Admin token cannot authenticate RPC");
-      return;
-    }
-
-    const grant =
-      this.deps.connectionGrants?.redeem(token) ??
-      this.deps.connectionGrants?.validate(token) ??
-      null;
-    let entry: import("@vibestudio/shared/tokenManager").TokenEntry | null;
-    let deviceCredential: DeviceCredential | undefined;
-    let pairingContext: PairingContext | undefined;
-    let agentBinding: import("@vibestudio/identity/types").AgentBinding | undefined;
-    // Host-verified subject for a device/agent credential redeemed over the pipe
-    // (§5.1/§5.3). Absent for the caller-token path (§5.2), where
-    // `verifiedCallerFor` resolves it from the caller id via `userSubjectSource`.
-    let subject: UserSubject | undefined;
-    try {
-      entry = grant
-        ? {
-            callerId: grant.principalId,
-            callerKind: this.callerKindForRuntimePrincipal(grant.principalId),
-          }
-        : this.deps.tokenManager.validateToken(token);
-      if (entry?.agentBinding) agentBinding = entry.agentBinding;
-      if (grant && entry?.callerKind === "app") {
-        subject = this.subjectForGrantIssuer(grant.issuedBy) ?? undefined;
-      }
-    } catch {
-      entry = null;
-    }
-    if (!entry) {
-      // A fresh device (pairing code) or a returning one (refresh credential)
-      // bootstraps its shell session over the pipe with no pre-issued bearer
-      // token. The refresh secret only exists at completePairing time (the store
-      // keeps just its hash), so a freshly issued device credential rides back on
-      // the auth-result for the client to persist for reconnects.
-      let paired: {
-        callerId: string;
-        callerKind: CallerKind;
-        deviceCredential?: DeviceCredential;
-        pairingContext?: PairingContext;
-        agentBinding?: import("@vibestudio/identity/types").AgentBinding;
-        subject?: UserSubject;
-      } | null = null;
-      if (this.deps.redeemPairingCredential) {
-        try {
-          paired =
-            (await this.deps.redeemPairingCredential(token, {
-              clientLabel,
-              clientPlatform,
-            })) ?? null;
-        } catch {
-          paired = null;
-        }
-      }
-      if (paired) {
-        entry = { callerId: paired.callerId, callerKind: paired.callerKind };
-        deviceCredential = paired.deviceCredential;
-        pairingContext = paired.pairingContext;
-        agentBinding = paired.agentBinding;
-        subject = paired.subject;
-      }
-    }
+    const resolutionOrPromise = preResolved
+      ? ({ ok: true, resolved: preResolved } as const)
+      : this.resolveRpcCredential(token, clientLabel, clientPlatform);
+    const resolution =
+      resolutionOrPromise instanceof Promise ? await resolutionOrPromise : resolutionOrPromise;
     // Pairing redemption crosses the child→hub boundary. The unauthenticated
     // socket may disappear while that durable operation is in flight; never
     // create session/lease/bridge state for a transport that is already gone.
     if (this.stopped || ws.readyState !== WebSocket.OPEN) return;
-    if (!entry) {
+    if (!resolution.ok) {
       // Fail-loud observability: a device/panel/agent presented a token that
       // matched no grant, bearer, or pairing/refresh credential. Log the device
       // label/platform for diagnosis — NEVER the token itself.
@@ -1319,12 +1460,14 @@ export class RpcServer {
       const msg: WsServerMessage = {
         type: "ws:auth-result",
         success: false,
-        error: "Invalid token",
+        error: resolution.message,
       };
       ws.send(JSON.stringify(msg));
-      ws.close(4006, "Invalid token");
+      ws.close(4006, resolution.message);
       return;
     }
+    const { entry, deviceCredential, pairingContext, agentBinding, subject, authorizedBy } =
+      resolution.resolved;
     // The literal caller id "shell" is reserved for in-process dispatch.
     // Host clients that authenticate over WS use kind:"shell" with concrete
     // caller ids such as "electron-main", headless-host, or paired devices.
@@ -1468,7 +1611,7 @@ export class RpcServer {
       authenticated: true,
       authenticatedAt: Date.now(),
       userId,
-      authorizedBy: grant?.issuedBy,
+      authorizedBy,
       clientLabel,
       clientSessionId,
       clientPlatform,
@@ -3766,9 +3909,225 @@ export class RpcServer {
   // Gateway in-process handlers
   // ===========================================================================
 
-  /** Accept a pre-upgraded WebSocket from the gateway (no WSS needed on our side). */
-  handleGatewayWsConnection(ws: WebSocket): void {
-    this.handleConnection(ws);
+  private writeWsAdmissionResponse(
+    res: import("node:http").ServerResponse,
+    status: number,
+    body: RpcWebSocketAdmissionResponse
+  ): void {
+    if (res.destroyed || res.writableEnded) return;
+    res.writeHead(status, {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+      ...(body.ok || body.retryAfterMs === undefined
+        ? {}
+        : { "Retry-After": String(Math.max(1, Math.ceil(body.retryAfterMs / 1000))) }),
+    });
+    res.end(JSON.stringify(body));
+  }
+
+  private wsAdmissionFailure(
+    res: import("node:http").ServerResponse,
+    status: number,
+    failure: RpcWebSocketAdmissionFailure
+  ): void {
+    this.writeWsAdmissionResponse(res, status, failure);
+  }
+
+  private pruneExpiredWsAdmissionGrants(now: number = Date.now()): void {
+    for (const [grant, admission] of this.wsAdmissionGrants) {
+      if (admission.expiresAt <= now) this.wsAdmissionGrants.delete(grant);
+    }
+    for (const [digest, replay] of this.pairingAdmissionReplays) {
+      if (replay.expiresAt <= now) this.pairingAdmissionReplays.delete(digest);
+    }
+  }
+
+  private pairingAdmissionDigest(credential: string): string {
+    return createHmac("sha256", this.pairingAdmissionReplayKey)
+      .update(credential, "utf8")
+      .digest("hex");
+  }
+
+  private issueWsAdmissionGrant(
+    resolved: ResolvedRpcCredential,
+    clientLabel?: string,
+    clientPlatform?: ClientPlatform
+  ): RpcWebSocketAdmissionGrant {
+    const grant = randomBytes(32).toString("hex");
+    const admission: RpcWebSocketAdmissionGrant = {
+      grant,
+      expiresAt: Date.now() + RPC_WS_ADMISSION_GRANT_TTL_MS,
+      resolved,
+      ...(clientLabel !== undefined ? { clientLabel } : {}),
+      ...(clientPlatform !== undefined ? { clientPlatform } : {}),
+    };
+    this.wsAdmissionGrants.set(grant, admission);
+    return admission;
+  }
+
+  private takeWsAdmissionGrant(grant: string): RpcWebSocketAdmissionGrant | null {
+    const admission = this.wsAdmissionGrants.get(grant);
+    if (!admission) return null;
+    this.wsAdmissionGrants.delete(grant);
+    if (admission.expiresAt <= Date.now()) return null;
+    if (!admission.resolved.isValidAtUpgrade()) return null;
+    return admission;
+  }
+
+  private outstandingGrantRetryAfterMs(now: number = Date.now()): number {
+    let earliestExpiry = Number.POSITIVE_INFINITY;
+    for (const admission of this.wsAdmissionGrants.values()) {
+      earliestExpiry = Math.min(earliestExpiry, admission.expiresAt);
+    }
+    for (const replay of this.pairingAdmissionReplays.values()) {
+      earliestExpiry = Math.min(earliestExpiry, replay.expiresAt);
+    }
+    return Number.isFinite(earliestExpiry)
+      ? Math.max(1, earliestExpiry - now)
+      : RPC_WS_ADMISSION_RETRY_AFTER_MS;
+  }
+
+  private async handleWsAdmissionRequest(
+    req: IncomingMessage,
+    res: import("node:http").ServerResponse
+  ): Promise<void> {
+    const hasRequestBody =
+      (req.headers["content-length"] !== undefined && req.headers["content-length"] !== "0") ||
+      req.headers["transfer-encoding"] !== undefined;
+    if (hasRequestBody) {
+      this.wsAdmissionFailure(res, 400, {
+        ok: false,
+        code: "invalid_request",
+        message: "RPC WebSocket admission requests must have an empty body",
+      });
+      req.resume();
+      return;
+    }
+
+    const authorization = req.headers.authorization;
+    const credential =
+      typeof authorization === "string" && authorization.startsWith("Bearer ")
+        ? authorization.slice("Bearer ".length)
+        : "";
+    const encodedClientLabel = req.headers[RPC_CLIENT_LABEL_HEADER];
+    const clientLabel =
+      typeof encodedClientLabel === "string"
+        ? decodeRpcClientLabelHeader(encodedClientLabel)
+        : encodedClientLabel === undefined
+          ? undefined
+          : null;
+    const rawClientPlatform = req.headers[RPC_CLIENT_PLATFORM_HEADER];
+    const clientPlatform =
+      rawClientPlatform === "desktop" ||
+      rawClientPlatform === "headless" ||
+      rawClientPlatform === "mobile"
+        ? rawClientPlatform
+        : rawClientPlatform === undefined
+          ? undefined
+          : null;
+    if (
+      credential.length === 0 ||
+      clientLabel === null ||
+      (clientLabel !== undefined &&
+        Buffer.byteLength(clientLabel, "utf8") > RPC_WS_ADMISSION_MAX_CLIENT_LABEL_BYTES) ||
+      clientPlatform === null
+    ) {
+      this.wsAdmissionFailure(res, 400, {
+        ok: false,
+        code: "invalid_request",
+        message: "Invalid RPC WebSocket admission headers",
+      });
+      return;
+    }
+
+    this.pruneExpiredWsAdmissionGrants();
+    const pairingReplayDigest = this.pairingAdmissionDigest(credential);
+    const pairingReplay = this.pairingAdmissionReplays.get(pairingReplayDigest);
+    if (pairingReplay) {
+      if (
+        pairingReplay.clientLabel !== clientLabel ||
+        pairingReplay.clientPlatform !== clientPlatform
+      ) {
+        this.wsAdmissionFailure(res, 400, {
+          ok: false,
+          code: "invalid_request",
+          message: "Pairing admission retry metadata does not match the original request",
+        });
+        return;
+      }
+      this.wsAdmissionGrants.delete(pairingReplay.grant);
+      const admission = this.issueWsAdmissionGrant(
+        pairingReplay.resolved,
+        clientLabel,
+        clientPlatform
+      );
+      pairingReplay.grant = admission.grant;
+      this.writeWsAdmissionResponse(res, 201, {
+        ok: true,
+        grant: admission.grant,
+        expiresAt: admission.expiresAt,
+      });
+      return;
+    }
+    const pendingSaturated =
+      this.pendingWsAdmissionResolutions >= RPC_WS_ADMISSION_MAX_PENDING_RESOLUTIONS;
+    const outstandingSaturated =
+      this.pendingWsAdmissionResolutions + this.wsAdmissionGrants.size >=
+        RPC_WS_ADMISSION_MAX_OUTSTANDING_GRANTS ||
+      this.pendingWsAdmissionResolutions + this.pairingAdmissionReplays.size >=
+        RPC_WS_ADMISSION_MAX_OUTSTANDING_GRANTS;
+    if (pendingSaturated || outstandingSaturated) {
+      this.wsAdmissionFailure(res, 503, {
+        ok: false,
+        code: "admission_saturated",
+        message: "RPC WebSocket admission is busy; retry shortly",
+        retryAfterMs: outstandingSaturated
+          ? this.outstandingGrantRetryAfterMs()
+          : RPC_WS_ADMISSION_RETRY_AFTER_MS,
+      });
+      return;
+    }
+
+    // Reserve capacity before any async pairing/device-store operation begins.
+    this.pendingWsAdmissionResolutions += 1;
+    try {
+      const resolution = await this.resolveRpcCredential(credential, clientLabel, clientPlatform);
+      if (this.stopped) {
+        this.wsAdmissionFailure(res, 503, {
+          ok: false,
+          code: "server_unavailable",
+          message: "RPC server is shutting down",
+          retryAfterMs: RPC_WS_ADMISSION_RETRY_AFTER_MS,
+        });
+        return;
+      }
+      if (!resolution.ok) {
+        this.wsAdmissionFailure(res, resolution.code === "admin_credential" ? 403 : 401, {
+          ok: false,
+          code: resolution.code,
+          message: resolution.message,
+        });
+        return;
+      }
+      const resolved = resolution.resolved;
+      const admission = this.issueWsAdmissionGrant(resolved, clientLabel, clientPlatform);
+      if (resolved.deviceCredential) {
+        this.pairingAdmissionReplays.set(pairingReplayDigest, {
+          resolved,
+          clientLabel,
+          clientPlatform,
+          grant: admission.grant,
+          expiresAt: Date.now() + RPC_WS_PAIRING_REPLAY_TTL_MS,
+        });
+      }
+      this.writeWsAdmissionResponse(res, 201, {
+        ok: true,
+        grant: admission.grant,
+        expiresAt: admission.expiresAt,
+      });
+    } finally {
+      this.pendingWsAdmissionResolutions = Math.max(0, this.pendingWsAdmissionResolutions - 1);
+    }
   }
 
   /** Upgrade a WebSocket when this RPC server directly owns the gateway route. */
@@ -3779,7 +4138,15 @@ export class RpcServer {
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => this.handleConnection(ws));
+    const protocolHeader = req.headers["sec-websocket-protocol"];
+    const grant = parseWebSocketAuthProtocol(protocolHeader, "rpc");
+    const admission = grant ? this.takeWsAdmissionGrant(grant) : null;
+    if (!admission) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => this.handleConnection(ws, admission));
   }
 
   /**
@@ -3789,8 +4156,9 @@ export class RpcServer {
    * machinery (handleConnection → handleAuth → per-session bridge with close-time
    * `CONNECTION_LOST` synthesis). Streaming bodies ride the binary bulk channel.
    * This reuses one server RPC implementation — the answerer is a translation
-   * layer, not a parallel server (fail-loud rule). Local co-located mode keeps the
-   * loopback WS via `handleGatewayWsConnection`; both feed the same dispatch.
+   * layer, not a parallel server (fail-loud rule). Local co-located mode enters
+   * through the pre-upgrade admission in `handleGatewayWsUpgrade`; both transports
+   * feed the same authenticated dispatch machinery.
    */
   attachWebRtcPipe(
     pipe: PipeChannels & {
@@ -4363,6 +4731,10 @@ export class RpcServer {
       res.end(JSON.stringify({ error: "RPC server is shutting down" }));
       return;
     }
+    if (req.method === "POST" && req.url === RPC_WEBSOCKET_ADMISSION_PATH) {
+      await this.handleWsAdmissionRequest(req, res);
+      return;
+    }
     await this.httpRpc.handle(req, res);
   }
 
@@ -4380,6 +4752,8 @@ export class RpcServer {
       ws.close(1001, "Server shutting down");
     }
     this.pendingAuthentications.clear();
+    this.wsAdmissionGrants.clear();
+    this.pairingAdmissionReplays.clear();
 
     // Clear pending tool calls
     for (const [, pending] of this.pendingToolCalls) {

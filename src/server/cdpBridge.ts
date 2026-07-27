@@ -10,8 +10,8 @@
  *   or a shell-authenticated RPC stream (remote/WebRTC shells)
  * - `/cdp/{targetId}` — per-panel Playwright client WebSocket connections
  *
- * Both paths authenticate with a first WebSocket message:
- * `{ "type": "vibestudio:cdp-auth", "token": "..." }`.
+ * Both paths authenticate at the HTTP upgrade boundary, before ws allocates
+ * its large CDP message receiver.
  *
  * The client ↔ server protocol is standard CDP, so Playwright connects
  * identically regardless of backend.
@@ -21,9 +21,10 @@ import { WebSocket, type WebSocketServer } from "ws";
 import type { IncomingMessage } from "http";
 import type { Duplex } from "stream";
 import { constantTimeStringEqual } from "@vibestudio/shared/tokenManager";
-import { CdpGrantService } from "@vibestudio/shared/cdpGrants";
+import { CDP_INTERNAL_GRANT_HEADER, CdpGrantService } from "@vibestudio/shared/cdpGrants";
 import type { PanelRuntimeLeaseChangedEvent } from "@vibestudio/shared/panel/panelLease";
 import { createDevLogger } from "@vibestudio/dev-log";
+import { parseWebSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 
 const log = createDevLogger("CdpBridge");
 
@@ -180,59 +181,6 @@ export class CdpBridge {
     this.port = options.port;
   }
 
-  // =========================================================================
-  // Public API
-  // =========================================================================
-
-  private authenticateConnection(
-    ws: WebSocket,
-    validate: (token: string) => boolean
-  ): Promise<boolean> {
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        cleanup();
-        ws.close(4001, "CDP auth required");
-        resolve(false);
-      }, 5_000);
-      const cleanup = () => {
-        clearTimeout(timer);
-        ws.off("message", handleMessage);
-        ws.off("close", handleClose);
-        ws.off("error", handleClose);
-      };
-      const handleClose = () => {
-        cleanup();
-        resolve(false);
-      };
-      const handleMessage = (data: Buffer) => {
-        let parsed: { type?: unknown; token?: unknown };
-        try {
-          parsed = JSON.parse(data.toString()) as { type?: unknown; token?: unknown };
-        } catch {
-          cleanup();
-          ws.close(4001, "Invalid CDP auth frame");
-          resolve(false);
-          return;
-        }
-        if (
-          parsed.type !== "vibestudio:cdp-auth" ||
-          typeof parsed.token !== "string" ||
-          !validate(parsed.token)
-        ) {
-          cleanup();
-          ws.close(4001, "Invalid CDP token");
-          resolve(false);
-          return;
-        }
-        cleanup();
-        resolve(true);
-      };
-      ws.once("message", handleMessage);
-      ws.once("close", handleClose);
-      ws.once("error", handleClose);
-    });
-  }
-
   /**
    * Route WebSocket upgrade requests by URL path.
    */
@@ -247,15 +195,15 @@ export class CdpBridge {
         socket.destroy();
         return;
       }
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        void this.authenticateConnection(ws, (token) =>
-          this.authenticateHostProvider(token, hostConnectionId)
-        ).then((ok) => {
-          if (!ok) return;
-          this.handleProviderConnection(hostConnectionId, ws);
-          ws.send(JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
-        });
-      });
+      const token = parseWebSocketAuthProtocol(req.headers["sec-websocket-protocol"], "cdp-host");
+      if (!token || !this.authenticateHostProvider(token, hostConnectionId)) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) =>
+        this.handleProviderConnection(hostConnectionId, ws)
+      );
     } else if (pathname.startsWith("/cdp/")) {
       const targetId = pathname.slice("/cdp/".length);
 
@@ -265,19 +213,21 @@ export class CdpBridge {
         return;
       }
 
+      const internalGrant = req.headers[CDP_INTERNAL_GRANT_HEADER];
+      const token =
+        (typeof internalGrant === "string" ? internalGrant : null) ??
+        parseWebSocketAuthProtocol(req.headers["sec-websocket-protocol"], "inspection");
+      if (!token || !this.cdpGrants.redeem(token, targetId)) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
       wss.handleUpgrade(req, socket, head, (ws) => {
-        void this.authenticateConnection(ws, (token) => {
-          const grant = this.cdpGrants.redeem(token, targetId);
-          return Boolean(grant);
-        }).then((ok) => {
-          if (!ok) return;
-          if (!this.providerForTarget(targetId)) {
-            ws.close(1011, "CDP provider not connected");
-            return;
-          }
-          this.handleClientConnection(ws, targetId);
-          ws.send(JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
-        });
+        if (!this.providerForTarget(targetId)) {
+          ws.close(1011, "CDP provider not connected");
+          return;
+        }
+        this.handleClientConnection(ws, targetId);
       });
     } else {
       socket.write("HTTP/1.1 404 Not Found\r\n\r\n");

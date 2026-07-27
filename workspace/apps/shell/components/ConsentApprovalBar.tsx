@@ -18,14 +18,7 @@ import {
   createApprovalStateController,
   SHELL_APPROVAL_PENDING_CHANGED_EVENT,
 } from "@vibestudio/shell-core/approvalState";
-import {
-  account,
-  blobstore,
-  events,
-  panel,
-  shellApproval,
-  shellPresence,
-} from "../shell/client";
+import { account, blobstore, events, panel, shellApproval, shellPresence } from "../shell/client";
 import { useShellContentOverlay, type ContentOverlayBounds } from "../shell/useShellContentOverlay";
 import { useShellEvent } from "../shell/useShellEvent";
 import { effectiveThemeAtom, themeConfigAtom } from "../state/themeAtoms";
@@ -36,6 +29,7 @@ import {
   getDiffReviewPayload,
   highestPendingTone,
   resolveCallerInfo,
+  sealedDetailPayloadHashes,
   type ApprovalCardIntent,
   type ApprovalTone,
   type BlobResult,
@@ -156,7 +150,9 @@ export function ConsentApprovalBar() {
   const canNext = queueLength > 1 && browseIndex < queueLength - 1;
   const currentCaller = current ? resolveCallerInfo(current) : null;
   const diffReview = current ? getDiffReviewPayload(current) : null;
-  const payloadHashes = diffReview ? diffReviewPayloadHashes(diffReview) : null;
+  const diffHashes = diffReview ? diffReviewPayloadHashes(diffReview) : new Set<string>();
+  const sealedHashes = current ? sealedDetailPayloadHashes(current) : new Set<string>();
+  const payloadHashes = new Set([...diffHashes, ...sealedHashes]);
 
   useEffect(() => {
     setDecisionError((error) => (error && error.approvalId !== current?.approvalId ? null : error));
@@ -169,11 +165,13 @@ export function ConsentApprovalBar() {
   // Fetch one payload blob on the surface's behalf. Only hashes named in the
   // current approval's payload are fetchable; any other hash is ignored.
   const fetchBlob = (hash: string) => {
-    if (!payloadHashes || !payloadHashes.has(hash)) return;
+    if (!current || !payloadHashes.has(hash)) return;
     if (blobResultsRef.current[hash] || inFlightBlobsRef.current.has(hash)) return;
     inFlightBlobsRef.current.add(hash);
-    void blobstore
-      .getText(hash)
+    const content = sealedHashes.has(hash)
+      ? shellApproval.getUserlandSealedDetail(current.approvalId, hash)
+      : blobstore.getText(hash);
+    void content
       .then((text) =>
         setBlobResults((prev) => ({ ...prev, [hash]: text == null ? { missing: true } : { text } }))
       )
@@ -273,9 +271,7 @@ export function ConsentApprovalBar() {
     );
   };
   const resolveMissionReview = (
-    resolution:
-      | { decision: "approve"; selectedAuthorityKeys: string[] }
-      | { decision: "dismiss" }
+    resolution: { decision: "approve"; selectedAuthorityKeys: string[] } | { decision: "dismiss" }
   ) => {
     if (current?.kind !== "mission-review") return;
     runApprovalAction(current, () =>

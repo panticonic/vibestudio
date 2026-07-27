@@ -76,7 +76,15 @@ export const extensionsMethods = defineServiceMethods({
     args: z.tuple([z.string(), z.string(), z.array(z.unknown())]),
     returns: JsonValueSchema,
     access: INVOKE_ACCESS,
-    examples: [{ args: ["shell", "exec", [{ command: "echo hi" }]] }],
+    examples: [
+      {
+        args: [
+          "shell",
+          "exec",
+          [{ intent: { kind: "argv", executable: "echo", args: ["hi"] } }],
+        ],
+      },
+    ],
   },
   invokeProvider: {
     description:

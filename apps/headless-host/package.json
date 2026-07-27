@@ -26,7 +26,7 @@
     "@vibestudio/shell-core": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "@puppeteer/browsers": "^2.6.1",
-    "ws": "^8.18.0",
+    "ws": "^8.21.1",
     "zod": "^3.24.0"
   },
   "devDependencies": {

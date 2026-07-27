@@ -873,9 +873,7 @@ export const shellApproval = {
     shellApprovalClient.resolveBootstrap(approvalId, decision),
   resolveMissionReview: (
     approvalId: string,
-    resolution:
-      | { decision: "approve"; selectedAuthorityKeys: string[] }
-      | { decision: "dismiss" }
+    resolution: { decision: "approve"; selectedAuthorityKeys: string[] } | { decision: "dismiss" }
   ) => shellApprovalClient.resolveMissionReview(approvalId, resolution),
   resolveUserland: (approvalId: string, choice: string | "dismiss") =>
     shellApprovalClient.resolveUserland(approvalId, choice),
@@ -887,6 +885,8 @@ export const shellApproval = {
     shellApprovalClient.submitCredentialInput(approvalId, values),
   submitSecretInput: (approvalId: string, values: Record<string, string>) =>
     shellApprovalClient.submitSecretInput(approvalId, values),
+  getUserlandSealedDetail: (approvalId: string, digest: string) =>
+    shellApprovalClient.getUserlandSealedDetail(approvalId, digest),
   listPending: () => shellApprovalClient.listPending(),
 };
 // =============================================================================

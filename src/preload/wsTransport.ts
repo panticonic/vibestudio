@@ -154,7 +154,7 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
       now: () => Date.now(),
       getAuthToken: async () => authToken,
       refreshAuthToken,
-      createSocket: (url) => new BrowserWsLike(new WebSocket(url)),
+      createSocket: (url, protocols) => new BrowserWsLike(new WebSocket(url, protocols)),
     },
   });
   base.onMessage((envelope) => deliver(envelope));

@@ -15,6 +15,14 @@ import type { UserSubject } from "../../packages/identity/src/types.js";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import { createTestServiceDispatcher } from "../../packages/shared/src/serviceDispatcherTestUtils.js";
 import type { ServiceDefinition } from "../../packages/shared/src/serviceDefinition.js";
+import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
+import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
+import {
+  RPC_CLIENT_LABEL_HEADER,
+  RPC_CLIENT_PLATFORM_HEADER,
+  type RpcWebSocketAdmissionResponse,
+} from "@vibestudio/rpc/protocol/rpcWebSocketAdmission";
+import { RPC_WS_ADMISSION_MAX_PENDING_RESOLUTIONS } from "./ingressLimits.js";
 
 function makeDoRecord(
   id: string,
@@ -64,6 +72,7 @@ function createTestSetup(opts?: {
   verifyExactCausalInvocation?: ConstructorParameters<
     typeof RpcServer
   >[0]["verifyExactCausalInvocation"];
+  redeemPairingCredential?: ConstructorParameters<typeof RpcServer>[0]["redeemPairingCredential"];
 }) {
   const tokenManager = new TokenManager();
   const adminToken = "test-admin-token";
@@ -124,6 +133,7 @@ function createTestSetup(opts?: {
     userSubjectSource: opts?.userSubjectSource,
     membershipGate: opts?.membershipGate,
     verifyExactCausalInvocation: opts?.verifyExactCausalInvocation,
+    redeemPairingCredential: opts?.redeemPairingCredential,
   });
 
   return {
@@ -253,6 +263,29 @@ async function postRpc(
     ("envelope" in json ? json["envelope"] : json) as { message?: Record<string, unknown> }
   ).message;
   return { status: res.status, body: (message ?? {}) as Record<string, unknown> };
+}
+
+async function postWsAdmission(
+  port: number,
+  credential: string,
+  metadata?: { clientLabel?: string; clientPlatform?: "desktop" | "headless" | "mobile" }
+): Promise<{ status: number; body: RpcWebSocketAdmissionResponse }> {
+  const response = await fetch(`http://127.0.0.1:${port}/rpc/ws-admission`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${credential}`,
+      ...(metadata?.clientLabel
+        ? { [RPC_CLIENT_LABEL_HEADER]: encodeURIComponent(metadata.clientLabel) }
+        : {}),
+      ...(metadata?.clientPlatform
+        ? { [RPC_CLIENT_PLATFORM_HEADER]: metadata.clientPlatform }
+        : {}),
+    },
+  });
+  return {
+    status: response.status,
+    body: (await response.json()) as RpcWebSocketAdmissionResponse,
+  };
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -688,11 +721,18 @@ describe("RpcServer HTTP POST /rpc", () => {
     });
 
     it("allows loopback websocket origins", async () => {
+      const token = setup.tokenManager.ensureToken("worker:origin-test", "worker");
+      const admission = await postWsAdmission(port, token);
+      expect(admission.body.ok).toBe(true);
+      if (!admission.body.ok) throw new Error(admission.body.message);
+      const admissionGrant = admission.body.grant;
       await expect(
         new Promise<void>((resolve, reject) => {
-          const ws = new WebSocket(`ws://127.0.0.1:${port}/rpc`, {
-            headers: { Origin: "http://localhost:5173" },
-          });
+          const ws = new WebSocket(
+            `ws://127.0.0.1:${port}/rpc`,
+            [webSocketAuthProtocol("rpc", admissionGrant)],
+            { headers: { Origin: "http://localhost:5173" } }
+          );
           ws.once("open", () => {
             ws.close();
             resolve();
@@ -702,8 +742,297 @@ describe("RpcServer HTTP POST /rpc", () => {
       ).resolves.toBeUndefined();
     });
 
+    it("binds the admitted upgrade credential to the RPC authentication frame", async () => {
+      const admitted = setup.tokenManager.ensureToken("worker:upgrade-binding", "worker");
+      const admission = await postWsAdmission(port, admitted);
+      expect(admission.body.ok).toBe(true);
+      if (!admission.body.ok) throw new Error(admission.body.message);
+      const admissionGrant = admission.body.grant;
+
+      await expect(
+        new Promise<{ code: number; reason: string }>((resolve, reject) => {
+          const ws = new WebSocket(
+            `ws://127.0.0.1:${port}/rpc`,
+            [webSocketAuthProtocol("rpc", admissionGrant)],
+            { headers: { Origin: "http://localhost:5173" } }
+          );
+          ws.once("open", () => {
+            ws.send(
+              JSON.stringify({
+                type: "ws:auth",
+                contractVersion: RPC_CONTRACT_VERSION,
+                token: "different-admission-grant",
+              })
+            );
+          });
+          ws.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+          ws.once("error", reject);
+        })
+      ).resolves.toEqual({
+        code: 4006,
+        reason: "RPC upgrade credential does not match authentication frame",
+      });
+    });
+
     // (Removed) "allows the configured public URL origin" — public-URL ingress
     // is decommissioned (§8); remote traffic is WebRTC, the gateway is loopback-only.
+  });
+
+  describe("websocket admission exchange", () => {
+    it("supports the bounded browser preflight only for allowed origins", async () => {
+      const allowed = await fetch(`http://127.0.0.1:${port}/rpc/ws-admission`, {
+        method: "OPTIONS",
+        headers: {
+          Origin: "http://localhost:5173",
+          "Access-Control-Request-Method": "POST",
+          "Access-Control-Request-Headers": "authorization, x-vibestudio-rpc-client-label",
+        },
+      });
+      expect(allowed.status).toBe(204);
+      expect(allowed.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+
+      const denied = await fetch(`http://127.0.0.1:${port}/rpc/ws-admission`, {
+        method: "OPTIONS",
+        headers: { Origin: "https://evil.example" },
+      });
+      expect(denied.status).toBe(403);
+    });
+
+    it("reports a stale 64-hex token after server restart as a typed auth failure", async () => {
+      const priorServerTokens = new TokenManager();
+      const staleToken = priorServerTokens.ensureToken("worker:stale-after-restart", "worker");
+
+      const result = await postWsAdmission(port, staleToken);
+
+      expect(result).toEqual({
+        status: 401,
+        body: {
+          ok: false,
+          code: "invalid_credential",
+          message: "Invalid token",
+        },
+      });
+    });
+
+    it("accepts async refresh credentials before upgrade and preserves pairing metadata", async () => {
+      await gateway.stop();
+      await setup.server.stop();
+      const redeemPairingCredential = vi.fn(
+        async (
+          token: string,
+          _ctx: { clientLabel?: string; clientPlatform?: "desktop" | "headless" | "mobile" }
+        ) =>
+          token === "PAIR-CODE-ONCE"
+            ? {
+                callerId: "shell:paired-device",
+                callerKind: "shell" as const,
+                deviceCredential: {
+                  deviceId: "paired-device",
+                  refreshToken: "fresh-refresh-token",
+                },
+                pairingContext: { workspaceId: "workspace-1" },
+                subject: { userId: "user-1", handle: "user1" },
+              }
+            : null
+      );
+      setup = createTestSetup({ redeemPairingCredential });
+      setup.server.initHandlers();
+      gateway = new Gateway({
+        tokenManager: setup.tokenManager,
+        externalHost: "localhost",
+        getRpcHandler: () => setup.server,
+      });
+      port = await gateway.start(0);
+
+      const result = await postWsAdmission(port, "PAIR-CODE-ONCE", {
+        clientLabel: "München phone",
+        clientPlatform: "mobile",
+      });
+
+      expect(result.status).toBe(201);
+      expect(result.body.ok).toBe(true);
+      expect(redeemPairingCredential).toHaveBeenCalledWith("PAIR-CODE-ONCE", {
+        clientLabel: "München phone",
+        clientPlatform: "mobile",
+      });
+      if (!result.body.ok) throw new Error(result.body.message);
+      const retried = await postWsAdmission(port, "PAIR-CODE-ONCE", {
+        clientLabel: "München phone",
+        clientPlatform: "mobile",
+      });
+      expect(retried.body.ok).toBe(true);
+      if (!retried.body.ok) throw new Error(retried.body.message);
+      const firstGrant = result.body.grant;
+      const retriedGrant = retried.body.grant;
+      expect(retriedGrant).not.toBe(firstGrant);
+      expect(redeemPairingCredential).toHaveBeenCalledTimes(1);
+      await expect(
+        new Promise<void>((resolve, reject) => {
+          const ws = new WebSocket(
+            `ws://127.0.0.1:${port}/rpc`,
+            [webSocketAuthProtocol("rpc", firstGrant)],
+            { headers: { Origin: "http://localhost:5173" } }
+          );
+          ws.once("open", () => reject(new Error("rotated pairing grant unexpectedly upgraded")));
+          ws.once("error", (error) => {
+            try {
+              expect(error.message).toContain("Unexpected server response: 401");
+              resolve();
+            } catch (expectError) {
+              reject(expectError);
+            }
+          });
+        })
+      ).resolves.toBeUndefined();
+      await expect(
+        new Promise<Record<string, unknown>>((resolve, reject) => {
+          const ws = new WebSocket(
+            `ws://127.0.0.1:${port}/rpc`,
+            [webSocketAuthProtocol("rpc", retriedGrant)],
+            { headers: { Origin: "http://localhost:5173" } }
+          );
+          ws.once("open", () => {
+            ws.send(
+              JSON.stringify({
+                type: "ws:auth",
+                contractVersion: RPC_CONTRACT_VERSION,
+                token: retriedGrant,
+                clientLabel: "München phone",
+                clientPlatform: "mobile",
+              })
+            );
+          });
+          ws.on("message", (raw) => {
+            const message = JSON.parse(String(raw)) as Record<string, unknown>;
+            if (message["type"] !== "ws:auth-result") return;
+            ws.close();
+            resolve(message);
+          });
+          ws.once("error", reject);
+        })
+      ).resolves.toMatchObject({
+        type: "ws:auth-result",
+        success: true,
+        deviceCredential: {
+          deviceId: "paired-device",
+          refreshToken: "fresh-refresh-token",
+        },
+      });
+      expect(redeemPairingCredential).toHaveBeenCalledTimes(1);
+      const afterAuthResultLoss = await postWsAdmission(port, "PAIR-CODE-ONCE", {
+        clientLabel: "München phone",
+        clientPlatform: "mobile",
+      });
+      expect(afterAuthResultLoss.body.ok).toBe(true);
+      expect(redeemPairingCredential).toHaveBeenCalledTimes(1);
+    });
+
+    it("returns truthful retry timing when resolver capacity is saturated", async () => {
+      await gateway.stop();
+      await setup.server.stop();
+      const releases: Array<(value: null) => void> = [];
+      const redeemPairingCredential = vi.fn(
+        () =>
+          new Promise<null>((resolve) => {
+            releases.push(resolve);
+          })
+      );
+      setup = createTestSetup({ redeemPairingCredential });
+      setup.server.initHandlers();
+      gateway = new Gateway({
+        tokenManager: setup.tokenManager,
+        externalHost: "localhost",
+        getRpcHandler: () => setup.server,
+      });
+      port = await gateway.start(0);
+
+      const pending = Array.from({ length: RPC_WS_ADMISSION_MAX_PENDING_RESOLUTIONS }, (_, index) =>
+        postWsAdmission(port, `refresh:pending:${index}`)
+      );
+      await vi.waitFor(() =>
+        expect(redeemPairingCredential).toHaveBeenCalledTimes(
+          RPC_WS_ADMISSION_MAX_PENDING_RESOLUTIONS
+        )
+      );
+
+      const saturated = await postWsAdmission(port, "refresh:one-too-many");
+      expect(saturated).toEqual({
+        status: 503,
+        body: {
+          ok: false,
+          code: "admission_saturated",
+          message: "RPC WebSocket admission is busy; retry shortly",
+          retryAfterMs: 1_000,
+        },
+      });
+      for (const release of releases) release(null);
+      await Promise.all(pending);
+    });
+
+    it("invalidates an outstanding admission grant when its caller is revoked", async () => {
+      const token = setup.tokenManager.ensureToken("worker:revoked-admission", "worker");
+      const admission = await postWsAdmission(port, token);
+      expect(admission.body.ok).toBe(true);
+      if (!admission.body.ok) throw new Error(admission.body.message);
+      const admissionGrant = admission.body.grant;
+      setup.tokenManager.revokeToken("worker:revoked-admission");
+
+      await expect(
+        new Promise<void>((resolve, reject) => {
+          const ws = new WebSocket(
+            `ws://127.0.0.1:${port}/rpc`,
+            [webSocketAuthProtocol("rpc", admissionGrant)],
+            { headers: { Origin: "http://localhost:5173" } }
+          );
+          ws.once("open", () => reject(new Error("unexpected websocket upgrade")));
+          ws.once("error", (error) => {
+            try {
+              expect(error.message).toContain("Unexpected server response: 401");
+              resolve();
+            } catch (expectError) {
+              reject(expectError);
+            }
+          });
+        })
+      ).resolves.toBeUndefined();
+    });
+
+    it("rejects first-frame metadata that disagrees with the admission headers", async () => {
+      const token = setup.tokenManager.ensureToken("worker:metadata-binding", "worker");
+      const admission = await postWsAdmission(port, token, {
+        clientLabel: "Expected",
+        clientPlatform: "desktop",
+      });
+      expect(admission.body.ok).toBe(true);
+      if (!admission.body.ok) throw new Error(admission.body.message);
+      const admissionGrant = admission.body.grant;
+
+      await expect(
+        new Promise<{ code: number; reason: string }>((resolve, reject) => {
+          const ws = new WebSocket(
+            `ws://127.0.0.1:${port}/rpc`,
+            [webSocketAuthProtocol("rpc", admissionGrant)],
+            { headers: { Origin: "http://localhost:5173" } }
+          );
+          ws.once("open", () => {
+            ws.send(
+              JSON.stringify({
+                type: "ws:auth",
+                contractVersion: RPC_CONTRACT_VERSION,
+                token: admissionGrant,
+                clientLabel: "Different",
+                clientPlatform: "desktop",
+              })
+            );
+          });
+          ws.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+          ws.once("error", reject);
+        })
+      ).resolves.toEqual({
+        code: 4006,
+        reason: "RPC authentication metadata does not match admission grant",
+      });
+    });
   });
 
   // ── Service dispatch ────────────────────────────────────────────────────────

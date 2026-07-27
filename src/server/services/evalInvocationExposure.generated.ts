@@ -9792,6 +9792,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:shellApproval.getUserlandSealedDetail",
+    rpcPlane: "host-service",
+    capability: "service:shellApproval.getUserlandSealedDetail",
+    authorityPrincipals: ["user", "code", "host"],
+    owner: "shellApproval",
+    method: "getUserlandSealedDetail",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:shellApproval.getUserlandSealedDetail",
+    },
+  },
+  {
     id: "host:shellApproval.listPending",
     rpcPlane: "host-service",
     capability: "service:shellApproval.listPending",
@@ -12581,6 +12594,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "shellApproval",
+    method: "getUserlandSealedDetail",
+  },
+  {
+    service: "shellApproval",
     method: "listPending",
   },
   {
@@ -13759,6 +13776,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:serverLog.stats",
   "service:serverLog.tail",
   "service:settings.getData",
+  "service:shellApproval.getUserlandSealedDetail",
   "service:shellApproval.listPending",
   "service:shellApproval.resolve",
   "service:shellApproval.resolveBootstrap",

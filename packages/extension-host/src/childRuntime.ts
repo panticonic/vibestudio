@@ -25,6 +25,11 @@ import { gitInteropMethods } from "@vibestudio/service-schemas/gitInterop";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
+import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
+import {
+  requestRpcWebSocketAdmission,
+  rpcWebSocketAdmissionUrl,
+} from "@vibestudio/rpc/protocol/rpcWebSocketAdmission";
 
 import type { ExtensionInvocation } from "./types.js";
 import {
@@ -519,7 +524,17 @@ function gatewayWebSocketUrl(): string {
 async function connectRuntimeBridge(): Promise<RpcClient> {
   const token = requiredEnv("VIBESTUDIO_EXTENSION_RPC_TOKEN");
   const extensionName = requiredEnv("VIBESTUDIO_EXTENSION_NAME");
-  const ws = new WebSocket(gatewayWebSocketUrl());
+  const wsUrl = gatewayWebSocketUrl();
+  const admission = await requestRpcWebSocketAdmission(rpcWebSocketAdmissionUrl(wsUrl), {
+    credential: token,
+  });
+  if (!admission.ok) {
+    throw new Error(
+      `Extension WebSocket admission failed (${admission.code}): ${admission.message}` +
+        (admission.retryAfterMs === undefined ? "" : `; retry after ${admission.retryAfterMs}ms`)
+    );
+  }
+  const ws = new WebSocket(wsUrl, [webSocketAuthProtocol("rpc", admission.grant)]);
   const listeners = new Set<(envelope: RpcEnvelope) => void>();
   const transport: EnvelopeRpcTransport = {
     async send(envelope: RpcEnvelope): Promise<void> {
@@ -570,7 +585,7 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
           JSON.stringify({
             type: "ws:auth",
             contractVersion: RPC_CONTRACT_VERSION,
-            token,
+            token: admission.grant,
             connectionId: `extension:${extensionName}`,
           } satisfies WsClientMessage)
         );

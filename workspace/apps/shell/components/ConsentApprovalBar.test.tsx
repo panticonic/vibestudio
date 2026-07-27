@@ -16,6 +16,7 @@ const shellClient = vi.hoisted(() => ({
   listPending: vi.fn<ListPendingFn>(() => Promise.resolve([])),
   resolve: vi.fn(() => Promise.resolve()),
   resolveUserland: vi.fn(() => Promise.resolve()),
+  getUserlandSealedDetail: vi.fn(() => Promise.resolve<string | null>("sealed-plan-text")),
   submitClientConfig: vi.fn(() => Promise.resolve()),
   submitCredentialInput: vi.fn(() => Promise.resolve()),
   subscribe: vi.fn(() => Promise.resolve()),
@@ -48,6 +49,7 @@ vi.mock("../shell/client", () => ({
     listPending: shellClient.listPending,
     resolve: shellClient.resolve,
     resolveUserland: shellClient.resolveUserland,
+    getUserlandSealedDetail: shellClient.getUserlandSealedDetail,
     submitClientConfig: shellClient.submitClientConfig,
     submitCredentialInput: shellClient.submitCredentialInput,
   },
@@ -113,6 +115,7 @@ function userlandApproval(
     subject: partial.subject ?? { id: "sub-1", label: "Subject" },
     title: partial.title,
     summary: partial.summary,
+    sealedDetails: partial.sealedDetails,
     promptOptions: partial.promptOptions ?? "choices",
     options: partial.options ?? [{ value: "ok", label: "OK", tone: "primary" }],
     approvalId: partial.approvalId,
@@ -339,6 +342,29 @@ describe("ConsentApprovalBar coordinator", () => {
     } as unknown as ApprovalCardIntent);
     await Promise.resolve();
     expect(shellClient.getText).not.toHaveBeenCalledWith("not-in-payload");
+  });
+
+  it("routes sealed approval detail fetches through the queue-owned trusted service", async () => {
+    const digest = "a".repeat(64);
+    shellClient.listPending.mockResolvedValueOnce([
+      userlandApproval({
+        approvalId: "sealed",
+        title: "Run a command",
+        sealedDetails: [
+          { label: "Complete execution plan", digest, byteLength: 16, format: "code" },
+        ],
+      }),
+    ]);
+    mountBar();
+    await waitFor(() => expect(overlay.options?.open).toBe(true));
+
+    emit({ type: "fetch-blob", hash: digest, approvalId: "sealed" });
+    await waitFor(() => {
+      expect(shellClient.getUserlandSealedDetail).toHaveBeenCalledWith("sealed", digest);
+      expect(shellClient.getText).not.toHaveBeenCalledWith(digest);
+      const props = overlay.options?.props as { blobResults?: Record<string, unknown> };
+      expect(props.blobResults?.[digest]).toEqual({ text: "sealed-plan-text" });
+    });
   });
 
   const gadTarget = {

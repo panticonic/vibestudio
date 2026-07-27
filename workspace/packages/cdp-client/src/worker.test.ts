@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BrowserImpl, CdpConnection, CdpError } from "./worker";
+import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 
 /**
  * Fake CDP transport. Understands two kinds of Runtime.evaluate:
@@ -23,7 +24,10 @@ class FakeWebSocket {
   private checking = false;
   closed = false;
 
-  constructor(readonly url: string) {
+  constructor(
+    readonly url: string,
+    readonly protocols?: string | string[]
+  ) {
     FakeWebSocket.instances.push(this);
     setTimeout(() => this.dispatch("open", {}), 0);
   }
@@ -44,16 +48,6 @@ class FakeWebSocket {
       method?: string;
       params?: Record<string, unknown>;
     };
-    if (message.type === "vibestudio:cdp-auth") {
-      setTimeout(
-        () =>
-          this.dispatch("message", {
-            data: JSON.stringify({ type: "vibestudio:cdp-auth-ok" }),
-          }),
-        0
-      );
-      return;
-    }
     if (typeof message.id !== "number") return;
     if (message.method) FakeWebSocket.sent.push({ method: message.method, params: message.params });
     if (
@@ -343,6 +337,9 @@ describe("worker CDP client", () => {
     const browser = await BrowserImpl.connect("ws://cdp", {
       transportOptions: { authToken: "token" },
     });
+    expect(FakeWebSocket.instances[0]?.protocols).toEqual([
+      webSocketAuthProtocol("inspection", "token"),
+    ]);
     const page = browser.contexts()[0]!.pages()[0]!;
 
     await expect(page.title()).resolves.toBe("Example");

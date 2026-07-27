@@ -6,10 +6,11 @@
  * privileged setup prompts all share this user-decision rendezvous point.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { canonicalKey } from "@vibestudio/shared/canonicalKey";
 import { getApprovalCopy } from "@vibestudio/shared/approvalCopy";
+import { USERLAND_APPROVAL_SEALED_DETAILS_MAX_BYTES } from "@vibestudio/shared/approvals";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type {
   ApprovalDecision,
@@ -33,6 +34,7 @@ import type {
   ExternalAgentApprovalResult,
   UserlandApprovalChoice,
   UserlandApprovalOption,
+  UserlandApprovalSealedDetailRef,
   UserlandApprovalSubject,
 } from "@vibestudio/shared/approvals";
 import type {
@@ -236,6 +238,10 @@ export interface UserlandApprovalQueueRequest {
   summary?: string;
   warning?: string;
   details?: PendingUserlandApproval["details"];
+  sealedDetails?: Array<{
+    ref: UserlandApprovalSealedDetailRef;
+    content: string;
+  }>;
   positiveEvidence?: PendingUserlandApproval["positiveEvidence"];
   severity?: PendingUserlandApproval["severity"];
   defaultAction?: PendingUserlandApproval["defaultAction"];
@@ -348,6 +354,10 @@ interface QueueEntry {
   dedupKey: string;
   /** The requesting user's `subject.userId`, captured at enqueue time (WP5 §5.1). */
   requestedByUserId?: string;
+  /** Exact host-sealed bytes, retained only for the lifetime of this prompt. */
+  userlandSealedDetails?: ReadonlyMap<string, string>;
+  /** UTF-8 bytes charged to the pending sealed-detail budgets. */
+  userlandSealedDetailBytes?: number;
   waiters: Map<number, QueueWaiter>;
   fieldInputWaiters: Map<number, FieldInputQueueWaiter>;
   userlandWaiters: Map<number, UserlandQueueWaiter>;
@@ -439,6 +449,7 @@ export interface ApprovalQueue {
     resolver?: ApprovalResolver
   ): Promise<void>;
   listPending(): PendingApproval[];
+  getUserlandSealedDetail(approvalId: string, digest: string): string | null;
   /** Cleanup hook: cancel any pending approvals associated with a caller id. */
   cancelForCaller(callerId: string): void;
 }
@@ -456,6 +467,16 @@ export interface ApprovalQueueWithListeners extends ApprovalQueue {
 }
 
 export type SensitiveActionQueue = ApprovalQueue;
+
+/**
+ * Retained sealed details are intentionally bounded independently of the RPC
+ * request limit. A caller can always keep one maximum-sized legitimate plan
+ * pending; the aggregate admits four such callers concurrently.
+ */
+export const USERLAND_APPROVAL_PENDING_SEALED_BYTES_PER_CALLER =
+  USERLAND_APPROVAL_SEALED_DETAILS_MAX_BYTES;
+export const USERLAND_APPROVAL_PENDING_SEALED_BYTES_AGGREGATE =
+  USERLAND_APPROVAL_PENDING_SEALED_BYTES_PER_CALLER * 4;
 
 export function createApprovalQueue(deps: {
   eventService: EventService;
@@ -488,6 +509,8 @@ export function createApprovalQueue(deps: {
   const entriesById = new Map<string, QueueEntry>();
   const entriesByDedupKey = new Map<string, QueueEntry>();
   const pendingListeners = new Set<(pending: PendingApproval[]) => void>();
+  const pendingUserlandSealedBytesByCaller = new Map<string, number>();
+  let pendingUserlandSealedBytes = 0;
 
   function emitPendingChanged(): void {
     const pending = Array.from(entriesById.values()).map((e) => e.approval);
@@ -502,8 +525,57 @@ export function createApprovalQueue(deps: {
   }
 
   function removeEntry(entry: QueueEntry): void {
+    if (entriesById.get(entry.approval.approvalId) !== entry) return;
     entriesById.delete(entry.approval.approvalId);
     entriesByDedupKey.delete(entry.dedupKey);
+    const sealedBytes = entry.userlandSealedDetailBytes ?? 0;
+    if (sealedBytes > 0) {
+      const callerId = entry.approval.callerId;
+      const callerBytes = pendingUserlandSealedBytesByCaller.get(callerId) ?? 0;
+      const remainingCallerBytes = callerBytes - sealedBytes;
+      if (remainingCallerBytes > 0) {
+        pendingUserlandSealedBytesByCaller.set(callerId, remainingCallerBytes);
+      } else {
+        pendingUserlandSealedBytesByCaller.delete(callerId);
+      }
+      pendingUserlandSealedBytes -= sealedBytes;
+    }
+  }
+
+  function userlandSealedDetailBytes(req: UserlandApprovalQueueRequest): number {
+    return (req.sealedDetails ?? []).reduce(
+      (total, detail) => total + Buffer.byteLength(detail.content, "utf8"),
+      0
+    );
+  }
+
+  function reserveUserlandSealedDetailBytes(callerId: string, sealedBytes: number): void {
+    if (sealedBytes === 0) return;
+    const callerBytes = pendingUserlandSealedBytesByCaller.get(callerId) ?? 0;
+    if (
+      sealedBytes > USERLAND_APPROVAL_PENDING_SEALED_BYTES_PER_CALLER ||
+      callerBytes + sealedBytes > USERLAND_APPROVAL_PENDING_SEALED_BYTES_PER_CALLER
+    ) {
+      throw new Error(
+        `Pending approval sealed-detail budget exceeded for caller '${callerId}' ` +
+          `(${callerBytes + sealedBytes} > ` +
+          `${USERLAND_APPROVAL_PENDING_SEALED_BYTES_PER_CALLER} bytes). ` +
+          "Resolve or cancel an existing approval before submitting another sealed plan."
+      );
+    }
+    if (
+      pendingUserlandSealedBytes + sealedBytes >
+      USERLAND_APPROVAL_PENDING_SEALED_BYTES_AGGREGATE
+    ) {
+      throw new Error(
+        "Pending approval aggregate sealed-detail budget exceeded " +
+          `(${pendingUserlandSealedBytes + sealedBytes} > ` +
+          `${USERLAND_APPROVAL_PENDING_SEALED_BYTES_AGGREGATE} bytes). ` +
+          "Wait for an existing approval to resolve or cancel it before retrying."
+      );
+    }
+    pendingUserlandSealedBytesByCaller.set(callerId, callerBytes + sealedBytes);
+    pendingUserlandSealedBytes += sealedBytes;
   }
 
   /**
@@ -789,7 +861,15 @@ export function createApprovalQueue(deps: {
       issuer.kind,
       issuer.id,
       req.subject.id,
+      userlandReviewDigest(req.sealedDetails?.map((detail) => detail.ref)) ?? "",
     ]);
+  }
+
+  function userlandReviewDigest(
+    details: PendingUserlandApproval["sealedDetails"]
+  ): string | undefined {
+    if (!details?.length) return undefined;
+    return createHash("sha256").update(JSON.stringify(details), "utf8").digest("hex");
   }
 
   function resolveRequesterFor(
@@ -1212,11 +1292,25 @@ export function createApprovalQueue(deps: {
 
   function settleUserlandEntry(entry: QueueEntry, choice: string): void {
     removeEntry(entry);
+    const sealedDetails =
+      entry.approval.kind === "userland"
+        ? entry.approval.sealedDetails?.map((detail) => {
+            const content = entry.userlandSealedDetails?.get(detail.digest);
+            if (content === undefined) {
+              throw new Error(`Missing sealed userland approval detail ${detail.digest}`);
+            }
+            return { digest: detail.digest, content };
+          })
+        : undefined;
     for (const waiter of entry.userlandWaiters.values()) {
       if (waiter.signal && waiter.onAbort) {
         waiter.signal.removeEventListener("abort", waiter.onAbort);
       }
-      waiter.resolve({ kind: "choice", choice });
+      waiter.resolve({
+        kind: "choice",
+        choice,
+        ...(sealedDetails?.length ? { sealedDetails } : {}),
+      });
     }
     entry.userlandWaiters.clear();
     for (const waiter of entry.waiters.values()) {
@@ -1507,6 +1601,7 @@ export function createApprovalQueue(deps: {
       let entry = entriesByDedupKey.get(dedupKey);
       let newEntry = false;
       if (!entry) {
+        const sealedDetailBytes = userlandSealedDetailBytes(req);
         const principalBase = {
           callerId: req.principal.callerId,
           callerKind: req.principal.callerKind,
@@ -1555,6 +1650,7 @@ export function createApprovalQueue(deps: {
           summary: req.summary,
           warning: req.warning,
           details: req.details,
+          sealedDetails: req.sealedDetails?.map((detail) => detail.ref),
           positiveEvidence: req.positiveEvidence,
           severity: req.severity,
           defaultAction: req.defaultAction,
@@ -1565,6 +1661,10 @@ export function createApprovalQueue(deps: {
           approval,
           dedupKey,
           requestedByUserId: req.requestedByUserId,
+          userlandSealedDetails: req.sealedDetails
+            ? new Map(req.sealedDetails.map((detail) => [detail.ref.digest, detail.content]))
+            : undefined,
+          ...(sealedDetailBytes > 0 ? { userlandSealedDetailBytes: sealedDetailBytes } : {}),
           waiters: new Map(),
           fieldInputWaiters: new Map(),
           userlandWaiters: new Map(),
@@ -1573,6 +1673,7 @@ export function createApprovalQueue(deps: {
           missionReviewWaiters: new Map(),
           nextWaiterId: 0,
         };
+        reserveUserlandSealedDetailBytes(req.principal.callerId, sealedDetailBytes);
         entriesById.set(approval.approvalId, entry);
         entriesByDedupKey.set(dedupKey, entry);
         newEntry = true;
@@ -1775,13 +1876,18 @@ export function createApprovalQueue(deps: {
       // `resource.key` so provenance records WHICH option was picked. Hoist the
       // subject id before `settle` so the narrowing survives the closure arg.
       const subjectId = entry.approval.subject.id;
+      const reviewDigest = userlandReviewDigest(entry.approval.sealedDetails);
       await settle(
         entry,
         {
           decision: "once",
           granted: true,
           resolver,
-          resource: { subjectId, key: choice },
+          resource: {
+            subjectId,
+            key: choice,
+            ...(reviewDigest ? { value: `sha256:${reviewDigest}` } : {}),
+          },
         },
         (e) => settleUserlandEntry(e, choice)
       );
@@ -1916,6 +2022,13 @@ export function createApprovalQueue(deps: {
 
     listPending() {
       return Array.from(entriesById.values()).map((e) => e.approval);
+    },
+
+    getUserlandSealedDetail(approvalId, digest) {
+      const entry = entriesById.get(approvalId);
+      if (!entry || entry.approval.kind !== "userland") return null;
+      if (!entry.approval.sealedDetails?.some((detail) => detail.digest === digest)) return null;
+      return entry.userlandSealedDetails?.get(digest) ?? null;
     },
 
     cancelForCaller(callerId) {

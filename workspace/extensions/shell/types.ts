@@ -1,12 +1,26 @@
 import { z } from "zod";
 
+export const execIntentSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("argv"),
+      executable: z.string().min(1),
+      args: z.array(z.string()).optional().default([]),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("script"),
+      script: z.string().min(1),
+    })
+    .strict(),
+]);
+
 export const execRequestSchema = z
   .object({
-    command: z.string().min(1),
-    args: z.array(z.string()).optional().default([]),
+    intent: execIntentSchema,
     cwd: z.string().optional(),
     env: z.record(z.string()).optional().default({}),
-    shell: z.boolean().optional().default(false),
     timeoutMs: z
       .number()
       .int()
@@ -29,6 +43,43 @@ export const execRequestSchema = z
     // (cwd resolves within it, env/cwd default to it) instead of the workspace root.
     contextId: z.string().min(1).optional(),
     contextAttachToken: z.string().min(16).optional(),
+  })
+  .strict();
+
+const environmentEntrySchema = z.tuple([z.string().min(1), z.string()]);
+
+export const sealedExecPlanSchema = z
+  .object({
+    version: z.literal(1),
+    intent: execIntentSchema,
+    cwd: z.string().min(1),
+    environment: z
+      .object({
+        profile: z
+          .object({
+            id: z.literal("vibestudio.shell.host-minimal.v1"),
+            label: z.string().min(1),
+            revision: z.string().regex(/^[0-9a-f]{12}$/),
+          })
+          .strict(),
+        effective: z.array(environmentEntrySchema),
+        overrides: z.array(environmentEntrySchema),
+      })
+      .strict(),
+    timeoutMs: z
+      .number()
+      .int()
+      .min(1)
+      .max(10 * 60_000),
+    stdin: z
+      .string()
+      .max(64 * 1024)
+      .optional(),
+    maxOutputBytes: z
+      .number()
+      .int()
+      .min(1024)
+      .max(16 * 1024 * 1024),
   })
   .strict();
 
@@ -91,6 +142,8 @@ export const unregisterLaunchAdapterSchema = z
   .strict();
 
 export type ExecRequest = z.infer<typeof execRequestSchema>;
+export type ExecIntent = z.infer<typeof execIntentSchema>;
+export type SealedExecPlan = z.infer<typeof sealedExecPlanSchema>;
 export type OpenRequest = z.infer<typeof openRequestSchema>;
 export type CreateContextRequest = z.infer<typeof createContextRequestSchema>;
 export interface FreshContextHandle {

@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { CdpHostProvider, type CdpHostProviderSocket } from "./cdpHostProvider.js";
+import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 
 class FakeSocket extends EventEmitter implements CdpHostProviderSocket {
   readyState: number = WebSocket.OPEN;
@@ -19,6 +20,7 @@ function createHarness(serverUrl = "ws://127.0.0.1:1234") {
   const socket = new FakeSocket();
   const openDevTools = vi.fn();
   let socketUrl = "";
+  let socketProtocols: string[] = [];
   const sendCommand = vi.fn<(...args: unknown[]) => Promise<unknown>>(async (method: unknown) =>
     method === "Accessibility.getFullAXTree" ? { nodes: [{ nodeId: 1 }] } : { ok: true }
   );
@@ -59,8 +61,9 @@ function createHarness(serverUrl = "ws://127.0.0.1:1234") {
         openDevTools,
         captureView,
       }) as never,
-    socketFactory: (url) => {
+    socketFactory: (url, protocols) => {
       socketUrl = url;
+      socketProtocols = protocols;
       return socket;
     },
   });
@@ -72,6 +75,7 @@ function createHarness(serverUrl = "ws://127.0.0.1:1234") {
     openDevTools,
     captureView,
     getSocketUrl: () => socketUrl,
+    getSocketProtocols: () => socketProtocols,
   };
 }
 
@@ -80,16 +84,15 @@ describe("CdpHostProvider", () => {
     vi.useRealTimers();
   });
 
-  it("authenticates and registers targets after broker auth", () => {
-    const { provider, socket } = createHarness();
+  it("authenticates during upgrade and registers targets when the socket opens", () => {
+    const { provider, socket, getSocketProtocols } = createHarness();
 
     provider.registerTarget("panel-1", 42);
     provider.start();
     socket.emit("open");
-    socket.emit("message", JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
 
+    expect(getSocketProtocols()).toEqual([webSocketAuthProtocol("cdp-host", "token")]);
     expect(socket.sent.map((entry) => JSON.parse(entry))).toEqual([
-      { type: "vibestudio:cdp-auth", token: "token" },
       { type: "cdp:register", targetId: "panel-1", tabId: 42 },
     ]);
   });
@@ -130,7 +133,6 @@ describe("CdpHostProvider", () => {
     provider.registerTarget("panel-1", 42);
     provider.start();
     socket.emit("open");
-    socket.emit("message", JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
 
     await provider.handleProviderMessageForTest({
       type: "cdp:command",
@@ -392,7 +394,11 @@ describe("CdpHostProvider", () => {
     expect(debuggerApi.detach).toHaveBeenCalledTimes(1);
 
     socket.sent = [];
-    socket.emit("message", JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
+    (
+      provider as unknown as {
+        registerAllTargets(): void;
+      }
+    ).registerAllTargets();
 
     expect(socket.sent.map((entry) => JSON.parse(entry))).toEqual([]);
   });
@@ -402,7 +408,6 @@ describe("CdpHostProvider", () => {
     provider.registerTarget("panel-1", 42);
     provider.start();
     socket.emit("open");
-    socket.emit("message", JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
 
     await provider.handleProviderMessageForTest({
       type: "cdp:command",
@@ -419,7 +424,11 @@ describe("CdpHostProvider", () => {
     expect(debuggerApi.detach).not.toHaveBeenCalled();
 
     socket.sent = [];
-    socket.emit("message", JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
+    (
+      provider as unknown as {
+        registerAllTargets(): void;
+      }
+    ).registerAllTargets();
 
     expect(socket.sent.map((entry) => JSON.parse(entry))).toEqual([
       { type: "cdp:register", targetId: "panel-1", tabId: 42 },
@@ -720,17 +729,14 @@ describe("CdpHostProvider", () => {
     provider.registerTarget("panel-1", 42);
     provider.start();
     sockets[0]!.emit("open");
-    sockets[0]!.emit("message", JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
     sockets[0]!.close();
 
     await vi.advanceTimersByTimeAsync(25);
     expect(sockets).toHaveLength(2);
 
     sockets[1]!.emit("open");
-    sockets[1]!.emit("message", JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
 
     expect(sockets[1]!.sent.map((entry) => JSON.parse(entry))).toEqual([
-      { type: "vibestudio:cdp-auth", token: "token" },
       { type: "cdp:register", targetId: "panel-1", tabId: 42 },
     ]);
 

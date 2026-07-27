@@ -9,6 +9,9 @@ overrides:
   react-dom: 19.0.0
   '@earendil-works/pi-ai': 0.82.0
   protobufjs: ^7.5.5
+  ws@6: 6.2.4
+  ws@7: 7.5.11
+  ws@8: 8.21.1
 
 patchedDependencies:
   '@earendil-works/pi-ai@0.82.0':
@@ -109,6 +112,9 @@ importers:
         specifier: workspace:*
         version: link:../shared
     devDependencies:
+      '@types/sql.js':
+        specifier: ^1.4.11
+        version: 1.4.11
       sql.js:
         specifier: ^1.14.0
         version: 1.14.1
@@ -327,6 +333,10 @@ importers:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+    devDependencies:
+      '@types/json-schema':
+        specifier: ^7.0.15
+        version: 7.0.15
 
   ../packages/shell-core:
     dependencies:
@@ -343,8 +353,8 @@ importers:
         specifier: workspace:*
         version: link:../workspace-contracts
       ws:
-        specifier: ^8.18.3
-        version: 8.21.0
+        specifier: 8.21.1
+        version: 8.21.1
     devDependencies:
       '@types/ws':
         specifier: ^8.18.1
@@ -729,8 +739,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/shell-core
       ws:
-        specifier: ^8.18.3
-        version: 8.21.0
+        specifier: 8.21.1
+        version: 8.21.1
 
   apps/shell:
     dependencies:
@@ -816,8 +826,8 @@ importers:
         specifier: 19.0.0
         version: 19.0.0
       ws:
-        specifier: ^8.18.3
-        version: 8.21.0
+        specifier: 8.21.1
+        version: 8.21.1
     devDependencies:
       vitest:
         specifier: ^3.2.4
@@ -1050,7 +1060,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.82.0
-        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.0)(zod@3.25.76)
+        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.1)(zod@3.25.76)
       '@sinclair/typebox':
         specifier: ^0.27.8
         version: 0.27.10
@@ -1125,7 +1135,11 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
 
-  packages/cdp-client: {}
+  packages/cdp-client:
+    dependencies:
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../../../packages/rpc
 
   packages/channel-fork:
     dependencies:
@@ -1195,7 +1209,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.82.0
-        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.0)(zod@3.25.76)
+        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.1)(zod@3.25.76)
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -1370,7 +1384,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.82.0
-        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.0)(zod@3.25.76)
+        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.1)(zod@3.25.76)
       ignore:
         specifier: 7.0.5
         version: 7.0.5
@@ -1422,8 +1436,8 @@ importers:
         specifier: ^3.2.4
         version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
       ws:
-        specifier: ^8.18.0
-        version: 8.21.0
+        specifier: 8.21.1
+        version: 8.21.1
 
   packages/react:
     dependencies:
@@ -2296,7 +2310,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.82.0
-        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.0)(zod@3.25.76)
+        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.1)(zod@3.25.76)
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
@@ -2373,7 +2387,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.82.0
-        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.0)(zod@3.25.76)
+        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.1)(zod@3.25.76)
       '@vibestudio/credential-client':
         specifier: workspace:*
         version: link:../../../packages/credential-client
@@ -4914,6 +4928,9 @@ packages:
   '@types/istanbul-reports@3.0.4':
     resolution: {integrity: sha512-pk2B1NWalF9toCRu6gjBzR69syFjP4Od8WRAX+0mmf9lAjCRicLOWc+ZrxZHx/0XRjotgkF9t6iaMJ+aXcOdZQ==}
 
+  '@types/json-schema@7.0.15':
+    resolution: {integrity: sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA==}
+
   '@types/mdast@4.0.4':
     resolution: {integrity: sha512-kGaNbPh1k7AFzgpud/gMdvIm5xuECykRR+JnWKQno9TAXVa6WIVCGTPvYGekIDL4uwCZQSYbUxNBSb1aUo79oA==}
 
@@ -6990,7 +7007,7 @@ packages:
     resolution: {integrity: sha512-zd23dbWTjiJ6sSAX6s0HrCZi41JwTA1bQVs0wLQPZ2/5o2gxOJA5wh7yOAUgwYybfhDXyhwlpeQf7Mlgx8EOCA==}
     hasBin: true
     peerDependencies:
-      ws: ^8.18.0
+      ws: 8.21.1
       zod: ^3.25 || ^4.0
     peerDependenciesMeta:
       ws:
@@ -8085,8 +8102,8 @@ packages:
       utf-8-validate:
         optional: true
 
-  ws@8.21.0:
-    resolution: {integrity: sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==}
+  ws@8.21.1:
+    resolution: {integrity: sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -8738,7 +8755,7 @@ snapshots:
       react: 19.0.0
       tslib: 2.8.1
 
-  '@earendil-works/pi-ai@0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.0)(zod@3.25.76)':
+  '@earendil-works/pi-ai@0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.1)(zod@3.25.76)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@3.25.76)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0
@@ -8748,7 +8765,7 @@ snapshots:
       '@smithy/node-http-handler': 4.7.3
       http-proxy-agent: 7.0.2
       https-proxy-agent: 7.0.6
-      openai: 6.26.0(ws@8.21.0)(zod@3.25.76)
+      openai: 6.26.0(ws@8.21.1)(zod@3.25.76)
       partial-json: 0.1.7
       typebox: 1.1.38
     transitivePeerDependencies:
@@ -9191,7 +9208,7 @@ snapshots:
       google-auth-library: 10.9.0
       p-retry: 4.6.2
       protobufjs: 7.6.4
-      ws: 8.21.0
+      ws: 8.21.1
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -9494,7 +9511,7 @@ snapshots:
   '@mistralai/mistralai@2.2.6(@opentelemetry/api@1.9.0)':
     dependencies:
       '@opentelemetry/semantic-conventions': 1.43.0
-      ws: 8.21.0
+      ws: 8.21.1
       zod: 3.25.76
       zod-to-json-schema: 3.25.2(zod@3.25.76)
     optionalDependencies:
@@ -10888,6 +10905,8 @@ snapshots:
   '@types/istanbul-reports@3.0.4':
     dependencies:
       '@types/istanbul-lib-report': 3.0.3
+
+  '@types/json-schema@7.0.15': {}
 
   '@types/mdast@4.0.4':
     dependencies:
@@ -12288,7 +12307,7 @@ snapshots:
       type-fest: 5.7.0
       widest-line: 6.0.0
       wrap-ansi: 9.0.2
-      ws: 8.21.0
+      ws: 8.21.1
       yoga-layout: 3.2.1
     optionalDependencies:
       '@types/react': 19.2.17
@@ -13465,9 +13484,9 @@ snapshots:
       is-docker: 2.2.1
       is-wsl: 2.2.0
 
-  openai@6.26.0(ws@8.21.0)(zod@3.25.76):
+  openai@6.26.0(ws@8.21.1)(zod@3.25.76):
     optionalDependencies:
-      ws: 8.21.0
+      ws: 8.21.1
       zod: 3.25.76
 
   opencollective-postinstall@2.0.3: {}
@@ -14748,7 +14767,7 @@ snapshots:
 
   ws@7.5.11: {}
 
-  ws@8.21.0: {}
+  ws@8.21.1: {}
 
   y18n@5.0.8: {}
 

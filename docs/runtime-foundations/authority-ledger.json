@@ -29992,6 +29992,47 @@
       "capability": "service:settings.getData"
     },
     {
+      "id": "host:shellApproval.getUserlandSealedDetail",
+      "rpcPlane": "host-service",
+      "owner": "shellApproval",
+      "method": "getUserlandSealedDetail",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellApproval.getUserlandSealedDetail"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:shellApproval.getUserlandSealedDetail),allOf(capability(user,service:shellApproval.getUserlandSealedDetail),workspace-member),allOf(capability(code,service:shellApproval.getUserlandSealedDetail),workspace-member))",
+      "r3b": {
+        "review": "exact-pending-approval-detail-read",
+        "change": "Adds a gated, read-only approval-plumbing method that accepts an approval id plus a host-computed digest and returns content only while that exact userland request is pending. The existing approvals.read capability and service authority remain required; settlement removes the content."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:shellApproval.getUserlandSealedDetail"
+    },
+    {
       "id": "host:shellApproval.listPending",
       "rpcPlane": "host-service",
       "owner": "shellApproval",

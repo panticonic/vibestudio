@@ -3,6 +3,7 @@ import { WebSocket } from "ws";
 import { webContents } from "electron";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { serverCdpHostWsUrl } from "@vibestudio/shared/connect";
+import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 import {
   PANEL_PAGE_OBSERVATION_EXPRESSION,
   parsePanelPageObservation,
@@ -72,7 +73,7 @@ export interface CdpHostProviderOptions {
   authToken: string | (() => string);
   hostConnectionId: string;
   getViewManager: () => ViewManager | null;
-  socketFactory?: (url: string) => CdpHostProviderSocket;
+  socketFactory?: (url: string, protocols: string[]) => CdpHostProviderSocket;
   reconnectDelayMs?: number;
   diagnosticsStore?: RuntimeDiagnosticsStore;
   onHostCommand?: (targetId: string, action: string, args: unknown[]) => unknown | Promise<unknown>;
@@ -141,13 +142,16 @@ export class CdpHostProvider {
       return;
     }
     const url = serverCdpHostWsUrl(this.options.serverUrl, this.options.hostConnectionId);
+    const protocols = [webSocketAuthProtocol("cdp-host", this.authToken())];
     const socket: CdpHostProviderSocket =
-      this.options.socketFactory?.(url) ?? (new WebSocket(url) as CdpHostProviderSocket);
+      this.options.socketFactory?.(url, protocols) ??
+      (new WebSocket(url, protocols) as CdpHostProviderSocket);
     this.socket = socket;
     this.authenticated = false;
 
     socket.on("open", () => {
-      socket.send(JSON.stringify({ type: "vibestudio:cdp-auth", token: this.authToken() }));
+      this.authenticated = true;
+      this.registerAllTargets();
     });
     socket.on("message", (data: Buffer | string) => {
       this.handleSocketMessage(data).catch((error: unknown) => {
@@ -332,11 +336,6 @@ export class CdpHostProvider {
 
   private async handleSocketMessage(data: Buffer | string): Promise<void> {
     const message = JSON.parse(data.toString()) as ProviderMessage;
-    if (message.type === "vibestudio:cdp-auth-ok") {
-      this.authenticated = true;
-      this.registerAllTargets();
-      return;
-    }
     await this.handleProviderMessage(message);
   }
 

@@ -9,6 +9,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as zlib from "node:zlib";
 import { WebSocketServer } from "ws";
+import { CDP_WEBSOCKET_MAX_PAYLOAD_BYTES } from "./ingressLimits.js";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type {
   BuildArtifactManifestEntry,
@@ -289,8 +290,13 @@ export class PanelHttpServer {
   initHandlers(): void {
     if (this.handlersInitialized) return;
     this.handlersInitialized = true;
-    // WSS in noServer mode — gateway calls handleGatewayUpgrade for CDP.
-    this.wss = new WebSocketServer({ noServer: true });
+    // CDP/inspector traffic can legitimately contain large screenshots and
+    // protocol results. The bridges authenticate before calling handleUpgrade,
+    // so this post-admission data-plane budget does not apply to anonymous peers.
+    this.wss = new WebSocketServer({
+      noServer: true,
+      maxPayload: CDP_WEBSOCKET_MAX_PAYLOAD_BYTES,
+    });
   }
   private handlersInitialized = false;
 

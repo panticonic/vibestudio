@@ -79,7 +79,7 @@
   },
   "dependencies": {
     "@vibestudio/rpc": "workspace:*",
-    "ws": "^8.18.3",
+    "ws": "^8.21.1",
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shell-core": "workspace:*",
     "@vibestudio/shared": "workspace:*"

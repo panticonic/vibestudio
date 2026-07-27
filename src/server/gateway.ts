@@ -17,7 +17,6 @@ import {
 } from "http";
 import { randomBytes } from "crypto";
 import { connect as connectNet } from "net";
-import { WebSocketServer, WebSocket } from "ws";
 import type { Duplex } from "stream";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { constantTimeStringEqual, type TokenManager } from "@vibestudio/shared/tokenManager";
@@ -78,9 +77,9 @@ export interface PanelHttpHandler {
 
 /** Handler interface for RpcServer (in-process dispatch) */
 export interface RpcHandler {
-  /** Accept a pre-upgraded WebSocket connection from the gateway */
-  handleGatewayWsConnection(ws: WebSocket): void;
-  /** Handle an HTTP POST /rpc request */
+  /** Own the RPC WebSocket upgrade so its protocol budgets are enforced once. */
+  handleGatewayWsUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void;
+  /** Handle an HTTP RPC or WebSocket-admission request. */
   handleGatewayHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> | void;
 }
 
@@ -183,7 +182,6 @@ export interface GatewayDeps {
 
 export class Gateway {
   private server: HttpServer | null = null;
-  private wss: WebSocketServer | null = null;
   private deps: GatewayDeps;
   /** Per-upstream gateway-internal bearer tokens (audit #32). Minted once at
    *  construction; stamped onto every forwarded request after inbound auth
@@ -485,6 +483,38 @@ export class Gateway {
       // POST /rpc → RPC handler (in-process). `/rpc/stream` is the
       // streaming RPC variant for Response-returning service methods,
       // including the credentials.proxyFetch fast path.
+      if (
+        url === "/rpc/ws-admission" &&
+        (req.method === "POST" || req.method === "OPTIONS") &&
+        rpcHandler
+      ) {
+        const origin = req.headers.origin;
+        const allowedOrigins = buildOriginAllowList(this.deps.externalHost);
+        if (!isOriginAllowed(origin, allowedOrigins)) {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Disallowed RPC admission origin" }));
+          return;
+        }
+        const originValue = Array.isArray(origin) ? origin[0] : origin;
+        if (originValue) {
+          res.setHeader("Access-Control-Allow-Origin", originValue);
+          res.setHeader("Vary", "Origin");
+        }
+        if (req.method === "OPTIONS") {
+          res.writeHead(204, {
+            "Access-Control-Allow-Methods": "POST",
+            "Access-Control-Allow-Headers": [
+              "authorization",
+              "x-vibestudio-rpc-client-label",
+              "x-vibestudio-rpc-client-platform",
+            ].join(", "),
+            "Access-Control-Max-Age": "600",
+          });
+          res.end();
+          return;
+        }
+        return rpcHandler.handleGatewayHttpRequest(req, res);
+      }
       if ((url === "/rpc" || url === "/rpc/stream") && req.method === "POST" && rpcHandler) {
         return rpcHandler.handleGatewayHttpRequest(req, res);
       }
@@ -501,10 +531,6 @@ export class Gateway {
     // Loopback HTTP only — the public/TLS ingress is decommissioned; remote
     // reach is the WebRTC pipe, co-located reach is loopback WS.
     this.server = createServer(requestHandler);
-
-    // WebSocket upgrade routing. No payload cap is configured here so the
-    // gateway preserves existing WebSocket behavior for large developer flows.
-    this.wss = new WebSocketServer({ noServer: true });
 
     this.server.on("upgrade", (req, socket, head) => {
       const url = req.url ?? "/";
@@ -524,11 +550,11 @@ export class Gateway {
         return;
       }
 
-      // /rpc → RPC WebSocket (in-process via WSS)
+      // /rpc → RPC WebSocket. RpcServer owns the upgrade so its control-plane
+      // payload and unauthenticated-admission budgets cannot drift from the
+      // handler that interprets the frames.
       if ((url === "/rpc" || url.startsWith("/rpc?")) && rpcHandler) {
-        assertPresent(this.wss).handleUpgrade(req, socket, head, (ws) => {
-          rpcHandler.handleGatewayWsConnection(ws);
-        });
+        rpcHandler.handleGatewayWsUpgrade(req, socket, head);
         return;
       }
 
@@ -628,10 +654,6 @@ export class Gateway {
   }
 
   async stop(): Promise<void> {
-    if (this.wss) {
-      this.wss.close();
-      this.wss = null;
-    }
     if (!this.server) return;
     return new Promise((resolve) => {
       assertPresent(this.server).close(() => resolve());

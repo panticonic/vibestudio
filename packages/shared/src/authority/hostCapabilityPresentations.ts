@@ -720,6 +720,13 @@ export const HOST_CAPABILITY_PRESENTATIONS = {
     description: "Allows {requesterKind} to view application settings.",
     group: "host",
   },
+  "shellApproval.getUserlandSealedDetail": {
+    title: "Inspect complete approval details",
+    action: "inspect complete approval details",
+    description:
+      "Allows {requesterKind} to inspect complete host-sealed details for a pending request.",
+    group: "approvals",
+  },
   "shellApproval.listPending": {
     title: "View requests awaiting your decision",
     action: "view requests awaiting your decision",

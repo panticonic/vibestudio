@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import initSqlJs from "sql.js";
 import { createTestDO } from "@vibestudio/durable/test-utils";
 import { WebhookStoreDO } from "./webhookStoreDO.js";
-import type { WebhookIngressSubscription } from "../../../packages/shared/src/webhooks/ingress.js";
+import {
+  WEBHOOK_DEFAULT_MAX_BODY_BYTES,
+  type WebhookIngressSubscription,
+} from "../../../packages/shared/src/webhooks/ingress.js";
 
 type CreateInput = Omit<WebhookIngressSubscription, "subscriptionId" | "createdAt" | "updatedAt">;
 
@@ -18,6 +21,7 @@ function input(overrides: Partial<CreateInput> = {}): CreateInput {
       method: "onPush",
     },
     delivery: overrides.delivery ?? { mode: "relay" },
+    maxBodyBytes: overrides.maxBodyBytes ?? WEBHOOK_DEFAULT_MAX_BODY_BYTES,
     payload: overrides.payload ?? { type: "json" },
     verifier: overrides.verifier ?? {
       type: "hmac-sha256",
@@ -103,17 +107,19 @@ describe("WebhookStoreDO", () => {
         target,
         verifier,
         delivery: { mode: "relay" },
+        maxBodyBytes: WEBHOOK_DEFAULT_MAX_BODY_BYTES,
         payload: { type: "json" },
         replay: { key: { type: "header", name: "X-Delivery-Id" }, ttlMs: 1234 },
         response: { successStatus: 202, malformedPayload: "ack", dispatchError: "retry" },
       }),
     ]);
     expect(sql.exec(`SELECT value FROM state WHERE key = 'schema_version'`).one()).toEqual({
-      value: "2",
+      value: "3",
     });
     expect(sql.exec(`PRAGMA table_info(webhook_ingress_subscriptions)`).toArray()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "delivery_json", notnull: 1 }),
+        expect.objectContaining({ name: "max_body_bytes", notnull: 1 }),
         expect.objectContaining({ name: "payload_json", notnull: 1 }),
         expect.objectContaining({ name: "response_json", notnull: 1 }),
       ])
@@ -154,7 +160,11 @@ describe("WebhookStoreDO", () => {
     expect(b.subscriptionId).not.toBe(a.subscriptionId);
 
     const fetched = await call<WebhookIngressSubscription | null>("get", a.subscriptionId);
-    expect(fetched).toMatchObject({ subscriptionId: a.subscriptionId, label: "alpha" });
+    expect(fetched).toMatchObject({
+      subscriptionId: a.subscriptionId,
+      label: "alpha",
+      maxBodyBytes: WEBHOOK_DEFAULT_MAX_BODY_BYTES,
+    });
 
     const all = await call<WebhookIngressSubscription[]>("list");
     expect(all).toHaveLength(2);

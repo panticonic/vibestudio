@@ -211,7 +211,7 @@ async function createEventServerClient(
         activeToken = await opts.refreshAuthToken();
         return activeToken;
       },
-      createSocket: (url) => new NodeWsLike(new WebSocket(url)),
+      createSocket: (url, protocols) => new NodeWsLike(new WebSocket(url, protocols)),
     },
   });
   await transport.connectAndWait();

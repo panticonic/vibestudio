@@ -1,7 +1,11 @@
 {
   "version": 1,
-  "censusDigest": "sha256:7c9a1eecaaaf71f32675957144df10afdc74d70eb74368b4f9f80e242745f89c",
+  "censusDigest": "sha256:04e4c2588566714c9a87e973ce7997f4cbd2760199fcdfc20947cd579392bc24",
   "decisions": {
+    "host:shellApproval.getUserlandSealedDetail": {
+      "review": "exact-pending-approval-detail-read",
+      "change": "Adds a gated, read-only approval-plumbing method that accepts an approval id plus a host-computed digest and returns content only while that exact userland request is pending. The existing approvals.read capability and service authority remain required; settlement removes the content."
+    },
     "direct:src/server/internalDOs/evalDO.ts:acquireKernelLease": {
       "review": "host-only-eval-kernel-residency-refresh",
       "change": "Adds a host-only, gated code-execution authority that creates or refreshes the exact EvalDO incarnation's bounded idle residency lease. The receiver validates the lease identity and duration, and no user or code principal may invoke it directly."

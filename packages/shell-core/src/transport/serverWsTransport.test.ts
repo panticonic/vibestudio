@@ -40,12 +40,17 @@ class FakeSocket implements WsLike {
 describe("createServerWsTransport", () => {
   it("preserves selected workspace paths", async () => {
     const sockets: FakeSocket[] = [];
+    const admissionUrls: string[] = [];
     const transport = createServerWsTransport({
       selfId: "shell:mobile",
       serverUrl: "https://server.example/_workspace/dev",
       adapter: {
         now: () => Date.now(),
         getAuthToken: async () => "grant",
+        requestAdmission: async (url) => {
+          admissionUrls.push(url);
+          return { ok: true, grant: "admitted", expiresAt: Date.now() + 15_000 };
+        },
         createSocket: (url) => {
           const socket = new FakeSocket(url);
           sockets.push(socket);
@@ -54,11 +59,12 @@ describe("createServerWsTransport", () => {
       },
     });
     const connected = transport.connectAndWait();
-    await Promise.resolve();
+    for (let index = 0; index < 4; index += 1) await Promise.resolve();
     sockets[0]?.open();
     sockets[0]?.authenticate();
     await connected;
 
     expect(sockets[0]?.url).toBe("wss://server.example/_workspace/dev/rpc");
+    expect(admissionUrls).toEqual(["https://server.example/_workspace/dev/rpc/ws-admission"]);
   });
 });

@@ -631,6 +631,18 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
       summary: z.string().optional(),
       warning: z.string().optional(),
       details: z.array(approvalDetailSchema).optional(),
+      sealedDetails: z
+        .array(
+          z
+            .object({
+              label: z.string(),
+              digest: z.string().regex(/^[0-9a-f]{64}$/),
+              byteLength: z.number().int().nonnegative(),
+              format: z.enum(["plain", "code"]).optional(),
+            })
+            .strict()
+        )
+        .optional(),
       positiveEvidence: z.array(approvalDetailSchema).optional(),
       severity: z.enum(["standard", "dangerous"]).optional(),
       defaultAction: z.enum(["allow", "deny"]).optional(),
@@ -799,6 +811,19 @@ export const shellApprovalMethods = defineServiceMethods({
     returns: z.void(),
     access: RESOLVE_ACCESS,
     examples: [{ args: ["approval-123", { value: "secret-value" }] }],
+  },
+  getUserlandSealedDetail: {
+    description:
+      "Fetch one complete host-sealed detail for a pending userland approval. The digest must be named by that approval; content disappears when the request settles.",
+    args: z.tuple([z.string(), z.string().regex(/^[0-9a-f]{64}$/)]),
+    returns: z.string().nullable(),
+    access: LIST_PENDING_ACCESS,
+    examples: [
+      {
+        args: ["approval-123", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"],
+        returns: "",
+      },
+    ],
   },
   listPending: {
     description:

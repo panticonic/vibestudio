@@ -336,6 +336,26 @@ describe("ensureExternalDeps", () => {
     expect(pkg.overrides).not.toHaveProperty("react");
   });
 
+  it("folds a matching major-scoped override into a direct dependency for npm", async () => {
+    vi.mocked(runNpmInstall).mockClear();
+    fs.rmSync(testExtDepsRoot, { recursive: true, force: true });
+
+    const nodeModulesDir = await ensureExternalDeps(
+      { ws: "^8.18.3" },
+      { "ws@6": "6.2.4", "ws@7": "7.5.11", "ws@8": "8.21.1" }
+    );
+
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(path.dirname(nodeModulesDir), "package.json"), "utf-8")
+    ) as {
+      dependencies: Record<string, string>;
+      overrides?: Record<string, string>;
+    };
+    expect(pkg.dependencies).toEqual({ ws: "8.21.1" });
+    expect(pkg.overrides).toMatchObject({ "ws@6": "6.2.4", "ws@7": "7.5.11" });
+    expect(pkg.overrides).not.toHaveProperty("ws@8");
+  });
+
   it("reinstalls a cache entry when the ready sentinel exists but node_modules is missing", async () => {
     fs.rmSync(testExtDepsRoot, { recursive: true, force: true });
     const first = await ensureExternalDeps({ leftpad: "1.0.0" });

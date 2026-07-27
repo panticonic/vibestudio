@@ -1,5 +1,12 @@
 import * as crypto from "node:crypto";
 
+export {
+  WEBHOOK_DEFAULT_DIRECT_MAX_BODY_BYTES,
+  WEBHOOK_DEFAULT_MAX_BODY_BYTES,
+  WEBHOOK_HARD_MAX_BODY_BYTES,
+  WEBHOOK_RELAY_MAX_BODY_BYTES,
+} from "./limits.js";
+
 export type WebhookVerifierConfig =
   | {
       type: "hmac-sha256";
@@ -102,6 +109,12 @@ export interface CreateWebhookIngressSubscriptionRequest {
   label?: string;
   target: WebhookTarget;
   delivery: WebhookDeliveryConfig;
+  /**
+   * Maximum decoded request-body bytes accepted for this subscription.
+   * Defaults to 1,500,000. Values above that default require direct delivery
+   * and are bounded by the host's configured direct-ingress ceiling.
+   */
+  maxBodyBytes?: number;
   payload: WebhookPayloadFormat;
   verifier: WebhookVerifierConfig;
   replay?: WebhookReplayConfig;
@@ -120,6 +133,7 @@ export interface WebhookIngressSubscription {
   ownerCallerKind: string;
   target: WebhookTarget;
   delivery: WebhookDeliveryConfig;
+  maxBodyBytes: number;
   payload: WebhookPayloadFormat;
   verifier: WebhookVerifierConfig;
   replay?: WebhookReplayConfig;

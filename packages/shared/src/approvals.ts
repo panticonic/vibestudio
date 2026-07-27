@@ -70,6 +70,47 @@ export const userlandApprovalDetailSchema = z
   })
   .strict();
 
+const SHA256_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+/**
+ * The RPC control frame is capped at 16 MiB. Reserve 1 MiB for the request
+ * envelope, approval copy, and encoding overhead; one execution plan may use
+ * the remainder.
+ */
+export const USERLAND_APPROVAL_SEALED_DETAILS_MAX_BYTES = 15 * 1024 * 1024;
+
+/**
+ * Large, security-relevant approval detail submitted for host sealing.
+ *
+ * The content is accepted only on the requester-facing service. Pending
+ * approval projections carry the host-computed reference below, never these
+ * bytes; trusted approval surfaces fetch them lazily while the request lives.
+ */
+export const userlandApprovalSealedDetailInputSchema = z
+  .object({
+    label: approvalCleanString("sealed detail label", { min: 1, max: 40 }),
+    content: z.string(),
+    format: z.enum(["plain", "code"]).optional(),
+  })
+  .strict();
+
+/** Host-computed immutable reference exposed on a pending approval. */
+export const userlandApprovalSealedDetailRefSchema = z
+  .object({
+    label: approvalCleanString("sealed detail label", { min: 1, max: 40 }),
+    digest: z.string().regex(SHA256_DIGEST_PATTERN),
+    byteLength: z.number().int().nonnegative(),
+    format: z.enum(["plain", "code"]).optional(),
+  })
+  .strict();
+
+/** Exact host-sealed bytes returned to the requester after approval. */
+export const approvedUserlandSealedDetailSchema = z
+  .object({
+    digest: z.string().regex(SHA256_DIGEST_PATTERN),
+    content: z.string(),
+  })
+  .strict();
+
 export const approvalPrincipalSchema = z
   .object({
     callerId: approvalCleanString("caller id", { min: 1, max: 200 }),
@@ -105,6 +146,7 @@ export const userlandApprovalRequestSchema = z
     summary: approvalCleanString("summary", { max: 1000, multiline: true }).optional(),
     warning: approvalCleanString("warning", { max: 200 }).optional(),
     details: z.array(userlandApprovalDetailSchema).max(8).optional(),
+    sealedDetails: z.array(userlandApprovalSealedDetailInputSchema).max(4).optional(),
     positiveEvidence: z.array(userlandApprovalDetailSchema).max(6).optional(),
     severity: z.enum(["standard", "dangerous"]).optional(),
     defaultAction: z.enum(["allow", "deny"]).optional(),
@@ -113,6 +155,18 @@ export const userlandApprovalRequestSchema = z
   })
   .strict()
   .superRefine((req, ctx) => {
+    const sealedBytes = (req.sealedDetails ?? []).reduce(
+      (total, detail) => total + new TextEncoder().encode(detail.content).byteLength,
+      0
+    );
+    if (sealedBytes > USERLAND_APPROVAL_SEALED_DETAILS_MAX_BYTES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sealedDetails"],
+        message:
+          "sealed approval details exceed the RPC frame budget; execute a reviewed immutable file or artifact instead",
+      });
+    }
     const values = new Set<string>();
     for (const [index, option] of (req.options ?? []).entries()) {
       if (values.has(option.value)) {
@@ -127,7 +181,13 @@ export const userlandApprovalRequestSchema = z
   });
 
 export const userlandApprovalChoiceSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("choice"), choice: z.string() }).strict(),
+  z
+    .object({
+      kind: z.literal("choice"),
+      choice: z.string(),
+      sealedDetails: z.array(approvedUserlandSealedDetailSchema).max(4).optional(),
+    })
+    .strict(),
   z.object({ kind: z.literal("dismissed") }).strict(),
   z
     .object({
@@ -161,6 +221,7 @@ export const userlandApprovalGrantSchema = z
         label: z.string().optional(),
       })
       .strict(),
+    reviewDigest: z.string().regex(SHA256_DIGEST_PATTERN).optional(),
     choice: z.string(),
     grantedAt: z.number(),
     grantedBy: z.string().optional(),
@@ -422,6 +483,8 @@ export interface UserlandApprovalGrant {
   };
   issuer?: UserlandApprovalIssuer;
   subject: UserlandApprovalSubject;
+  /** Host-derived identity of the sealed review material this grant covers. */
+  reviewDigest?: string;
   choice: string;
   grantedAt: number;
   grantedBy?: string;
@@ -791,6 +854,8 @@ export interface PendingUserlandApproval extends PendingApprovalBase {
     value: string;
     format?: ApprovalDetailFormat;
   }>;
+  /** Host-sealed, lazily fetched detail references. Bytes live only with the pending request. */
+  sealedDetails?: UserlandApprovalSealedDetailRef[];
   positiveEvidence?: Array<{
     label: string;
     value: string;
@@ -848,6 +913,8 @@ export interface UserlandApprovalRequest {
     value: string;
     format?: ApprovalDetailFormat;
   }>;
+  /** Complete immutable detail content for the host to seal and expose lazily. */
+  sealedDetails?: UserlandApprovalSealedDetailInput[];
   /** Positive proof for security claims displayed by the prompt. */
   positiveEvidence?: Array<{
     label: string;
@@ -869,13 +936,19 @@ export interface UserlandApprovalRequest {
 }
 
 export type UserlandApprovalChoice =
-  | { kind: "choice"; choice: string }
+  | { kind: "choice"; choice: string; sealedDetails?: ApprovedUserlandSealedDetail[] }
   | { kind: "dismissed" }
   | { kind: "uncallable"; reason: "no-user-context" };
 
 export type SecretInputResult =
   | { decision: "submit"; values: Record<string, string> }
   | { decision: "deny" };
+
+export type UserlandApprovalSealedDetailInput = z.infer<
+  typeof userlandApprovalSealedDetailInputSchema
+>;
+export type UserlandApprovalSealedDetailRef = z.infer<typeof userlandApprovalSealedDetailRefSchema>;
+export type ApprovedUserlandSealedDetail = z.infer<typeof approvedUserlandSealedDetailSchema>;
 
 export type SecretInputRequest = z.infer<typeof secretInputRequestSchema>;
 

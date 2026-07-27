@@ -652,16 +652,17 @@ export class CapabilityGrantStore {
   lookupUserland(
     principal: ApprovalPrincipal,
     subjectId: string,
-    issuer?: UserlandApprovalIssuer
+    issuer?: UserlandApprovalIssuer,
+    reviewDigest?: string
   ): UserlandApprovalGrant | null {
     return (
-      this.userlandRows(principal, subjectId, issuer).find(
+      this.userlandRows(principal, subjectId, issuer, reviewDigest, true).find(
         (entry) => entry.grant.scope === "session"
       )?.grant ??
-      this.userlandRows(principal, subjectId, issuer).find(
+      this.userlandRows(principal, subjectId, issuer, reviewDigest, true).find(
         (entry) => entry.grant.scope === "caller"
       )?.grant ??
-      this.userlandRows(principal, subjectId, issuer).find(
+      this.userlandRows(principal, subjectId, issuer, reviewDigest, true).find(
         (entry) => entry.grant.scope === "version"
       )?.grant ??
       null
@@ -678,7 +679,8 @@ export class CapabilityGrantStore {
     decision?: {
       provenance: IssueAuthorityGrantInput["provenance"];
       decidedBy: string;
-    }
+    },
+    reviewDigest?: string
   ): Promise<void> {
     const effectiveIssuer = issuer ?? {
       kind: principal.callerKind,
@@ -686,11 +688,11 @@ export class CapabilityGrantStore {
     };
     const subjectPrincipal = userlandSubject(principal, scope);
     this.transaction(() => {
-      this.revokeUserlandRows(principal, subject.id, effectiveIssuer, scope, now);
+      this.revokeUserlandRows(principal, subject.id, effectiveIssuer, scope, now, reviewDigest);
       this.issue({
         effect: choice === "deny" ? "deny" : "allow",
         capability: userlandCapability(effectiveIssuer, choice),
-        resource: { kind: "exact", key: subject.id },
+        resource: { kind: "exact", key: userlandResourceKey(subject.id, reviewDigest) },
         subject: subjectPrincipal,
         constraints:
           scope === "session"
@@ -708,9 +710,11 @@ export class CapabilityGrantStore {
     principal: ApprovalPrincipal,
     subjectId: string,
     issuer?: UserlandApprovalIssuer,
-    now = Date.now()
+    now = Date.now(),
+    reviewDigest?: string,
+    exactReview = false
   ): Promise<boolean> {
-    const rows = this.userlandRows(principal, subjectId, issuer);
+    const rows = this.userlandRows(principal, subjectId, issuer, reviewDigest, exactReview);
     let changed = false;
     this.transaction(() => {
       for (const row of rows) changed = this.revoke(row.id, now) || changed;
@@ -744,10 +748,16 @@ export class CapabilityGrantStore {
   private userlandRows(
     principal: ApprovalPrincipal,
     subjectId?: string,
-    issuer?: UserlandApprovalIssuer
+    issuer?: UserlandApprovalIssuer,
+    reviewDigest?: string,
+    exactReview = false
   ): Array<{ id: string; grant: UserlandApprovalGrant }> {
     const candidates = this.allUserlandRows().filter(({ grant }) => {
       if (subjectId !== undefined && grant.subject.id !== subjectId) return false;
+      if (exactReview && grant.reviewDigest !== reviewDigest) return false;
+      if (!exactReview && reviewDigest !== undefined && grant.reviewDigest !== reviewDigest) {
+        return false;
+      }
       if (!userlandGrantApplies(grant, principal)) return false;
       const effectiveIssuer = userlandEffectiveIssuer(grant);
       const expectedIssuer =
@@ -783,9 +793,10 @@ export class CapabilityGrantStore {
     subjectId: string,
     issuer: UserlandApprovalIssuer,
     scope: UserlandApprovalGrantScope,
-    now: number
+    now: number,
+    reviewDigest?: string
   ): void {
-    for (const row of this.userlandRows(principal, subjectId, issuer)) {
+    for (const row of this.userlandRows(principal, subjectId, issuer, reviewDigest, true)) {
       if (row.grant.scope === scope) this.revoke(row.id, now);
     }
   }
@@ -806,6 +817,25 @@ type GrantRow = Record<string, SQLOutputValue>;
 type EnvelopeRuleRow = Record<string, SQLOutputValue>;
 
 const USERLAND_CAPABILITY_PREFIX = "userland.choice/";
+const USERLAND_REVIEW_SEPARATOR = "#review:";
+
+function userlandResourceKey(subjectId: string, reviewDigest?: string): string {
+  return reviewDigest ? `${subjectId}${USERLAND_REVIEW_SEPARATOR}${reviewDigest}` : subjectId;
+}
+
+function parseUserlandResourceKey(value: string): {
+  subjectId: string;
+  reviewDigest?: string;
+} {
+  const separator = value.lastIndexOf(USERLAND_REVIEW_SEPARATOR);
+  if (separator < 0) return { subjectId: value };
+  const subjectId = value.slice(0, separator);
+  const reviewDigest = value.slice(separator + USERLAND_REVIEW_SEPARATOR.length);
+  if (!subjectId || !/^[0-9a-f]{64}$/u.test(reviewDigest)) {
+    throw new Error("Invalid userland sealed-review resource key");
+  }
+  return { subjectId, reviewDigest };
+}
 
 function encoded(value: string): string {
   return Buffer.from(value, "utf8").toString("base64url");
@@ -916,6 +946,7 @@ function userlandGrantFromRow(row: GrantRow): UserlandApprovalGrant {
   } else if (!subject.startsWith("session:userland/")) {
     throw new Error(`Invalid caller-scoped userland subject ${subject}`);
   }
+  const resource = parseUserlandResourceKey(String(row["resource_key"]));
   return {
     principal: {
       callerId: principal.callerId,
@@ -924,7 +955,8 @@ function userlandGrantFromRow(row: GrantRow): UserlandApprovalGrant {
       effectiveVersion: principal.effectiveVersion,
     },
     issuer,
-    subject: { id: String(row["resource_key"]) },
+    subject: { id: resource.subjectId },
+    ...(resource.reviewDigest ? { reviewDigest: resource.reviewDigest } : {}),
     choice,
     grantedAt: Number(row["created_at"]),
     ...(row["decided_by"] === null ? {} : { grantedBy: String(row["decided_by"]) }),

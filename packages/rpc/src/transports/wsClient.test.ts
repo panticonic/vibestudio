@@ -1,6 +1,7 @@
 import { wsClientTransport } from "./wsClient.js";
 import type { WsLike } from "../protocol/wsAdapter.js";
 import { RPC_CONTRACT_VERSION } from "../protocol/contractVersion.js";
+import { webSocketAuthProtocol } from "../protocol/webSocketAuthProtocol.js";
 
 class FakeSocket implements WsLike {
   readyState = 0;
@@ -24,12 +25,16 @@ class FakeSocket implements WsLike {
     this.onopen?.();
   }
 
-  authenticate(contractVersion: number = RPC_CONTRACT_VERSION): void {
+  authenticate(
+    contractVersion: number = RPC_CONTRACT_VERSION,
+    extras: { serverBootId?: string; sessionDirty?: boolean } = {}
+  ): void {
     this.onmessage?.({
       data: JSON.stringify({
         success: true,
         type: "ws:auth-result",
         contractVersion,
+        ...extras,
       }),
     });
   }
@@ -37,9 +42,18 @@ class FakeSocket implements WsLike {
 
 function createTransportHarness() {
   const sockets: FakeSocket[] = [];
+  const socketProtocols: string[][] = [];
+  const admissionRequests: string[] = [];
+  let nextGrant = 0;
   const transport = wsClientTransport({
     adapter: {
-      createSocket: () => {
+      requestAdmission: async (_url, request) => {
+        admissionRequests.push(request.credential);
+        nextGrant += 1;
+        return { ok: true, grant: `grant-${nextGrant}`, expiresAt: Date.now() + 15_000 };
+      },
+      createSocket: (_url, protocols) => {
+        socketProtocols.push(protocols);
         const socket = new FakeSocket();
         sockets.push(socket);
         return socket;
@@ -50,7 +64,11 @@ function createTransportHarness() {
     getWsUrl: () => "wss://server.example/rpc",
     selfId: "app:mobile:test",
   });
-  return { sockets, transport };
+  return { admissionRequests, socketProtocols, sockets, transport };
+}
+
+async function flushAsyncWork(): Promise<void> {
+  for (let index = 0; index < 6; index += 1) await Promise.resolve();
 }
 
 describe("wsClientTransport", () => {
@@ -69,7 +87,7 @@ describe("wsClientTransport", () => {
       "Server WS connection timeout (10000ms): wss://server.example/rpc"
     );
 
-    await Promise.resolve();
+    await flushAsyncWork();
     await vi.advanceTimersByTimeAsync(10_000);
 
     await assertion;
@@ -82,7 +100,7 @@ describe("wsClientTransport", () => {
       settled = true;
     });
 
-    await Promise.resolve();
+    await flushAsyncWork();
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(settled).toBe(false);
@@ -94,15 +112,17 @@ describe("wsClientTransport", () => {
   });
 
   it("declares the RPC contract version in its authentication handshake", async () => {
-    const { sockets, transport } = createTransportHarness();
+    const { socketProtocols, sockets, transport } = createTransportHarness();
     const connected = transport.connectAndWait();
-    await Promise.resolve();
+    await flushAsyncWork();
     sockets[0]?.open();
 
     expect(JSON.parse(sockets[0]!.sent[0]!)).toMatchObject({
       type: "ws:auth",
       contractVersion: RPC_CONTRACT_VERSION,
     });
+    expect(socketProtocols[0]).toEqual([webSocketAuthProtocol("rpc", "grant-1")]);
+    expect(JSON.parse(sockets[0]!.sent[0]!)).toMatchObject({ token: "grant-1" });
 
     sockets[0]?.authenticate();
     await connected;
@@ -114,7 +134,7 @@ describe("wsClientTransport", () => {
     const rejected = expect(connected).rejects.toThrow(
       `RPC contract mismatch: server ${RPC_CONTRACT_VERSION + 1} (want ${RPC_CONTRACT_VERSION})`
     );
-    await Promise.resolve();
+    await flushAsyncWork();
     sockets[0]?.open();
     sockets[0]?.authenticate(RPC_CONTRACT_VERSION + 1);
 
@@ -125,7 +145,7 @@ describe("wsClientTransport", () => {
   it("does not reconnect after a terminal invalid-token close by default", async () => {
     const { sockets, transport } = createTransportHarness();
     const connected = transport.connectAndWait();
-    await Promise.resolve();
+    await flushAsyncWork();
     sockets[0]?.open();
     sockets[0]?.authenticate();
     await connected;
@@ -139,9 +159,54 @@ describe("wsClientTransport", () => {
   it("does not spin when auth refresh returns the rejected token", async () => {
     const sockets: FakeSocket[] = [];
     const refreshAuthToken = vi.fn(async () => "token");
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const transport = wsClientTransport({
       adapter: {
+        requestAdmission: async () => ({
+          ok: false,
+          code: "invalid_credential",
+          message: "Invalid token",
+        }),
+        createSocket: () => {
+          const socket = new FakeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        getAuthToken: async () => "token",
+        refreshAuthToken,
+        now: () => Date.now(),
+      },
+      getWsUrl: () => "wss://server.example/rpc",
+      selfId: "panel:nav-test",
+    });
+
+    const connected = transport.connectAndWait();
+    await flushAsyncWork();
+
+    await expect(connected).rejects.toThrow("Auth refresh returned the rejected token");
+    expect(refreshAuthToken).toHaveBeenCalledTimes(1);
+    expect(sockets).toHaveLength(0);
+    expect(transport.status?.()).toBe("disconnected");
+  });
+
+  it("honors typed admission retry timing without refreshing or opening a socket", async () => {
+    const sockets: FakeSocket[] = [];
+    const requestAdmission = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        code: "admission_saturated",
+        message: "busy",
+        retryAfterMs: 2_500,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        grant: "after-retry",
+        expiresAt: Date.now() + 15_000,
+      });
+    const refreshAuthToken = vi.fn(async () => "fresh");
+    const transport = wsClientTransport({
+      adapter: {
+        requestAdmission,
         createSocket: () => {
           const socket = new FakeSocket();
           sockets.push(socket);
@@ -156,27 +221,96 @@ describe("wsClientTransport", () => {
     });
 
     transport.connect();
-    await Promise.resolve();
-    sockets[0]?.open();
-    sockets[0]?.onmessage?.({
-      data: JSON.stringify({
-        type: "ws:auth-result",
-        success: false,
-        error: "Invalid token",
-      }),
+    await flushAsyncWork();
+    expect(sockets).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(2_499);
+    expect(requestAdmission).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(requestAdmission).toHaveBeenCalledTimes(2);
+    expect(sockets).toHaveLength(1);
+    expect(refreshAuthToken).not.toHaveBeenCalled();
+  });
+
+  it("retries a first-connect pre-open transport failure with a fresh admission grant", async () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    const { admissionRequests, sockets, transport } = createTransportHarness();
+    const connected = transport.connectAndWait();
+    await flushAsyncWork();
+
+    expect(sockets).toHaveLength(1);
+    sockets[0]!.onerror?.(new Error("upgrade race"));
+    sockets[0]!.onclose?.({ code: 1006, reason: "upgrade failed" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushAsyncWork();
+
+    expect(admissionRequests).toEqual(["token", "token"]);
+    expect(sockets).toHaveLength(2);
+    sockets[1]!.open();
+    sockets[1]!.authenticate();
+    await expect(connected).resolves.toBeUndefined();
+    random.mockRestore();
+  });
+
+  it("refreshes a stale post-restart token and emits cold recovery after reconnect", async () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    const stale = "a".repeat(64);
+    const fresh = "b".repeat(64);
+    let admissionAttempt = 0;
+    const sockets: FakeSocket[] = [];
+    const refreshAuthToken = vi.fn(async () => fresh);
+    const recovery: string[] = [];
+    const transport = wsClientTransport({
+      adapter: {
+        requestAdmission: async (_url, request) => {
+          admissionAttempt += 1;
+          if (admissionAttempt === 2 && request.credential === stale) {
+            return {
+              ok: false,
+              code: "invalid_credential",
+              message: "Invalid token",
+            };
+          }
+          return {
+            ok: true,
+            grant: `grant-${admissionAttempt}`,
+            expiresAt: Date.now() + 15_000,
+          };
+        },
+        createSocket: () => {
+          const socket = new FakeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        getAuthToken: async () => stale,
+        refreshAuthToken,
+        now: () => Date.now(),
+      },
+      getWsUrl: () => "wss://server.example/rpc",
+      selfId: "panel:nav-test",
+      onRecovery: (kind) => {
+        recovery.push(kind);
+      },
     });
-    await Promise.resolve();
-    await Promise.resolve();
-    await vi.advanceTimersByTimeAsync(60_000);
+
+    const connected = transport.connectAndWait();
+    await flushAsyncWork();
+    sockets[0]!.open();
+    sockets[0]!.authenticate(RPC_CONTRACT_VERSION, { serverBootId: "boot-old" });
+    await connected;
+    expect(recovery).toEqual(["resubscribe"]);
+
+    sockets[0]!.onclose?.({ code: 1006, reason: "server restart" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushAsyncWork();
+    await vi.runOnlyPendingTimersAsync();
+    await flushAsyncWork();
 
     expect(refreshAuthToken).toHaveBeenCalledTimes(1);
-    expect(sockets).toHaveLength(1);
-    expect(transport.status?.()).toBe("disconnected");
-    expect(warn).toHaveBeenCalledWith(
-      "[wsClientTransport] Auth refresh failed:",
-      expect.objectContaining({ message: "Auth refresh returned the rejected token" })
-    );
-    warn.mockRestore();
+    expect(sockets).toHaveLength(2);
+    sockets[1]!.open();
+    sockets[1]!.authenticate(RPC_CONTRACT_VERSION, { serverBootId: "boot-new" });
+    expect(recovery).toEqual(["resubscribe", "cold-recover"]);
+    random.mockRestore();
   });
 
   it("synthesizes a rejecting response envelope from ws:routed-response-error", async () => {
@@ -187,7 +321,7 @@ describe("wsClientTransport", () => {
     });
 
     const connected = transport.connectAndWait();
-    await Promise.resolve();
+    await flushAsyncWork();
     sockets[0]?.open();
     sockets[0]?.authenticate();
     await connected;
@@ -223,7 +357,7 @@ describe("wsClientTransport", () => {
     transport.onMessage((envelope) => delivered.push(envelope));
 
     const connected = transport.connectAndWait();
-    await Promise.resolve();
+    await flushAsyncWork();
     sockets[0]?.open();
     sockets[0]?.authenticate();
     await connected;
@@ -245,7 +379,7 @@ describe("wsClientTransport", () => {
   it("returns server-initiated responses through ws:rpc", async () => {
     const { sockets, transport } = createTransportHarness();
     const connected = transport.connectAndWait();
-    await Promise.resolve();
+    await flushAsyncWork();
     sockets[0]?.open();
     sockets[0]?.authenticate();
     await connected;

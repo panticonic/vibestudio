@@ -4,6 +4,12 @@ import type {
   RotateWebhookIngressSecretResult,
   WebhookIngressSubscriptionSummary,
 } from "@vibestudio/shared/webhooks/ingress";
+export {
+  WEBHOOK_DEFAULT_MAX_BODY_BYTES,
+  WEBHOOK_DEFAULT_DIRECT_MAX_BODY_BYTES,
+  WEBHOOK_HARD_MAX_BODY_BYTES,
+  WEBHOOK_RELAY_MAX_BODY_BYTES,
+} from "@vibestudio/shared/webhooks/limits";
 export type {
   CreateWebhookIngressSubscriptionRequest,
   RotateWebhookIngressSecretRequest,

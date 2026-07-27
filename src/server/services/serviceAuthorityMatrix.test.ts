@@ -9,7 +9,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ExtensionHost } from "@vibestudio/extension-host";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { createEvalService } from "./evalService.js";
 import { createPushService } from "./pushService.js";
+import { createWebhookIngressService } from "./webhookIngressService.js";
 
 const servicesDir = fileURLToPath(new URL(".", import.meta.url));
 const goldenPath = join(servicesDir, "__serviceAuthorityMatrix.golden.json");
@@ -62,11 +64,21 @@ async function collectAuthorityMatrix(): Promise<AuthorityMatrix> {
     inertDeps() as ExtensionHost
   );
   definitions.set(extensionDefinition.name, extensionDefinition);
+  // Eval's required host integrations are only touched by method handlers.
+  // Construct it explicitly so the complete census cannot depend on whether
+  // the generic callable proxy happens to satisfy a newly added dependency.
+  const evalDefinition = createEvalService(inertDeps() as Parameters<typeof createEvalService>[0]);
+  definitions.set(evalDefinition.name, evalDefinition);
   // Push owns a SQLite store, so the generic callable proxy is not a valid
   // construction dependency. Include its real definition with an isolated
   // in-memory store instead of letting the census silently skip it.
   const pushDefinition = createPushService({ databasePath: ":memory:" }).definition;
   definitions.set(pushDefinition.name, pushDefinition);
+  // Webhook ingress validates optional primitive configuration at construction
+  // time. Empty deps select its production defaults and an isolated in-memory
+  // store, preserving authority coverage without weakening that validation.
+  const webhookIngressDefinition = createWebhookIngressService({}).definition;
+  definitions.set(webhookIngressDefinition.name, webhookIngressDefinition);
   for (const file of files) {
     const module = (await import(/* @vite-ignore */ join(servicesDir, file))) as Record<
       string,

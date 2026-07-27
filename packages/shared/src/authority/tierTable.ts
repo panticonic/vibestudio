@@ -1971,6 +1971,12 @@ export const METHOD_TIERS = {
     rationale:
       "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
   },
+  "shellApproval.getUserlandSealedDetail": {
+    tier: "gated",
+    session: "codeOnly",
+    rationale:
+      "G5: exact pending-request approval plumbing; §2 durable code identity or host approval plumbing",
+  },
   "shellApproval.listPending": {
     tier: "gated",
     session: "codeOnly",

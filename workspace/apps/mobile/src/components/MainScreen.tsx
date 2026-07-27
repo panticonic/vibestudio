@@ -526,6 +526,13 @@ export function MainScreen() {
     },
     [removeResolvedApproval, shellClient]
   );
+  const fetchUserlandSealedDetail = useCallback(
+    async (approvalId: string, digest: string) => {
+      if (!shellClient) throw new Error("Shell client not available");
+      return shellClient.shellApproval.getUserlandSealedDetail(approvalId, digest);
+    },
+    [shellClient]
+  );
   const resolveMissionReview = useCallback(
     async (
       approvalId: string,
@@ -1835,6 +1842,7 @@ export function MainScreen() {
         onSubmitCredentialInput={submitCredentialInput}
         onSubmitSecretInput={submitSecretInput}
         onResolveUserland={resolveUserland}
+        onFetchUserlandSealedDetail={fetchUserlandSealedDetail}
         onResolveMissionReview={resolveMissionReview}
         onResolveExternalAgent={resolveExternalAgent}
         onNavigateToPanel={activatePanel}

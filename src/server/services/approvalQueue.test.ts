@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { createApprovalQueue, type UnitBatchApprovalQueueRequest } from "./approvalQueue.js";
+import {
+  createApprovalQueue,
+  USERLAND_APPROVAL_PENDING_SEALED_BYTES_PER_CALLER,
+  type UnitBatchApprovalQueueRequest,
+} from "./approvalQueue.js";
 
 function createQueue(overrides: Partial<Parameters<typeof createApprovalQueue>[0]> = {}) {
   const emit = vi.fn();
@@ -814,6 +818,214 @@ describe("approvalQueue", () => {
       queue.resolveUserland(pending[0]!.approvalId, "allow");
       await expect(first).resolves.toEqual({ kind: "choice", choice: "allow" });
       await expect(second).resolves.toEqual({ kind: "choice", choice: "allow" });
+    });
+
+    it("keeps complete sealed details host-owned until settlement and returns the same bytes", async () => {
+      const { queue } = createQueue();
+      const content = `${"x".repeat(1_100)}dangerous-suffix`;
+      const digest = "a".repeat(64);
+      const result = queue.requestUserland({
+        ...userlandRequest,
+        sealedDetails: [
+          {
+            ref: {
+              label: "Complete execution plan",
+              digest,
+              byteLength: Buffer.byteLength(content),
+              format: "code",
+            },
+            content,
+          },
+        ],
+      });
+      const pending = queue.listPending()[0]!;
+
+      expect(pending).toMatchObject({
+        kind: "userland",
+        sealedDetails: [{ digest, byteLength: Buffer.byteLength(content) }],
+      });
+      expect(JSON.stringify(pending)).not.toContain("dangerous-suffix");
+      expect(queue.getUserlandSealedDetail(pending.approvalId, digest)).toBe(content);
+
+      await queue.resolveUserland(pending.approvalId, "allow");
+      await expect(result).resolves.toEqual({
+        kind: "choice",
+        choice: "allow",
+        sealedDetails: [{ digest, content }],
+      });
+      expect(queue.getUserlandSealedDetail(pending.approvalId, digest)).toBeNull();
+    });
+
+    it("drops sealed detail bytes on dismiss, abort, and caller cancellation", async () => {
+      const digest = "b".repeat(64);
+      const content = "x".repeat(USERLAND_APPROVAL_PENDING_SEALED_BYTES_PER_CALLER);
+      const sealedRequest = (signal?: AbortSignal) => ({
+        ...userlandRequest,
+        ...(signal ? { signal } : {}),
+        sealedDetails: [
+          {
+            ref: { label: "Plan", digest, byteLength: content.length, format: "code" as const },
+            content,
+          },
+        ],
+      });
+      const assertBudgetReleased = async (queue: ReturnType<typeof createQueue>["queue"]) => {
+        const retry = queue.requestUserland({
+          ...userlandRequest,
+          subject: { id: "team-x:retry" },
+          sealedDetails: [
+            {
+              ref: { label: "Plan", digest: "f".repeat(64), byteLength: 1, format: "code" },
+              content: "x",
+            },
+          ],
+        });
+        await queue.resolveUserland(queue.listPending()[0]!.approvalId, "deny");
+        await expect(retry).resolves.toMatchObject({ kind: "choice", choice: "deny" });
+      };
+
+      {
+        const { queue } = createQueue();
+        const result = queue.requestUserland(sealedRequest());
+        const id = queue.listPending()[0]!.approvalId;
+        await queue.resolve(id, "dismiss");
+        await expect(result).resolves.toEqual({ kind: "dismissed" });
+        expect(queue.getUserlandSealedDetail(id, digest)).toBeNull();
+        await assertBudgetReleased(queue);
+      }
+
+      {
+        const { queue } = createQueue();
+        const controller = new AbortController();
+        const result = queue.requestUserland(sealedRequest(controller.signal));
+        const id = queue.listPending()[0]!.approvalId;
+        controller.abort();
+        await expect(result).resolves.toEqual({ kind: "dismissed" });
+        expect(queue.getUserlandSealedDetail(id, digest)).toBeNull();
+        await assertBudgetReleased(queue);
+      }
+
+      {
+        const { queue } = createQueue();
+        const result = queue.requestUserland(sealedRequest());
+        const id = queue.listPending()[0]!.approvalId;
+        queue.cancelForCaller(userlandRequest.principal.callerId);
+        await expect(result).resolves.toEqual({ kind: "dismissed" });
+        expect(queue.getUserlandSealedDetail(id, digest)).toBeNull();
+        await assertBudgetReleased(queue);
+      }
+    });
+
+    it("bounds retained sealed bytes per caller and releases the budget on settlement", async () => {
+      const { queue } = createQueue();
+      const maximumPlan = "x".repeat(USERLAND_APPROVAL_PENDING_SEALED_BYTES_PER_CALLER);
+      const maximumDigest = "c".repeat(64);
+      const result = queue.requestUserland({
+        ...userlandRequest,
+        sealedDetails: [
+          {
+            ref: {
+              label: "Plan",
+              digest: maximumDigest,
+              byteLength: maximumPlan.length,
+              format: "code",
+            },
+            content: maximumPlan,
+          },
+        ],
+      });
+      const approvalId = queue.listPending()[0]!.approvalId;
+
+      expect(() =>
+        queue.requestUserland({
+          ...userlandRequest,
+          subject: { id: "team-x:second-plan" },
+          sealedDetails: [
+            {
+              ref: { label: "Plan", digest: "d".repeat(64), byteLength: 1, format: "code" },
+              content: "x",
+            },
+          ],
+        })
+      ).toThrow(/Resolve or cancel an existing approval/);
+
+      await queue.resolveUserland(approvalId, "allow");
+      await expect(result).resolves.toMatchObject({ kind: "choice", choice: "allow" });
+
+      const retry = queue.requestUserland({
+        ...userlandRequest,
+        subject: { id: "team-x:second-plan" },
+        sealedDetails: [
+          {
+            ref: { label: "Plan", digest: "d".repeat(64), byteLength: 1, format: "code" },
+            content: "x",
+          },
+        ],
+      });
+      await queue.resolveUserland(queue.listPending()[0]!.approvalId, "deny");
+      await expect(retry).resolves.toMatchObject({ kind: "choice", choice: "deny" });
+    });
+
+    it("bounds aggregate retained sealed bytes and releases it on cancellation", async () => {
+      const { queue } = createQueue();
+      const maximumPlan = "x".repeat(USERLAND_APPROVAL_PENDING_SEALED_BYTES_PER_CALLER);
+      const pending: Promise<unknown>[] = [];
+
+      for (let index = 0; index < 4; index += 1) {
+        pending.push(
+          queue.requestUserland({
+            ...userlandRequest,
+            principal: {
+              ...userlandRequest.principal,
+              callerId: `worker:${index}`,
+            },
+            subject: { id: `team-x:plan-${index}` },
+            sealedDetails: [
+              {
+                ref: {
+                  label: "Plan",
+                  digest: `${index}`.repeat(64),
+                  byteLength: maximumPlan.length,
+                  format: "code",
+                },
+                content: maximumPlan,
+              },
+            ],
+          })
+        );
+      }
+
+      expect(() =>
+        queue.requestUserland({
+          ...userlandRequest,
+          principal: { ...userlandRequest.principal, callerId: "worker:overflow" },
+          subject: { id: "team-x:overflow" },
+          sealedDetails: [
+            {
+              ref: { label: "Plan", digest: "e".repeat(64), byteLength: 1, format: "code" },
+              content: "x",
+            },
+          ],
+        })
+      ).toThrow(/aggregate sealed-detail budget exceeded/);
+
+      queue.cancelForCaller("worker:0");
+      const retry = queue.requestUserland({
+        ...userlandRequest,
+        principal: { ...userlandRequest.principal, callerId: "worker:overflow" },
+        subject: { id: "team-x:overflow" },
+        sealedDetails: [
+          {
+            ref: { label: "Plan", digest: "e".repeat(64), byteLength: 1, format: "code" },
+            content: "x",
+          },
+        ],
+      });
+
+      for (const approval of queue.listPending()) {
+        await queue.resolveUserland(approval.approvalId, "deny");
+      }
+      await expect(Promise.all([...pending, retry])).resolves.toHaveLength(5);
     });
 
     it("keeps different issuers with the same subject separate", () => {

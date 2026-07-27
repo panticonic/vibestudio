@@ -362,15 +362,48 @@ function applyDirectDependencyOverrides(
   const dependencies = { ...deps };
   const transitiveOverrides: Record<string, string> = {};
 
-  for (const [name, version] of Object.entries(overrides)) {
-    if (Object.prototype.hasOwnProperty.call(dependencies, name)) {
-      dependencies[name] = version;
+  for (const [selector, version] of Object.entries(overrides)) {
+    const direct = directDependencyOverrideTarget(selector, dependencies);
+    if (direct) {
+      // npm rejects an override that targets a direct dependency unless the
+      // dependency itself names that exact spec. Apply a matching major-scoped
+      // override to the direct dependency and omit it from npm's overrides;
+      // the generated install still enforces the same resolved version.
+      dependencies[direct] = version;
     } else {
-      transitiveOverrides[name] = version;
+      transitiveOverrides[selector] = version;
     }
   }
 
   return { dependencies, overrides: transitiveOverrides };
+}
+
+/**
+ * Returns the direct dependency selected by an npm/pnpm simple override, if
+ * any.  Package-manager override keys can be either `name` or `name@major`
+ * (including scoped names such as `@scope/name@major`).  The latter is what
+ * lets the root pin vulnerable transitive majors independently.
+ */
+function directDependencyOverrideTarget(
+  selector: string,
+  dependencies: Record<string, string>
+): string | null {
+  if (Object.prototype.hasOwnProperty.call(dependencies, selector)) return selector;
+
+  const at = selector.lastIndexOf("@");
+  if (at <= 0) return null;
+  const name = selector.slice(0, at);
+  const requestedMajor = majorFromSimpleVersion(selector.slice(at + 1));
+  const directMajor = majorFromSimpleVersion(dependencies[name] ?? "");
+  return requestedMajor !== null && requestedMajor === directMajor ? name : null;
+}
+
+function majorFromSimpleVersion(spec: string): number | null {
+  // `validateNpmSpecMap` admits only this simple semver subset.  Do not treat
+  // inequalities as a single-major request: `>=8` may legitimately resolve
+  // to 9 and must remain a transitive override instead of being rewritten.
+  const match = /^(?:\^|~|=)?(\d+)(?:\.\d+)?(?:\.\d+)?$/u.exec(spec);
+  return match ? Number(match[1]) : null;
 }
 
 function warnCleanupFailure(pathName: string, error: unknown): void {

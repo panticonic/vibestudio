@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { userlandApprovalRequestSchema, userlandApprovalSubjectIdSchema } from "./approvals.js";
+import {
+  USERLAND_APPROVAL_SEALED_DETAILS_MAX_BYTES,
+  userlandApprovalRequestSchema,
+  userlandApprovalSubjectIdSchema,
+} from "./approvals.js";
 
 const validRequest = {
   subject: { id: "team-x:foo", label: "Team X foo" },
@@ -25,13 +29,15 @@ describe("userland approval validation", () => {
 
   it("strips zero-width characters before reserved-prefix and duplicate checks", () => {
     expect(() => userlandApprovalSubjectIdSchema.parse("shell\u200B:foo")).toThrow(/reserved/);
-    expect(() => userlandApprovalRequestSchema.parse({
-      ...validRequest,
-      options: [
-        { value: "allow", label: "Allow" },
-        { value: "al\u200Blow", label: "Allow again" },
-      ],
-    })).toThrow(/unique/);
+    expect(() =>
+      userlandApprovalRequestSchema.parse({
+        ...validRequest,
+        options: [
+          { value: "allow", label: "Allow" },
+          { value: "al\u200Blow", label: "Allow again" },
+        ],
+      })
+    ).toThrow(/unique/);
   });
 
   it("accepts newlines in multi-line summary and detail values (markdown blocks)", () => {
@@ -57,13 +63,16 @@ describe("userland approval validation", () => {
   });
 
   it("rejects control characters, invalid identifiers, and reserved option values", () => {
-    expect(() => userlandApprovalRequestSchema.parse({ ...validRequest, title: "bad\u0001title" }))
-      .toThrow(/control/);
+    expect(() =>
+      userlandApprovalRequestSchema.parse({ ...validRequest, title: "bad\u0001title" })
+    ).toThrow(/control/);
     expect(() => userlandApprovalSubjectIdSchema.parse("bad subject")).toThrow(/invalid/);
-    expect(() => userlandApprovalRequestSchema.parse({
-      ...validRequest,
-      options: [{ value: "dismiss", label: "Dismiss" }],
-    })).toThrow(/reserved/);
+    expect(() =>
+      userlandApprovalRequestSchema.parse({
+        ...validRequest,
+        options: [{ value: "dismiss", label: "Dismiss" }],
+      })
+    ).toThrow(/reserved/);
   });
 
   it("returns sanitized strings for callers to enqueue and persist", () => {
@@ -89,5 +98,28 @@ describe("userland approval validation", () => {
       defaultAction: "deny",
       positiveEvidence: [{ label: "Gate", value: "sudoers" }],
     });
+  });
+
+  it("admits a complete large sealed detail but rejects content beyond the RPC frame budget", () => {
+    expect(
+      userlandApprovalRequestSchema.parse({
+        ...validRequest,
+        sealedDetails: [
+          { label: "Complete execution plan", content: "x".repeat(2_000), format: "code" },
+        ],
+      }).sealedDetails?.[0]?.content
+    ).toHaveLength(2_000);
+
+    expect(() =>
+      userlandApprovalRequestSchema.parse({
+        ...validRequest,
+        sealedDetails: [
+          {
+            label: "Complete execution plan",
+            content: "x".repeat(USERLAND_APPROVAL_SEALED_DETAILS_MAX_BYTES + 1),
+          },
+        ],
+      })
+    ).toThrow(/reviewed immutable file or artifact/);
   });
 });

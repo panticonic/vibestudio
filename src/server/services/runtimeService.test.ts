@@ -69,6 +69,7 @@ function approvalQueueMock(
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
     submitSecretInput: vi.fn(),
     listPending: vi.fn(() => []),
+    getUserlandSealedDetail: vi.fn(() => null),
     cancelForCaller: vi.fn(),
   };
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import {
   createVerifiedCaller,
   ServiceAccessError,
@@ -22,11 +23,10 @@ function createDeps() {
     behavior: "allow",
   }));
   const settleExternalAgent = vi.fn<ApprovalQueue["settleExternalAgent"]>(() => 1);
-  const lookup = vi.fn<
-    (principal: unknown, subjectId: string, issuer?: unknown) => UserlandApprovalGrant | null
-  >(() => null);
-  const record = vi.fn(async () => {});
-  const revoke = vi.fn(async () => true);
+  type GrantStore = Parameters<typeof createUserlandApprovalService>[0]["grantStore"];
+  const lookup = vi.fn<GrantStore["lookupUserland"]>(() => null);
+  const record = vi.fn<GrantStore["recordUserland"]>(async () => {});
+  const revoke = vi.fn<GrantStore["revokeUserland"]>(async () => true);
   const list = vi.fn<(principal: unknown, issuer?: unknown) => UserlandApprovalGrant[]>(() => []);
   const resolveRuntimeEntity = vi.fn(async (id: string) =>
     id === "do:workers/alpha:AlphaDO:agent-1"
@@ -192,7 +192,8 @@ describe("userlandApprovalService", () => {
       {
         provenance: "preauthorization",
         decidedBy: expect.stringContaining(":approve-harmless"),
-      }
+      },
+      undefined
     );
     await expect(
       service.handler(ctx, "request", [
@@ -215,7 +216,8 @@ describe("userlandApprovalService", () => {
       "caller",
       expect.objectContaining({
         provenance: "preauthorization",
-      })
+      }),
+      undefined
     );
     await expect(
       service.handler(ctx, "request", [
@@ -352,6 +354,62 @@ describe("userlandApprovalService", () => {
     expect(queued).not.toHaveBeenCalled();
   });
 
+  it("binds cached approval reuse and returned sealed bytes to the exact host review digest", async () => {
+    const { service, lookup, queued } = createDeps();
+    const content = '{"command":"deploy","environmentProfile":"local-dev@abc123"}';
+    const contentDigest = createHash("sha256").update(content, "utf8").digest("hex");
+    const reviewDigest = createHash("sha256")
+      .update(
+        JSON.stringify([
+          {
+            label: "Execution plan",
+            digest: contentDigest,
+            byteLength: Buffer.byteLength(content, "utf8"),
+            format: "code",
+          },
+        ]),
+        "utf8"
+      )
+      .digest("hex");
+    lookup.mockReturnValueOnce({
+      principal: {
+        callerId: "worker:alpha",
+        callerKind: "worker",
+        repoPath: "workers/alpha",
+        effectiveVersion: "hash-1",
+      },
+      subject: { id: "team-x:foo" },
+      reviewDigest,
+      choice: "allow",
+      grantedAt: 10,
+    });
+
+    await expect(
+      service.handler(workerCtx, "request", [
+        {
+          ...validRequest,
+          sealedDetails: [{ label: "Execution plan", content, format: "code" }],
+        },
+      ])
+    ).resolves.toEqual({
+      kind: "choice",
+      choice: "allow",
+      sealedDetails: [{ digest: contentDigest, content }],
+    });
+    expect(lookup).toHaveBeenCalledWith(
+      {
+        callerId: "worker:alpha",
+        callerKind: "worker",
+        repoPath: "workers/alpha",
+        effectiveVersion: "hash-1",
+      },
+      "team-x:foo",
+      undefined,
+      reviewDigest
+    );
+    expect(queued).not.toHaveBeenCalled();
+  });
+
   it("revokes stale cached choices and prompts when the current options changed", async () => {
     const { service, lookup, revoke, queued } = createDeps();
     lookup.mockReturnValueOnce({
@@ -379,7 +437,10 @@ describe("userlandApprovalService", () => {
         effectiveVersion: "hash-1",
       },
       "team-x:foo",
-      undefined
+      undefined,
+      expect.any(Number),
+      undefined,
+      true
     );
     expect(queued).toHaveBeenCalledTimes(1);
   });
@@ -423,7 +484,9 @@ describe("userlandApprovalService", () => {
       "allow",
       expect.any(Number),
       undefined,
-      "caller"
+      "caller",
+      undefined,
+      undefined
     );
 
     record.mockClear();
@@ -493,7 +556,9 @@ describe("userlandApprovalService", () => {
       "allow",
       expect.any(Number),
       undefined,
-      "version"
+      "version",
+      undefined,
+      undefined
     );
   });
 
@@ -586,7 +651,7 @@ describe("userlandApprovalService", () => {
       choice: "allow",
     });
     const issuer = { kind: "extension", id: "@workspace-extensions/shell" };
-    expect(lookup).toHaveBeenCalledWith(extensionCtx.chainCaller, "team-x:foo", issuer);
+    expect(lookup).toHaveBeenCalledWith(extensionCtx.chainCaller, "team-x:foo", issuer, undefined);
     expect(queued).toHaveBeenCalledWith(
       expect.objectContaining({
         principal: extensionCtx.chainCaller,
@@ -602,7 +667,9 @@ describe("userlandApprovalService", () => {
       "allow",
       expect.any(Number),
       issuer,
-      "caller"
+      "caller",
+      undefined,
+      undefined
     );
     await service.handler(extensionCtx, "revoke", ["team-x:foo"]);
     expect(revoke).toHaveBeenCalledWith(extensionCtx.chainCaller, "team-x:foo", issuer);

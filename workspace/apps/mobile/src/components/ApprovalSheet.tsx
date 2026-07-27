@@ -118,6 +118,7 @@ export interface ApprovalSheetProps {
   ) => Promise<void> | void;
   onSubmitSecretInput: (approvalId: string, values: Record<string, string>) => Promise<void> | void;
   onResolveUserland: (approvalId: string, choice: string | "dismiss") => Promise<void> | void;
+  onFetchUserlandSealedDetail: (approvalId: string, digest: string) => Promise<string | null>;
   onResolveExternalAgent: (approvalId: string, behavior: "allow" | "deny") => Promise<void> | void;
   onResolveMissionReview: (
     approvalId: string,
@@ -150,6 +151,7 @@ export function ApprovalSheet({
   onSubmitCredentialInput,
   onSubmitSecretInput,
   onResolveUserland,
+  onFetchUserlandSealedDetail,
   onResolveExternalAgent,
   onResolveMissionReview,
   onNavigateToPanel,
@@ -478,6 +480,7 @@ export function ApprovalSheet({
                   caller={callerInfo}
                   open={detailsOpen}
                   onToggle={() => setDetailsOpen((open) => !open)}
+                  onFetchUserlandSealedDetail={onFetchUserlandSealedDetail}
                 />
                 {current.kind === "userland" ? (
                   <RememberedHint approval={current} caller={callerInfo} />
@@ -1006,11 +1009,13 @@ function ApprovalDetails({
   caller,
   open,
   onToggle,
+  onFetchUserlandSealedDetail,
 }: {
   approval: PendingApproval;
   caller: CallerInfo;
   open: boolean;
   onToggle: () => void;
+  onFetchUserlandSealedDetail: (approvalId: string, digest: string) => Promise<string | null>;
 }) {
   const colors = useAtomValue(themeColorsAtom);
   return (
@@ -1081,7 +1086,10 @@ function ApprovalDetails({
           ) : approval.kind === "secret-input" ? (
             <SecretInputDetails approval={approval} />
           ) : approval.kind === "userland" ? (
-            <UserlandDetails approval={approval} />
+            <UserlandDetails
+              approval={approval}
+              onFetchSealedDetail={onFetchUserlandSealedDetail}
+            />
           ) : approval.kind === "external-agent" ? (
             <ExternalAgentDetails approval={approval} />
           ) : approval.kind === "device-code" ? (
@@ -1256,10 +1264,42 @@ function BrowserPermissionDetails({ approval }: { approval: PendingBrowserPermis
   );
 }
 
-function UserlandDetails({ approval }: { approval: PendingUserlandApproval }) {
+function UserlandDetails({
+  approval,
+  onFetchSealedDetail,
+}: {
+  approval: PendingUserlandApproval;
+  onFetchSealedDetail: (approvalId: string, digest: string) => Promise<string | null>;
+}) {
   const issuer = approval.issuer;
   const showIssuer =
     issuer && (issuer.kind !== approval.callerKind || issuer.id !== approval.callerId);
+  const [sealedContent, setSealedContent] = useState<Record<string, string | null>>({});
+  const [sealedErrors, setSealedErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    for (const detail of approval.sealedDetails ?? []) {
+      void onFetchSealedDetail(approval.approvalId, detail.digest)
+        .then((content) => {
+          if (!cancelled) {
+            setSealedContent((current) => ({ ...current, [detail.digest]: content }));
+          }
+        })
+        .catch((error: unknown) => {
+          if (!cancelled) {
+            setSealedErrors((current) => ({
+              ...current,
+              [detail.digest]: error instanceof Error ? error.message : "Content unavailable",
+            }));
+          }
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [approval.approvalId, approval.sealedDetails, onFetchSealedDetail]);
+
   return (
     <>
       {showIssuer && issuer ? (
@@ -1284,6 +1324,26 @@ function UserlandDetails({ approval }: { approval: PendingUserlandApproval }) {
           format={detail.format}
         />
       ))}
+      {(approval.sealedDetails ?? []).map((detail) => {
+        const content = sealedContent[detail.digest];
+        const error = sealedErrors[detail.digest];
+        return (
+          <DetailRow
+            key={`sealed:${detail.digest}`}
+            icon={Lock}
+            label={detail.label}
+            value={
+              content ??
+              (error
+                ? `Complete content unavailable: ${error}`
+                : `Loading complete content… (${detail.byteLength.toLocaleString()} bytes)`)
+            }
+            secondary={`sha256:${detail.digest}`}
+            secondarySelectable
+            code
+          />
+        );
+      })}
     </>
   );
 }

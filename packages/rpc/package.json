@@ -24,6 +24,14 @@
       "types": "./dist/protocol/wsAdapter.d.ts",
       "default": "./dist/protocol/wsAdapter.js"
     },
+    "./protocol/webSocketAuthProtocol": {
+      "types": "./dist/protocol/webSocketAuthProtocol.d.ts",
+      "default": "./dist/protocol/webSocketAuthProtocol.js"
+    },
+    "./protocol/rpcWebSocketAdmission": {
+      "types": "./dist/protocol/rpcWebSocketAdmission.d.ts",
+      "default": "./dist/protocol/rpcWebSocketAdmission.js"
+    },
     "./protocol/recoveryCoordinator": {
       "types": "./dist/protocol/recoveryCoordinator.d.ts",
       "default": "./dist/protocol/recoveryCoordinator.js"

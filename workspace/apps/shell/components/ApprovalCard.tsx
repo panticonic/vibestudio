@@ -5,7 +5,7 @@
  * its host, which performs the actual `shellApproval.*` calls. Secret-input
  * values stay local and are only emitted on submit.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ComponentProps, CSSProperties, KeyboardEvent, ReactNode } from "react";
 import {
   Badge,
@@ -401,6 +401,14 @@ export function ApprovalCard({
               />
             ) : null}
 
+            {approval.kind === "userland" && approval.sealedDetails?.length && fetchContent ? (
+              <SealedApprovalDetails
+                approvalId={approval.approvalId}
+                details={approval.sealedDetails}
+                fetchContent={fetchContent}
+              />
+            ) : null}
+
             {approval.kind === "mission-review" ? (
               <MissionReviewBody
                 approval={approval}
@@ -505,6 +513,99 @@ export function ApprovalCard({
         ) : null}
       </fieldset>
     </div>
+  );
+}
+
+function SealedApprovalDetails({
+  approvalId,
+  details,
+  fetchContent,
+}: {
+  approvalId: string;
+  details: NonNullable<PendingUserlandApproval["sealedDetails"]>;
+  fetchContent: DiffContentFetcher;
+}) {
+  const [open, setOpen] = useState(false);
+  const [contents, setContents] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    for (const detail of details) {
+      if (contents[detail.digest] !== undefined || errors[detail.digest] !== undefined) continue;
+      void fetchContent(detail.digest)
+        .then((content) => {
+          if (cancelled) return;
+          const text = typeof content === "string" ? content : new TextDecoder().decode(content);
+          setContents((current) => ({ ...current, [detail.digest]: text }));
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          setErrors((current) => ({
+            ...current,
+            [detail.digest]: error instanceof Error ? error.message : "Content unavailable",
+          }));
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [approvalId, contents, details, errors, fetchContent, open]);
+
+  return (
+    <details
+      className="approval-details"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>
+        <ChevronDownIcon className="approval-details-chevron" width={13} height={13} />
+        Inspect complete execution plan
+      </summary>
+      <Flex direction="column" gap="2" pt="2">
+        {details.map((detail) => {
+          const content = contents[detail.digest];
+          const detailError = errors[detail.digest];
+          return (
+            <Box key={detail.digest}>
+              <Flex align="center" gap="2" mb="1" wrap="wrap">
+                <Text size="1" weight="medium">
+                  {detail.label}
+                </Text>
+                <Text size="1" color="gray">
+                  {detail.byteLength.toLocaleString()} bytes · sha256:{detail.digest}
+                </Text>
+              </Flex>
+              {content !== undefined ? (
+                <Code
+                  size="1"
+                  style={{
+                    display: "block",
+                    maxHeight: 360,
+                    overflow: "auto",
+                    padding: 8,
+                    whiteSpace: "pre-wrap",
+                    overflowWrap: "anywhere",
+                    userSelect: "text",
+                  }}
+                >
+                  {content}
+                </Code>
+              ) : detailError ? (
+                <Text size="1" color="red" role="alert">
+                  Complete content unavailable: {detailError}
+                </Text>
+              ) : (
+                <Text size="1" color="gray" role="status">
+                  Loading complete content…
+                </Text>
+              )}
+            </Box>
+          );
+        })}
+      </Flex>
+    </details>
   );
 }
 

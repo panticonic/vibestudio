@@ -7025,6 +7025,14 @@
       ]
     },
     "methods": {
+      "getUserlandSealedDetail": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
       "listPending": {
         "authority": {
           "inherits": true

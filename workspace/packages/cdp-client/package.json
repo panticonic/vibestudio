@@ -4,6 +4,9 @@
   "type": "module",
   "description": "Workerd-native Playwright-style CDP client for Vibestudio panel targets",
   "license": "Apache-2.0",
+  "dependencies": {
+    "@vibestudio/rpc": "workspace:*"
+  },
   "exports": {
     ".": {
       "types": "./index.d.ts",

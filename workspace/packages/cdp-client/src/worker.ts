@@ -9,6 +9,8 @@
 // frames, and full network request interception (route). Raw `CdpConnection`
 // is always available for protocol-level work those cases would need.
 
+import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
+
 type CdpResponse = {
   id?: number;
   result?: unknown;
@@ -125,7 +127,7 @@ function compileLocatorSelector(selector: string): LocatorStep {
   return { by: "text", value, exact: true };
 }
 
-type WebSocketCtor = new (url: string) => WebSocket;
+type WebSocketCtor = new (url: string, protocols?: string | string[]) => WebSocket;
 
 type WorkerClientWebSocket = WebSocket & { accept?: () => void };
 
@@ -135,7 +137,13 @@ async function openWebSocket(
 ): Promise<{ socket: WorkerClientWebSocket; waitForOpen: boolean }> {
   const ctor = (globalThis as { WebSocket?: WebSocketCtor }).WebSocket;
   if (ctor) {
-    return { socket: new ctor(wsEndpoint), waitForOpen: true };
+    return {
+      socket: new ctor(
+        wsEndpoint,
+        authToken ? [webSocketAuthProtocol("inspection", authToken)] : undefined
+      ),
+      waitForOpen: true,
+    };
   }
 
   if (typeof fetch !== "function") {
@@ -255,14 +263,6 @@ export class CdpConnection {
   static async connect(wsEndpoint: string, authToken?: string): Promise<CdpConnection> {
     const { socket: ws, waitForOpen } = await openWebSocket(wsEndpoint, authToken);
     if (waitForOpen) await once(ws, "open");
-    if (authToken) {
-      ws.send(JSON.stringify({ type: "vibestudio:cdp-auth", token: authToken }));
-      const event = (await once(ws, "message")) as MessageEvent;
-      const parsed = JSON.parse(await messageText(event.data)) as { type?: string };
-      if (parsed.type !== "vibestudio:cdp-auth-ok") {
-        throw new Error("CDP authentication failed");
-      }
-    }
     return new CdpConnection(ws);
   }
 

@@ -247,6 +247,8 @@ export function createShellApprovalService(deps: {
         );
         metrics.recordApprovalResolved({ decision: "submit", source: ctx.caller.runtime.kind });
       },
+      getUserlandSealedDetail: (_ctx, [approvalId, digest]) =>
+        approvalQueue.getUserlandSealedDetail(approvalId, digest),
       listPending: () => approvalQueue.listPending(),
     }),
   };

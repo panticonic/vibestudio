@@ -5,6 +5,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { CdpBridge } from "./cdpBridge.js";
 import type { PanelRuntimeLeaseChangedEvent } from "@vibestudio/shared/panel/panelLease";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
+import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 
 type BridgeHarness = {
   bridge: CdpBridge;
@@ -179,13 +180,24 @@ async function connectHostProviderOnly(
   hostConnectionId: string
 ): Promise<WebSocket> {
   const ws = new WebSocket(
-    `ws://127.0.0.1:${harness.port}/api/cdp-host?hostConnectionId=${hostConnectionId}`
+    `ws://127.0.0.1:${harness.port}/api/cdp-host?hostConnectionId=${hostConnectionId}`,
+    [webSocketAuthProtocol("cdp-host", "admin-token")]
   );
   harness.sockets.push(ws);
   await waitForOpen(ws);
-  ws.send(JSON.stringify({ type: "vibestudio:cdp-auth", token: "admin-token" }));
-  await expect(waitForJson(ws)).resolves.toMatchObject({ type: "vibestudio:cdp-auth-ok" });
   return ws;
+}
+
+async function connectInspectionClient(
+  harness: BridgeHarness,
+  endpoint: { wsEndpoint: string; token: string }
+): Promise<WebSocket> {
+  const client = new WebSocket(endpoint.wsEndpoint, [
+    webSocketAuthProtocol("inspection", endpoint.token),
+  ]);
+  harness.sockets.push(client);
+  await waitForOpen(client);
+  return client;
 }
 
 describe("CdpBridge authentication", () => {
@@ -194,7 +206,20 @@ describe("CdpBridge authentication", () => {
     await Promise.all(pending.map(closeHarness));
   });
 
-  it("returns token-free CDP endpoints and authenticates with the first WebSocket message", async () => {
+  it("rejects an invalid host credential before the WebSocket upgrade", async () => {
+    const harness = await createHarness();
+    const client = new WebSocket(
+      `ws://127.0.0.1:${harness.port}/api/cdp-host?hostConnectionId=invalid`,
+      [webSocketAuthProtocol("cdp-host", "invalid-token")]
+    );
+    harness.sockets.push(client);
+
+    await expect(waitForError(client)).resolves.toMatchObject({
+      message: "Unexpected server response: 401",
+    });
+  });
+
+  it("returns token-free CDP endpoints admitted during the WebSocket upgrade", async () => {
     const harness = await createHarness();
     await connectHostProvider(harness, "desktop-host");
 
@@ -205,11 +230,7 @@ describe("CdpBridge authentication", () => {
     });
     expect(endpoint?.wsEndpoint).not.toContain("token=");
 
-    const client = new WebSocket(endpoint!.wsEndpoint);
-    harness.sockets.push(client);
-    await waitForOpen(client);
-    client.send(JSON.stringify({ type: "vibestudio:cdp-auth", token: endpoint!.token }));
-    await expect(waitForJson(client)).resolves.toMatchObject({ type: "vibestudio:cdp-auth-ok" });
+    await connectInspectionClient(harness, endpoint);
   });
 
   it("builds public wss endpoints from the configured gateway host", async () => {
@@ -233,14 +254,9 @@ describe("CdpBridge authentication", () => {
 
     const client = new WebSocket(`${endpoint.wsEndpoint}?token=${endpoint.token}`);
     harness.sockets.push(client);
-    await waitForOpen(client);
-    client.send(
-      JSON.stringify({ id: 1, method: "Runtime.evaluate", params: { expression: "1 + 1" } })
-    );
 
-    await expect(waitForClose(client)).resolves.toMatchObject({
-      code: 4001,
-      reason: "Invalid CDP token",
+    await expect(waitForError(client)).resolves.toMatchObject({
+      message: "Unexpected server response: 401",
     });
   });
 
@@ -250,11 +266,7 @@ describe("CdpBridge authentication", () => {
     expect(harness.bridge.isProviderConnected("desktop-host")).toBe(true);
 
     const endpoint = await waitForEndpoint(harness);
-    const client = new WebSocket(endpoint.wsEndpoint);
-    harness.sockets.push(client);
-    await waitForOpen(client);
-    client.send(JSON.stringify({ type: "vibestudio:cdp-auth", token: endpoint.token }));
-    await expect(waitForJson(client)).resolves.toMatchObject({ type: "vibestudio:cdp-auth-ok" });
+    const client = await connectInspectionClient(harness, endpoint);
 
     client.send(
       JSON.stringify({ id: 7, method: "Runtime.evaluate", params: { expression: "2+2" } })
@@ -273,11 +285,7 @@ describe("CdpBridge authentication", () => {
     const provider = await connectHostProvider(harness, "desktop-host");
 
     const endpoint = await waitForEndpoint(harness);
-    const client = new WebSocket(endpoint.wsEndpoint);
-    harness.sockets.push(client);
-    await waitForOpen(client);
-    client.send(JSON.stringify({ type: "vibestudio:cdp-auth", token: endpoint.token }));
-    await expect(waitForJson(client)).resolves.toMatchObject({ type: "vibestudio:cdp-auth-ok" });
+    const client = await connectInspectionClient(harness, endpoint);
 
     client.send(
       JSON.stringify({
@@ -320,11 +328,7 @@ describe("CdpBridge authentication", () => {
       "panel:tree/workspace-1",
       "panel:tree/workspace-1"
     );
-    const client = new WebSocket(endpoint.wsEndpoint);
-    harness.sockets.push(client);
-    await waitForOpen(client);
-    client.send(JSON.stringify({ type: "vibestudio:cdp-auth", token: endpoint.token }));
-    await expect(waitForJson(client)).resolves.toMatchObject({ type: "vibestudio:cdp-auth-ok" });
+    const client = await connectInspectionClient(harness, endpoint);
 
     client.send(
       JSON.stringify({
@@ -563,11 +567,7 @@ describe("CdpBridge authentication", () => {
     await connectHostProvider(harness, "desktop-host");
 
     const endpoint = await waitForEndpoint(harness);
-    const client = new WebSocket(endpoint.wsEndpoint);
-    harness.sockets.push(client);
-    await waitForOpen(client);
-    client.send(JSON.stringify({ type: "vibestudio:cdp-auth", token: endpoint.token }));
-    await expect(waitForJson(client)).resolves.toMatchObject({ type: "vibestudio:cdp-auth-ok" });
+    const client = await connectInspectionClient(harness, endpoint);
 
     holder = "headless-host";
     harness.bridge.handleRuntimeLeaseChanged(
@@ -593,7 +593,9 @@ describe("CdpBridge authentication", () => {
       leaseChangedEvent("panel:tree/browser-1", "desktop-host", "headless-host")
     );
 
-    const client = new WebSocket(endpoint.wsEndpoint);
+    const client = new WebSocket(endpoint.wsEndpoint, [
+      webSocketAuthProtocol("inspection", endpoint.token),
+    ]);
     harness.sockets.push(client);
 
     await expect(waitForError(client)).resolves.toMatchObject({
@@ -608,11 +610,7 @@ describe("CdpBridge authentication", () => {
     const provider = await connectHostProvider(harness, "desktop-host");
 
     const endpoint = await waitForEndpoint(harness);
-    const client = new WebSocket(endpoint.wsEndpoint);
-    harness.sockets.push(client);
-    await waitForOpen(client);
-    client.send(JSON.stringify({ type: "vibestudio:cdp-auth", token: endpoint.token }));
-    await expect(waitForJson(client)).resolves.toMatchObject({ type: "vibestudio:cdp-auth-ok" });
+    const client = await connectInspectionClient(harness, endpoint);
 
     harness.bridge.handleRuntimeLeaseChanged(
       leaseChangedEvent("panel:tree/browser-1", "desktop-host", "desktop-host")
@@ -633,11 +631,7 @@ describe("CdpBridge authentication", () => {
     const provider = await connectHostProvider(harness, "desktop-host");
 
     const endpoint = await waitForEndpoint(harness);
-    const client = new WebSocket(endpoint.wsEndpoint);
-    harness.sockets.push(client);
-    await waitForOpen(client);
-    client.send(JSON.stringify({ type: "vibestudio:cdp-auth", token: endpoint.token }));
-    await expect(waitForJson(client)).resolves.toMatchObject({ type: "vibestudio:cdp-auth-ok" });
+    const client = await connectInspectionClient(harness, endpoint);
 
     harness.bridge.handleRuntimeLeaseChanged(
       leaseChangedEvent("panel:tree/browser-1", "desktop-host", "desktop-host", {
@@ -927,11 +921,7 @@ describe("CdpBridge authentication", () => {
     const otherProvider = await connectHostProviderOnly(harness, "headless-host");
 
     const endpoint = await waitForEndpoint(harness);
-    const client = new WebSocket(endpoint.wsEndpoint);
-    harness.sockets.push(client);
-    await waitForOpen(client);
-    client.send(JSON.stringify({ type: "vibestudio:cdp-auth", token: endpoint.token }));
-    await expect(waitForJson(client)).resolves.toMatchObject({ type: "vibestudio:cdp-auth-ok" });
+    const client = await connectInspectionClient(harness, endpoint);
 
     client.send(JSON.stringify({ id: 42, method: "Runtime.evaluate" }));
     const command = await waitForJson(provider);
@@ -973,18 +963,10 @@ describe("CdpBridge authentication", () => {
     const endpoint = await waitForEndpoint(harness);
 
     // First client connects → pin true (once).
-    const clientA = new WebSocket(endpoint.wsEndpoint);
-    harness.sockets.push(clientA);
-    await waitForOpen(clientA);
-    clientA.send(JSON.stringify({ type: "vibestudio:cdp-auth", token: endpoint.token }));
-    await expect(waitForJson(clientA)).resolves.toMatchObject({ type: "vibestudio:cdp-auth-ok" });
+    const clientA = await connectInspectionClient(harness, endpoint);
 
     const endpointB = await waitForEndpoint(harness);
-    const clientB = new WebSocket(endpointB.wsEndpoint);
-    harness.sockets.push(clientB);
-    await waitForOpen(clientB);
-    clientB.send(JSON.stringify({ type: "vibestudio:cdp-auth", token: endpointB.token }));
-    await expect(waitForJson(clientB)).resolves.toMatchObject({ type: "vibestudio:cdp-auth-ok" });
+    const clientB = await connectInspectionClient(harness, endpointB);
 
     // Second client must NOT emit another pin.
     expect(pinChanges).toEqual([{ targetId: "panel:tree/browser-1", pinned: true }]);

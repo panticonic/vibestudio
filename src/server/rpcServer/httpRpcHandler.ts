@@ -85,6 +85,15 @@ export class HttpRpcHandler {
       return;
     }
 
+    // Admission is deliberately header-only and must precede request-body
+    // consumption. An invalid caller never receives a body-sized allocation.
+    const admission = this.deps.authenticate(req);
+    if (!admission.ok) {
+      writeJson(res, admission.status, admission.body);
+      req.resume();
+      return;
+    }
+
     const chunks: Buffer[] = [];
     let bodyBytes = 0;
     for await (const chunk of req) {
@@ -94,7 +103,8 @@ export class HttpRpcHandler {
         writeJson(res, 413, {
           error:
             `RPC body exceeds ${this.deps.maxBodyBytes} bytes ` +
-            "(set VIBESTUDIO_RPC_MAX_BODY_BYTES to raise)",
+            "(use streaming RPC/bulk transfer for large payloads, or raise " +
+            "VIBESTUDIO_RPC_MAX_BODY_BYTES)",
         });
         req.destroy();
         return;
@@ -107,12 +117,6 @@ export class HttpRpcHandler {
       envelope = JSON.parse(Buffer.concat(chunks).toString()) as RpcEnvelope;
     } catch {
       writeJson(res, 400, { error: "Invalid JSON body" });
-      return;
-    }
-
-    const admission = this.deps.authenticate(req);
-    if (!admission.ok) {
-      writeJson(res, admission.status, admission.body);
       return;
     }
 

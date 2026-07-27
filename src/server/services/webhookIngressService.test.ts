@@ -16,6 +16,11 @@ import type {
   WebhookIngressSubscriptionSummary,
   WebhookTarget,
 } from "../../../packages/shared/src/webhooks/ingress.js";
+import {
+  WEBHOOK_DEFAULT_MAX_BODY_BYTES,
+  WEBHOOK_HARD_MAX_BODY_BYTES,
+} from "../../../packages/shared/src/webhooks/ingress.js";
+import { resolveWebhookDirectMaxBodyBytes } from "./webhookIngressService.js";
 
 const RELAY_SECRET = "relay-secret-for-tests-only";
 const RELAY_BASE_URL = "https://hooks.test";
@@ -173,6 +178,22 @@ function ackBody(ack: { response?: { bodyBase64?: string } }): unknown {
   const b64 = ack.response?.bodyBase64;
   return b64 ? JSON.parse(Buffer.from(b64, "base64").toString("utf8")) : undefined;
 }
+
+describe("resolveWebhookDirectMaxBodyBytes", () => {
+  it("uses the conservative default and accepts bounded operator overrides", () => {
+    expect(resolveWebhookDirectMaxBodyBytes(undefined)).toBe(16 * 1024 * 1024);
+    expect(resolveWebhookDirectMaxBodyBytes(" 2000000 ")).toBe(2_000_000);
+  });
+
+  it.each(["0", "1499999", "1.5", "not-a-number", String(WEBHOOK_HARD_MAX_BODY_BYTES + 1)])(
+    "fails loud for an unsafe operator ceiling: %s",
+    (raw) => {
+      expect(() => resolveWebhookDirectMaxBodyBytes(raw)).toThrow(
+        /VIBESTUDIO_WEBHOOK_DIRECT_MAX_BODY_BYTES/
+      );
+    }
+  );
+});
 
 describe("webhookIngressService — RPC surface", () => {
   it("uses direct server dispatch for the infrastructure-owned storage DO", async () => {
@@ -368,13 +389,17 @@ describe("webhookIngressService — public ingress route", () => {
     verifier: CreateWebhookIngressSubscriptionRequest["verifier"],
     replay?: CreateWebhookIngressSubscriptionRequest["replay"],
     overrides: Partial<
-      Pick<CreateWebhookIngressSubscriptionRequest, "delivery" | "payload" | "response">
+      Pick<
+        CreateWebhookIngressSubscriptionRequest,
+        "delivery" | "maxBodyBytes" | "payload" | "response"
+      >
     > = {}
   ) {
     return (await svc.definition.handler(shellCtx(), "createSubscription", [
       {
         target: TARGET,
         delivery: overrides.delivery ?? { mode: "relay" },
+        maxBodyBytes: overrides.maxBodyBytes,
         payload: overrides.payload ?? { type: "json" },
         verifier,
         replay,
@@ -396,10 +421,65 @@ describe("webhookIngressService — public ingress route", () => {
     const { svc, registered, unregistered } = setup();
     const sub = await provision(svc, { type: "hmac-sha256", headerName: "X-Sig", secret: "shh" });
     expect(registered).toEqual([sub.subscriptionId]);
+    expect(sub.maxBodyBytes).toBe(WEBHOOK_DEFAULT_MAX_BODY_BYTES);
     await svc.definition.handler(shellCtx(), "revokeSubscription", [
       { subscriptionId: sub.subscriptionId },
     ]);
     expect(unregistered).toEqual([sub.subscriptionId]);
+  });
+
+  it("requires larger per-subscription budgets to use direct delivery", async () => {
+    const { svc } = setup();
+    await expect(
+      provision(svc, { type: "hmac-sha256", headerName: "X-Sig", secret: "shh" }, undefined, {
+        delivery: { mode: "relay" },
+        maxBodyBytes: WEBHOOK_DEFAULT_MAX_BODY_BYTES + 1,
+      })
+    ).rejects.toThrow(/use direct delivery.*host allows up to/);
+  });
+
+  it("allows a smaller relay-specific budget", async () => {
+    const { svc } = setup();
+    const sub = await provision(
+      svc,
+      { type: "hmac-sha256", headerName: "X-Sig", secret: "shh" },
+      undefined,
+      { delivery: { mode: "relay" }, maxBodyBytes: 64 * 1024 }
+    );
+    expect(sub.maxBodyBytes).toBe(64 * 1024);
+  });
+
+  it("enforces a smaller relay-specific budget before decoding the body", async () => {
+    const { svc, dispatched } = setup();
+    const sub = await provision(
+      svc,
+      { type: "hmac-sha256", headerName: "X-Sig", secret: "shh" },
+      undefined,
+      { delivery: { mode: "relay" }, maxBodyBytes: 1 }
+    );
+    const ack = await svc.internal.deliverRelayWebhook(
+      buildRelayFrame({
+        subscriptionId: sub.subscriptionId,
+        body: Buffer.from("ok"),
+      })
+    );
+
+    expect(ack).toMatchObject({
+      ok: false,
+      permanent: true,
+      reason: "webhook-body-too-large",
+    });
+    expect(dispatched).toHaveLength(0);
+  });
+
+  it("reports the effective host ceiling when a direct subscription asks for more", async () => {
+    const { svc } = setup({ directMaxBodyBytes: 2_000_000 });
+    await expect(
+      provision(svc, { type: "hmac-sha256", headerName: "X-Sig", secret: "shh" }, undefined, {
+        delivery: { mode: "direct" },
+        maxBodyBytes: 2_000_001,
+      })
+    ).rejects.toThrow(/configured ceiling of 2000000/);
   });
 
   it("rejects a backhaul frame whose relay envelope signature is forged (permanent nack)", async () => {
@@ -528,6 +608,149 @@ describe("webhookIngressService — public ingress route", () => {
     });
     await handler(req, res, { subscriptionId: sub.subscriptionId });
     expect(captured.status).toBe(404);
+    expect(dispatched).toHaveLength(0);
+  });
+
+  it("rejects an oversized direct delivery from Content-Length before buffering", async () => {
+    const { svc, dispatched } = setup();
+    const sub = await provision(
+      svc,
+      { type: "query-token", paramName: "token", token: "tok" },
+      { key: { type: "body-sha256" }, ttlMs: 60_000 },
+      { delivery: { mode: "direct" }, payload: { type: "json" } }
+    );
+    const handler = findRoute(svc);
+    const { req, res, captured } = createMockReqRes(
+      "POST",
+      `/_r/s/webhookIngress/${sub.subscriptionId}?token=tok`,
+      Buffer.from("{}"),
+      {
+        "content-type": "application/json",
+        "content-length": String(WEBHOOK_DEFAULT_MAX_BODY_BYTES + 1),
+      }
+    );
+
+    await handler(req, res, { subscriptionId: sub.subscriptionId });
+
+    expect(captured.status).toBe(413);
+    expect(captured.body).toEqual({
+      code: "WEBHOOK_BODY_TOO_LARGE",
+      error:
+        "Webhook payload exceeds this subscription's 1500000-byte budget. Recreate the direct subscription with a larger maxBodyBytes (up to this host's 16777216-byte ceiling) or reduce the provider payload.",
+      subscriptionId: sub.subscriptionId,
+      maxBodyBytes: WEBHOOK_DEFAULT_MAX_BODY_BYTES,
+      observedBytes: WEBHOOK_DEFAULT_MAX_BODY_BYTES + 1,
+      hostMaxBodyBytes: 16 * 1024 * 1024,
+    });
+    expect(dispatched).toHaveLength(0);
+  });
+
+  it("bounds chunked direct deliveries when Content-Length is absent", async () => {
+    const { svc, dispatched } = setup();
+    const sub = await provision(
+      svc,
+      { type: "query-token", paramName: "token", token: "tok" },
+      { key: { type: "body-sha256" }, ttlMs: 60_000 },
+      { delivery: { mode: "direct" }, payload: { type: "raw" } }
+    );
+    const handler = findRoute(svc);
+    const oversized = Buffer.alloc(WEBHOOK_DEFAULT_MAX_BODY_BYTES + 1);
+    const { req, res, captured } = createMockReqRes(
+      "POST",
+      `/_r/s/webhookIngress/${sub.subscriptionId}?token=tok`,
+      oversized,
+      { "content-type": "application/octet-stream" }
+    );
+
+    await handler(req, res, { subscriptionId: sub.subscriptionId });
+
+    expect(captured.status).toBe(413);
+    expect(captured.body).toEqual({
+      code: "WEBHOOK_BODY_TOO_LARGE",
+      error:
+        "Webhook payload exceeds this subscription's 1500000-byte budget. Recreate the direct subscription with a larger maxBodyBytes (up to this host's 16777216-byte ceiling) or reduce the provider payload.",
+      subscriptionId: sub.subscriptionId,
+      maxBodyBytes: WEBHOOK_DEFAULT_MAX_BODY_BYTES,
+      observedBytes: WEBHOOK_DEFAULT_MAX_BODY_BYTES + 1,
+      hostMaxBodyBytes: 16 * 1024 * 1024,
+    });
+    expect(dispatched).toHaveLength(0);
+  });
+
+  it("accepts a larger bounded direct payload when the subscription opts in", async () => {
+    const customBudget = WEBHOOK_DEFAULT_MAX_BODY_BYTES + 32;
+    const { svc, dispatched } = setup({ directMaxBodyBytes: customBudget });
+    const sub = await provision(
+      svc,
+      { type: "query-token", paramName: "token", token: "tok" },
+      undefined,
+      {
+        delivery: { mode: "direct" },
+        maxBodyBytes: customBudget,
+        payload: { type: "raw" },
+      }
+    );
+    const body = Buffer.alloc(WEBHOOK_DEFAULT_MAX_BODY_BYTES + 1);
+    const request = createMockReqRes(
+      "POST",
+      `/_r/s/webhookIngress/${sub.subscriptionId}?token=tok`,
+      body,
+      { "content-length": String(body.byteLength) }
+    );
+
+    await findRoute(svc)(request.req, request.res, { subscriptionId: sub.subscriptionId });
+
+    expect(request.captured.status).toBe(202);
+    expect(dispatched).toHaveLength(1);
+    expect(sub.maxBodyBytes).toBe(customBudget);
+  });
+
+  it("rejects persisted subscriptions without a bounded body contract before reading", async () => {
+    const { svc, store, dispatched } = setup();
+    const malformed = store.create({
+      ownerCallerId: "shell",
+      ownerCallerKind: "shell",
+      target: TARGET,
+      delivery: { mode: "direct" },
+      payload: { type: "raw" },
+      verifier: { type: "query-token", paramName: "token", token: "tok" },
+      response: { successStatus: 202, malformedPayload: "reject", dispatchError: "retry" },
+      publicUrl: `${DIRECT_BASE_URL}/invalid`,
+    } as unknown as Parameters<InMemoryWebhookIngressStore["create"]>[0]);
+    const request = createMockReqRes(
+      "POST",
+      `/_r/s/webhookIngress/${malformed.subscriptionId}?token=tok`,
+      Buffer.alloc(WEBHOOK_DEFAULT_MAX_BODY_BYTES + 1),
+      {}
+    );
+
+    await findRoute(svc)(request.req, request.res, {
+      subscriptionId: malformed.subscriptionId,
+    });
+
+    expect(request.captured.status).toBe(500);
+    expect(request.captured.body).toMatchObject({
+      code: "WEBHOOK_SUBSCRIPTION_INVALID_BODY_BUDGET",
+      subscriptionId: malformed.subscriptionId,
+    });
+    expect(dispatched).toHaveLength(0);
+  });
+
+  it("looks up unknown subscriptions before considering their request body", async () => {
+    const { svc, dispatched } = setup();
+    const handler = findRoute(svc);
+    const unknownId = "00000000-0000-0000-0000-000000000000";
+    const { req, res, captured } = createMockReqRes(
+      "POST",
+      `/_r/s/webhookIngress/${unknownId}`,
+      Buffer.from("{}"),
+      { "content-length": String(WEBHOOK_DEFAULT_MAX_BODY_BYTES + 1) }
+    );
+
+    await handler(req, res, { subscriptionId: unknownId });
+
+    expect(captured.status).toBe(404);
+    expect(captured.body).toEqual({ error: "webhook subscription not found" });
     expect(dispatched).toHaveLength(0);
   });
 

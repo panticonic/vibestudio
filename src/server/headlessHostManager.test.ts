@@ -3,7 +3,12 @@ import type { ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
-import { HeadlessHostManager, resolveHeadlessHostEntryPath } from "./headlessHostManager.js";
+import {
+  formatBridgeDiagnostic,
+  HeadlessHostManager,
+  parseBridgeDiagnostic,
+  resolveHeadlessHostEntryPath,
+} from "./headlessHostManager.js";
 
 describe("resolveHeadlessHostEntryPath", () => {
   it("uses the single app-root build contract", () => {
@@ -22,6 +27,51 @@ describe("resolveHeadlessHostEntryPath", () => {
         "/repo"
       )
     ).toBe("/repo/fixtures/headless.js");
+  });
+});
+
+describe("headless host bridge diagnostics", () => {
+  it("formats the admitted phase without obsolete message-authentication flags", () => {
+    const diagnostic = parseBridgeDiagnostic({
+      state: "admitted",
+      attempt: 2,
+      url: "wss://server.example/api/cdp-host",
+      authSent: true,
+      authenticated: true,
+      lastMessageType: "cdp:command",
+    });
+
+    expect(diagnostic).toEqual({
+      state: "admitted",
+      attempt: 2,
+      url: "wss://server.example/api/cdp-host",
+      lastMessageType: "cdp:command",
+    });
+    expect(formatBridgeDiagnostic(diagnostic!)).toBe(
+      "phase=admitted attempt=2 url=wss://server.example/api/cdp-host lastMessage=cdp:command"
+    );
+  });
+
+  it("does not revive obsolete authentication phases from child IPC", () => {
+    expect(
+      parseBridgeDiagnostic({
+        state: "authenticating",
+        opened: true,
+        authSent: true,
+        authenticated: false,
+      })
+    ).toBeNull();
+  });
+
+  it("preserves retry context in operator-facing output", () => {
+    expect(
+      formatBridgeDiagnostic({
+        state: "retrying",
+        attempt: 3,
+        lastError: "failed to get token: unavailable",
+        nextRetryMs: 1_000,
+      })
+    ).toBe("phase=retrying attempt=3 error=failed to get token: unavailable nextRetryMs=1000");
   });
 });
 

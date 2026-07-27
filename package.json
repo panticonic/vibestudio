@@ -113,12 +113,15 @@
       "node-pty",
       "node-datachannel"
     ],
-    "//overrides": "react-native 0.79 peerDeps react ^19.0.0. Pinning here prevents hoisted React 18 (pulled in transitively by workspace deps) from shadowing RN's requirement in the mobile bundle. protobufjs ^7.5.5 patches RCE GHSA-xq3m-2v4x-88gg reachable via @google/genai → pi-ai. Revisit when bumping RN.",
+    "//overrides": "react-native 0.79 peerDeps react ^19.0.0. Pinning here prevents hoisted React 18 (pulled in transitively by workspace deps) from shadowing RN's requirement in the mobile bundle. protobufjs ^7.5.5 patches RCE GHSA-xq3m-2v4x-88gg reachable via @google/genai → pi-ai. ws pins each transitively required major to its patched fragmentation-memory floor. Revisit when bumping RN.",
     "overrides": {
       "react": "19.0.0",
       "react-dom": "19.0.0",
       "@earendil-works/pi-ai": "0.82.0",
-      "protobufjs": "^7.5.5"
+      "protobufjs": "^7.5.5",
+      "ws@6": "6.2.4",
+      "ws@7": "7.5.11",
+      "ws@8": "8.21.1"
     },
     "patchedDependencies": {
       "@earendil-works/pi-ai@0.82.0": "workspace/packages/harness/patches/@earendil-works__pi-ai@0.82.0.patch"
@@ -213,7 +216,7 @@
     "tldts": "^7.0.19",
     "typescript": "^5.9.3",
     "workerd": "^1.20260724.1",
-    "ws": "^8.18.3",
+    "ws": "^8.21.1",
     "yaml": "^2.8.1",
     "zod": "^3.24.1",
     "zod-to-json-schema": "^3.25.0"

@@ -227,7 +227,7 @@ describe("ModelSettingsDO", () => {
     expect(sol).toMatchObject({
       id: "gpt-5.6-sol",
       provider: "openai-codex",
-      contextWindow: 372_000,
+      contextWindow: 272_000,
       thinkingLevels: ["minimal", "low", "medium", "high", "xhigh", "max"],
       modelSpec: {
         thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },

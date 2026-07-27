@@ -1,3 +1,8 @@
+import type {
+  RpcWebSocketAdmissionRequest,
+  RpcWebSocketAdmissionResponse,
+} from "./rpcWebSocketAdmission.js";
+
 export interface WsLike {
   readonly readyState: number;
   onopen: (() => void) | null;
@@ -9,7 +14,11 @@ export interface WsLike {
 }
 
 export interface WsTransportAdapter {
-  createSocket(url: string): WsLike;
+  createSocket(url: string, protocols: string[]): WsLike;
+  requestAdmission?(
+    url: string,
+    request: RpcWebSocketAdmissionRequest
+  ): Promise<RpcWebSocketAdmissionResponse>;
   getAuthToken(): Promise<string>;
   refreshAuthToken?(): Promise<string>;
   now(): number;

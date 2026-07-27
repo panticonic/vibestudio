@@ -93,7 +93,7 @@ describe("HttpRpcHandler", () => {
     expect(configured.authenticate).not.toHaveBeenCalled();
   });
 
-  it("rejects an oversized body before authentication or dispatch", async () => {
+  it("authenticates before rejecting an oversized body without dispatch", async () => {
     const configured = deps({ maxBodyBytes: 4 });
     const handler = new HttpRpcHandler(configured);
     const { res, captured } = response();
@@ -102,13 +102,15 @@ describe("HttpRpcHandler", () => {
 
     expect(captured.status).toBe(413);
     expect(JSON.parse(captured.body)).toEqual({
-      error: "RPC body exceeds 4 bytes (set VIBESTUDIO_RPC_MAX_BODY_BYTES to raise)",
+      error:
+        "RPC body exceeds 4 bytes (use streaming RPC/bulk transfer for large payloads, " +
+        "or raise VIBESTUDIO_RPC_MAX_BODY_BYTES)",
     });
-    expect(configured.authenticate).not.toHaveBeenCalled();
+    expect(configured.authenticate).toHaveBeenCalledOnce();
     expect(configured.handleRequest).not.toHaveBeenCalled();
   });
 
-  it("serializes admission failures without reaching the dispatch callback", async () => {
+  it("rejects admission before parsing or dispatching the body", async () => {
     const configured = deps({
       authenticate: () => ({
         ok: false,
@@ -119,7 +121,7 @@ describe("HttpRpcHandler", () => {
     const handler = new HttpRpcHandler(configured);
     const { res, captured } = response();
 
-    await handler.handle(request({ body: JSON.stringify(rpcEnvelope()) }), res);
+    await handler.handle(request({ body: "not-json" }), res);
 
     expect(captured.status).toBe(403);
     expect(JSON.parse(captured.body)).toEqual({ error: "Not a member", code: "EACCES" });

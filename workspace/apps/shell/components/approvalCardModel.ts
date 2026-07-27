@@ -129,6 +129,15 @@ export function diffReviewPayloadHashes(entries: DiffReviewEntry[]): Set<string>
   return hashes;
 }
 
+/** Host-sealed detail hashes the trusted card may fetch for this exact prompt. */
+export function sealedDetailPayloadHashes(approval: PendingApproval): Set<string> {
+  return new Set(
+    approval.kind === "userland"
+      ? (approval.sealedDetails ?? []).map((detail) => detail.digest)
+      : []
+  );
+}
+
 export function basename(path: string): string {
   if (!path) return "";
   const trimmed = path.replace(/\/+$/, "");

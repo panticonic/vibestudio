@@ -9,6 +9,9 @@ overrides:
   react-dom: 19.0.0
   '@earendil-works/pi-ai': 0.82.0
   protobufjs: ^7.5.5
+  ws@6: 6.2.4
+  ws@7: 7.5.11
+  ws@8: 8.21.1
 
 patchedDependencies:
   '@earendil-works/pi-ai@0.82.0':
@@ -36,7 +39,7 @@ importers:
         version: 3.2.2(react@19.0.0)
       '@earendil-works/pi-ai':
         specifier: 0.82.0
-        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
+        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.21.1)(zod@3.25.76)
       '@ghostery/adblocker':
         specifier: ^2.13.4
         version: 2.13.4
@@ -224,8 +227,8 @@ importers:
         specifier: ^1.20260724.1
         version: 1.20260724.1
       ws:
-        specifier: ^8.18.3
-        version: 8.19.0
+        specifier: 8.21.1
+        version: 8.21.1
       yaml:
         specifier: ^2.8.1
         version: 2.8.2
@@ -312,8 +315,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shell-core
       ws:
-        specifier: ^8.18.0
-        version: 8.19.0
+        specifier: 8.21.1
+        version: 8.21.1
       zod:
         specifier: ^3.24.0
         version: 3.25.76
@@ -821,8 +824,8 @@ importers:
         specifier: workspace:*
         version: link:../workspace-contracts
       ws:
-        specifier: ^8.18.3
-        version: 8.19.0
+        specifier: 8.21.1
+        version: 8.21.1
     devDependencies:
       '@types/ws':
         specifier: ^8.18.1
@@ -7079,7 +7082,7 @@ packages:
     resolution: {integrity: sha512-zd23dbWTjiJ6sSAX6s0HrCZi41JwTA1bQVs0wLQPZ2/5o2gxOJA5wh7yOAUgwYybfhDXyhwlpeQf7Mlgx8EOCA==}
     hasBin: true
     peerDependencies:
-      ws: ^8.18.0
+      ws: 8.21.1
       zod: ^3.25 || ^4.0
     peerDependenciesMeta:
       ws:
@@ -8570,8 +8573,8 @@ packages:
     resolution: {integrity: sha512-7KxauUdBmSdWnmpaGFg+ppNjKF8uNLry8LyzjauQDOVONfFLNKrKvQOxZ/VuTIcS/gge/YNahf5RIIQWTSarlg==}
     engines: {node: ^12.13.0 || ^14.15.0 || >=16.0.0}
 
-  ws@6.2.3:
-    resolution: {integrity: sha512-jmTjYU0j60B+vHey6TfR3Z7RD61z/hmxBS3VMSGIrroOWXQEneK1zNuotOUrGyBHQj0yrpsLHPWtigEFd13ndA==}
+  ws@6.2.4:
+    resolution: {integrity: sha512-PNIUUyLI5YpkJZj60YBzX1o0ByQ4ovvfmq9N/Kig/PAYbVlGyz4R6G0SEWrD0O9acc0sT2+IdMBVLFv8FSi0Nw==}
     peerDependencies:
       bufferutil: ^4.0.1
       utf-8-validate: ^5.0.2
@@ -8581,8 +8584,8 @@ packages:
       utf-8-validate:
         optional: true
 
-  ws@7.5.10:
-    resolution: {integrity: sha512-+dbF1tHwZpXcbOJdVOkzLDxZP1ailvSxM6ZweXTegylPny803bFhA+vqBYw4s31NSAk4S2Qz+AKXK9a4wkdjcQ==}
+  ws@7.5.11:
+    resolution: {integrity: sha512-zS54Oen9bITtp7kp2XM3AydrCIq1D+HwJOuH+c+e4LfpL/lotP5osijd+UoMnxwAam1GN8R4KtLAyIrIcBNpiA==}
     engines: {node: '>=8.3.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -8593,20 +8596,8 @@ packages:
       utf-8-validate:
         optional: true
 
-  ws@8.18.0:
-    resolution: {integrity: sha512-8VbfWfHLbbwu3+N6OKsOMpBdT4kXPDDB9cJk2bJ6mh9ucxdlnNvH1e+roYkKmN9Nxw2yjz7VzeO9oOz2zJ04Pw==}
-    engines: {node: '>=10.0.0'}
-    peerDependencies:
-      bufferutil: ^4.0.1
-      utf-8-validate: '>=5.0.2'
-    peerDependenciesMeta:
-      bufferutil:
-        optional: true
-      utf-8-validate:
-        optional: true
-
-  ws@8.19.0:
-    resolution: {integrity: sha512-blAT2mjOEIi0ZzruJfIhb3nps74PRWTCz1IjglWEEpQl5XS/UNama6u2/rjFkDDouqr4L67ry+1aGIALViWjDg==}
+  ws@8.21.1:
+    resolution: {integrity: sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -9762,7 +9753,7 @@ snapshots:
       react: 19.0.0
       tslib: 2.8.1
 
-  '@earendil-works/pi-ai@0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)':
+  '@earendil-works/pi-ai@0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.21.1)(zod@3.25.76)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@3.25.76)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0
@@ -9772,7 +9763,7 @@ snapshots:
       '@smithy/node-http-handler': 4.7.3
       http-proxy-agent: 7.0.2
       https-proxy-agent: 7.0.6
-      openai: 6.26.0(ws@8.19.0)(zod@3.25.76)
+      openai: 6.26.0(ws@8.21.1)(zod@3.25.76)
       partial-json: 0.1.7
       typebox: 1.1.38
     transitivePeerDependencies:
@@ -10528,7 +10519,7 @@ snapshots:
       google-auth-library: 10.6.1
       p-retry: 4.6.2
       protobufjs: 7.5.6
-      ws: 8.19.0
+      ws: 8.21.1
     optionalDependencies:
       '@modelcontextprotocol/sdk': 1.25.3(hono@4.11.7)(zod@3.25.76)
     transitivePeerDependencies:
@@ -10937,7 +10928,7 @@ snapshots:
   '@mistralai/mistralai@2.2.6(@opentelemetry/api@1.9.0)':
     dependencies:
       '@opentelemetry/semantic-conventions': 1.43.0
-      ws: 8.19.0
+      ws: 8.21.1
       zod: 3.25.76
       zod-to-json-schema: 3.25.1(zod@3.25.76)
     optionalDependencies:
@@ -11918,7 +11909,7 @@ snapshots:
       open: 6.4.0
       pretty-format: 26.6.2
       serve-static: 1.16.3
-      ws: 6.2.3
+      ws: 6.2.4
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -12097,7 +12088,7 @@ snapshots:
       nullthrows: 1.1.1
       open: 7.4.2
       serve-static: 1.16.3
-      ws: 6.2.3
+      ws: 6.2.4
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -12124,9 +12115,7 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 
@@ -12717,7 +12706,7 @@ snapshots:
       sirv: 3.0.2
       tinyrainbow: 2.0.0
       vitest: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jsdom@29.0.1)(terser@5.46.1)(tsx@4.21.0)(yaml@2.8.2)
-      ws: 8.19.0
+      ws: 8.21.1
     optionalDependencies:
       playwright: 1.58.1
     transitivePeerDependencies:
@@ -12736,7 +12725,7 @@ snapshots:
       sirv: 3.0.2
       tinyrainbow: 2.0.0
       vitest: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jsdom@29.0.1)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
-      ws: 8.19.0
+      ws: 8.21.1
     optionalDependencies:
       playwright: 1.58.1
     transitivePeerDependencies:
@@ -15921,7 +15910,7 @@ snapshots:
       serialize-error: 2.1.0
       source-map: 0.5.7
       throat: 5.0.0
-      ws: 7.5.10
+      ws: 7.5.11
       yargs: 17.7.2
     transitivePeerDependencies:
       - bufferutil
@@ -15967,7 +15956,7 @@ snapshots:
       sharp: 0.34.5
       undici: 7.24.8
       workerd: 1.20260426.1
-      ws: 8.18.0
+      ws: 8.21.1
       youch: 4.1.0-beta.10
     transitivePeerDependencies:
       - bufferutil
@@ -16194,9 +16183,9 @@ snapshots:
       is-docker: 2.2.1
       is-wsl: 2.2.0
 
-  openai@6.26.0(ws@8.19.0)(zod@3.25.76):
+  openai@6.26.0(ws@8.21.1)(zod@3.25.76):
     optionalDependencies:
-      ws: 8.19.0
+      ws: 8.21.1
       zod: 3.25.76
 
   opentype.js@0.8.0:
@@ -16598,7 +16587,7 @@ snapshots:
   react-devtools-core@6.1.5:
     dependencies:
       shell-quote: 1.8.3
-      ws: 7.5.10
+      ws: 7.5.11
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -16775,7 +16764,7 @@ snapshots:
       semver: 7.8.4
       stacktrace-parser: 0.1.11
       whatwg-fetch: 3.6.20
-      ws: 6.2.3
+      ws: 6.2.4
       yargs: 17.7.2
     optionalDependencies:
       '@types/react': 19.2.10
@@ -16823,7 +16812,7 @@ snapshots:
       semver: 7.8.4
       stacktrace-parser: 0.1.11
       whatwg-fetch: 3.6.20
-      ws: 6.2.3
+      ws: 6.2.4
       yargs: 17.7.2
     optionalDependencies:
       '@types/react': 19.2.10
@@ -18090,15 +18079,13 @@ snapshots:
       imurmurhash: 0.1.4
       signal-exit: 3.0.7
 
-  ws@6.2.3:
+  ws@6.2.4:
     dependencies:
       async-limiter: 1.0.1
 
-  ws@7.5.10: {}
+  ws@7.5.11: {}
 
-  ws@8.18.0: {}
-
-  ws@8.19.0: {}
+  ws@8.21.1: {}
 
   xml-name-validator@5.0.0: {}
 

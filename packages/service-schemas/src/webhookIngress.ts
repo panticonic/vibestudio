@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import {
+  WEBHOOK_DEFAULT_MAX_BODY_BYTES,
+  WEBHOOK_HARD_MAX_BODY_BYTES,
+} from "@vibestudio/shared/webhooks/limits";
 
 export const GOOGLE_OIDC_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
 
@@ -99,6 +103,15 @@ export const createWebhookIngressSubscriptionSchema = z
     delivery: webhookDeliverySchema.describe(
       "relay uses the configured public relay; direct uses this server's co-located public gateway."
     ),
+    maxBodyBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(WEBHOOK_HARD_MAX_BODY_BYTES)
+      .default(WEBHOOK_DEFAULT_MAX_BODY_BYTES)
+      .describe(
+        `Per-subscription decoded request-body budget in bytes. Defaults to ${WEBHOOK_DEFAULT_MAX_BODY_BYTES}; larger values require direct delivery and must fit the host's configured ceiling.`
+      ),
     payload: webhookPayloadFormatSchema.describe("How the verified request body is decoded."),
     verifier: webhookVerifierSchema.describe(
       "Authentication applied before delivery. Secrets/tokens are redacted from list results."
@@ -203,6 +216,7 @@ export const webhookIngressSubscriptionSummarySchema = z
     ownerCallerKind: z.string(),
     target: webhookTargetSchema,
     delivery: webhookDeliverySchema,
+    maxBodyBytes: z.number().int().positive().max(WEBHOOK_HARD_MAX_BODY_BYTES),
     payload: webhookPayloadFormatSchema,
     verifier: redactedWebhookVerifierSchema,
     replay: z.object({ key: webhookReplayKeySchema, ttlMs: z.number() }).strict().optional(),
@@ -233,8 +247,7 @@ export const webhookIngressMethods = defineServiceMethods({
     returns: webhookIngressSubscriptionSummarySchema,
     agentFacing: false,
     access: { sensitivity: "write" },
-    description:
-      "Create an owner-scoped public webhook subscription targeting a method in the caller's own source. In agent eval, use agent.describe().identity for target.source, target.className, and target.objectKey.",
+    description: `Create an owner-scoped public webhook subscription targeting a method in the caller's own source. maxBodyBytes defaults to ${WEBHOOK_DEFAULT_MAX_BODY_BYTES}; larger bounded payloads require direct delivery and must fit the host's configured ceiling. In agent eval, use agent.describe().identity for target.source, target.className, and target.objectKey.`,
   },
   listSubscriptions: {
     args: z.union([z.tuple([]), z.tuple([listWebhookIngressSubscriptionsOptionsSchema])]),

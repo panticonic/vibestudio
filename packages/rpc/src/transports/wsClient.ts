@@ -13,6 +13,11 @@ import type { RecoveryKind } from "../protocol/recoveryCoordinator.js";
 import type { WsLike, WsTransportAdapter } from "../protocol/wsAdapter.js";
 import { TERMINAL_CLOSE_CODES } from "../protocol/closeCodes.js";
 import { RPC_CONTRACT_VERSION } from "../protocol/contractVersion.js";
+import {
+  requestRpcWebSocketAdmission,
+  rpcWebSocketAdmissionUrl,
+} from "../protocol/rpcWebSocketAdmission.js";
+import { webSocketAuthProtocol } from "../protocol/webSocketAuthProtocol.js";
 
 export interface WsClientTransportConfig {
   selfId: string;
@@ -104,23 +109,48 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     }, delay);
   };
 
-  const handleAuthFailure = async (reason?: string): Promise<void> => {
+  const scheduleAdmissionRetry = (socketGeneration: number, retryAfterMs: number): void => {
+    if (closed) return;
+    clearReconnectTimer();
+    setStatus("connecting");
+    reconnectTimer = setTimeout(
+      () => {
+        reconnectTimer = null;
+        if (closed || socketGeneration !== generation) return;
+        void openSocket();
+      },
+      Math.max(0, retryAfterMs)
+    );
+  };
+
+  const failAuthentication = (reason: string): void => {
+    const error = new Error(reason);
+    firstConnectReject?.(error);
+    firstConnectReject = null;
+    firstConnectResolve = null;
+    firstConnectPromise = null;
+    closed = true;
+    authenticated = false;
+    setStatus("disconnected");
+    socket?.close(4006, "Authentication failed");
+  };
+
+  const handleAuthFailure = async (
+    rejectedToken: string,
+    reason: string,
+    socketGeneration: number
+  ): Promise<void> => {
     if (!config.adapter.refreshAuthToken) {
-      firstConnectReject?.(
-        new Error(reason ? `Server auth failed: ${reason}` : "Server auth failed")
-      );
-      firstConnectReject = null;
-      firstConnectResolve = null;
-      if (!hasConnectedBefore) closed = true;
-      socket?.close(4006, "Authentication failed");
+      failAuthentication(`Server auth failed: ${reason}`);
       return;
     }
     try {
-      const previousAuthToken = authToken;
       const refreshedAuthToken = await config.adapter.refreshAuthToken();
-      if (refreshedAuthToken === previousAuthToken) {
-        throw new Error("Auth refresh returned the rejected token");
+      if (refreshedAuthToken === rejectedToken) {
+        failAuthentication("Auth refresh returned the rejected token");
+        return;
       }
+      if (closed || socketGeneration !== generation) return;
       authToken = refreshedAuthToken;
       const oldSocket = socket;
       const nextGeneration = ++generation;
@@ -132,7 +162,9 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       }, 0);
     } catch (error) {
       console.warn("[wsClientTransport] Auth refresh failed:", error);
-      socket?.close(4006, "Authentication failed");
+      failAuthentication(
+        `Auth refresh failed: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
   };
 
@@ -140,7 +172,16 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     switch (msg.type) {
       case "ws:auth-result": {
         if (!msg.success) {
-          void handleAuthFailure(msg.error);
+          const rejectedToken = authToken;
+          if (rejectedToken) {
+            void handleAuthFailure(
+              rejectedToken,
+              msg.error ?? "Server rejected RPC authentication",
+              generation
+            );
+          } else {
+            failAuthentication(msg.error ?? "Server rejected RPC authentication");
+          }
           return;
         }
         if (msg.contractVersion !== RPC_CONTRACT_VERSION) {
@@ -237,21 +278,48 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       return;
     }
 
-    let nextSocket: WsLike;
+    const authFields = config.getAuthMessageFields?.();
+    let admission;
     try {
-      nextSocket = config.adapter.createSocket(config.getWsUrl());
+      admission = await (config.adapter.requestAdmission ?? requestRpcWebSocketAdmission)(
+        rpcWebSocketAdmissionUrl(config.getWsUrl()),
+        {
+          credential: token,
+          ...(authFields?.clientLabel ? { clientLabel: authFields.clientLabel } : {}),
+          ...(authFields?.clientPlatform ? { clientPlatform: authFields.clientPlatform } : {}),
+        }
+      );
     } catch (error) {
-      console.warn(`[${prefix}] Failed to create WebSocket:`, error);
-      if (!hasConnectedBefore) {
-        closed = true;
-        setStatus("disconnected");
-        firstConnectReject?.(
-          error instanceof Error ? error : new Error("Failed to create WebSocket")
-        );
-        firstConnectReject = null;
-        firstConnectResolve = null;
+      console.warn(`[${prefix}] RPC WebSocket admission request failed:`, error);
+      scheduleReconnect(socketGeneration);
+      return;
+    }
+    if (closed || socketGeneration !== generation) return;
+    if (!admission.ok) {
+      if (admission.code === "admission_saturated") {
+        scheduleAdmissionRetry(socketGeneration, admission.retryAfterMs ?? 1_000);
         return;
       }
+      if (admission.code === "invalid_credential" || admission.code === "admin_credential") {
+        await handleAuthFailure(token, admission.message, socketGeneration);
+        return;
+      }
+      if (admission.code === "invalid_request") {
+        failAuthentication(`RPC WebSocket admission failed: ${admission.message}`);
+        return;
+      }
+      scheduleAdmissionRetry(socketGeneration, admission.retryAfterMs ?? 1_000);
+      return;
+    }
+    const admissionGrant = admission.grant;
+
+    let nextSocket: WsLike;
+    try {
+      nextSocket = config.adapter.createSocket(config.getWsUrl(), [
+        webSocketAuthProtocol("rpc", admissionGrant),
+      ]);
+    } catch (error) {
+      console.warn(`[${prefix}] Failed to create WebSocket:`, error);
       scheduleReconnect(socketGeneration);
       return;
     }
@@ -261,10 +329,10 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       nextSocket.send(
         JSON.stringify({
           type: "ws:auth",
+          ...authFields,
           contractVersion: RPC_CONTRACT_VERSION,
-          token,
+          token: admissionGrant,
           connectionId,
-          ...config.getAuthMessageFields?.(),
         } satisfies WsClientMessage)
       );
     };
@@ -279,12 +347,6 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     nextSocket.onerror = (event) => {
       if (socketGeneration !== generation || socket !== nextSocket) return;
       console.warn(`[${prefix}] WebSocket error`, event);
-      if (!hasConnectedBefore && firstConnectReject) {
-        firstConnectReject(new Error(event instanceof Error ? event.message : "WebSocket error"));
-        firstConnectReject = null;
-        firstConnectResolve = null;
-        closed = true;
-      }
     };
     nextSocket.onclose = (event) => {
       if (socketGeneration !== generation || socket !== nextSocket) return;
@@ -317,6 +379,10 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         shouldConnect = !socket || status === "disconnected";
       }
       if (shouldConnect) this.connect();
+      if (!firstConnectPromise) {
+        throw new Error("RPC WebSocket connection promise was not initialized");
+      }
+      const pendingConnection = firstConnectPromise;
       return new Promise<void>((resolve, reject) => {
         const timeout =
           timeoutMs == null
@@ -328,7 +394,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
                   ),
                 timeoutMs
               );
-        firstConnectPromise!.then(
+        pendingConnection.then(
           () => {
             if (timeout) clearTimeout(timeout);
             resolve();

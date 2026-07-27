@@ -2552,7 +2552,8 @@ async function main() {
 
   // ── Generic public webhook ingress ──
   {
-    const { createWebhookIngressService } = await import("./services/webhookIngressService.js");
+    const { createWebhookIngressService, resolveWebhookDirectMaxBodyBytes } =
+      await import("./services/webhookIngressService.js");
     const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
     let webhookIngress: ReturnType<typeof createWebhookIngressService> | null = null;
     container.registerManaged({
@@ -2572,6 +2573,9 @@ async function main() {
           // No public ingress: direct-mode webhooks only resolve co-located (loopback).
           // Remote webhooks ride the multi-tenant callback relay over the backhaul.
           directPublicBaseUrl: getLocalGatewayUrl("webhook direct base URL"),
+          directMaxBodyBytes: resolveWebhookDirectMaxBodyBytes(
+            process.env["VIBESTUDIO_WEBHOOK_DIRECT_MAX_BODY_BYTES"]
+          ),
           doDispatch,
           resolveDelegatedCaller: async (callerId) => {
             const store = getEntityStore();

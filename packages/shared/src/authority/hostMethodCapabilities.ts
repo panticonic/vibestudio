@@ -142,7 +142,11 @@ const GROUPS = {
   "context.relationships.record": ["runtime.recordContextEdge"],
   "server-logs.read": ["serverLog.query", "serverLog.stats", "serverLog.tail"],
   "settings.read": ["settings.getData"],
-  "approvals.read": ["shellApproval.listPending", "userlandApproval.list"],
+  "approvals.read": [
+    "shellApproval.getUserlandSealedDetail",
+    "shellApproval.listPending",
+    "userlandApproval.list",
+  ],
   "approvals.decide": [
     "shellApproval.resolve",
     "shellApproval.resolveMissionReview",

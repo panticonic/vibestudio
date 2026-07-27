@@ -240,6 +240,7 @@ function renderSheet(
     onSubmitCredentialInput: jest.fn(async () => undefined),
     onSubmitSecretInput: jest.fn(async () => undefined),
     onResolveUserland: jest.fn(async () => undefined),
+    onFetchUserlandSealedDetail: jest.fn(async () => null),
     onResolveExternalAgent: jest.fn(async () => undefined),
     onResolveMissionReview: jest.fn(async () => undefined),
     ...overrides,
@@ -417,6 +418,7 @@ describe("ApprovalSheet", () => {
         onSubmitCredentialInput={jest.fn()}
         onSubmitSecretInput={jest.fn()}
         onResolveUserland={jest.fn()}
+        onFetchUserlandSealedDetail={jest.fn(async () => null)}
         onResolveExternalAgent={jest.fn()}
         onResolveMissionReview={jest.fn()}
       />
@@ -444,6 +446,27 @@ describe("ApprovalSheet", () => {
 
     fireEvent.press(getByTestId("approval-userland-allow"));
     await waitFor(() => expect(onResolveUserland).toHaveBeenCalledWith("approval-1", "allow"));
+  });
+
+  it("fetches and renders complete sealed userland detail on the trusted mobile sheet", async () => {
+    const suffix = "dangerous-mobile-suffix-after-one-thousand";
+    const content = `${"x".repeat(1_100)}${suffix}`;
+    const digest = "b".repeat(64);
+    const onFetchUserlandSealedDetail = jest.fn(async () => content);
+    const approval: PendingApproval = {
+      ...userland,
+      sealedDetails: [
+        { label: "Complete execution plan", digest, byteLength: content.length, format: "code" },
+      ],
+    };
+    const { getByText } = renderSheet(approval, { onFetchUserlandSealedDetail });
+
+    fireEvent.press(getByText("Request details"));
+    await waitFor(() =>
+      expect(onFetchUserlandSealedDetail).toHaveBeenCalledWith("approval-1", digest)
+    );
+    expect(getByText(content)).toBeTruthy();
+    expect(getByText(`sha256:${digest}`)).toBeTruthy();
   });
 
   it("renders the caller chip with the kind icon and label", () => {
@@ -610,6 +633,7 @@ describe("ApprovalSheet", () => {
         onSubmitCredentialInput={jest.fn()}
         onSubmitSecretInput={jest.fn()}
         onResolveUserland={jest.fn()}
+        onFetchUserlandSealedDetail={jest.fn(async () => null)}
         onResolveExternalAgent={jest.fn()}
         onResolveMissionReview={jest.fn()}
       />

@@ -53,6 +53,7 @@ describe("shellApprovalService", () => {
         submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
         listPending: vi.fn(() => []),
+        getUserlandSealedDetail: vi.fn(() => null),
         cancelForCaller: vi.fn(),
       },
     });
@@ -100,6 +101,7 @@ describe("shellApprovalService", () => {
             options: [{ value: "allow", label: "Allow" }],
           },
         ]),
+        getUserlandSealedDetail: vi.fn(() => null),
         cancelForCaller: vi.fn(),
       },
       deviceLabelFor: (deviceId) => (deviceId === "dev_1" ? "Gabriel's phone" : undefined),
@@ -166,6 +168,7 @@ describe("shellApprovalService", () => {
         submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
         listPending: vi.fn(() => []),
+        getUserlandSealedDetail: vi.fn(() => null),
         cancelForCaller: vi.fn(),
       },
     });
@@ -216,6 +219,7 @@ describe("shellApprovalService", () => {
             credentialLabel: "ChatGPT Codex model credential",
           } as PendingApproval,
         ]),
+        getUserlandSealedDetail: vi.fn(() => null),
         cancelForCaller: vi.fn(),
       },
     });
@@ -253,6 +257,7 @@ describe("shellApprovalService", () => {
         submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
         listPending: vi.fn(() => [startupApproval("startup-1")]),
+        getUserlandSealedDetail: vi.fn(() => null),
         cancelForCaller: vi.fn(),
       },
       metrics,

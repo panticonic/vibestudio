@@ -29,13 +29,19 @@ interface HeadlessHostChildMessage {
   diagnostic?: unknown;
 }
 
-interface HeadlessHostBridgeDiagnostic {
-  state?: string;
+export type HeadlessHostBridgeDiagnosticPhase =
+  | "idle"
+  | "acquiring-credential"
+  | "connecting"
+  | "admitted"
+  | "closed"
+  | "error"
+  | "retrying";
+
+export interface HeadlessHostBridgeDiagnostic {
+  state?: HeadlessHostBridgeDiagnosticPhase;
   attempt?: number;
   url?: string;
-  opened?: boolean;
-  authSent?: boolean;
-  authenticated?: boolean;
   lastError?: string;
   lastCloseCode?: number;
   lastCloseReason?: string;
@@ -89,17 +95,13 @@ export function resolveHeadlessHostEntryPath(
   return path.resolve(appRoot, "dist", "headless-host", "main.js");
 }
 
-function parseBridgeDiagnostic(value: unknown): HeadlessHostBridgeDiagnostic | null {
+export function parseBridgeDiagnostic(value: unknown): HeadlessHostBridgeDiagnostic | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   const diagnostic: HeadlessHostBridgeDiagnostic = {};
-  if (typeof record["state"] === "string") diagnostic.state = record["state"];
+  if (isBridgeDiagnosticPhase(record["state"])) diagnostic.state = record["state"];
   if (typeof record["attempt"] === "number") diagnostic.attempt = record["attempt"];
   if (typeof record["url"] === "string") diagnostic.url = record["url"];
-  if (typeof record["opened"] === "boolean") diagnostic.opened = record["opened"];
-  if (typeof record["authSent"] === "boolean") diagnostic.authSent = record["authSent"];
-  if (typeof record["authenticated"] === "boolean")
-    diagnostic.authenticated = record["authenticated"];
   if (typeof record["lastError"] === "string") diagnostic.lastError = record["lastError"];
   if (typeof record["lastCloseCode"] === "number")
     diagnostic.lastCloseCode = record["lastCloseCode"];
@@ -108,18 +110,27 @@ function parseBridgeDiagnostic(value: unknown): HeadlessHostBridgeDiagnostic | n
   if (typeof record["lastMessageType"] === "string")
     diagnostic.lastMessageType = record["lastMessageType"];
   if (typeof record["nextRetryMs"] === "number") diagnostic.nextRetryMs = record["nextRetryMs"];
-  return diagnostic;
+  return Object.keys(diagnostic).length > 0 ? diagnostic : null;
 }
 
-function formatBridgeDiagnostic(
+function isBridgeDiagnosticPhase(value: unknown): value is HeadlessHostBridgeDiagnosticPhase {
+  return (
+    value === "idle" ||
+    value === "acquiring-credential" ||
+    value === "connecting" ||
+    value === "admitted" ||
+    value === "closed" ||
+    value === "error" ||
+    value === "retrying"
+  );
+}
+
+export function formatBridgeDiagnostic(
   diagnostic: HeadlessHostBridgeDiagnostic,
   includeLastMessage = true
 ): string {
-  const parts = [`state=${diagnostic.state ?? "unknown"}`, `attempt=${diagnostic.attempt ?? 0}`];
+  const parts = [`phase=${diagnostic.state ?? "unknown"}`, `attempt=${diagnostic.attempt ?? 0}`];
   if (diagnostic.url) parts.push(`url=${diagnostic.url}`);
-  parts.push(`opened=${diagnostic.opened === true ? "yes" : "no"}`);
-  parts.push(`authSent=${diagnostic.authSent === true ? "yes" : "no"}`);
-  parts.push(`authenticated=${diagnostic.authenticated === true ? "yes" : "no"}`);
   if (includeLastMessage && diagnostic.lastMessageType) {
     parts.push(`lastMessage=${diagnostic.lastMessageType}`);
   }

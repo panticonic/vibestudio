@@ -42,7 +42,7 @@ export async function connectToServer(config: HeadlessHostConfig): Promise<Serve
     adapter: {
       now: () => Date.now(),
       getAuthToken: async () => currentToken,
-      createSocket: (url) => new NodeWsLike(new WebSocket(url)),
+      createSocket: (url, protocols) => new NodeWsLike(new WebSocket(url, protocols)),
     },
   });
 

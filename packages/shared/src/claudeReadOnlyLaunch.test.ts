@@ -10,6 +10,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { confineClaudeReadOnly } from "./claudeReadOnlyLaunch.js";
 
+function canCreateBubblewrapNamespace(): boolean {
+  if (process.platform !== "linux" || !existsSync("/usr/bin/bwrap")) return false;
+  const probe = spawnSync("/usr/bin/bwrap", ["--ro-bind", "/", "/", "--", "/bin/true"], {
+    stdio: "ignore",
+  });
+  return probe.status === 0;
+}
+
 describe("confineClaudeReadOnly", () => {
   const roots: string[] = [];
   afterEach(() => {
@@ -73,7 +81,7 @@ describe("confineClaudeReadOnly", () => {
     ).toThrow(/requires bubblewrap/);
   });
 
-  it.runIf(process.platform === "linux" && existsSync("/usr/bin/bwrap"))(
+  it.runIf(canCreateBubblewrapNamespace())(
     "enforces EROFS for native context writes while explicit scratch stays writable",
     () => {
       const root = mkdtempSync(path.join(os.tmpdir(), "claude-readonly-exec-"));

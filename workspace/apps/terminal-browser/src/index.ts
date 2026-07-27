@@ -58,7 +58,7 @@ async function connect(appId: string, logSink: LogSink) {
     adapter: {
       now: () => Date.now(),
       getAuthToken: async () => token,
-      createSocket: (url) => new NodeWsLike(new WebSocket(url)),
+      createSocket: (url, protocols) => new NodeWsLike(new WebSocket(url, protocols)),
     },
   });
   const rpc: RpcClient = createRpcClient({

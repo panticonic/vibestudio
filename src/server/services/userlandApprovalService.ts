@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 
 import type {
   ApprovalPrincipal,
@@ -13,6 +14,8 @@ import type {
   UserlandApprovalIssuer,
   UserlandApprovalOption,
   UserlandApprovalRequest,
+  UserlandApprovalSealedDetailInput,
+  UserlandApprovalSealedDetailRef,
 } from "@vibestudio/shared/approvals";
 import {
   approvalPrincipalSchema,
@@ -33,6 +36,74 @@ import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { testPolicyUserlandDecision } from "./authorityRuntime.js";
 
 const SERVICE_NAME = "userlandApproval";
+
+interface SealedUserlandDetail {
+  ref: UserlandApprovalSealedDetailRef;
+  content: string;
+}
+
+function sealUserlandDetails(
+  details: UserlandApprovalSealedDetailInput[] | undefined
+): SealedUserlandDetail[] | undefined {
+  return details?.map((detail) => ({
+    ref: {
+      label: detail.label,
+      digest: createHash("sha256").update(detail.content, "utf8").digest("hex"),
+      byteLength: Buffer.byteLength(detail.content, "utf8"),
+      ...(detail.format ? { format: detail.format } : {}),
+    },
+    content: detail.content,
+  }));
+}
+
+function approvedChoice(
+  choice: string,
+  sealedDetails: SealedUserlandDetail[] | undefined
+): UserlandApprovalChoice {
+  return {
+    kind: "choice",
+    choice,
+    ...(sealedDetails?.length
+      ? {
+          sealedDetails: sealedDetails.map((detail) => ({
+            digest: detail.ref.digest,
+            content: detail.content,
+          })),
+        }
+      : {}),
+  };
+}
+
+function sealedReviewDigest(
+  details:
+    | ReadonlyArray<SealedUserlandDetail>
+    | ReadonlyArray<{
+        label: string;
+        digest: string;
+        byteLength: number;
+        format?: "plain" | "code";
+      }>
+    | undefined
+): string | undefined {
+  if (!details?.length) return undefined;
+  return createHash("sha256")
+    .update(
+      JSON.stringify(
+        details.map((detail) =>
+          "ref" in detail
+            ? detail.ref
+            : {
+                label: detail.label,
+                digest: detail.digest,
+                byteLength: detail.byteLength,
+                ...(detail.format ? { format: detail.format } : {}),
+              }
+        )
+      ),
+      "utf8"
+    )
+    .digest("hex");
+}
 /**
  * A relayed external-agent permission auto-denies at the workspace card after
  * this long with no user answer. Agent runtimes use the same horizon so
@@ -345,24 +416,39 @@ export function createUserlandApprovalService(deps: {
   ): Promise<UserlandApprovalChoice> {
     const issuer = extensionIssuer(ctx);
     const decoratedReq = decorateForIssuer(req, issuer);
+    const { sealedDetails: rawSealedDetails, ...promptReq } = decoratedReq;
+    const sealedDetails = sealUserlandDetails(rawSealedDetails);
+    const reviewDigest = sealedReviewDigest(sealedDetails);
     const promptOptions = decoratedReq.promptOptions ?? "scoped";
     const options =
       promptOptions === "scoped"
         ? scopedOptionsFor(principal, decoratedReq)
         : (decoratedReq.options ?? BINARY_OPTIONS);
-    const hit = deps.grantStore.lookupUserland(principal, decoratedReq.subject.id, issuer);
+    const hit = deps.grantStore.lookupUserland(
+      principal,
+      promptReq.subject.id,
+      issuer,
+      reviewDigest
+    );
     if (hit) {
       if (isCachedChoiceValid(promptOptions, options, hit.choice)) {
-        return { kind: "choice", choice: hit.choice };
+        return approvedChoice(hit.choice, sealedDetails);
       }
-      await deps.grantStore.revokeUserland(principal, decoratedReq.subject.id, issuer);
+      await deps.grantStore.revokeUserland(
+        principal,
+        promptReq.subject.id,
+        issuer,
+        Date.now(),
+        reviewDigest,
+        true
+      );
     }
 
     const policyCaller = ctx.authorizingCaller ?? ctx.caller;
     const testDecision = testPolicyUserlandDecision(
       policyCaller,
       ctx.authorization,
-      decoratedReq.subject.id
+      promptReq.subject.id
     );
     if (testDecision) {
       const resolved = resolveTestPromptChoice(
@@ -371,10 +457,10 @@ export function createUserlandApprovalService(deps: {
         testDecision.decision,
         testDecision.remember
       );
-      if (!resolved.record) return { kind: "choice", choice: resolved.choice };
+      if (!resolved.record) return approvedChoice(resolved.choice, sealedDetails);
       await deps.grantStore.recordUserland(
         principal,
-        decoratedReq.subject,
+        promptReq.subject,
         resolved.choice,
         Date.now(),
         issuer,
@@ -382,9 +468,10 @@ export function createUserlandApprovalService(deps: {
         {
           provenance: "preauthorization",
           decidedBy: `host:${testDecision.policyId}:${testDecision.ruleId}`,
-        }
+        },
+        reviewDigest
       );
-      return { kind: "choice", choice: resolved.choice };
+      return approvedChoice(resolved.choice, sealedDetails);
     }
     const testPolicy =
       ctx.authorization?.testPolicy ??
@@ -394,7 +481,7 @@ export function createUserlandApprovalService(deps: {
       throw new ServiceError(
         SERVICE_NAME,
         "request",
-        `Unexpected userland approval prompt in system test ${testPolicy.case.testId}: ${decoratedReq.subject.id}`,
+        `Unexpected userland approval prompt in system test ${testPolicy.case.testId}: ${promptReq.subject.id}`,
         "EUNEXPECTEDTESTPROMPT"
       );
     }
@@ -403,20 +490,27 @@ export function createUserlandApprovalService(deps: {
       principal,
       issuer,
       ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
-      ...decoratedReq,
+      ...promptReq,
+      ...(sealedDetails?.length ? { sealedDetails } : {}),
       promptOptions,
       options,
     });
     if (result.kind === "choice") {
       const resolved = resolvePromptChoice(promptOptions, options, result.choice);
-      if (!resolved.record) return { kind: "choice", choice: resolved.choice };
+      const normalizedResult: UserlandApprovalChoice = {
+        ...result,
+        choice: resolved.choice,
+      };
+      if (!resolved.record) return normalizedResult;
       await deps.grantStore.recordUserland(
         principal,
-        decoratedReq.subject,
+        promptReq.subject,
         resolved.choice,
         Date.now(),
         issuer,
-        resolved.scope
+        resolved.scope,
+        undefined,
+        reviewDigest
       );
       if (typeof deps.approvalQueue.resolveMatchingUserland === "function") {
         deps.approvalQueue.resolveMatchingUserland((approval) => {
@@ -434,12 +528,13 @@ export function createUserlandApprovalService(deps: {
               effectiveVersion: approval.effectiveVersion,
             },
             approval.subject.id,
-            approval.issuer
+            approval.issuer,
+            sealedReviewDigest(approval.sealedDetails)
           );
           return !!hit && isCachedChoiceValid(approval.promptOptions, approval.options, hit.choice);
         }, result.choice);
       }
-      return { kind: "choice", choice: resolved.choice };
+      return normalizedResult;
     }
     return result;
   }
