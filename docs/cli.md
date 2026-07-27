@@ -355,7 +355,7 @@ Remote reach is WebRTC (pair by QR: signaling room + DTLS fingerprint); see
 ## Git Upstream
 
 The CLI exposes Git upstream workflows through `vibestudio vcs git ...`:
-`status`, `remote:set`, `enable`, `push`, `pull`, `publish`, `import`,
+`status`, `remote set`, `remote rm`, `enable`, `push`, `pull`, `publish`, `import`,
 `auto`, and `disable`. These commands dispatch to the host-known `gitInterop`
 service. Operations that need the Git upstream engine are fulfilled by the
 workspace manifest's configured `providers.gitInterop` extension rather than a
@@ -370,11 +370,27 @@ package name. Provider helpers such as the GitHub skill can then publish through
 the same routed API.
 
 `vcs git pull` and `vcs git import` stop at a committed semantic candidate;
-they do not advance protected `main`. Their results identify the candidate
-context and event. While `vcs git status` reports `integration-required`, use
+they do not advance protected `main`. Import results also contain required
+`semanticEvidence` from the same atomic semantic transaction: the application,
+import work unit, canonical snapshot revision/digest, and admitted repository
+IDs. Use `--json` with `vcs git import` or a real `vcs git pull` when a CLI
+agent needs that complete evidence; human output remains a compact candidate
+summary. While
+`vcs git status` reports `integration-required`, use
 the ordinary semantic compare/integrate/check/commit workflow and publish
 explicitly. Outgoing export and Git push remain blocked until that candidate is
 accounted for.
 
+Credential selection is explicit: omit both flags for automatic URL-bound
+resolution, pass `--credential ID` to pin one stored credential, or pass
+`--anonymous` to forbid credential resolution. Durable remotes reject embedded
+credentials, query parameters, and fragments. `vcs git pull --dry-run` uses a
+disposable checkout and mutates no managed Git or semantic state. A missing
+configured remote branch is reported distinctly from fetch/auth failure; push
+to create it or update the declaration. Related force updates show an exact
+overwrite count, while unrelated histories deliberately have no comparable
+count.
+
 See [git-upstream.md](./git-upstream.md) for the two-layer model, approvals,
-`git.upstreams` config, and divergence repair workflow.
+`git.upstreams` config, immediate reconciliation, and divergence repair
+workflow.

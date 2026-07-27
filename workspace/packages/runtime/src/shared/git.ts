@@ -4,7 +4,9 @@
  * The public `git` namespace is the typed `gitInterop` service contract
  * without aliases, adapters, provider names, or target-specific behavior.
  * Provider selection and policy enforcement happen behind `gitInterop.*` on
- * the host.
+ * the host. Omitted, string, and null `credentialId` values mean automatic
+ * URL-bound resolution, one exact stored credential, and explicitly anonymous
+ * Git HTTP respectively; callers must preserve that distinction.
  */
 
 import type { RpcCaller } from "@vibestudio/rpc";

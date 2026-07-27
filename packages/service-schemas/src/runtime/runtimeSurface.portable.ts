@@ -273,7 +273,7 @@ export const GIT_MEMBERS = Object.keys(gitInteropMethods);
 export const VCS_MEMBERS = Object.keys(vcsMethods);
 
 export const VCS_DESCRIPTION =
-  "Simple semantic version control: exact event/application state, expressive edit/move/copy records, incremental local integration, whole-chain commit/discard, and directly walkable provenance.";
+  "Simple semantic version control: exact event/application state, expressive edit/move/copy records, incremental local integration, whole-chain commit/discard, directly walkable provenance, and atomic external-snapshot acknowledgements containing the committed event/application/work-unit/repository/snapshot tuple.";
 
 export const GAD_MEMBERS = [...GAD_RUNTIME_METHOD_NAMES];
 
@@ -363,7 +363,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   ),
   git: namespaceEntry(
     GIT_MEMBERS,
-    "Typed external Git operations routed through the workspace's configured gitInterop provider.",
+    "Typed external Git operations routed through the workspace's configured gitInterop provider. Managed content crosses the boundary only as semantic import candidates or protected-main exports. Credential selection is exact: omit credentialId for URL-bound resolution, pass a string to pin one credential, or pass null to require anonymous Git HTTP. Pull dry-runs use disposable state and do not mutate the managed checkout or semantic workspace.",
     "gitInterop"
   ),
   vcs: namespaceEntry(VCS_MEMBERS, VCS_DESCRIPTION, "vcs"),

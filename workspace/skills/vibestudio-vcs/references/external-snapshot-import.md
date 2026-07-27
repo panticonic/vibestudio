@@ -115,10 +115,18 @@ reverted without an import-specific workflow.
 
 ## Verify the result
 
-Inspect the returned event and import work unit. Confirm that the work unit's
-`externalSnapshot` exposes `sourceKind`, `sourceUri`, `snapshotRevision`, and
-`snapshotDigest` together, plus the complete sorted `targetRepositoryIds`
-vector. The `imports-repository` neighbors expose those same exact targets as
+The successful return is the atomic acknowledgement of the committed import. It
+includes `contextId`, `eventId`, `applicationId`, `workUnitId`,
+`importedRepositoryIds`, and the complete canonical `externalSnapshot`. These
+fields are required; callers must not accept an event-only result or reconstruct
+the application/work-unit/snapshot tuple in a post-commit pass.
+
+Confirm that the returned `externalSnapshot` exposes `sourceKind`, `sourceUri`,
+`snapshotRevision`, and `snapshotDigest` together, plus the complete sorted
+`targetRepositoryIds` vector. Confirm that `importedRepositoryIds` names the
+same admitted repositories. Independently inspect the returned event,
+application, and import work unit; the persisted work unit must expose the same
+snapshot. The `imports-repository` neighbors expose those same exact targets as
 walkable edges.
 Inspect its ordinary authored changes and confirm the repository identities and
 imported file states. Confirm each placed file reports intrinsic `contentKind`,

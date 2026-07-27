@@ -9,6 +9,7 @@
  */
 
 import * as fsp from "node:fs/promises";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -20,6 +21,7 @@ import { GitClient, type GitCommitTreeEntry } from "@vibestudio/git";
 import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
 import {
   vcsMethods,
+  type VcsExternalSnapshot,
   type VcsListFilesResult,
   type VcsStateNodeRef,
 } from "@vibestudio/service-schemas/vcs";
@@ -62,6 +64,11 @@ export interface ImportResult {
   contextId: string;
   eventId: string;
   changed: boolean;
+  semanticEvidence: {
+    applicationId: string;
+    workUnitId: string;
+    externalSnapshot: VcsExternalSnapshot;
+  };
 }
 
 export interface PendingImportCandidate {
@@ -206,7 +213,45 @@ export class GitBridge {
     const pending = await this.pendingImportCandidate(repo);
     if (pending) throw new PendingImportCandidateError(pending);
     const gitDir = await this.repoGitDir(repo);
-    if (!(await this.checkoutExists(repo))) {
+    return this.exportProtectedStateToDirectory(repo, gitDir, opts, true);
+  }
+
+  async withProtectedExportPreviewLocked<T>(
+    repoPath: string,
+    opts: { authorName?: string; authorEmail?: string },
+    inspect: (preview: { dir: string; exported: ExportResult }) => Promise<T>
+  ): Promise<T> {
+    const repo = normalizeWorkspaceRepoPath(repoPath);
+    const pending = await this.pendingImportCandidate(repo);
+    if (pending) throw new PendingImportCandidateError(pending);
+    const previewRoot = await fsp.mkdtemp(path.join(tmpdir(), "vibestudio-git-preview-"));
+    const previewDir = path.join(previewRoot, "repo");
+    try {
+      await fsp.mkdir(previewDir, { recursive: true });
+      const checkoutDir = await this.repoGitDir(repo);
+      try {
+        await fsp.cp(path.join(checkoutDir, ".git"), path.join(previewDir, ".git"), {
+          recursive: true,
+        });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      const exported = await this.exportProtectedStateToDirectory(repo, previewDir, opts, false);
+      return await inspect({ dir: previewDir, exported });
+    } finally {
+      await fsp.rm(previewRoot, { recursive: true, force: true });
+    }
+  }
+
+  private async exportProtectedStateToDirectory(
+    repo: string,
+    gitDir: string,
+    opts: { authorName?: string; authorEmail?: string },
+    detectLocalEdits: boolean
+  ): Promise<ExportResult> {
+    try {
+      await fsp.access(path.join(gitDir, ".git"));
+    } catch {
       await fsp.mkdir(gitDir, { recursive: true });
       await this.git.init(gitDir, "main");
     }
@@ -226,7 +271,9 @@ export class GitBridge {
     const targetFiles = await this.listRepositoryFiles(state, repository.repositoryId);
     const checkout = await this.checkoutHead(gitDir);
     const tracked = checkout.files;
-    const clobberedLocalEdits = await this.detectLocalDrift(gitDir, tracked);
+    const clobberedLocalEdits = detectLocalEdits
+      ? await this.detectLocalDrift(gitDir, tracked)
+      : [];
     if (checkout.eventId === event.eventId && sameCheckoutTree(tracked, targetFiles)) {
       return { exported: 0, headCommit: checkout.commitSha, clobberedLocalEdits };
     }
@@ -340,11 +387,13 @@ export class GitBridge {
       );
     }
     const sourceUri = provenanceGitUri(observedRemote);
-    const priorRevision =
+    const priorEvidence =
       status.committed.kind === "event"
-        ? await this.importRevisionAtEvent(status.committed.eventId, sourceUri)
+        ? await this.importEvidenceAtEvent(status.committed.eventId, sourceUri)
         : null;
+    const priorRevision = priorEvidence?.externalSnapshot.snapshotRevision ?? null;
     if (
+      priorEvidence !== null &&
       priorRevision === gitCommit &&
       currentRepo &&
       currentFiles.length === files.length &&
@@ -366,6 +415,7 @@ export class GitBridge {
                 throw new Error("clean import context has no committed event");
               })(),
         changed: false,
+        semanticEvidence: priorEvidence,
       };
     }
 
@@ -390,10 +440,23 @@ export class GitBridge {
       ],
       message: summary,
     });
-    return { contextId, eventId: imported.eventId, changed: true };
+    return {
+      contextId,
+      eventId: imported.eventId,
+      changed: true,
+      semanticEvidence: {
+        applicationId: imported.applicationId,
+        workUnitId: imported.workUnitId,
+        externalSnapshot: imported.externalSnapshot,
+      },
+    };
   }
 
-  private async importRevisionAtEvent(eventId: string, sourceUri: string): Promise<string | null> {
+  private async importEvidenceAtEvent(
+    eventId: string,
+    sourceUri: string,
+    expectedWorkUnitId?: string
+  ): Promise<ImportResult["semanticEvidence"] | null> {
     const event = await this.host.vcs.inspect({
       node: { kind: "event", eventId },
       edgeLimit: 1,
@@ -412,10 +475,15 @@ export class GitBridge {
       if (
         workUnit.node.kind === "work-unit" &&
         workUnit.node.value.kind === "import" &&
+        (!expectedWorkUnitId || workUnit.node.value.workUnitId === expectedWorkUnitId) &&
         workUnit.node.value.externalSnapshot?.sourceKind === "git" &&
         workUnit.node.value.externalSnapshot.sourceUri === sourceUri
       ) {
-        return workUnit.node.value.externalSnapshot.snapshotRevision;
+        return {
+          applicationId: application.node.value.applicationId,
+          workUnitId: workUnit.node.value.workUnitId,
+          externalSnapshot: workUnit.node.value.externalSnapshot,
+        };
       }
     }
     return null;

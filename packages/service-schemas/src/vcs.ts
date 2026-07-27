@@ -893,6 +893,8 @@ export const vcsImportSnapshotResultSchema = z
     contextId,
     eventId: id("Committed import event."),
     workUnitId: id("Import work unit."),
+    applicationId: id("Import application committed by the event."),
+    externalSnapshot: vcsExternalSnapshotSchema,
     importedRepositoryIds: z.array(id("Imported repository identity.")).min(1),
   })
   .strict();
@@ -1638,13 +1640,11 @@ const vcsVisibleEntryLineageSchema = z
 export const vcsListDirectoryInputSchema = z
   .object({
     state: vcsStateNodeRefSchema,
-    path: z
-      .string()
-      .refine((value) => value === "" || semanticVcsPathAdmission(value).admissible, {
-        message:
-          `Expected an admissible canonical workspace-relative directory path of at most ` +
-          `${SEMANTIC_VCS_MAX_PATH_UTF8_BYTES} UTF-8 bytes`,
-      }),
+    path: z.string().refine((value) => value === "" || semanticVcsPathAdmission(value).admissible, {
+      message:
+        `Expected an admissible canonical workspace-relative directory path of at most ` +
+        `${SEMANTIC_VCS_MAX_PATH_UTF8_BYTES} UTF-8 bytes`,
+    }),
     cursor: cursor.optional(),
     limit: pageLimit,
   })
@@ -1653,7 +1653,10 @@ export type VcsListDirectoryInput = z.infer<typeof vcsListDirectoryInputSchema>;
 
 export const vcsVisibleDirectoryEntrySchema = z
   .object({
-    name: z.string().min(1).refine((value) => !value.includes("/")),
+    name: z
+      .string()
+      .min(1)
+      .refine((value) => !value.includes("/")),
     path: z.string().min(1),
     kind: z.enum(["file", "directory"]),
     identity: id("Stable semantic identity of the visible entry."),
@@ -2005,7 +2008,7 @@ export const vcsMethods = defineVcsMethods({
   },
   importSnapshot: {
     description:
-      "Import one exact complete external snapshot as ordinary changes on an import work unit.",
+      "Import one exact complete external snapshot as ordinary changes on an import work unit and atomically return the committed event, application, work unit, admitted repository IDs, and canonical external snapshot.",
     args: z.tuple([vcsImportSnapshotInputSchema]),
     returns: vcsImportSnapshotResultSchema,
     access: WRITE_ACCESS,

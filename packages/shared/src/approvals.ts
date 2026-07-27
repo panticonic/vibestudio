@@ -513,10 +513,19 @@ export interface PendingCredentialApproval extends PendingApprovalBase {
     remote: string;
     service?: string;
     force?: boolean;
-    overwrites?: {
-      count: number;
-      commits: Array<{ sha: string; summary: string }>;
-    };
+    overwrites?:
+      | {
+          relationship: "related";
+          count: number;
+          commits: Array<{ sha: string; summary: string }>;
+          truncated: boolean;
+        }
+      | {
+          relationship: "unrelated";
+          count: null;
+          commits: Array<{ sha: string; summary: string }>;
+          truncated: boolean;
+        };
   };
   grantResource?: {
     bindingId: string;

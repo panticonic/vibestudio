@@ -75,6 +75,8 @@ export interface PushOptions {
 export interface FetchResult {
   fetchHead: string | null;
   fetchHeadDescription?: string | null;
+  /** Whether the requested remote ref was advertised by the remote. */
+  remoteRefExists: boolean;
 }
 
 /**

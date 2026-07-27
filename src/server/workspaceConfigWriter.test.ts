@@ -22,96 +22,98 @@ const repositoryRef = {
 };
 
 function configReader(initialYaml: string) {
-  return vi.fn(async (method: string, input: unknown) => {
-    if (method === "vcsStatus") {
-      return {
-        contextId: (input as { contextId: string }).contextId,
-        committed: mainState,
-        workingHead: mainState,
-        clean: true,
-        mainEventId: mainState.eventId,
-        mainRelation: "at",
-        workingCounts: { applications: 0, workUnits: 0, changes: 0 },
-      };
-    }
-    if (method === "vcsNeighbors") {
-      return {
-        root: mainState,
-        edges: [
-          {
-            kind: "contains-repository",
-            from: mainState,
-            to: repositoryRef,
+  return vi.fn<(method: string, input: unknown) => Promise<unknown>>(
+    async (method: string, input: unknown) => {
+      if (method === "vcsStatus") {
+        return {
+          contextId: (input as { contextId: string }).contextId,
+          committed: mainState,
+          workingHead: mainState,
+          clean: true,
+          mainEventId: mainState.eventId,
+          mainRelation: "at",
+          workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+        };
+      }
+      if (method === "vcsNeighbors") {
+        return {
+          root: mainState,
+          edges: [
+            {
+              kind: "contains-repository",
+              from: mainState,
+              to: repositoryRef,
+            },
+          ],
+          nextCursor: null,
+        };
+      }
+      if (method === "vcsInspect") {
+        return {
+          root: repositoryRef,
+          node: {
+            kind: "repository",
+            state: mainState,
+            value: {
+              kind: "present",
+              repositoryId: "repository:meta",
+              repoPath: "meta",
+              manifestId: "manifest:meta",
+            },
           },
-        ],
-        nextCursor: null,
-      };
-    }
-    if (method === "vcsInspect") {
-      return {
-        root: repositoryRef,
-        node: {
-          kind: "repository",
+          edges: [],
+          hasMoreEdges: false,
+        };
+      }
+      if (method === "vcsListFiles") {
+        return {
           state: mainState,
-          value: {
-            kind: "present",
-            repositoryId: "repository:meta",
-            repoPath: "meta",
-            manifestId: "manifest:meta",
-          },
-        },
-        edges: [],
-        hasMoreEdges: false,
-      };
+          repositoryId: "repository:meta",
+          files: [
+            {
+              fileId: "file:config",
+              path: "vibestudio.yml",
+              contentHash: "blob:before",
+              mode: 0o644,
+              size: initialYaml.length,
+              binary: false,
+            },
+          ],
+          nextCursor: null,
+        };
+      }
+      if (method === "vcsReadFile") {
+        return {
+          repositoryId: "repository:meta",
+          fileId: "file:config",
+          repoPath: "meta",
+          path: "vibestudio.yml",
+          contentHash: "blob:before",
+          mode: 0o644,
+          content: { kind: "text", text: initialYaml },
+        };
+      }
+      if (method === "vcsEdit") {
+        return {
+          contextId: (input as { contextId: string }).contextId,
+          workUnitId: "work-unit:config",
+          applicationId: editedState.applicationId,
+          changeIds: ["change:config"],
+          incorporatedChangeIds: [],
+          workingHead: editedState,
+        };
+      }
+      if (method === "vcsCommit") {
+        return {
+          contextId: (input as { contextId: string }).contextId,
+          event: committedState,
+          committedApplicationIds: [editedState.applicationId],
+          integrationSourceEventIds: [],
+        };
+      }
+      throw new Error(`unexpected semantic call ${method}`);
     }
-    if (method === "vcsListFiles") {
-      return {
-        state: mainState,
-        repositoryId: "repository:meta",
-        files: [
-          {
-            fileId: "file:config",
-            path: "vibestudio.yml",
-            contentHash: "blob:before",
-            mode: 0o644,
-            size: initialYaml.length,
-            binary: false,
-          },
-        ],
-        nextCursor: null,
-      };
-    }
-    if (method === "vcsReadFile") {
-      return {
-        repositoryId: "repository:meta",
-        fileId: "file:config",
-        repoPath: "meta",
-        path: "vibestudio.yml",
-        contentHash: "blob:before",
-        mode: 0o644,
-        content: { kind: "text", text: initialYaml },
-      };
-    }
-    if (method === "vcsEdit") {
-      return {
-        contextId: (input as { contextId: string }).contextId,
-        workUnitId: "work-unit:config",
-        applicationId: editedState.applicationId,
-        changeIds: ["change:config"],
-        incorporatedChangeIds: [],
-        workingHead: editedState,
-      };
-    }
-    if (method === "vcsCommit") {
-      return {
-        contextId: (input as { contextId: string }).contextId,
-        event: committedState,
-        committedApplicationIds: [editedState.applicationId],
-        integrationSourceEventIds: [],
-      };
-    }
-    throw new Error(`unexpected semantic call ${method}`);
-  });
+  );
 }
 
 describe("workspaceConfigWriter", () => {
@@ -125,8 +127,9 @@ describe("workspaceConfigWriter", () => {
       effectId: "effect:publish",
       appliedAt: "2026-07-15T12:00:00.000Z",
     }));
+    const ensureContext = vi.fn(async (_contextId: string) => mainState);
     const vcs = {
-      ensureContext: vi.fn(async () => mainState),
+      ensureContext,
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,
       semanticPublishCall,
@@ -183,6 +186,165 @@ describe("workspaceConfigWriter", () => {
       expect.objectContaining({
         runtime: expect.objectContaining({ id: "shell:dev", kind: "shell" }),
       }),
+      { class: "internal", externalKeys: [] }
+    );
+  });
+
+  it("advances the authenticated eval execution context so config writes do not strand the caller", async () => {
+    const initialYaml = `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ndefaultRepo: panels/old\n`;
+    const semanticCausalCall = configReader(initialYaml);
+    const semanticPublishCall = vi.fn(async () => ({
+      contextId: "context:agent-task",
+      eventId: committedState.eventId,
+      mainEventId: committedState.eventId,
+      effectId: "effect:publish",
+      appliedAt: "2026-07-15T12:00:00.000Z",
+    }));
+    const ensureContext = vi.fn(async () => mainState);
+    const vcs = {
+      ensureContext,
+      dropContext: vi.fn(async () => undefined),
+      semanticCausalCall,
+      semanticPublishCall,
+    } as unknown as WorkspaceVcs;
+    const writer = createWorkspaceConfigMainWriter({ workspaceId: WORKSPACE_ID, vcs });
+    const executionSession = {
+      contextId: "context:agent-task",
+    } as unknown as NonNullable<ServiceContext["caller"]["executionSession"]>;
+    const ctx = {
+      caller: {
+        ...createVerifiedCaller("do:eval", "do"),
+        executionSession,
+      },
+      requestId: "request:agent-config",
+      authorization: INTERNAL_AUTHORIZATION,
+    } satisfies ServiceContext;
+
+    await expect(
+      writer.applyMutation({
+        ctx,
+        mutate: (config) => ({ ...config, defaultRepo: "panels/new" }),
+        summary: "change default repo",
+      })
+    ).resolves.toMatchObject({ changed: true });
+
+    expect(vcs.ensureContext).not.toHaveBeenCalled();
+    expect(vcs.dropContext).not.toHaveBeenCalled();
+    expect(
+      semanticCausalCall.mock.calls.find(([method]) => method === "vcsEdit")?.[1]
+    ).toMatchObject({ contextId: "context:agent-task" });
+    expect(semanticPublishCall).toHaveBeenCalledWith(
+      expect.objectContaining({ contextId: "context:agent-task" }),
+      null,
+      expect.anything(),
+      { class: "internal", externalKeys: [] }
+    );
+  });
+
+  it("preserves the authenticated authorizing caller across an extension provider relay", async () => {
+    const semanticCausalCall = configReader(
+      `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ndefaultRepo: panels/old\n`
+    );
+    const semanticPublishCall = vi.fn(async () => ({
+      contextId: "context:paired-shell",
+      eventId: committedState.eventId,
+      mainEventId: committedState.eventId,
+      effectId: "effect:publish",
+      appliedAt: "2026-07-15T12:00:00.000Z",
+    }));
+    const vcs = {
+      ensureContext: vi.fn(async () => mainState),
+      dropContext: vi.fn(async () => undefined),
+      semanticCausalCall,
+      semanticPublishCall,
+    } as unknown as WorkspaceVcs;
+    const writer = createWorkspaceConfigMainWriter({ workspaceId: WORKSPACE_ID, vcs });
+    const authorizingCaller = {
+      ...createVerifiedCaller("shell:dev", "shell"),
+      executionSession: {
+        contextId: "context:paired-shell",
+      } as NonNullable<ServiceContext["caller"]["executionSession"]>,
+    };
+    const ctx = {
+      caller: createVerifiedCaller("@workspace-extensions/git-bridge", "extension"),
+      authorizingCaller,
+      requestId: "request:provider-config",
+      authorization: INTERNAL_AUTHORIZATION,
+    } satisfies ServiceContext;
+
+    await expect(
+      writer.applyMutation({
+        ctx,
+        mutate: (config) => ({ ...config, defaultRepo: "panels/new" }),
+        summary: "record provider remote",
+      })
+    ).resolves.toMatchObject({ changed: true });
+
+    expect(vcs.ensureContext).not.toHaveBeenCalled();
+    expect(vcs.dropContext).not.toHaveBeenCalled();
+    expect(
+      semanticCausalCall.mock.calls.find(([method]) => method === "vcsEdit")?.[1]
+    ).toMatchObject({ contextId: "context:paired-shell" });
+    expect(semanticPublishCall).toHaveBeenCalledWith(
+      expect.objectContaining({ contextId: "context:paired-shell" }),
+      null,
+      authorizingCaller,
+      { class: "internal", externalKeys: [] }
+    );
+  });
+
+  it("falls back to an isolated config context rather than publishing dirty caller work", async () => {
+    const semanticCausalCall = configReader(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`);
+    semanticCausalCall.mockImplementationOnce(async (_method, input) => ({
+      contextId: (input as { contextId: string }).contextId,
+      committed: mainState,
+      workingHead: editedState,
+      clean: false,
+      mainEventId: mainState.eventId,
+      mainRelation: "at",
+      workingCounts: { applications: 1, workUnits: 1, changes: 1 },
+    }));
+    const ensureContext = vi.fn(async (_contextId: string) => mainState);
+    const vcs = {
+      ensureContext,
+      dropContext: vi.fn(async () => undefined),
+      semanticCausalCall,
+      semanticPublishCall: vi.fn(),
+    } as unknown as WorkspaceVcs;
+    const writer = createWorkspaceConfigMainWriter({ workspaceId: WORKSPACE_ID, vcs });
+    const executionSession = {
+      contextId: "context:dirty-agent-task",
+    } as unknown as NonNullable<ServiceContext["caller"]["executionSession"]>;
+    const ctx = {
+      caller: {
+        ...createVerifiedCaller("do:eval", "do"),
+        executionSession,
+      },
+      requestId: "request:dirty-config",
+      authorization: INTERNAL_AUTHORIZATION,
+    } satisfies ServiceContext;
+
+    await expect(
+      writer.applyMutation({
+        ctx,
+        mutate: (config) => ({ ...config, defaultRepo: "panels/new" }),
+        summary: "change default repo",
+      })
+    ).resolves.toMatchObject({ changed: true });
+    expect(vcs.ensureContext).toHaveBeenCalledOnce();
+    expect(vcs.dropContext).toHaveBeenCalledOnce();
+    const isolatedContextId = ensureContext.mock.calls[0]?.[0];
+    expect(isolatedContextId).toMatch(/^system:workspace-config:/u);
+    expect(
+      semanticCausalCall.mock.calls.find(
+        ([method, input]) =>
+          method === "vcsEdit" && (input as { contextId?: string }).contextId === isolatedContextId
+      )
+    ).toBeDefined();
+    expect(vcs.semanticPublishCall).toHaveBeenCalledWith(
+      expect.objectContaining({ contextId: isolatedContextId }),
+      null,
+      ctx.caller,
       { class: "internal", externalKeys: [] }
     );
   });

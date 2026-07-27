@@ -240,12 +240,55 @@ function nodeLabel(node: VcsSemanticNodeRef): string {
   }
 }
 
+function inspectionContinuation(
+  inspection: CanonicalProvenanceInspection
+): { label: string; root: VcsSemanticNodeRef } | null {
+  const node = inspection.node;
+  if (node.kind === "event" && node.value.applicationIds.length === 1) {
+    return {
+      label: "sole application",
+      root: { kind: "application", applicationId: node.value.applicationIds[0]! },
+    };
+  }
+  if (node.kind === "application") {
+    return {
+      label: "owning work",
+      root: { kind: "work-unit", workUnitId: node.value.workUnitId },
+    };
+  }
+  if (node.kind === "change") {
+    return {
+      label: "authoring work",
+      root: { kind: "work-unit", workUnitId: node.value.authoredByWorkUnitId },
+    };
+  }
+  if (node.kind === "applied-change") {
+    return {
+      label: "owning application",
+      root: { kind: "application", applicationId: node.value.applicationId },
+    };
+  }
+  return null;
+}
+
 export function renderProvenanceBlock(input: ProvenanceBlockInput): string | null {
   if (!input.inspection && !input.history && input.result.edges.length === 0) return null;
   const lines = [
     `prov · ${input.label} · ${input.result.edges.length} edge${input.result.edges.length === 1 ? "" : "s"}`,
   ];
-  if (input.inspection) lines.push(`  node · ${inspectedNodeSummary(input.inspection)}`);
+  if (input.inspection) {
+    lines.push(`  node · ${inspectedNodeSummary(input.inspection)}`);
+    const next = inspectionContinuation(input.inspection);
+    if (next) {
+      lines.push(
+        `  inspect ${next.label} → ${provenanceCall({
+          kind: "root",
+          root: next.root,
+          includeCursor: false,
+        })}`
+      );
+    }
+  }
   for (const entry of input.history?.entries ?? []) {
     lines.push(`  past · ${nodeLabel(entry.node)} · ${JSON.stringify(entry.summary)}`);
   }

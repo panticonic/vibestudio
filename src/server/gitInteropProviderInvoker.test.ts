@@ -32,10 +32,25 @@ describe("Git interop provider dispatch", () => {
     );
   });
 
+  it("rejects import results without canonical semantic evidence", async () => {
+    const host = {
+      invokeProvider: vi.fn(async () => ({
+        contextId: "git-bridge-projects/demo",
+        eventId: "event:imported",
+        changed: true,
+      })),
+    };
+    const invoke = createGitInteropProviderInvoker(() => host);
+
+    await expect(invoke(ctx, "cloneRepo", [{ repoPath: "projects/demo" }])).rejects.toThrow(
+      "Invalid gitInterop provider cloneRepo result"
+    );
+  });
+
   it("fails before dispatch when the extension host is unavailable", async () => {
     const invoke = createGitInteropProviderInvoker(() => null);
 
-    await expect(invoke(ctx, "onMainAdvanced", [["projects/demo"]])).rejects.toThrow(
+    await expect(invoke(ctx, "reconcileUpstreams", [["projects/demo"]])).rejects.toThrow(
       "Git upstream provider is unavailable: extension host not started"
     );
   });

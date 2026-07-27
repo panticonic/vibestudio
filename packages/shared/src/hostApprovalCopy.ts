@@ -492,17 +492,37 @@ export const HOST_APPROVAL_COPY = {
       "The sign-in site is different from the service's site. Make sure you recognize both.",
     contextBoundaryWarning:
       "This can affect files and running work in a different part of your project.",
-    forcePush: (remote: string, credential: string, overwrittenCount: number) => ({
-      title: `Overwrite history on ${remote}`,
-      summary:
-        overwrittenCount > 0
-          ? `Replaces ${overwrittenCount} commit${overwrittenCount === 1 ? "" : "s"} on ${remote}.`
-          : `Overwrites history on ${remote}.`,
-      warning:
-        overwrittenCount > 0
-          ? `The overwritten commit${overwrittenCount === 1 ? "" : "s"} can't be recovered from the remote.`
-          : "This may permanently replace commits others are using.",
-    }),
+    forcePush: (
+      remote: string,
+      credential: string,
+      overwrites:
+        | {
+            relationship: "related" | "unrelated";
+            count: number | null;
+          }
+        | undefined
+    ) => {
+      if (overwrites?.relationship === "unrelated") {
+        return {
+          title: `Replace unrelated history on ${remote}`,
+          summary: `Replaces a branch on ${remote} whose history has no common ancestor with the local branch.`,
+          warning:
+            "The remote commits cannot be counted relative to the local history and may become unreachable.",
+        };
+      }
+      const overwrittenCount = overwrites?.count ?? 0;
+      return {
+        title: `Overwrite history on ${remote}`,
+        summary:
+          overwrittenCount > 0
+            ? `Replaces ${overwrittenCount} commit${overwrittenCount === 1 ? "" : "s"} on ${remote}.`
+            : `Force-updates the branch on ${remote}.`,
+        warning:
+          overwrittenCount > 0
+            ? `The overwritten commit${overwrittenCount === 1 ? "" : "s"} can't be recovered from the remote.`
+            : "This may permanently replace commits others are using.",
+      };
+    },
     git: (action: "read" | "write", remote: string, label: string, credential: string) => ({
       title: action === "write" ? `Push to ${remote}` : `Fetch from ${remote}`,
       summary: `Uses your ${credential} account to ${label} on ${remote}.`,

@@ -39,6 +39,11 @@ Mutation inputs carry a stable command ID, context ID, and exact expected
 working head. They do not carry actor, turn, invocation, authority, or proof
 payloads. Runtime transport attaches verified causal ingress automatically.
 
+`importSnapshot` has one current result shape: it atomically returns the
+committed event, application, import work unit, admitted repository IDs, and
+canonical external snapshot. There is no event-only or optional-evidence
+compatibility result.
+
 Ordinary local work follows one path:
 
 ```text

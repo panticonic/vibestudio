@@ -2048,6 +2048,56 @@ describe("EgressProxy", () => {
     });
   });
 
+  it("keeps explicitly anonymous git HTTP requests out of credential resolution", async () => {
+    const credential = createCredential({
+      bindings: [
+        {
+          id: "github-git",
+          use: "git-http",
+          audience: [{ url: "https://github.com/", match: "origin" }],
+          injection: {
+            type: "basic-auth",
+            usernameTemplate: "x-access-token",
+            passwordTemplate: "{token}",
+          },
+        },
+      ],
+      grants: [
+        {
+          bindingId: "github-git",
+          use: "git-http",
+          resource: "https://github.com/octocat/Hello-World.git",
+          action: "read",
+          scope: "version",
+          repoPath: "/repo",
+          effectiveVersion: "hash-1",
+          grantedAt: 1,
+          grantedBy: "self",
+        },
+      ],
+    });
+    const authorizeInternalRequest = vi.fn(async () => true);
+    const proxy = createProxy(credential, new MemoryAuditLog(), {
+      authorizeInternalRequest,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        expect(new Headers(init?.headers).has("authorization")).toBe(false);
+        return new Response(new Uint8Array(), { status: 200, statusText: "OK" });
+      })
+    );
+
+    await proxy.forwardGitHttp({
+      caller: workerCaller("worker:test"),
+      credentialId: null,
+      url: "https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack",
+      method: "GET",
+    });
+
+    expect(authorizeInternalRequest).toHaveBeenCalledTimes(1);
+  });
+
   it("requests git-specific approval copy metadata for git HTTP writes", async () => {
     const credential = createCredential({
       grants: [],

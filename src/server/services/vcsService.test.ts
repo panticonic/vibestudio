@@ -113,6 +113,19 @@ describe("canonical vcsService", () => {
     });
   });
 
+  it("preserves authorized chrome read authority through an extension provider relay", async () => {
+    const { definition, semanticCall } = service();
+    const ctx: ServiceContext = {
+      caller: createVerifiedCaller("@workspace-extensions/git-bridge", "extension"),
+      authorizingCaller: createVerifiedCaller("shell:paired-device", "shell"),
+      authorization: INTERNAL_AUTHORIZATION,
+    };
+
+    await definition.handler(ctx, "status", [{ contextId: "git-bridge-project" }]);
+
+    expect(semanticCall).toHaveBeenCalledOnce();
+  });
+
   it("preserves semantic failures unchanged", async () => {
     const failure = Object.assign(new Error("context changed"), { code: "RevisionChanged" });
     const { definition } = service({ failure });

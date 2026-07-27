@@ -100,7 +100,7 @@ export function hookForUrl(
   return requireClient().hookForUrl(url, opts);
 }
 
-export function gitHttp(opts?: { credentialId?: string }): GitHttpClient {
+export function gitHttp(opts?: { credentialId?: string | null }): GitHttpClient {
   return requireClient().gitHttp(opts);
 }
 

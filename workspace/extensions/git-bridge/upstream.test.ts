@@ -89,7 +89,7 @@ interface ConfigEntry {
   remote?: string;
   branch?: string;
   autoPush?: boolean;
-  credentialId?: string;
+  credentialId?: string | null;
   authorEmail?: string;
   authorName?: string;
   url?: string;
@@ -116,7 +116,7 @@ function buildConfig(entries: ConfigEntry[]): unknown {
       remote,
       ...(entry.branch ? { branch: entry.branch } : {}),
       autoPush: entry.autoPush ?? false,
-      ...(entry.credentialId ? { credentialId: entry.credentialId } : {}),
+      ...(entry.credentialId !== undefined ? { credentialId: entry.credentialId } : {}),
       ...(entry.authorEmail ? { authorEmail: entry.authorEmail } : {}),
       ...(entry.authorName ? { authorName: entry.authorName } : {}),
     };
@@ -198,15 +198,34 @@ function createBridge(
   const pendingImportCandidate = vi.fn(
     async (): Promise<{ contextId: string; eventId: string } | null> => null
   );
+  const withProtectedExportPreviewLocked = vi.fn(
+    async (
+      repo: string,
+      _options: unknown,
+      inspect: (preview: {
+        dir: string;
+        exported: { exported: number; headCommit: string | null; clobberedLocalEdits: string[] };
+      }) => Promise<unknown>
+    ) =>
+      inspect({
+        dir: `/previews/${repo}`,
+        exported: {
+          clobberedLocalEdits: [],
+          ...(opts.exportResult ?? { exported: 1, headCommit: "head-sha" }),
+        },
+      })
+  );
   return {
     bridge: {
       exportLockedInner,
+      withProtectedExportPreviewLocked,
       importLockedInner,
       repoGitDir,
       checkoutExists,
       pendingImportCandidate,
     },
     exportLockedInner,
+    withProtectedExportPreviewLocked,
     importLockedInner,
     repoGitDir,
     checkoutExists,
@@ -264,7 +283,10 @@ describe("UpstreamEngine", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     for (const fn of Object.values(gitFns)) fn.mockReset();
-    gitFns.fetch.mockResolvedValue(undefined);
+    gitFns.fetch.mockResolvedValue({
+      fetchHead: "remote-head",
+      remoteRefExists: true,
+    });
     gitFns.fastForward.mockResolvedValue(undefined);
     gitFns.checkout.mockResolvedValue(undefined);
     gitFns.deleteBranch.mockResolvedValue(undefined);
@@ -291,7 +313,7 @@ describe("UpstreamEngine", () => {
     const { bridge, exportLockedInner } = createBridge();
     const { engine } = makeEngine(config, bridge);
 
-    engine.onMainAdvanced([repo]);
+    engine.reconcileUpstreams([repo]);
     await tick();
 
     expect(exportLockedInner).toHaveBeenCalledTimes(1);
@@ -308,7 +330,7 @@ describe("UpstreamEngine", () => {
     gitFns.getCurrentBranch.mockResolvedValue("master");
     const { engine } = makeEngine(config, bridge);
 
-    engine.onMainAdvanced([repo]);
+    engine.reconcileUpstreams([repo]);
     await tick();
 
     expect(exportLockedInner).toHaveBeenCalledTimes(1);
@@ -324,14 +346,43 @@ describe("UpstreamEngine", () => {
     );
   });
 
-  it("coalesces rapid onMainAdvanced calls for the same repo into one export", async () => {
+  it("preserves URL-based credential resolution unless an upstream credential is declared", async () => {
+    const autoResolvedRepo = "projects/auto-resolved";
+    const anonymousRepo = "projects/anonymous";
+    const credentialRepo = "projects/authenticated";
+    const { bridge } = createBridge();
+    const autoResolved = makeEngine(
+      buildConfig([{ repo: autoResolvedRepo, autoPush: true }]),
+      bridge
+    );
+    const anonymous = makeEngine(
+      buildConfig([{ repo: anonymousRepo, autoPush: true, credentialId: null }]),
+      bridge
+    );
+    const authenticated = makeEngine(
+      buildConfig([{ repo: credentialRepo, autoPush: true, credentialId: "github-credential" }]),
+      bridge
+    );
+
+    await autoResolved.engine.pushUpstream(autoResolvedRepo);
+    await anonymous.engine.pushUpstream(anonymousRepo);
+    await authenticated.engine.pushUpstream(credentialRepo);
+
+    expect(autoResolved.credentials.gitHttp).toHaveBeenCalledWith({});
+    expect(anonymous.credentials.gitHttp).toHaveBeenCalledWith({ credentialId: null });
+    expect(authenticated.credentials.gitHttp).toHaveBeenCalledWith({
+      credentialId: "github-credential",
+    });
+  });
+
+  it("coalesces rapid reconcileUpstreams calls for the same repo into one export", async () => {
     const repo = "projects/c";
     const config = buildConfig([{ repo, autoPush: false }]);
     const { bridge, exportLockedInner } = createBridge();
     const { engine } = makeEngine(config, bridge);
 
-    engine.onMainAdvanced([repo]);
-    engine.onMainAdvanced([repo]);
+    engine.reconcileUpstreams([repo]);
+    engine.reconcileUpstreams([repo]);
     await tick();
 
     expect(exportLockedInner).toHaveBeenCalledTimes(1);
@@ -351,7 +402,7 @@ describe("UpstreamEngine", () => {
 
     const manualPush = engine.pushUpstream(repo);
     await enteredPush.promise;
-    engine.onMainAdvanced([repo]);
+    engine.reconcileUpstreams([repo]);
     releasePush.resolve();
     await manualPush;
     await vi.advanceTimersByTimeAsync(2_000);
@@ -359,7 +410,7 @@ describe("UpstreamEngine", () => {
     expect(exportLockedInner).toHaveBeenCalledTimes(2);
   });
 
-  it("skips the wire push when the exported head is already the last-pushed sha", async () => {
+  it("skips the wire push only when the remote still has the last-pushed sha", async () => {
     const repo = "projects/d";
     const config = buildConfig([{ repo, autoPush: true }]);
     const files = new Map<string, string>();
@@ -373,16 +424,135 @@ describe("UpstreamEngine", () => {
 
     // A fresh engine using the same config and storage trusts that state.
     const engine2 = makeEngine(config, bridge, { files }).engine;
+    gitFns.resolveRef.mockResolvedValue("same-sha");
 
-    // Auto job: exports, but the head equals lastPushedSha so no wire push.
-    engine2.onMainAdvanced([repo]);
+    // Auto job: exports and verifies the remote ref before taking the no-op.
+    engine2.reconcileUpstreams([repo]);
     await tick();
+    expect(gitFns.fetch).toHaveBeenCalledTimes(1);
     expect(gitFns.push).not.toHaveBeenCalled();
 
-    // Manual push: same skip, reports pushed:false without touching the wire.
+    // Manual push: same verified skip, reports pushed:false.
     const result = await engine2.pushUpstream(repo);
     expect(result.pushed).toBe(false);
+    expect(gitFns.fetch).toHaveBeenCalledTimes(2);
     expect(gitFns.push).not.toHaveBeenCalled();
+  });
+
+  it("recreates a deleted remote branch even when the local head was previously pushed", async () => {
+    const repo = "projects/recreate-deleted";
+    const config = buildConfig([{ repo, autoPush: true }]);
+    const files = new Map<string, string>();
+    const { bridge } = createBridge({
+      exportResult: { exported: 1, headCommit: "last-pushed-head" },
+    });
+    const { engine } = makeEngine(config, bridge, { files });
+
+    await engine.pushUpstream(repo);
+    gitFns.push.mockClear();
+    gitFns.fetch.mockResolvedValueOnce({
+      fetchHead: null,
+      remoteRefExists: false,
+    });
+
+    const result = await engine.pushUpstream(repo);
+
+    expect(result.pushed).toBe(true);
+    expect(gitFns.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits overwrite evidence when a forced push creates a missing remote branch", async () => {
+    const repo = "projects/force-missing";
+    const config = buildConfig([{ repo, autoPush: false }]);
+    const { bridge } = createBridge();
+    const { engine } = makeEngine(config, bridge);
+    gitFns.fetch.mockResolvedValueOnce({
+      fetchHead: null,
+      remoteRefExists: false,
+    });
+
+    const result = await engine.pushUpstream(repo, { force: true });
+
+    expect(result.pushed).toBe(true);
+    expect(result.overwrites).toBeUndefined();
+    expect(gitFns.resolveRef).not.toHaveBeenCalled();
+    expect(gitFns.compareRefs).not.toHaveBeenCalled();
+  });
+
+  it("reports an exact bounded overwrite count for related history", async () => {
+    const repo = "projects/force-related";
+    const config = buildConfig([{ repo, autoPush: false }]);
+    const { bridge } = createBridge();
+    const { engine } = makeEngine(config, bridge);
+    gitFns.resolveRef.mockResolvedValueOnce("remote-head");
+    gitFns.compareRefs.mockResolvedValueOnce({ ahead: 1, behind: 3, diverged: true });
+    gitFns.log.mockResolvedValueOnce(
+      Array.from({ length: 3 }, (_, index) => ({
+        oid: `remote-${index}`,
+        message: `Remote commit ${index}\n`,
+      }))
+    );
+
+    await expect(engine.pushUpstream(repo, { force: true })).resolves.toMatchObject({
+      overwrites: {
+        relationship: "related",
+        count: 3,
+        truncated: false,
+        commits: [
+          { sha: "remote-0", summary: "Remote commit 0" },
+          { sha: "remote-1", summary: "Remote commit 1" },
+          { sha: "remote-2", summary: "Remote commit 2" },
+        ],
+      },
+    });
+  });
+
+  it("describes unrelated history without inventing a comparable commit count", async () => {
+    const repo = "projects/force-unrelated";
+    const config = buildConfig([{ repo, autoPush: false }]);
+    const { bridge } = createBridge();
+    const { engine } = makeEngine(config, bridge);
+    gitFns.resolveRef.mockResolvedValueOnce("remote-head");
+    gitFns.compareRefs.mockResolvedValueOnce(null);
+    gitFns.log.mockResolvedValueOnce(
+      Array.from({ length: 21 }, (_, index) => ({
+        oid: `remote-${index}`,
+        message: `Remote commit ${index}\n`,
+      }))
+    );
+
+    const result = await engine.pushUpstream(repo, { force: true });
+
+    expect(result.overwrites).toMatchObject({
+      relationship: "unrelated",
+      count: null,
+      truncated: true,
+    });
+    expect(result.overwrites?.commits).toHaveLength(20);
+  });
+
+  it("does not report a stale last-pushed sha as in-sync after an upstream-only advance", async () => {
+    const repo = "projects/upstream-advanced";
+    const config = buildConfig([{ repo, autoPush: true }]);
+    const files = new Map<string, string>();
+    const { bridge } = createBridge({ exportResult: { exported: 1, headCommit: "local-head" } });
+    const { engine } = makeEngine(config, bridge, { files });
+
+    await expect(engine.pushUpstream(repo)).resolves.toMatchObject({ pushed: true });
+    gitFns.push.mockRejectedValueOnce(
+      new GitPushRejectedError("Updates were rejected: non-fast-forward")
+    );
+    gitFns.resolveRef.mockResolvedValue("upstream-head");
+    gitFns.compareRefs.mockResolvedValue({ ahead: 0, behind: 1, diverged: false });
+
+    await expect(engine.pushUpstream(repo)).rejects.toThrow("non-fast-forward");
+
+    expect(gitFns.fetch).toHaveBeenCalled();
+    expect(gitFns.push).toHaveBeenCalledTimes(2);
+    expect(readStored(files).repos[repo]).toMatchObject({
+      status: "behind",
+      lastPushedSha: "local-head",
+    });
   });
 
   it("ignores version 1 state instead of migrating its last-pushed sha", async () => {
@@ -418,7 +588,7 @@ describe("UpstreamEngine", () => {
     gitFns.push.mockRejectedValue(new GitAuthError("401 Unauthorized", 401));
     const { engine, files, notifications } = makeEngine(config, bridge);
 
-    engine.onMainAdvanced([repo]);
+    engine.reconcileUpstreams([repo]);
     await tick();
 
     expect(readStored(files).repos[repo]?.status).toBe("auth-failed");
@@ -468,7 +638,7 @@ describe("UpstreamEngine", () => {
     gitFns.compareRefs.mockResolvedValue({ ahead: 1, behind: 2, diverged: true });
     const { engine, files, notifications } = makeEngine(config, bridge);
 
-    engine.onMainAdvanced([repo]);
+    engine.reconcileUpstreams([repo]);
     await tick();
 
     expect(readStored(files).repos[repo]?.status).toBe("diverged");
@@ -479,7 +649,7 @@ describe("UpstreamEngine", () => {
     // Next auto job still EXPORTS (keeps the checkout current) but the wire
     // push stays paused while diverged.
     gitFns.push.mockClear();
-    engine.onMainAdvanced([repo]);
+    engine.reconcileUpstreams([repo]);
     await tick();
 
     expect(exportLockedInner).toHaveBeenCalledTimes(2);
@@ -493,7 +663,7 @@ describe("UpstreamEngine", () => {
     gitFns.push.mockRejectedValue(new Error("ECONNRESET: connection reset by peer"));
     const { engine, files } = makeEngine(config, bridge);
 
-    engine.onMainAdvanced([repo]);
+    engine.reconcileUpstreams([repo]);
     // Advance exactly the debounce so the 30s backoff timer is scheduled at a
     // known instant (t = 2000 + 30000) and the boundary assertions below line up.
     await vi.advanceTimersByTimeAsync(2_000);
@@ -515,7 +685,7 @@ describe("UpstreamEngine", () => {
     const { bridge } = createBridge({ exportResult: { exported: 1, headCommit: "persist-sha" } });
     const { engine } = makeEngine(config, bridge, { files });
 
-    engine.onMainAdvanced([repo]);
+    engine.reconcileUpstreams([repo]);
     await tick();
     expect(gitFns.push).toHaveBeenCalledTimes(1);
 
@@ -604,7 +774,7 @@ describe("UpstreamEngine", () => {
     const { engine, files } = makeEngine(config, bridge);
     gitFns.push.mockRejectedValue(new Error("ECONNRESET"));
 
-    engine.onMainAdvanced([repo]);
+    engine.reconcileUpstreams([repo]);
     await vi.advanceTimersByTimeAsync(2_000);
     expect(readStored(files).repos[repo]?.status).toBe("error");
     expect(exportLockedInner).toHaveBeenCalledTimes(1);
@@ -616,7 +786,7 @@ describe("UpstreamEngine", () => {
         git: unknown;
       }
     ).git;
-    engine.onMainAdvanced([repo]);
+    engine.reconcileUpstreams([repo]);
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect(exportLockedInner).toHaveBeenCalledTimes(2);
@@ -648,7 +818,9 @@ describe("UpstreamEngine", () => {
     expect(status?.lastError).toBeUndefined();
     expect(readStored(files).repos[repo]?.configFingerprint).toBe(fingerprint);
 
+    gitFns.resolveRef.mockResolvedValue("same-head");
     await expect(engine.pushUpstream(repo)).resolves.toMatchObject({ pushed: false });
+    expect(gitFns.fetch).toHaveBeenCalled();
     expect(gitFns.push).not.toHaveBeenCalled();
   });
 
@@ -687,7 +859,7 @@ describe("UpstreamEngine", () => {
     };
     const { engine } = makeEngine(config, bridge);
 
-    engine.onMainAdvanced([repo]);
+    engine.reconcileUpstreams([repo]);
     await tick();
 
     const rows = await engine.upstreamStatus([repo]);
@@ -706,6 +878,26 @@ describe("UpstreamEngine", () => {
 
     await engine.upstreamStatus([repo], { fetch: true });
     expect(gitFns.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a successfully observed missing remote branch without classifying a fetch failure", async () => {
+    const repo = "projects/status-missing-branch";
+    const config = buildConfig([{ repo, autoPush: false }]);
+    const { bridge } = createBridge();
+    const { engine } = makeEngine(config, bridge);
+    gitFns.fetch.mockResolvedValueOnce({
+      fetchHead: null,
+      remoteRefExists: false,
+    });
+
+    const [row] = await engine.upstreamStatus([repo], { fetch: true });
+
+    expect(row).toMatchObject({
+      state: "ahead",
+      remoteBranchExists: false,
+      behindBy: 0,
+    });
+    expect(row?.lastError).toBeUndefined();
   });
 
   it("reuses only a successful fresh fetch for the same effective target", async () => {
@@ -745,7 +937,7 @@ describe("UpstreamEngine", () => {
     gitFns.compareRefs.mockResolvedValue({ ahead: 1, behind: 1, diverged: true });
     const { engine, files } = makeEngine(config, bridge);
 
-    engine.onMainAdvanced([repoA, repoB]);
+    engine.reconcileUpstreams([repoA, repoB]);
     await tick();
 
     const stored = readStored(files).repos;
@@ -827,7 +1019,7 @@ describe("UpstreamEngine", () => {
 
     const manualPush = engine.pushUpstream(repo);
     await enteredExport.promise;
-    engine.onMainAdvanced([repo]);
+    engine.reconcileUpstreams([repo]);
     await vi.advanceTimersByTimeAsync(2_000);
     config.git = (buildConfig([{ repo, autoPush: false }]) as { git: unknown }).git;
     releaseExport.resolve();
@@ -836,6 +1028,39 @@ describe("UpstreamEngine", () => {
 
     expect(bridge.exportLockedInner).toHaveBeenCalledTimes(2);
     expect(gitFns.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("previews a pull in a disposable export without mutating the managed checkout or state", async () => {
+    const repo = "projects/pull-preview";
+    const config = buildConfig([{ repo, autoPush: false }]);
+    const created = createBridge();
+    const { engine, files } = makeEngine(config, created.bridge);
+    gitFns.resolveRef.mockResolvedValueOnce("remote-head");
+    gitFns.compareRefs.mockResolvedValueOnce({ ahead: 1, behind: 2, diverged: true });
+    gitFns.log.mockResolvedValueOnce([
+      { oid: "incoming-1", message: "Incoming one\n" },
+      { oid: "incoming-2", message: "Incoming two\n" },
+    ]);
+
+    await expect(engine.pullUpstream(repo, { dryRun: true })).resolves.toEqual({
+      aheadBy: 1,
+      behindBy: 2,
+      remoteBranchExists: true,
+      incoming: [
+        { sha: "incoming-1", summary: "Incoming one" },
+        { sha: "incoming-2", summary: "Incoming two" },
+      ],
+    });
+
+    expect(created.withProtectedExportPreviewLocked).toHaveBeenCalledOnce();
+    expect(created.exportLockedInner).not.toHaveBeenCalled();
+    expect(created.repoGitDir).not.toHaveBeenCalled();
+    expect(gitFns.fetch).toHaveBeenCalledWith(
+      expect.objectContaining({ dir: `/previews/${repo}` })
+    );
+    expect(gitFns.fastForward).not.toHaveBeenCalled();
+    expect(created.importLockedInner).not.toHaveBeenCalled();
+    expect(files.size).toBe(0);
   });
 
   it("classifies pull fetch authentication failures in fingerprint-scoped state", async () => {
@@ -997,7 +1222,10 @@ describe("UpstreamEngine", () => {
     const config = buildConfig([{ repo, autoPush: false }]);
     const { bridge } = createBridge();
     const { engine } = makeEngine(config, bridge);
-    gitFns.resolveRef.mockResolvedValue(null);
+    gitFns.fetch.mockResolvedValueOnce({
+      fetchHead: null,
+      remoteRefExists: false,
+    });
 
     const result = await engine.pullUpstream(repo);
 
@@ -1006,6 +1234,7 @@ describe("UpstreamEngine", () => {
     expect(result.behindBy).toBe(0);
     expect(result.incoming).toEqual([]);
     expect(result.imported).toBeUndefined();
+    expect(gitFns.resolveRef).not.toHaveBeenCalled();
   });
 
   it("does not fabricate an import when the remote has no incoming commit", async () => {
@@ -1095,7 +1324,7 @@ describe("UpstreamEngine", () => {
       },
     });
 
-    engine.onMainAdvanced([repo]);
+    engine.reconcileUpstreams([repo]);
     await tick();
     expect(exportLockedInner).not.toHaveBeenCalled();
   });
@@ -1138,7 +1367,7 @@ describe("UpstreamEngine", () => {
     gitFns.push.mockRejectedValue(new Error("Invalid author email"));
     const { engine, files } = makeEngine(config, bridge);
 
-    engine.onMainAdvanced([repo]);
+    engine.reconcileUpstreams([repo]);
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect(readStored(files).repos[repo]?.status).toBe("error");
@@ -1155,7 +1384,7 @@ describe("UpstreamEngine", () => {
     const { engine, files } = makeEngine(config, bridge);
     gitFns.push.mockRejectedValue(new Error("ECONNRESET"));
 
-    engine.onMainAdvanced([repo]);
+    engine.reconcileUpstreams([repo]);
     await vi.advanceTimersByTimeAsync(2_000);
     expect(readStored(files).repos[repo]?.status).toBe("error");
 
@@ -1189,7 +1418,9 @@ describe("UpstreamEngine", () => {
       expect(gitFns.clone).toHaveBeenCalledWith(
         expect.objectContaining({ dir: path.join(checkoutRoot, repo) })
       );
-      await expect(fsp.access(path.join(sourceRoot, repo))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fsp.access(path.join(sourceRoot, repo))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
       expect(importLockedInner).toHaveBeenCalledWith(repo, {
         summary: "Import projects/fresh-clone from github.com/acme/fresh-clone",
         sourceUri: "https://github.com/acme/fresh-clone.git",

@@ -93,11 +93,11 @@ export async function activate(ctx: ExtensionContextLike) {
     cloneRepo(input: { repoPath: string }) {
       return upstream.cloneRepo(input);
     },
-    remoteDefaultBranch(input: { url: string; credentialId?: string }) {
+    remoteDefaultBranch(input: { url: string; credentialId?: string | null }) {
       return upstream.remoteDefaultBranch(input);
     },
-    async onMainAdvanced(repoPaths: string[]) {
-      upstream.onMainAdvanced(repoPaths);
+    async reconcileUpstreams(repoPaths: string[]) {
+      upstream.reconcileUpstreams(repoPaths);
       return { queued: repoPaths.length };
     },
   } satisfies GitInteropProvider;

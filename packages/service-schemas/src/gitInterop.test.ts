@@ -5,6 +5,18 @@ import {
   gitInteropProviderMethods,
 } from "./gitInterop.js";
 
+const SEMANTIC_EVIDENCE = {
+  applicationId: "application:import",
+  workUnitId: "work-unit:import",
+  externalSnapshot: {
+    sourceKind: "git" as const,
+    sourceUri: "https://example.test/demo.git",
+    snapshotRevision: "a".repeat(40),
+    snapshotDigest: `snapshot:${"b".repeat(64)}`,
+    targetRepositoryIds: ["repository:demo"],
+  },
+};
+
 describe("gitInterop canonical contract", () => {
   it("exposes one exact public method table", () => {
     expect(Object.keys(gitInteropMethods)).toEqual([
@@ -27,6 +39,49 @@ describe("gitInterop canonical contract", () => {
       "importProject",
       "completeWorkspaceDependencies",
     ]);
+  });
+
+  it("models automatic, explicit, and anonymous Git credential selection distinctly", () => {
+    for (const credentialId of [undefined, "credential:github", null]) {
+      const upstream = {
+        remote: "origin",
+        ...(credentialId !== undefined ? { credentialId } : {}),
+      };
+      expect(
+        gitInteropMethods.setUpstream.args.safeParse(["projects/demo", upstream]).success
+      ).toBe(true);
+    }
+  });
+
+  it("requires truthful force-overwrite relationship metadata", () => {
+    const base = {
+      exported: 1,
+      headCommit: "abc",
+      pushed: true,
+      status: "in-sync",
+    };
+    expect(
+      gitInteropMethods.pushUpstream.returns.safeParse({
+        ...base,
+        overwrites: {
+          relationship: "unrelated",
+          count: null,
+          commits: [{ sha: "remote", summary: "Remote history" }],
+          truncated: false,
+        },
+      }).success
+    ).toBe(true);
+    expect(
+      gitInteropMethods.pushUpstream.returns.safeParse({
+        ...base,
+        overwrites: {
+          relationship: "related",
+          count: null,
+          commits: [],
+          truncated: false,
+        },
+      }).success
+    ).toBe(false);
   });
 
   it("exposes a strict stepwise disposable-remote push", () => {
@@ -65,6 +120,9 @@ describe("gitInterop canonical contract", () => {
     );
     expect(gitInteropMethods.upstreamStatus.args.safeParse([null, {}]).success).toBe(false);
     expect(gitInteropMethods.upstreamStatus.args.safeParse([undefined]).success).toBe(false);
+    expect(gitInteropMethods.upstreamStatus.description).toContain(
+      "git.upstreamStatus([imported.path], { fetch: false })"
+    );
   });
 
   it("models omitted options as shorter tuples that survive JSON transport", () => {
@@ -143,15 +201,27 @@ describe("gitInterop canonical contract", () => {
         contextId: "git-bridge-demo",
         eventId: "event:imported",
         changed: true,
+        semanticEvidence: SEMANTIC_EVIDENCE,
       },
     };
     expect(gitInteropMethods.importProject.returns.safeParse(result).success).toBe(true);
+    expect(
+      gitInteropMethods.importProject.returns.safeParse({
+        ...result,
+        candidate: {
+          contextId: result.candidate.contextId,
+          eventId: result.candidate.eventId,
+          changed: result.candidate.changed,
+        },
+      }).success
+    ).toBe(false);
     expect(
       gitInteropMethods.importProject.returns.safeParse({
         path: result.path,
         remote: result.remote,
       }).success
     ).toBe(false);
+    expect(gitInteropMethods.importProject.description).toContain("identity-joined evidence");
   });
 
   it("exposes only canonical object declarations in config mutation results", () => {
@@ -262,7 +332,7 @@ describe("gitInterop canonical contract", () => {
       "pushDisposableRemote",
       "cloneRepo",
       "remoteDefaultBranch",
-      "onMainAdvanced",
+      "reconcileUpstreams",
     ]);
     expect(GIT_INTEROP_PROVIDER_METHOD_NAMES).toEqual(Object.keys(gitInteropProviderMethods));
 
@@ -276,8 +346,16 @@ describe("gitInterop canonical contract", () => {
         contextId: "git-bridge-demo",
         eventId: "event:123",
         changed: true,
+        semanticEvidence: SEMANTIC_EVIDENCE,
       }).success
     ).toBe(true);
+    expect(
+      gitInteropProviderMethods.cloneRepo.returns.safeParse({
+        contextId: "git-bridge-demo",
+        eventId: "event:123",
+        changed: true,
+      }).success
+    ).toBe(false);
     expect(
       gitInteropProviderMethods.cloneRepo.returns.safeParse({
         contextId: "git-bridge-demo",
@@ -306,10 +384,10 @@ describe("gitInterop canonical contract", () => {
       ]).success
     ).toBe(false);
     expect(
-      gitInteropProviderMethods.onMainAdvanced.args.safeParse([["projects/demo"]]).success
+      gitInteropProviderMethods.reconcileUpstreams.args.safeParse([["projects/demo"]]).success
     ).toBe(true);
     expect(
-      gitInteropProviderMethods.onMainAdvanced.returns.safeParse({ queued: 1, ignored: false })
+      gitInteropProviderMethods.reconcileUpstreams.returns.safeParse({ queued: 1, ignored: false })
         .success
     ).toBe(false);
   });

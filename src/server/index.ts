@@ -40,6 +40,10 @@ import {
 import { resolveHttpRuntimeCaller } from "./httpRuntimeIdentity.js";
 import { classifyStartupDependency } from "./startupDependencyStatus.js";
 import { getProductBootManifest } from "./internalDOs/productBootManifest.js";
+import {
+  AppliedWorkspaceUnitDeclarations,
+  workspaceUnitDeclarationFingerprint,
+} from "./workspaceUnitDeclarationFingerprint.js";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
@@ -1180,6 +1184,8 @@ async function main() {
   ): Promise<typeof workspaceConfig> => {
     return readWorkspaceConfigFromState(workspaceVcs, workspaceId, stateHash);
   };
+  const appliedExtensionDeclarations = new AppliedWorkspaceUnitDeclarations();
+  const appliedAppDeclarations = new AppliedWorkspaceUnitDeclarations();
   const reconcileDeclaredWorkspaceUnits = async (
     nextConfig: typeof workspaceConfig,
     trigger: "startup" | "meta-change"
@@ -1196,92 +1202,109 @@ async function main() {
             (declaration) => !criticalSources.has(declaration.source)
           ),
         ];
-        if (trigger === "startup") {
-          const review = extensionHost.reviewDeclared(declared);
-          if (review.units.length > 0) {
-            void unitApprovalCoordinator
-              .enqueue({
-                entries: review.units,
-                trigger,
-                applyApproved: async () => {
-                  extensionHost.acceptPreapprovedTrust(review.identityKeys);
-                },
-                applyDenied: () => undefined,
-              })
-              .catch((err: unknown) =>
-                console.warn("[Units] Failed to apply reviewed extension trust:", err)
-              );
-          }
-        }
-        const reconcileAll = () =>
-          extensionHost
-            .reconcileDeclared(declared, {
-              trigger,
-              // Startup reconciliation is opportunistic background work.
-              // Keep one compiler busy without saturating the machine while
-              // the focused panel is building and booting.
-              ...(trigger === "startup" ? { maxConcurrentApplies: 1 } : {}),
-            })
-            .then(() => extensionHost.whenReconciled())
-            .then(() => import("@vibestudio/workspace/extensionRegistry"))
-            .then(({ writeExtensionRegistry }) => {
-              writeExtensionRegistry(workspacePath);
-            });
-        if (trigger === "startup") {
-          console.info(
-            "[StartupCriticalPath] Extension builds deferred until a host target or background reconcile needs them"
-          );
-          armStartupLaunchFallback();
-          startupNonCriticalUnitReconcile = Promise.resolve()
-            .then(() => startupLaunchWindowComplete)
-            .then(() => {
-              const backgroundStartedAt = Date.now();
-              return reconcileAll().then(() => {
-                void unitApprovalCoordinator
-                  .publishPending("startup")
-                  .catch((err: unknown) =>
-                    console.warn("[Units] Failed to publish startup approvals:", err)
-                  );
-                console.info(
-                  `[StartupBackground] Remaining extensions reconciled in ${Date.now() - backgroundStartedAt}ms`
-                );
-              });
-            })
-            .catch((err: unknown) =>
-              console.warn("[Extensions] Failed to reconcile background workspace units:", err)
-            );
+        const declarationFingerprint = workspaceUnitDeclarationFingerprint(declared);
+        if (
+          trigger === "meta-change" &&
+          appliedExtensionDeclarations.matches(declarationFingerprint)
+        ) {
+          console.info("[Extensions] Declarations unchanged after meta change; reconcile skipped");
         } else {
-          tasks.push(
-            reconcileAll().catch((err: unknown) =>
-              console.warn("[Extensions] Failed to reconcile declared workspace units:", err)
-            )
-          );
-        }
-      }
-      if (appHostForGateway) {
-        try {
-          const declared = resolveDeclaredApps(nextConfig);
-          appHostForGateway.setDeclared(declared, { trigger });
           if (trigger === "startup") {
-            const review = appHostForGateway.reviewDeclared(declared);
+            const review = extensionHost.reviewDeclared(declared);
             if (review.units.length > 0) {
-              const appHost = appHostForGateway;
               void unitApprovalCoordinator
                 .enqueue({
                   entries: review.units,
                   trigger,
                   applyApproved: async () => {
-                    appHost.acceptPreapprovedTrust(review.identityKeys);
+                    extensionHost.acceptPreapprovedTrust(review.identityKeys);
                   },
                   applyDenied: () => undefined,
                 })
                 .catch((err: unknown) =>
-                  console.warn("[Units] Failed to apply reviewed app trust:", err)
+                  console.warn("[Units] Failed to apply reviewed extension trust:", err)
                 );
             }
           }
+          const reconcileAll = () =>
+            appliedExtensionDeclarations.apply(declarationFingerprint, () =>
+              extensionHost
+                .reconcileDeclared(declared, {
+                  trigger,
+                  // Startup reconciliation is opportunistic background work.
+                  // Keep one compiler busy without saturating the machine while
+                  // the focused panel is building and booting.
+                  ...(trigger === "startup" ? { maxConcurrentApplies: 1 } : {}),
+                })
+                .then(() => extensionHost.whenReconciled())
+                .then(() => import("@vibestudio/workspace/extensionRegistry"))
+                .then(({ writeExtensionRegistry }) => {
+                  writeExtensionRegistry(workspacePath);
+                })
+            );
           if (trigger === "startup") {
-            console.info("[StartupCriticalPath] App declarations staged for on-demand launch");
+            console.info(
+              "[StartupCriticalPath] Extension builds deferred until a host target or background reconcile needs them"
+            );
+            armStartupLaunchFallback();
+            startupNonCriticalUnitReconcile = Promise.resolve()
+              .then(() => startupLaunchWindowComplete)
+              .then(() => {
+                const backgroundStartedAt = Date.now();
+                return reconcileAll().then(() => {
+                  void unitApprovalCoordinator
+                    .publishPending("startup")
+                    .catch((err: unknown) =>
+                      console.warn("[Units] Failed to publish startup approvals:", err)
+                    );
+                  console.info(
+                    `[StartupBackground] Remaining extensions reconciled in ${Date.now() - backgroundStartedAt}ms`
+                  );
+                });
+              })
+              .catch((err: unknown) =>
+                console.warn("[Extensions] Failed to reconcile background workspace units:", err)
+              );
+          } else {
+            tasks.push(
+              reconcileAll().catch((err: unknown) =>
+                console.warn("[Extensions] Failed to reconcile declared workspace units:", err)
+              )
+            );
+          }
+        }
+      }
+      if (appHostForGateway) {
+        const appHost = appHostForGateway;
+        try {
+          const declared = resolveDeclaredApps(nextConfig);
+          const declarationFingerprint = workspaceUnitDeclarationFingerprint(declared);
+          if (trigger === "meta-change" && appliedAppDeclarations.matches(declarationFingerprint)) {
+            console.info("[Apps] Declarations unchanged after meta change; reconcile skipped");
+          } else {
+            await appliedAppDeclarations.apply(declarationFingerprint, () =>
+              appHost.setDeclared(declared, { trigger })
+            );
+            if (trigger === "startup") {
+              const review = appHost.reviewDeclared(declared);
+              if (review.units.length > 0) {
+                void unitApprovalCoordinator
+                  .enqueue({
+                    entries: review.units,
+                    trigger,
+                    applyApproved: async () => {
+                      appHost.acceptPreapprovedTrust(review.identityKeys);
+                    },
+                    applyDenied: () => undefined,
+                  })
+                  .catch((err: unknown) =>
+                    console.warn("[Units] Failed to apply reviewed app trust:", err)
+                  );
+              }
+            }
+            if (trigger === "startup") {
+              console.info("[StartupCriticalPath] App declarations staged for on-demand launch");
+            }
           }
         } catch (err) {
           console.warn("[Apps] Failed to update declared workspace app units:", err);
@@ -1640,6 +1663,10 @@ async function main() {
     workspacePath,
     workspaceConfig,
     invokeGitProvider: invokeGitInteropProvider,
+    requestGitReconciliation: (repoPaths) => {
+      for (const repo of repoPaths) pendingGitUpstreamRepos.add(repo);
+      void flushGitUpstreamRepos();
+    },
     disposableRemotes: disposableGitRemotes,
     persistWorkspaceConfigMutation: async (input) => {
       const result = await workspaceConfigWriter.applyMutation(input);
@@ -1673,9 +1700,11 @@ async function main() {
         const repos = [...pendingGitUpstreamRepos];
         pendingGitUpstreamRepos.clear();
         try {
-          await invokeGitInteropProvider({ caller: createHostCaller("server") }, "onMainAdvanced", [
-            repos,
-          ]);
+          await invokeGitInteropProvider(
+            { caller: createHostCaller("server") },
+            "reconcileUpstreams",
+            [repos]
+          );
           readinessAttempts = 0;
         } catch (err) {
           const code =

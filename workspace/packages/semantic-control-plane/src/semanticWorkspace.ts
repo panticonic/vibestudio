@@ -11,6 +11,7 @@ import {
   type VcsCopyInput,
   type VcsDiscardInput,
   type VcsEditInput,
+  type VcsExternalSnapshot,
   type VcsHistoryInput,
   type VcsImportSnapshotInput,
   type VcsInspectInput,
@@ -1187,6 +1188,8 @@ export class SemanticWorkspace {
             contextId: importInput.contextId,
             eventId: committed.event.eventId,
             workUnitId: working.workUnitId,
+            applicationId: working.applicationId,
+            externalSnapshot: planned.externalSnapshot,
             importedRepositoryIds: planned.importedRepositoryIds,
           };
           const projection = this.queueMaterialization(
@@ -2816,7 +2819,11 @@ export class SemanticWorkspace {
   private planImportSnapshot(
     input: VcsImportSnapshotInput,
     receipt: Row
-  ): { draft: MutationDraft; importedRepositoryIds: string[] } {
+  ): {
+    draft: MutationDraft;
+    importedRepositoryIds: string[];
+    externalSnapshot: VcsExternalSnapshot;
+  } {
     const rows = receipt["files"];
     if (!Array.isArray(rows)) {
       throw internalSemanticIntegrityFailure("EffectMismatch", "Content observation lacks files", {
@@ -3017,22 +3024,23 @@ export class SemanticWorkspace {
         });
       }
     }
+    const externalSnapshot: VcsExternalSnapshot = {
+      sourceKind: input.source.kind,
+      sourceUri: input.source.uri,
+      snapshotRevision: input.source.snapshotRevision,
+      snapshotDigest,
+      targetRepositoryIds: [...new Set(importedRepositoryIds)].sort(compareUtf16CodeUnits),
+    };
     const draft: MutationDraft = {
       kind: "import",
       intentSummary: input.intentSummary ?? input.message ?? null,
-      externalSnapshot: {
-        sourceKind: input.source.kind,
-        sourceUri: input.source.uri,
-        snapshotRevision: input.source.snapshotRevision,
-        snapshotDigest,
-        targetRepositoryIds: [...new Set(importedRepositoryIds)].sort(compareUtf16CodeUnits),
-      },
+      externalSnapshot,
       incorporatedChangeIds: [],
       changes,
       fileResults,
       repositoryResults,
     };
-    return { draft, importedRepositoryIds };
+    return { draft, importedRepositoryIds, externalSnapshot };
   }
 
   private assertImportRepositoryTargets(input: VcsImportSnapshotInput): void {
@@ -3686,9 +3694,7 @@ export class SemanticWorkspace {
     };
   }
 
-  private repositoryLineages(
-    repositoryIds: readonly string[]
-  ): Map<
+  private repositoryLineages(repositoryIds: readonly string[]): Map<
     string,
     {
       authoredChangeId: null;
@@ -3761,11 +3767,7 @@ export class SemanticWorkspace {
       throw new SemanticVcsError("InvalidReference", "Directory path is not canonical");
     }
     const cursorBasis = { state: input.state, path: normalizedPath };
-    const cursorPosition = parseSemanticCursor(
-      input.cursor,
-      "list-directory",
-      cursorBasis
-    );
+    const cursorPosition = parseSemanticCursor(input.cursor, "list-directory", cursorBasis);
     const afterName = cursorPosition?.["name"];
     const afterKind = cursorPosition?.["kind"];
     if (
@@ -3784,11 +3786,7 @@ export class SemanticWorkspace {
       });
       for (const { key: repoPath, value: repositoryId } of page.values) {
         const repository = this.deps.store.facts.member(root, repositoryId);
-        if (
-          !repository ||
-          repository.presence !== "present" ||
-          repository.repoPath !== repoPath
-        ) {
+        if (!repository || repository.presence !== "present" || repository.repoPath !== repoPath) {
           throw new SemanticVcsError(
             "IntegrityFailure",
             `Live repository path ${repoPath} has no exact present member`
@@ -3836,15 +3834,12 @@ export class SemanticWorkspace {
           ? `${prefix}${afterName}0`
           : undefined;
       while (candidates.length <= input.limit) {
-        const page = this.deps.store.facts.pageManifest(
-          containingRepository.fileManifestId,
-          {
-            ...(afterPath ? { afterPath } : {}),
-            ...(atOrAfterPath ? { atOrAfterPath } : {}),
-            ...(prefix ? { prefix } : {}),
-            limit: 1,
-          }
-        );
+        const page = this.deps.store.facts.pageManifest(containingRepository.fileManifestId, {
+          ...(afterPath ? { afterPath } : {}),
+          ...(atOrAfterPath ? { atOrAfterPath } : {}),
+          ...(prefix ? { prefix } : {}),
+          limit: 1,
+        });
         const manifestEntry = page.values[0];
         if (!manifestEntry) break;
         const remainder = manifestEntry.path.slice(prefix.length);
@@ -3905,7 +3900,11 @@ export class SemanticWorkspace {
       if (candidates.length === 0 && normalizedPath !== "") return null;
     }
 
-    if (candidates.length === 0 && containingRepository && normalizedPath !== containingRepository.repoPath) {
+    if (
+      candidates.length === 0 &&
+      containingRepository &&
+      normalizedPath !== containingRepository.repoPath
+    ) {
       return null;
     }
     const fileWitnesses = candidates.flatMap((candidate) =>

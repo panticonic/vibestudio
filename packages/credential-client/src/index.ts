@@ -72,7 +72,11 @@ export interface CredentialClient {
     opts?: { credentialId?: string }
   ): (init?: RequestInit) => Promise<Response>;
   gitHttp(opts?: {
-    credentialId?: string;
+    /**
+     * Omit to resolve a matching credential automatically, pass an id to use
+     * that credential, or pass null to make an explicitly anonymous request.
+     */
+    credentialId?: string | null;
     gitIntent?: ProxyGitHttpRequest["gitIntent"];
   }): GitHttpClient;
   forAudience(descriptor: UrlAudienceDescriptor): Promise<UrlCredentialHandle>;
@@ -193,7 +197,7 @@ async function resolveByAudienceList(
 
 export function createGitHttpClient(
   rpc: RpcCaller,
-  opts?: { credentialId?: string; gitIntent?: ProxyGitHttpRequest["gitIntent"] }
+  opts?: { credentialId?: string | null; gitIntent?: ProxyGitHttpRequest["gitIntent"] }
 ): GitHttpClient {
   return {
     async request(request) {

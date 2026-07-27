@@ -155,7 +155,9 @@ resolveRepository  readFile  listDirectory  listFiles
 - Read [external snapshot import](references/external-snapshot-import.md) for
   Git, archive, upload, filesystem, or generated ingress, and whenever blame
   reaches an import boundary. The snapshot tuple lives on the owning import
-  work unit; there is no barrier change to find.
+  work unit; the successful import returns its event, application, work unit,
+  repositories, and canonical snapshot atomically. There is no barrier change
+  or post-commit evidence reconstruction to find.
 - Read [checks and publication](references/checks-and-publication.md) for
   advisory checks against the current context and the protected publication
   boundary.

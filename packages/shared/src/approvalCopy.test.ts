@@ -102,6 +102,43 @@ describe("approvalCopy", () => {
       summaryIncludes: "github.com/acme/project",
     },
     {
+      name: "credential unrelated force-push",
+      approval: {
+        ...base,
+        kind: "credential",
+        allowedDecisions: ["once", "deny"],
+        credentialId: "cred-git",
+        credentialLabel: "GitHub PAT",
+        audience: [{ match: "origin", url: "https://github.com/" }],
+        injection: {
+          type: "basic-auth",
+          usernameTemplate: "x-access-token",
+          passwordTemplate: "{{token}}",
+        },
+        accountIdentity: { username: "octo", providerUserId: "octo" },
+        scopes: ["repo"],
+        credentialUse: "git-http",
+        gitOperation: {
+          action: "write",
+          label: "force-push commits",
+          remote: "https://github.com/acme/project.git",
+          service: "github",
+          force: true,
+          overwrites: {
+            relationship: "unrelated",
+            count: null,
+            commits: [{ sha: "abc", summary: "Remote root" }],
+            truncated: false,
+          },
+        },
+      },
+      category: "Push changes",
+      title: "Replace unrelated history on github.com/acme/project",
+      summaryIncludes: "no common ancestor",
+      warning:
+        "The remote commits cannot be counted relative to the local history and may become unreachable.",
+    },
+    {
       name: "network egress",
       approval: {
         ...base,

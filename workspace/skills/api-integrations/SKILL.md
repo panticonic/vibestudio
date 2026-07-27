@@ -231,7 +231,11 @@ const imported = await git.importProject({
   credentialId: "cred_github_...",
 });
 
-console.log(imported.candidate.contextId, imported.candidate.eventId);
+console.log(
+  imported.candidate.contextId,
+  imported.candidate.eventId,
+  imported.candidate.semanticEvidence
+);
 ```
 
 The clone produces a committed semantic candidate and does not advance
@@ -240,14 +244,24 @@ context with ordinary `vcs.compare` and small `vcs.integrate` steps, check it,
 commit the complete local chain, and call `vcs.push` explicitly when
 publication is intended.
 
+The candidate's required `semanticEvidence` is returned by the same atomic
+semantic import and names the exact application, import work unit, source
+revision/digest, and target repositories. Do not substitute clone metadata or a
+post-commit reconstruction.
+
+For Git transport credentials, omission means URL-bound automatic resolution, a
+string pins one stored credential, and `null` requires anonymous HTTP. Persist
+only credential-free HTTP(S) remote URLs without query parameters or fragments.
+
 At startup, the configured Git provider reports operational checkout state via
 `upstreamStatus`. Vibestudio clones/imports only `not-materialized`
 declarations; other reported states are skipped as `already-materialized`, even
 when a candidate is still `integration-required`. Use
 `git.completeWorkspaceDependencies()` for the same explicit retry/backfill flow.
 For private repos, pass a credential id on the retry call because startup import
-has no interactive `credentialId` argument. Operational clones live below
-server `state/git-checkouts/` and never become Build V2 source directly.
+has no interactive `credentialId` argument. Pass `null` on an explicit retry
+when the operation must remain anonymous. Operational clones live below server
+`state/git-checkouts/` and never become Build V2 source directly.
 
 `git.importProject()` uses one workspace config approval covering the shared
 remote and upstream; the prompt shows the destination path, remote URL, and

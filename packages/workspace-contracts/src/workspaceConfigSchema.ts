@@ -32,7 +32,7 @@ const WorkspaceGitUpstreamSchema = z
     remote: z.string(),
     branch: z.string().optional(),
     autoPush: z.boolean().optional(),
-    credentialId: z.string().optional(),
+    credentialId: z.string().nullable().optional(),
     authorEmail: z.string().optional(),
     authorName: z.string().optional(),
   })
@@ -45,15 +45,7 @@ const WorkspaceSourceRefSchema = z
 const WorkspaceServicePrincipalSchema = z.enum(["host", "user", "code", "session", "mission"]);
 const WorkspaceServicePresentationSchema = z
   .object({
-    domain: z.enum([
-      "files",
-      "sharing",
-      "accounts",
-      "web",
-      "automation",
-      "people",
-      "computer",
-    ]),
+    domain: z.enum(["files", "sharing", "accounts", "web", "automation", "people", "computer"]),
     verb: z.enum(["see", "act", "manage"]),
     substanceKind: z.enum(["change-set", "send", "deletion", "custom"]).optional(),
   })
@@ -63,7 +55,8 @@ const WorkspaceServicePresentationSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["substanceKind"],
-        message: "Publishing & sending services must declare how exact operation substance is shown",
+        message:
+          "Publishing & sending services must declare how exact operation substance is shown",
       });
     }
   });

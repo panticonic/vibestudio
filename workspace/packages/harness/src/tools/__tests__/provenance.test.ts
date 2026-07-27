@@ -400,6 +400,42 @@ function fixture() {
 }
 
 describe("createProvenanceTool", () => {
+  it("resolves a friendly repository path to its typed repository node", async () => {
+    const f = fixture();
+    const tool = createProvenanceTool("/", f.value);
+    const result = await tool.execute("call:repository", { target: "packages/foo" });
+
+    expect(f.resolveRepository).toHaveBeenCalledWith({
+      state: working,
+      repoPath: "packages/foo",
+    });
+    expect(f.neighbors).toHaveBeenLastCalledWith({
+      root: {
+        kind: "repository",
+        state: working,
+        repositoryId: "repository:packages/foo",
+      },
+      limit: 5,
+    });
+    expect(f.inspect).toHaveBeenCalledWith({
+      node: {
+        kind: "repository",
+        state: working,
+        repositoryId: "repository:packages/foo",
+      },
+      edgeLimit: 1,
+    });
+    expect(f.readFile).not.toHaveBeenCalled();
+    expect(f.history).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      target: "packages/foo",
+      root: {
+        kind: "repository",
+        repositoryId: "repository:packages/foo",
+      },
+    });
+  });
+
   it("resolves a friendly file path to a typed file node and pages neighbors", async () => {
     const f = fixture();
     const tool = createProvenanceTool("/", f.value);
@@ -412,7 +448,7 @@ describe("createProvenanceTool", () => {
         repositoryId: "repository:packages/foo",
         fileId: "file:bar",
       },
-      limit: 100,
+      limit: 5,
     });
     expect(result.details).toMatchObject({ target: "packages/foo/bar.ts", edges: 1 });
     expect(f.inspect).toHaveBeenCalledWith({
@@ -464,7 +500,7 @@ describe("createProvenanceTool", () => {
       state: working,
       repoPath: "packages/foo",
     });
-    expect(f.neighbors).toHaveBeenLastCalledWith({ root, limit: 100 });
+    expect(f.neighbors).toHaveBeenLastCalledWith({ root, limit: 5 });
     expect(f.inspect).toHaveBeenCalledWith({ node: root, edgeLimit: 1 });
     expect(f.readFile).not.toHaveBeenCalled();
     expect(f.history).not.toHaveBeenCalled();
@@ -477,7 +513,7 @@ describe("createProvenanceTool", () => {
     await tool.execute("call:2", { target: "session" });
     expect(f.neighbors).toHaveBeenCalledWith({
       root: { kind: "trajectory", logId: "log:1", head: "head:1" },
-      limit: 100,
+      limit: 5,
     });
   });
 
@@ -503,12 +539,12 @@ describe("createProvenanceTool", () => {
     await tool.execute("call:3", { target: "change:42" });
     expect(f.neighbors).toHaveBeenCalledWith({
       root: { kind: "change", changeId: "change:42" },
-      limit: 100,
+      limit: 5,
     });
     await tool.execute("call:applied", { target: "applied-change:42" });
     expect(f.neighbors).toHaveBeenCalledWith({
       root: { kind: "applied-change", appliedChangeId: "applied-change:42" },
-      limit: 100,
+      limit: 5,
     });
   });
 
@@ -517,7 +553,7 @@ describe("createProvenanceTool", () => {
     const tool = createProvenanceTool("/", f.value);
     const root = { kind: "decision" as const, decisionId: "decision:1" };
     await tool.execute("call:4", { target: root, after: "cursor:1" });
-    expect(f.neighbors).toHaveBeenCalledWith({ root, limit: 100, cursor: "cursor:1" });
+    expect(f.neighbors).toHaveBeenCalledWith({ root, limit: 5, cursor: "cursor:1" });
   });
 
   it("renders work-unit intent before exact adjacency and retains its endpoints", async () => {

@@ -13,6 +13,8 @@ import {
   type CanonicalProvenanceResult,
 } from "./provenance-format.js";
 
+const ORIENTATION_EDGE_LIMIT = 5;
+
 const stateRootSchema = Type.Union([
   Type.Object({ kind: Type.Literal("event"), eventId: Type.String() }),
   Type.Object({ kind: Type.Literal("application"), applicationId: Type.String() }),
@@ -201,14 +203,14 @@ export async function neighborsForWorkspacePath(
     contextId: () => contextIdOf(deps),
   });
   const split = splitRepoPath(workspacePath);
-  if (!split) throw new Error(`No workspace repository at ${workspacePath}`);
+  if (!split) throw new Error(`${workspacePath} is not inside a workspace repository`);
   if (!split.repoRelPath) {
     const repository = await deps.vcs.resolveRepository({
       state: workingHead,
       repoPath: split.repoPath,
     });
     if (!repository) {
-      throw new Error(`No repository identity at ${workspacePath} in the working state`);
+      throw new Error(`Repository ${split.repoPath} is not present in the working state`);
     }
     const root: Extract<VcsSemanticNodeRef, { kind: "repository" }> = {
       kind: "repository",
@@ -285,7 +287,7 @@ export function createProvenanceTool(
     label: "provenance",
     executionMode: "parallel",
     description:
-      "Inspect a semantic node and walk one bounded adjacency page; managed files also include a small exact change-history preview.",
+      "Inspect a semantic node or managed repository/file path and walk one bounded adjacency page; managed files also include a small exact change-history preview.",
     parameters: provenanceSchema,
     execute: async (_toolCallId, input) => {
       const cursor = typeof input.after === "string" && input.after ? input.after : undefined;
@@ -293,7 +295,11 @@ export function createProvenanceTool(
         const root = parseRoot(input.target);
         const [inspection, neighbors, history] = await Promise.all([
           deps.vcs.inspect({ node: root, edgeLimit: 1 }),
-          deps.vcs.neighbors({ root, limit: 100, ...(cursor ? { cursor } : {}) }),
+          deps.vcs.neighbors({
+            root,
+            limit: ORIENTATION_EDGE_LIMIT,
+            ...(cursor ? { cursor } : {}),
+          }),
           root.kind === "file"
             ? deps.vcs.history({ root, direction: "past", limit: 5 })
             : Promise.resolve(undefined),
@@ -307,7 +313,10 @@ export function createProvenanceTool(
       const target = String(input.target ?? "session").trim() || "session";
       const path = target.startsWith("file:") ? target.slice(5) : target;
       if (splitRepoPath(path)) {
-        const page = await neighborsForWorkspacePath(cwd, deps, path, { cursor, limit: 100 });
+        const page = await neighborsForWorkspacePath(cwd, deps, path, {
+          cursor,
+          limit: ORIENTATION_EDGE_LIMIT,
+        });
         const [inspection, history] = await Promise.all([
           deps.vcs.inspect({ node: page.root, edgeLimit: 1 }),
           page.root.kind === "file"
@@ -323,7 +332,11 @@ export function createProvenanceTool(
       const root = semanticRootForTarget(target, deps.session);
       const [inspection, neighbors] = await Promise.all([
         deps.vcs.inspect({ node: root, edgeLimit: 1 }),
-        deps.vcs.neighbors({ root, limit: 100, ...(cursor ? { cursor } : {}) }),
+        deps.vcs.neighbors({
+          root,
+          limit: ORIENTATION_EDGE_LIMIT,
+          ...(cursor ? { cursor } : {}),
+        }),
       ]);
       return toolResult(target, inspection, neighbors, undefined, {
         kind: "root",

@@ -4,7 +4,6 @@ import { stableSha256Hex } from "@vibestudio/content-addressing";
 import { GitAuthError, GitClient, GitPushRejectedError } from "@vibestudio/git";
 import {
   getDeclaredRemoteForRepo,
-  getDeclaredRemotesForRepo,
   getDeclaredUpstreamForRepo,
   listDeclaredUpstreams,
   normalizeWorkspaceRepoPath,
@@ -44,6 +43,7 @@ import { withRepoLock } from "./repoLocks.js";
 
 const STATE_FILE = "state/upstream-state.json";
 const DEFAULT_BRANCH = "main";
+const OVERWRITE_PREVIEW_LIMIT = 20;
 const TRANSIENT_BACKOFF_MIN_MS = 30_000;
 const TRANSIENT_BACKOFF_MAX_MS = 15 * 60_000;
 
@@ -80,6 +80,7 @@ interface RuntimeRepoState {
    * remote/branch/credential fingerprint rather than only declared config. */
   lastFetchedFingerprint?: string;
   lastFetchedAt?: number;
+  lastFetchedRemoteBranchExists?: boolean;
   backoffMs?: number;
   retryAt?: number;
   debounceTimer?: ReturnType<typeof setTimeout>;
@@ -126,7 +127,7 @@ export class UpstreamEngine {
     await this.reportHealth();
   }
 
-  onMainAdvanced(repoPaths: string[]): void {
+  reconcileUpstreams(repoPaths: string[]): void {
     for (const repoPath of repoPaths) this.enqueue(repoPath);
   }
 
@@ -195,11 +196,26 @@ export class UpstreamEngine {
       return { exported, pushed: false };
     }
     if (!opts.force && exported.headCommit === stored?.lastPushedSha) {
-      await this.updateRepoState(repo, fingerprint, {
-        status: "in-sync",
-        lastError: undefined,
+      // lastPushedSha proves what this bridge sent, not what the remote still
+      // contains. Fetch before taking the no-op path so an upstream-only
+      // advance, branch deletion, or rewritten ref can never be reported as
+      // "in-sync" from stale local bookkeeping.
+      const fetched = await git.fetch({
+        dir,
+        url: remote.url,
+        remote: transportRemote,
+        ref: upstream.branch,
       });
-      return { exported, pushed: false };
+      const remoteHead = fetched.remoteRefExists
+        ? await git.resolveRef(dir, `refs/remotes/${transportRemote}/${upstream.branch}`)
+        : null;
+      if (fetched.remoteRefExists && remoteHead === exported.headCommit) {
+        await this.updateRepoState(repo, fingerprint, {
+          status: "in-sync",
+          lastError: undefined,
+        });
+        return { exported, pushed: false };
+      }
     }
     let overwrites: GitOverwritePreview | undefined;
     if (opts.force) {
@@ -240,10 +256,56 @@ export class UpstreamEngine {
     return withRepoLock(repo, async () => {
       let scope: RepoOperationScope | null = null;
       try {
-        scope = await this.resolveRepoScope(repo);
+        scope = await this.resolveRepoScope(repo, { persistState: opts.dryRun !== true });
         const { upstream, remote, fingerprint, transportRemote } = scope;
-        const dir = await this.bridge.repoGitDir(repo);
         const git = this.gitClient(upstream.credentialId);
+        if (opts.dryRun) {
+          return await this.bridge.withProtectedExportPreviewLocked(
+            repo,
+            {
+              authorEmail: upstream.authorEmail,
+              authorName: upstream.authorName,
+            },
+            async ({ dir }) => {
+              const fetched = await git.fetch({
+                dir,
+                url: remote.url,
+                remote: transportRemote,
+                ref: upstream.branch,
+              });
+              if (!fetched.remoteRefExists) {
+                return {
+                  behindBy: 0,
+                  aheadBy: 0,
+                  remoteBranchExists: false,
+                  incoming: [],
+                };
+              }
+              const remoteRef = `refs/remotes/${transportRemote}/${upstream.branch}`;
+              const remoteHead = await git.resolveRef(dir, remoteRef);
+              if (!remoteHead) {
+                return {
+                  behindBy: 0,
+                  aheadBy: 0,
+                  remoteBranchExists: false,
+                  incoming: [],
+                };
+              }
+              const tracking = (await git.compareRefs(dir, "HEAD", remoteRef)) ?? {
+                ahead: 1,
+                behind: 1,
+                diverged: true,
+              };
+              return {
+                behindBy: tracking.behind,
+                aheadBy: tracking.ahead,
+                remoteBranchExists: true,
+                incoming: await this.commitSummaries(git, dir, remoteRef, tracking.behind),
+              };
+            }
+          );
+        }
+        const dir = await this.bridge.repoGitDir(repo);
         // Export FIRST: the divergence judgment below must compare the remote
         // against gad main's exported tip, not a stale checkout. Without this,
         // a pull right after `vcs push` classifies as a clean fast-forward and
@@ -256,25 +318,23 @@ export class UpstreamEngine {
           exported.clobberedLocalEdits.length > 0
             ? { clobberedLocalEdits: exported.clobberedLocalEdits }
             : {};
-        await git.fetch({
+        const fetched = await git.fetch({
           dir,
           url: remote.url,
           remote: transportRemote,
           ref: upstream.branch,
         });
         const remoteRef = `refs/remotes/${transportRemote}/${upstream.branch}`;
-        const remoteHead = await git.resolveRef(dir, remoteRef);
-        if (!remoteHead) {
+        const remoteHead = fetched.remoteRefExists ? await git.resolveRef(dir, remoteRef) : null;
+        if (!fetched.remoteRefExists || !remoteHead) {
           // The tracked remote branch does not exist yet — nothing to pull,
           // and nothing to fabricate: report the state explicitly.
-          if (!opts.dryRun) {
-            await this.updateRepoState(repo, fingerprint, {
-              status: exported.headCommit ? "ahead" : undefined,
-              lastError: undefined,
-              lastFailureAt: undefined,
-            });
-            this.clearBackoff(repo, fingerprint);
-          }
+          await this.updateRepoState(repo, fingerprint, {
+            status: exported.headCommit ? "ahead" : undefined,
+            lastError: undefined,
+            lastFailureAt: undefined,
+          });
+          this.clearBackoff(repo, fingerprint);
           return {
             behindBy: 0,
             aheadBy: 0,
@@ -289,15 +349,6 @@ export class UpstreamEngine {
           diverged: true,
         };
         const incoming = await this.commitSummaries(git, dir, remoteRef, tracking.behind);
-        if (opts.dryRun) {
-          return {
-            behindBy: tracking.behind,
-            aheadBy: tracking.ahead,
-            remoteBranchExists: true,
-            incoming,
-            ...clobbered,
-          };
-        }
         if (tracking.behind === 0) {
           await this.updateRepoState(repo, fingerprint, {
             status: statusFromCounts(tracking.ahead, tracking.behind, tracking.diverged),
@@ -467,6 +518,7 @@ export class UpstreamEngine {
             state: "auth-failed" | "error" | "fetch-failed";
             message: string;
           } | null = null;
+          let remoteBranchExists: boolean | undefined;
           // Fetch separately from the local comparison: an offline/unreachable
           // remote must degrade to `fetch-failed` with last-known local counts,
           // not a blanket error row. Auth policy comes from the TYPED error only.
@@ -477,19 +529,24 @@ export class UpstreamEngine {
             runtime?.lastFetchedFingerprint === operationalFingerprint &&
             runtime.lastFetchedAt !== undefined &&
             Date.now() - runtime.lastFetchedAt < options.ttlMs;
+          if (fetchIsFresh) {
+            remoteBranchExists = runtime?.lastFetchedRemoteBranchExists;
+          }
           if (options.fetch === true && !fetchIsFresh) {
             try {
               const git = this.gitClient(resolved.credentialId);
-              await git.fetch({
+              const fetched = await git.fetch({
                 dir,
                 url: operationalRemote.url,
                 remote: transportRemote,
                 ref: resolved.branch,
               });
+              remoteBranchExists = fetched.remoteRefExists;
               const currentRuntime = this.runtime.get(repo);
               if (currentRuntime?.configFingerprint === stored.configFingerprint) {
                 currentRuntime.lastFetchedFingerprint = operationalFingerprint;
                 currentRuntime.lastFetchedAt = Date.now();
+                currentRuntime.lastFetchedRemoteBranchExists = fetched.remoteRefExists;
               }
             } catch (err) {
               statusError = {
@@ -550,6 +607,7 @@ export class UpstreamEngine {
             state: computed,
             aheadBy: counts.aheadBy,
             behindBy: counts.behindBy,
+            remoteBranchExists,
             lastPushedSha: observesDeclaredTarget ? stored.lastPushedSha : undefined,
             lastPushedAt: observesDeclaredTarget ? stored.lastPushedAt : undefined,
             lastError:
@@ -754,7 +812,7 @@ export class UpstreamEngine {
 
   async remoteDefaultBranch(input: {
     url: string;
-    credentialId?: string;
+    credentialId?: string | null;
   }): Promise<{ branch: string | null }> {
     const git = this.gitClient(input.credentialId);
     return { branch: await git.getRemoteDefaultBranch(input.url) };
@@ -860,7 +918,10 @@ export class UpstreamEngine {
         }
         // Tracking always exports (local-only, keeps the checkout current).
         // Divergence/auth failures pause only the wire push, never the export.
-        const paused = scope.stored.status === "diverged" || scope.stored.status === "auth-failed";
+        const paused =
+          scope.stored.status === "behind" ||
+          scope.stored.status === "diverged" ||
+          scope.stored.status === "auth-failed";
         await this.syncLocked(repo, scope, {
           push: scope.upstream.autoPush && !paused,
         });
@@ -897,8 +958,11 @@ export class UpstreamEngine {
     if (err instanceof GitPushRejectedError) {
       // Confirm divergence deterministically before pausing pushes on it.
       const counts = await this.aheadBehind(repo, scope, { fetch: true }).catch(() => null);
-      if (counts && (counts.diverged || counts.behindBy > 0)) {
+      if (counts?.diverged) {
         return { status: "diverged", lastError: message, lastFailureAt };
+      }
+      if (counts && counts.behindBy > 0) {
+        return { status: "behind", lastError: message, lastFailureAt };
       }
       return { status: "error", lastError: message, lastFailureAt };
     }
@@ -940,7 +1004,11 @@ export class UpstreamEngine {
   ): Promise<void> {
     const fingerprint = scope.fingerprint;
     const patch = await this.classifyFailure(repo, scope, err);
-    if (patch.status === "auth-failed" || patch.status === "diverged") {
+    if (
+      patch.status === "auth-failed" ||
+      patch.status === "behind" ||
+      patch.status === "diverged"
+    ) {
       if (await this.updateRepoState(repo, fingerprint, patch)) {
         await this.showFailureNotification(repo, upstream, patch.lastError ?? errorMessage(err));
       }
@@ -1010,21 +1078,44 @@ export class UpstreamEngine {
     dir: string,
     scope: RepoOperationScope,
     localHead: string
-  ): Promise<GitOverwritePreview> {
-    await git.fetch({
+  ): Promise<GitOverwritePreview | undefined> {
+    const fetched = await git.fetch({
       dir,
       url: scope.remote.url,
       remote: scope.transportRemote,
       ref: scope.upstream.branch,
     });
+    if (!fetched.remoteRefExists) return undefined;
     const remoteRef = `refs/remotes/${scope.transportRemote}/${scope.upstream.branch}`;
     const remoteHead = await git.resolveRef(dir, remoteRef);
-    if (!remoteHead || remoteHead === localHead) return { count: 0, commits: [] };
+    if (!remoteHead || remoteHead === localHead) return undefined;
     const counts = await git.compareRefs(dir, "HEAD", remoteRef);
-    const count = counts?.behind ?? 0;
+    if (!counts) {
+      const remoteCommits = await this.commitSummaries(
+        git,
+        dir,
+        remoteRef,
+        OVERWRITE_PREVIEW_LIMIT + 1
+      );
+      return {
+        relationship: "unrelated",
+        count: null,
+        commits: remoteCommits.slice(0, OVERWRITE_PREVIEW_LIMIT),
+        truncated: remoteCommits.length > OVERWRITE_PREVIEW_LIMIT,
+      };
+    }
+    const count = counts.behind;
+    if (count === 0) return undefined;
     return {
+      relationship: "related",
       count,
-      commits: await this.commitSummaries(git, dir, remoteRef, Math.min(count, 20)),
+      commits: await this.commitSummaries(
+        git,
+        dir,
+        remoteRef,
+        Math.min(count, OVERWRITE_PREVIEW_LIMIT)
+      ),
+      truncated: count > OVERWRITE_PREVIEW_LIMIT,
     };
   }
 
@@ -1055,12 +1146,15 @@ export class UpstreamEngine {
     const dir = await this.bridge.repoGitDir(repo);
     const git = this.gitClient(scope.upstream.credentialId);
     if (options.fetch === true) {
-      await git.fetch({
+      const fetched = await git.fetch({
         dir,
         url: scope.remote.url,
         remote: scope.transportRemote,
         ref: scope.upstream.branch,
       });
+      if (!fetched.remoteRefExists) {
+        return { aheadBy: 1, behindBy: 0, diverged: false };
+      }
     }
     const remoteRef = `refs/remotes/${scope.transportRemote}/${scope.upstream.branch}`;
     const remoteHead = await git.resolveRef(dir, remoteRef);
@@ -1105,17 +1199,28 @@ export class UpstreamEngine {
     });
   }
 
-  private async resolveRepoScope(repo: string): Promise<RepoOperationScope> {
+  private async resolveRepoScope(
+    repo: string,
+    options: { persistState?: boolean } = {}
+  ): Promise<RepoOperationScope> {
     const config = await this.readConfig();
     const upstream = this.requireUpstream(config, repo);
     const remote = this.requireRemote(config, repo, upstream.remote);
-    const stored = await this.reconcileRepoState(repo, upstream, remote);
+    const configFingerprint = upstreamConfigFingerprint(repo, upstream, remote);
+    let stored: StoredRepoState;
+    if (options.persistState === false) {
+      const current = (await this.readState()).repos[repo];
+      stored =
+        current?.configFingerprint === configFingerprint ? { ...current } : { configFingerprint };
+    } else {
+      stored = await this.reconcileRepoState(repo, upstream, remote);
+    }
     return {
       upstream,
       remote,
-      fingerprint: stored.configFingerprint,
+      fingerprint: configFingerprint,
       stored,
-      transportRemote: transportRemoteForFingerprint(stored.configFingerprint),
+      transportRemote: transportRemoteForFingerprint(configFingerprint),
     };
   }
 
@@ -1154,7 +1259,7 @@ export class UpstreamEngine {
       ...upstream,
       remote: remoteName,
       branch,
-      ...(options.credentialId ? { credentialId: options.credentialId } : {}),
+      ...(options.credentialId !== undefined ? { credentialId: options.credentialId } : {}),
     };
   }
 
@@ -1165,7 +1270,7 @@ export class UpstreamEngine {
   }
 
   private gitClient(
-    credentialId?: string,
+    credentialId?: string | null,
     gitIntent?: { force: boolean; overwrites?: GitOverwritePreview }
   ): GitClient {
     return new GitClient(fsp, {
@@ -1174,11 +1279,11 @@ export class UpstreamEngine {
   }
 
   private gitHttp(
-    credentialId?: string,
+    credentialId?: string | null,
     gitIntent?: { force: boolean; overwrites?: GitOverwritePreview }
   ) {
     return this.ctx.credentials.gitHttp({
-      ...(credentialId ? { credentialId } : {}),
+      ...(credentialId !== undefined ? { credentialId } : {}),
       ...(gitIntent ? { gitIntent } : {}),
     });
   }
@@ -1271,7 +1376,10 @@ export class UpstreamEngine {
     await this.stateWrite;
     const state = await this.readState();
     const degraded = Object.entries(state.repos)
-      .filter(([, repo]) => repo.status === "auth-failed" || repo.status === "diverged")
+      .filter(
+        ([, repo]) =>
+          repo.status === "auth-failed" || repo.status === "behind" || repo.status === "diverged"
+      )
       .map(([repo, status]) => `${repo}: ${status.status}`);
     if (degraded.length === 0) {
       this.ctx.health.healthy({ summary: "git upstream healthy" });
@@ -1323,7 +1431,12 @@ function upstreamConfigFingerprint(
       remote: upstream.remote,
       branch: upstream.branch,
       autoPush: upstream.autoPush,
-      credentialId: upstream.credentialId ?? null,
+      credentialSelection:
+        upstream.credentialId === undefined
+          ? { mode: "auto" }
+          : upstream.credentialId === null
+            ? { mode: "anonymous" }
+            : { mode: "credential", credentialId: upstream.credentialId },
       authorEmail: upstream.authorEmail ?? null,
       authorName: upstream.authorName ?? null,
     },

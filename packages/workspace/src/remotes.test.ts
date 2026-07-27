@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   getDeclaredRemoteForRepo,
   getDeclaredRemotesForRepo,
+  getDeclaredUpstreamForRepo,
   isDeclaredRemoteRepoPath,
   normalizeWorkspaceRepoPath,
   removeDeclaredRemoteFromConfig,
@@ -115,6 +116,23 @@ describe("workspace remotes", () => {
     });
   });
 
+  it("preserves explicit anonymous credential selection distinctly from automatic resolution", () => {
+    const withRemote = setDeclaredRemoteInConfig(BASE_CONFIG, "projects/bgkit", {
+      name: "origin",
+      url: "https://github.com/werg/bgkit.git",
+    });
+    const anonymous = setDeclaredUpstreamInConfig(withRemote, "projects/bgkit", {
+      remote: "origin",
+      credentialId: null,
+    });
+    const automatic = setDeclaredUpstreamInConfig(withRemote, "projects/bgkit", {
+      remote: "origin",
+    });
+
+    expect(getDeclaredUpstreamForRepo(anonymous, "projects/bgkit")?.credentialId).toBeNull();
+    expect(getDeclaredUpstreamForRepo(automatic, "projects/bgkit")?.credentialId).toBeUndefined();
+  });
+
   it("removes a named remote without removing the repo declaration", () => {
     const config = setDeclaredRemoteInConfig(
       setDeclaredRemoteInConfig({ ...BASE_CONFIG, git: {} }, "panels/chat", {
@@ -166,6 +184,18 @@ describe("workspace remotes", () => {
         url: "https://token@github.com/acme/chat.git",
       })
     ).toThrow("Remote URL must not contain embedded credentials");
+  });
+
+  it.each([
+    "https://github.com/acme/chat.git?token=secret",
+    "https://github.com/acme/chat.git#deployment",
+  ])("rejects non-canonical durable remote URL %s", (url) => {
+    expect(() =>
+      setDeclaredRemoteInConfig(BASE_CONFIG, "panels/chat", {
+        name: "origin",
+        url,
+      })
+    ).toThrow("Remote URL must not contain query parameters or fragments");
   });
 
   it("rejects invalid remote branch names", () => {

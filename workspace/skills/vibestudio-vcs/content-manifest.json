@@ -4,7 +4,7 @@
   "files": [
     {
       "path": "SKILL.md",
-      "sha256": "1b0b306d278ef07024c2712fbbd8c56ca0f9214953dde8c1bfad2ce20f26e8d3"
+      "sha256": "051ca934d0d94047e70576670f53f7555acea6786d05a7aa038345af916e75be"
     },
     {
       "path": "agents/openai.yaml",
@@ -36,7 +36,7 @@
     },
     {
       "path": "references/external-snapshot-import.md",
-      "sha256": "af3ce10b872f925a4381d63e6ec0ca2da7e249504e4f076d47e6a148cd8da9e1"
+      "sha256": "e887e85705032320cedecda7c776c0ecd674f8331c77b1e310cdd148386d8060"
     },
     {
       "path": "references/file-move-copy.md",
@@ -48,11 +48,11 @@
     },
     {
       "path": "references/public-contract.json",
-      "sha256": "884fb4a273ab42654d821719e0e3e8af35bcd68a32a8fa716991b86083115a2e"
+      "sha256": "5291ff8c3c746509d59fd440d3305f2e7eae5340c2a7341fa2e2138375aa9042"
     },
     {
       "path": "references/public-contract.md",
-      "sha256": "546e0423a89aca31c53632d59668a8f57d449c1dea6e7357f1cc7aa34c63f104"
+      "sha256": "841683d0eb2c2c08bba6d317361cb41ead6047ed4568b49eb5cd1b879ff07da7"
     },
     {
       "path": "references/revert-counteractions.md",
@@ -71,5 +71,5 @@
       "sha256": "6233c96b7827b26543230a204e9b2c0342fb888186b76a60e717e3f688e1fc33"
     }
   ],
-  "packageDigest": "e7977a1c7d8c5312c47d6d6dc39dcd829ca0de61e18fba4c5afb4a7d58e868bf"
+  "packageDigest": "089d21904ab8e285b2cd71d1799e649085e8e68ca85f59fa909bc62841631a4a"
 }

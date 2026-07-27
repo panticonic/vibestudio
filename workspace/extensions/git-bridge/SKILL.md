@@ -61,6 +61,13 @@ Command-line workflows use `vibestudio vcs git ...`. Both reach the configured
 `gitInterop` provider. Userland code must not call the extension through
 `extensions.invoke` or hard-code its package name.
 
+In an agent conversation, keep semantic publication on the agent's
+context-aware `commit` and `vcs` tools: commit the managed edit, then call the
+`vcs` tool with `operation: "push"`. Do not import the lower-level runtime
+`vcs` client just to publish the agent's current context; that client requires
+an explicit context ID. The `git` runtime namespace below starts only after the
+desired snapshot is already protected main.
+
 ```ts
 import { git } from "@workspace/runtime";
 
@@ -73,11 +80,12 @@ await git.setSharedRemote("projects/bgkit", {
 await git.setUpstream("projects/bgkit", {
   remote: "origin",
   branch: "main",
+  // Omit for URL-based credential resolution; use null to require anonymity.
   credentialId: "cred_github_...",
   autoPush: false,
 });
 
-const status = await git.upstreamStatus(["projects/bgkit"]);
+const status = await git.upstreamStatus(["projects/bgkit"], { fetch: true });
 await git.pullUpstream("projects/bgkit", { dryRun: true });
 await git.pushUpstream("projects/bgkit");
 ```
@@ -85,8 +93,13 @@ await git.pushUpstream("projects/bgkit");
 An empty repository array means all configured upstreams:
 
 ```ts
-const statuses = await git.upstreamStatus([]);
+const statuses = await git.upstreamStatus([], { fetch: true });
 ```
+
+Use `fetch: true` at an operational decision boundary so ahead/behind and
+divergence reflect the remote now. Use `fetch: false` only for an intentionally
+local observation, such as checking the candidate returned by the import call
+that just ran.
 
 Important runtime methods:
 
@@ -94,6 +107,7 @@ Important runtime methods:
 | ---------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `setSharedRemote` / `removeSharedRemote` | Change shared remote declarations through approved workspace config APIs.                    |
 | `setUpstream` / `removeUpstream`         | Change a repository's selected remote and branch.                                            |
+| `detachUpstream`                         | Atomically remove tracking and optionally its declared remote.                               |
 | `setAutoPush`                            | Toggle an optional outgoing push after an already-published main event is exported.          |
 | `upstreamStatus`                         | Compare the protected-main export with its declared upstream and expose pending candidates.  |
 | `pushUpstream`                           | Export the current protected-main snapshot and push it; refuse unresolved import candidates. |
@@ -103,6 +117,26 @@ Important runtime methods:
 | `commitMapping`                          | Read Git commit to semantic-event mappings from export trailers.                             |
 | `createDisposableRemote`                 | Create a short-lived credential-free smart-HTTP remote.                                      |
 | `publishToDisposableRemote`              | Export, push, verify, and clean up a disposable remote.                                      |
+| `pushDisposableRemote`                   | Push to an existing host-managed disposable remote without changing tracking.                |
+| `inspectDisposableRemote`                | Read a disposable remote's exact branch head and commit count.                               |
+| `removeDisposableRemote`                 | Delete a disposable remote before automatic expiry.                                          |
+
+The CLI exposes the same host-mediated workflow:
+
+```bash
+vibestudio vcs git status --repo projects/bgkit
+vibestudio vcs git pull --repo projects/bgkit --dry-run
+vibestudio vcs git pull --repo projects/bgkit
+vibestudio vcs git push --repo projects/bgkit
+```
+
+`vibestudio vcs git status` fetches before reporting. Use `--credential ID` to
+select a stored credential or `--anonymous` to forbid credential resolution.
+Omit both for automatic URL-bound resolution; the flags are mutually exclusive.
+Remote declarations accept only credential-free HTTP(S) URLs without query
+parameters or fragments.
+Run `vibestudio vcs git --help` for enable, disable, publish, import, auto-push,
+and remote-declaration commands.
 
 For a generic public import:
 
@@ -117,14 +151,30 @@ const imported = await git.importProject({
 });
 ```
 
-The result carries `candidate.contextId`, `candidate.eventId`, and whether the
-snapshot changed. The import records the remote and upstream with
+The result carries `candidate.contextId`, `candidate.eventId`, whether the
+snapshot changed, and `candidate.semanticEvidence`: the exact application,
+import work unit, and external snapshot returned atomically by the canonical
+semantic import.
+The import records the remote and upstream with
 `autoPush: false`, but that setting controls only later outgoing Git pushes; it
 never publishes an import candidate. Compare the candidate event from the
 working context where it should land, integrate selected changes in small local
 steps, and test. Commit derives the candidate source from those recorded local
 decisions and rejects mixed or caller-mismatched source parents. Call
 `vcs.push` explicitly when publication is intended.
+
+Before reporting that an import succeeded, verify that the returned
+`semanticEvidence` is complete and identity-joined to the candidate event. It
+comes from the same semantic transaction that commits the event, rather than
+from clone metadata or fallible post-commit reconstruction. The focused
+`provenance` tool can independently inspect the returned event,
+application, and work-unit IDs. Confirm the external snapshot has the
+credential-free source URI, exact revision, snapshot digest, and target
+repository IDs. See
+[external snapshot import](../../skills/vibestudio-vcs/references/external-snapshot-import.md)
+for the canonical verification contract. Then use `upstreamStatus` on the same
+repository path to distinguish an unpublished `integration-required` candidate
+from protected main and outgoing Git publication.
 
 ## Startup dependency completion
 
@@ -142,6 +192,13 @@ decisions and rejects mixed or caller-mismatched source parents. Call
 - Use `git.completeWorkspaceDependencies({ credentialId })` for an explicit
   retry/backfill, especially when a private remote needs a credential that was
   unavailable during startup.
+- Credential selection has three exact states everywhere: omit `credentialId`
+  to resolve a matching URL-bound credential, provide an id to select it, or
+  pass `null` to require anonymous Git HTTP.
+- Successful config writes queue immediate, coalesced reconciliation but do
+  not wait for provider readiness. Provider activation also reconciles all
+  declarations, so a durable config change is never rolled back merely because
+  the extension is still starting.
 
 For a credential-free end-to-end verification:
 
@@ -162,15 +219,26 @@ await git.setSharedRemote("projects/example", {
 await git.setUpstream("projects/example", {
   remote: "origin",
   branch: disposable.branch,
+  credentialId: null,
   autoPush: false,
 });
 await git.pushUpstream("projects/example");
 const received = await git.inspectDisposableRemote(disposable.url);
+await git.detachUpstream("projects/example", { forgetRemote: true });
 await git.removeDisposableRemote(disposable.url);
 ```
 
+`publishToDisposableRemote` always creates and deletes its own separate remote.
+It cannot initialize a URL returned by `createDisposableRemote`; use
+`pushUpstream` after declaring that exact URL when later calls must observe the
+same Git history. Detach the temporary upstream and shared remote before
+deleting the disposable endpoint so workspace configuration never retains a
+dead URL.
+
 ## Import rules
 
+- When `importProject` omits `remote.branch`, resolve the remote's advertised
+  default branch before persisting config and cloning. Do not assume `main`.
 - Resolve an exact Git revision and require the checkout to match its HEAD tree.
   A dirty checkout is an error, not an implicit edit channel.
 - Scan the complete snapshot. Honor the semantic import contract's atomic
@@ -183,9 +251,11 @@ await git.removeDisposableRemote(disposable.url);
   the accepted complete tree must describe every tracked entry exactly.
 - Stop provenance at the exact snapshot boundary. Do not walk Git history or
   attach per-path authors, commit times, summaries, or revisions to an import.
-- Record the canonical credential-free Git remote as the source URI, never the
-  server checkout path. Strip transport credentials and ephemeral query/hash
-  material; represent a local-only remote by an opaque digest.
+- Durable HTTP(S) remote declarations must not contain embedded credentials,
+  query parameters, or fragments. Authentication belongs in the credential
+  system. Record the canonical credential-free Git remote as the source URI,
+  never the server checkout path; represent a local-only remote by an opaque
+  digest.
 - Shallow clones are valid sources. Do not walk or normalize the reachable Git
   graph merely to import a tree.
 - Do not infer semantic moves or copies from Git similarity heuristics. Agentic
@@ -239,7 +309,13 @@ await git.removeDisposableRemote(disposable.url);
 - Auto-push is outgoing-only: it may push an export of an already-published
   protected-main event, and it must stop at an unresolved semantic candidate.
   It is never force-push. Force is an explicit recovery action with overwrite
-  preview metadata and user approval.
+  preview metadata and user approval. Related history reports an exact bounded
+  overwrite count; unrelated history reports `count: null` and bounded commit
+  examples rather than inventing a comparison.
+- After a successful fetch, `remoteBranchExists: false` means the configured
+  branch is genuinely absent. Clear stale tracking refs, report zero counts,
+  and tell the caller to create the branch or update config; do not flatten it
+  into in-sync, auth failure, or generic fetch failure.
 
 ## Remote topology
 
@@ -260,13 +336,15 @@ await serverLog.query({ tag: "BuildV2" });
 
 ## Divergence and recovery
 
-1. Run `upstreamStatus`.
+1. Run `upstreamStatus([repo], { fetch: true })`.
 2. If it reports `integration-required`, use its exact candidate context and
    event IDs. Compare that event from the intended working context, integrate
    ordinary changes incrementally, run checks, commit the complete local chain,
    and call `vcs.push` explicitly. Do not pull, export, or Git-push over it.
 3. When the remote is ahead or diverged, preview with
-   `pullUpstream(repo, { dryRun: true })`.
+   `pullUpstream(repo, { dryRun: true })`. The preview exports and fetches only
+   inside a disposable checkout; it does not change the managed checkout,
+   bridge state, semantic state, or remote.
 4. Pull once to import exact upstream HEAD as a committed candidate. Retain the
    returned context and event IDs; the pull does not advance protected `main`.
 5. If protected `main` advances while integrating, re-observe it and continue
@@ -279,6 +357,11 @@ await serverLog.query({ tag: "BuildV2" });
 
 Preserve actionable states such as `auth-failed` and `diverged`; do not flatten
 them into a generic failure or silently retry with broader authority.
+
+The provider-side convergence method is `reconcileUpstreams(repoPaths)`.
+Config writes and protected-main advances both feed it. Do not reintroduce
+`onMainAdvanced`, direct service-to-provider calls from config handlers, or an
+optional legacy import-evidence result.
 
 ## Development checklist
 
@@ -297,8 +380,13 @@ Run focused verification:
 ```bash
 pnpm vitest run workspace/extensions/git-bridge/bridge.test.ts \
   workspace/extensions/git-bridge/upstream.test.ts
-pnpm --filter @vibestudio/shared test -- gitInterop
-pnpm exec tsc --noEmit --pretty false
+pnpm vitest run packages/service-schemas/src/gitInterop.test.ts \
+  src/server/services/gitInteropService.test.ts \
+  src/cli/agent/vcsGitCommands.test.ts
+pnpm type-check
+pnpm check:agent-docs
+pnpm check:runtime-docs
+pnpm check:vcs-skill-release
 ```
 
 Regression coverage should protect exact snapshot verification, bounded atomic

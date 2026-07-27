@@ -277,8 +277,8 @@ describe("GitClient", () => {
     const client = new GitClient(fs, { http });
     const fetch = vi.spyOn(git, "fetch").mockResolvedValueOnce({
       defaultBranch: null,
-      fetchHead: null,
-      fetchHeadDescription: null,
+      fetchHead: "remote-head",
+      fetchHeadDescription: "branch 'main'",
       headers: {},
     });
     const push = vi.spyOn(git, "push").mockResolvedValueOnce({
@@ -288,6 +288,7 @@ describe("GitClient", () => {
     });
     const pull = vi.spyOn(git, "pull").mockResolvedValueOnce(undefined);
     const fastForward = vi.spyOn(git, "fastForward").mockResolvedValueOnce(undefined);
+    const addRemote = vi.spyOn(git, "addRemote").mockResolvedValue(undefined);
     const url = "https://example.com/immutable.git";
 
     await client.fetch({ dir: "/repo", url, remote: "vibestudio-token", ref: "main" });
@@ -323,6 +324,84 @@ describe("GitClient", () => {
         })
       );
     }
+    expect(addRemote).toHaveBeenCalledTimes(3);
+    expect(addRemote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dir: "/repo",
+        remote: "vibestudio-token",
+        url,
+        force: true,
+      })
+    );
+  });
+
+  it("returns a typed missing-ref result and removes a stale tracking ref", async () => {
+    const client = new GitClient(fs, { http });
+    vi.spyOn(git, "fetch").mockRejectedValueOnce(
+      new git.Errors.NotFoundError("refs/heads/deleted")
+    );
+    const deleteRef = vi.spyOn(git, "deleteRef").mockResolvedValueOnce(undefined);
+
+    await expect(
+      client.fetch({
+        dir: "/repo",
+        url: "https://example.com/repo.git",
+        remote: "vibestudio-target",
+        ref: "deleted",
+      })
+    ).resolves.toEqual({
+      fetchHead: null,
+      fetchHeadDescription: null,
+      remoteRefExists: false,
+    });
+    expect(deleteRef).toHaveBeenCalledWith({
+      fs: expect.any(Object),
+      dir: "/repo",
+      ref: "refs/remotes/vibestudio-target/deleted",
+    });
+  });
+
+  it("does not misclassify an unrelated missing Git object as a missing remote ref", async () => {
+    const client = new GitClient(fs, { http });
+    const missingObject = "0123456789abcdef0123456789abcdef01234567";
+    vi.spyOn(git, "fetch").mockRejectedValueOnce(new git.Errors.NotFoundError(missingObject));
+    const deleteRef = vi.spyOn(git, "deleteRef");
+
+    await expect(
+      client.fetch({
+        dir: "/repo",
+        url: "https://example.com/repo.git",
+        remote: "vibestudio-target",
+        ref: "main",
+      })
+    ).rejects.toThrow(missingObject);
+    expect(deleteRef).not.toHaveBeenCalled();
+  });
+
+  it("removes a stale tracking ref when the remote is empty", async () => {
+    const client = new GitClient(fs, { http });
+    vi.spyOn(git, "fetch").mockResolvedValueOnce({
+      defaultBranch: null,
+      fetchHead: null,
+      fetchHeadDescription: null,
+    });
+    const deleteRef = vi.spyOn(git, "deleteRef").mockResolvedValueOnce(undefined);
+
+    await expect(
+      client.fetch({
+        dir: "/repo",
+        url: "https://example.com/empty.git",
+        remote: "vibestudio-empty",
+        ref: "main",
+      })
+    ).resolves.toEqual({
+      fetchHead: null,
+      fetchHeadDescription: null,
+      remoteRefExists: false,
+    });
+    expect(deleteRef).toHaveBeenCalledWith(
+      expect.objectContaining({ ref: "refs/remotes/vibestudio-empty/main" })
+    );
   });
 
   it("refuses to create an unattributed commit", async () => {

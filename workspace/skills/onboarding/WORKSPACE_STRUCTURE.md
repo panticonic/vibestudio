@@ -65,7 +65,8 @@ semantic VCS. This means:
   unpublished semantic candidates. Prefer `git.setSharedRemote(path, remote)`
   for targeted approval instead of editing an operational checkout by hand. See
   [EXTERNAL_GIT_PROJECTS.md](EXTERNAL_GIT_PROJECTS.md) for config shape,
-  approvals, branch declarations, and private repo retry behavior.
+  approvals, branch/default discovery, credential tri-state, atomic import
+  evidence, nonmutating previews, and private repo retry behavior.
 
 ## Context Folders
 
@@ -131,7 +132,8 @@ Plain projects are still external Git-backed projects when imported that way:
 - `git.importProject({ path: "projects/name", remote })` coordinates remote
   configuration/clone and crosses into the semantic graph through one explicit
   `vcs.importSnapshot` work unit. It returns a committed candidate context and
-  event without advancing protected `main`. Later pulls use the same exact
+  event without advancing protected `main`, plus required semantic evidence
+  from that same atomic import transaction. Later pulls use the same exact
   snapshot import for that stable repository identity; each import authors
   ordinary changes and follows the same incremental integration path.
 - Startup imports only configured upstreams whose provider status is

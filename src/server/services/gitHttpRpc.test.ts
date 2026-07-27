@@ -24,4 +24,15 @@ describe("serializeGitHttpResponse", () => {
     expect(credentialsMethods.proxyGitHttp.returns.safeParse(result).success).toBe(true);
     expect(result).not.toHaveProperty("body");
   });
+
+  it("accepts null as an explicit anonymous Git transport selection", () => {
+    expect(
+      credentialsMethods.proxyGitHttp.args.safeParse([
+        {
+          url: "https://github.com/octocat/Hello-World.git/info/refs",
+          credentialId: null,
+        },
+      ]).success
+    ).toBe(true);
+  });
 });

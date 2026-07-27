@@ -131,8 +131,10 @@ Keep these out of initial setup:
 ## Repository work after connection
 
 - API calls use `credentials.fetch()`.
-- Clone/pull/push uses `@vibestudio/git` with `credentials.gitHttp()`.
-- Workspace-managed remotes use the runtime `git` provider.
+- A plain unmanaged checkout uses `@vibestudio/git` with
+  `credentials.gitHttp()`.
+- Workspace-managed source uses the runtime `git` provider; never reach into
+  the server's operational checkout or run a second merge workflow there.
 - `publishToGitHub()` and `git.publishRepo()` create a new GitHub repository
   through the configured provider without receiving the token. If
   `organization` is omitted, they use the persisted organization owner from
@@ -143,9 +145,25 @@ Keep these out of initial setup:
   owner, and owner-source as safe diagnostics. If multiple GitHub credentials
   are active, pass `credentialId` explicitly.
 - Configure shared remotes with `git.setSharedRemote()`, tracking with
-  `git.setUpstream()`, and inspect before push with `git.upstreamStatus()`.
+  `git.setUpstream()`, and inspect before push with
+  `git.upstreamStatus([repo], { fetch: true })`.
 - Import an external repository with `git.importProject()` and integrate its
   returned semantic candidate before publishing protected `main`.
 
-For the complete remote/upstream model and divergence recovery, use
-`docs/git-upstream.md`. Do not duplicate that machinery inside onboarding.
+Keep the two publication boundaries explicit:
+
+1. Commit a managed edit and publish it through the agent's `commit` and
+   `vcs({ operation: "push" })` tools.
+2. Call `git.pushUpstream(repo)` to export that protected-main snapshot and
+   push it to GitHub.
+3. When GitHub is ahead or diverged, preview with
+   `git.pullUpstream(repo, { dryRun: true })`; this uses disposable Git state
+   and mutates neither the managed checkout nor semantic state. Then call
+   `git.pullUpstream(repo)` once. Retain the returned candidate event.
+4. Compare and incrementally integrate the candidate, check, commit, and
+   publish through semantic VCS; then re-run fresh status and
+   `git.pushUpstream(repo)`.
+
+Load `skills/git-bridge/SKILL.md` for the complete remote/upstream model,
+credential tri-state, disposable remotes, and divergence recovery. Do not
+duplicate that machinery inside GitHub onboarding.
