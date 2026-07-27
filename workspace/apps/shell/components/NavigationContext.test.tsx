@@ -21,16 +21,7 @@ function NavigationProbe({ handler }: { handler: ReturnType<typeof vi.fn> }) {
   const { navigateToId, registerNavigateToId } = useNavigation();
   useEffect(() => registerNavigateToId(handler), [handler, registerNavigateToId]);
   return (
-    <button
-      onClick={() =>
-        navigateToId("panel-child", {
-          parentId: "panel-parent",
-          hint: { disposition: "side", minWidth: 700 },
-          intentId: "create:panel-child",
-          target: "focused-pane",
-        })
-      }
-    >
+    <button onClick={() => navigateToId("panel-child", { target: "focused-pane" })}>
       Navigate
     </button>
   );
@@ -119,7 +110,7 @@ describe("NavigationProvider", () => {
     expect(renderMode()).toBe("stack");
   });
 
-  it("carries a child placement intent through the registered navigation boundary", () => {
+  it("carries explicit pane navigation through the registered navigation boundary", () => {
     const handler = vi.fn();
     render(
       <NavigationProvider>
@@ -130,9 +121,6 @@ describe("NavigationProvider", () => {
     fireEvent.click(screen.getByRole("button", { name: "Navigate" }));
 
     expect(handler).toHaveBeenCalledWith("panel-child", {
-      parentId: "panel-parent",
-      hint: { disposition: "side", minWidth: 700 },
-      intentId: "create:panel-child",
       target: "focused-pane",
     });
   });

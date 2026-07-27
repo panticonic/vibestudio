@@ -630,7 +630,7 @@ describe("PanelOrchestrator.createPanel", () => {
 
     expect(serverClient.call).toHaveBeenCalledWith("panelTree", "create", [
       "panels/created-panel",
-      expect.objectContaining({ parentId: caller.id }),
+      expect.objectContaining({ parentId: caller.id, focus: true }),
     ]);
     expect(serverClient.callAs).not.toHaveBeenCalledWith(
       expect.anything(),
@@ -741,6 +741,10 @@ describe("PanelOrchestrator.createPanel", () => {
       scopedCaller
     );
 
+    expect(serverClient.callAs).toHaveBeenCalledWith(scopedCaller, "panelTree", "create", [
+      "https://example.com/",
+      expect.objectContaining({ parentId: caller.id, focus: false }),
+    ]);
     const acquireCallIndex = serverClient.call.mock.calls.findIndex(
       ([service, method]) => service === "panelRuntime" && method === "acquire"
     );

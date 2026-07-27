@@ -37,11 +37,7 @@ import type { PanelRestorePolicy } from "@vibestudio/workspace-contracts/types";
 import { buildPanelUrl } from "@vibestudio/shared/panelFactory";
 import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { PanelPinStoreApi } from "./panelPinStore.js";
-import {
-  getPanelSource,
-  getPanelContextId,
-  getPanelRef,
-} from "@vibestudio/shared/panel/accessors";
+import { getPanelSource, getPanelContextId, getPanelRef } from "@vibestudio/shared/panel/accessors";
 import { assertPresent } from "../lintHelpers";
 import { PanelRuntimeLeaseController } from "./panelRuntimeLeaseController.js";
 import type {
@@ -207,6 +203,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       ref?: string;
       stateArgs?: Record<string, unknown>;
       placement?: PanelPlacementHint;
+      focus?: boolean;
     },
     attachOpts: { focus?: boolean },
     callPanelTree: PanelTreeCall
@@ -281,6 +278,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         ref: options?.ref,
         stateArgs,
         ...(options?.placement ? { placement: options.placement } : {}),
+        focus: options?.focus !== false,
       },
       { focus: options?.focus !== false },
       scopedCaller ? this.panelTreeCallAs(scopedCaller) : this.panelTreeCallAsServer()
@@ -354,7 +352,13 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         : this.registry.findParentId(callerId);
     return this.createViaPanelTree(
       url,
-      { parentId, title: options?.title, slug: options?.slug, name: options?.name },
+      {
+        parentId,
+        title: options?.title,
+        slug: options?.slug,
+        name: options?.name,
+        focus: options?.focus !== false,
+      },
       { focus: options?.focus !== false },
       caller ? this.panelTreeCallAs(caller) : this.panelTreeCallAsServer()
     );

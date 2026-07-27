@@ -50,6 +50,7 @@ export type EventName =
   | "panel-responsiveness-changed"
   | "native-slot-focused"
   | "navigate-about"
+  | "panel-created"
   | "navigate-to-panel"
   | "external-open:open"
   | "browser-panel:open"
@@ -178,7 +179,7 @@ export interface EventPayloads {
   "toggle-address-bar": undefined;
   "focus-address-bar": undefined;
   "panel-chrome-command": { command: PanelCommandId };
-  "toggle-find-in-page": void;
+  "toggle-find-in-page": undefined;
   "toggle-panel-devtools": undefined;
   "panel-initialization-error": { path: string; error: string };
   "panel-responsiveness-changed": { panelId: string; responsive: boolean };
@@ -190,14 +191,24 @@ export interface EventPayloads {
   "native-slot-focused": { nativeSlotId: string; panelId: string };
   "navigate-about": { page: string };
   /**
-   * Canonical layout intent (multi-column plan §3.1/§4): the shell layout
-   * engine consumes parentId/hint/intentId to place the panel deliberately.
-   * All fields beyond panelId are best-effort — emitters populate what they
-   * have (e.g. child creation carries parent + resolved placement hint).
+   * A newly-created panel that the addressed host should present. The
+   * authoritative tree is broadcast separately through panel-tree-updated;
+   * this event is delivered only to the shell caller that owns the selected
+   * runtime host, so presentation remains device-local.
+   */
+  "panel-created": {
+    panelId: string;
+    parentId: string | null;
+    focus: boolean;
+    placement?: PanelPlacementHint;
+  };
+  /**
+   * Request to present an existing panel on the addressed host. Creation uses
+   * panel-created instead, so ordinary focus cannot accidentally acquire
+   * creation semantics.
    */
   "navigate-to-panel": {
     panelId: string;
-    parentId?: string;
     /** Presentation anchor for a non-creation display request. */
     anchorPanelId?: string;
     hint?: PanelPlacementHint;
@@ -366,6 +377,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "panel-responsiveness-changed",
   "native-slot-focused",
   "navigate-about",
+  "panel-created",
   "navigate-to-panel",
   "external-open:open",
   "browser-panel:open",

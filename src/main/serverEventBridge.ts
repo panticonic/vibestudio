@@ -47,7 +47,12 @@ export interface ServerHostTargetChangeEvent {
   payload: unknown;
 }
 
-const HOST_DIRECT_EVENT_NAMES = ["external-open:open", "browser-panel:open"] as const;
+const HOST_DIRECT_EVENT_NAMES = [
+  "external-open:open",
+  "browser-panel:open",
+  "panel-created",
+  "navigate-to-panel",
+] as const;
 
 /**
  * Bind connection-addressed events whose side effects are owned by Electron

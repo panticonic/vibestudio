@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openInNewColumnAction } from "./panelPresentation";
+import { openInNewColumnAction, panelCreatedLayoutAction } from "./panelPresentation";
 import type { PanelLayout } from "./types";
 
 describe("openInNewColumnAction", () => {
@@ -83,5 +83,44 @@ describe("openInNewColumnAction", () => {
       type: "focus-pane",
       paneId: "pane-a",
     });
+  });
+});
+
+describe("panelCreatedLayoutAction", () => {
+  it("opens a focused child relative to its authoritative parent", () => {
+    expect(
+      panelCreatedLayoutAction({
+        panelId: "panel-child",
+        parentId: "panel-parent",
+        focus: true,
+        placement: { disposition: "side", minWidth: 480 },
+      })
+    ).toEqual({
+      type: "open-child",
+      panelId: "panel-child",
+      parentId: "panel-parent",
+      hint: { disposition: "side", minWidth: 480 },
+    });
+  });
+
+  it("shows a focused root and ignores an intentional background creation", () => {
+    expect(
+      panelCreatedLayoutAction({
+        panelId: "panel-root",
+        parentId: null,
+        focus: true,
+      })
+    ).toEqual({
+      type: "show-panel",
+      panelId: "panel-root",
+      origin: "navigate-event",
+    });
+    expect(
+      panelCreatedLayoutAction({
+        panelId: "panel-background",
+        parentId: "panel-parent",
+        focus: false,
+      })
+    ).toBeNull();
   });
 });

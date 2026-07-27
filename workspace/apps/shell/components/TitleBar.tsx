@@ -135,12 +135,7 @@ export function TitleBar({
       return;
     }
     try {
-      const result = await panel.createAboutPanel("new");
-      window.dispatchEvent(
-        new CustomEvent("shell-panel-created", {
-          detail: { panelId: result.id },
-        })
-      );
+      await panel.createAboutPanel("new");
     } catch (error) {
       void notification.show({
         type: "error",

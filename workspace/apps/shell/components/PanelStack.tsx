@@ -54,7 +54,7 @@ import { assertPresent } from "../utils/assertPresent";
 import { ColumnRow } from "./ColumnRow";
 import { usePanelLayout } from "../layout/usePanelLayout";
 import { canSplitColumnVertically, findPane, paneForPanel } from "../layout/placementEngine";
-import { openInNewColumnAction } from "../layout/panelPresentation";
+import { openInNewColumnAction, panelCreatedLayoutAction } from "../layout/panelPresentation";
 import { LAYOUT_DROP_EVENT, type LayoutDropDetail } from "../layout/dropTargets";
 import { PANE_VERTICAL_CHROME_HEIGHT, type PanelPlacementHint } from "../layout/types";
 import type { FocusedPaneChromeState, PaneChromeCommand } from "./paneChrome";
@@ -310,49 +310,18 @@ export const PanelStack = memo(function PanelStack({
     setLazyStatusNavigation(lazyStatusNavigationData);
   }, [setLazyStatusNavigation, lazyStatusNavigationData]);
 
-  // A child just created with focus: dispatch full open-child intent so the
-  // engine can place it beside/below its parent (§4.2). The intentId keeps a
-  // later bare navigate-to-panel for the same creation from double-applying.
-  const openChildInLayout = useCallback(
-    (
-      parentId: string,
-      childId: string,
-      hint?: PanelPlacementHint,
-      intentId = `create:${childId}`
-    ) => {
-      // The server resolves call-site ?? manifest hints onto the snapshot (W4);
-      // use it when the local call site didn't carry one.
-      const resolvedHint =
-        hint ??
-        (panelMap.get(childId)?.snapshot as { placement?: PanelPlacementHint } | undefined)
-          ?.placement;
-      dispatchIntent(intentId, {
-        type: "open-child",
-        panelId: childId,
-        parentId,
-        hint: resolvedHint,
-      });
-    },
-    [dispatchIntent, panelMap]
-  );
-
-  // Navigate to a specific panel by ID. Callers that created a child can carry
-  // the full placement intent through this same boundary; ordinary navigation
-  // retains rule 1 (replace nearest-relative pane or focus an existing pane).
+  // Navigate to an existing panel by ID. Creation never enters this boundary;
+  // panel-created is the sole source of creation placement.
   const navigateToPanelId = useCallback<NavigateToPanelId>(
     (panelId, options) => {
       if (!panelId) return;
-      if (options?.parentId) {
-        openChildInLayout(options.parentId, panelId, options.hint, options.intentId);
-        return;
-      }
       dispatch({
         type: "show-panel",
         panelId,
         origin: options?.target === "focused-pane" ? "navigation-click" : "navigate-event",
       });
     },
-    [dispatch, openChildInLayout]
+    [dispatch]
   );
 
   // Register navigate function with context
@@ -366,32 +335,34 @@ export const PanelStack = memo(function PanelStack({
     onRegisterNavigateToId(navigateToPanelId);
   }, [onRegisterNavigateToId, navigateToPanelId]);
 
-  // Listen for navigate-to-panel events from main process (e.g., when new
-  // panels are created with focus: true). The payload optionally carries the
-  // canonical layout intent (§3.1): parentId/hint/intentId for creations.
+  useShellEvent(
+    "panel-created",
+    useCallback(
+      (payload: {
+        panelId: string;
+        parentId: string | null;
+        focus: boolean;
+        placement?: PanelPlacementHint;
+      }) => {
+        const action = panelCreatedLayoutAction(payload);
+        if (action) dispatchIntent(`create:${payload.panelId}`, action);
+      },
+      [dispatchIntent]
+    )
+  );
+
+  // Existing-panel presentation is deliberately separate from creation.
   useShellEvent(
     "navigate-to-panel",
     useCallback(
       (payload: {
         panelId: string;
-        parentId?: string;
         anchorPanelId?: string;
         hint?: PanelPlacementHint;
         intentId?: string;
       }) => {
-        const intentId =
-          payload.intentId ?? (payload.parentId ? `create:${payload.panelId}` : undefined);
-        if (payload.parentId) {
-          dispatchIntent(intentId, {
-            type: "open-child",
-            panelId: payload.panelId,
-            parentId: payload.parentId,
-            hint: payload.hint,
-          });
-          return;
-        }
         if (payload.hint) {
-          dispatchIntent(intentId, {
+          dispatchIntent(payload.intentId, {
             type: "present-panel",
             panelId: payload.panelId,
             anchorPanelId: payload.anchorPanelId,
@@ -399,7 +370,7 @@ export const PanelStack = memo(function PanelStack({
           });
           return;
         }
-        dispatchIntent(intentId, {
+        dispatchIntent(payload.intentId, {
           type: "show-panel",
           panelId: payload.panelId,
           origin: "navigate-event",
@@ -408,23 +379,6 @@ export const PanelStack = memo(function PanelStack({
       [dispatchIntent]
     )
   );
-
-  // Renderer-local creation surfaces (title bar, sidebar add-child, user
-  // notifications) announce via this custom event; the detail may carry the
-  // parent for full open-child intent.
-  useEffect(() => {
-    const handleShellPanelCreated = (event: Event) => {
-      const detail = (event as CustomEvent<{ panelId?: string; parentId?: string }>).detail;
-      if (!detail?.panelId) return;
-      if (detail.parentId) {
-        openChildInLayout(detail.parentId, detail.panelId);
-      } else {
-        navigateToPanelId(detail.panelId);
-      }
-    };
-    window.addEventListener("shell-panel-created", handleShellPanelCreated);
-    return () => window.removeEventListener("shell-panel-created", handleShellPanelCreated);
-  }, [openChildInLayout, navigateToPanelId]);
 
   // Tree→layout drops (W5, D8): pane-handle drop shows the panel in exactly
   // that pane; gutter drop opens it in a new column at that position.
@@ -479,13 +433,12 @@ export const PanelStack = memo(function PanelStack({
 
   const createChildForPanel = useCallback(
     async (panelId: string, disposition: "side" | "split-below") => {
-      const result = await panelService.createChild(panelId, "about/new", {
+      await panelService.createChild(panelId, "about/new", {
         focus: true,
         placement: { disposition },
       });
-      openChildInLayout(panelId, result.id, { disposition });
     },
-    [openChildInLayout]
+    []
   );
 
   // Execute the canonical panel context-menu command set.
@@ -578,12 +531,10 @@ export const PanelStack = memo(function PanelStack({
           const state = await panelService.getChromeState(panelId);
           if (state.kind === "browser") {
             if (state.resolvedUrl) {
-              const result = await panelService.createBrowser(state.resolvedUrl, { focus: true });
-              navigateToPanelId(result.id);
+              await panelService.createBrowser(state.resolvedUrl, { focus: true });
             }
           } else {
-            const result = await panelService.createPanel(state.source, { isRoot: true });
-            navigateToPanelId(result.id);
+            await panelService.createPanel(state.source, { isRoot: true });
           }
           break;
         }
@@ -613,7 +564,6 @@ export const PanelStack = memo(function PanelStack({
     },
     [
       navigatePanelHistory,
-      navigateToPanelId,
       createChildForPanel,
       panelMap,
       setPinnedPanelIds,
@@ -815,7 +765,6 @@ export const PanelStack = memo(function PanelStack({
             if (url)
               void panelService
                 .createBrowser(url, { focus: true })
-                .then((result) => navigateToPanelId(result.id))
                 .catch((error) => reportPanelCommandError("Duplicate panel", error));
           } else {
             void panelService
@@ -823,7 +772,6 @@ export const PanelStack = memo(function PanelStack({
                 isRoot: true,
                 ref: snapshot.options.ref,
               })
-              .then((result) => navigateToPanelId(result.id))
               .catch((error) => reportPanelCommandError("Duplicate panel", error));
           }
           return;
@@ -891,25 +839,24 @@ export const PanelStack = memo(function PanelStack({
                 stateArgs: location.stateArgs,
                 placement: location.placement,
               };
-              const result =
-                mode === "current"
-                  ? await panelService.navigate(panelId, location.source, common)
-                  : mode === "child"
-                    ? await panelService.createChild(panelId, location.source, {
-                        ...common,
-                        name: location.name,
-                        focus: location.focus ?? true,
-                      })
-                    : await panelService.createPanel(location.source, {
-                        ...common,
-                        name: location.name,
-                        isRoot: true,
-                        focus: location.focus ?? true,
-                      });
-              if (result && location.focus !== false) {
-                if (mode === "child") openChildInLayout(panelId, result.id, location.placement);
-                else navigateToPanelId(result.id);
-              }
+              await (mode === "current"
+                ? panelService.navigate(panelId, location.source, common)
+                : mode === "child"
+                  ? panelService.createChild(panelId, location.source, {
+                      ...common,
+                      title: location.title,
+                      slug: location.slug,
+                      name: location.name,
+                      focus: location.focus ?? true,
+                    })
+                  : panelService.createPanel(location.source, {
+                      ...common,
+                      title: location.title,
+                      slug: location.slug,
+                      name: location.name,
+                      isRoot: true,
+                      focus: location.focus ?? true,
+                    }));
             })().catch((error: unknown) => {
               void notification.show({
                 type: "error",
@@ -933,11 +880,11 @@ export const PanelStack = memo(function PanelStack({
             } else if (mode === "child") {
               void panelService
                 .createBrowserChild(panelId, parsed.url, { focus: true })
-                .then((result) => openChildInLayout(panelId, result.id));
+                .catch((error) => reportPanelCommandError("Open child panel", error));
             } else if (mode === "root") {
               void panelService
                 .createBrowser(parsed.url, { focus: true })
-                .then((result) => navigateToPanelId(result.id));
+                .catch((error) => reportPanelCommandError("Open panel", error));
             } else if (
               visiblePanel &&
               isBrowserPanelSource(getCurrentSnapshot(visiblePanel).source)
@@ -946,7 +893,7 @@ export const PanelStack = memo(function PanelStack({
             } else {
               void panelService
                 .createBrowser(parsed.url, { focus: true })
-                .then((result) => navigateToPanelId(result.id));
+                .catch((error) => reportPanelCommandError("Open panel", error));
             }
             return;
           }
@@ -958,11 +905,7 @@ export const PanelStack = memo(function PanelStack({
                 : mode === "child"
                   ? panelService.createChild(panelId, parsed.source, { focus: true, ref })
                   : panelService.createPanel(parsed.source, { isRoot: true, ref });
-            void creator.then((result) => {
-              if (!result) return;
-              if (mode === "child") openChildInLayout(panelId, result.id);
-              else navigateToPanelId(result.id);
-            });
+            void creator.catch((error) => reportPanelCommandError("Open panel", error));
             return;
           }
           if (parsed.type === "search") {
@@ -980,11 +923,11 @@ export const PanelStack = memo(function PanelStack({
             } else if (mode === "child") {
               void panelService
                 .createBrowserChild(panelId, url, { focus: true })
-                .then((result) => openChildInLayout(panelId, result.id));
+                .catch((error) => reportPanelCommandError("Open child panel", error));
             } else if (mode === "root") {
               void panelService
                 .createBrowser(url, { focus: true })
-                .then((result) => navigateToPanelId(result.id));
+                .catch((error) => reportPanelCommandError("Open panel", error));
             } else if (
               visiblePanel &&
               isBrowserPanelSource(getCurrentSnapshot(visiblePanel).source)
@@ -993,7 +936,7 @@ export const PanelStack = memo(function PanelStack({
             } else {
               void panelService
                 .createBrowser(url, { focus: true })
-                .then((result) => navigateToPanelId(result.id));
+                .catch((error) => reportPanelCommandError("Open panel", error));
             }
             return;
           }
@@ -1030,26 +973,24 @@ export const PanelStack = memo(function PanelStack({
               stateArgs: location.stateArgs,
               placement: location.placement,
             };
-            const result =
-              targetMode === "current"
-                ? await panelService.navigate(targetPanelId, location.source, common)
-                : targetMode === "child"
-                  ? await panelService.createChild(targetPanelId, location.source, {
-                      ...common,
-                      name: location.name,
-                      focus: location.focus ?? true,
-                    })
-                  : await panelService.createPanel(location.source, {
-                      ...common,
-                      name: location.name,
-                      isRoot: true,
-                      focus: location.focus ?? true,
-                    });
-            if (result && location.focus !== false) {
-              if (targetMode === "child") {
-                openChildInLayout(targetPanelId, result.id, location.placement);
-              } else navigateToPanelId(result.id);
-            }
+            await (targetMode === "current"
+              ? panelService.navigate(targetPanelId, location.source, common)
+              : targetMode === "child"
+                ? panelService.createChild(targetPanelId, location.source, {
+                    ...common,
+                    title: location.title,
+                    slug: location.slug,
+                    name: location.name,
+                    focus: location.focus ?? true,
+                  })
+                : panelService.createPanel(location.source, {
+                    ...common,
+                    title: location.title,
+                    slug: location.slug,
+                    name: location.name,
+                    isRoot: true,
+                    focus: location.focus ?? true,
+                  }));
           })().catch((error: unknown) => {
             void notification.show({
               type: "error",
@@ -1067,11 +1008,11 @@ export const PanelStack = memo(function PanelStack({
           } else if (mode === "child") {
             void panelService
               .createBrowserChild(targetPanelId, action.url, { focus: true })
-              .then((result) => openChildInLayout(targetPanelId, result.id));
+              .catch((error) => reportPanelCommandError("Open child panel", error));
           } else if (mode === "root") {
             void panelService
               .createBrowser(action.url, { focus: true })
-              .then((result) => navigateToPanelId(result.id));
+              .catch((error) => reportPanelCommandError("Open panel", error));
           } else if (
             visiblePanel &&
             isBrowserPanelSource(getCurrentSnapshot(visiblePanel).source)
@@ -1080,7 +1021,7 @@ export const PanelStack = memo(function PanelStack({
           } else {
             void panelService
               .createBrowser(action.url, { focus: true })
-              .then((result) => navigateToPanelId(result.id));
+              .catch((error) => reportPanelCommandError("Open panel", error));
           }
           return;
         }
@@ -1093,11 +1034,11 @@ export const PanelStack = memo(function PanelStack({
           } else if (mode === "child") {
             void panelService
               .createBrowserChild(targetPanelId, url, { focus: true })
-              .then((result) => openChildInLayout(targetPanelId, result.id));
+              .catch((error) => reportPanelCommandError("Open child panel", error));
           } else if (mode === "root") {
             void panelService
               .createBrowser(url, { focus: true })
-              .then((result) => navigateToPanelId(result.id));
+              .catch((error) => reportPanelCommandError("Open panel", error));
           } else if (
             visiblePanel &&
             isBrowserPanelSource(getCurrentSnapshot(visiblePanel).source)
@@ -1106,7 +1047,7 @@ export const PanelStack = memo(function PanelStack({
           } else {
             void panelService
               .createBrowser(url, { focus: true })
-              .then((result) => navigateToPanelId(result.id));
+              .catch((error) => reportPanelCommandError("Open panel", error));
           }
           return;
         }
@@ -1121,23 +1062,11 @@ export const PanelStack = memo(function PanelStack({
                     ref: actionRef,
                   })
                 : panelService.createPanel(action.source, { isRoot: true, ref: actionRef });
-          void creator.then((result) => {
-            if (!result) return;
-            if (mode === "child") openChildInLayout(targetPanelId, result.id);
-            else navigateToPanelId(result.id);
-          });
+          void creator.catch((error) => reportPanelCommandError("Open panel", error));
         }
       }
     },
-    [
-      navigatePanelHistory,
-      navigateToPanelId,
-      openChildInLayout,
-      setPinnedPanelIds,
-      bumpPinMutationSeq,
-      visiblePanel,
-      panelMap,
-    ]
+    [navigatePanelHistory, setPinnedPanelIds, bumpPinMutationSeq, visiblePanel, panelMap]
   );
 
   useEffect(() => {
@@ -1527,7 +1456,6 @@ export const PanelStack = memo(function PanelStack({
                       onClick={() => {
                         void panelService
                           .createAboutPanel("new")
-                          .then((result) => navigateToPanelId(result.id))
                           .catch((error) => reportPanelCommandError("Create panel", error));
                       }}
                     >

@@ -116,6 +116,14 @@ describe("PanelRuntimeCoordinator", () => {
     expect(coordinator.hasClientHostConnection("desktop-host")).toBe(true);
     expect(coordinator.hasClientHostConnection("desktop-host", "shell:desktop")).toBe(true);
     expect(coordinator.hasClientHostConnection("desktop-host", "shell:other")).toBe(false);
+    expect(coordinator.resolvePresentationCallerForSlot("panel:tree/missing")).toBeNull();
+
+    coordinator.acquire("panel:nav-owned", {
+      slotId: "panel:tree/owned",
+      clientSessionId: "desktop-session",
+      connectionId: "runtime-owned",
+    });
+    expect(coordinator.resolvePresentationCallerForSlot("panel:tree/owned")).toBe("shell:desktop");
   });
 
   it("adopts a missing runtime lease from a registered CDP host connection", () => {

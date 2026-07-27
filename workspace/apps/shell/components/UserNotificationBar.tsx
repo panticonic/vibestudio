@@ -91,12 +91,9 @@ export function UserNotificationBar() {
       setError(null);
       let opened = false;
       try {
-        const created = await userNotifications.openChannel(invite.channelId);
+        await userNotifications.openChannel(invite.channelId);
         opened = true;
         setOpenedNotificationId(notification.id);
-        window.dispatchEvent(
-          new CustomEvent("shell-panel-created", { detail: { panelId: created.id } })
-        );
         await userNotifications.acknowledge(notification.id);
         removeLocal(notification.id);
       } catch (cause) {

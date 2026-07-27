@@ -269,7 +269,7 @@ async function createSinglePanelBridge(options?: {
   const ensureDefaultCdpHostForSlot =
     options?.ensureDefaultCdpHostForSlot ??
     vi.fn(() => ({ assigned: true, lease: { holderLabel: "Desktop" } }));
-  const eventService = { emit: vi.fn() };
+  const eventService = { emit: vi.fn(), emitToCaller: vi.fn(() => true) };
   const bridge = await createServerPanelTreeBridge({
     container: {
       get: vi.fn((name: string) => (name === "rpcServer" ? { server: { callTarget } } : cdpBridge)),
@@ -287,6 +287,7 @@ async function createSinglePanelBridge(options?: {
         hostConnectionId: "desktop-host",
         supportsCdp: true,
       })),
+      resolvePresentationCallerForSlot: vi.fn(() => "shell:desktop"),
       ensureDefaultCdpHostForSlot,
     },
     eventService,
@@ -463,7 +464,8 @@ describe("createServerPanelTreeBridge ergonomic panel lifecycle", () => {
       ],
     });
 
-    expect(eventService.emit).toHaveBeenCalledWith(
+    expect(eventService.emitToCaller).toHaveBeenCalledWith(
+      "shell:desktop",
       "navigate-to-panel",
       expect.objectContaining({
         panelId: slot.slot_id,
@@ -472,6 +474,7 @@ describe("createServerPanelTreeBridge ergonomic panel lifecycle", () => {
         intentId: expect.stringMatching(/^focus:/),
       })
     );
+    expect(eventService.emit).not.toHaveBeenCalledWith("navigate-to-panel", expect.anything());
   });
 
   it("uses the hosted DOM snapshot when a panel has no agent snapshot API", async () => {
@@ -1038,7 +1041,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       throw new Error(`Unexpected dispatch: ${service}.${method}`);
     });
 
-    const eventService = { emit: vi.fn() };
+    const eventService = { emit: vi.fn(), emitToCaller: vi.fn(() => true) };
     const ensureDefaultCdpHostForSlot = vi.fn(() => ({
       assigned: true,
       lease: { holderLabel: "Desktop" },
@@ -1079,6 +1082,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
           hostConnectionId: "desktop-host",
           supportsCdp: true,
         })),
+        resolvePresentationCallerForSlot: vi.fn(() => "electron-main"),
         getLease: vi.fn(() => null),
         ensureDefaultCdpHostForSlot,
       },
@@ -1100,11 +1104,12 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       source: "panels/new",
       observation: { phase: "building" },
     });
-    expect(eventService.emit).toHaveBeenCalledWith("panel-created", {
+    expect(eventService.emitToCaller).toHaveBeenCalledWith("electron-main", "panel-created", {
       panelId: (rootResult as { id: string }).id,
       parentId: null,
       focus: true,
     });
+    expect(eventService.emit).not.toHaveBeenCalledWith("panel-created", expect.anything());
     expect(ensureDefaultCdpHostForSlot).not.toHaveBeenCalled();
 
     releaseActivation();
@@ -1306,7 +1311,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
           : undefined
       ),
     };
-    const eventService = { emit: vi.fn() };
+    const eventService = { emit: vi.fn(), emitToCaller: vi.fn(() => true) };
     const bridge = await createServerPanelTreeBridge({
       container: { get: vi.fn(() => cdpBridge) },
       dispatcher: { dispatch },
@@ -1321,6 +1326,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
           hostConnectionId: "desktop-host",
           supportsCdp: true,
         })),
+        resolvePresentationCallerForSlot: vi.fn(() => "shell:desktop"),
         getLease: vi.fn(() => null),
         ensureDefaultCdpHostForSlot: vi.fn(() => ({
           assigned: true,
@@ -1345,12 +1351,13 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       source: "panels/child",
       runtimeEntityId: expect.stringMatching(/^panel:nav-new-/),
     });
-    expect(eventService.emit).toHaveBeenCalledWith("panel-created", {
+    expect(eventService.emitToCaller).toHaveBeenCalledWith("shell:desktop", "panel-created", {
       panelId: (result as { id: string }).id,
       parentId: parentSlotId,
       focus: true,
       placement: { disposition: "side", minWidth: 480 },
     });
+    expect(eventService.emit).not.toHaveBeenCalledWith("panel-created", expect.anything());
     const createdEntity = entities.get((result as { runtimeEntityId: string }).runtimeEntityId);
     expect(createdEntity).toMatchObject({
       parentId: parentEntityId,

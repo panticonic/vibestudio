@@ -62,6 +62,8 @@ export function usePanelLayout(
   const [layout, setLayout] = useState<PanelLayout>(EMPTY_LAYOUT);
   const [layoutEpoch, setLayoutEpoch] = useState(0);
   const [restored, setRestored] = useState(false);
+  const restoredRef = useRef(false);
+  const pendingActionsRef = useRef<LayoutAction[]>([]);
 
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
@@ -122,6 +124,13 @@ export function usePanelLayout(
 
   const dispatch = useCallback(
     (action: LayoutAction) => {
+      // Presentation events can arrive while the persisted per-device layout
+      // is still loading. Queue them so restore cannot overwrite a creation
+      // that the authoritative panel service has already published.
+      if (!restoredRef.current) {
+        pendingActionsRef.current.push(action);
+        return;
+      }
       setLayout((previous) => {
         const next = applyLayoutAction(previous, action, envRef.current);
         if (next !== previous) {
@@ -179,15 +188,22 @@ export function usePanelLayout(
         next = seedLayout(seedId);
       }
       if (cancelled) return;
+      const queued = pendingActionsRef.current;
+      pendingActionsRef.current = [];
+      for (const action of queued) {
+        next = applyLayoutAction(next, action, envRef.current);
+      }
+      restoredRef.current = true;
       layoutRef.current = next;
       setLayout(next);
       setLayoutEpoch((epoch) => epoch + 1);
       setRestored(true);
+      if (queued.length > 0) schedulePersist();
     })();
     return () => {
       cancelled = true;
     };
-  }, [restored, rootLoading, initialized]);
+  }, [restored, rootLoading, initialized, schedulePersist]);
 
   // Persist layout focus so restore can seed from it (W3: the focused pane's
   // panel is the successor of the old single focused panel).

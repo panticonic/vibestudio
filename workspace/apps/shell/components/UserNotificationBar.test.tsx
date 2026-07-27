@@ -137,8 +137,6 @@ describe("UserNotificationBar", () => {
       order.push("acknowledge");
       return true;
     });
-    const created = vi.fn();
-    window.addEventListener("shell-panel-created", created);
     render(<UserNotificationBar />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Join" }));
@@ -146,8 +144,6 @@ describe("UserNotificationBar", () => {
     await waitFor(() => expect(screen.queryByText("Conversation one")).toBeNull());
     expect(order).toEqual(["open", "acknowledge"]);
     expect(shellClient.acknowledge).toHaveBeenCalledWith("channel.invite:one");
-    expect((created.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({ panelId: "panel-chat" });
-    window.removeEventListener("shell-panel-created", created);
   });
 
   it("renders and dismisses notification kinds unknown to the shell", async () => {

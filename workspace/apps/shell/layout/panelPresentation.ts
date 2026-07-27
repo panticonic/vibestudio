@@ -1,6 +1,23 @@
 import { paneForPanel } from "./placementEngine";
 import type { LayoutAction } from "./placementEngine";
+import type { EventPayloads } from "@vibestudio/shared/events";
 import type { PanelLayout } from "./types";
+
+/** Translate the authoritative creation fact into one device-local layout action. */
+export function panelCreatedLayoutAction(
+  created: EventPayloads["panel-created"]
+): LayoutAction | null {
+  if (!created.focus) return null;
+  if (created.parentId) {
+    return {
+      type: "open-child",
+      panelId: created.panelId,
+      parentId: created.parentId,
+      ...(created.placement ? { hint: created.placement } : {}),
+    };
+  }
+  return { type: "show-panel", panelId: created.panelId, origin: "navigate-event" };
+}
 
 /**
  * Resolve the context-menu "Open in New Column" command without duplicating

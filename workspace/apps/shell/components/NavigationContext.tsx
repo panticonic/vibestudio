@@ -12,12 +12,8 @@ import type {
   LazyTitleNavigationData,
   LazyStatusNavigationData,
 } from "./navigationTypes";
-import type { PanelPlacementHint } from "../layout/types";
 
 export interface PanelNavigationOptions {
-  parentId?: string;
-  hint?: PanelPlacementHint;
-  intentId?: string;
   /** Explicit user navigation replaces the pane the user most recently focused. */
   target?: "focused-pane";
 }

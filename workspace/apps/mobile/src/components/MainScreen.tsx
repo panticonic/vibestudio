@@ -748,7 +748,6 @@ export function MainScreen() {
     if (!shellClient) return;
     refreshTree();
     const eventNames = [
-      "navigate-to-panel",
       "external-open:open",
       "notification:show",
       "apps:lifecycle",
@@ -805,7 +804,11 @@ export function MainScreen() {
       refreshTree();
       activatePanel(panelId);
     });
-    const unsubNav = shellClient.events.on("navigate-to-panel", ({ panelId }) => {
+    const unsubCreated = shellClient.onDirectEvent("panel-created", ({ panelId, focus }) => {
+      refreshTree();
+      if (focus) activatePanel(panelId);
+    });
+    const unsubNav = shellClient.onDirectEvent("navigate-to-panel", ({ panelId }) => {
       if (panelId) activatePanel(panelId);
     });
     const unsubExternal = shellClient.events.on("external-open:open", (payload) => {
@@ -875,6 +878,7 @@ export function MainScreen() {
       disposed = true;
       unsubReconnect();
       unsubNavigate();
+      unsubCreated();
       unsubNav();
       unsubExternal();
       unsubNotification();
@@ -1228,11 +1232,15 @@ export function MainScreen() {
             : locationMode === "child" && activePanelId
               ? shellClient.panels.createChildPanel(activePanelId, location.source, {
                   ...common,
+                  title: location.title,
+                  slug: location.slug,
                   name: location.name,
                   focus: location.focus ?? true,
                 })
               : shellClient.panels.createRootPanel(location.source, {
                   ...common,
+                  title: location.title,
+                  slug: location.slug,
                   name: location.name,
                   focus: location.focus ?? true,
                 });
@@ -1399,11 +1407,15 @@ export function MainScreen() {
             : targetMode === "child" && activePanelId
               ? shellClient.panels.createChildPanel(activePanelId, location.source, {
                   ...common,
+                  title: location.title,
+                  slug: location.slug,
                   name: location.name,
                   focus: location.focus ?? true,
                 })
               : shellClient.panels.createRootPanel(location.source, {
                   ...common,
+                  title: location.title,
+                  slug: location.slug,
                   name: location.name,
                   focus: location.focus ?? true,
                 });
@@ -1463,12 +1475,16 @@ export function MainScreen() {
         event.disposition === "child"
           ? shellClient.panels.createChildPanel(event.panelId, event.source, {
               ...common,
+              title: event.options.title,
+              slug: event.options.slug,
               name: event.options.name,
               focus: event.options.focus ?? true,
             })
           : event.disposition === "root"
             ? shellClient.panels.createRootPanel(event.source, {
                 ...common,
+                title: event.options.title,
+                slug: event.options.slug,
                 name: event.options.name,
                 focus: event.options.focus ?? true,
               })

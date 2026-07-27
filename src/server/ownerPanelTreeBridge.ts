@@ -52,10 +52,7 @@ import type {
   PanelSearchResult,
 } from "@vibestudio/shared/panelSearchTypes";
 import { stateLayout } from "./stateLayout.js";
-import {
-  isCdpTargetLifecycleTransitionError,
-  type CdpBridge,
-} from "./cdpBridge.js";
+import { isCdpTargetLifecycleTransitionError, type CdpBridge } from "./cdpBridge.js";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import type { PanelTreeBridgeRequest } from "./services/panelTreeService.js";
 import type { EventService } from "@vibestudio/shared/eventsService";
@@ -1201,12 +1198,35 @@ export async function createServerPanelTreeBridge(
             // Creation still has a complete semantic result without a placement hint.
           }
         }
-        deps.eventService?.emit("panel-created", {
-          panelId: created.panelId,
-          parentId: parentId ?? null,
-          focus: shouldFocus,
-          ...(resolvedPlacement ? { placement: resolvedPlacement } : {}),
-        });
+        let presentationPublished = false;
+        const publishCreationPresentation = () => {
+          if (!shouldFocus || presentationPublished || !deps.eventService) return;
+          // A shell request already names its device-local address. Runtime
+          // callers inherit the host of their owning/created panel instead.
+          // Never fall back to a workspace-wide broadcast: presentation is
+          // local state, while panel-tree-updated carries the global fact.
+          const presentationCaller =
+            request.callerKind === "shell"
+              ? request.callerId
+              : ((parentId
+                  ? deps.panelRuntimeCoordinator?.resolvePresentationCallerForSlot?.(parentId)
+                  : null) ??
+                deps.panelRuntimeCoordinator?.resolvePresentationCallerForSlot?.(created.panelId));
+          if (!presentationCaller) return;
+          presentationPublished = deps.eventService.emitToCaller(
+            presentationCaller,
+            "panel-created",
+            {
+              panelId: created.panelId,
+              parentId: parentId ?? null,
+              focus: true,
+              ...(resolvedPlacement ? { placement: resolvedPlacement } : {}),
+            }
+          );
+        };
+        // Child creates and direct shell creates already have an unambiguous
+        // target. Root creates from agents/servers acquire one while loading.
+        publishCreationPresentation();
         const finishOpening = async (): Promise<void> => {
           try {
             if (created.preparation) {
@@ -1245,6 +1265,8 @@ export async function createServerPanelTreeBridge(
               `Panel ${created.panelId} asynchronous create lifecycle failed ` +
                 `[${failure.code}/${failure.stage}, diagnostic=${failure.diagnosticId}]: ${message}`
             );
+          } finally {
+            publishCreationPresentation();
           }
         };
         // Slot creation is the transaction boundary. Runtime preparation,
@@ -1280,11 +1302,15 @@ export async function createServerPanelTreeBridge(
         const observation = await loadAndWaitForPanelReady(panelId, "focus");
         await panelManager.notifyFocused(asPanelSlotId(panelId));
         emitTreeSnapshot();
-        if (options.placement) {
-          deps.eventService?.emit("navigate-to-panel", {
+        const presentationCaller =
+          request.callerKind === "shell"
+            ? request.callerId
+            : deps.panelRuntimeCoordinator?.resolvePresentationCallerForSlot?.(panelId);
+        if (presentationCaller) {
+          deps.eventService?.emitToCaller(presentationCaller, "navigate-to-panel", {
             panelId,
             ...(anchorPanelId ? { anchorPanelId } : {}),
-            hint: options.placement,
+            ...(options.placement ? { hint: options.placement } : {}),
             intentId: `focus:${randomUUID()}`,
           });
         }

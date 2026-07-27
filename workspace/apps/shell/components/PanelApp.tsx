@@ -162,9 +162,6 @@ function PanelAppContent() {
   }, [openPanelDevTools]);
   useShellEvent("toggle-panel-devtools", handleTogglePanelDevTools);
 
-  // shell-panel-created is handled by PanelStack, which routes it through the
-  // layout placement engine with full open-child intent when a parent is known.
-
   useEffect(() => {
     let active = true;
     const openLocation = async (location: PanelLocation) => {
@@ -192,28 +189,29 @@ function PanelAppContent() {
         disposition === "current" && focusedPanelId
           ? await panel.navigate(focusedPanelId, location.source, common)
           : disposition === "child" && focusedPanelId
-            ? await panel.createChild(focusedPanelId, location.source, {
-                ...common,
-                name: location.name,
-                focus: location.focus ?? true,
-              })
-            : await panel.createPanel(location.source, {
-                ...common,
-                name: location.name,
-                isRoot: true,
+                ? await panel.createChild(focusedPanelId, location.source, {
+                    ...common,
+                    title: location.title,
+                    slug: location.slug,
+                    name: location.name,
+                    focus: location.focus ?? true,
+                  })
+                : await panel.createPanel(location.source, {
+                    ...common,
+                    title: location.title,
+                    slug: location.slug,
+                    name: location.name,
+                    isRoot: true,
                 focus: location.focus ?? true,
               });
-      if (active && result && location.focus !== false) {
-        navigateToId(
-          result.id,
-          disposition === "child" && focusedPanelId
-            ? {
-                parentId: focusedPanelId,
-                hint: location.placement,
-                intentId: `create:${result.id}`,
-              }
-            : undefined
-        );
+      if (
+        active &&
+        result &&
+        location.focus !== false &&
+        disposition === "current" &&
+        focusedPanelId
+      ) {
+        navigateToId(result.id);
       }
     };
     const handle = (location: PanelLocation) => {

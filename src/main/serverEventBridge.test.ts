@@ -57,7 +57,7 @@ function createHarness(
 describe("createServerEventBridge", () => {
   it("binds host-owned OAuth handoffs on the direct server event channel", () => {
     const listeners = new Map<string, (payload: unknown) => void>();
-    const releases = [vi.fn(), vi.fn()];
+    const releases = [vi.fn(), vi.fn(), vi.fn(), vi.fn()];
     const client = {
       onDirectEvent: vi.fn((event: string, listener: (payload: unknown) => void) => {
         listeners.set(event, listener);
@@ -72,6 +72,12 @@ describe("createServerEventBridge", () => {
       url: "https://auth.example.test",
       parentPanelId: "panel:tree/slot-a",
     });
+    listeners.get("panel-created")?.({
+      panelId: "panel:tree/slot-b",
+      parentId: null,
+      focus: true,
+    });
+    listeners.get("navigate-to-panel")?.({ panelId: "panel:tree/slot-a" });
 
     expect(handle).toHaveBeenNthCalledWith(1, "external-open:open", {
       url: "https://auth.example.test",
@@ -80,10 +86,20 @@ describe("createServerEventBridge", () => {
       url: "https://auth.example.test",
       parentPanelId: "panel:tree/slot-a",
     });
+    expect(handle).toHaveBeenNthCalledWith(3, "panel-created", {
+      panelId: "panel:tree/slot-b",
+      parentId: null,
+      focus: true,
+    });
+    expect(handle).toHaveBeenNthCalledWith(4, "navigate-to-panel", {
+      panelId: "panel:tree/slot-a",
+    });
 
     release();
     expect(releases[0]).toHaveBeenCalledOnce();
     expect(releases[1]).toHaveBeenCalledOnce();
+    expect(releases[2]).toHaveBeenCalledOnce();
+    expect(releases[3]).toHaveBeenCalledOnce();
   });
 
   it("normalizes build completion into orchestrator state updates instead of emitting raw events", () => {

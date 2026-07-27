@@ -180,6 +180,22 @@ export class PanelRuntimeCoordinator {
     return null;
   }
 
+  /**
+   * Resolve the shell caller that owns the host currently presenting a slot.
+   *
+   * Presentation is device-local. The caller id stamped when a host registers
+   * is therefore the canonical address for focus/layout events; broadcasting
+   * those events would make one device rearrange every collaborator's shell.
+   */
+  resolvePresentationCallerForSlot(slotId: string): string | null {
+    const normalizedSlotId = asPanelSlotId(slotId);
+    for (const lease of this.leases.values()) {
+      if (lease.slotId !== normalizedSlotId) continue;
+      return this.clientForHostConnection(lease.hostConnectionId)?.ownerCallerId ?? null;
+    }
+    return null;
+  }
+
   adoptHostLeaseForSlot(
     slotId: string,
     runtimeEntityId: string,

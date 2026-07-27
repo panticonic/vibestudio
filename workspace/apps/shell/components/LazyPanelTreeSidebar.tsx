@@ -1032,12 +1032,7 @@ export function LazyPanelTreeSidebar({
 
   const handleNewPanel = useCallback(async () => {
     try {
-      const result = await panel.createAboutPanel("new");
-      window.dispatchEvent(
-        new CustomEvent("shell-panel-created", {
-          detail: { panelId: result.id },
-        })
-      );
+      await panel.createAboutPanel("new");
     } catch (error) {
       void notification.show({
         type: "error",
@@ -1057,14 +1052,7 @@ export function LazyPanelTreeSidebar({
         expandIds([parentId]);
       }
       try {
-        const result = await panel.createChild(parentId, "about/new", { focus: true });
-        // parentId lets the layout engine place the child with full
-        // open-child intent (beside/below) instead of a bare show-panel.
-        window.dispatchEvent(
-          new CustomEvent("shell-panel-created", {
-            detail: { panelId: result.id, parentId },
-          })
-        );
+        await panel.createChild(parentId, "about/new", { focus: true });
       } catch (error) {
         void notification.show({
           type: "error",
