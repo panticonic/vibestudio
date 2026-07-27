@@ -157,7 +157,8 @@ Keep the two publication boundaries explicit:
 2. Call `git.pushUpstream(repo)` to export that protected-main snapshot and
    push it to GitHub.
 3. When GitHub is ahead or diverged, preview with
-   `git.pullUpstream(repo, { dryRun: true })`, then call
+   `git.pullUpstream(repo, { dryRun: true })`; this uses disposable Git state
+   and mutates neither the managed checkout nor semantic state. Then call
    `git.pullUpstream(repo)` once. Retain the returned candidate event.
 4. Compare and incrementally integrate the candidate, check, commit, and
    publish through semantic VCS; then re-run fresh status and

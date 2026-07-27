@@ -34,6 +34,11 @@ git:
           url: https://github.com/owner/upstream.git
 ```
 
+An explicit `git.importProject()` with no branch discovers the remote's
+advertised default and records it. Durable URLs must be credential-free HTTP(S)
+URLs without query parameters or fragments; use credential selection for
+authentication instead of persisting token-bearing URLs.
+
 Add `branch` when the workspace should clone a specific branch:
 
 ```yaml
@@ -69,12 +74,17 @@ const imported = await git.importProject({
   credentialId: "cred_github_...",
 });
 
-console.log(imported.candidate.contextId, imported.candidate.eventId);
+console.log(
+  imported.candidate.contextId,
+  imported.candidate.eventId,
+  imported.candidate.semanticEvidence
+);
 ```
 
 The remote's `branch` is recorded on both the shared remote and matching
-upstream. The selected `credentialId`, when present, is recorded on the
-upstream. The exact imported tree receives stable repository/file identities
+upstream. Credential selection is recorded exactly: omission means automatic
+URL-bound resolution, a string pins one stored credential, and `null` requires
+anonymous Git HTTP. The exact imported tree receives stable repository/file identities
 and ordinary repository/file changes under one import work unit. That work
 unit's required `externalSnapshot` retains the canonical credential-free remote
 URI, exact revision, and snapshot digest derived by the semantic workspace only
@@ -83,6 +93,12 @@ server-local checkout path and transport credentials are not provenance.
 Blame stops at the snapshot boundary when its terminal ordinary change belongs
 to that import work unit; Git ancestry and per-path commit metadata stay in
 Git. Git commits never become a parallel workspace-event DAG.
+
+`candidate.semanticEvidence` is required. The same atomic semantic transaction
+that commits the candidate returns its exact application, import work unit, and
+external snapshot; the bridge does not reconstruct these identities afterward.
+Agents can independently inspect those returned IDs and verify the canonical
+source URI, revision, digest, and target repository identities.
 
 The returned candidate is committed in its dedicated import context, but it is
 not protected `main`. From the working context where the project should land,
@@ -143,7 +159,9 @@ observable boundaries:
    push the resulting Git commit.
 3. If the remote is ahead or diverged, preview with
    `git.pullUpstream(repo, { dryRun: true })`, then pull once. The pull returns a
-   committed candidate and does not advance protected main.
+   committed candidate and does not advance protected main. The preview uses a
+   disposable checkout and changes no managed checkout, bridge, semantic, or
+   remote state.
 4. Compare and integrate that exact candidate in small steps, check, commit the
    complete chain, and explicitly publish it through semantic VCS.
 5. Fetch status again. Only call `git.pushUpstream(repo)` after the
@@ -152,6 +170,9 @@ observable boundaries:
 Pass a credential ID to require that URL-bound credential, omit
 `credentialId` to allow host resolution, or pass `credentialId: null` to require
 anonymous HTTP. Never infer that a public URL means anonymous operation.
+If a successful fetch reports `remoteBranchExists: false`, the declared branch
+was deleted or has not been created; push to create it or update the
+declaration. Do not infer in-sync from zero counts.
 
 Load [Git Bridge](../../extensions/git-bridge/SKILL.md) for remote declaration,
 CLI equivalents, disposable remotes, exact status states, and the full
@@ -194,6 +215,8 @@ attempts to roll both declarations back and reports whether rollback succeeded.
 Retry the same import when nothing persisted. If rollback itself failed, status
 reports `not-materialized`; retry the import or explicitly detach the upstream
 and remote. Never treat a configured-but-uncloned path as imported content.
+Successful config changes queue immediate provider reconciliation without
+waiting for provider readiness; provider startup retries the same declarations.
 
 ## Private Repos
 

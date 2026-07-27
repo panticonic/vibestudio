@@ -80,6 +80,7 @@ await git.setSharedRemote("projects/bgkit", {
 await git.setUpstream("projects/bgkit", {
   remote: "origin",
   branch: "main",
+  // Omit for URL-based credential resolution; use null to require anonymity.
   credentialId: "cred_github_...",
   autoPush: false,
 });
@@ -131,6 +132,9 @@ vibestudio vcs git push --repo projects/bgkit
 
 `vibestudio vcs git status` fetches before reporting. Use `--credential ID` to
 select a stored credential or `--anonymous` to forbid credential resolution.
+Omit both for automatic URL-bound resolution; the flags are mutually exclusive.
+Remote declarations accept only credential-free HTTP(S) URLs without query
+parameters or fragments.
 Run `vibestudio vcs git --help` for enable, disable, publish, import, auto-push,
 and remote-declaration commands.
 
@@ -149,7 +153,8 @@ const imported = await git.importProject({
 
 The result carries `candidate.contextId`, `candidate.eventId`, whether the
 snapshot changed, and `candidate.semanticEvidence`: the exact application,
-import work unit, and external snapshot read back from the canonical GAD graph.
+import work unit, and external snapshot returned atomically by the canonical
+semantic import.
 The import records the remote and upstream with
 `autoPush: false`, but that setting controls only later outgoing Git pushes; it
 never publishes an import candidate. Compare the candidate event from the
@@ -160,9 +165,9 @@ decisions and rejects mixed or caller-mismatched source parents. Call
 
 Before reporting that an import succeeded, verify that the returned
 `semanticEvidence` is complete and identity-joined to the candidate event. It
-is produced by reading the event, application, and import work unit back from
-the canonical GAD graph, rather than by trusting clone transport metadata. The
-focused `provenance` tool can independently inspect the returned event,
+comes from the same semantic transaction that commits the event, rather than
+from clone metadata or fallible post-commit reconstruction. The focused
+`provenance` tool can independently inspect the returned event,
 application, and work-unit IDs. Confirm the external snapshot has the
 credential-free source URI, exact revision, snapshot digest, and target
 repository IDs. See
@@ -187,6 +192,13 @@ from protected main and outgoing Git publication.
 - Use `git.completeWorkspaceDependencies({ credentialId })` for an explicit
   retry/backfill, especially when a private remote needs a credential that was
   unavailable during startup.
+- Credential selection has three exact states everywhere: omit `credentialId`
+  to resolve a matching URL-bound credential, provide an id to select it, or
+  pass `null` to require anonymous Git HTTP.
+- Successful config writes queue immediate, coalesced reconciliation but do
+  not wait for provider readiness. Provider activation also reconciles all
+  declarations, so a durable config change is never rolled back merely because
+  the extension is still starting.
 
 For a credential-free end-to-end verification:
 
@@ -225,6 +237,8 @@ dead URL.
 
 ## Import rules
 
+- When `importProject` omits `remote.branch`, resolve the remote's advertised
+  default branch before persisting config and cloning. Do not assume `main`.
 - Resolve an exact Git revision and require the checkout to match its HEAD tree.
   A dirty checkout is an error, not an implicit edit channel.
 - Scan the complete snapshot. Honor the semantic import contract's atomic
@@ -237,9 +251,11 @@ dead URL.
   the accepted complete tree must describe every tracked entry exactly.
 - Stop provenance at the exact snapshot boundary. Do not walk Git history or
   attach per-path authors, commit times, summaries, or revisions to an import.
-- Record the canonical credential-free Git remote as the source URI, never the
-  server checkout path. Strip transport credentials and ephemeral query/hash
-  material; represent a local-only remote by an opaque digest.
+- Durable HTTP(S) remote declarations must not contain embedded credentials,
+  query parameters, or fragments. Authentication belongs in the credential
+  system. Record the canonical credential-free Git remote as the source URI,
+  never the server checkout path; represent a local-only remote by an opaque
+  digest.
 - Shallow clones are valid sources. Do not walk or normalize the reachable Git
   graph merely to import a tree.
 - Do not infer semantic moves or copies from Git similarity heuristics. Agentic
@@ -293,7 +309,13 @@ dead URL.
 - Auto-push is outgoing-only: it may push an export of an already-published
   protected-main event, and it must stop at an unresolved semantic candidate.
   It is never force-push. Force is an explicit recovery action with overwrite
-  preview metadata and user approval.
+  preview metadata and user approval. Related history reports an exact bounded
+  overwrite count; unrelated history reports `count: null` and bounded commit
+  examples rather than inventing a comparison.
+- After a successful fetch, `remoteBranchExists: false` means the configured
+  branch is genuinely absent. Clear stale tracking refs, report zero counts,
+  and tell the caller to create the branch or update config; do not flatten it
+  into in-sync, auth failure, or generic fetch failure.
 
 ## Remote topology
 
@@ -320,7 +342,9 @@ await serverLog.query({ tag: "BuildV2" });
    ordinary changes incrementally, run checks, commit the complete local chain,
    and call `vcs.push` explicitly. Do not pull, export, or Git-push over it.
 3. When the remote is ahead or diverged, preview with
-   `pullUpstream(repo, { dryRun: true })`.
+   `pullUpstream(repo, { dryRun: true })`. The preview exports and fetches only
+   inside a disposable checkout; it does not change the managed checkout,
+   bridge state, semantic state, or remote.
 4. Pull once to import exact upstream HEAD as a committed candidate. Retain the
    returned context and event IDs; the pull does not advance protected `main`.
 5. If protected `main` advances while integrating, re-observe it and continue
@@ -333,6 +357,11 @@ await serverLog.query({ tag: "BuildV2" });
 
 Preserve actionable states such as `auth-failed` and `diverged`; do not flatten
 them into a generic failure or silently retry with broader authority.
+
+The provider-side convergence method is `reconcileUpstreams(repoPaths)`.
+Config writes and protected-main advances both feed it. Do not reintroduce
+`onMainAdvanced`, direct service-to-provider calls from config handlers, or an
+optional legacy import-evidence result.
 
 ## Development checklist
 
@@ -351,8 +380,13 @@ Run focused verification:
 ```bash
 pnpm vitest run workspace/extensions/git-bridge/bridge.test.ts \
   workspace/extensions/git-bridge/upstream.test.ts
-pnpm --filter @vibestudio/shared test -- gitInterop
-pnpm exec tsc --noEmit --pretty false
+pnpm vitest run packages/service-schemas/src/gitInterop.test.ts \
+  src/server/services/gitInteropService.test.ts \
+  src/cli/agent/vcsGitCommands.test.ts
+pnpm type-check
+pnpm check:agent-docs
+pnpm check:runtime-docs
+pnpm check:vcs-skill-release
 ```
 
 Regression coverage should protect exact snapshot verification, bounded atomic

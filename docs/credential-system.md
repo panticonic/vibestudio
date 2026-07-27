@@ -295,11 +295,14 @@ expose narrow local bindings for API calls and Git HTTP transport. GitHub uses
 this pattern with `github-user`, `github-repos`, `github-uploads`, and
 `github-git-http`.
 
-`git.upstreams.<section>.<repo>.credentialId` stores the credential selected for
-push/pull. The credential material remains host-owned: runtime code passes the
-credential id, and the host injects it only for matching Git HTTP URLs through
-`credentials.gitHttp()` or the git-bridge upstream methods. Remote URLs must not
-contain usernames, passwords, or tokens.
+`git.upstreams.<section>.<repo>.credentialId` has three exact states for
+push/pull: omit it for automatic URL-bound resolution, provide a string to pin
+one stored credential, or set it to `null` to require anonymous Git HTTP and
+forbid credential resolution. Config rewrites preserve this distinction. The
+credential material remains host-owned: runtime code passes the credential id,
+and the host injects it only for matching Git HTTP URLs through
+`credentials.gitHttp()` or the git-bridge upstream methods. Durable remote URLs
+must not contain usernames, passwords, tokens, query parameters, or fragments.
 
 Provider extensions should pair credential setup with repository verification:
 check the provider API or Git smart-HTTP discovery for the target repository,

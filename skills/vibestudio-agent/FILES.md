@@ -44,7 +44,9 @@ filesystem transfer and expect history to be reconstructed afterward.
 
 Scratch-only files remain ordinary context-local data. To bring an external
 tree into managed semantic history, use `vcs.importSnapshot` with honest source
-evidence.
+evidence. Its successful result atomically identifies the committed event,
+application, import work unit, admitted repositories, and canonical external
+snapshot; do not reconstruct that provenance after the commit.
 
 These mutation workflows require an in-process agent tool invocation or a direct
 authorized human/device caller. A linked Claude session's agent credential has neither:

@@ -371,6 +371,13 @@ the manifest-declared provider slot; userland never names or invokes Git Bridge
 directly. Credential use remains URL-bound and host-mediated. See
 [docs/git-upstream.md](./docs/git-upstream.md).
 
+The provider contract uses `reconcileUpstreams(repoPaths)` as its single
+coalescible convergence trigger. Approved config writes and protected-main ref
+advances enqueue repository paths through that method; they do not depend on
+provider readiness. Providers also return required atomic semantic import
+evidence and distinguish a missing remote branch from a fetch failure. There is
+no legacy provider callback or compatibility result shape.
+
 Node's standard library is available globally inside the extension process — `import * as fs from "node:fs"`, child processes, native addons all work normally. There is no host-mediated wrapper; the extension is running in a real Node process.
 
 ## Process model

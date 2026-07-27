@@ -415,20 +415,20 @@ and typed recovery.
 
 Core routing:
 
-| Intent                       | Runtime surface                                                                                                                     |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Orient in a context          | `vcs.status()` uses the runtime's bound semantic context and returns committed event, working head, main relation, and local counts |
-| Compare committed work       | `vcs.compare` from an exact target state to one source event                                                                        |
-| Account for incoming changes | `vcs.integrate` with one explicit adopt, reconcile, or decline decision                                                             |
-| Commit coherent context work | `vcs.commit` consumes the complete local application chain                                                                          |
-| Publish committed work       | `vcs.push` advances protected main to one exact committed event                                                                     |
-| Read or list managed files   | `vcs.readFile` and `vcs.listFiles` at an event/application state                                                                    |
-| Move managed identities      | `vcs.move` preserves file or repository identity                                                                                    |
-| Copy managed content         | `vcs.copy` mints file identity and records immediate copy provenance                                                                |
-| Import external content      | `vcs.importSnapshot` records one exact complete snapshot and an honest provenance boundary; it does not import per-path authorship  |
-| Undo named changes           | `vcs.revert` authors explicit counteractions                                                                                        |
-| Explain history or content   | `vcs.inspect`, `vcs.neighbors`, `vcs.history`, and `vcs.blame`                                                                      |
-| Validate a working build     | use the ordinary typecheck, test, and build services for the context                                                                |
+| Intent                       | Runtime surface                                                                                                                                                                      |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Orient in a context          | `vcs.status()` uses the runtime's bound semantic context and returns committed event, working head, main relation, and local counts                                                  |
+| Compare committed work       | `vcs.compare` from an exact target state to one source event                                                                                                                         |
+| Account for incoming changes | `vcs.integrate` with one explicit adopt, reconcile, or decline decision                                                                                                              |
+| Commit coherent context work | `vcs.commit` consumes the complete local application chain                                                                                                                           |
+| Publish committed work       | `vcs.push` advances protected main to one exact committed event                                                                                                                      |
+| Read or list managed files   | `vcs.readFile` and `vcs.listFiles` at an event/application state                                                                                                                     |
+| Move managed identities      | `vcs.move` preserves file or repository identity                                                                                                                                     |
+| Copy managed content         | `vcs.copy` mints file identity and records immediate copy provenance                                                                                                                 |
+| Import external content      | `vcs.importSnapshot` records one exact complete snapshot and atomically returns its event/application/work-unit/repository/snapshot evidence; it does not import per-path authorship |
+| Undo named changes           | `vcs.revert` authors explicit counteractions                                                                                                                                         |
+| Explain history or content   | `vcs.inspect`, `vcs.neighbors`, `vcs.history`, and `vcs.blame`                                                                                                                       |
+| Validate a working build     | use the ordinary typecheck, test, and build services for the context                                                                                                                 |
 
 Every context mutation includes `contextId`, `expectedWorkingHead`, and a stable
 `commandId`. A command ID identifies

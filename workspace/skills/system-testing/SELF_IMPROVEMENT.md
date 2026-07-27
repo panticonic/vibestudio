@@ -545,6 +545,7 @@ eval({
         },
       });
       console.log("Import candidate:", imported.candidate);
+      console.log("Atomic import evidence:", imported.candidate.semanticEvidence);
     }
 
     scope.checkoutDir = dir;
@@ -708,13 +709,24 @@ if (retest.result.passed) {
   semantic/CAS state, never this checkout. Use the destination path to choose
   the category, such as `panels/name`, `skills/name`, `workers/name`, or
   `projects/name`.
+  Require `candidate.semanticEvidence` and inspect its application, work unit,
+  source URI, revision, digest, and target repository IDs before reporting the
+  import as proven. Those fields are returned by the same semantic transaction,
+  not reconstructed after commit.
 - **Use `git.completeWorkspaceDependencies()` as a retry/backfill.** It imports
   each configured upstream whose provider status is `not-materialized` and
   reports imported, skipped, and failed paths, including candidate coordinates
   for each successful import. Other provider-reported states are skipped as
   `already-materialized`, including `integration-required`. Pass
   `{ credentialId }` for private repo retries; startup auto-import has no
-  interactive credential argument.
+  interactive credential argument. Omit the field for URL-bound resolution,
+  pass a string to pin a credential, or pass `null` to require anonymous Git
+  HTTP.
+- **Preview Git pulls without perturbing the test.** `git.pullUpstream(repo,
+{ dryRun: true })` exports and fetches in a disposable checkout and changes no
+  managed Git, bridge, semantic, or remote state. After a successful fetch,
+  `remoteBranchExists: false` means the configured branch is absent, not
+  in-sync or auth-failed.
 - **If an API is confusing, fix the API.** Don't add comments explaining the confusion.
 - **If an error message is unhelpful, fix the error message.** Don't add try/catch wrappers that translate it.
 - **If a service is missing a method, add the method.** Don't chain multiple calls to work around it.

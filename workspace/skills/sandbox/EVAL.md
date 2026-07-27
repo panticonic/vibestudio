@@ -828,7 +828,8 @@ From eval, keep these boundaries explicit:
   confidence before protected publication; do not infer that `vcs.push` runs
   or certifies them;
 - use `vcs.importSnapshot` for a trusted exact external tree instead of
-  disguising it as local edits.
+  disguising it as local edits, and retain its atomic event/application/work
+  unit/repository/snapshot acknowledgement.
 
 Every mutation branches on typed result/error discriminants. An uncertain retry
 reuses the same command ID and identical payload; any changed request after a

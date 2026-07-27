@@ -199,18 +199,40 @@ vibestudio vcs git status --repo projects/example
 vibestudio vcs git publish --repo projects/example --private
 vibestudio vcs git remote set --repo projects/example --url https://github.com/owner/example.git
 vibestudio vcs git enable --repo projects/example --credential cred_github_...
+vibestudio vcs git enable --repo projects/public-example --anonymous
+vibestudio vcs git import https://github.com/owner/example.git --path projects/imported --json
 vibestudio vcs git pull --repo projects/example --dry-run
 vibestudio vcs git push --repo projects/example
 ```
 
 `status` fetches before reporting. `--credential ID` selects a stored
 credential; `--anonymous` explicitly prevents URL-based credential resolution.
+Omitting both enables URL-bound automatic resolution. These are three distinct
+states and `--credential` cannot be combined with `--anonymous`. Persist only
+credential-free HTTP(S) remote URLs: embedded credentials, query parameters,
+and fragments are rejected.
+Remote, tracking, and auto-push commands durably write config first and queue
+provider reconciliation; they do not fail merely because Git Bridge is still
+starting. Run status afterward to observe operational convergence.
 For outgoing changes, edit, `vibestudio vcs commit`, and `vibestudio vcs push`
 first; then run `vibestudio vcs git push`. For incoming changes, run
-`vibestudio vcs git pull`. It returns an unpublished candidate: compare and
+`vibestudio vcs git pull --dry-run` first when you need a strict preview; it
+uses disposable Git state and changes neither the managed checkout nor semantic
+state. A real pull returns an unpublished candidate with required atomic
+semantic evidence: compare and
 integrate that exact event, commit, and publish through semantic VCS before
 exporting it back to Git. Never repair divergence by editing the server's
 operational checkout or by creating an untracked Git merge there.
+
+Use `--json` on `vcs git import` or a real `vcs git pull` when the agent must
+retain the full `candidate.semanticEvidence`; human output is a concise
+candidate summary.
+
+If status or pull reports that the configured remote branch does not exist,
+push to create it or update the branch declaration; do not call it in-sync.
+Forced pushes report bounded overwrite evidence. Related history has an exact
+count; unrelated history deliberately reports no count because it has no common
+ancestor.
 
 There is no dedicated worker command: the workerd service is not
 shell-callable, so create workers (and DOs) via RPC —
