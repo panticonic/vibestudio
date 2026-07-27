@@ -493,6 +493,12 @@ describe("PanelManager", () => {
       path.join(panelDir, "package.json"),
       JSON.stringify({ name: "named", vibestudio: { title: "Named Panel" } })
     );
+    const aboutDir = path.join(workspacePath, "about", "new");
+    fs.mkdirSync(aboutDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(aboutDir, "package.json"),
+      JSON.stringify({ name: "about-new", vibestudio: { title: "New Panel" } })
+    );
     const registry = new PanelRegistry({});
     const { deps } = makeManagerDeps(workspacePath);
     return { registry, manager: new PanelManager({ registry, ...deps }) };
@@ -530,6 +536,14 @@ describe("PanelManager", () => {
     const { registry, manager } = namedPanelWorkspace();
     const created = await manager.create("panels/named", { isRoot: true, addAsRoot: true });
     expect(registry.getPanel(created.panelId)?.title).toBe("Named Panel");
+  });
+
+  it("keeps generated about-panel identity out of its display title", async () => {
+    const { registry, manager } = namedPanelWorkspace();
+    const created = await manager.createAboutPanel("new");
+    expect(created.title).toBe("New Panel");
+    expect(registry.getPanel(created.id)?.title).toBe("New Panel");
+    expect(created.id).not.toContain("new~");
   });
 
   it("gives panels sharing a title distinct ids", async () => {

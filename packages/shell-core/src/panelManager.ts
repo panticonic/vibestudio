@@ -610,7 +610,6 @@ export class PanelManager {
 
   async createAboutPanel(page: string): Promise<{ id: string; title: string }> {
     const result = await this.create(aboutPanelSource(page), {
-      name: `${page}~${Date.now().toString(36)}`,
       isRoot: true,
       addAsRoot: true,
     });

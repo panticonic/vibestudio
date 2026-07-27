@@ -300,7 +300,7 @@ class MobilePanels implements PanelHost {
   }> {
     const result = await this.callPanelTree<{ id: string; title: string }>("create", [
       `about/${page}`,
-      { name: `${page}~${Date.now().toString(36)}` },
+      { focus: true },
     ]);
     this.deps.navigateToPanel(result.id);
     return result;
@@ -308,6 +308,8 @@ class MobilePanels implements PanelHost {
   async createFromSource(
     source: string,
     options?: {
+      title?: string;
+      slug?: string;
       name?: string;
       contextId?: string;
       stateArgs?: Record<string, unknown>;
@@ -318,7 +320,13 @@ class MobilePanels implements PanelHost {
   }> {
     const result = await this.callPanelTree<{ id: string; title: string }>("create", [
       source,
-      { name: options?.name, contextId: options?.contextId, stateArgs: options?.stateArgs },
+      {
+        title: options?.title,
+        slug: options?.slug,
+        name: options?.name,
+        contextId: options?.contextId,
+        stateArgs: options?.stateArgs,
+      },
     ]);
     this.deps.navigateToPanel(result.id);
     return result;
@@ -331,6 +339,8 @@ class MobilePanels implements PanelHost {
     parentId: string,
     source: string,
     options?: {
+      title?: string;
+      slug?: string;
       name?: string;
       contextId?: string;
       focus?: boolean;
@@ -345,7 +355,10 @@ class MobilePanels implements PanelHost {
       source,
       {
         parentId,
+        title: options?.title,
+        slug: options?.slug,
         name: options?.name,
+        focus: options?.focus,
         contextId: options?.contextId,
         ref: options?.ref,
         stateArgs: options?.stateArgs,
@@ -358,6 +371,8 @@ class MobilePanels implements PanelHost {
     parentId: string | null,
     url: string,
     options?: {
+      title?: string;
+      slug?: string;
       name?: string;
       focus?: boolean;
     }
@@ -367,7 +382,13 @@ class MobilePanels implements PanelHost {
   }> {
     const result = await this.callPanelTree<{ id: string; title: string }>("create", [
       url,
-      { parentId: parentId ?? undefined, name: options?.name },
+      {
+        parentId: parentId ?? undefined,
+        title: options?.title,
+        slug: options?.slug,
+        name: options?.name,
+        focus: options?.focus,
+      },
     ]);
     if (options?.focus !== false) this.deps.navigateToPanel(result.id);
     return result;
@@ -377,6 +398,8 @@ class MobilePanels implements PanelHost {
     options?: {
       ref?: string;
       contextId?: string;
+      title?: string;
+      slug?: string;
       name?: string;
       focus?: boolean;
       stateArgs?: Record<string, unknown>;
@@ -391,12 +414,14 @@ class MobilePanels implements PanelHost {
         parentId: null,
         ref: options?.ref,
         contextId: options?.contextId,
+        title: options?.title,
+        slug: options?.slug,
         name: options?.name,
         focus: options?.focus,
         stateArgs: options?.stateArgs,
       },
     ]);
-    this.deps.navigateToPanel(result.id);
+    if (options?.focus !== false) this.deps.navigateToPanel(result.id);
     return result;
   }
   async setCollapsed(panelId: string, collapsed: boolean): Promise<void> {

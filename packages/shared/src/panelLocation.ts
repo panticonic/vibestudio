@@ -27,7 +27,11 @@ export interface PanelLocation {
   contextId?: string;
   /** Initial panel state, validated again by the target panel manifest. */
   stateArgs?: Record<string, unknown>;
-  /** Optional panel title/name override. */
+  /** Display title override. Free text; carries no identity. */
+  title?: string;
+  /** Opt-in stable id segment, unique among the parent's children. */
+  slug?: string;
+  /** @deprecated Alias for `title`. */
   name?: string;
   /** Whether a newly-created target should receive focus. */
   focus?: boolean;
@@ -52,6 +56,8 @@ const PARAMETER_KEYS = new Set([
   "ref",
   "contextId",
   "stateArgs",
+  "title",
+  "slug",
   "name",
   "focus",
   "disposition",
@@ -92,6 +98,8 @@ export function validatePanelLocation(location: PanelLocation): void {
     ["workspace", location.workspace, 256],
     ["ref", location.ref, 1024],
     ["contextId", location.contextId, 1024],
+    ["title", location.title, 256],
+    ["slug", location.slug, 256],
     ["name", location.name, 256],
   ] as const) {
     if (value !== undefined && !isSafeText(value, maxLength)) {
@@ -156,6 +164,8 @@ function encodePanelLocationParams(location: PanelLocation): string {
   if (location.stateArgs !== undefined) {
     pairs.push(["stateArgs", JSON.stringify(location.stateArgs)]);
   }
+  if (location.title !== undefined) pairs.push(["title", location.title]);
+  if (location.slug !== undefined) pairs.push(["slug", location.slug]);
   if (location.name !== undefined) pairs.push(["name", location.name]);
   if (location.focus !== undefined) pairs.push(["focus", String(location.focus)]);
   if (location.disposition !== undefined) pairs.push(["disposition", location.disposition]);
@@ -315,6 +325,8 @@ export function parsePanelLocationLink(raw: string): ParsedPanelLocationLink {
     ...(decoded.get("ref") !== undefined ? { ref: decoded.get("ref") } : {}),
     ...(decoded.get("contextId") !== undefined ? { contextId: decoded.get("contextId") } : {}),
     ...(stateArgs !== undefined ? { stateArgs } : {}),
+    ...(decoded.get("title") !== undefined ? { title: decoded.get("title") } : {}),
+    ...(decoded.get("slug") !== undefined ? { slug: decoded.get("slug") } : {}),
     ...(decoded.get("name") !== undefined ? { name: decoded.get("name") } : {}),
     ...(focusValue !== undefined ? { focus: focusValue === "true" } : {}),
     ...(dispositionValue !== undefined

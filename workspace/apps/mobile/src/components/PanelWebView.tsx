@@ -27,7 +27,14 @@ export interface PanelNavigationEvent {
   ref?: string;
   disposition?: PanelDisposition;
   workspace?: string;
-  options: { name?: string; contextId?: string; focus?: boolean; ref?: string };
+  options: {
+    title?: string;
+    slug?: string;
+    name?: string;
+    contextId?: string;
+    focus?: boolean;
+    ref?: string;
+  };
   stateArgs?: Record<string, unknown>;
 }
 
@@ -596,6 +603,8 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
           ref: canonical.ref,
           disposition: canonical.disposition ?? fallbackDisposition,
           options: {
+            title: canonical.title,
+            slug: canonical.slug,
             name: canonical.name,
             contextId: canonical.contextId,
             focus: canonical.focus,

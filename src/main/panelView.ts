@@ -245,6 +245,8 @@ export class PanelView implements PanelViewLike {
       return {
         ...canonical,
         options: {
+          title: canonical.title,
+          slug: canonical.slug,
           name: canonical.name,
           contextId: canonical.contextId,
           focus: canonical.focus,
@@ -843,6 +845,8 @@ export class PanelView implements PanelViewLike {
   }
 
   private createOptionsForParsedLink(parsed: ParsedPanelUrl): {
+    title?: string;
+    slug?: string;
     name?: string;
     contextId?: string;
     ref?: string;
@@ -851,6 +855,8 @@ export class PanelView implements PanelViewLike {
     placement?: PanelPlacementHint;
   } {
     return {
+      ...(parsed.options.title !== undefined ? { title: parsed.options.title } : {}),
+      ...(parsed.options.slug !== undefined ? { slug: parsed.options.slug } : {}),
       ...(parsed.options.name !== undefined ? { name: parsed.options.name } : {}),
       ...(parsed.contextId !== undefined ? { contextId: parsed.contextId } : {}),
       ...(parsed.ref !== undefined ? { ref: parsed.ref } : {}),

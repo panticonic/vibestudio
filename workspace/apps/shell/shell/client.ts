@@ -275,7 +275,6 @@ export const panel = {
   ) => panelTreeClient.updatePanelState(panelId, state),
   createAboutPanel: (page: string) =>
     panelTreeClient.create(`about/${page}`, {
-      name: `${page}~${Date.now().toString(36)}`,
       focus: true,
     }),
   /** Create a panel from any source path (not prefixed with "about/"). */
@@ -291,6 +290,8 @@ export const panel = {
   createPanel: (
     source: string,
     options?: {
+      title?: string;
+      slug?: string;
       name?: string;
       isRoot?: boolean;
       ref?: string;
@@ -301,6 +302,8 @@ export const panel = {
     }
   ) =>
     panelTreeClient.create(source, {
+      title: options?.title,
+      slug: options?.slug,
       name: options?.name,
       ref: options?.ref,
       contextId: options?.contextId,
@@ -313,6 +316,8 @@ export const panel = {
     parentId: string,
     source: string,
     options?: {
+      title?: string;
+      slug?: string;
       name?: string;
       focus?: boolean;
       ref?: string;
@@ -323,6 +328,8 @@ export const panel = {
   ) =>
     panelTreeClient.create(source, {
       parentId,
+      title: options?.title,
+      slug: options?.slug,
       name: options?.name,
       focus: options?.focus,
       ref: options?.ref,
@@ -333,20 +340,33 @@ export const panel = {
   createBrowser: (
     url: string,
     options?: {
+      title?: string;
+      slug?: string;
       name?: string;
       focus?: boolean;
     }
-  ) => panelTreeClient.create(url, { parentId: null, name: options?.name, focus: options?.focus }),
+  ) =>
+    panelTreeClient.create(url, {
+      parentId: null,
+      title: options?.title,
+      slug: options?.slug,
+      name: options?.name,
+      focus: options?.focus,
+    }),
   createBrowserChild: (
     parentId: string,
     url: string,
     options?: {
+      title?: string;
+      slug?: string;
       name?: string;
       focus?: boolean;
     }
   ) =>
     panelTreeClient.create(url, {
       parentId,
+      title: options?.title,
+      slug: options?.slug,
       name: options?.name,
       focus: options?.focus,
     }),

@@ -82,6 +82,20 @@ describe("parsePanelUrl()", () => {
     expect(result!.options.name).toBe("My Panel");
   });
 
+  it("parses title and slug independently from the deprecated name alias", () => {
+    const result = parsePanelUrl(
+      "https://vibestudio.example.com/panels/chat?title=Research&slug=research&name=Legacy",
+      host
+    );
+
+    expect(result).toMatchObject({
+      title: "Research",
+      slug: "research",
+      name: "Legacy",
+      options: { title: "Research", slug: "research", name: "Legacy" },
+    });
+  });
+
   it("parses URL with focus=true query param", () => {
     const result = parsePanelUrl("https://vibestudio.example.com/panels/chat?focus=true", host);
 

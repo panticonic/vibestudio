@@ -37,12 +37,14 @@ describe("buildPanelLink", () => {
       buildPanelLink("panels/chat", {
         ref: "state:abc",
         stateArgs: { prompt: "hello" },
+        title: "Research",
+        slug: "research",
         focus: false,
         disposition: "child",
         placement: { disposition: "side", preferredWidth: 640, minWidth: 440 },
       })
     ).toBe(
-      "/panels/chat/?ref=state%3Aabc&stateArgs=%7B%22prompt%22%3A%22hello%22%7D&focus=false&disposition=child&placement=side&preferredWidth=640&minWidth=440"
+      "/panels/chat/?ref=state%3Aabc&stateArgs=%7B%22prompt%22%3A%22hello%22%7D&title=Research&slug=research&focus=false&disposition=child&placement=side&preferredWidth=640&minWidth=440"
     );
   });
 
@@ -57,6 +59,8 @@ describe("buildPanelLink", () => {
     const options = {
       contextId: "ctx-1",
       stateArgs: { prompt: "hi" },
+      title: "Research",
+      slug: "research",
       disposition: "root" as const,
       placement: { disposition: "split-below" as const, minWidth: 480 },
     };
@@ -71,6 +75,8 @@ describe("buildPanelLink", () => {
           workspace: "dev-123",
           contextId: "ctx-1",
           stateArgs: { prompt: "hi" },
+          title: "Research",
+          slug: "research",
           disposition: "root",
           placement: { disposition: "split-below", minWidth: 480 },
         },

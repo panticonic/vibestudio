@@ -101,12 +101,16 @@ function AppContent() {
       } else if (disposition === "child" && focusedPanelId) {
         await shellClient.panels.createChildPanel(focusedPanelId, location.source, {
           ...common,
+          title: location.title,
+          slug: location.slug,
           name: location.name,
           focus: location.focus ?? true,
         });
       } else {
         await shellClient.panels.createRootPanel(location.source, {
           ...common,
+          title: location.title,
+          slug: location.slug,
           name: location.name,
           focus: location.focus ?? true,
         });

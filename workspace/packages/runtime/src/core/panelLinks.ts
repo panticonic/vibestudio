@@ -119,6 +119,8 @@ export function buildPanelLink(source: string, options?: BuildPanelLinkOptions):
   if (options?.contextId !== undefined) params.set("contextId", String(options.contextId));
   if (options?.ref !== undefined) params.set("ref", options.ref);
   if (options?.stateArgs !== undefined) params.set("stateArgs", JSON.stringify(options.stateArgs));
+  if (options?.title !== undefined) params.set("title", options.title);
+  if (options?.slug !== undefined) params.set("slug", options.slug);
   if (options?.name !== undefined) params.set("name", options.name);
   if (options?.focus !== undefined) params.set("focus", String(options.focus));
   if (options?.disposition !== undefined) params.set("disposition", options.disposition);
