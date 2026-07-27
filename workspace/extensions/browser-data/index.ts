@@ -861,6 +861,7 @@ async function openTabsAsPanels(
         // A collection that cannot host children must not take the tabs down
         // with it — retry flat under the caller before giving up on the tab.
         if (parentId === callerId) throw error;
+        if (tab.windowId) collectionByWindow.set(tab.windowId, null);
         created = await create(callerId);
         landedIn = callerId;
         collectionErrors.add(error instanceof Error ? error.message : String(error));
@@ -877,6 +878,22 @@ async function openTabsAsPanels(
   }
   for (const reason of collectionErrors) {
     skipped.push({ url: "(collection)", reason: `Tabs opened outside their collection: ${reason}` });
+  }
+  // Creating the parent must precede creating its first child, so a failed
+  // first child can leave a zero-member collection. Roll those containers back
+  // explicitly; filtering the result alone would hide an orphan in the tree.
+  for (const collection of collections) {
+    if (collection.panelsOpened > 0) continue;
+    try {
+      await ctx.rpc.call("main", "panelTree.archive", collection.id);
+    } catch (error) {
+      skipped.push({
+        url: "(collection)",
+        reason: `Could not remove empty collection ${collection.title}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      });
+    }
   }
   return {
     tabsFound: tabs.length,

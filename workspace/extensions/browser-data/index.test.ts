@@ -106,6 +106,7 @@ function makeContext(
     if (method === "addBookmark") return 42;
     if (method === "getBookmarks") return [{ id: 1, title: "Example" }];
     if (method === "getPasswords") return [{ id: 7, origin_url: "https://example.com" }];
+    if (method === "panelTree.archive") return true;
     if (method === "panelTree.create") {
       createdPanels += 1;
       return { id: `browser-panel-${createdPanels}`, title: `panel-${createdPanels}` };
@@ -366,6 +367,7 @@ describe("@workspace-extensions/browser-data", () => {
     expect(result.skipped.map((entry) => entry.reason)).toEqual([
       expect.stringContaining("Tabs opened outside their collection"),
     ]);
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.archive", "collection-1");
   });
 
   it("skips grouping when groupBy is omitted", async () => {
