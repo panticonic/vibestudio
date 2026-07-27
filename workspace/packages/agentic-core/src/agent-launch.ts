@@ -1,4 +1,5 @@
 import { AGENTIC_PROTOCOL_VERSION, type AgenticEvent } from "@workspace/agentic-protocol";
+import type { RuntimeEntityCreateSpec } from "@vibestudio/shared/runtime/entitySpec";
 import { doTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 import {
   toSubscriptionConfig,
@@ -107,17 +108,22 @@ function targetIdFor(handleOrTargetId: AgentEntityHandle | string): string {
   return typeof handleOrTargetId === "string" ? handleOrTargetId : handleOrTargetId.targetId;
 }
 
-export function buildAgentEntityCreateSpec(input: AgentEntityCreateInput): Record<string, unknown> {
+type AgentEntityCreateSpec = Extract<RuntimeEntityCreateSpec, { kind: "do" }>;
+
+export function buildAgentEntityCreateSpec(input: AgentEntityCreateInput): AgentEntityCreateSpec {
   const stateArgs = {
     ...(input.stateArgs ?? {}),
     ...(input.config !== undefined ? { agentConfig: input.config } : {}),
   };
   return {
     kind: "do",
-    source: input.source,
+    execution: {
+      surface: "code",
+      source: input.source,
+      ...(input.ref ? { ref: input.ref } : {}),
+    },
     className: input.className,
     key: input.key,
-    ...(input.ref ? { ref: input.ref } : {}),
     ...(input.contextId ? { contextId: input.contextId } : {}),
     ...(Object.keys(stateArgs).length > 0 ? { stateArgs } : {}),
     ...(input.agentBinding ? { agentBinding: input.agentBinding } : {}),

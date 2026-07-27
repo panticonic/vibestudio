@@ -69,7 +69,10 @@ describe("subscribeHeadlessAgent — unified contract", () => {
 
     expect(captured.createSpec).toEqual({
       kind: "do",
-      source: "workers/agent-worker",
+      execution: {
+        surface: "code",
+        source: "workers/agent-worker",
+      },
       className: "AiChatWorker",
       key: "obj-1",
       contextId: "ctx-1",
@@ -108,14 +111,16 @@ describe("subscribeHeadlessAgent — unified contract", () => {
       return undefined;
     });
 
-    await expect(subscribeHeadlessAgent({
-      rpcCall,
-      source: "workers/agent-worker",
-      className: "AiChatWorker",
-      objectKey: "obj-1",
-      channelId: "ch-1",
-      contextId: "ctx-1",
-    })).rejects.toThrow("subscribe failed");
+    await expect(
+      subscribeHeadlessAgent({
+        rpcCall,
+        source: "workers/agent-worker",
+        className: "AiChatWorker",
+        objectKey: "obj-1",
+        channelId: "ch-1",
+        contextId: "ctx-1",
+      })
+    ).rejects.toThrow("subscribe failed");
 
     expect(calls[calls.length - 1]).toEqual({
       target: "main",
@@ -274,7 +279,7 @@ describe("unsubscribeHeadlessAgent", () => {
     expect(rpcCall).toHaveBeenCalledWith(
       "do:workers/agent-worker:AiChatWorker:obj-1",
       "unsubscribeChannel",
-      ["ch-1"],
+      ["ch-1"]
     );
   });
 });

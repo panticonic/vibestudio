@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { CreateEntitySpecSchema } from "@vibestudio/service-schemas/runtime";
 import {
   buildAgentEntityCreateSpec,
   buildAgentTaskSeedEvent,
@@ -44,7 +45,10 @@ describe("agent launch primitive", () => {
       })
     ).toEqual({
       kind: "do",
-      source: "workers/agent-worker",
+      execution: {
+        surface: "code",
+        source: "workers/agent-worker",
+      },
       className: "AiChatWorker",
       key: "agent-1",
       contextId: "ctx-1",
@@ -57,6 +61,20 @@ describe("agent launch primitive", () => {
         },
       },
     });
+  });
+
+  it("builds an agent entity request accepted by the runtime wire schema", () => {
+    const spec = buildAgentEntityCreateSpec({
+      source: "workers/agent-worker",
+      ref: "ctx:ctx-1",
+      className: "AiChatWorker",
+      key: "agent-1",
+      contextId: "ctx-1",
+      config: { model: "openai:gpt-5.3" },
+      agentChannelId: "chat-1",
+    });
+
+    expect(CreateEntitySpecSchema.parse(spec)).toEqual(spec);
   });
 
   it("launches by creating before subscribing, stripping behavior settings from subscription config", async () => {

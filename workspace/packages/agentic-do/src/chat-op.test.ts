@@ -1941,7 +1941,9 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     const create = probe.rpcCalls.find(
       (call) => call.target === "main" && call.method === "runtime.createEntity"
     );
-    expect(create?.args[0]).toMatchObject({ source: "test" });
+    expect(create?.args[0]).toMatchObject({
+      execution: { surface: "code", source: "test" },
+    });
   });
 
   it("reuses an existing child trajectory fork point when a forked spawn is retried", async () => {
