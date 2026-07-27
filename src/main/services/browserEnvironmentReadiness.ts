@@ -42,9 +42,30 @@ export class BrowserEnvironmentReadiness {
     this.waiters.clear();
   }
 
+  /**
+   * The environment failed to come up. This is terminal for the current
+   * attempt: later waiters fail fast rather than hanging on a dependency that
+   * is not coming.
+   */
   unavailable(error: unknown): void {
     const normalized = error instanceof Error ? error : new Error(String(error));
     this.state = { kind: "unavailable", error: normalized };
+    for (const waiter of this.waiters) waiter.reject(normalized);
+    this.waiters.clear();
+  }
+
+  /**
+   * The environment stopped as part of an ordinary lifecycle transition — the
+   * owning extension restarted, the workspace reloaded. In-flight waiters are
+   * released with the reason, but the boundary returns to `pending` so views
+   * created afterwards wait for the next start instead of failing forever.
+   *
+   * Treating a stop as terminal meant one extension restart permanently broke
+   * every browser panel for the rest of the session.
+   */
+  stopped(reason: unknown): void {
+    const normalized = reason instanceof Error ? reason : new Error(String(reason));
+    this.state = { kind: "pending" };
     for (const waiter of this.waiters) waiter.reject(normalized);
     this.waiters.clear();
   }

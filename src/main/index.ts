@@ -2671,40 +2671,69 @@ app.on("ready", async () => {
           },
           async onReady(api) {
             browserCookieProjection = api;
-            const { BrowserPermissionController } =
-              await import("./services/browserPermissionController.js");
-            const permissionController = new BrowserPermissionController({
-              partition: api.partition,
-              serverClient: sc,
-              eventService,
-              getViewManager: () => applicationWindow.viewManager,
+
+            // Browser views need the session partition and nothing else. The
+            // subsystems below enrich the environment — site permissions, web
+            // notifications, download tracking — and each can fail on its own
+            // without making the browser unusable. Letting one rejection escape
+            // marked the whole environment unavailable, which left every
+            // browser panel with no view at all and an empty pane.
+            const attach = async (label: string, start: () => Promise<void> | void) => {
+              try {
+                await start();
+              } catch (error) {
+                log.error(
+                  `Browser environment: ${label} unavailable; continuing without it: ${
+                    error instanceof Error ? error.message : String(error)
+                  }`
+                );
+              }
+            };
+
+            await attach("site permissions", async () => {
+              const { BrowserPermissionController } =
+                await import("./services/browserPermissionController.js");
+              const permissionController = new BrowserPermissionController({
+                partition: api.partition,
+                serverClient: sc,
+                eventService,
+                getViewManager: () => applicationWindow.viewManager,
+              });
+              await permissionController.start();
+              browserPermissionController = permissionController;
+
+              // The notification bridge routes through permission decisions, so
+              // it only exists when those are available.
+              const { WebsiteNotificationBridge } =
+                await import("./services/websiteNotificationBridge.js");
+              websiteNotificationBridge = new WebsiteNotificationBridge({
+                permissions: permissionController,
+                eventService,
+                getViewManager: () => applicationWindow.viewManager,
+              });
+              websiteNotificationBridge.start();
             });
-            await permissionController.start();
-            browserPermissionController = permissionController;
-            const { WebsiteNotificationBridge } =
-              await import("./services/websiteNotificationBridge.js");
-            websiteNotificationBridge = new WebsiteNotificationBridge({
-              permissions: permissionController,
-              eventService,
-              getViewManager: () => applicationWindow.viewManager,
+
+            await attach("downloads", async () => {
+              const { BrowserDownloadManager } =
+                await import("./services/browserDownloadManager.js");
+              const manager = new BrowserDownloadManager({
+                browserSession: session.fromPartition(api.partition),
+                environmentKey: api.identity.environmentKey,
+                hostId: `desktop:${cdpHostConnectionId}`,
+                downloadsDirectory: app.getPath("downloads"),
+                browserData: browserDataClient,
+                eventService,
+                getViewManager: () => applicationWindow.viewManager,
+              });
+              await manager.start();
+              browserDownloadManager = manager;
             });
-            websiteNotificationBridge.start();
-            const { BrowserDownloadManager } = await import("./services/browserDownloadManager.js");
-            const manager = new BrowserDownloadManager({
-              browserSession: session.fromPartition(api.partition),
-              environmentKey: api.identity.environmentKey,
-              hostId: `desktop:${cdpHostConnectionId}`,
-              downloadsDirectory: app.getPath("downloads"),
-              browserData: browserDataClient,
-              eventService,
-              getViewManager: () => applicationWindow.viewManager,
-            });
-            await manager.start();
-            browserDownloadManager = manager;
+
             browserEnvironmentReadiness.ready(api.partition);
           },
           async onStopped() {
-            browserEnvironmentReadiness.unavailable(
+            browserEnvironmentReadiness.stopped(
               new Error("Browser environment stopped with the workspace")
             );
             websiteNotificationBridge?.stop();
