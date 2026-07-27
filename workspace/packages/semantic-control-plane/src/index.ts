@@ -1215,6 +1215,25 @@ export class GadWorkspaceDO extends DurableObjectBase {
     principals: ["host"],
     effect: { kind: "workspace-service" },
     tier: "open",
+    sensitivity: "read",
+  })
+  vcsIsStateDescendant(input: {
+    ancestor: import("@vibestudio/service-schemas/vcs").VcsStateNodeRef;
+    descendant: import("@vibestudio/service-schemas/vcs").VcsStateNodeRef;
+    maxEdges: number;
+  }): boolean {
+    this.ensureReady();
+    return this.semanticWorkspace().isStateDescendant(
+      input.ancestor as import("@workspace/vcs-engine").StateNodeRef,
+      input.descendant as import("@workspace/vcs-engine").StateNodeRef,
+      input.maxEdges
+    );
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
     sensitivity: "write",
   })
   vcsEnsureContext(input: {

@@ -4,7 +4,7 @@ import { TestRunner } from "./test-runner.js";
 import type { HeadlessRunner } from "./runner.js";
 import { CONTENT_WORKSPACE_REPO_FIXTURE, type TestCase } from "./types.js";
 
-const TEST_MODEL = "openai-codex:gpt-5.4-mini";
+const TEST_MODEL = "openai-codex:gpt-5.3-codex-spark";
 const modelEvidence = () => ({
   totalCalls: 1,
   truncated: false,
@@ -12,7 +12,7 @@ const modelEvidence = () => ({
     {
       ref: TEST_MODEL,
       provider: "openai-codex",
-      model: "gpt-5.4-mini",
+      model: "gpt-5.3-codex-spark",
       api: "openai-codex-responses",
       auth: "url-bound",
       usage: { input: 10, output: 5, totalTokens: 15 },
@@ -964,7 +964,7 @@ describe("TestRunner", () => {
         {
           ref: TEST_MODEL,
           provider: "openai-codex",
-          model: "gpt-5.4-mini",
+          model: "gpt-5.3-codex-spark",
           api: "openai-codex-responses",
           auth: "url-bound",
           outcome: "failed",

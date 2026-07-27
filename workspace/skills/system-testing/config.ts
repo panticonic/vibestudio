@@ -4,7 +4,7 @@
  * Callers may still override it explicitly with `--model` for model-specific
  * investigations.
  */
-export const SYSTEM_TEST_AGENT_MODEL = "openai-codex:gpt-5.4-mini";
+export const SYSTEM_TEST_AGENT_MODEL = "openai-codex:gpt-5.3-codex-spark";
 
 /**
  * The complete model route for one system-test run.

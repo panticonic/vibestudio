@@ -27,6 +27,7 @@ export { unitDiagnosticsTests } from "./tests/unit-diagnostics.js";
 export { multiUserTests } from "./tests/multi-user.js";
 export { approvalPermissionTests } from "./tests/approvals-permissions.js";
 export { evalLifecycleTests } from "./tests/eval-lifecycle.js";
+export { selfDevelopmentTests } from "./tests/self-development.js";
 export { docsDiscoveryTests } from "./tests/docs-discovery.js";
 export { webhookTests } from "./tests/webhooks.js";
 export { extensionSurfaceTests } from "./tests/extensions-surface.js";
@@ -61,6 +62,7 @@ import { unitDiagnosticsTests as _unitDiagnostics } from "./tests/unit-diagnosti
 import { multiUserTests as _multiUser } from "./tests/multi-user.js";
 import { approvalPermissionTests as _approvals } from "./tests/approvals-permissions.js";
 import { evalLifecycleTests as _evalLifecycle } from "./tests/eval-lifecycle.js";
+import { selfDevelopmentTests as _selfDevelopment } from "./tests/self-development.js";
 import { docsDiscoveryTests as _docsDiscovery } from "./tests/docs-discovery.js";
 import { webhookTests as _webhooks } from "./tests/webhooks.js";
 import { extensionSurfaceTests as _extensionSurface } from "./tests/extensions-surface.js";
@@ -117,6 +119,7 @@ export function allTests(): TestCase[] {
     ..._agenticRuntime,
     ..._agentOrchestration,
     ..._evalLifecycle,
+    ..._selfDevelopment,
     ..._blobstore,
     ..._serverLogs,
     ..._webhooks,

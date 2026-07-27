@@ -14,6 +14,7 @@ import {
 } from "@vibestudio/shared/governance/governanceLog";
 import type { ApprovalResolvedEvent, GovernanceRecord } from "@vibestudio/shared/governance/types";
 import { DEVICE_ID_PATTERN, SERVER_BOOT_ID_PATTERN } from "@vibestudio/shared/deviceCredentials";
+import { HubPairingInviteSchema } from "@vibestudio/service-schemas/hubControl";
 import type { IssuedAgentCredential } from "./hostCore/deviceAuthStore.js";
 import { governanceListQuerySchema } from "./hostCore/governanceQuery.js";
 
@@ -46,6 +47,22 @@ export const WorkspaceChildDeviceTouchInputSchema = z
   .strict();
 export const WorkspaceChildDeviceTouchResultSchema = z
   .object({ touched: z.literal(true) })
+  .strict();
+export const WorkspaceChildDeviceInviteInputSchema = z
+  .object({
+    userId: z.string().min(1),
+    ttlMs: z
+      .number()
+      .int()
+      .positive()
+      .max(10 * 60_000),
+  })
+  .strict();
+export const WorkspaceChildDeviceInviteResultSchema = z
+  .object({
+    workspace: z.string().min(1),
+    pairing: HubPairingInviteSchema,
+  })
   .strict();
 
 export const WorkspaceChildPresenceReportInputSchema = z
@@ -88,6 +105,9 @@ export interface WorkspaceChildHubPort {
   revokeAgentCredential(agentId: string): Promise<boolean>;
   revokeAgentCredentialsForEntity(entityId: string): Promise<string[]>;
   touchDevice(deviceId: string): Promise<void>;
+  mintDeviceInvite(
+    input: z.infer<typeof WorkspaceChildDeviceInviteInputSchema>
+  ): Promise<z.infer<typeof WorkspaceChildDeviceInviteResultSchema>>;
   reportPresence(input: z.infer<typeof WorkspaceChildPresenceReportInputSchema>): Promise<boolean>;
   appendApproval(record: ApprovalResolvedEvent): Promise<void>;
   queryGovernance(query?: z.infer<typeof governanceListQuerySchema>): Promise<GovernanceRecord[]>;
@@ -110,6 +130,7 @@ export function createWorkspaceChildHubPort(
       | "agent-credential/revoke"
       | "agent-credential/revoke-entity"
       | "device/touch"
+      | "device/invite"
       | "presence/report"
       | "governance/append-approval"
       | "governance/query",
@@ -175,6 +196,13 @@ export function createWorkspaceChildHubPort(
         { deviceId }
       );
     },
+    mintDeviceInvite: (input) =>
+      post(
+        "device/invite",
+        WorkspaceChildDeviceInviteInputSchema,
+        WorkspaceChildDeviceInviteResultSchema,
+        input
+      ),
     async reportPresence(input) {
       return (
         await post(

@@ -7,10 +7,15 @@ import {
   type ServiceContext,
 } from "@vibestudio/shared/serviceDispatcher";
 import {
+  fixedPreparedAuthoritySelection,
+  preparedAuthorityPayload,
   selectedPreparedAuthoritySelection,
   type ServiceDefinition,
 } from "@vibestudio/shared/serviceDefinition";
-import { selectedPreparedAuthorityRequirement } from "@vibestudio/shared/typedServiceClient";
+import {
+  fixedPreparedAuthorityRequirement,
+  selectedPreparedAuthorityRequirement,
+} from "@vibestudio/shared/typedServiceClient";
 import {
   createTestExecutionSession,
   createTestServiceDispatcher,
@@ -319,13 +324,16 @@ describe("dispatcher: access descriptor + JIT errors", () => {
         },
       },
       authorityPreparation: {
-        "discovery.resolve.dynamic": () => [
-          selectedPreparedAuthoritySelection({
-            capability: "workspace-service:local",
-            resourceKey: "do:workers/local:LocalDO:main",
-            requirement: requirementForPrincipals(["code"], "workspace-service:local"),
-          }),
-        ],
+        "discovery.resolve.dynamic": () => ({
+          selections: [
+            selectedPreparedAuthoritySelection({
+              capability: "workspace-service:local",
+              resourceKey: "do:workers/local:LocalDO:main",
+              requirement: requirementForPrincipals(["code"], "workspace-service:local"),
+            }),
+          ],
+          payload: null,
+        }),
       },
       handler: vi.fn(async () => "resolved"),
     });
@@ -372,7 +380,9 @@ describe("dispatcher: access descriptor + JIT errors", () => {
     let selectedTarget = "target-a";
     const grantedResources = new Set<string>();
     const acquiredResources: string[] = [];
-    const handler = vi.fn(async () => "resolved");
+    const handler = vi.fn(async (handlerCtx: ServiceContext) =>
+      preparedAuthorityPayload<{ selectedTarget: string }>(handlerCtx, "dynamic.resolve.target")
+    );
     const d = new ServiceDispatcher({
       tierLookup: () => ({ tier: "open", session: "family", rationale: "discovery" }),
     });
@@ -418,13 +428,16 @@ describe("dispatcher: access descriptor + JIT errors", () => {
         },
       },
       authorityPreparation: {
-        "dynamic.resolve.target": () => [
-          selectedPreparedAuthoritySelection({
-            capability: "workspace-service:local",
-            resourceKey: `workspace:${selectedTarget}`,
-            requirement: requirementForPrincipals(["code"], "workspace-service:local"),
-          }),
-        ],
+        "dynamic.resolve.target": () => ({
+          selections: [
+            selectedPreparedAuthoritySelection({
+              capability: "workspace-service:local",
+              resourceKey: `workspace:${selectedTarget}`,
+              requirement: requirementForPrincipals(["code"], "workspace-service:local"),
+            }),
+          ],
+          payload: { selectedTarget },
+        }),
       },
       handler,
     });
@@ -432,9 +445,148 @@ describe("dispatcher: access descriptor + JIT errors", () => {
 
     await expect(
       d.dispatch({ ...ctx("worker"), authorityAcquisition: "wait" }, "dynamic", "resolve", [])
-    ).resolves.toBe("resolved");
+    ).resolves.toEqual({ selectedTarget: "target-b" });
     expect(acquiredResources).toEqual(["workspace:target-a", "workspace:target-b"]);
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps prepared payloads invocation-local and exposes only the final handler value", async () => {
+    const resolverSawPayload: boolean[] = [];
+    const d = new ServiceDispatcher({
+      tierLookup: () => ({ tier: "open", session: "family", rationale: "test" }),
+    });
+    d.setAuthorityResolver(({ caller, capability, resourceKey }) =>
+      testAuthority(caller, capability, resourceKey)
+    );
+    const capability = "payload.use";
+    d.registerService({
+      name: "payload",
+      authority: { principals: ["code"] },
+      methods: {
+        use: {
+          args: z.tuple([z.string()]),
+          authority: {
+            requirement: requirementForPrincipals(["code"], "service:payload.use"),
+            resource: { kind: "literal", key: "service:payload.use" },
+            prepared: {
+              resolver: "payload.use.exact",
+              leaves: [
+                {
+                  capability,
+                  requirement: fixedPreparedAuthorityRequirement(
+                    requirementForPrincipals(["code"], capability)
+                  ),
+                  tier: "open",
+                },
+              ],
+            },
+          },
+          access: { sensitivity: "read" },
+        },
+      },
+      authorityPreparation: {
+        "payload.use.exact": async (prepareCtx, [value]) => {
+          resolverSawPayload.push(prepareCtx.preparedAuthority !== undefined);
+          await Promise.resolve();
+          return {
+            selections: [
+              fixedPreparedAuthoritySelection({
+                capability,
+                resourceKey: `payload:${String(value)}`,
+              }),
+            ],
+            payload: { value: String(value) },
+          };
+        },
+      },
+      handler: async (handlerCtx) =>
+        preparedAuthorityPayload<{ value: string }>(handlerCtx, "payload.use.exact"),
+    });
+    d.markInitialized();
+
+    const leftCtx = ctx("worker");
+    leftCtx.caller = createVerifiedCaller("worker-left", "worker");
+    const rightCtx = ctx("worker");
+    rightCtx.caller = createVerifiedCaller("worker-right", "worker");
+    const [left, right] = await Promise.all([
+      d.dispatch(leftCtx, "payload", "use", ["left"]),
+      d.dispatch(rightCtx, "payload", "use", ["right"]),
+    ]);
+    expect(left).toEqual({ value: "left" });
+    expect(right).toEqual({ value: "right" });
+    expect(resolverSawPayload).toEqual([false, false, false, false]);
+  });
+
+  it("clears stale prepared payloads when authority is denied and never invokes the effect", async () => {
+    const d = new ServiceDispatcher({
+      tierLookup: () => ({ tier: "open", session: "family", rationale: "test" }),
+    });
+    d.setAuthorityResolver(({ caller, capability, resourceKey }) => ({
+      ...testAuthority(caller, capability, resourceKey),
+      grants:
+        capability === "payload.denied"
+          ? []
+          : testAuthority(caller, capability, resourceKey).grants,
+    }));
+    d.setAuthorityAcquirer({
+      request: vi.fn(),
+      acquire: vi.fn(async () => ({ state: "decided" as const, decision: "deny" as const })),
+      consume: vi.fn(),
+      invalidate: vi.fn(),
+    });
+    const handler = vi.fn(async () => "effect");
+    d.registerService({
+      name: "deniedPayload",
+      authority: { principals: ["code"] },
+      methods: {
+        use: {
+          args: z.tuple([]),
+          authority: {
+            requirement: requirementForPrincipals(["code"], "service:deniedPayload.use"),
+            resource: { kind: "literal", key: "service:deniedPayload.use" },
+            prepared: {
+              resolver: "deniedPayload.use.exact",
+              leaves: [
+                {
+                  capability: "payload.denied",
+                  requirement: fixedPreparedAuthorityRequirement(
+                    requirementForPrincipals(["code"], "payload.denied")
+                  ),
+                  tier: "gated",
+                },
+              ],
+            },
+          },
+          access: { sensitivity: "write" },
+        },
+      },
+      authorityPreparation: {
+        "deniedPayload.use.exact": () => ({
+          selections: [
+            fixedPreparedAuthoritySelection({
+              capability: "payload.denied",
+              resourceKey: "payload:denied",
+            }),
+          ],
+          payload: { shouldNeverReachHandler: true },
+        }),
+      },
+      handler,
+    });
+    d.markInitialized();
+    const deniedCtx = ctx("worker");
+    deniedCtx.preparedAuthority = {
+      resolver: "stale",
+      digest: "stale",
+      payload: { stale: true },
+    };
+    deniedCtx.authorityAcquisition = "wait";
+
+    await expect(d.dispatch(deniedCtx, "deniedPayload", "use", [])).rejects.toMatchObject({
+      code: "EACCES",
+    });
+    expect(handler).not.toHaveBeenCalled();
+    expect(deniedCtx.preparedAuthority).toBeUndefined();
   });
 
   it("returns EACQUIRE immediately to installed code while interactive origins suspend", async () => {

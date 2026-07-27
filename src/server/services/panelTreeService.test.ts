@@ -862,14 +862,17 @@ describe("panelTreeService", () => {
     ] as const;
     for (const [method, args, verb] of cases) {
       const prepare = service.authorityPreparation?.[`panelTree.${method}.contextBoundary`];
-      await expect(prepare?.(ctx(), [...args])).resolves.toEqual([
-        expect.objectContaining({
-          capability: CONTEXT_BOUNDARY_CAPABILITY,
-          challenge: expect.objectContaining({
-            operation: expect.objectContaining({ verb }),
+      await expect(prepare?.(ctx(), [...args])).resolves.toEqual({
+        selections: [
+          expect.objectContaining({
+            capability: CONTEXT_BOUNDARY_CAPABILITY,
+            challenge: expect.objectContaining({
+              operation: expect.objectContaining({ verb }),
+            }),
           }),
-        }),
-      ]);
+        ],
+        payload: null,
+      });
     }
   });
 

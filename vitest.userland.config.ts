@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import path from "node:path";
 import baseConfig from "./vitest.config";
 
 const base = baseConfig as {
@@ -14,6 +15,14 @@ export default defineConfig({
   ...base,
   test: {
     ...baseTest,
+    name: "userland",
+    reporters: [
+      "default",
+      [
+        path.resolve(__dirname, "scripts/runtime-foundation-evidence-reporter.mjs"),
+        { project: "userland", root: __dirname },
+      ],
+    ],
     // Userland's full suite concurrently transforms several large dependency
     // graphs (TypeScript, provider SDKs, and panel barrels). A five-second
     // per-test budget makes otherwise-fast dynamic-import tests fail under

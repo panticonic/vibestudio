@@ -5,6 +5,14 @@ import { fileURLToPath } from "node:url";
 import { format, resolveConfig } from "prettier";
 import YAML from "yaml";
 import { PRODUCT_WORKSPACE_SERVICES } from "../packages/shared/src/productWorkspaceServices.mjs";
+import { runtimeFoundationEvidence } from "./runtime-foundation-evidence.mjs";
+import {
+  assertNoOrphanEvidence,
+  generatedCensusEvidence,
+  resolveLedgerEvidence,
+  testEvidence,
+  validateEvidenceRegistry,
+} from "./lib/runtime-foundation-evidence.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const prettierOptions = (await resolveConfig(path.join(root, "src", "server", "index.ts"))) ?? {};
@@ -23,6 +31,8 @@ const formatTypeScript = async (source, filepath) => {
 const output = path.join(root, "docs", "runtime-foundations");
 const check = process.argv.includes("--check");
 if (!check) fs.mkdirSync(output, { recursive: true });
+const evidenceRegistry = validateEvidenceRegistry({ root, registry: runtimeFoundationEvidence });
+const usedEvidence = new Set();
 
 const serverServiceAuthority = JSON.parse(
   fs.readFileSync(
@@ -126,7 +136,7 @@ for (const [service, entry] of Object.entries(serviceAuthority).sort(([a], [b]) 
         ? JSON.stringify(declaration.requirement).replaceAll("$method", capability)
         : principalExpression(principals, capability),
       r3b: { review: "unchanged-parity", change: null },
-      parityAssertion: "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      evidence: generatedCensusEvidence("host-authority"),
     });
     for (const additional of declaration.additional ?? []) {
       authorityRows.push({
@@ -154,8 +164,7 @@ for (const [service, entry] of Object.entries(serviceAuthority).sort(([a], [b]) 
         predicates: ["live-session", "exact-resource-scope"],
         r3aRequirement: JSON.stringify(additional.requirement),
         r3b: { review: "schema-owned-additional-leaf", change: null },
-        parityAssertion:
-          "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+        evidence: generatedCensusEvidence("host-authority"),
       });
     }
     for (const leaf of declaration.prepared?.leaves ?? []) {
@@ -198,8 +207,7 @@ for (const [service, entry] of Object.entries(serviceAuthority).sort(([a], [b]) 
         predicates: ["live-session", "exact-prepared-resource", "registered-preparer"],
         r3aRequirement: JSON.stringify(leaf.requirement),
         r3b: { review: "schema-owned-prepared-leaf", change: null },
-        parityAssertion:
-          "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+        evidence: generatedCensusEvidence("host-authority"),
       });
     }
   }
@@ -333,8 +341,7 @@ for (const file of directRoots.flatMap(walk).sort()) {
       ],
       r3aRequirement: principalExpression(principals, `rpc:${method}`),
       r3b: { review: "unchanged-parity", change: null },
-      parityAssertion:
-        "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census",
+      evidence: generatedCensusEvidence("direct-authority"),
     });
   }
   for (const match of source.matchAll(namedRpcPattern)) {
@@ -389,8 +396,7 @@ for (const file of directRoots.flatMap(walk).sort()) {
       ],
       r3aRequirement: `declared:${declaration}`,
       r3b: { review: "unchanged-parity", change: null },
-      parityAssertion:
-        "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census",
+      evidence: generatedCensusEvidence("direct-authority"),
     });
   }
   for (const match of source.matchAll(factoryRpcPattern)) {
@@ -447,8 +453,7 @@ for (const file of directRoots.flatMap(walk).sort()) {
       ],
       r3aRequirement: `factory:${factory}`,
       r3b: { review: "instance-resolved-parity", change: null },
-      parityAssertion:
-        "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census",
+      evidence: generatedCensusEvidence("direct-authority"),
     });
   }
 }
@@ -645,84 +650,37 @@ const executionRows = [
     "runtime.createEntity",
     "head/state/artifact",
     "surface-adapter",
-    "src/server/services/runtimeService.test.ts",
+    "execution.runtime-create-entity",
   ],
   [
     "ensureDurableObjectEntity",
     "head/state/artifact",
     "next-request",
-    "src/server/universalDoHost.test.ts",
+    "execution.ensure-durable-object",
   ],
-  [
-    "workerd.startWorker",
-    "head/state/artifact",
-    "next-request",
-    "src/server/workerdManager.test.ts",
-  ],
-  ["worker-push-rebuild", "matching-head", "next-request", "src/server/workerdManager.test.ts"],
+  ["workerd.startWorker", "head/state/artifact", "next-request", "execution.workerd-start-worker"],
+  ["worker-push-rebuild", "matching-head", "next-request", "execution.worker-push-rebuild"],
   [
     "durable-object-push-rebuild",
     "matching-head",
     "next-request",
-    "src/server/dynamicWorkerHost.test.ts",
+    "execution.durable-object-push-rebuild",
   ],
-  [
-    "eval-do",
-    "exact-product-seed",
-    "new-eval-incarnation",
-    "src/server/services/evalService.test.ts",
-  ],
-  [
-    "vcs-store",
-    "exact-product-seed",
-    "bootstrap-manifest",
-    "src/server/internalDOs/workspaceDO.test.ts",
-  ],
-  [
-    "agent-spawn",
-    "resolved-exact-artifact",
-    "launch",
-    "workspace/packages/agentic-do/src/agent-loop-driver.test.ts",
-  ],
-  [
-    "panel",
-    "selected-source-ref",
-    "explicit-reload-or-navigation",
-    "src/server/panelRuntimeRegistration.ts",
-  ],
-  ["electron-app", "resolved-exact-artifact", "load-update", "src/server/appHost.test.ts"],
-  ["react-native-app", "resolved-exact-artifact", "mobile-install", "src/server/appHost.test.ts"],
-  [
-    "terminal-app",
-    "resolved-exact-artifact",
-    "process-restart",
-    "src/server/terminalAppRunner.test.ts",
-  ],
-  [
-    "extension",
-    "resolved-exact-artifact",
-    "supervised-restart",
-    "packages/extension-host/src/service.test.ts",
-  ],
-  [
-    "dev-host-current-client",
-    "exact-context-snapshot",
-    "validated-client-ready",
-    "src/server/services/devHostService.test.ts",
-  ],
-  [
-    "dev-host-isolated",
-    "exact-context-snapshot",
-    "candidate-promotion",
-    "workspace/extensions/dev-host/lifecycle.test.ts",
-  ],
+  ["eval-do", "exact-product-seed", "new-eval-incarnation", "execution.eval-do"],
+  ["vcs-store", "exact-product-seed", "bootstrap-manifest", "execution.vcs-store"],
+  ["agent-spawn", "resolved-exact-artifact", "launch", "execution.agent-spawn"],
+  ["panel", "selected-source-ref", "explicit-reload-or-navigation", "execution.panel"],
+  ["electron-app", "resolved-exact-artifact", "load-update", "execution.electron-app"],
+  ["react-native-app", "resolved-exact-artifact", "mobile-install", "execution.react-native-app"],
+  ["terminal-app", "resolved-exact-artifact", "process-restart", "execution.terminal-app"],
+  ["extension", "resolved-exact-artifact", "supervised-restart", "execution.extension"],
   [
     "claude-code",
     "host-plugin-plus-context-state",
     "managed-process-launch",
-    "workspace/extensions/claude-code/index.test.ts",
+    "execution.claude-code",
   ],
-].map(([surface, selector, adoption, assertion]) => ({
+].map(([surface, selector, adoption, testId]) => ({
   surface,
   selector,
   executableIdentity: "full-execution-digest",
@@ -732,75 +690,45 @@ const executionRows = [
   durableStorage: "stable-logical-entity-namespace",
   visibleProgress: "surface-specific-existing-loading-or-status",
   provenance: ["source-state", "recipe", "build-key", "artifact-digest", "execution-digest"],
-  parityAssertion: assertion,
+  evidence: testEvidence(testId),
 }));
 
 const channelRows = [
   [
-    "creation",
-    "explicit atomic structure; subscribe cannot create",
-    "workspace/workers/pubsub-channel/channel-do.test.ts",
-  ],
-  [
-    "first-subscribe",
-    "admission only; never freezes structure",
-    "workspace/workers/pubsub-channel/channel-do.test.ts",
-  ],
-  [
-    "subsequent-subscribe",
-    "live admission policy",
-    "workspace/workers/pubsub-channel/channel-do.test.ts",
+    "ordinary-subscribe",
+    "workspace-authorized identity may atomically initialize ordinary channel context and config; invitation membership is not an ACL",
+    "channel.ordinary.authenticated-admission",
   ],
   [
     "invitation",
-    "discovery metadata for ordinary workspace channels",
-    "workspace/workers/pubsub-channel/channel-do.test.ts",
-  ],
-  [
-    "visibility",
-    "workspace discovery plus explicit channel policy",
-    "workspace/workers/gad-store/gadStore.test.ts",
+    "durable per-user discovery metadata for explicitly invited workspace members; no fabricated presence",
+    "channel.invitation.discovery-metadata",
   ],
   [
     "presence",
-    "multi-human presence retained",
-    "workspace/workers/pubsub-channel/channel-do.test.ts",
-  ],
-  [
-    "presentation-mutation",
-    "immutable structure revision plus authorized presentation revision",
-    "workspace/workers/pubsub-channel/channel-do.test.ts",
+    "one authenticated human identity may own multiple live delivery sessions without duplicating roster presence",
+    "channel.presence.canonical-human",
   ],
   [
     "fork-clone",
-    "new structure revision with explicit origin and context rewrite",
-    "workspace/workers/pubsub-channel/channel-do.test.ts",
-  ],
-  [
-    "owner-loss",
-    "structure retained; explicit administrative recovery",
-    "workspace/workers/pubsub-channel/channel-do.test.ts",
-  ],
-  [
-    "deletion",
-    "tombstoned and reconnect fails deterministically",
-    "workspace/workers/pubsub-channel/channel-do.test.ts",
+    "a fork gets a fresh context and retains the parent log prefix as explicit origin",
+    "channel.fork.context-and-log-origin",
   ],
   [
     "reconnect",
-    "same structure/admission; no authority creation",
-    "workspace/packages/pubsub/src/rpc-client.test.ts",
+    "transport reconnection re-establishes the authenticated subscription and does not create authority",
+    "channel.reconnect.authority-neutral",
   ],
   [
-    "system-agent",
-    "exact-principal locked admission expressible without host special case",
-    "packages/shared/src/channelStructure.ts",
+    "locked-admission",
+    "host initializes one immutable exact-principal policy; subscribe verifies canonical participant identity and active durable-object incarnation",
+    "channel.locked.exact-admission",
   ],
-].map(([behavior, contract, assertion]) => ({
+].map(([behavior, contract, testId]) => ({
   behavior,
   contract,
   policyChange: null,
-  parityAssertion: assertion,
+  evidence: testEvidence(testId),
 }));
 
 const bootstrap = {
@@ -831,8 +759,75 @@ const bootstrap = {
     "webhook handlers",
     "System Agent",
   ],
-  parityAssertion: "src/server/services/runtimeFoundationLedgers.test.ts#bootstrap-acyclic",
+  evidence: generatedCensusEvidence("bootstrap"),
 };
+
+const hostCensusIds = Object.entries(serviceAuthority)
+  .flatMap(([service, entry]) =>
+    Object.keys(entry.methods).map((method) => `host:${service}.${method}`)
+  )
+  .sort();
+const actualHostCensusIds = authorityRows
+  .filter((row) => row.rpcPlane === "host-service" && !row.id.includes("#"))
+  .map((row) => row.id)
+  .sort();
+if (JSON.stringify(actualHostCensusIds) !== JSON.stringify(hostCensusIds)) {
+  throw new Error("Host authority generated census is incomplete or duplicated");
+}
+const directCensusIds = authorityRows
+  .filter((row) => row.rpcPlane === "workspace-do")
+  .map((row) => row.id);
+if (new Set(directCensusIds).size !== directCensusIds.length) {
+  throw new Error("Direct authority generated census contains duplicate methods");
+}
+const bootstrapNodeIds = new Set(bootstrap.nodes.map((node) => node.id));
+const incoming = new Map([...bootstrapNodeIds].map((id) => [id, 0]));
+const outgoing = new Map([...bootstrapNodeIds].map((id) => [id, []]));
+for (const [from, to] of bootstrap.edges) {
+  if (!bootstrapNodeIds.has(from) || !bootstrapNodeIds.has(to)) {
+    throw new Error(`Bootstrap generated census has unknown edge ${from} -> ${to}`);
+  }
+  outgoing.get(from).push(to);
+  incoming.set(to, incoming.get(to) + 1);
+}
+const queue = [...incoming].filter(([, count]) => count === 0).map(([id]) => id);
+let visited = 0;
+while (queue.length > 0) {
+  const id = queue.shift();
+  visited += 1;
+  for (const next of outgoing.get(id)) {
+    incoming.set(next, incoming.get(next) - 1);
+    if (incoming.get(next) === 0) queue.push(next);
+  }
+}
+if (visited !== bootstrapNodeIds.size || queue.length > 0) {
+  throw new Error("Bootstrap generated census contains a dependency cycle");
+}
+
+const materializeEvidence = (ledger, subject, row) => {
+  const { evidence, ...value } = row;
+  return {
+    ...value,
+    parityAssertion: resolveLedgerEvidence({
+      ledger,
+      subject,
+      evidence,
+      registry: evidenceRegistry,
+      used: usedEvidence,
+    }),
+  };
+};
+const serializedAuthorityRows = authorityRows.map((row) =>
+  materializeEvidence("authority-ledger", `row ${JSON.stringify(row.id)}`, row)
+);
+const serializedExecutionRows = executionRows.map((row) =>
+  materializeEvidence("execution-update-ledger", `surface ${JSON.stringify(row.surface)}`, row)
+);
+const serializedChannelRows = channelRows.map((row) =>
+  materializeEvidence("channel-behavior-ledger", `behavior ${JSON.stringify(row.behavior)}`, row)
+);
+const serializedBootstrap = materializeEvidence("bootstrap-dependency-graph", "graph", bootstrap);
+assertNoOrphanEvidence(evidenceRegistry, usedEvidence);
 
 const write = (name, value) => {
   const expected = `${JSON.stringify(value, null, 2)}\n`;
@@ -848,10 +843,10 @@ const write = (name, value) => {
   }
   fs.writeFileSync(target, expected);
 };
-write("execution-update-ledger.json", { version: 1, rows: executionRows });
-write("authority-ledger.json", { version: 1, rows: authorityRows });
-write("channel-behavior-ledger.json", { version: 1, rows: channelRows });
-write("bootstrap-dependency-graph.json", bootstrap);
+write("execution-update-ledger.json", { version: 1, rows: serializedExecutionRows });
+write("authority-ledger.json", { version: 1, rows: serializedAuthorityRows });
+write("channel-behavior-ledger.json", { version: 1, rows: serializedChannelRows });
+write("bootstrap-dependency-graph.json", serializedBootstrap);
 
 const evalSurfaceRows = invocationSubjects.map((row) => ({
   id: row.id,

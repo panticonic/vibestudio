@@ -1224,6 +1224,27 @@ describe("blobstoreService", () => {
       await expect(fsp.readFile(path.join(outDir, "copy.txt"), "utf8")).resolves.toBe("copy me");
     });
 
+    it("materializeTree copy-on-write isolates a writable run tree from CAS", async () => {
+      const digest = await seed("immutable input");
+      const { treeHash } = await putTree(blobsDir, [file("input.txt", digest)]);
+      const outDir = path.join(rootDir, "cow-run");
+      await materializeTree(blobsDir, treeHash, outDir, { strategy: "copy-on-write" });
+      const casPath = path.join(
+        blobsDir,
+        "sha256",
+        digest.slice(0, 2),
+        digest.slice(2, 4),
+        digest.slice(4)
+      );
+      const [cas, run] = await Promise.all([
+        fsp.stat(casPath),
+        fsp.stat(path.join(outDir, "input.txt")),
+      ]);
+      expect(run.ino).not.toBe(cas.ino);
+      await fsp.writeFile(path.join(outDir, "input.txt"), "mutated run input");
+      await expect(fsp.readFile(casPath, "utf8")).resolves.toBe("immutable input");
+    });
+
     it("materializeTree refuses to descend through a pre-existing symlinked subdir", async () => {
       const { rootTree } = await seedFixtureTree();
       const outDir = path.join(rootDir, "symlink-out");

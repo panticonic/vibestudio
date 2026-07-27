@@ -2067,6 +2067,32 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /**
+   * Executable entities that may still run or be selected from panel history.
+   * Retired rows with no slot-history reference are deliberately excluded.
+   */
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "semantic", capability: "workspace.runtime-state.inspect" },
+    tier: "gated",
+    sensitivity: "read",
+  })
+  entityListExecutionRoots(): EntityRecord[] {
+    return this.sql
+      .exec(
+        `SELECT e.*
+           FROM entities e
+          WHERE e.active_build_key IS NOT NULL
+            AND (
+              e.status = 'active'
+              OR EXISTS (SELECT 1 FROM slot_history h WHERE h.entity_id = e.id)
+            )
+          ORDER BY e.id`
+      )
+      .toArray()
+      .map((row) => this.rowToEntity(row as unknown as DbEntityRow));
+  }
+
+  /**
    * Return every entity record attached to a context, including retired rows.
    * Context ownership must survive entity retirement long enough for the
    * creator to reclaim the now-empty context without acquiring foreign-state

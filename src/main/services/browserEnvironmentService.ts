@@ -22,21 +22,25 @@ export function createBrowserEnvironmentService(deps: {
     Object.keys(browserEnvironmentMethods).map((method) => [
       `${BROWSER_ENVIRONMENT_BROKER_AUTHORITY_PREFIX}.${method}`,
       (ctx: Parameters<NonNullable<ServiceDefinition["authorityPreparation"]>[string]>[0]) => {
-        if (!ctx.caller.code && !ctx.caller.executionSession) return [];
+        if (!ctx.caller.code && !ctx.caller.executionSession)
+          return { selections: [], payload: null };
         const capability = `service:browserEnvironment.${method}`;
-        return [
-          selectedPreparedAuthoritySelection({
-            capability,
-            resourceKey: capability,
-            requirement: allOf(
-              requirementForPrincipals(["code"], capability),
-              relationship(
-                "code-source",
-                deps.browserDataBrokerRepoPath ?? "__no_browser_data_broker_declared__"
-              )
-            ),
-          }),
-        ];
+        return {
+          selections: [
+            selectedPreparedAuthoritySelection({
+              capability,
+              resourceKey: capability,
+              requirement: allOf(
+                requirementForPrincipals(["code"], capability),
+                relationship(
+                  "code-source",
+                  deps.browserDataBrokerRepoPath ?? "__no_browser_data_broker_declared__"
+                )
+              ),
+            }),
+          ],
+          payload: null,
+        };
       },
     ])
   );

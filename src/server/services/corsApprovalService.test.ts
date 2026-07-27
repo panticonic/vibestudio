@@ -29,12 +29,15 @@ describe("corsApprovalService", () => {
           requestOrigin: "http://localhost:9100",
         },
       ])
-    ).toEqual([
-      expect.objectContaining({
-        capability: "network.response.read",
-        resourceKey: "https://api.example.com",
-      }),
-    ]);
+    ).toEqual({
+      selections: [
+        expect.objectContaining({
+          capability: "network.response.read",
+          resourceKey: "https://api.example.com",
+        }),
+      ],
+      payload: null,
+    });
   });
 
   it("reports the dispatcher decision without running a second approval path", async () => {

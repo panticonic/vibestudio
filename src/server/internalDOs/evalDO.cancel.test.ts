@@ -20,9 +20,21 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@vibestudio/durable/test-utils";
 import type { RpcCallOptions } from "@vibestudio/rpc";
+import type { Sha256 } from "@vibestudio/shared/execution/identity";
+import {
+  executionArtifactDigest,
+  executionSourceClosureDigest,
+  type ExecutionArtifactRefV1,
+} from "@vibestudio/shared/execution/retention";
 import { EvalDO } from "./evalDO.js";
 
-type RunResult = { success: boolean; console: string; returnValue?: unknown; error?: string };
+type RunResult = {
+  success: boolean;
+  console: string;
+  returnValue?: unknown;
+  error?: string;
+  failureCode?: string;
+};
 type RunLockedFn = (args: unknown, signal?: AbortSignal, runId?: string) => Promise<RunResult>;
 
 /** Access a private method/field on the instance without TS visibility friction (test-only). */
@@ -31,6 +43,41 @@ function priv<T = unknown>(instance: object, key: string): T {
 }
 function setPriv(instance: object, key: string, value: unknown): void {
   (instance as unknown as Record<string, unknown>)[key] = value;
+}
+
+function executionArtifact(): ExecutionArtifactRefV1 {
+  const effectiveVersion = "e".repeat(64) as Sha256;
+  const buildKey = "b".repeat(64) as Sha256;
+  const artifactDigest = "a".repeat(64) as Sha256;
+  const contentRoots = [{ repoPath: "packages/example", stateHash: `state:${"c".repeat(64)}` }];
+  return {
+    version: 1,
+    sourceState: {
+      kind: "workspace",
+      workspaceId: "workspace:test",
+      effectiveVersion,
+      state: { kind: "event", eventId: "event:test" },
+      contentRoots,
+      sourceClosureDigest: executionSourceClosureDigest(contentRoots),
+    },
+    recipeDigest: buildKey,
+    buildKey,
+    artifactDigest,
+    executionDigest: executionArtifactDigest({
+      version: 1,
+      sourceState: {
+        kind: "workspace",
+        workspaceId: "workspace:test",
+        effectiveVersion,
+        state: { kind: "event", eventId: "event:test" },
+        contentRoots,
+        sourceClosureDigest: executionSourceClosureDigest(contentRoots),
+      },
+      recipeDigest: buildKey,
+      buildKey,
+      artifactDigest,
+    }),
+  };
 }
 
 /**
@@ -64,11 +111,17 @@ function seedPendingRun(
   runId: string,
   args: Record<string, unknown> = { code: "return 1;", contextId: "ctx" }
 ): void {
+  const normalizedArgs = {
+    intentDigest: "i".repeat(64),
+    scopeInputRevision: "scope:initial",
+    runDigest: "r".repeat(64),
+    ...args,
+  };
   sql.exec(
     `INSERT INTO runs (run_id, args, agent_ref, channel_id, status, started_at, deadline_at)
      VALUES (?, ?, NULL, NULL, 'pending', ?, NULL)`,
     runId,
-    JSON.stringify(args),
+    JSON.stringify(normalizedArgs),
     Date.now()
   );
 }
@@ -205,6 +258,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       runId: "background-run",
       code: "return 7",
       agentRef: "do:workers/agent-worker:AiChatWorker:agent-1",
+      resultReceiverRef: "do:workers/agent-worker:AiChatWorker:agent-1",
       agentInvocationId: "invocation-1",
       channelId: "channel-1",
     });
@@ -229,11 +283,34 @@ describe("EvalDO cancellation + forced recovery", () => {
     );
   });
 
+  it("durably retains verified workspace import executions until disposal", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    setPriv(instance, "runLocked", () =>
+      Promise.resolve({ success: true, console: "", returnValue: 1 })
+    );
+    await instance.startRun({ runId: "root-run", code: "return 1" });
+    const artifact = executionArtifact();
+
+    instance.retainExecutionRoot("root-run", "@workspace/example", artifact);
+    instance.retainExecutionRoot("root-run", "@workspace/example", artifact);
+    expect(instance.listRetainedExecutionRoots()).toEqual([
+      {
+        runId: "root-run",
+        moduleSpecifier: "@workspace/example",
+        artifact,
+      },
+    ]);
+
+    await instance.dispose();
+    expect(instance.listRetainedExecutionRoots()).toEqual([]);
+  });
+
   it("refreshes pending host credentials without changing the semantic run identity", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     seedPendingRun(sql, "credential-redrive", {
       runId: "credential-redrive",
       code: "return 7",
+      intentDigest: "i".repeat(64),
       gatewayToken: "gateway-old",
       executionSessionNonce: "session-old",
     });
@@ -249,12 +326,19 @@ describe("EvalDO cancellation + forced recovery", () => {
         {
           runId: "credential-redrive",
           code: "return 7",
+          intentDigest: "i".repeat(64),
           gatewayToken: "gateway-new",
           executionSessionNonce: "session-new",
         },
         false
       )
-    ).resolves.toEqual({ runId: "credential-redrive", status: "pending" });
+    ).resolves.toEqual({
+      runId: "credential-redrive",
+      runDigest: "r".repeat(64),
+      scopeInputRevision: "scope:initial",
+      status: "pending",
+      existing: true,
+    });
     const stored = JSON.parse(
       String(
         sql.exec(`SELECT args FROM runs WHERE run_id = 'credential-redrive'`).toArray()[0]?.["args"]
@@ -271,8 +355,76 @@ describe("EvalDO cancellation + forced recovery", () => {
         {
           runId: "credential-redrive",
           code: "return 8",
+          intentDigest: "different-intent",
           gatewayToken: "gateway-newer",
           executionSessionNonce: "session-newer",
+        },
+        false
+      )
+    ).rejects.toThrow(/reused with different input/);
+  });
+
+  it("binds exact source and the EvalDO-owned scope input revision across replay", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const enqueue = priv<
+      (
+        args: Record<string, unknown> & { runId: string },
+        schedule: boolean
+      ) => Promise<{
+        runId: string;
+        runDigest: string;
+        scopeInputRevision: string;
+        status: string;
+        existing: boolean;
+      }>
+    >(instance, "enqueueRun").bind(instance);
+    const accepted = await enqueue(
+      {
+        runId: "exact-source-replay",
+        code: "return 1",
+        sourcePath: "scripts/check.ts",
+        sourceDigest: "a".repeat(64),
+        sourceState: { kind: "event", eventId: "event:one" },
+        contentStateHash: `state:${"b".repeat(64)}`,
+        intentDigest: "c".repeat(64),
+      },
+      false
+    );
+    expect(accepted).toMatchObject({
+      scopeInputRevision: "scope:initial",
+      existing: false,
+      runDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+
+    await expect(
+      enqueue(
+        {
+          runId: "exact-source-replay",
+          code: "return 1",
+          sourcePath: "scripts/check.ts",
+          sourceDigest: "a".repeat(64),
+          sourceState: { kind: "event", eventId: "event:one" },
+          contentStateHash: `state:${"b".repeat(64)}`,
+          intentDigest: "c".repeat(64),
+        },
+        false
+      )
+    ).resolves.toMatchObject({
+      scopeInputRevision: accepted.scopeInputRevision,
+      runDigest: accepted.runDigest,
+      existing: true,
+    });
+
+    await expect(
+      enqueue(
+        {
+          runId: "exact-source-replay",
+          code: "return 2",
+          sourcePath: "scripts/check.ts",
+          sourceDigest: "d".repeat(64),
+          sourceState: { kind: "event", eventId: "event:two" },
+          contentStateHash: `state:${"e".repeat(64)}`,
+          intentDigest: "f".repeat(64),
         },
         false
       )
@@ -394,6 +546,38 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(persisted.status).toBe("done");
     expect(persisted.result).toEqual(result);
     expect(JSON.stringify(persisted.result).length).toBeLessThan(250_000);
+  });
+
+  it("persists approval route loss as a distinct restartable terminal condition", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    setPriv(instance, "runLocked", () =>
+      Promise.reject(
+        Object.assign(new Error("parent callback disconnected"), {
+          code: "EAPPROVALROUTELOST",
+        })
+      )
+    );
+    seedPendingRun(sql, "route-lost-run");
+
+    await expect(
+      priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+        instance,
+        "route-lost-run"
+      )
+    ).resolves.toMatchObject({
+      success: false,
+      failureCode: "approval-route-lost",
+      error: expect.stringContaining("restart"),
+    });
+    expect(
+      priv<(id: string) => { status: string; result?: RunResult }>(instance, "getRun").call(
+        instance,
+        "route-lost-run"
+      )
+    ).toMatchObject({
+      status: "approval-route-lost",
+      result: { failureCode: "approval-route-lost" },
+    });
   });
 
   it("retains a small structured return for REPL-style follow-up inspection", async () => {
@@ -1099,6 +1283,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         createRpcFs: () => ({}),
         createRuntimeParentHandle: () => null,
         createServicesProxy: () => ({}),
+        createAttachedHostsApi: () => ({}),
         createWorkerdClient: () => ({}),
       })
     );
@@ -1257,6 +1442,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         createRpcFs: () => ({}),
         createRuntimeParentHandle: () => null,
         createServicesProxy: () => ({}),
+        createAttachedHostsApi: () => ({}),
         createWorkerdClient: () => ({}),
       })
     );
@@ -1358,6 +1544,9 @@ describe("EvalDO cancellation + forced recovery", () => {
       (args: { runId: string; code: string; reset: boolean }) => Promise<{
         runId: string;
         status: string;
+        existing: boolean;
+        runDigest: string;
+        scopeInputRevision: string;
       }>
     >(instance, "startRun").call(instance, {
       runId: "reset-run",
@@ -1365,7 +1554,13 @@ describe("EvalDO cancellation + forced recovery", () => {
       reset: true,
     });
 
-    expect(first).toEqual({ runId: "reset-run", status: "pending" });
+    expect(first).toMatchObject({
+      runId: "reset-run",
+      status: "pending",
+      existing: false,
+      scopeInputRevision: "reset:reset-run",
+      runDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
     const tablesAfterFirst = sql
       .exec(`SELECT name FROM sqlite_master WHERE type='table'`)
       .toArray()
@@ -1378,6 +1573,9 @@ describe("EvalDO cancellation + forced recovery", () => {
       (args: { runId: string; code: string; reset: boolean }) => Promise<{
         runId: string;
         status: string;
+        existing: boolean;
+        runDigest: string;
+        scopeInputRevision: string;
       }>
     >(instance, "startRun").call(instance, {
       runId: "reset-run",
@@ -1385,7 +1583,13 @@ describe("EvalDO cancellation + forced recovery", () => {
       reset: true,
     });
 
-    expect(replay).toEqual({ runId: "reset-run", status: "pending" });
+    expect(replay).toMatchObject({
+      runId: "reset-run",
+      status: "pending",
+      existing: true,
+      scopeInputRevision: first.scopeInputRevision,
+      runDigest: first.runDigest,
+    });
     expect(
       sql.exec(`SELECT name FROM sqlite_master WHERE name='user_after_insert'`).toArray()
     ).toHaveLength(1);
@@ -1438,6 +1642,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         createRpcFs: () => ({}),
         createRuntimeParentHandle: () => null,
         createServicesProxy: () => ({}),
+        createAttachedHostsApi: () => ({}),
         createWorkerdClient: () => ({}),
       })
     );

@@ -123,7 +123,8 @@ Authority principals: `code`, `host`, `user`
 | `build.listRecentBuildEvents` | List recent state-triggered build lifecycle events and failures, optionally filtered by unit name or workspace-relative path. |
 | `build.doctorExtension` | Inspect an extension manifest, dependency routing, cached metadata, and smoke/build status. |
 | `build.recompute` | Rediscover the package graph, recompute every unit's effective version, rebuild any changed buildable units, and return the set of changed/added/removed units. |
-| `build.gc` | Garbage-collect cached build artifacts not referenced by the given active units; returns the number of artifacts freed. |
+| `build.gc` | Inspect authoritative execution retention using host-owned roots without mutating artifacts or source content. Destructive collection is private to the coordinated host epoch. |
+| `build.inspectExecution` | Explain one immutable execution identity, its authoritative owners, and whether its artifact and source closure remain reconstructible. |
 | `build.getAboutPages` | List available about pages for the launcher UI. |
 | `build.hasUnit` | Whether a build unit with this name exists in the workspace graph. |
 | `build.getPanelMetadata` | Launcher metadata (source path, title, description, launcher visibility) for a panel unit, or null if the name is absent or not a panel. |
@@ -168,6 +169,39 @@ Authority principals: `code`, `host`, `user`
 | `credentials.completeCapture` | Complete a pending server-initiated session credential capture (`credential:capture-request` event) with the captured material or an error; callable only by the attached desktop shell. |
 | `credentials.audit` | Query the credential egress audit log (optionally filtered by provider/connection/caller/since, paged by limit/after). |
 
+## `development`
+
+Exact semantic development sessions and reviewed private build execution
+
+Authority principals: `code`, `host`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `development.openSession` | Fork the caller's exact semantic working state. Semantic mode stays in the control plane; native-tool mode launches the selected reviewed local tool in a private owned terminal and tree. |
+| `development.getSession` | Read an owned development session. |
+| `development.listSessions` | Page development sessions owned by the caller in stable newest-first order. |
+| `development.closeSession` | Close a development session idempotently while retaining its semantic child context. |
+| `development.destroySession` | Close a development session and destroy its owned semantic child context. Active runs are refused. |
+| `development.retrySessionCleanup` | Retry the previously requested destruction of a session's owned semantic child context. |
+| `development.keepSessionRepair` | Keep a session repair record without performing cleanup. Read the session to inspect it. |
+| `development.listRecipes` | List the reviewed build recipes. No method accepts a command line. |
+| `development.listNativeTools` | List reviewed native development tools with live executor availability and an actionable unavailable reason. |
+| `development.start` | Build one exact semantic snapshot in a private root. A caller-owned runId is the sole start idempotency key. |
+| `development.get` | Read one owned development run. |
+| `development.list` | Page owned development runs with stable newest-first cursors and optional session/state filters. |
+| `development.events` | Page bounded durable run events. Subscribe to development:run-event for live delivery. |
+| `development.stop` | Stop an owned build process and record exact cleanup outcome. |
+| `development.retry` | Retry a failed exact build from its retained snapshot under the same native-execution authority contract. |
+| `development.keepRunRepair` | Keep a run repair record. Read the run to inspect it. |
+| `development.forceRetire` | Abandon a failed run and remove only execution effects whose ownership is proven. |
+| `development.forceRetireSession` | Abandon a broken session after attempting cleanup of its proven-owned semantic context. |
+| `development.checkpoint` | Freeze an owned native tool, import one exact external snapshot into the development child, and resume the tool. |
+| `development.inspectNative` | Inspect native session ownership, checkpoint, repair, and optionally exact pending-change state. |
+| `development.stopNativeTool` | Stop the exact owned native tool process group while retaining its terminal and writable tree for inspection. |
+| `development.readNativeTerminal` | Read bounded scrollback from the native session's owned terminal. |
+| `development.writeNativeTerminal` | Write interactive input to the native session's owned terminal. |
+| `development.resizeNativeTerminal` | Resize the native session's owned terminal. |
+
 ## `docs`
 
 Agent-facing capability catalog: discover services and runtime APIs with typed schemas, access rules, and examples (results filtered to what the caller may invoke).
@@ -201,11 +235,11 @@ Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `eval.run` | Run TypeScript/JS in the caller's per-owner EvalDO notebook (activation-resident live heap plus exact cold scope recovery and synchronous in-DO SQLite `db`). Kernel restarts report exact restored/lost keys. Set reset:true to atomically clear scope/db before this run. Owner is the verified caller; fs is scoped to the owner's context. |
+| `eval.start` | Durably accept one caller-owned eval run. A new run executes asynchronously in the owner's EvalDO; replaying the same runId and exact input observes the same run, while input drift is rejected. A trivially fast or replayed settled run may return its terminal snapshot immediately. |
+| `eval.get` | Read the canonical durable snapshot for a caller-owned eval run. This is a recovery/backstop read; agent-owned runs normally settle through the EvalDO's terminal completion push. |
+| `eval.events` | Read one stable, bounded page of durable events for a caller-owned eval run. Subscribe to the canonical eval:run-event through events.watch for live delivery, then use this cursor page to catch up after reconnect or backpressure. |
 | `eval.reset` | Reset the eval context: wipe the live/durable scope and user `db` tables while preserving kernel infrastructure. The owner's existing eval data is cleared. |
 | `eval.dispose` | Permanently release one owner-scoped eval kernel and erase its scope, run records, loaded modules, runtime image, and entity registration. Use this for explicitly finite eval scopes; ordinary notebooks remain durable until disposed. |
-| `eval.startRun` | Start an asynchronous eval for an agent DO: returns a runId after the EvalDO durably records and schedules the idempotent run; reset:true atomically clears scope/db before first insertion. The owning EvalDO delivers the result directly to its agent, while getRun reads the canonical durable result for recovery. Panels/CLI should use run for a one-request result. |
-| `eval.getRun` | Poll an async run started with startRun: returns its status, latest durable progress heartbeat, and (when done) result. Treat cancelling as non-terminal; registered cleanup still owns live execution authority until cancelled. |
 | `eval.readScopeTextPage` | Read a bounded page from a string in the caller's current durable eval scope. Use this to retrieve a large eval result losslessly after an eval caches it under a scope key; pages are UTF-16LE base64 so every JavaScript string code unit round-trips exactly. |
 | `eval.deleteScopeValue` | Delete one value from the caller's current durable eval scope and persist the deletion. Intended for cleaning up temporary keys used by lossless large-result paging. |
 | `eval.cancel` | Cancel an in-flight or pending run by runId. The durable status is cancelling while registered cleanup runs and becomes cancelled only after cleanup settles, so evaluated-execution authority remains valid for teardown. Cooperative cancellation preserves other runs and scope and returns forcedReset:false. If the run or its cleanup does not settle within the recovery grace period, the EvalDO cancels all non-terminal runs, resets its shared scope/user db, and returns forcedReset:true. A terminal run is a no-op with forcedReset:false. |

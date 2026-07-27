@@ -17,20 +17,27 @@ import type { WorkspaceStateSource } from "./stateTrigger.js";
 import { discoverPackageGraph } from "./packageGraph.js";
 
 const APP_NODE_MODULES = [path.resolve(__dirname, "../../../node_modules")];
+const TEST_STATE = `state:${"a".repeat(64)}`;
+const CONTEXT_STATE = `state:${"b".repeat(64)}`;
+const RESOLVE_CONTEXT_STATE = `state:${"c".repeat(64)}`;
 
 /** Serves the working tree as the (only) workspace state. */
 function fakeWorkspaceSource(
   getWorkspaceRoot: () => string
 ): WorkspaceStateSource & BuildSourceProvider {
   return {
+    workspaceId: "workspace:test",
     async ensureFresh() {
-      return { stateHash: "state:test" };
+      return { stateHash: TEST_STATE };
     },
     async unitHashes(_stateHash, relPaths) {
       return Object.fromEntries(relPaths.map((relPath) => [relPath, `h:${relPath}`]));
     },
     async resolveContextState() {
-      return "state:test";
+      return TEST_STATE;
+    },
+    semanticStateForContent(stateHash) {
+      return { kind: "event", eventId: `event:${stateHash}` };
     },
     async discoverGraph() {
       return discoverPackageGraph(getWorkspaceRoot());
@@ -56,6 +63,7 @@ function fakeMultiStateWorkspaceSource(
     return root;
   };
   return {
+    workspaceId: "workspace:test",
     async ensureFresh() {
       return { stateHash: mainStateHash };
     },
@@ -69,7 +77,10 @@ function fakeMultiStateWorkspaceSource(
       );
     },
     async resolveContextState(contextId) {
-      return heads[`ctx:${contextId}`] ?? "state:test";
+      return heads[`ctx:${contextId}`] ?? TEST_STATE;
+    },
+    semanticStateForContent(stateHash) {
+      return { kind: "event", eventId: `event:${stateHash}` };
     },
     async discoverGraph(stateHash) {
       return discoverPackageGraph(rootForState(stateHash));
@@ -454,10 +465,10 @@ describe("BuildSystemV2 library package subpaths", () => {
       fakeMultiStateWorkspaceSource(
         {
           "state:main": mainRoot,
-          "state:ctx": contextRoot,
+          [CONTEXT_STATE]: contextRoot,
         },
         "state:main",
-        { "ctx:agent-1": "state:ctx" }
+        { "ctx:agent-1": CONTEXT_STATE }
       ),
       APP_NODE_MODULES
     );
@@ -509,10 +520,10 @@ describe("BuildSystemV2 library package subpaths", () => {
       fakeMultiStateWorkspaceSource(
         {
           "state:main-resolve": mainRoot,
-          "state:ctx-resolve": contextRoot,
+          [RESOLVE_CONTEXT_STATE]: contextRoot,
         },
         "state:main-resolve",
-        { "ctx:agent-resolve": "state:ctx-resolve" }
+        { "ctx:agent-resolve": RESOLVE_CONTEXT_STATE }
       ),
       APP_NODE_MODULES
     );
@@ -524,7 +535,7 @@ describe("BuildSystemV2 library package subpaths", () => {
       unitPath: "panels/context-panel",
       unitName: "@workspace-panels/context-panel",
       kind: "panel",
-      stateHash: "state:ctx-resolve",
+      stateHash: RESOLVE_CONTEXT_STATE,
     });
   });
 });

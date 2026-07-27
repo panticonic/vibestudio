@@ -36,4 +36,37 @@ describe("reviewed host method tiers", () => {
       session: "family",
     });
   });
+
+  it("keeps development inspection frictionless while reviewing durable and native effects", () => {
+    for (const method of [
+      "build.inspectExecution",
+      "development.getSession",
+      "development.listSessions",
+      "development.listRecipes",
+      "development.listNativeTools",
+      "development.get",
+      "development.list",
+      "development.events",
+      "development.openSession",
+      "development.closeSession",
+      "development.stop",
+      "development.keepRunRepair",
+      "development.keepSessionRepair",
+    ] as const) {
+      expect(METHOD_TIERS[method]).toMatchObject({ tier: "open", session: "family" });
+    }
+
+    for (const method of ["development.start", "development.retry"] as const) {
+      expect(METHOD_TIERS[method]).toMatchObject({ tier: "gated", session: "family" });
+    }
+
+    for (const method of [
+      "development.destroySession",
+      "development.retrySessionCleanup",
+      "development.forceRetireSession",
+      "development.forceRetire",
+    ] as const) {
+      expect(METHOD_TIERS[method]).toMatchObject({ tier: "critical", session: "family" });
+    }
+  });
 });

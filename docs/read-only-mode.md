@@ -57,33 +57,39 @@ await rpc.call("main", "blobstore.getText", [digest], { readOnly: true }); // �
 
 ### Per eval run (the agent entry point)
 
-`eval.run({ readOnly: true, code })` runs the whole sandbox session read-only: every
-service call the eval code makes — `services.*`, the ambient `rpc`, the runtime bindings
-(`fs`/`vcs`/`workers`/…) — carries `readOnly`, so the dispatcher refuses any non-`read`
-method.
+An eval started with `authority.effects: "read-only"` runs that exact durable run
+read-only: every service call the eval code makes — `services.*`, the ambient `rpc`, and
+the runtime bindings (`fs`/`vcs`/`workers`/…) — carries the derived read-only delivery
+flag, so the dispatcher refuses any non-`read` method.
 
 ```ts
-await eval.run({
-  readOnly: true,
-  code: `
-    await services.blobstore.getText(digest);  // ok
-    await services.fs.writeFile("/x", "y");     // throws: Blocked in read-only mode
-  `,
+const executeEval = createEvalExecutor((method, args) => rpc.call("main", method, args));
+await executeEval({
+  runId: crypto.randomUUID(),
+  source: {
+    kind: "inline",
+    code: `
+      await services.blobstore.getText(digest);  // ok
+      await services.fs.writeFile("/x", "y");    // throws: Blocked in read-only mode
+    `,
+  },
+  authority: { effects: "read-only" },
 });
 ```
 
-The EvalDO threads the flag per-run, the same way it threads `parentMeta`: the cached
-hosted-runtime rpc wrapper and `callMainService` read the live `currentRunReadOnly`, and
-the per-run `callOptions` cover the ambient `rpc` / `chat` paths. **DO-infrastructure
-calls** (durable state, trajectory writes) use the unwrapped client, so they are never
+The service normalizes the authority intent into the immutable admitted run manifest.
+The EvalDO derives the live per-run flag from that manifest: the cached hosted-runtime
+RPC wrapper and `callMainService` read `currentRunReadOnly`, and the per-run
+`callOptions` cover the ambient `rpc` / `chat` paths. **DO-infrastructure calls**
+(durable state, trajectory writes) use the unwrapped client, so they are never
 read-only-blocked.
 
 ## Propagation path
 
 ```
-eval.run({readOnly:true})            packages/service-schemas/src/eval.ts (evalRunArgsSchema.readOnly)
-  → evalService.prepareRun           → assembledArgs.readOnly
-  → EvalDO.runLocked                  → currentRunReadOnly (host-rpc Proxy + callOptions + callMainService)
+eval.start({authority:{effects:"read-only"}})
+  → evalService.prepareRun           → normalized, admitted per-run authority manifest
+  → EvalDO.runLocked                 → immutable per-run RPC context (host-rpc Proxy + callOptions)
   → rpc.call(…, {readOnly:true})     packages/rpc: RpcCallOptions.readOnly
   → envelope.delivery.readOnly        client.ts makeEnvelope
   → rpcServer.handleEnvelopeRequest   → ctx.readOnly = delivery.readOnly

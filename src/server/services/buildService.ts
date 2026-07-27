@@ -120,7 +120,9 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
       listRecentBuildEvents: (_ctx, [unit]) => deps.buildSystem.listRecentBuildEvents(unit),
       doctorExtension: (_ctx, [source]) => deps.buildSystem.doctorExtension(source),
       recompute: () => deps.buildSystem.recompute(),
-      gc: (_ctx, [activeUnits]) => deps.buildSystem.gc(activeUnits),
+      gc: () => deps.buildSystem.gc(),
+      inspectExecution: (_ctx, [executionDigest]) =>
+        deps.buildSystem.inspectExecution(executionDigest),
       getAboutPages: () => deps.buildSystem.getAboutPages(),
       hasUnit: (_ctx, [unit]) => deps.buildSystem.hasUnit(unit),
       getPanelMetadata: (_ctx, [unit]) => {

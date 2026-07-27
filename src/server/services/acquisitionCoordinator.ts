@@ -13,7 +13,14 @@ import { createHash } from "node:crypto";
 import { authorityRow } from "@vibestudio/shared/authority/authorityRows";
 import { testPolicyAuthorityDecision } from "./authorityRuntime.js";
 
-type AuthorityAcquisitionDecision = "once" | "task" | "agent" | "lock" | "version" | "deny";
+type AuthorityAcquisitionDecision =
+  | "once"
+  | "session"
+  | "task"
+  | "agent"
+  | "lock"
+  | "version"
+  | "deny";
 
 export interface AcquisitionRequestInput {
   snapshot: InvocationSnapshot;
@@ -566,6 +573,29 @@ export class AcquisitionCoordinator {
       });
       return;
     }
+    if (decision === "session") {
+      this.deps.grantStore.issue({
+        effect: "allow",
+        capability: input.snapshot.capability,
+        resource: input.resource,
+        subject: sessionSubject,
+        constraints: {
+          sessionId: input.snapshot.sessionId,
+          ...(input.snapshot.agentBindingId
+            ? { agentBindingId: input.snapshot.agentBindingId }
+            : {}),
+          ...(input.snapshot.mission === "-" ? {} : { missionSubject: input.snapshot.mission }),
+          lineageAtConsent,
+        },
+        issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
+        provenance: "acquisition",
+        scope: "session",
+        ...(input.presentation?.grantExpiresAt
+          ? { expiresAt: input.presentation.grantExpiresAt }
+          : {}),
+      });
+      return;
+    }
     if (decision === "task") {
       if (!input.snapshot.taskRef) {
         throw new Error("Task approval requires an attested task reference");
@@ -641,6 +671,9 @@ export class AcquisitionCoordinator {
       constraints: { lineageAtConsent: [] },
       issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
       provenance: "acquisition",
+      ...(input.presentation?.grantExpiresAt
+        ? { expiresAt: input.presentation.grantExpiresAt }
+        : {}),
     });
   }
 }
@@ -736,6 +769,7 @@ function decisionsForOrigin(
   if (input.snapshot.callerPrincipal.startsWith("session:")) {
     return [
       "once",
+      "session",
       "task",
       ...(input.snapshot.agentBindingId && input.snapshot.agentScopeEligible
         ? (["agent", "lock"] as const)
@@ -772,6 +806,7 @@ function isAuthorityAcquisitionDecision(
 ): decision is AuthorityAcquisitionDecision {
   return (
     decision === "once" ||
+    decision === "session" ||
     decision === "task" ||
     decision === "agent" ||
     decision === "lock" ||

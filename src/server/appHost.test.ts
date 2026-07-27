@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
@@ -11,6 +12,12 @@ import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
+import { domainHash } from "@vibestudio/shared/execution/identity";
+import {
+  executionArtifactDigest,
+  executionSourceClosureDigest,
+} from "@vibestudio/shared/execution/retention";
 import { AppHost } from "./appHost.js";
 import { ServerUnitApprovalCoordinator } from "./unitApprovalCoordinator.js";
 import type { BuildMetadata } from "./buildV2/buildStore.js";
@@ -25,8 +32,16 @@ const REACT_NATIVE_PROVIDER = {
 };
 const TEST_EXECUTION_IDENTITY: NonNullable<BuildMetadata["execution"]> = {
   version: 1,
-  source: { repoPath: "apps/shell", effectiveVersion: "b".repeat(64) as never },
-  buildInputDigest: "c".repeat(64) as never,
+  sourceState: {
+    kind: "workspace",
+    workspaceId: "workspace:test",
+    effectiveVersion: "b".repeat(64) as never,
+    state: { kind: "event", eventId: "event:test" },
+    contentRoots: [{ repoPath: "apps/shell", stateHash: `state:${"e".repeat(64)}` }],
+    sourceClosureDigest: "f".repeat(64) as never,
+  },
+  recipeDigest: "c".repeat(64) as never,
+  buildKey: "c".repeat(64) as never,
   artifactDigest: "d".repeat(64) as never,
   executionDigest: "a".repeat(64) as never,
 };
@@ -1208,7 +1223,7 @@ describe("AppHost", () => {
     expect(host.hasAppCapability("app:apps/mobile:device-1", "panel-hosting")).toBe(false);
   });
 
-  it("records explicit host trust identity when activating a pinned ref", async () => {
+  ledgerTest("execution.electron-app", async () => {
     const { host, buildSystem, graphNode, root } = makeHarness();
     graphNode.manifest.app.capabilities = ["panel-hosting", "notifications"] as never;
     const pinnedBuild = {
@@ -1370,25 +1385,66 @@ describe("AppHost", () => {
     installApp(host, graphNode);
     const outDir = path.join(tempRoot(), "dist", "baked-app");
     const activeBuild = buildSystem.getBuildByKey("app-key");
-    buildSystem.getBuildByKey.mockReturnValueOnce({
-      ...activeBuild,
-      artifacts: activeBuild?.artifacts?.map((artifact) => ({
+    const buildKey = "b".repeat(64);
+    const effectiveVersion = "e".repeat(64);
+    const sourceStateHash = `state:${"c".repeat(64)}`;
+    host.registry.patch(graphNode.name, {
+      activeBundleKey: buildKey,
+      activeEv: effectiveVersion,
+      activeSourceHash: sourceStateHash,
+    });
+    const artifacts =
+      activeBuild?.artifacts?.map((artifact) => ({
         ...artifact,
         integrity: `sha256-${"a".repeat(64)}`,
-      })),
+      })) ?? [];
+    const artifactDigest = domainHash(
+      "vibestudio/build-v2-artifacts/v1",
+      canonicalJson(
+        artifacts.map(({ content: _content, ...artifact }) => ({
+          path: artifact.path,
+          role: artifact.role,
+          contentType: artifact.contentType,
+          encoding: artifact.encoding,
+          platform: (artifact as { platform?: string }).platform ?? null,
+          integrity: artifact.integrity ?? null,
+        }))
+      )
+    );
+    const contentRoots = [{ repoPath: "apps/shell", stateHash: sourceStateHash }];
+    const unsignedExecution = {
+      version: 1 as const,
+      sourceState: {
+        kind: "workspace" as const,
+        workspaceId: "workspace:test",
+        effectiveVersion: effectiveVersion as never,
+        state: { kind: "event" as const, eventId: "event:test" },
+        contentRoots,
+        sourceClosureDigest: executionSourceClosureDigest(contentRoots),
+      },
+      recipeDigest: buildKey as never,
+      buildKey: buildKey as never,
+      artifactDigest,
+    };
+    const execution = {
+      ...unsignedExecution,
+      executionDigest: executionArtifactDigest(unsignedExecution),
+    };
+    buildSystem.getBuildByKey.mockReturnValueOnce({
+      ...activeBuild,
+      buildKey,
+      sourceStateHash,
+      artifacts,
       metadata: {
         ...TEST_SEALED_APP_BUILD_METADATA,
         ...activeBuild?.metadata,
-        buildKey: "app-key",
+        buildKey,
         sourcePath: "apps/shell",
+        sourceStateHash,
+        sourceSemanticState: { kind: "event", eventId: "event:test" },
+        ev: effectiveVersion,
         authority: { requests: [] },
-        execution: {
-          version: 1,
-          source: { repoPath: "apps/shell", effectiveVersion: "e".repeat(64) },
-          buildInputDigest: "b".repeat(64),
-          artifactDigest: "a".repeat(64),
-          executionDigest: "d".repeat(64),
-        },
+        execution,
       },
     } as never);
 
@@ -1401,11 +1457,11 @@ describe("AppHost", () => {
         target: "electron",
       },
       build: {
-        key: "app-key",
-        effectiveVersion: "ev-app",
+        key: buildKey,
+        effectiveVersion,
         target: "electron",
         integrity: "sha256-app",
-        executionDigest: "d".repeat(64),
+        executionDigest: execution.executionDigest,
         authorityRequests: [],
       },
     });
@@ -2788,7 +2844,7 @@ describe("AppHost", () => {
     );
   });
 
-  it("activates React Native builds with a single platform primary artifact", async () => {
+  ledgerTest("execution.react-native-app", async () => {
     const { host, buildSystem, graphNode } = makeHarness();
     setAppManifestTarget(graphNode, "react-native", ["notifications"]);
     buildSystem.getBuildProviderDetails.mockReturnValue(REACT_NATIVE_PROVIDER);

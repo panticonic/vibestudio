@@ -19,6 +19,9 @@ import { contextIntegrityMethods } from "./contextIntegrity.js";
 import { corsApprovalMethods } from "./corsApproval.js";
 import { ConnectCredentialSpecSchema, credentialsMethods } from "./credentials.js";
 import { docsMethods } from "./docs.js";
+import { developmentMethods } from "./development.js";
+import { developmentClientExecutorMethods } from "./developmentClientExecutor.js";
+import { attachedHostsMethods } from "./attachedHosts.js";
 import { durableWorkMethods } from "./durableWork.js";
 import { eventsMethods } from "./events.js";
 import { extensionsMethods } from "./extensions.js";
@@ -44,6 +47,8 @@ import { phoneProvisioningMethods } from "./phoneProvisioning.js";
 import { remoteCredMethods } from "./remoteCred.js";
 import { runtimeMethods } from "./runtime.js";
 import { evalMethods } from "./eval.js";
+import { evalEventIngressMethods } from "./evalEventIngress.js";
+import { evalExecutionRootsMethods } from "./evalExecutionRoots.js";
 import { settingsMethods } from "./settings.js";
 import { shellApprovalMethods } from "./shellApproval.js";
 import { shellPresenceMethods } from "./shellPresence.js";
@@ -63,6 +68,7 @@ type ServiceTable = {
 };
 
 const serviceTables: ServiceTable[] = [
+  { service: "attachedHosts", file: "attachedHosts.ts", methods: attachedHostsMethods },
   { service: "account", file: "account.ts", methods: accountMethods },
   { service: "app", file: "app.ts", methods: appMethods },
   { service: "auth", file: "auth.ts", methods: authMethods },
@@ -90,6 +96,12 @@ const serviceTables: ServiceTable[] = [
   { service: "corsApproval", file: "corsApproval.ts", methods: corsApprovalMethods },
   { service: "credentials", file: "credentials.ts", methods: credentialsMethods },
   { service: "docs", file: "docs.ts", methods: docsMethods },
+  { service: "development", file: "development.ts", methods: developmentMethods },
+  {
+    service: "developmentClientExecutor",
+    file: "developmentClientExecutor.ts",
+    methods: developmentClientExecutorMethods,
+  },
   { service: "durableWork", file: "durableWork.ts", methods: durableWorkMethods },
   { service: "events", file: "events.ts", methods: eventsMethods },
   { service: "extensions", file: "extensions.ts", methods: extensionsMethods },
@@ -119,6 +131,16 @@ const serviceTables: ServiceTable[] = [
   { service: "remoteCred", file: "remoteCred.ts", methods: remoteCredMethods },
   { service: "runtime", file: "runtime.ts", methods: runtimeMethods },
   { service: "eval", file: "eval.ts", methods: evalMethods },
+  {
+    service: "evalEventIngress",
+    file: "evalEventIngress.ts",
+    methods: evalEventIngressMethods,
+  },
+  {
+    service: "evalExecutionRoots",
+    file: "evalExecutionRoots.ts",
+    methods: evalExecutionRootsMethods,
+  },
   { service: "settings", file: "settings.ts", methods: settingsMethods },
   { service: "shellApproval", file: "shellApproval.ts", methods: shellApprovalMethods },
   { service: "shellPresence", file: "shellPresence.ts", methods: shellPresenceMethods },
@@ -246,7 +268,7 @@ describe("service schema contracts", () => {
     ).toBe(false);
   });
 
-  it("preserves structured eval failure data through run and getRun", () => {
+  it("preserves structured eval failure data through start and get", () => {
     const result = {
       success: false,
       console: "",
@@ -260,16 +282,24 @@ describe("service schema contracts", () => {
       },
     };
 
-    expect(evalMethods.run.returns.safeParse(result).success).toBe(true);
     expect(
-      evalMethods.getRun.returns.safeParse({
+      evalMethods.start.returns.safeParse({
+        runId: "run-1",
+        runDigest: "a".repeat(64),
+        authorityManifestDigest: "b".repeat(64),
+        status: "terminal",
+        snapshot: { status: "done", result },
+      }).success
+    ).toBe(true);
+    expect(
+      evalMethods.get.returns.safeParse({
         status: "done",
         result,
       }).success
     ).toBe(true);
   });
 
-  it("carries exact eval-kernel restart recovery through run and getRun", () => {
+  it("carries exact eval-kernel restart recovery through start and get", () => {
     const result = {
       success: true,
       console: "",
@@ -288,10 +318,18 @@ describe("service schema contracts", () => {
       },
     };
 
-    expect(evalMethods.run.returns.safeParse(result).success).toBe(true);
-    expect(evalMethods.getRun.returns.safeParse({ status: "done", result }).success).toBe(true);
-    expect(evalMethods.getRun.returns.safeParse({ status: "cancelling" }).success).toBe(true);
-    expect(evalMethods.getRun.returns.safeParse({ status: "cleanup-ish" }).success).toBe(false);
+    expect(
+      evalMethods.start.returns.safeParse({
+        runId: "run-1",
+        runDigest: "a".repeat(64),
+        authorityManifestDigest: "b".repeat(64),
+        status: "terminal",
+        snapshot: { status: "done", result },
+      }).success
+    ).toBe(true);
+    expect(evalMethods.get.returns.safeParse({ status: "done", result }).success).toBe(true);
+    expect(evalMethods.get.returns.safeParse({ status: "cancelling" }).success).toBe(true);
+    expect(evalMethods.get.returns.safeParse({ status: "cleanup-ish" }).success).toBe(false);
   });
 
   it("reports whether eval cancellation required a shared-scope reset", () => {

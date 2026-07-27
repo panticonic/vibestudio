@@ -318,8 +318,14 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
         "expandIds",
       ].map((method) => [
         `panelTree.${method}.contextBoundary`,
-        (ctx: ServiceContext, args: unknown[]) =>
-          prepareAccess(ctx, method as keyof typeof panelTreeMethods & string, args),
+        async (ctx: ServiceContext, args: unknown[]) => ({
+          selections: await prepareAccess(
+            ctx,
+            method as keyof typeof panelTreeMethods & string,
+            args
+          ),
+          payload: null,
+        }),
       ])
     ),
     handler: defineServiceHandler("panelTree", panelTreeMethods, {

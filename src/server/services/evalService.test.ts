@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
 import {
   createVerifiedCaller,
   type ServiceContext,
@@ -17,6 +18,7 @@ import { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.j
 import { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import type { EvalStartInput } from "@vibestudio/service-schemas/eval";
 
 const WORKSPACE_REF = {
   source: INTERNAL_DO_SOURCE,
@@ -58,6 +60,23 @@ function activeInvocationContext(
   };
 }
 
+function inlineEvalStart(
+  input: Omit<EvalStartInput, "source" | "scope"> & {
+    code: string;
+    scopeKey?: string;
+    lifecycle?: "persistent" | "finite";
+    syntax?: "javascript" | "typescript" | "jsx" | "tsx";
+    pathHint?: string;
+  }
+): EvalStartInput {
+  const { code, scopeKey, lifecycle, syntax, pathHint, ...rest } = input;
+  return {
+    ...rest,
+    source: { kind: "inline", code, syntax, pathHint },
+    ...(scopeKey || lifecycle ? { scope: { key: scopeKey ?? "default", lifecycle } } : {}),
+  };
+}
+
 function createHarness(
   contexts: Record<string, string | null>,
   options: {
@@ -68,6 +87,7 @@ function createHarness(
     finiteEvalEntityIds?: ReadonlySet<string>;
     kernelLeaseError?: Error;
     systemTestHarness?: boolean;
+    executeRunPending?: boolean;
     getRunSequence?: Array<{
       status: "pending" | "running" | "cancelling" | "done" | "cancelled" | "unknown";
       gate?: Promise<void>;
@@ -145,9 +165,16 @@ function createHarness(
           throw new Error("simulated lost startRun acknowledgement");
         }
         if (rejectedStartRun && options.retryStartGate) await options.retryStartGate;
-        return { runId: (args[0] as { runId: string }).runId, status: "pending" };
+        return {
+          runId: (args[0] as { runId: string }).runId,
+          runDigest: "d".repeat(64),
+          scopeInputRevision: "scope:initial",
+          status: "pending",
+          existing: false,
+        };
       }
       if (method === "executeRun") {
+        if (options.executeRunPending) return new Promise(() => {});
         return { success: true, console: "ok", scopeKeys: [] };
       }
       if (method === "getRun") {
@@ -239,6 +266,15 @@ function createHarness(
   } as unknown as EntityCache;
   const entityStore = new WorkspaceEntityStore({ doDispatch, workspaceId: "ws_1", entityCache });
   const executionSessions = new AgentExecutionSessionRegistry();
+  const eventSinkTerminal = new Map<string, () => void>();
+  const eventSinks = {
+    register(route: { nonce: string; onTerminal?: () => void }) {
+      if (route.onTerminal) eventSinkTerminal.set(route.nonce, route.onTerminal);
+    },
+    close(nonce: string) {
+      eventSinkTerminal.delete(nonce);
+    },
+  };
   const retireEntity = vi.fn(async () => {});
   const service = createEvalService({
     doDispatch,
@@ -249,14 +285,31 @@ function createHarness(
     } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
     workspaceId: "ws_1",
     executionSessions,
+    eventSinks,
     ...(options.systemTestHarness ? { isSystemTestHarness: () => true } : {}),
     kernelLeases: {
       touch: vi.fn(async () => {
         if (options.kernelLeaseError) throw options.kernelLeaseError;
       }),
     },
+    resolveContextSource: async (_contextId, sourcePath) => ({
+      code: `// exact:${sourcePath}\nreturn 7;`,
+      sourceDigest: createHash("sha256").update(`// exact:${sourcePath}\nreturn 7;`).digest("hex"),
+      sourceState: { kind: "event", eventId: "event:source" },
+      contentStateHash: `state:${"c".repeat(64)}`,
+    }),
   });
-  return { service, calls, executionSessions, retireEntity };
+  return {
+    service,
+    calls,
+    executionSessions,
+    retireEntity,
+    settleLiveEvent() {
+      const callbacks = [...eventSinkTerminal.values()];
+      eventSinkTerminal.clear();
+      for (const callback of callbacks) callback();
+    },
+  };
 }
 
 describe("createEvalService", () => {
@@ -269,13 +322,13 @@ describe("createEvalService", () => {
     );
 
     await expect(
-      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "run", [
-        {
-          ownerId,
-          contextId: "ctx_1",
-          subKey,
+      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "start", [
+        inlineEvalStart({
+          target: { kind: "owner-session", sessionId: ownerId },
+          scopeKey: subKey,
+          runId: "run:lease-error",
           code: "return 1;",
-        },
+        }),
       ])
     ).rejects.toThrow("kernel lease unavailable");
 
@@ -283,16 +336,16 @@ describe("createEvalService", () => {
     expect(executionSessions.resolve(runtimeId)).toBeNull();
   });
 
-  it("runs CLI eval as the selected session owner and context", async () => {
+  ledgerTest("execution.eval-do", async () => {
     const { service, calls } = createHarness({ "session:default": "ctx_1" });
 
-    await service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "run", [
-      {
-        ownerId: "session:default",
-        contextId: "ctx_1",
-        subKey: "default",
+    await service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "start", [
+      inlineEvalStart({
+        target: { kind: "owner-session", sessionId: "session:default" },
+        scopeKey: "default",
+        runId: "run:ledger",
         code: "return 1;",
-      },
+      }),
     ]);
 
     const objectKey = evalKey("session:default", "default");
@@ -325,9 +378,9 @@ describe("createEvalService", () => {
         },
       ],
     });
-    expect(calls.find((c) => c.method === "run")).toMatchObject({
+    expect(calls.find((c) => c.method === "startRun")).toMatchObject({
       ref: { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey },
-      method: "run",
+      method: "startRun",
       args: [
         expect.objectContaining({
           runId: expect.any(String),
@@ -337,7 +390,7 @@ describe("createEvalService", () => {
       ],
     });
     expect(
-      (calls.find((c) => c.method === "run")?.args[0] as { timeoutMs?: number }).timeoutMs
+      (calls.find((c) => c.method === "startRun")?.args[0] as { timeoutMs?: number }).timeoutMs
     ).toBeUndefined();
   });
 
@@ -345,8 +398,8 @@ describe("createEvalService", () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
     const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
 
-    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "run", [
-      { subKey: "chan_1", code: "return 1;" },
+    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
+      inlineEvalStart({ scopeKey: "chan_1", runId: "run:entity", code: "return 1;" }),
     ]);
 
     const objectKey = evalKey(ownerId, "chan_1");
@@ -364,9 +417,9 @@ describe("createEvalService", () => {
         }),
       ],
     });
-    expect(calls.find((c) => c.method === "run")).toMatchObject({
+    expect(calls.find((c) => c.method === "startRun")).toMatchObject({
       ref: { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey },
-      method: "run",
+      method: "startRun",
       args: [
         expect.objectContaining({
           contextId: "ctx_agent",
@@ -382,13 +435,13 @@ describe("createEvalService", () => {
     const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
 
     await expect(
-      service.handler({ caller: authenticatedCaller(ownerId, "do") }, "run", [
-        { subKey: "chan_1", code: "return 1;" },
+      service.handler({ caller: authenticatedCaller(ownerId, "do") }, "start", [
+        inlineEvalStart({ scopeKey: "chan_1", runId: "run:unscoped", code: "return 1;" }),
       ])
     ).rejects.toMatchObject({ code: "EACCES", errorKind: "access" });
 
     expect(calls.some((call) => call.method === "entityActivate")).toBe(false);
-    expect(calls.some((call) => call.method === "run")).toBe(false);
+    expect(calls.some((call) => call.method === "startRun")).toBe(false);
   });
 
   it("resolves the eval's parent as the agent caller's owning panel (lineage walk)", async () => {
@@ -434,7 +487,9 @@ describe("createEvalService", () => {
         // Durable nav→slot: the panel entity "panel:p" is the current entity of open slot "panel:tree/p".
         if (method === "slotResolveByEntity")
           return String(args[0]) === "panel:p" ? "panel:tree/p" : null;
-        if (method === "run") return { success: true, console: "", scopeKeys: [] };
+        if (method === "startRun")
+          return { runId: String((args[0] as { runId?: string }).runId), status: "pending" };
+        if (method === "executeRun") return { success: true, console: "", scopeKeys: [] };
         if (method === "getRun") return { status: "done" };
         throw new Error(`unexpected dispatch ${method}`);
       },
@@ -461,11 +516,11 @@ describe("createEvalService", () => {
 
     await service.handler(
       activeInvocationContext(authenticatedCaller("do:src:Agent:k", "do"), "c"),
-      "run",
-      [{ code: "return 1;" }]
+      "start",
+      [inlineEvalStart({ runId: "run:parent", code: "return 1;" })]
     );
 
-    const runCall = calls.find((c) => c.method === "run");
+    const runCall = calls.find((c) => c.method === "startRun");
     // The parent is the owning panel's TREE SLOT id (durable nav→slot of "panel:p" → "panel:tree/p"),
     // not the panel's entity id — so defaultOpenParentId/getPanelHandle nest under the real slot.
     expect((runCall?.args[0] as { parent?: unknown }).parent).toEqual({
@@ -482,38 +537,41 @@ describe("createEvalService", () => {
     });
 
     await expect(
-      service.handler({ caller: authenticatedCaller("panel:one", "panel") }, "run", [
-        {
-          ownerId: "session:default",
-          contextId: "ctx_1",
-          subKey: "default",
+      service.handler({ caller: authenticatedCaller("panel:one", "panel") }, "start", [
+        inlineEvalStart({
+          target: { kind: "owner-session", sessionId: "session:default" },
+          scopeKey: "default",
+          runId: "run:override",
           code: "return 1;",
-        },
+        }),
       ])
     ).rejects.toThrow(/restricted to shell\/server/);
   });
 
-  it("rejects missing or ambiguous run sources even when handler is called directly", async () => {
+  it("rejects missing or malformed typed sources even when handler is called directly", async () => {
     const { service } = createHarness({ "session:default": "ctx_1" });
     const ctx = { caller: authenticatedCaller("shell:dev_cli", "shell") };
 
     await expect(
-      service.handler(ctx, "run", [
-        { ownerId: "session:default", contextId: "ctx_1", subKey: "default" },
-      ])
-    ).rejects.toThrow(/exactly one of code or path/);
-
-    await expect(
-      service.handler(ctx, "run", [
+      service.handler(ctx, "start", [
         {
-          ownerId: "session:default",
-          contextId: "ctx_1",
-          subKey: "default",
-          code: "return 1;",
-          path: "/snippet.ts",
+          target: { kind: "owner-session", sessionId: "session:default" },
+          scope: { key: "default" },
+          runId: "run:missing",
         },
       ])
-    ).rejects.toThrow(/exactly one of code or path/);
+    ).rejects.toThrow(/source/i);
+
+    await expect(
+      service.handler(ctx, "start", [
+        {
+          target: { kind: "owner-session", sessionId: "session:default" },
+          scope: { key: "default" },
+          runId: "run:ambiguous",
+          source: { kind: "inline", code: "return 1;", path: "/snippet.ts" },
+        },
+      ])
+    ).rejects.toThrow(/unrecognized key/i);
   });
 
   it("keeps eval effect identity distinct from its exact causal parent", async () => {
@@ -524,10 +582,22 @@ describe("createEvalService", () => {
 
     const ret = await service.handler(
       activeInvocationContext(authenticatedCaller(ownerId, "do"), "chan_1", agentInvocationId),
-      "startRun",
-      [{ subKey: "chan_1", code: "return 1;", runId }]
+      "start",
+      [
+        inlineEvalStart({
+          scopeKey: "chan_1",
+          code: "return 1;",
+          runId,
+          resultReceiver: { kind: "caller" },
+        }),
+      ]
     );
-    expect(ret).toEqual({ runId });
+    expect(ret).toEqual({
+      runId,
+      runDigest: "d".repeat(64),
+      authorityManifestDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      status: "accepted",
+    });
 
     const objectKey = evalKey(ownerId, "chan_1");
     // The run/effect key stays independent while the private causality field
@@ -554,21 +624,51 @@ describe("createEvalService", () => {
     expect(calls.some((c) => c.method === "onEvalComplete")).toBe(false);
   });
 
+  it("retains exact context-file bytes and semantic source provenance before acceptance", async () => {
+    const ownerId = "session:default";
+    const { service, calls } = createHarness({ [ownerId]: "ctx:source" });
+    await service.handler(
+      activeInvocationContext(authenticatedCaller("shell:dev_cli", "shell")),
+      "start",
+      [
+        {
+          target: { kind: "owner-session", sessionId: ownerId },
+          runId: "run:exact-source",
+          source: { kind: "context-file", path: "scripts/check.ts" },
+        },
+      ]
+    );
+    const accepted = calls.find((call) => call.method === "startRun")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(accepted).toMatchObject({
+      code: "// exact:scripts/check.ts\nreturn 7;",
+      sourcePath: "scripts/check.ts",
+      sourceState: { kind: "event", eventId: "event:source" },
+      contentStateHash: `state:${"c".repeat(64)}`,
+      sourceDigest: createHash("sha256")
+        .update("// exact:scripts/check.ts\nreturn 7;")
+        .digest("hex"),
+    });
+    expect(accepted["path"]).toBeUndefined();
+  });
+
   it("retains admission and retries the same run after an ambiguous start acknowledgement", async () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:ambiguous";
     let acceptRetry!: () => void;
     const retryStartGate = new Promise<void>((resolve) => {
       acceptRetry = resolve;
     });
-    const { service, calls, executionSessions } = createHarness(
+    const { service, calls, executionSessions, settleLiveEvent } = createHarness(
       { [ownerId]: "ctx_agent" },
       { rejectFirstStartRun: true, retryStartGate }
     );
     const runId = "effect:eval:ambiguous";
 
     await expect(
-      service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "startRun", [
-        { subKey: "chan_1", code: "return 1;", runId },
+      service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
+        inlineEvalStart({ scopeKey: "chan_1", code: "return 1;", runId }),
       ])
     ).rejects.toThrow(/lost startRun acknowledgement/);
     const objectKey = (
@@ -584,62 +684,52 @@ describe("createEvalService", () => {
       expect.objectContaining({ runId }),
       expect.objectContaining({ runId }),
     ]);
+    expect(executionSessions.resolve(runtimeId)).not.toBeNull();
+    settleLiveEvent();
     expect(executionSessions.resolve(runtimeId)).toBeNull();
   });
 
-  it("retains admission across a transient terminal-monitor transport failure", async () => {
-    const ownerId = "do:workers/agent-worker:AiChatWorker:monitor-retry";
-    let acceptRetry!: () => void;
-    const retryGetRunGate = new Promise<void>((resolve) => {
-      acceptRetry = resolve;
+  it("does not poll after acceptance and closes admission once from the trusted terminal sink", async () => {
+    const ownerId = "do:workers/agent-worker:AiChatWorker:live-terminal";
+    const { service, calls, executionSessions, settleLiveEvent } = createHarness({
+      [ownerId]: "ctx_agent",
     });
-    const { service, calls, executionSessions } = createHarness(
-      { [ownerId]: "ctx_agent" },
-      { rejectFirstGetRun: true, retryGetRunGate }
-    );
-    const runId = "effect:eval:monitor-retry";
+    const runId = "effect:eval:live-terminal";
 
-    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "startRun", [
-      { subKey: "chan_1", code: "return 1;", runId },
+    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
+      inlineEvalStart({
+        scopeKey: "chan_1",
+        code: "return 1;",
+        runId,
+        resultReceiver: { kind: "caller" },
+      }),
     ]);
 
     const objectKey = (
       calls.find((call) => call.method === "startRun")?.ref as { objectKey: string }
     ).objectKey;
     const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`;
-    await expect
-      .poll(() => calls.filter((call) => call.method === "getRun").length)
-      .toBeGreaterThanOrEqual(1);
+    expect(calls.filter((call) => call.method === "getRun")).toHaveLength(0);
     expect(executionSessions.resolve(runtimeId)?.eval.runId).toBe(runId);
 
-    acceptRetry();
-    await expect.poll(() => executionSessions.resolve(runtimeId)).toBeNull();
-    expect(calls.filter((call) => call.method === "getRun")).toHaveLength(2);
+    settleLiveEvent();
+    settleLiveEvent();
+    expect(executionSessions.resolve(runtimeId)).toBeNull();
+    expect(calls.filter((call) => call.method === "getRun")).toHaveLength(0);
   });
 
   it("retains root and descendant test admissions through cancelling and revokes them at cancelled", async () => {
     const ownerId = "session:default";
     const runId = "system-test-runner:cancel-lifecycle";
-    let releaseTerminal!: () => void;
-    const terminalGate = new Promise<void>((resolve) => {
-      releaseTerminal = resolve;
-    });
-    const { service, calls, executionSessions } = createHarness(
+    const { service, calls, executionSessions, settleLiveEvent } = createHarness(
       { [ownerId]: "ctx:orchestrator" },
-      {
-        systemTestHarness: true,
-        getRunSequence: [{ status: "cancelling" }, { status: "cancelled", gate: terminalGate }],
-      }
+      { systemTestHarness: true, executeRunPending: true }
     );
 
-    await service.handler(
-      activeInvocationContext(authenticatedCaller(ownerId, "shell")),
-      "startRun",
-      [{ code: "await new Promise(() => {});", runId }]
-    );
-    await expect
-      .poll(() => calls.filter((call) => call.method === "getRun").length)
-      .toBeGreaterThanOrEqual(1);
+    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "shell")), "start", [
+      inlineEvalStart({ code: "await new Promise(() => {});", runId }),
+    ]);
+    expect(calls.filter((call) => call.method === "getRun")).toHaveLength(0);
     const objectKey = (
       calls.find((call) => call.method === "startRun")?.ref as { objectKey: string }
     ).objectKey;
@@ -671,6 +761,13 @@ describe("createEvalService", () => {
       eval: {
         runtimeId: "do:vibestudio/internal:EvalDO:cancel-lifecycle-child",
         runId: "system-test-runner:cancel-lifecycle-child",
+        authorityManifest: {
+          mode: "adaptive",
+          effects: "mutable",
+          approvals: "prompt",
+          requests: [],
+          digest: "0".repeat(64),
+        },
       },
       causalParent: null,
       testPolicy: casePolicy,
@@ -678,71 +775,63 @@ describe("createEvalService", () => {
 
     expect(executionSessions.resolve(rootRuntimeId)?.nonce).toBe(root?.nonce);
     expect(executionSessions.resolve(child.eval.runtimeId)?.nonce).toBe(child.nonce);
-    await expect
-      .poll(() => calls.filter((call) => call.method === "getRun").length)
-      .toBeGreaterThanOrEqual(2);
     expect(executionSessions.resolve(rootRuntimeId)).not.toBeNull();
     expect(executionSessions.resolve(child.eval.runtimeId)).not.toBeNull();
 
-    releaseTerminal();
-    await expect.poll(() => executionSessions.resolve(rootRuntimeId)).toBeNull();
+    settleLiveEvent();
+    expect(executionSessions.resolve(rootRuntimeId)).toBeNull();
     expect(executionSessions.resolve(child.eval.runtimeId)).toBeNull();
     expect(executionSessions.testPolicyForContext("ctx:orchestrator")).toBeNull();
     expect(executionSessions.testPolicyForContext("ctx:case")).toBeNull();
   });
 
-  it("keeps a held run admitted until its durable cancelling phase settles", async () => {
+  it("closes admission immediately for a start that returns its terminal snapshot", async () => {
     const ownerId = "session:default";
-    let releaseTerminal!: () => void;
-    const terminalGate = new Promise<void>((resolve) => {
-      releaseTerminal = resolve;
-    });
-    const { service, calls, executionSessions } = createHarness(
-      { [ownerId]: "ctx:held" },
-      {
-        getRunSequence: [{ status: "cancelling" }, { status: "cancelled", gate: terminalGate }],
-      }
-    );
+    const { service, calls, executionSessions } = createHarness({ [ownerId]: "ctx:held" });
 
-    const run = service.handler(
+    const run = await service.handler(
       activeInvocationContext(authenticatedCaller(ownerId, "shell")),
-      "run",
-      [{ code: "return 1;" }]
+      "start",
+      [inlineEvalStart({ code: "return 1;", runId: "run:held" })]
     );
-    await expect
-      .poll(() => calls.filter((call) => call.method === "getRun").length)
-      .toBeGreaterThanOrEqual(2);
-    const objectKey = (calls.find((call) => call.method === "run")?.ref as { objectKey: string })
-      .objectKey;
+    const objectKey = (
+      calls.find((call) => call.method === "startRun")?.ref as { objectKey: string }
+    ).objectKey;
     const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`;
-    expect(executionSessions.resolve(runtimeId)).not.toBeNull();
-
-    releaseTerminal();
-    await expect(run).resolves.toMatchObject({ success: true });
+    expect(run).toMatchObject({
+      runId: "run:held",
+      status: "terminal",
+      snapshot: { status: "done", result: { success: true } },
+    });
     expect(executionSessions.resolve(runtimeId)).toBeNull();
   });
 
-  it("startRun without a caller runId mints a server uuid (and uses it for the run)", async () => {
+  it("start requires a caller-owned runId", async () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
     const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
 
-    const ret = (await service.handler(
-      activeInvocationContext(authenticatedCaller(ownerId, "do")),
-      "startRun",
-      [{ subKey: "chan_1", code: "return 1;" }]
-    )) as { runId: string };
-    expect(ret.runId).toBeTruthy();
-    expect(calls.find((c) => c.method === "startRun")).toMatchObject({
-      args: [expect.objectContaining({ runId: ret.runId })],
-    });
+    await expect(
+      service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
+        {
+          scope: { key: "chan_1" },
+          source: { kind: "inline", code: "return 1;" },
+        },
+      ])
+    ).rejects.toThrow(/runId/);
+    expect(calls.some((c) => c.method === "startRun")).toBe(false);
   });
 
   it("preserves an explicit agent eval deadline", async () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
     const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
 
-    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "startRun", [
-      { subKey: "chan_1", code: "return 1;", timeoutMs: 12_345 },
+    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
+      inlineEvalStart({
+        scopeKey: "chan_1",
+        runId: "run:deadline",
+        code: "return 1;",
+        timeoutMs: 12_345,
+      }),
     ]);
 
     expect(calls.find((c) => c.method === "startRun")?.args[0]).toMatchObject({
@@ -754,8 +843,8 @@ describe("createEvalService", () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
     const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
 
-    await service.handler({ caller: authenticatedCaller(ownerId, "do") }, "getRun", [
-      { subKey: "chan_1", runId: "inv-42" },
+    await service.handler({ caller: authenticatedCaller(ownerId, "do") }, "get", [
+      { scopeKey: "chan_1", runId: "inv-42" },
     ]);
 
     const objectKey = evalKey(ownerId, "chan_1");
@@ -772,9 +861,8 @@ describe("createEvalService", () => {
 
     const page = await service.handler(caller, "readScopeTextPage", [
       {
-        ownerId,
-        contextId: "ctx_1",
-        subKey: "system-tests",
+        target: { kind: "owner-session", sessionId: ownerId },
+        scopeKey: "system-tests",
         key: "__temporary",
         offset: 131_072,
         limit: 4096,
@@ -792,9 +880,8 @@ describe("createEvalService", () => {
 
     await service.handler(caller, "deleteScopeValue", [
       {
-        ownerId,
-        contextId: "ctx_1",
-        subKey: "system-tests",
+        target: { kind: "owner-session", sessionId: ownerId },
+        scopeKey: "system-tests",
         key: "__temporary",
       },
     ]);
@@ -821,9 +908,8 @@ describe("createEvalService", () => {
     await expect(
       service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "dispose", [
         {
-          ownerId,
-          contextId: "ctx_1",
-          subKey: "finite",
+          target: { kind: "owner-session", sessionId: ownerId },
+          scopeKey: "finite",
         },
       ])
     ).resolves.toEqual({ ok: true });
@@ -844,7 +930,7 @@ describe("createEvalService", () => {
 
     await expect(
       service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "dispose", [
-        { ownerId, contextId: "ctx_1" },
+        { target: { kind: "owner-session", sessionId: ownerId } },
       ])
     ).rejects.toMatchObject({ code: "EACCES", errorKind: "access" });
     expect(retireEntity).not.toHaveBeenCalled();
@@ -863,11 +949,10 @@ describe("createEvalService", () => {
     );
 
     await expect(
-      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "getRun", [
+      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "get", [
         {
-          ownerId,
-          contextId: "ctx_1",
-          subKey: "finite",
+          target: { kind: "owner-session", sessionId: ownerId },
+          scopeKey: "finite",
           runId: "finite-run",
         },
       ])
@@ -891,14 +976,14 @@ describe("createEvalService", () => {
     });
 
     await expect(
-      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "run", [
-        {
-          ownerId,
-          contextId: "ctx_1",
-          subKey: "default",
+      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "start", [
+        inlineEvalStart({
+          target: { kind: "owner-session", sessionId: ownerId },
+          scopeKey: "default",
+          runId: "run:reclassify",
           lifecycle: "finite",
           code: "return 1;",
-        },
+        }),
       ])
     ).rejects.toMatchObject({ code: "EINVAL", errorKind: "application" });
     expect(calls.some((call) => call.method === "entityActivate")).toBe(false);
@@ -918,13 +1003,13 @@ describe("createEvalService", () => {
     );
 
     await expect(
-      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "run", [
-        {
-          ownerId,
-          contextId: "ctx_1",
-          subKey: "finite",
+      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "start", [
+        inlineEvalStart({
+          target: { kind: "owner-session", sessionId: ownerId },
+          scopeKey: "finite",
+          runId: "run:finite-persistent",
           code: "return 1;",
-        },
+        }),
       ])
     ).rejects.toMatchObject({ code: "EINVAL", errorKind: "application" });
     expect(calls.some((call) => call.method === "entityActivate")).toBe(false);
@@ -936,7 +1021,7 @@ describe("createEvalService", () => {
     const { service, calls } = createHarness({ [ownerId]: "ctx_agent" });
 
     const ret = await service.handler({ caller: authenticatedCaller(ownerId, "do") }, "cancel", [
-      { subKey: "chan_1", runId: "inv-42" },
+      { scopeKey: "chan_1", runId: "inv-42" },
     ]);
     expect(ret).toEqual({ ok: true });
 
@@ -1049,8 +1134,14 @@ describe("createEvalService — explicit timeout process watchdog", () => {
       heldMode: "cooperative-timeout",
     });
 
-    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "startRun", [
-      { subKey: "chan_1", code: "while (true) {}", runId: "inv-cooperative", timeoutMs: 5 },
+    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
+      inlineEvalStart({
+        scopeKey: "chan_1",
+        code: "while (true) {}",
+        runId: "inv-cooperative",
+        timeoutMs: 5,
+        resultReceiver: { kind: "caller" },
+      }),
     ]);
     await new Promise((resolve) => setTimeout(resolve, 15));
 
@@ -1072,8 +1163,14 @@ describe("createEvalService — explicit timeout process watchdog", () => {
       recoveryDelayMs: 5,
     });
 
-    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "startRun", [
-      { subKey: "chan_1", code: "while (true) {}", runId: "inv-watchdog", timeoutMs: 5 },
+    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
+      inlineEvalStart({
+        scopeKey: "chan_1",
+        code: "while (true) {}",
+        runId: "inv-watchdog",
+        timeoutMs: 5,
+        resultReceiver: { kind: "caller" },
+      }),
     ]);
     await new Promise((resolve) => setTimeout(resolve, 25));
 
@@ -1081,9 +1178,9 @@ describe("createEvalService — explicit timeout process watchdog", () => {
     expect(recoverUnresponsiveSandbox).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "inv-watchdog", timeoutMs: 5 })
     );
-    // The live admission monitor reads the durable terminal so the exact
-    // execution-session fact closes when this async run ends.
-    expect(calls.some((call) => call.method === "getRun")).toBe(true);
+    // Terminal admission closure is producer-pushed; watchdog recovery never
+    // creates a per-run status polling loop.
+    expect(calls.some((call) => call.method === "getRun")).toBe(false);
     expect(calls.some((call) => call.method === "onEvalComplete")).toBe(false);
   });
 
@@ -1094,13 +1191,18 @@ describe("createEvalService — explicit timeout process watchdog", () => {
       heldMode: "hang",
     });
 
-    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "startRun", [
-      { subKey: "chan_1", code: "while(true){}", runId: "inv-h3" },
+    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
+      inlineEvalStart({
+        scopeKey: "chan_1",
+        code: "while(true){}",
+        runId: "inv-h3",
+        resultReceiver: { kind: "caller" },
+      }),
     ]);
     await new Promise((r) => setTimeout(r, 10));
 
     expect(recoverUnresponsiveSandbox).not.toHaveBeenCalled();
-    expect(calls.some((c) => c.method === "getRun")).toBe(true);
+    expect(calls.some((c) => c.method === "getRun")).toBe(false);
     expect(calls.some((c) => c.method === "onEvalComplete")).toBe(false);
   });
 
@@ -1122,8 +1224,8 @@ describe("createEvalService — explicit timeout process watchdog", () => {
         binding.channelId,
         "invocation:bound-agent"
       ),
-      "run",
-      [{ code: "return 1;" }]
+      "start",
+      [inlineEvalStart({ runId: "run:bound-agent", code: "return 1;" })]
     );
 
     // Registered + ran against the EvalDO keyed by the BINDING entity, in the
@@ -1132,7 +1234,7 @@ describe("createEvalService — explicit timeout process watchdog", () => {
     const activate = calls.find((c) => c.method === "entityActivate");
     expect(activate).toBeTruthy();
     expect((activate!.args[0] as { contextId?: string }).contextId).toBe("ctx_bound");
-    const run = calls.find((c) => c.method === "run");
+    const run = calls.find((c) => c.method === "startRun");
     expect((run!.ref as { objectKey: string }).objectKey).toBe(objectKey);
   });
 
@@ -1149,8 +1251,14 @@ describe("createEvalService — explicit timeout process watchdog", () => {
     await expect(
       service.handler(
         { caller: authenticatedCaller("agent:ent_agent", "agent", null, binding) },
-        "run",
-        [{ ownerId: "someone_else", contextId: "ctx_bound", code: "return 1;" }]
+        "start",
+        [
+          inlineEvalStart({
+            target: { kind: "owner-session", sessionId: "someone_else" },
+            runId: "run:contradict-binding",
+            code: "return 1;",
+          }),
+        ]
       )
     ).rejects.toThrow(/must match the connection's entity binding/);
   });

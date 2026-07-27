@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 import { readyElectronLaunchEvent } from "./hostTargetLaunchAdapter.js";
 
 describe("readyElectronLaunchEvent", () => {
-  it("preserves the selected artifact's immutable execution authority", () => {
+  ledgerTest("execution.panel", () => {
     const authorityRequests = [
       {
         capability: "events.watch",

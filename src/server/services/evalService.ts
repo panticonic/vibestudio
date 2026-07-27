@@ -1,7 +1,11 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import { evalMethods, type EvalRunArgs } from "@vibestudio/service-schemas/eval";
+import {
+  evalMethods,
+  normalizeEvalAuthorityIntent,
+  type EvalStartInput,
+} from "@vibestudio/service-schemas/eval";
 import {
   getInternalDOBundle,
   internalDOExecutionIdentity,
@@ -12,6 +16,9 @@ import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import { resolveOwningPanelSlot } from "@vibestudio/shared/panel/owningPanelSlot";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createHash, randomUUID } from "node:crypto";
+import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
+import { capabilityPatternCovers } from "@vibestudio/shared/authorityManifest";
+import { resourceScopeContains } from "@vibestudio/shared/authorization";
 import type { RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
@@ -75,6 +82,49 @@ async function watchTimedRun(
 
 const EVAL_DO_CLASS = "EvalDO";
 
+function normalizeAuthorityManifest(
+  runArgs: EvalStartInput,
+  initiatingRequests: readonly import("@vibestudio/rpc").CapabilityScope[]
+): import("@vibestudio/rpc").EvalAuthorityManifest {
+  const intent = normalizeEvalAuthorityIntent(runArgs.authority);
+  const requests = [...(intent.requests ?? [])]
+    .map((request) => ({
+      capability: request.capability,
+      resource: { ...request.resource },
+    }))
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  for (const request of requests) {
+    if (
+      request.capability.endsWith("*") &&
+      !initiatingRequests.some(
+        (sealed) =>
+          capabilityPatternCovers(sealed.capability, request.capability.slice(0, -1)) &&
+          resourceScopeContains(sealed.resource, request.resource)
+      )
+    ) {
+      throw new ServiceError(
+        "eval",
+        "start",
+        `Wildcard run request ${request.capability} is not bounded by an equivalent sealed request`,
+        "ERUNMANIFEST",
+        undefined,
+        "access"
+      );
+    }
+  }
+  const normalized = {
+    mode: intent.mode,
+    effects: intent.effects,
+    approvals: intent.approvals,
+    requests,
+  };
+  return Object.freeze({
+    ...normalized,
+    requests: Object.freeze(requests),
+    digest: sha256Canonical(normalized),
+  });
+}
+
 interface EvalOwner {
   ownerId: string;
   contextId: string;
@@ -89,8 +139,8 @@ interface EvalParentMeta {
 
 /**
  * Owner-scoped sandbox eval service — replaces the `scope` service. Any entity-principal
- * (panel/app/worker/do/shell) calls `eval.run`/`eval.reset`; the owner is the verified
- * `ctx.caller` unless a privileged shell/server caller selects a session owner. The EvalDO
+ * (panel/app/worker/do/shell) calls `eval.start`/`eval.reset`; the owner is the verified
+ * `ctx.caller` unless a privileged shell/server caller selects a live session owner. The EvalDO
  * `objectKey` is derived (hashed) from the owner id + subKey, so unprivileged callers can
  * only address their own EvalDO. The EvalDO entity is registered with the owner's context so
  * the kernel's own fs/git/vcs resolve the owner's workspace.
@@ -127,6 +177,33 @@ export function createEvalService(deps: {
   watchdogGraceMs?: number;
   /** Test seam; production uses one held inter-cell lease per EvalDO. */
   kernelLeases?: EvalKernelLease;
+  /** Canonical dispatcher authorization-only path for exact prospective calls. */
+  preauthorize?: (
+    ctx: ServiceContext,
+    operation: { service: string; method: string; args: unknown[] }
+  ) => Promise<void>;
+  eventSinks?: {
+    register(route: {
+      nonce: string;
+      runtimeId: string;
+      runId: string;
+      contextId: string;
+      ownerCallerId: string;
+      initiatorCallerId: string;
+      subKey: string;
+      onTerminal?: () => void;
+    }): void;
+    close(nonce: string): void;
+  };
+  resolveContextSource?: (
+    contextId: string,
+    path: string
+  ) => Promise<{
+    code: string;
+    sourceDigest: string;
+    sourceState: import("@vibestudio/service-schemas/vcs").VcsStateNodeRef;
+    contentStateHash: string;
+  }>;
 }): ServiceDefinition {
   const store = deps.entityStore;
   const kernelLeases =
@@ -199,7 +276,7 @@ export function createEvalService(deps: {
   async function resolveOwner(
     callerKind: string,
     callerId: string,
-    requested: { ownerId?: string; contextId?: string },
+    target: EvalRoute["target"],
     agentBinding?: { entityId: string; contextId: string }
   ): Promise<EvalOwner> {
     // Agent callers (plan §6.4): the host-verified entity binding IS the owner
@@ -210,33 +287,19 @@ export function createEvalService(deps: {
       if (!agentBinding) {
         throw new Error("eval: agent caller has no entity binding");
       }
-      if (
-        (requested.ownerId !== undefined && requested.ownerId !== agentBinding.entityId) ||
-        (requested.contextId !== undefined && requested.contextId !== agentBinding.contextId)
-      ) {
-        throw new Error(
-          "eval: agent ownerId/contextId overrides must match the connection's entity binding"
-        );
-      }
+      if (target?.kind === "owner-session" && target.sessionId !== agentBinding.entityId)
+        throw new Error("eval: agent target must match the connection's entity binding");
       return { ownerId: agentBinding.entityId, contextId: agentBinding.contextId };
     }
-    if (requested.ownerId !== undefined || requested.contextId !== undefined) {
+    if (target?.kind === "owner-session") {
       if (callerKind !== "shell" && callerKind !== "server") {
-        throw new Error("eval: ownerId/contextId overrides are restricted to shell/server callers");
+        throw new Error("eval: owner-session targets are restricted to shell/server callers");
       }
-      if (!requested.ownerId || !requested.contextId) {
-        throw new Error("eval: ownerId and contextId must be provided together");
-      }
-      const registeredContext = await resolveRegisteredContext(requested.ownerId);
+      const registeredContext = await resolveRegisteredContext(target.sessionId);
       if (registeredContext == null) {
-        throw new Error(`eval: no context registered for owner ${requested.ownerId}`);
+        throw new Error(`eval: no context registered for owner session ${target.sessionId}`);
       }
-      if (registeredContext !== requested.contextId) {
-        throw new Error(
-          `eval: owner ${requested.ownerId} is registered to ${registeredContext}, not ${requested.contextId}`
-        );
-      }
-      return { ownerId: requested.ownerId, contextId: requested.contextId };
+      return { ownerId: target.sessionId, contextId: registeredContext };
     }
 
     const contextId = await resolveRegisteredContext(callerId);
@@ -275,7 +338,7 @@ export function createEvalService(deps: {
     if (active && requestedLifecycle && activeLifecycle !== requestedLifecycle) {
       throw new ServiceError(
         "eval",
-        "run",
+        "start",
         `Eval scope ${subKey} was created as ${activeLifecycle} and cannot be reclassified as ${requestedLifecycle}`,
         "EINVAL",
         undefined,
@@ -339,15 +402,10 @@ export function createEvalService(deps: {
     return { objectKey };
   }
 
-  function assertRunSource(args: { code?: string; path?: string; sourcePath?: string }): void {
-    const hasCode = args.code !== undefined;
-    const hasPath = args.path !== undefined;
-    if (hasCode === hasPath) {
-      throw new Error("eval: provide exactly one of code or path");
-    }
-  }
-
-  type EvalRoute = { ownerId?: string; contextId?: string; subKey?: string };
+  type EvalRoute = {
+    target?: { kind: "caller" } | { kind: "owner-session"; sessionId: string };
+    scopeKey?: string;
+  };
 
   async function resolveOwnerForCaller(
     ctx: ServiceContext,
@@ -356,7 +414,7 @@ export function createEvalService(deps: {
     return await resolveOwner(
       ctx.caller.runtime.kind,
       ctx.caller.runtime.id,
-      requested,
+      requested.target,
       ctx.caller.agentBinding
     );
   }
@@ -386,7 +444,7 @@ export function createEvalService(deps: {
     const agentBinding = trustedAgentRelay(ctx);
     const { objectKey } = await ensureEvalDO(
       owner,
-      route.subKey ?? "default",
+      route.scopeKey ?? "default",
       ctx.caller.subject?.userId,
       agentBinding,
       undefined
@@ -396,22 +454,44 @@ export function createEvalService(deps: {
 
   async function prepareRun(
     ctx: ServiceContext,
-    runArgs: EvalRunArgs,
+    runArgs: EvalStartInput,
     runId: string
   ): Promise<{
     evalDoRef: { source: string; className: string; objectKey: string };
     assembledArgs: Record<string, unknown>;
     agentRef: string | undefined;
     channelId: string | undefined;
+    runDigest: string;
+    authorityManifestDigest: string;
+    eventSinkNonce: string;
   }> {
-    assertRunSource(runArgs);
     const owner = await resolveOwnerForCaller(ctx, runArgs);
     const ownerId = owner.ownerId;
+    const exactSource =
+      runArgs.source.kind === "inline"
+        ? {
+            code: runArgs.source.code,
+            sourceDigest: createHash("sha256").update(runArgs.source.code).digest("hex"),
+            sourceState: undefined,
+            contentStateHash: undefined,
+          }
+        : deps.resolveContextSource
+          ? await deps.resolveContextSource(owner.contextId, runArgs.source.path)
+          : (() => {
+              throw new ServiceError(
+                "eval",
+                "start",
+                "Exact semantic context-file resolution is unavailable",
+                "EUNAVAILABLE",
+                undefined,
+                "service"
+              );
+            })();
     const agentBinding = trustedAgentRelay(ctx);
     if (agentBinding && !ctx.causalParent) {
       throw new ServiceError(
         "eval",
-        "run",
+        "start",
         "Agent-bound eval execution requires an exact causal tool invocation",
         "EACCES",
         undefined,
@@ -423,7 +503,7 @@ export function createEvalService(deps: {
       if (ctx.causalParent.logId !== expected.logId || ctx.causalParent.head !== expected.head) {
         throw new ServiceError(
           "eval",
-          "run",
+          "start",
           "Agent eval cause does not belong to the relay's host-bound trajectory",
           "EACCES",
           undefined,
@@ -435,12 +515,22 @@ export function createEvalService(deps: {
     // an EvalDO or exposing any presenter authority ceiling.
     const { objectKey } = await ensureEvalDO(
       owner,
-      runArgs.subKey ?? "default",
+      runArgs.scope?.key ?? "default",
       ctx.caller.subject?.userId,
       agentBinding,
-      runArgs.lifecycle ?? "persistent"
+      runArgs.scope?.lifecycle ?? "persistent"
     );
     const isAgentDo = ctx.caller.runtime.kind === "do" && agentBinding !== undefined;
+    if (runArgs.resultReceiver && !isAgentDo) {
+      throw new ServiceError(
+        "eval",
+        "start",
+        "This caller does not expose the eval terminal receiver contract",
+        "EINVAL",
+        undefined,
+        "application"
+      );
+    }
     const timeoutMs = runArgs.timeoutMs;
     const chatBinding = isAgentDo ? { channelId: agentBinding.channelId, agentRef: ownerId } : {};
     const parent = (await resolveParentPanel(ownerId)) ?? undefined;
@@ -460,7 +550,7 @@ export function createEvalService(deps: {
     if (!ctx.caller.subject) {
       throw new ServiceError(
         "eval",
-        "run",
+        "start",
         "Evaluated execution requires an authenticated user",
         "EACCES",
         undefined,
@@ -476,6 +566,7 @@ export function createEvalService(deps: {
         (deps.isSystemTestHarness?.(ctx.caller, runId)
           ? deps.executionSessions.createTestPolicy(runId)
           : null));
+    const eventSinkNonce = randomUUID();
     const executionSession = await deps.executionSessions.admitWhenAvailable(
       {
         mode: mission ? "mission" : testPolicy ? "test" : "interactive",
@@ -495,7 +586,13 @@ export function createEvalService(deps: {
           repoPath: harness.repoPath,
           effectiveVersion: harness.effectiveVersion,
         },
-        eval: { runtimeId: evalRuntimeId, runId },
+        eval: {
+          runtimeId: evalRuntimeId,
+          runId,
+          authorityManifest: normalizeAuthorityManifest(runArgs, ctx.caller.code?.requested ?? []),
+          eventSinkNonce,
+        },
+        ...(ctx.attachedHost ? { attachedHost: ctx.attachedHost } : {}),
         causalParent: ctx.causalParent
           ? {
               logId: ctx.causalParent.logId,
@@ -508,6 +605,111 @@ export function createEvalService(deps: {
       },
       ctx.signal
     );
+    if (!executionSession.eval.eventSinkNonce) {
+      deps.executionSessions.close(evalRuntimeId, runId);
+      throw new Error("Evaluated execution admission has no live event sink");
+    }
+    deps.eventSinks?.register({
+      nonce: executionSession.eval.eventSinkNonce,
+      runtimeId: evalRuntimeId,
+      runId,
+      contextId: owner.contextId,
+      ownerCallerId: ownerId,
+      initiatorCallerId: ctx.caller.runtime.id,
+      subKey: runArgs.scope?.key ?? "default",
+      onTerminal: () => {
+        deps.executionSessions.close(evalRuntimeId, runId);
+      },
+    });
+    const authorityManifestDigest = executionSession.eval.authorityManifest.digest;
+    const runDigest = sha256Canonical({
+      runId,
+      ownerRuntimeId: ownerId,
+      contextId: owner.contextId,
+      source:
+        runArgs.source.kind === "inline"
+          ? {
+              kind: "inline",
+              digest: exactSource.sourceDigest,
+              pathHint: runArgs.source.pathHint ?? null,
+              syntax: runArgs.source.syntax ?? null,
+            }
+          : {
+              kind: "context-file",
+              path: runArgs.source.path,
+              digest: exactSource.sourceDigest,
+              sourceState: exactSource.sourceState,
+              contentStateHash: exactSource.contentStateHash,
+              syntax: runArgs.source.syntax ?? null,
+            },
+      scope: {
+        key: runArgs.scope?.key ?? "default",
+        lifecycle: runArgs.scope?.lifecycle ?? "persistent",
+      },
+      reset: runArgs.reset === true,
+      imports: runArgs.imports ?? {},
+      timeoutMs: runArgs.timeoutMs ?? null,
+      authorityManifestDigest,
+      attachedHost: ctx.attachedHost
+        ? {
+            sessionId: ctx.attachedHost.sessionId,
+            childGenerationId: ctx.attachedHost.childGenerationId,
+            developmentRunId: ctx.attachedHost.developmentRunId,
+            authorityCeilingDigest: ctx.attachedHost.authorityCeilingDigest,
+          }
+        : null,
+      preauthorize: normalizeEvalAuthorityIntent(runArgs.authority).preauthorize ?? [],
+      initiatorChain: [
+        ctx.caller.subject ? `user:${ctx.caller.subject.userId}` : null,
+        ctx.caller.runtime.id,
+        ctx.caller.code?.executionDigest
+          ? `code:${ctx.caller.code.repoPath}@${ctx.caller.code.executionDigest}`
+          : null,
+      ].filter((value): value is string => value !== null),
+    });
+    if (normalizeEvalAuthorityIntent(runArgs.authority).preauthorize?.length) {
+      if (!deps.preauthorize) {
+        deps.executionSessions.close(evalRuntimeId, runId);
+        throw new ServiceError(
+          "eval",
+          "start",
+          "Exact eval preauthorization is unavailable",
+          "EUNAVAILABLE",
+          undefined,
+          "service"
+        );
+      }
+      const principalDigest = executionSession.harness.principal.split("@").at(-1)!;
+      const prospectiveCtx: ServiceContext = {
+        caller: {
+          runtime: { id: evalRuntimeId, kind: "do" },
+          code: {
+            callerId: evalRuntimeId,
+            callerKind: "do",
+            repoPath: executionSession.harness.repoPath,
+            effectiveVersion: executionSession.harness.effectiveVersion,
+            executionDigest: principalDigest,
+            requested: ownerHarness?.requested ?? [],
+          },
+          ...(agentBinding ? { agentBinding } : {}),
+          executionSession,
+          ...(ctx.caller.subject ? { subject: ctx.caller.subject } : {}),
+        },
+        ...(ctx.causalParent ? { causalParent: ctx.causalParent } : {}),
+        ...(executionSession.eval.authorityManifest.effects === "read-only"
+          ? { readOnly: true }
+          : {}),
+      };
+      try {
+        for (const operation of normalizeEvalAuthorityIntent(runArgs.authority).preauthorize ??
+          []) {
+          await deps.preauthorize(prospectiveCtx, operation);
+        }
+      } catch (error) {
+        deps.executionSessions.close(evalRuntimeId, runId);
+        throw error;
+      }
+    }
     const evalDoRef = { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey };
     try {
       await kernelLeases.touch(evalDoRef);
@@ -522,11 +724,15 @@ export function createEvalService(deps: {
       evalDoRef,
       assembledArgs: {
         runId,
-        code: runArgs.code,
-        path: runArgs.path,
-        sourcePath: runArgs.sourcePath,
+        code: exactSource.code,
+        path: undefined,
+        sourcePath:
+          runArgs.source.kind === "inline" ? runArgs.source.pathHint : runArgs.source.path,
+        sourceDigest: exactSource.sourceDigest,
+        sourceState: exactSource.sourceState,
+        contentStateHash: exactSource.contentStateHash,
         reset: runArgs.reset,
-        syntax: runArgs.syntax,
+        syntax: runArgs.source.syntax,
         imports: runArgs.imports,
         contextId: owner.contextId,
         gatewayToken: mintGatewayToken(objectKey),
@@ -535,11 +741,18 @@ export function createEvalService(deps: {
         agentInvocationId: ctx.causalParent?.invocationId,
         parent,
         timeoutMs,
-        readOnly: runArgs.readOnly,
+        readOnly: executionSession.eval.authorityManifest.effects === "read-only",
+        authorityManifestDigest,
+        intentDigest: runDigest,
+        eventSinkNonce: executionSession.eval.eventSinkNonce,
+        resultReceiverRef: runArgs.resultReceiver ? ownerId : undefined,
         ...chatBinding,
       },
       agentRef: isAgentDo ? ownerId : undefined,
       channelId: isAgentDo ? agentBinding.channelId : undefined,
+      runDigest,
+      authorityManifestDigest,
+      eventSinkNonce: executionSession.eval.eventSinkNonce,
     };
   }
 
@@ -549,41 +762,90 @@ export function createEvalService(deps: {
     authority: { principals: ["code", "user", "host"] },
     methods: evalMethods,
     handler: defineServiceHandler("eval", evalMethods, {
-      run: async (ctx, [runArgs]) => {
-        // Held synchronous run for connection-holding callers (panels over WS, CLI). The EvalDO
-        // runs in a held handler; the caller holds its own leg. One request, one result.
-        const runId = randomUUID();
-        const { evalDoRef, assembledArgs } = await prepareRun(ctx, runArgs, runId);
-        const activityId = `eval:held:${runId}`;
-        deps.activity?.begin(activityId);
-        try {
-          return await deps.doDispatch.dispatchHeld(evalDoRef, "run", assembledArgs);
-        } finally {
-          try {
-            // The held execution may unwind before a concurrent cancel RPC's
-            // registered cleanup has settled. Keep its admission (and any
-            // descendant test admissions) through the durable `cancelling`
-            // phase; only the EvalDO's terminal row owns authorization release.
-            await closeAdmissionWhenRunEnds(deps.doDispatch, evalDoRef, runId);
-          } finally {
-            deps.executionSessions.close(evalDoEntityId(evalDoRef.objectKey), runId);
-            deps.activity?.end(activityId);
-          }
-        }
-      },
-      startRun: async (ctx, [runArgs]) => {
-        // Async agent run: the EvalDO persists and schedules it under its own lifetime, then returns
-        // immediately. Its terminal row is canonical and its own owner-scoped callback settles the
-        // agent. The host keeps no execution request open.
-        const runId = runArgs.runId ?? randomUUID();
-        const { evalDoRef, assembledArgs } = await prepareRun(ctx, runArgs, runId);
+      start: async (ctx, [runArgs]) => {
+        // Every caller uses the same durable lifecycle. The caller-owned run id
+        // is known before transport, so an ambiguous response or process loss
+        // never makes the accepted run unaddressable.
+        const runId = runArgs.runId;
+        const { evalDoRef, assembledArgs, authorityManifestDigest, eventSinkNonce } =
+          await prepareRun(ctx, runArgs, runId);
         const startArgs = {
           ...assembledArgs,
           runId,
         };
         const evalRuntimeId = evalDoEntityId(evalDoRef.objectKey);
         try {
-          await deps.doDispatch.dispatch(evalDoRef, "startRun", startArgs);
+          const accepted = (await deps.doDispatch.dispatch(evalDoRef, "startRun", startArgs)) as {
+            status: string;
+            existing?: boolean;
+            runDigest: string;
+          };
+          const acceptedRunDigest = accepted.runDigest;
+          const timeoutMs = assembledArgs["timeoutMs"];
+          if (typeof timeoutMs === "number" && deps.recoverUnresponsiveSandbox) {
+            const activityId = `eval-watchdog:${runId}`;
+            deps.activity?.begin(activityId);
+            void watchTimedRun(
+              deps.doDispatch,
+              evalDoRef,
+              runId,
+              timeoutMs,
+              deps.recoverUnresponsiveSandbox,
+              deps.watchdogGraceMs ?? DEFAULT_EVAL_WATCHDOG_GRACE_MS
+            )
+              .catch((error) => {
+                console.warn(
+                  `[eval] timed run watchdog ${runId} completed through recovery:`,
+                  error instanceof Error ? error.message : error
+                );
+              })
+              .finally(() => {
+                deps.activity?.end(activityId);
+              });
+          }
+          if (
+            accepted.status === "done" ||
+            accepted.status === "cancelled" ||
+            accepted.status === "approval-route-lost"
+          ) {
+            const snapshot = await deps.doDispatch.dispatch(evalDoRef, "getRun", runId);
+            deps.executionSessions.close(evalRuntimeId, runId);
+            deps.eventSinks?.close(eventSinkNonce);
+            return {
+              runId,
+              runDigest: acceptedRunDigest,
+              authorityManifestDigest,
+              status: "terminal" as const,
+              snapshot,
+            };
+          }
+          // Preserve the one-round-trip fast path without reintroducing a
+          // second public execution method. Non-agent callers give the same
+          // accepted run a short completion window; agent DOs return
+          // immediately so their existing terminal push remains primary.
+          if (!assembledArgs["resultReceiverRef"]) {
+            const quick = await terminalWithin(
+              deps.doDispatch.dispatchHeld(evalDoRef, "executeRun", runId),
+              25
+            );
+            if (quick) {
+              deps.executionSessions.close(evalRuntimeId, runId);
+              deps.eventSinks?.close(eventSinkNonce);
+              return {
+                runId,
+                runDigest: acceptedRunDigest,
+                authorityManifestDigest,
+                status: "terminal" as const,
+                snapshot: { status: "done" as const, result: quick },
+              };
+            }
+          }
+          return {
+            runId,
+            runDigest: acceptedRunDigest,
+            authorityManifestDigest,
+            status: accepted.existing ? ("already-running" as const) : ("accepted" as const),
+          };
         } catch (error) {
           // startRun is idempotent on runId. A transport rejection is
           // ambiguous: the EvalDO may already have durably accepted the run.
@@ -597,46 +859,22 @@ export function createEvalService(deps: {
               );
             })
             .finally(() => {
-              deps.executionSessions.close(evalRuntimeId, runId);
+              // Once the durable owner acknowledges the run, its producer-side
+              // terminal event closes admission through the trusted sink.
             });
           throw error;
         }
-        void closeAdmissionWhenRunEnds(deps.doDispatch, evalDoRef, runId)
-          .catch((error) => {
-            console.warn(
-              `[eval] admission monitor ${runId} stopped:`,
-              error instanceof Error ? error.message : error
-            );
-          })
-          .finally(() => {
-            deps.executionSessions.close(evalRuntimeId, runId);
-          });
-        const timeoutMs = assembledArgs["timeoutMs"];
-        if (typeof timeoutMs === "number" && deps.recoverUnresponsiveSandbox) {
-          const activityId = `eval-watchdog:${runId}`;
-          deps.activity?.begin(activityId);
-          void watchTimedRun(
-            deps.doDispatch,
-            evalDoRef,
-            runId,
-            timeoutMs,
-            deps.recoverUnresponsiveSandbox,
-            deps.watchdogGraceMs ?? DEFAULT_EVAL_WATCHDOG_GRACE_MS
-          )
-            .catch((error) => {
-              console.warn(
-                `[eval] timed run watchdog ${runId} completed through recovery:`,
-                error instanceof Error ? error.message : error
-              );
-            })
-            .finally(() => {
-              deps.activity?.end(activityId);
-            });
-        }
-        return { runId };
       },
-      getRun: async (ctx, [getArgs]) =>
+      get: async (ctx, [getArgs]) =>
         deps.doDispatch.dispatch(await evalDoRefFor(ctx, getArgs), "getRun", getArgs.runId),
+      events: async (ctx, [eventArgs]) =>
+        deps.doDispatch.dispatch(
+          await evalDoRefFor(ctx, eventArgs),
+          "getRunEvents",
+          eventArgs.runId,
+          eventArgs.after ?? 0,
+          eventArgs.limit ?? 100
+        ),
       readScopeTextPage: async (ctx, [pageArgs]) =>
         deps.doDispatch.dispatch(
           await evalDoRefFor(ctx, pageArgs),
@@ -655,7 +893,7 @@ export function createEvalService(deps: {
         deps.doDispatch.dispatch(await evalDoRefFor(ctx, resetArgs), "reset"),
       dispose: async (ctx, [disposeArgs = {}]) => {
         const owner = await resolveOwnerForCaller(ctx, disposeArgs);
-        const objectKey = evalDoKey(owner.ownerId, disposeArgs.subKey ?? "default");
+        const objectKey = evalDoKey(owner.ownerId, disposeArgs.scopeKey ?? "default");
         const entityId = evalDoEntityId(objectKey);
         const active = await store.resolveRecord(entityId);
         if (!active || active.status !== "active") return { ok: true };
@@ -697,30 +935,10 @@ async function reconcileAmbiguousStart(
   for (;;) {
     try {
       await dispatch.dispatch(ref, "startRun", startArgs);
-      return closeAdmissionWhenRunEnds(dispatch, ref, runId);
+      return;
     } catch {
       await admissionRetryDelay();
     }
-  }
-}
-
-async function closeAdmissionWhenRunEnds(
-  dispatch: HeldDoDispatcher,
-  ref: { source: string; className: string; objectKey: string },
-  runId: string
-): Promise<void> {
-  for (;;) {
-    try {
-      const run = (await dispatch.dispatch(ref, "getRun", runId)) as { status?: unknown };
-      const status = typeof run.status === "string" ? run.status : "unknown";
-      if (status === "done" || status === "cancelled" || status === "unknown") return;
-    } catch {
-      // Admission is a semantic lifetime, not the lifetime of one monitoring
-      // request. A transient workerd/gateway reset must not de-authorize a run
-      // that the EvalDO still owns; only its durable terminal state may close
-      // the execution session.
-    }
-    await admissionRetryDelay();
   }
 }
 
@@ -729,4 +947,17 @@ function admissionRetryDelay(): Promise<void> {
     const timer = setTimeout(resolve, 250);
     timer.unref?.();
   });
+}
+
+async function terminalWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const elapsed = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([promise, elapsed]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }

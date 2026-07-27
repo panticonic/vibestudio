@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
+import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
 import {
   clearDevInstanceReady,
   createEphemeralInstanceRoot,
@@ -17,7 +18,6 @@ import {
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
-const READY_TIMEOUT_MS = 5 * 60_000;
 
 type Mode = DevInstanceRecord["kind"];
 
@@ -85,53 +85,6 @@ function run(
   });
 }
 
-function waitForExit(child: ChildProcess): Promise<number> {
-  return new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code, signal) => {
-      if (signal) {
-        resolve(128 + (process.platform === "win32" ? 0 : 1));
-        return;
-      }
-      resolve(code ?? 1);
-    });
-  });
-}
-
-async function waitForReady(file: string, child: ChildProcess): Promise<unknown> {
-  const startedAt = Date.now();
-  for (;;) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error("Vibestudio server exited before publishing readiness");
-    }
-    try {
-      return JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof SyntaxError)) {
-        throw error;
-      }
-    }
-    if (Date.now() - startedAt >= READY_TIMEOUT_MS) {
-      throw new Error(`Timed out waiting for Vibestudio readiness at ${file}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-}
-
-function forwardSignals(child: ChildProcess): () => void {
-  const handlers = new Map<NodeJS.Signals, () => void>();
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-    const handler = () => {
-      if (child.exitCode === null && child.signalCode === null) child.kill(signal);
-    };
-    handlers.set(signal, handler);
-    process.on(signal, handler);
-  }
-  return () => {
-    for (const [signal, handler] of handlers) process.off(signal, handler);
-  };
-}
-
 async function runServer(
   forwarded: string[],
   env: NodeJS.ProcessEnv,
@@ -148,38 +101,33 @@ async function runServer(
     configuredReadyFile ?? path.join(instance.root, "server-auth", "hub-ready.json");
   fs.rmSync(readyFile, { force: true });
   const serverArgs = configuredReadyFile ? forwarded : [...forwarded, "--ready-file", readyFile];
-  const child = spawn(process.execPath, [tsxCli, "src/server/index.ts", ...serverArgs], {
-    cwd: process.cwd(),
+  const supervisor = new DevInstanceSupervisor({
+    sourceRoot: fs.realpathSync(process.cwd()),
+    command: process.execPath,
+    args: [tsxCli, "src/server/index.ts", ...serverArgs],
     env,
     stdio: "inherit",
-    // The supervisor is the terminal's sole signal recipient. Otherwise Ctrl-C
-    // reaches both processes and the forwarded second SIGINT escalates an
-    // already-ordered hub shutdown into a forced child-tree kill.
-    detached: process.platform !== "win32",
+    forwardParentSignals: true,
+    readiness: {
+      file: readyFile,
+      async onReady(ready) {
+        const bootstrap = await bootstrapInstanceCli(ready);
+        publishDevInstanceReady(instance, bootstrap);
+        if (bootstrap.status === "invite-required") {
+          console.warn(
+            `[instance:${instance.id}] CLI is not paired. Create a device invite, then run ` +
+              `\`pnpm cli --instance ${instance.id} remote pair <invite>\`.`
+          );
+        } else {
+          console.log(
+            `[instance:${instance.id}] CLI ${bootstrap.status}; workspace=${bootstrap.workspaceName}`
+          );
+        }
+      },
+    },
   });
-  const stopForwarding = forwardSignals(child);
-  try {
-    const ready = await waitForReady(readyFile, child);
-    const bootstrap = await bootstrapInstanceCli(ready);
-    publishDevInstanceReady(instance, bootstrap);
-    if (bootstrap.status === "invite-required") {
-      console.warn(
-        `[instance:${instance.id}] CLI is not paired. Create a device invite, then run ` +
-          `\`pnpm cli --instance ${instance.id} remote pair <invite>\`.`
-      );
-    } else {
-      console.log(
-        `[instance:${instance.id}] CLI ${bootstrap.status}; workspace=${bootstrap.workspaceName}`
-      );
-    }
-    return await waitForExit(child);
-  } catch (error) {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
-    await waitForExit(child).catch(() => undefined);
-    throw error;
-  } finally {
-    stopForwarding();
-  }
+  await supervisor.start();
+  return supervisor.wait();
 }
 
 async function runDesktop(forwarded: string[], env: NodeJS.ProcessEnv): Promise<number> {
@@ -192,17 +140,18 @@ async function runDesktop(forwarded: string[], env: NodeJS.ProcessEnv): Promise<
     env,
     stdio: "inherit",
   });
-  const electron = spawn(process.execPath, ["scripts/run-electron.mjs", ...forwarded], {
-    cwd: process.cwd(),
+  const supervisor = new DevInstanceSupervisor({
+    sourceRoot: fs.realpathSync(process.cwd()),
+    command: process.execPath,
+    args: ["scripts/run-electron.mjs", ...forwarded],
     env,
     stdio: "inherit",
-    detached: process.platform !== "win32",
+    forwardParentSignals: true,
   });
-  const stopForwarding = forwardSignals(electron);
   try {
-    return await waitForExit(electron);
+    await supervisor.start();
+    return await supervisor.wait();
   } finally {
-    stopForwarding();
     if (realTypeCheck.exitCode === null && realTypeCheck.signalCode === null) {
       realTypeCheck.kill("SIGTERM");
     }

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestDO, createTestDirectAuthority } from "@workspace/runtime/worker/test-utils";
+import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
@@ -305,7 +306,7 @@ describe("PubSubChannel", () => {
     expect(schedule!.wakeAt).toBeLessThanOrEqual(Date.now() + 250);
   });
 
-  it("enforces host-initialized locked membership independently of the live roster", async () => {
+  ledgerTest("channel.locked.exact-admission", async () => {
     const workerId = "do:workers/system-agent:SystemAgentWorker:user-alice";
     const { instance } = await createGadBackedChannel({
       rpcCall: (target, method, args) => {
@@ -498,7 +499,7 @@ describe("PubSubChannel", () => {
     });
   });
 
-  it("allows a panel caller to use its stable slot participant id", async () => {
+  ledgerTest("channel.ordinary.authenticated-admission", async () => {
     const { instance } = await createGadBackedChannel();
     setRpcCaller(instance, "panel:nav-current", "panel", "panel:slot-stable");
 
@@ -546,7 +547,7 @@ describe("PubSubChannel", () => {
     ).resolves.toMatchObject({ ok: true });
   });
 
-  it("canonicalizes one human across panels while each response owns its delivery", async () => {
+  ledgerTest("channel.presence.canonical-human", async () => {
     const emittedTargets: string[] = [];
     const { instance, sql } = await createGadBackedChannel({ emittedTargets });
 
@@ -676,7 +677,7 @@ describe("PubSubChannel", () => {
     expect((await instance.getChannelPresence()).entries[0]?.status).toBe("online");
   });
 
-  it("supports durable channel invites without fabricating presence", async () => {
+  ledgerTest("channel.invitation.discovery-metadata", async () => {
     const { instance, gad } = await createGadBackedChannel({
       rpcCall: (_target, method, args) => {
         if (method === "account.isMember") return args[0] === "usr_bob";
@@ -1975,7 +1976,7 @@ describe("PubSubChannel", () => {
     ]);
   });
 
-  it("forks the GAD-backed channel log during postClone", async () => {
+  ledgerTest("channel.fork.context-and-log-origin", async () => {
     const parent = await createGadBackedChannel({ channelKey: "channel-parent" });
     setRpcCaller(parent.instance, "panel:user", "panel");
     await parent.instance.subscribe("panel:user", {

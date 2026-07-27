@@ -34,6 +34,35 @@ export type PreparedAuthoritySelection =
   | FixedPreparedAuthoritySelection
   | SelectedPreparedAuthoritySelection;
 
+/**
+ * One exact host-prepared invocation state.
+ *
+ * `payload` is receiver-owned JSON data that the dispatcher seals into the
+ * same prepared-state digest as the authority selections, then exposes to the
+ * handler only after the final revalidation at the handler boundary. This
+ * lets a receiver prepare an exact effect once (for example, an immutable VCS
+ * snapshot plan) without re-reading mutable host state after approval.
+ */
+export interface PreparedAuthorityState {
+  selections: readonly PreparedAuthoritySelection[];
+  payload: unknown;
+}
+
+export function preparedAuthorityState(
+  selections: readonly PreparedAuthoritySelection[],
+  payload: unknown = null
+): PreparedAuthorityState {
+  return { selections, payload };
+}
+
+/** Read the exact payload admitted for this handler invocation. */
+export function preparedAuthorityPayload<T>(ctx: ServiceContext, resolver: string): T {
+  if (!ctx.preparedAuthority || ctx.preparedAuthority.resolver !== resolver) {
+    throw new Error(`Prepared authority payload '${resolver}' is unavailable`);
+  }
+  return ctx.preparedAuthority.payload as T;
+}
+
 /** Select only resource/presentation data for a schema-fixed prepared leaf. */
 export function fixedPreparedAuthoritySelection<const S extends PreparedAuthoritySelectionFields>(
   selection: S
@@ -77,7 +106,7 @@ export function selectedPreparedAuthoritySelection<
 export type AuthorityPreparationResolver = (
   ctx: ServiceContext,
   args: unknown[]
-) => readonly PreparedAuthoritySelection[] | Promise<readonly PreparedAuthoritySelection[]>;
+) => PreparedAuthorityState | Promise<PreparedAuthorityState>;
 
 export interface ServiceDefinition {
   name: string;

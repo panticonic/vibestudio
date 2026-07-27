@@ -7,8 +7,52 @@
  */
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
+import {
+  createEvalExecutor,
+  evalAuthorityInputSchema,
+  type EvalStartInput,
+} from "@vibestudio/service-schemas/eval";
 
 const evalCommonSchema = {
+  authority: Type.Optional(
+    Type.Object(
+      {
+        mode: Type.Optional(Type.Union([Type.Literal("adaptive"), Type.Literal("strict")])),
+        effects: Type.Optional(Type.Union([Type.Literal("mutable"), Type.Literal("read-only")])),
+        approvals: Type.Optional(
+          Type.Union([Type.Literal("prompt"), Type.Literal("pregranted-only")])
+        ),
+        requests: Type.Optional(
+          Type.Array(
+            Type.Object({
+              capability: Type.String(),
+              resource: Type.Union([
+                Type.Object({ kind: Type.Literal("exact"), key: Type.String() }),
+                Type.Object({ kind: Type.Literal("prefix"), prefix: Type.String() }),
+                Type.Object({ kind: Type.Literal("origin"), origin: Type.String() }),
+                Type.Object({ kind: Type.Literal("domain"), domain: Type.String() }),
+                Type.Object({ kind: Type.Literal("network"), value: Type.Literal("*") }),
+              ]),
+            })
+          )
+        ),
+        preauthorize: Type.Optional(
+          Type.Array(
+            Type.Object({
+              service: Type.String(),
+              method: Type.String(),
+              args: Type.Array(Type.Unknown()),
+            })
+          )
+        ),
+      },
+      {
+        additionalProperties: false,
+        description:
+          "Optional per-run authority attenuation. Strict requests only narrow authority; pregranted-only never opens an approval card; read-only is enforced at the canonical dispatcher.",
+      }
+    )
+  ),
   timeoutMs: Type.Optional(
     Type.Integer({
       minimum: 1,
@@ -109,11 +153,7 @@ export interface EvalRunResult {
   };
 }
 
-export interface NormalizedEvalToolSource {
-  code?: string;
-  path?: string;
-  sourcePath?: string;
-}
+export type NormalizedEvalToolSource = EvalStartInput["source"];
 
 const EXECUTABLE_EVAL_PATH = /\.(?:[cm]?js|[cm]?ts|jsx|tsx)$/i;
 
@@ -142,16 +182,19 @@ export function normalizeEvalToolSource(params: {
   // never useful; load it through the same context-scoped runtime fs instead.
   if (code === undefined && path !== undefined && !EXECUTABLE_EVAL_PATH.test(path)) {
     return {
+      kind: "inline",
       code: `return await fs.readFile(${JSON.stringify(path)}, "utf8");`,
     };
   }
+  if (code === undefined) {
+    return { kind: "context-file", path: path!, syntax: params.syntax };
+  }
   return {
+    kind: "inline",
     code,
-    path: code === undefined ? path : undefined,
-    sourcePath:
-      code !== undefined
-        ? (explicitSourcePath ?? (path ? inlineSourcePathFromHint(path, params.syntax) : undefined))
-        : undefined,
+    pathHint:
+      explicitSourcePath ?? (path ? inlineSourcePathFromHint(path, params.syntax) : undefined),
+    syntax: params.syntax,
   };
 }
 
@@ -212,31 +255,34 @@ export function createEvalTool(
   callMain: <T>(method: string, args: unknown[]) => Promise<T>,
   opts: { subKey?: string } = {}
 ): AgentTool<typeof evalSchema> {
+  const executeEval = createEvalExecutor(callMain);
   return {
     name: "eval",
     label: "eval",
     description:
       'Execute TypeScript/JS in your persistent notebook sandbox (a per-agent EvalDO, not the visible panel). The live heap—including objects with methods, module singletons, and client handles—is retained for 30 minutes after the latest cell. Calls have no implicit wall deadline; pass a positive integer timeoutMs when work may stall or must finish within a known bound. Split intentionally bounded workflows when useful and keep live working objects in `scope`; store stable IDs and exact serializable data there for recovery, or durable records in `db`. An unavoidable process restart is reported explicitly as `[kernel] Restarted` with exact restored/lost scope keys—reacquire lost handles from stable IDs before continuing. Set reset:true to clear scope/db atomically before this call; never call eval.reset from inside the running eval. The live runtime is self-describing: call `await help()` to list bindings or `await help("workers")` (and the analogous binding name) before guessing an API or return shape. Call workspace services via `rpc`/`services`; `chat.channelId` is only the channel where this agent is responding; for visible panel perspective use `parent`/`getParent()` and `panelTree` plus target panel stateArgs. `return` sends a bounded value back; console output is captured. Very large console/return payloads are windowed with recovery pointers to `scope.$lastConsole` / `scope.$lastReturn`, so prefer compact summaries and store large artifacts in scope/blobstore.',
     parameters: evalSchema,
-    execute: async (_toolCallId, params): Promise<AgentToolResult<EvalRunResult>> => {
+    execute: async (toolCallId, params): Promise<AgentToolResult<EvalRunResult>> => {
       // Some model transports materialize an optional string as "". Treat an
       // empty path as omitted when inline code is present; it is never a valid
       // context-relative file and should not turn an otherwise valid eval into
       // a mutually-exclusive-arguments error.
       const source = normalizeEvalToolSource(params);
-      const result = await callMain<EvalRunResult>("eval.run", [
-        {
-          subKey: opts.subKey,
-          // The agent's eval subKey IS its channelId — thread it through so the
-          // service can give the sandbox a `chat` binding proxied to this agent.
-          channelId: opts.subKey,
-          reset: params.reset,
-          timeoutMs: params.timeoutMs,
-          ...source,
-          syntax: params.syntax,
-          imports: params.imports,
-        },
-      ]);
+      const result = await executeEval({
+        // The tool invocation id is the durable eval handle. A vessel replay
+        // therefore addresses the already-accepted run instead of duplicating
+        // arbitrary code after a lost response.
+        runId: toolCallId,
+        scope: opts.subKey ? { key: opts.subKey } : undefined,
+        reset: params.reset,
+        timeoutMs: params.timeoutMs,
+        source,
+        imports: params.imports,
+        authority:
+          params.authority === undefined
+            ? undefined
+            : evalAuthorityInputSchema.parse(params.authority),
+      });
       // Formatting (with large-output windowing) is shared with the agent's deferred resume.
       return formatEvalResult(result);
     },

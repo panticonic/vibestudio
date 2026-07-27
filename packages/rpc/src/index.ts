@@ -49,6 +49,7 @@ export type {
   AuthorizationOrigin,
   AuthorizationDecision,
   InvocationSnapshot,
+  EvalAuthorityManifest,
   AcquisitionInfo,
   AuthorityFailureInfo,
   AuthorityFailureReasonCode,
@@ -77,6 +78,7 @@ export type {
   AgentExecutionTestPolicySpec,
   AgentExecutionTestUserlandRule,
   AgentExecutionSessionFact,
+  AttachedHostExecutionFact,
 } from "./authority.js";
 export { isParentPortEnvelope } from "./types.js";
 export { createRpcClient, defineContract, withCausalParent } from "./client.js";

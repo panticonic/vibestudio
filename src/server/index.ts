@@ -21,7 +21,11 @@ import { createHash, randomBytes, randomUUID } from "crypto";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
-import { createHostCaller, type VerifiedCodeIdentity } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createHostCaller,
+  createVerifiedCaller,
+  type VerifiedCodeIdentity,
+} from "@vibestudio/shared/serviceDispatcher";
 import { parseDoTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 import { isCallerKind } from "@vibestudio/shared/principalKinds";
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
@@ -69,6 +73,16 @@ type HeartbeatControlSelector =
       channelId?: string;
       participantHandle?: string;
     };
+
+function readHostExecutionDigest(repoRoot: string): string {
+  const record = JSON.parse(
+    fs.readFileSync(path.join(repoRoot, "dist", "host-build-fingerprint.json"), "utf8")
+  ) as { version?: unknown; fingerprint?: unknown };
+  if (record.version !== 1 || !/^[0-9a-f]{64}$/u.test(String(record.fingerprint ?? ""))) {
+    throw new Error("The trusted host build fingerprint is missing or invalid");
+  }
+  return String(record.fingerprint);
+}
 
 function resolveHeartbeatRegistryRow(
   rows: HeartbeatRegistryControlRow[],
@@ -451,6 +465,29 @@ async function main() {
   const workspacePath = workspace.path;
   const workspaceConfig = workspace.config;
   const statePath = workspace.statePath;
+  const { ExecutionPublicationJournal } = await import("./executionPublicationJournal.js");
+  const { executionArtifactRefFromBuild, buildKeyRootProvider, DelegatingExecutionRootProvider } =
+    await import("./executionRootProviders.js");
+  const buildStoreForPublication = await import("./buildV2/buildStore.js");
+  const { getInternalDOBundle, internalDOExecutionArtifacts } =
+    await import("./internalDOs/internalDoLoader.js");
+  const productSeedArtifacts = internalDOExecutionArtifacts(getInternalDOBundle());
+  const productSeedArtifactByIdentity = new Map(
+    productSeedArtifacts.map((artifact) => [
+      `${artifact.buildKey}\0${artifact.executionDigest}`,
+      artifact,
+    ])
+  );
+  const executionPublicationJournal = new ExecutionPublicationJournal(
+    statePath,
+    (buildKey, executionDigest) => {
+      const build = buildStoreForPublication.peekLocal(buildKey);
+      if (build) return executionArtifactRefFromBuild(workspaceId, build);
+      return productSeedArtifactByIdentity.get(`${buildKey}\0${executionDigest}`) ?? null;
+    }
+  );
+  const evalRunRootProvider = new DelegatingExecutionRootProvider("eval-run");
+  const developmentRunRootProvider = new DelegatingExecutionRootProvider("development-run");
   const { createCapabilityPresentationResolver, summarizeAuthorityRequests } =
     await import("@vibestudio/shared/authorityPresentation");
   const { PRODUCT_WORKSPACE_SERVICES } =
@@ -610,6 +647,7 @@ async function main() {
       doDispatch,
       workspaceId,
       entityCache,
+      executionPublicationPort: executionPublicationJournal,
     }));
   const connectionGrants = new ConnectionGrantService({ entityCache });
   const serverBootId = `boot_${randomBytes(18).toString("base64url")}`;
@@ -741,6 +779,8 @@ async function main() {
   const recordContextIngestionBatch = createContextIngestionBatchRecorder(contextIntegrityStore);
   const { ConduitBlessingStore } = await import("./services/conduitBlessingStore.js");
   const conduitBlessingStore = new ConduitBlessingStore({ statePath });
+  const { isAttestedSystemTestHarness, isBlessedSystemTestConduit } =
+    await import("./services/authorityRuntime.js");
   const { MissionRegistry } = await import("./services/missionRegistry.js");
   const missionRegistry = new MissionRegistry({
     statePath,
@@ -751,6 +791,15 @@ async function main() {
         effectiveVersion: identity.ev,
       }),
   });
+  const { DevelopmentSessionStore } = await import("./services/developmentSessionStore.js");
+  const developmentSessionStore = new DevelopmentSessionStore({
+    statePath,
+    publicationPort: executionPublicationJournal,
+  });
+  const { SystemTestBuildFaultRegistry } =
+    await import("./services/systemTestBuildFaultRegistry.js");
+  const systemTestBuildFaults = new SystemTestBuildFaultRegistry();
+  developmentRunRootProvider.bind(developmentSessionStore.executionRootProvider());
   // EntityTitleService: source-of-truth for display titles lives in the
   // WorkspaceDO (entities.display_title). The cache here is populated at
   // boot via `hydrate()` and updated on every write. The lazy doDispatch
@@ -1426,54 +1475,200 @@ async function main() {
   // Unified ServiceContainer — lifecycle + RPC services in one container
   // ===========================================================================
 
-  dispatcher.setAuthorityAcquirer({
-    request: (input) => acquisitionCoordinator.request(input),
-    acquire: (input, signal) => acquisitionCoordinator.requestAndWait(input, signal),
-    consume: (grantId) => acquisitionCoordinator.consume(grantId),
-    touch: (grantId) => acquisitionCoordinator.touch(grantId),
-    priorInteractiveApprovalCount: (input) =>
-      capabilityGrantStore.priorInteractiveApprovalCount(input),
-    invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
-      acquisitionCoordinator.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
-    proposeMissionRevision: ({ snapshot, tier, resource }) => {
-      if (snapshot.mission === "-") {
-        throw new Error("Mission revision proposal requires a mission-bound invocation");
-      }
-      const mission = missionRegistry.proposePermissionRevision({
-        sessionId: snapshot.sessionId,
-        service: snapshot.service,
-        method: snapshot.method,
-        capability: snapshot.capability,
-        resource,
-        tier,
-      });
-      void import("./services/missionService.js")
-        .then(({ reviewMission }) =>
-          reviewMission(
-            {
-              registry: missionRegistry,
-              approvalQueue,
-              capabilityGrants: capabilityGrantStore,
-              describeCapability,
-              contextIntegrityReady: () => contextIntegrityStore.isCutoverComplete(),
-            },
-            mission,
-            mission.owner.userId,
-            {
-              reviewKind: "out-of-charter",
-              blockedAt: Date.now(),
-              declinedRestriction: {
-                capability: snapshot.capability,
-                resourceKey: snapshot.resourceKey,
-              },
-            }
-          )
-        )
-        .catch((error) => {
-          console.error("[Mission] Could not publish revision review:", error);
+  const { AttachedHostSessionStore } = await import("./services/attachedHostSessionStore.js");
+  const { AttachedHostEndpoint } = await import("./services/attachedHostProtocol.js");
+  const { AttachedHostApprovalPresenter, createAttachedHostApprovalResolver } =
+    await import("./services/attachedHostApprovalPresenter.js");
+  const {
+    AttachedHostAuthorityBridge,
+    AttachedHostDecisionConsumer,
+    attachedHostAwareAuthorityAcquirer,
+  } = await import("./services/attachedHostAuthorityBridge.js");
+  const { createAttachedHostChildEndpoint, readAttachedHostChildEnvironment } =
+    await import("./services/attachedHostRuntime.js");
+  const {
+    HttpAttachedHostApprovalClient,
+    attachedHostHttpRoutes,
+    attachedHostParentHttpRoutes,
+    createAttachedHostPublicationPorts,
+  } = await import("./services/attachedHostTransport.js");
+  const { createAttachedHostsService } = await import("./services/attachedHostsService.js");
+  const { AttachedHostController } = await import("./services/attachedHostController.js");
+
+  // This is an attenuation ceiling, not a grant. An attached child can ask the
+  // canonical parent UI about any semantic capability/resource, but it can
+  // never bypass normal parent policy or widen the exact child-local decision.
+  // Keeping this route complete preserves ordinary agent UX while the signed
+  // transcript, canonical presentation, and dispatcher enforce the boundaries.
+  const attachedHostAuthorityCeiling = Object.freeze([
+    Object.freeze({
+      capability: "*",
+      resource: Object.freeze({ kind: "prefix" as const, prefix: "" }),
+    }),
+  ]);
+  const attachedHostProtocolStore = new AttachedHostSessionStore(
+    layout.development.attachedHostsDb
+  );
+  const attachedHostApprovalResolver = createAttachedHostApprovalResolver(dispatcher);
+  const localHostId = deviceAuthStore.getServerId();
+  const attachedHostParentEndpoint = new AttachedHostEndpoint({
+    role: "parent",
+    store: attachedHostProtocolStore,
+    localFacts: (facts) => {
+      if (facts.parentHostId !== localHostId) {
+        throw Object.assign(new Error("Attached-host parent identity drifted"), {
+          code: "EATTACHED_BINDING",
         });
+      }
+      return { facts, authorityCeiling: attachedHostAuthorityCeiling };
     },
+    resolveApprovalPresentation: attachedHostApprovalResolver,
   });
+  const attachedHostApprovalPresenter = new AttachedHostApprovalPresenter({
+    endpoint: attachedHostParentEndpoint,
+    approvalQueue,
+  });
+  const attachedChildEnvironment = readAttachedHostChildEnvironment(process.env);
+  const childInstanceId = attachedChildEnvironment?.instanceId;
+  const childGenerationId = attachedChildEnvironment?.generationId;
+  const childDevelopmentRunId = attachedChildEnvironment?.developmentRunId;
+  const attachedParentGatewayUrl = attachedChildEnvironment?.parentGatewayUrl;
+  const attachedHostChildEndpoint =
+    childInstanceId && childGenerationId && childDevelopmentRunId && attachedParentGatewayUrl
+      ? createAttachedHostChildEndpoint({
+          store: attachedHostProtocolStore,
+          dispatcher,
+          localFacts: (facts) => {
+            if (
+              facts.childHostId !== localHostId ||
+              facts.childGenerationId !== childGenerationId ||
+              facts.developmentRunId !== childDevelopmentRunId
+            ) {
+              throw Object.assign(new Error("Attached-host child readiness facts drifted"), {
+                code: "EATTACHED_BINDING",
+              });
+            }
+            return { facts, authorityCeiling: attachedHostAuthorityCeiling };
+          },
+          resolveCaller: (relationship) => {
+            const user = relationship.ownerUserId
+              ? userStore.getUser(relationship.ownerUserId)
+              : null;
+            if (relationship.ownerUserId && (!user || user.revokedAt !== undefined)) {
+              throw Object.assign(new Error("Attached-host owner is unavailable"), {
+                code: "EATTACHED_OWNER",
+              });
+            }
+            return createVerifiedCaller(
+              relationship.ownerRuntimeId,
+              relationship.ownerRuntimeKind,
+              null,
+              null,
+              user ? { userId: user.id, handle: user.handle } : null
+            );
+          },
+        })
+      : null;
+  const attachedHostDecisionConsumer = attachedHostChildEndpoint
+    ? new AttachedHostDecisionConsumer({
+        endpoint: attachedHostChildEndpoint,
+        grantStore: capabilityGrantStore,
+        revalidate: (challenge) => attachedHostApprovalResolver(challenge) !== null,
+      })
+    : null;
+  const attachedHostApprovalClient =
+    attachedHostChildEndpoint && attachedParentGatewayUrl
+      ? new HttpAttachedHostApprovalClient({
+          parentGatewayUrl: attachedParentGatewayUrl,
+          endpoint: attachedHostChildEndpoint,
+        })
+      : null;
+  const attachedHostController = new AttachedHostController(
+    attachedHostParentEndpoint,
+    ({ sessionId, developmentRunId, childGenerationId: lostGenerationId }) => {
+      const run = developmentSessionStore.getRun(developmentRunId);
+      if (
+        !run?.attachedHost ||
+        run.attachedHost.sessionId !== sessionId ||
+        run.attachedHost.childGenerationId !== lostGenerationId
+      ) {
+        return;
+      }
+      developmentSessionStore.transitionRun({
+        runId: run.runId,
+        expected: [run.state],
+        state: run.state,
+        attachedHost: {
+          ...run.attachedHost,
+          state: "route-lost",
+          routeLostAt: Date.now(),
+        },
+        message: "Attached child approval route was lost; restart the isolated run",
+      });
+    }
+  );
+
+  const ordinaryAuthorityAcquirer: import("./services/attachedHostAuthorityBridge.js").OrdinaryAuthorityAcquirer =
+    {
+      request: (input) => acquisitionCoordinator.request(input),
+      acquire: (input, signal) => acquisitionCoordinator.requestAndWait(input, signal),
+      consume: (grantId) => acquisitionCoordinator.consume(grantId),
+      touch: (grantId) => acquisitionCoordinator.touch(grantId),
+      priorInteractiveApprovalCount: (input) =>
+        capabilityGrantStore.priorInteractiveApprovalCount(input),
+      invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
+        acquisitionCoordinator.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
+      proposeMissionRevision: ({ snapshot, tier, resource }) => {
+        if (snapshot.mission === "-") {
+          throw new Error("Mission revision proposal requires a mission-bound invocation");
+        }
+        const mission = missionRegistry.proposePermissionRevision({
+          sessionId: snapshot.sessionId,
+          service: snapshot.service,
+          method: snapshot.method,
+          capability: snapshot.capability,
+          resource,
+          tier,
+        });
+        void import("./services/missionService.js")
+          .then(({ reviewMission }) =>
+            reviewMission(
+              {
+                registry: missionRegistry,
+                approvalQueue,
+                capabilityGrants: capabilityGrantStore,
+                describeCapability,
+                contextIntegrityReady: () => contextIntegrityStore.isCutoverComplete(),
+              },
+              mission,
+              mission.owner.userId,
+              {
+                reviewKind: "out-of-charter",
+                blockedAt: Date.now(),
+                declinedRestriction: {
+                  capability: snapshot.capability,
+                  resourceKey: snapshot.resourceKey,
+                },
+              }
+            )
+          )
+          .catch((error) => {
+            console.error("[Mission] Could not publish revision review:", error);
+          });
+      },
+    };
+  dispatcher.setAuthorityAcquirer(
+    attachedHostChildEndpoint && attachedHostDecisionConsumer && attachedHostApprovalClient
+      ? attachedHostAwareAuthorityAcquirer(
+          ordinaryAuthorityAcquirer,
+          new AttachedHostAuthorityBridge({
+            endpoint: attachedHostChildEndpoint,
+            decisionConsumer: attachedHostDecisionConsumer,
+            present: (challenge, signal) => attachedHostApprovalClient.present(challenge, signal),
+          })
+        )
+      : ordinaryAuthorityAcquirer
+  );
   const container = new ServiceContainer(dispatcher);
   const getEntityStore = (): import("./workspaceEntityStore.js").WorkspaceEntityStore =>
     ensureEntityStore(container.get<import("./doDispatch.js").DODispatch>("doDispatch"));
@@ -1483,6 +1678,34 @@ async function main() {
   // early so both consumers can wire it without awaiting other services.
   const { RouteRegistry } = await import("./routeRegistry.js");
   const routeRegistry = new RouteRegistry();
+  routeRegistry.registerHttpServiceRoutes(
+    attachedHostParentHttpRoutes(attachedHostParentEndpoint, attachedHostApprovalPresenter)
+  );
+  if (attachedHostChildEndpoint) {
+    routeRegistry.registerHttpServiceRoutes(attachedHostHttpRoutes(attachedHostChildEndpoint));
+  }
+
+  let attachedHostsDefinition:
+    | import("@vibestudio/shared/serviceDefinition").ServiceDefinition
+    | null = null;
+  container.registerManaged({
+    name: "attachedHosts",
+    dependencies: [],
+    async start() {
+      attachedHostsDefinition = createAttachedHostsService({
+        parent: attachedHostParentEndpoint,
+        controller: attachedHostController,
+        approvalPresenter: attachedHostApprovalPresenter,
+        ...(attachedHostChildEndpoint ? { child: attachedHostChildEndpoint } : {}),
+      });
+    },
+    getServiceDefinition() {
+      if (!attachedHostsDefinition) {
+        throw new Error("attachedHosts service not initialized");
+      }
+      return attachedHostsDefinition;
+    },
+  });
 
   // ── Lifecycle services ──
 
@@ -1512,6 +1735,225 @@ async function main() {
         {
           appRoot,
           dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
+          executionRootProviders: [
+            buildKeyRootProvider({
+              id: "app-generation",
+              owner: "app-generation",
+              buildKeys() {
+                const appHost = appHostForGateway;
+                if (!appHost) throw new Error("App registry is not available");
+                return appHost.registry
+                  .list()
+                  .filter((entry) => entry.target !== "terminal")
+                  .flatMap((entry) => [
+                    ...(entry.activeBundleKey
+                      ? [
+                          {
+                            ownerId: entry.name,
+                            buildKey: entry.activeBundleKey,
+                            reason: "active" as const,
+                          },
+                        ]
+                      : []),
+                    ...entry.previousVersions.map((version) => ({
+                      ownerId: entry.name,
+                      buildKey: version.activeBundleKey,
+                      reason: "rollback" as const,
+                    })),
+                  ]);
+              },
+              resolve: ({ buildKey }) => {
+                const build = buildStoreForPublication.peekLocal(buildKey);
+                return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
+              },
+            }),
+            buildKeyRootProvider({
+              id: "terminal-app",
+              owner: "terminal-app",
+              buildKeys() {
+                const appHost = appHostForGateway;
+                if (!appHost) throw new Error("App registry is not available");
+                return appHost.registry
+                  .list()
+                  .filter((entry) => entry.target === "terminal")
+                  .flatMap((entry) => [
+                    ...(entry.activeBundleKey
+                      ? [
+                          {
+                            ownerId: entry.name,
+                            buildKey: entry.activeBundleKey,
+                            reason: "active" as const,
+                          },
+                        ]
+                      : []),
+                    ...entry.previousVersions.map((version) => ({
+                      ownerId: entry.name,
+                      buildKey: version.activeBundleKey,
+                      reason: "rollback" as const,
+                    })),
+                  ]);
+              },
+              resolve: ({ buildKey }) => {
+                const build = buildStoreForPublication.peekLocal(buildKey);
+                return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
+              },
+            }),
+            buildKeyRootProvider({
+              id: "host-target-selection",
+              owner: "host-target-selection",
+              buildKeys() {
+                const appHost = appHostForGateway;
+                if (!appHost) throw new Error("Host-target selections are not available");
+                return appHost.listPersistedHostTargetSelections().flatMap((selection) =>
+                  selection.buildKey
+                    ? [
+                        {
+                          ownerId: selection.target,
+                          buildKey: selection.buildKey,
+                          reason: "pinned" as const,
+                        },
+                      ]
+                    : []
+                );
+              },
+              resolve: ({ buildKey }) => {
+                const build = buildStoreForPublication.peekLocal(buildKey);
+                return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
+              },
+            }),
+            buildKeyRootProvider({
+              id: "extension-generation",
+              owner: "extension-generation",
+              buildKeys() {
+                const extensionHost = extensionHostForGateway;
+                if (!extensionHost) throw new Error("Extension registry is not available");
+                return extensionHost.registry.list().flatMap((entry) =>
+                  entry.activeBundleKey
+                    ? [
+                        {
+                          ownerId: entry.name,
+                          buildKey: entry.activeBundleKey,
+                          reason: "active" as const,
+                        },
+                      ]
+                    : []
+                );
+              },
+              resolve: ({ buildKey }) => {
+                const build = buildStoreForPublication.peekLocal(buildKey);
+                return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
+              },
+            }),
+            {
+              id: "runtime-image",
+              mandatory: true,
+              async snapshotRoots() {
+                const workerdManager = workerdManagerForGateway;
+                if (!workerdManager) throw new Error("Runtime image store is not available");
+                return workerdManager.listRuntimeImages().map((image) => ({
+                  owner: "runtime-image" as const,
+                  ownerId: image.id,
+                  reason: "active" as const,
+                  artifact: image.artifact,
+                }));
+              },
+            },
+            buildKeyRootProvider({
+              id: "runtime-entity",
+              owner: "runtime-entity",
+              buildKeys: () =>
+                entityCache.listActive().flatMap((entity) =>
+                  entity.activeBuildKey
+                    ? [
+                        {
+                          ownerId: entity.id,
+                          buildKey: entity.activeBuildKey,
+                          reason: "active" as const,
+                          executionDigest: entity.activeExecutionDigest,
+                        },
+                      ]
+                    : []
+                ),
+              resolve: ({ buildKey, executionDigest }) => {
+                const build = buildStoreForPublication.peekLocal(buildKey);
+                if (build) return executionArtifactRefFromBuild(workspaceId, build);
+                return executionDigest
+                  ? (productSeedArtifactByIdentity.get(`${buildKey}\0${executionDigest}`) ?? null)
+                  : null;
+              },
+            }),
+            {
+              id: "panel-history",
+              mandatory: true,
+              async snapshotRoots() {
+                if (!entityStoreInstance)
+                  throw new Error("Workspace entity store is not available");
+                return (await entityStoreInstance.listExecutionRoots())
+                  .filter((entity) => entity.kind === "panel" && entity.activeBuildKey)
+                  .map((entity) => {
+                    const build = buildStoreForPublication.peekLocal(entity.activeBuildKey!);
+                    if (!build) {
+                      throw new Error(
+                        `Panel history ${entity.id} references missing build ${entity.activeBuildKey}`
+                      );
+                    }
+                    return {
+                      owner: "panel-history" as const,
+                      ownerId: entity.id,
+                      reason:
+                        entity.status === "active" ? ("active" as const) : ("rollback" as const),
+                      artifact: executionArtifactRefFromBuild(workspaceId, build),
+                    };
+                  });
+              },
+            },
+            evalRunRootProvider,
+            developmentRunRootProvider,
+            {
+              id: "product-seed",
+              mandatory: true,
+              async snapshotRoots() {
+                // Product code comes from the verified application bundle,
+                // outside workspace BuildStore.
+                return productSeedArtifacts.map((artifact) => ({
+                  owner: "product-seed" as const,
+                  ownerId: artifact.executionDigest,
+                  reason: "pinned" as const,
+                  artifact,
+                }));
+              },
+            },
+          ],
+          onRetentionDiagnostic(report) {
+            const level = report.complete ? "warn" : "error";
+            const message =
+              report.providerFailures.length > 0
+                ? `Build retention diagnostic is incomplete (${report.providerFailures.length} provider failure${report.providerFailures.length === 1 ? "" : "s"})`
+                : report.unresolvedAuthoritativeRootBuildKeys.length > 0
+                  ? `Build retention diagnostic has ${report.unresolvedAuthoritativeRootBuildKeys.length} unresolved authoritative root${report.unresolvedAuthoritativeRootBuildKeys.length === 1 ? "" : "s"}`
+                  : `Build cache contains ${report.unreferenced} unreferenced build${report.unreferenced === 1 ? "" : "s"} (${report.unreferencedBytes} bytes)`;
+            const fields = {
+              complete: report.complete,
+              roots: report.roots,
+              rootBuildKeys: report.rootBuildKeys,
+              storedRootBuildKeys: report.storedRootBuildKeys,
+              unresolvedAuthoritativeRootBuildKeys: report.unresolvedAuthoritativeRootBuildKeys,
+              reachableBuilds: report.reachableBuilds,
+              unreferenced: report.unreferenced,
+              unreferencedBytes: report.unreferencedBytes,
+              providerFailures: report.providerFailures,
+              quarantined: report.quarantined,
+              deleted: report.deleted,
+              retainedForGrace: report.retainedForGrace,
+              notReconstructible: report.notReconstructible,
+              notReconstructibleDetails: report.notReconstructibleDetails,
+              cleanupFailures: report.cleanupFailures,
+            };
+            // The server log is both durable JSONL and a live subscribed event
+            // stream, so operators can inspect this finding after the caller
+            // that requested the report is gone.
+            serverLogStore.append(level, [`[BuildRetention] ${message}`, fields]);
+          },
         }
       );
       const snapshotState = productSeedStateHash;
@@ -1558,7 +2000,7 @@ async function main() {
   // Prepare the manifest-declared eval engine + runtime prewarm. The returned
   // starter runs only after host readiness so optional compiles cannot starve
   // the VCS store DO that is on the critical startup path.
-  // first interactive `eval.run` doesn't pay the cold esbuild compiles (the bulk
+  // first interactive `eval.start` doesn't pay the cold esbuild compiles (the bulk
   // of the EvalDO cold start). The units come from meta/vibestudio.yml
   // (`providers.evalEngine` / `providers.evalRuntime`) — no declaration means
   // eval is disabled, so there is nothing to warm (logged once). Fire-and-forget:
@@ -2213,9 +2655,82 @@ async function main() {
         const runtime = assertPresent(
           resolve<import("./services/runtimeService.js").RuntimeServiceResult>("runtime")
         );
+        const evalEntityStore = ensureEntityStore(doDispatch);
+        const { createEvalEventIngressService, EvalEventSinkRegistry } =
+          await import("./services/evalEventIngressService.js");
+        const evalEventSinks = new EvalEventSinkRegistry();
+        dispatcher.registerService(
+          createEvalEventIngressService({
+            entityStore: evalEntityStore,
+            eventService,
+            sinks: evalEventSinks,
+          })
+        );
+        const { createEvalExecutionRootsService } =
+          await import("./services/evalExecutionRootsService.js");
+        dispatcher.registerService(
+          createEvalExecutionRootsService({
+            doDispatch,
+            entityStore: evalEntityStore,
+            publicationPort: executionPublicationJournal,
+          })
+        );
+        evalRunRootProvider.bind({
+          id: "eval-run",
+          mandatory: true,
+          async snapshotRoots() {
+            const entities = (await evalEntityStore.listActive("do")).filter(
+              (entity) =>
+                entity.source.repoPath === "vibestudio/internal" &&
+                entity.className === "EvalDO" &&
+                typeof entity.key === "string"
+            );
+            const roots = [];
+            for (const entity of entities) {
+              const retained = (await doDispatch.dispatch(
+                {
+                  source: "vibestudio/internal",
+                  className: "EvalDO",
+                  objectKey: entity.key!,
+                },
+                "listRetainedExecutionRoots"
+              )) as Array<{
+                runId: string;
+                moduleSpecifier: string;
+                artifact: import("@vibestudio/shared/execution/retention").ExecutionArtifactRefV1;
+              }>;
+              for (const row of retained) {
+                roots.push({
+                  owner: "eval-run" as const,
+                  ownerId: `${entity.id}:${row.runId}:${row.moduleSpecifier}`,
+                  reason: "active" as const,
+                  artifact: row.artifact,
+                });
+              }
+            }
+            return roots;
+          },
+        });
+        dispatcher.setAuthorityObserver(({ executionSession, kind, payload }) => {
+          const prefix = "do:vibestudio/internal:EvalDO:";
+          if (!executionSession.eval.runtimeId.startsWith(prefix)) return;
+          return doDispatch
+            .dispatch(
+              {
+                source: "vibestudio/internal",
+                className: "EvalDO",
+                objectKey: executionSession.eval.runtimeId.slice(prefix.length),
+              },
+              "appendAuthorityEvent",
+              executionSession.eval.runId,
+              kind,
+              payload
+            )
+            .then(() => undefined);
+        });
         evalDefinition = createEvalService({
           doDispatch,
-          entityStore: ensureEntityStore(doDispatch),
+          entityStore: evalEntityStore,
           retireEntity: (id) => runtime.internal.retireEntity(id),
           tokenManager,
           workspaceId,
@@ -2223,14 +2738,42 @@ async function main() {
           missionFactForSession: (sessionId) => missionRegistry.factForSession(sessionId),
           isSystemTestHarness: (caller, runId) =>
             runId.startsWith("system-test-runner:") &&
-            caller.code?.repoPath === "workers/system-test-runner" &&
-            Boolean(caller.code.executionDigest) &&
-            conduitBlessingStore.isBlessed(caller.code),
+            isBlessedSystemTestConduit(caller, (identity) =>
+              conduitBlessingStore.isBlessed(identity)
+            ),
           activity: activityRegistry,
           recoverUnresponsiveSandbox: ({ runId, timeoutMs }) =>
             workerdManager.recoverUnresponsiveSandbox(
               `eval ${runId} remained unresponsive after ${timeoutMs}ms`
             ),
+          preauthorize: (ctx, operation) =>
+            dispatcher.preauthorizeAuthority(
+              ctx,
+              operation.service,
+              operation.method,
+              operation.args
+            ),
+          eventSinks: evalEventSinks,
+          resolveContextSource: async (contextId, sourcePath) => {
+            const contentStateHash = await workspaceVcs.resolveContextState(contextId);
+            const sourceState = workspaceVcs.semanticStateForContent(contentStateHash);
+            if (!sourceState) {
+              throw new Error(
+                `eval context ${contextId} has no semantic identity for ${contentStateHash}`
+              );
+            }
+            const file = await workspaceVcs.readFile(contentStateHash, sourcePath);
+            if (!file) throw new Error(`eval source file does not exist: ${sourcePath}`);
+            if (file.content.kind !== "text") {
+              throw new Error(`eval source file is not UTF-8 text: ${sourcePath}`);
+            }
+            return {
+              code: file.content.text,
+              sourceDigest: file.contentHash,
+              sourceState,
+              contentStateHash,
+            };
+          },
         });
       },
       getServiceDefinition() {
@@ -2346,10 +2889,10 @@ async function main() {
         primePanelRuntimeImage = async (source, ref) => {
           await panelHttpServer.primeBuild(source, ref, async () => {
             const binding = await buildSystem.bindRuntimeImage(source, ref);
-            const build = buildSystem.getBuildByKey(binding.buildKey);
+            const build = buildSystem.getBuildByKey(binding.artifact.buildKey);
             if (!build) {
               throw new Error(
-                `Prebound panel image ${binding.buildKey} for ${source} is unavailable`
+                `Prebound panel image ${binding.artifact.buildKey} for ${source} is unavailable`
               );
             }
             return build;
@@ -2394,6 +2937,14 @@ async function main() {
             forkContext: async (sourceContextId, targetContextId) => {
               await workspaceVcs.forkContext(sourceContextId, targetContextId);
             },
+            resolveWorkingState: (contextId) =>
+              workspaceVcs
+                .semanticDirectCall("vcsStatus", { contextId })
+                .then(
+                  (status) =>
+                    (status as import("@vibestudio/service-schemas/vcs").VcsStatusResult)
+                      .workingHead
+                ),
           },
           hooks: {
             prepare: (async ({ spec, key, contextId, existingBuildKey, parent }) => {
@@ -2475,9 +3026,9 @@ async function main() {
                 } else {
                   const binding = await buildSystem.bindRuntimeImage(source, ref);
                   prepared = {
-                    effectiveVersion: binding.effectiveVersion,
-                    buildKey: binding.buildKey,
-                    executionDigest: binding.executionDigest,
+                    effectiveVersion: binding.artifact.sourceState.effectiveVersion,
+                    buildKey: binding.artifact.buildKey,
+                    executionDigest: binding.artifact.executionDigest,
                     authorityRequests: binding.authorityRequests,
                   };
                 }
@@ -2575,6 +3126,31 @@ async function main() {
             // Matches auth/model.ts agentCallerId(entityId).
             tokenManager.revokeToken(`agent:${entityId}`);
           },
+          faultAbortAgentVessel: async (caller, record) => {
+            if (
+              !isAttestedSystemTestHarness(caller, (identity) =>
+                conduitBlessingStore.isBlessed(identity)
+              )
+            ) {
+              throw new Error(
+                "runtime.faultAbortAgentVessel requires an attested system-test harness"
+              );
+            }
+            if (
+              record.source.repoPath !== "workers/agent-worker" ||
+              record.className !== "AiChatWorker" ||
+              !record.agentBinding
+            ) {
+              throw new Error(
+                "runtime.faultAbortAgentVessel accepts only an exact headless agent vessel"
+              );
+            }
+            await workerdManager.faultAbortUserlandDOFacet({
+              source: record.source.repoPath,
+              className: record.className,
+              objectKey: record.key,
+            });
+          },
         });
         return runtimeResult;
       },
@@ -2583,6 +3159,197 @@ async function main() {
           throw new Error("runtime service not initialized");
         }
         return runtimeResult.definition;
+      },
+    });
+  }
+
+  // ── development.* exact semantic build lifecycle ──
+  {
+    const { createDevelopmentService } = await import("./services/developmentService.js");
+    const { DevelopmentRecipeRegistry } = await import("./services/developmentRecipes.js");
+    const { DevelopmentExecutor } = await import("./services/developmentExecutor.js");
+    const { IsolatedDevelopmentHostExecutor } =
+      await import("./services/isolatedDevelopmentHostExecutor.js");
+    const { DevelopmentClientExecutorRegistry } =
+      await import("./services/developmentClientExecutorService.js");
+    const { createNativeDevelopmentController } =
+      await import("./services/nativeDevelopmentComposition.js");
+    const { createNativeDevelopmentSemanticAdapter } =
+      await import("./services/nativeDevelopmentSemanticAdapter.js");
+    let developmentDefinition:
+      | import("@vibestudio/shared/serviceDefinition").ServiceDefinition
+      | null = null;
+    const isolatedInstanceId = process.env["VIBESTUDIO_INSTANCE"];
+    const isolatedGenerationId = process.env["VIBESTUDIO_DEVELOPMENT_INSTANCE_GENERATION"];
+    const developmentClientExecutors = new DevelopmentClientExecutorRegistry({
+      eventService,
+      ...(process.env["VIBESTUDIO_DEVELOPMENT_PARENT_RUN"] &&
+      isolatedInstanceId &&
+      isolatedGenerationId
+        ? {
+            isolatedHost: {
+              instanceId: isolatedInstanceId,
+              generationId: isolatedGenerationId,
+            },
+          }
+        : {}),
+    });
+    let developmentClientExecutorDefinition:
+      | import("@vibestudio/shared/serviceDefinition").ServiceDefinition
+      | null = null;
+    container.registerManaged({
+      name: "developmentClientExecutor",
+      dependencies: [],
+      async start() {
+        developmentClientExecutorDefinition = developmentClientExecutors.definition();
+      },
+      getServiceDefinition() {
+        if (!developmentClientExecutorDefinition) {
+          throw new Error("development client executor service not initialized");
+        }
+        return developmentClientExecutorDefinition;
+      },
+    });
+    container.registerManaged({
+      name: "development",
+      dependencies: ["runtime", "developmentClientExecutor", "attachedHosts"],
+      async start(resolve) {
+        const runtime = assertPresent(
+          resolve<import("./services/runtimeService.js").RuntimeServiceResult>("runtime")
+        );
+        const recipes = new DevelopmentRecipeRegistry();
+        const executor = new DevelopmentExecutor({
+          workspaceId,
+          hostExecutionDigest: readHostExecutionDigest(process.cwd()),
+          root: layout.development.runsDir,
+          recipes,
+          planSource: (input) => workspaceVcs.planExactContextRepository(input),
+          materializeSource: (plan, destination) =>
+            workspaceVcs.materializeExactRepositoryPlan(plan, destination),
+          onLog: (runId, stream, line) => {
+            developmentSessionStore.appendRunEvent(runId, "log", { stream, line });
+            serverLogStore.append("info", [`[development:${runId}:${stream}] ${line}`]);
+          },
+        });
+        const isolatedExecutor = new IsolatedDevelopmentHostExecutor({
+          controlRepoRoot: process.cwd(),
+          parentGatewayUrl: getLocalGatewayUrl("attached development host callback"),
+          buildExecutor: executor,
+          onLog: (runId, stream, line) => {
+            developmentSessionStore.appendRunEvent(runId, "log", { stream, line });
+            serverLogStore.append("info", [`[development:${runId}:isolated:${stream}] ${line}`]);
+          },
+          createAttachmentPorts: (input) =>
+            createAttachedHostPublicationPorts({
+              ...input,
+              parentEndpoint: attachedHostParentEndpoint,
+            }),
+        });
+        const nativeExecutorId = `local:${readHostExecutionDigest(process.cwd())}`;
+        const native = await createNativeDevelopmentController({
+          executorId: nativeExecutorId,
+          root: layout.development.nativeSessionsDir,
+          blobsDir: layout.blobsDir,
+          semantic: createNativeDevelopmentSemanticAdapter(workspaceVcs),
+          planSource: ({ developmentContextId, repositoryId }) =>
+            workspaceVcs.planExactContextRepository({
+              contextId: developmentContextId,
+              repositoryId,
+              requiredFiles: [],
+            }),
+          materializeSource: (plan, destination) =>
+            workspaceVcs.materializeExactRepositoryPlan(plan, destination),
+        });
+        developmentDefinition = createDevelopmentService({
+          store: developmentSessionStore,
+          runtime: runtime.internal,
+          eventService,
+          recipes,
+          executor,
+          isolatedExecutor,
+          attachedHostPublisher: attachedHostController,
+          attachedHostParentId: localHostId,
+          attachedHostAuthorityCeiling,
+          clientExecutors: developmentClientExecutors,
+          armSystemTestBuildFailure: (caller, input, phase) => {
+            if (
+              !isAttestedSystemTestHarness(caller, (identity) =>
+                conduitBlessingStore.isBlessed(identity)
+              )
+            ) {
+              throw Object.assign(
+                new Error(
+                  "development.faultFailBuildAfterSnapshotRetained requires an attested system-test harness"
+                ),
+                { code: "EACCES" }
+              );
+            }
+            return systemTestBuildFaults.arm({ ...input, phase });
+          },
+          consumeSystemTestBuildFailure: (run) =>
+            systemTestBuildFaults.consumeAfterSnapshotRetained(run),
+          mintCurrentHostInvite: (input) => workspaceChildHub.mintDeviceInvite(input),
+          resolveClientExecutorRuntime: (ctx) => {
+            for (const caller of [ctx.caller, ctx.authorizingCaller, ctx.transportCaller]) {
+              if (!caller) continue;
+              if (caller.runtime.kind === "shell") return caller.runtime.id;
+              const presentation = panelRuntimeCoordinator.resolvePresentationCallerForRuntime(
+                caller.runtime.id
+              );
+              if (presentation) return presentation;
+            }
+            return null;
+          },
+          native,
+          isStateDescendant: (ancestor, descendant) =>
+            workspaceVcs.isStateDescendant(ancestor, descendant),
+          repositories: {
+            resolveExact: async ({ contextId, repositoryId }) => {
+              const status = await workspaceVcs.semanticDirectCall<
+                import("@vibestudio/service-schemas/vcs").VcsStatusResult
+              >("vcsStatus", { contextId });
+              try {
+                const inspected = await workspaceVcs.semanticDirectCall<
+                  import("@vibestudio/service-schemas/vcs").VcsInspectResult
+                >("vcsInspect", {
+                  node: { kind: "repository", state: status.workingHead, repositoryId },
+                  edgeLimit: 1,
+                });
+                if (
+                  inspected.node.kind !== "repository" ||
+                  inspected.node.value.kind !== "present"
+                ) {
+                  return { status: "not-adopted" as const };
+                }
+                return {
+                  status: "present" as const,
+                  repoPath: inspected.node.value.repoPath,
+                  sourceState: status.workingHead,
+                };
+              } catch (error) {
+                // The semantic API's only expected absence result here is an
+                // unknown repository at this exact working state. Never import
+                // or infer an identity from a native checkout.
+                const semanticCode =
+                  typeof error === "object" &&
+                  error !== null &&
+                  "errorData" in error &&
+                  typeof (error as { errorData?: { code?: unknown } }).errorData?.code === "string"
+                    ? (error as { errorData: { code: string } }).errorData.code
+                    : undefined;
+                if (semanticCode === "InvalidReference") {
+                  return { status: "not-adopted" as const };
+                }
+                throw error;
+              }
+            },
+          },
+        });
+        return developmentDefinition;
+      },
+      getServiceDefinition() {
+        if (!developmentDefinition) throw new Error("development service not initialized");
+        return developmentDefinition;
       },
     });
   }
@@ -3326,6 +4093,7 @@ async function main() {
         workspacePath,
         workspaceId,
         buildSystem: buildSystemInst,
+        executionPublicationPort: executionPublicationJournal,
         tokenManager: tokenManagerInst,
         eventService,
         approvalQueue,
@@ -3401,6 +4169,7 @@ async function main() {
         workspacePath,
         workspaceId,
         buildSystem: buildSystemInst,
+        executionPublicationPort: executionPublicationJournal,
         eventService,
         approvalQueue,
         approvalCoordinator: unitApprovalCoordinator,
@@ -3646,6 +4415,7 @@ async function main() {
     getInternalDoEnv: internalDoProviderEnv,
     runtimeDiagnostics,
     eventService,
+    executionPublicationPort: executionPublicationJournal,
     resolveEgressCaller: (registered) => {
       const activeEntity = entityCache.resolveActive(registered.runtime.id);
       return resolveLiveExecutionCaller({
@@ -3667,6 +4437,7 @@ async function main() {
   wireVcsDurability({
     container,
     workspaceVcs,
+    executionPublicationJournal,
     registerControlPlanePrincipal: ({
       targetId,
       source,

@@ -402,7 +402,7 @@ const authorityRequirementSchema: z.ZodType<AuthorityRequirement> = z.lazy(() =>
       .strict(),
   ])
 );
-const invocationSnapshotSchema = z
+export const invocationSnapshotSchema = z
   .object({
     v: z.literal(1),
     service: z.string(),

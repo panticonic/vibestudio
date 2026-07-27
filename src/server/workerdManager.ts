@@ -20,9 +20,11 @@ import { pathToFileURL } from "url";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { FsService } from "@vibestudio/shared/fsService";
+import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { productDirectMethodCapability } from "@vibestudio/shared/authority/directMethodEffects";
 import { primaryTextArtifactContent, type BuildResult } from "./buildV2/buildStore.js";
+import { executionArtifactRefFromBuild } from "./executionRootProviders.js";
 import type { WorkspaceRpcMethodDoc } from "./buildV2/workspaceRpcCatalog.js";
 import type { ProtectedPublicationEvent, RuntimeImageBinding } from "./buildV2/index.js";
 import { validateBuildRef } from "./buildV2/refs.js";
@@ -284,6 +286,7 @@ export interface WorkerdManagerDeps {
   workspacePath: string;
   /** State directory — used for DO storage (localDisk). */
   statePath: string;
+  executionPublicationPort?: ExecutionPublicationPort;
   /** Route registry for `/_r/` dispatch — optional; when absent, route
    *  registration is a no-op and routes in package manifests have no effect. */
   routeRegistry?: RouteRegistry;
@@ -422,7 +425,7 @@ export class WorkerdManager {
   constructor(deps: WorkerdManagerDeps) {
     this.deps = deps;
     this.egressSecret = deps.egressSecret;
-    this.runtimeImages = new RuntimeImageStore(deps.statePath);
+    this.runtimeImages = new RuntimeImageStore(deps.statePath, deps.executionPublicationPort);
     this.configDir = path.join(os.tmpdir(), `vibestudio-workerd-${process.pid}`);
     fs.mkdirSync(this.configDir, { recursive: true });
     this.bootGenerationFile = stateLayout(this.deps.statePath).bootGenerationFile;
@@ -431,6 +434,11 @@ export class WorkerdManager {
 
   getStage(): WorkerdStage {
     return this.workspaceProvider ? "workspace" : "control-plane";
+  }
+
+  /** Durable runtime images whose immutable artifacts must remain resolvable. */
+  listRuntimeImages(): RuntimeImageRecord[] {
+    return this.runtimeImages.list();
   }
 
   /** Bind the one semantic-main-backed workspace provider exactly once. */
@@ -493,11 +501,8 @@ export class WorkerdManager {
       id: imageId,
       source: binding.source,
       unitName: binding.unitName,
-      stateHash: binding.stateHash,
-      buildKey: binding.buildKey,
-      executionDigest: binding.executionDigest,
+      artifact: binding.artifact,
       authorityRequests: binding.authorityRequests,
-      effectiveVersion: binding.effectiveVersion,
       ...(scopeRef ? { scopeRef } : {}),
     });
   }
@@ -508,11 +513,8 @@ export class WorkerdManager {
       id: imageId,
       source: identity.source,
       unitName: identity.unitName,
-      stateHash: identity.stateHash,
-      buildKey: identity.buildKey,
-      executionDigest: identity.executionDigest,
+      artifact: identity.artifact,
       authorityRequests: identity.authorityRequests,
-      effectiveVersion: identity.effectiveVersion,
     });
   }
 
@@ -529,7 +531,7 @@ export class WorkerdManager {
       throw new RuntimeImageWarmingError(`Runtime image is not bound yet: ${imageId}`);
     }
     const build = this.requireWorkspaceProvider("runtime image loading").getBuildByKey(
-      image.buildKey
+      image.artifact.buildKey
     );
     if (build) return { image, build };
     if (image.error) {
@@ -540,7 +542,7 @@ export class WorkerdManager {
 
     this.scheduleRuntimeImageRebind(image, onRebound);
     throw new RuntimeImageWarmingError(
-      `Runtime image ${imageId} points at missing artifact ${image.buildKey}; warming`
+      `Runtime image ${imageId} points at missing artifact ${image.artifact.buildKey}; warming`
     );
   }
 
@@ -776,9 +778,9 @@ export class WorkerdManager {
     }
     return {
       targetId,
-      effectiveVersion: image.effectiveVersion,
-      buildKey: image.buildKey,
-      executionDigest: image.executionDigest,
+      effectiveVersion: image.artifact.sourceState.effectiveVersion,
+      buildKey: image.artifact.buildKey,
+      executionDigest: image.artifact.executionDigest,
       authorityRequests: image.authorityRequests,
     };
   }
@@ -808,9 +810,9 @@ export class WorkerdManager {
       requests: persistedImage.authorityRequests,
     };
     if (
-      persistedImage.buildKey !== record.activeBuildKey ||
-      persistedImage.executionDigest !== record.activeExecutionDigest ||
-      persistedImage.effectiveVersion !== record.source.effectiveVersion ||
+      persistedImage.artifact.buildKey !== record.activeBuildKey ||
+      persistedImage.artifact.executionDigest !== record.activeExecutionDigest ||
+      persistedImage.artifact.sourceState.effectiveVersion !== record.source.effectiveVersion ||
       JSON.stringify(persistedAuthority) !== JSON.stringify(record.activeAuthority)
     ) {
       throw new Error(
@@ -834,9 +836,9 @@ export class WorkerdManager {
       requests: restored.authorityRequests,
     };
     if (
-      restored.buildKey !== record.activeBuildKey ||
-      restored.executionDigest !== record.activeExecutionDigest ||
-      restored.effectiveVersion !== record.source.effectiveVersion ||
+      restored.artifact.buildKey !== record.activeBuildKey ||
+      restored.artifact.executionDigest !== record.activeExecutionDigest ||
+      restored.artifact.sourceState.effectiveVersion !== record.source.effectiveVersion ||
       JSON.stringify(restoredAuthority) !== JSON.stringify(record.activeAuthority)
     ) {
       throw new Error(
@@ -864,11 +866,11 @@ export class WorkerdManager {
     }
     if (
       !this.requireWorkspaceProvider("sealed runtime image restoration").getBuildByKey(
-        image.buildKey
+        image.artifact.buildKey
       )
     ) {
       throw new RuntimeImageUnavailableError(
-        `Durable Object ${record.id} is missing its sealed build artifact ${image.buildKey}`
+        `Durable Object ${record.id} is missing its sealed build artifact ${image.artifact.buildKey}`
       );
     }
 
@@ -877,7 +879,7 @@ export class WorkerdManager {
     if (!service) {
       const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
       service = {
-        buildKey: image.buildKey,
+        buildKey: image.artifact.buildKey,
         className,
         imageId: image.id,
         serviceName: `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`,
@@ -891,7 +893,7 @@ export class WorkerdManager {
     const stateArgs = recordStateArgs(record.stateArgs);
     this.doObjectBuilds.set(doObjectBuildKey(source, className, record.key), {
       imageId: image.id,
-      buildKey: image.buildKey,
+      buildKey: image.artifact.buildKey,
       ...(image.scopeRef ? { scopeRef: image.scopeRef } : {}),
       ...(stateArgs ? { stateArgs } : {}),
     });
@@ -954,9 +956,9 @@ export class WorkerdManager {
         }
         return {
           targetId,
-          effectiveVersion: image.effectiveVersion,
-          buildKey: image.buildKey,
-          executionDigest: image.executionDigest,
+          effectiveVersion: image.artifact.sourceState.effectiveVersion,
+          buildKey: image.artifact.buildKey,
+          executionDigest: image.artifact.executionDigest,
           authorityRequests: image.authorityRequests,
         };
       }
@@ -1008,9 +1010,9 @@ export class WorkerdManager {
         this.ensureWorkerdRunning(),
       ]);
       instance.scopeRef = image.scopeRef;
-      instance.buildKey = image.buildKey;
-      instance.executionDigest = image.executionDigest;
-      instance.effectiveVersion = image.effectiveVersion;
+      instance.buildKey = image.artifact.buildKey;
+      instance.executionDigest = image.artifact.executionDigest;
+      instance.effectiveVersion = image.artifact.sourceState.effectiveVersion;
       this.advanceWorkerCodeVersion(instance, image.generation);
       // Register egress AFTER bind so the caller carries the signed effective
       // version (not "unknown"/an artifact key) for version-scoped approvals/audit.
@@ -1022,12 +1024,12 @@ export class WorkerdManager {
         source: args.source,
         callerId,
         level: "info",
-        message: `Worker started (build ${image.buildKey})`,
+        message: `Worker started (build ${image.artifact.buildKey})`,
         fields: {
           event: "worker-started",
-          buildKey: image.buildKey,
+          buildKey: image.artifact.buildKey,
           generation: image.generation,
-          effectiveVersion: image.effectiveVersion,
+          effectiveVersion: image.artifact.sourceState.effectiveVersion,
         },
       });
       log.info(`Worker entity "${targetId}" started (source: ${args.source})`);
@@ -1046,9 +1048,9 @@ export class WorkerdManager {
 
       return {
         targetId,
-        effectiveVersion: image.effectiveVersion,
-        buildKey: image.buildKey,
-        executionDigest: image.executionDigest,
+        effectiveVersion: image.artifact.sourceState.effectiveVersion,
+        buildKey: image.artifact.buildKey,
+        executionDigest: image.artifact.executionDigest,
         authorityRequests: image.authorityRequests,
       };
     } catch (error) {
@@ -1122,11 +1124,14 @@ export class WorkerdManager {
     log.info(`Worker entity "${callerId}" stopped`);
   }
 
-  private async abortUserlandDOFacet(ref: DORef): Promise<void> {
+  private async abortUserlandDOFacet(
+    ref: DORef,
+    operation: "__vibestudio_retire" | "__vibestudio_fault_abort"
+  ): Promise<void> {
     if (!this.process || this.process.exitCode !== null || !this.port) return;
     const key = encodeUniversalKey(ref);
     const response = await fetch(
-      `http://127.0.0.1:${this.port}/_u/${encodeURIComponent(key)}/__vibestudio_retire`,
+      `http://127.0.0.1:${this.port}/_u/${encodeURIComponent(key)}/${operation}`,
       {
         method: "POST",
         headers: {
@@ -1139,10 +1144,27 @@ export class WorkerdManager {
     );
     if (!response.ok) {
       throw new Error(
-        `Failed to retire userland DO facet ${ref.source}:${ref.className}/${ref.objectKey} ` +
+        `Failed to ${operation === "__vibestudio_retire" ? "retire" : "fault-abort"} ` +
+          `userland DO facet ${ref.source}:${ref.className}/${ref.objectKey} ` +
           `(${response.status}): ${await response.text()}`
       );
     }
+  }
+
+  /**
+   * Test-only host seam: evict one userland DO facet without deleting its
+   * durable state or changing its runtime image. Admission is owned by the
+   * hidden runtime service method; this low-level owner accepts only the
+   * already-resolved canonical DO reference.
+   */
+  async faultAbortUserlandDOFacet(ref: DORef): Promise<void> {
+    if (!this.process || this.process.exitCode !== null || !this.port) {
+      throw new Error(
+        `Cannot fault-abort userland DO facet ${ref.source}:${ref.className}/${ref.objectKey}: ` +
+          "workerd is not running"
+      );
+    }
+    await this.abortUserlandDOFacet(ref, "__vibestudio_fault_abort");
   }
 
   /**
@@ -1161,7 +1183,7 @@ export class WorkerdManager {
     let abortError: unknown;
     if (!isInternalDOSource(ref.source)) {
       try {
-        await this.abortUserlandDOFacet(ref);
+        await this.abortUserlandDOFacet(ref, "__vibestudio_retire");
       } catch (error) {
         abortError = error;
       }
@@ -1183,7 +1205,7 @@ export class WorkerdManager {
    */
   private registerEgressCaller(instance: WorkerInstance): void {
     const image = this.runtimeImages.get(instance.runtimeImageId);
-    if (!image || image.executionDigest !== instance.executionDigest) {
+    if (!image || image.artifact.executionDigest !== instance.executionDigest) {
       throw new Error(
         `Cannot register egress for ${instance.callerId} without its exact sealed runtime image`
       );
@@ -1192,8 +1214,8 @@ export class WorkerdManager {
       callerId: instance.callerId,
       callerKind: "worker",
       repoPath: instance.source,
-      effectiveVersion: image.effectiveVersion,
-      executionDigest: image.executionDigest,
+      effectiveVersion: image.artifact.sourceState.effectiveVersion,
+      executionDigest: image.artifact.executionDigest,
       requested: image.authorityRequests,
     });
     this.deps.registerEgressCaller(instance.callerId, caller);
@@ -1236,8 +1258,9 @@ export class WorkerdManager {
         instance.source,
         instance.scopeRef
       );
-      instance.buildKey = image.buildKey;
-      instance.effectiveVersion = image.effectiveVersion;
+      instance.buildKey = image.artifact.buildKey;
+      instance.executionDigest = image.artifact.executionDigest;
+      instance.effectiveVersion = image.artifact.sourceState.effectiveVersion;
       this.advanceWorkerCodeVersion(instance, image.generation);
       this.registerEgressCaller(instance); // refresh egress EV after a rebind
     }
@@ -1409,14 +1432,16 @@ export class WorkerdManager {
     const { image, build: buildResult } = this.getRuntimeImageBuild(
       instance.runtimeImageId,
       (record) => {
-        instance.buildKey = record.buildKey;
-        instance.effectiveVersion = record.effectiveVersion;
+        instance.buildKey = record.artifact.buildKey;
+        instance.executionDigest = record.artifact.executionDigest;
+        instance.effectiveVersion = record.artifact.sourceState.effectiveVersion;
         this.advanceWorkerCodeVersion(instance, record.generation);
         this.registerEgressCaller(instance);
       }
     );
-    instance.buildKey = image.buildKey;
-    instance.effectiveVersion = image.effectiveVersion;
+    instance.buildKey = image.artifact.buildKey;
+    instance.executionDigest = image.artifact.executionDigest;
+    instance.effectiveVersion = image.artifact.sourceState.effectiveVersion;
     const bundleContent = primaryTextArtifactContent(buildResult);
 
     // WorkerCode `env` (unlike the old capnp config) supports non-string values
@@ -1476,7 +1501,7 @@ export class WorkerdManager {
     const image = service.imageId ? this.runtimeImages.get(service.imageId) : null;
     return {
       repoPath: service.source,
-      effectiveVersion: image?.effectiveVersion ?? service.buildKey,
+      effectiveVersion: image?.artifact.sourceState.effectiveVersion ?? service.buildKey,
     };
   }
 
@@ -1574,20 +1599,20 @@ export class WorkerdManager {
       if (objectBuildKey && objectBuild) {
         this.doObjectBuilds.set(objectBuildKey, {
           ...objectBuild,
-          buildKey: record.buildKey,
+          buildKey: record.artifact.buildKey,
         });
       } else {
-        svc.buildKey = record.buildKey;
+        svc.buildKey = record.artifact.buildKey;
       }
       this.registerDoEgressCaller(source, className, record, objectKey);
     });
     if (objectBuildKey && objectBuild) {
       this.doObjectBuilds.set(objectBuildKey, {
         ...objectBuild,
-        buildKey: image.buildKey,
+        buildKey: image.artifact.buildKey,
       });
     } else {
-      svc.buildKey = image.buildKey;
+      svc.buildKey = image.artifact.buildKey;
     }
     const bundleContent = primaryTextArtifactContent(buildResult);
     // Terminal (Ink) DOs import a pre-compiled `yoga.wasm` module — it must be
@@ -1649,8 +1674,8 @@ export class WorkerdManager {
       callerId: identity,
       callerKind: objectKey ? "do" : "worker",
       repoPath: source,
-      effectiveVersion: image.effectiveVersion,
-      executionDigest: image.executionDigest,
+      effectiveVersion: image.artifact.sourceState.effectiveVersion,
+      executionDigest: image.artifact.executionDigest,
       requested: image.authorityRequests,
     });
     this.deps.registerEgressCaller(identity, caller);
@@ -2471,7 +2496,7 @@ export class WorkerdManager {
       const image = isInternalDOSource(source)
         ? this.persistInternalRuntimeImage(imageId, className)
         : await this.bindRuntimeImage(imageId, source, undefined);
-      const buildKey = image.buildKey;
+      const buildKey = image.artifact.buildKey;
       const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
       const serviceName = `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`;
       this.doServices.set(serviceKey, {
@@ -2578,10 +2603,10 @@ export class WorkerdManager {
       }
       if (isInternalDOSource(source)) {
         image = this.persistInternalRuntimeImage(`do-service:${serviceKey}`, className);
-        buildKey = image.buildKey;
+        buildKey = image.artifact.buildKey;
       } else {
         image = await this.bindRuntimeImage(`do-service:${serviceKey}`, source, opts.scopeRef);
-        buildKey = image.buildKey;
+        buildKey = image.artifact.buildKey;
       }
       const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
       const serviceName = `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`;
@@ -2605,13 +2630,13 @@ export class WorkerdManager {
       const imageId =
         opts.imageId ?? canonicalEntityId({ kind: "do", source, className, key: opts.objectKey });
       image = await this.bindRuntimeImage(imageId, source, serviceScopeRef);
-      buildKey = image.buildKey;
+      buildKey = image.artifact.buildKey;
     }
 
     if (!isInternalDOSource(source) && opts.objectKey) {
       const svc = this.doServices.get(serviceKey);
       const imageId = image?.id ?? svc?.imageId;
-      const buildKey = image?.buildKey ?? svc?.buildKey;
+      const buildKey = image?.artifact.buildKey ?? svc?.buildKey;
       if (imageId && buildKey) {
         const stateArgs = recordStateArgs(opts.stateArgs);
         this.doObjectBuilds.set(doObjectBuildKey(source, className, opts.objectKey), {
@@ -2847,11 +2872,8 @@ export class WorkerdManager {
         id: imageId,
         source,
         unitName: completed.metadata.name,
-        stateHash: trigger.workspaceStateHash,
-        buildKey: completedBuildKey,
-        executionDigest: assertPresent(completed.metadata.execution).executionDigest,
+        artifact: executionArtifactRefFromBuild(this.deps.workspaceId, completed),
         authorityRequests: assertPresent(completed.metadata.authority).requests,
-        effectiveVersion: completed.metadata.ev,
         ...(scopeRef ? { scopeRef } : {}),
       });
     };
@@ -2861,8 +2883,9 @@ export class WorkerdManager {
       if (instance.source === source && scopeTracksProtectedMain(instance.scopeRef)) {
         const image = updateImageFromCompleted(instance.runtimeImageId, instance.scopeRef);
         if (image) {
-          instance.buildKey = image.buildKey;
-          instance.effectiveVersion = image.effectiveVersion;
+          instance.buildKey = image.artifact.buildKey;
+          instance.executionDigest = image.artifact.executionDigest;
+          instance.effectiveVersion = image.artifact.sourceState.effectiveVersion;
           this.advanceWorkerCodeVersion(instance, image.generation);
           this.registerEgressCaller(instance);
         }
@@ -2881,14 +2904,14 @@ export class WorkerdManager {
       if (!svc.imageId) continue;
       const image = updateImageFromCompleted(svc.imageId, svc.scopeRef);
       if (image) {
-        svc.buildKey = image.buildKey;
+        svc.buildKey = image.artifact.buildKey;
         this.registerDoEgressCaller(svc.source, svc.className, image);
       }
     }
     for (const [key, objectBuild] of trackedObjects) {
       const image = updateImageFromCompleted(objectBuild.imageId, objectBuild.scopeRef);
       if (image) {
-        this.doObjectBuilds.set(key, { ...objectBuild, buildKey: image.buildKey });
+        this.doObjectBuilds.set(key, { ...objectBuild, buildKey: image.artifact.buildKey });
       }
     }
 
@@ -2921,7 +2944,7 @@ export class WorkerdManager {
         const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
         const serviceName = `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`;
         this.doServices.set(serviceKey, {
-          buildKey: image.buildKey,
+          buildKey: image.artifact.buildKey,
           className,
           imageId,
           serviceName,

@@ -7,10 +7,12 @@ import { contextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceP
 import { EMPTY_STATE_HASH } from "@vibestudio/content-addressing";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import {
+  blobPath,
   ensureLayout,
   getBytes,
   mirrorWorktreeTree,
   putBytes,
+  putTree,
 } from "../services/blobstoreService.js";
 import { createProtectedRefStore } from "../services/protectedRefStore.js";
 import { WorkspaceVcs } from "./workspaceVcs.js";
@@ -88,11 +90,95 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       contentDigests: [cached.digest],
     });
 
-    await expect(vcs.runGc({ minAgeMs: 0 })).resolves.toMatchObject({ swept: 1 });
+    await expect(
+      vcs.runGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] })
+    ).resolves.toMatchObject({ swept: 1 });
     await expect(getBytes(blobsDir, cached.digest)).resolves.toEqual(
       Buffer.from("cached-composed-view")
     );
     await expect(getBytes(blobsDir, unreachable.digest)).resolves.toBeNull();
+  });
+
+  it("keeps a retained execution source composition rooted during content GC", async () => {
+    const { blobsDir, vcs } = await harness();
+    const retained = await putBytes(blobsDir, Buffer.from("retained build source"));
+    const source = await putTree(
+      blobsDir,
+      [{ name: "index.ts", kind: "file", contentHash: retained.digest, mode: 0o100644 }],
+      { root: true }
+    );
+    const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
+    await vcs.attachGad({
+      call: vi.fn(async (method: string) => {
+        if (method !== "vcsContentGcRoots") throw new Error(`unexpected ${method}`);
+        return { contentRoots: [], contentHashes: [] };
+      }),
+    } as never);
+
+    await expect(
+      vcs.runGc({
+        minAgeMs: 0,
+        epoch: 1,
+        executionSourceRoots: [{ repoPath: "panels/retained", stateHash: source.stateHash! }],
+      })
+    ).resolves.toMatchObject({ swept: 1 });
+    await expect(getBytes(blobsDir, retained.digest)).resolves.toEqual(
+      Buffer.from("retained build source")
+    );
+    await expect(getBytes(blobsDir, unreachable.digest)).resolves.toBeNull();
+  });
+
+  it("fails closed when an execution source root is missing from the content store", async () => {
+    const { blobsDir, vcs } = await harness();
+    const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
+    await vcs.attachGad({
+      call: vi.fn(async (method: string) => {
+        if (method !== "vcsContentGcRoots") throw new Error(`unexpected ${method}`);
+        return { contentRoots: [], contentHashes: [] };
+      }),
+    } as never);
+
+    await expect(
+      vcs.runGc({
+        minAgeMs: 0,
+        epoch: 1,
+        executionSourceRoots: [
+          { repoPath: "panels/retained", stateHash: `state:${"0".repeat(64)}` },
+        ],
+      })
+    ).rejects.toThrow("is missing from the content store");
+    await expect(getBytes(blobsDir, unreachable.digest)).resolves.toEqual(
+      Buffer.from("unreachable")
+    );
+  });
+
+  it("fails closed before sweeping when an execution source closure is corrupt", async () => {
+    const { blobsDir, vcs } = await harness();
+    const retained = await putBytes(blobsDir, Buffer.from("retained build source"));
+    const source = await putTree(
+      blobsDir,
+      [{ name: "index.ts", kind: "file", contentHash: retained.digest, mode: 0o100644 }],
+      { root: true }
+    );
+    const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
+    await fsp.unlink(blobPath(blobsDir, retained.digest));
+    await vcs.attachGad({
+      call: vi.fn(async (method: string) => {
+        if (method !== "vcsContentGcRoots") throw new Error(`unexpected ${method}`);
+        return { contentRoots: [], contentHashes: [] };
+      }),
+    } as never);
+
+    await expect(
+      vcs.prepareGc({
+        minAgeMs: 0,
+        epoch: 1,
+        executionSourceRoots: [{ repoPath: "panels/retained", stateHash: source.stateHash! }],
+      })
+    ).rejects.toThrow(`Content object missing from store: ${retained.digest}`);
+    await expect(getBytes(blobsDir, unreachable.digest)).resolves.toEqual(
+      Buffer.from("unreachable")
+    );
   });
 
   it("reuses one stable context-initialization command across host instances", async () => {

@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import {
   normalizeFingerprint,
   PAIRING_PROTOCOL_VERSION,
@@ -49,8 +50,8 @@ const STORED_PAIRING_KEYS = new Set(["room", "fp", "sig", "v", "ice"]);
 
 export const credentialPath = cliCredentialPath;
 
-export function loadCliCredentials(): CliCredentials | null {
-  const p = credentialPath();
+export function loadCliCredentials(filePath: string = credentialPath()): CliCredentials | null {
+  const p = path.resolve(filePath);
   if (!fs.existsSync(p)) return null;
   let parsed: unknown;
   try {
@@ -72,11 +73,14 @@ export function loadCliCredentials(): CliCredentials | null {
   return null;
 }
 
-export function saveCliCredentials(creds: CliCredentials): void {
+export function saveCliCredentials(
+  creds: CliCredentials,
+  filePath: string = credentialPath()
+): void {
   if (!isCliCredentials(creds)) {
     throw new Error("Refusing to persist a non-canonical CLI device credential");
   }
-  const p = credentialPath();
+  const p = path.resolve(filePath);
   if (fs.existsSync(p)) {
     const existing = readCanonicalCredentialForWrite(p);
     if (existing.serverId !== creds.serverId || existing.deviceId !== creds.deviceId) {

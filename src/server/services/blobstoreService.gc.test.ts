@@ -1,32 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { VcsGcScheduler } from "./vcsGcScheduler.js";
 import { blobPath, getBytes, putBytes, sweepUnreachableBlobs } from "./blobstoreService.js";
 
-describe("VcsGcScheduler", () => {
-  beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
-
-  it("runs owner-derived GC periodically and never overlaps", async () => {
-    const runGc = vi.fn(async () => ({ scanned: 1, swept: 1, bytes: 3 }));
-    const scheduler = new VcsGcScheduler({
-      workspaceVcs: { attached: true, runGc },
-      initialDelayMs: 5,
-      intervalMs: 20,
-      minAgeMs: 123,
-    });
-    scheduler.start();
-    await vi.advanceTimersByTimeAsync(5);
-    expect(runGc).toHaveBeenCalledWith({ minAgeMs: 123 });
-    await vi.advanceTimersByTimeAsync(20);
-    expect(runGc).toHaveBeenCalledTimes(2);
-    scheduler.stop();
-  });
-
+describe("sweepUnreachableBlobs", () => {
   it("sweeps only old unreachable objects from the workspace CAS", async () => {
-    vi.useRealTimers();
     const blobsDir = await fsp.mkdtemp(path.join(os.tmpdir(), "semantic-gc-"));
     try {
       const kept = await putBytes(blobsDir, Buffer.from("kept"));
@@ -41,7 +20,6 @@ describe("VcsGcScheduler", () => {
   });
 
   it("keeps a recently linked namespace entry whose immutable bytes have an old mtime", async () => {
-    vi.useRealTimers();
     const blobsDir = await fsp.mkdtemp(path.join(os.tmpdir(), "semantic-gc-hardlink-age-"));
     try {
       const linked = await putBytes(blobsDir, Buffer.from("shared immutable bytes"));

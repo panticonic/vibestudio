@@ -141,28 +141,31 @@ describe("gitInteropService", () => {
           autoPush: false,
         },
       ])
-    ).toEqual([
-      expect.objectContaining({
-        capability: "git.publish",
-        resourceKey: "external-repository:github:default:vibestudio-default-test",
-        challenge: expect.objectContaining({
-          title: "Create and publish vibestudio-default-test",
-          resource: {
-            type: "external-repository",
-            label: "Destination",
-            value: "GitHub / vibestudio-default-test",
-          },
-          substance: expect.objectContaining({
-            summary: "Create a private GitHub repository and publish projects/default",
-            facts: expect.arrayContaining([
-              { label: "Visibility", value: "Private" },
-              { label: "Publish", value: "projects/default → main" },
-              { label: "Future changes", value: "Push only when requested" },
-            ]),
+    ).toEqual({
+      selections: [
+        expect.objectContaining({
+          capability: "git.publish",
+          resourceKey: "external-repository:github:default:vibestudio-default-test",
+          challenge: expect.objectContaining({
+            title: "Create and publish vibestudio-default-test",
+            resource: {
+              type: "external-repository",
+              label: "Destination",
+              value: "GitHub / vibestudio-default-test",
+            },
+            substance: expect.objectContaining({
+              summary: "Create a private GitHub repository and publish projects/default",
+              facts: expect.arrayContaining([
+                { label: "Visibility", value: "Private" },
+                { label: "Publish", value: "projects/default → main" },
+                { label: "Future changes", value: "Push only when requested" },
+              ]),
+            }),
           }),
         }),
-      }),
-    ]);
+      ],
+      payload: null,
+    });
   });
 
   it("imports a requested branch and persists it as a shared remote", async () => {

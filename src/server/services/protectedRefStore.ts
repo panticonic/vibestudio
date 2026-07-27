@@ -101,6 +101,7 @@ export interface ProtectedRefStoreDeps {
 }
 
 export interface ProtectedRefStore {
+  readMainSemanticState?(): { kind: "event"; eventId: string } | null;
   readMain(repoPath: string): MainRefRecord | null;
   listMains(): MainRefRecord[];
   updateMains(input: UpdateMainsInput): Promise<UpdateMainsResult>;
@@ -461,6 +462,9 @@ export function createProtectedRefStore(deps: ProtectedRefStoreDeps): ProtectedR
   };
 
   const service: ProtectedRefStore = {
+    readMainSemanticState() {
+      return mainEventId ? { kind: "event", eventId: mainEventId } : null;
+    },
     readMain(repoPath) {
       validateRepoPath(repoPath);
       const record = mains.get(repoPath);

@@ -2,76 +2,40 @@
   "version": 1,
   "rows": [
     {
-      "behavior": "creation",
-      "contract": "explicit atomic structure; subscribe cannot create",
+      "behavior": "ordinary-subscribe",
+      "contract": "workspace-authorized identity may atomically initialize ordinary channel context and config; invitation membership is not an ACL",
       "policyChange": null,
-      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
-    },
-    {
-      "behavior": "first-subscribe",
-      "contract": "admission only; never freezes structure",
-      "policyChange": null,
-      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
-    },
-    {
-      "behavior": "subsequent-subscribe",
-      "contract": "live admission policy",
-      "policyChange": null,
-      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
+      "parityAssertion": "test:channel.ordinary.authenticated-admission"
     },
     {
       "behavior": "invitation",
-      "contract": "discovery metadata for ordinary workspace channels",
+      "contract": "durable per-user discovery metadata for explicitly invited workspace members; no fabricated presence",
       "policyChange": null,
-      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
-    },
-    {
-      "behavior": "visibility",
-      "contract": "workspace discovery plus explicit channel policy",
-      "policyChange": null,
-      "parityAssertion": "workspace/workers/gad-store/gadStore.test.ts"
+      "parityAssertion": "test:channel.invitation.discovery-metadata"
     },
     {
       "behavior": "presence",
-      "contract": "multi-human presence retained",
+      "contract": "one authenticated human identity may own multiple live delivery sessions without duplicating roster presence",
       "policyChange": null,
-      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
-    },
-    {
-      "behavior": "presentation-mutation",
-      "contract": "immutable structure revision plus authorized presentation revision",
-      "policyChange": null,
-      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
+      "parityAssertion": "test:channel.presence.canonical-human"
     },
     {
       "behavior": "fork-clone",
-      "contract": "new structure revision with explicit origin and context rewrite",
+      "contract": "a fork gets a fresh context and retains the parent log prefix as explicit origin",
       "policyChange": null,
-      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
-    },
-    {
-      "behavior": "owner-loss",
-      "contract": "structure retained; explicit administrative recovery",
-      "policyChange": null,
-      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
-    },
-    {
-      "behavior": "deletion",
-      "contract": "tombstoned and reconnect fails deterministically",
-      "policyChange": null,
-      "parityAssertion": "workspace/workers/pubsub-channel/channel-do.test.ts"
+      "parityAssertion": "test:channel.fork.context-and-log-origin"
     },
     {
       "behavior": "reconnect",
-      "contract": "same structure/admission; no authority creation",
+      "contract": "transport reconnection re-establishes the authenticated subscription and does not create authority",
       "policyChange": null,
-      "parityAssertion": "workspace/packages/pubsub/src/rpc-client.test.ts"
+      "parityAssertion": "test:channel.reconnect.authority-neutral"
     },
     {
-      "behavior": "system-agent",
-      "contract": "exact-principal locked admission expressible without host special case",
+      "behavior": "locked-admission",
+      "contract": "host initializes one immutable exact-principal policy; subscribe verifies canonical participant identity and active durable-object incarnation",
       "policyChange": null,
-      "parityAssertion": "packages/shared/src/channelStructure.ts"
+      "parityAssertion": "test:channel.locked.exact-admission"
     }
   ]
 }

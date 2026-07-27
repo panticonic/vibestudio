@@ -1,7 +1,99 @@
 {
   "version": 1,
-  "censusDigest": "sha256:43ed631483a0c0a442feccdf5f5a358bb358f5ed521b26b49ecbe9c8771e521b",
+  "censusDigest": "sha256:2c89d5217063245bcee1b967c8f3192b072a920e3ede502d872a1001db5a7904",
   "decisions": {
+    "direct:src/server/internalDOs/evalDO.ts:appendAuthorityEvent": {
+      "review": "host-only-eval-authority-event-ingress",
+      "change": "Adds the typed host-only write used to append one already receiver-bound authority lifecycle event to an exact eval run. It cannot choose another owner, execute code, or grant authority."
+    },
+    "direct:src/server/internalDOs/evalDO.ts:getRunEvents": {
+      "review": "host-only-bounded-eval-event-page",
+      "change": "Adds a host-only bounded cursor read of durable events for an exact EvalDO run. It performs no execution, mutation, or authority acquisition."
+    },
+    "direct:src/server/internalDOs/evalDO.ts:listRetainedExecutionRoots": {
+      "review": "host-only-eval-execution-root-census",
+      "change": "Adds a host-only bounded read of immutable execution roots already retained by one EvalDO so the mandatory retention provider can fail closed. It exposes no eval source, result, credential, or mutation path."
+    },
+    "direct:src/server/internalDOs/evalDO.ts:retainExecutionRoot": {
+      "review": "host-only-exact-eval-execution-retention",
+      "change": "Adds a host-only write of one validated immutable execution artifact reference joined to its exact eval run. It cannot fabricate an artifact, widen executable authority, or delete retention."
+    },
+    "direct:src/server/internalDOs/workspaceDO.ts:entityListExecutionRoots": {
+      "review": "host-only-active-entity-execution-root-census",
+      "change": "Adds a host-only bounded read of exact execution identities held by active workspace entities for the mandatory retention provider. It exposes no entity payload and performs no lifecycle mutation."
+    },
+    "direct:workspace/packages/semantic-control-plane/src/index.ts:vcsIsStateDescendant": {
+      "review": "bounded-semantic-state-ancestry-read",
+      "change": "Adds an open read-only causal ancestry check between two exact semantic state references. The receiver traverses bounded semantic history and performs no source mutation or filesystem projection."
+    },
+    "host:attachedHosts.attachClient": {
+      "review": "owner-scoped-attached-host-client-open",
+      "change": "Adds a hidden read of one live caller-owned attached route's exact run, host, generation, ceiling, and expiry so the runtime can construct ordinary child service clients. The receiver rejects foreign, expired, lost, and wrong-generation routes."
+    },
+    "host:attachedHosts.bootstrapConfirm": {
+      "review": "mutually-signed-attached-bootstrap-confirmation",
+      "change": "Confirms the exact mutually signed bootstrap transcript before revoking the ordinary pairing credential. Receiver verification binds both hosts, the development run, generation, authority ceiling, expiry, and ephemeral route keys."
+    },
+    "host:attachedHosts.bootstrapExchange": {
+      "review": "exact-generation-attached-bootstrap-exchange",
+      "change": "Exchanges one ordinary device bootstrap for an ephemeral signed route only after receiver validation of the parent, child generation, development run, expiry, and authority ceiling. It returns no admin credential or durable route secret."
+    },
+    "host:attachedHosts.close": {
+      "review": "host-owned-attached-route-close",
+      "change": "Adds host-only effect reduction for one exact attached session. It closes pending challenges and revokes route state without invoking child services or widening authority."
+    },
+    "host:attachedHosts.invoke": {
+      "review": "signed-replay-protected-attached-invocation",
+      "change": "Adds the host transport entry for one exact signed child invocation. The receiver validates session, generation, expiry, nonce, invocation snapshot, prepared operation, and route ceiling before dispatching the child's ordinary service schema."
+    },
+    "host:attachedHosts.invokeAttached": {
+      "review": "owner-scoped-ordinary-child-service-invocation",
+      "change": "Adds the hidden runtime transport behind hosts.attach(...).services. The parent verifies route ownership and signs the exact request; the child then applies its normal schema, relationships, authority ceiling, and acquisition path. No development-specific service bypass is introduced."
+    },
+    "host:attachedHosts.listApprovalAudit": {
+      "review": "owner-scoped-bounded-attached-approval-audit",
+      "change": "Adds a hidden read-only page of terminal approval evidence for one live caller-owned route. It returns only signed-request coordinates, canonical invocation and presentation digests, decision, and timestamps from existing durable protocol state; arguments, signatures, keys, credentials, and foreign sessions are excluded."
+    },
+    "host:attachedHosts.presentApproval": {
+      "review": "parent-presented-exact-child-approval",
+      "change": "Adds the host-only parent presentation of one verified signed child challenge. The acquisition request is derived from the canonical invocation snapshot and prepared operation, and the signed terminal decision cannot authorize a different request."
+    },
+    "host:build.gc": {
+      "review": "read-only-execution-retention-report",
+      "change": "Narrows the public method to a zero-argument read-only retention report. Quarantine and sweep are no longer advertised no-op modes and remain available only through the private two-collector epoch coordinator after source-closure preflight and publication interlock checks."
+    },
+    "host:development.faultFailBuildAfterSnapshotRetained": {
+      "review": "sealed-exact-run-system-test-build-fault",
+      "change": "Adds a hidden code-only test seam additionally admitted only for the exact attested system-test runner and blessed conduit. Its bounded expiring one-shot fault is bound before start to one caller-owned session and run and consumed only after durable snapshot retention; it cannot alter source, recipe, executor, prompts, or unrelated runs."
+    },
+    "host:development.openSession#capability:development.native.execute": {
+      "review": "exact-native-development-session-authority",
+      "change": "Selects the gated prepared authority leaf only for native-tool session mode, binding the exact repository, semantic source state, private tree, reviewed tool, and executor. Semantic session forks do not enter this native capability."
+    },
+    "host:development.retry#capability:development.native.execute": {
+      "review": "exact-retained-development-retry-authority",
+      "change": "Re-enters the same prepared native-execution authority for one retryable caller-owned run and its retained immutable snapshot. Retry cannot change recipe, target, source, executor, or run identity."
+    },
+    "host:development.start#capability:development.native.execute": {
+      "review": "exact-development-build-authority",
+      "change": "Binds one caller-owned run to the reviewed recipe, exact semantic snapshot, lockfiles, toolchain, executor, target, and declared environment before any local build code executes."
+    },
+    "host:eval.events": {
+      "review": "owner-scoped-bounded-eval-event-catchup",
+      "change": "Adds the bounded durable cursor catch-up page for one caller-owned eval run. Live delivery remains on watched events; this read performs no execution, cancellation, reset, or authority acquisition."
+    },
+    "host:evalEventIngress.publish": {
+      "review": "authenticated-internal-eval-event-publication",
+      "change": "Adds a host-only internal publication path for a persisted EvalDO event. The receiver validates the nonce-bound run and re-derives owner and initiating caller before emitting to watched transports; it accepts no caller-supplied audience."
+    },
+    "host:evalExecutionRoots.retain": {
+      "review": "typed-internal-eval-execution-root-retention",
+      "change": "Adds a host-only typed internal write that retains the exact validated execution artifact for the originating eval run. It creates no executable admission and cannot widen or delete retention."
+    },
+    "host:runtime.faultAbortAgentVessel": {
+      "review": "sealed-exact-vessel-system-test-abort",
+      "change": "Adds a hidden code-only fault seam admitted only for the exact attested system-test runner and blessed conduit. It aborts one exact agent-vessel facet while preserving durable state so replay can be proven, and cannot target arbitrary Durable Objects or production callers."
+    },
     "host:browserPermissions.snapshot": {
       "review": "verified-user-browser-grant-projection",
       "change": "Replaces an unusable host-only read with a verified-user read of that same user's exact-origin browser grants in the current workspace environment. Code and anonymous principals remain excluded."
@@ -25,6 +117,110 @@
     "direct:src/server/internalDOs/workspaceDO.ts:entityReserve": {
       "review": "host-only-generic-entity-reservation",
       "change": "Generalizes the WorkspaceDO reservation write from panels to the enumerated buildable entity kinds. The host supplies the already validated immutable identity fields, and the receiver atomically creates or returns the exact reserved entity without executing code or widening caller authority."
+    },
+    "host:eval.start": {
+      "review": "caller-owned-durable-eval-acceptance",
+      "change": "Replaces the split blocking and asynchronous public eval entry points with one gated owner-scoped acceptance method. The caller must choose the run id before transport; the receiver derives owner, context, channel binding, and execution admission from verified host state, rejects semantic replay drift, and preserves the existing EvalDO terminal push."
+    },
+    "host:eval.get": {
+      "review": "owner-scoped-eval-recovery-read",
+      "change": "Replaces the former asynchronous status method with the sole read-only recovery backstop for the caller-owned run id. The receiver derives the exact owner-scoped EvalDO from verified caller or live owner-session binding and returns only its bounded durable status, progress, and terminal result."
+    },
+    "host:build.inspectExecution": {
+      "review": "immutable-execution-retention-inspection",
+      "change": "Adds an open, read-only explanation of one immutable execution digest. It returns only the artifact reference, authoritative owners, and reconstructibility diagnostics already held by retention, and cannot publish, acquire, or delete an artifact."
+    },
+    "host:development.openSession": {
+      "review": "adaptive-semantic-or-native-development-session-open",
+      "change": "Semantic mode remains an open deterministic source-only fork. Native-tool mode selects gated prepared authority binding the exact caller context, repository source state, deterministic session and private-tree identities, reviewed tool, and executor before launching a local OS process."
+    },
+    "host:development.getSession": {
+      "review": "owner-scoped-development-session-read",
+      "change": "Adds the open, read-only lookup of one caller-owned semantic development session. The receiver derives ownership and returns no foreign context."
+    },
+    "host:development.listSessions": {
+      "review": "owner-scoped-development-session-list",
+      "change": "Adds the open, read-only listing of the caller's development sessions. It is bounded durable-state discovery and cannot create, change, or retire a context."
+    },
+    "host:development.closeSession": {
+      "review": "development-session-close-retain-context",
+      "change": "Adds the open owner-scoped close that retains the semantic child context and reduces active lifecycle state. Destruction is a separate explicit critical method."
+    },
+    "host:development.destroySession": {
+      "review": "development-context-destruction",
+      "change": "Adds explicit critical destruction of an owned semantic development context after refusing active runs."
+    },
+    "host:development.retrySessionCleanup": {
+      "review": "development-context-destruction-retry",
+      "change": "Retries the exact prior owned-context destruction after a recorded cleanup failure."
+    },
+    "host:development.keepSessionRepair": {
+      "review": "development-session-repair-acknowledgement",
+      "change": "Keeps the owner-scoped repair record and performs no cleanup or other external effect."
+    },
+    "host:development.forceRetireSession": {
+      "review": "development-session-force-retirement",
+      "change": "Explicitly abandons a broken session, attempts only proven-owned context cleanup, and retains exact diagnostics when cleanup cannot be proven."
+    },
+    "host:development.checkpoint": {
+      "review": "owner-scoped-native-development-save",
+      "change": "Adds a promptless Save operation after native launch approval. It freezes only the exact live owned process group, scans the exact owned tree, imports that immutable descriptor through verified VCS ingress, records the receipt, and resumes."
+    },
+    "host:development.inspectNative": {
+      "review": "owner-scoped-native-development-inspection",
+      "change": "Adds an open bounded inspection of one caller-owned native session, with pending-change assessment performed only when explicitly requested."
+    },
+    "host:development.stopNativeTool": {
+      "review": "owned-native-development-tool-stop",
+      "change": "Adds promptless effect reduction for an already approved native session, terminating only its exact proven-owned process group and retaining its terminal and tree for inspection."
+    },
+    "host:development.readNativeTerminal": {
+      "review": "owner-scoped-native-terminal-read",
+      "change": "Adds cursor-based bounded scrollback reads for the exact terminal owned by the caller's native development session."
+    },
+    "host:development.writeNativeTerminal": {
+      "review": "owner-scoped-idempotent-native-terminal-input",
+      "change": "Adds owner-scoped interactive terminal input with a caller-chosen bounded write id, exact replay deduplication, and payload-drift rejection."
+    },
+    "host:development.resizeNativeTerminal": {
+      "review": "owner-scoped-native-terminal-resize",
+      "change": "Adds an owner-scoped naturally idempotent terminal resize within an already approved native session."
+    },
+    "host:development.listRecipes": {
+      "review": "reviewed-development-recipe-discovery",
+      "change": "Adds the open, read-only listing of host-reviewed build recipes. It accepts no command line, executable path, environment expansion, or native effect."
+    },
+    "host:development.start": {
+      "review": "exact-native-development-build",
+      "change": "Adds the gated start of one caller-owned build for an exact semantic snapshot. The prepared development.native.execute capability binds the reviewed recipe, executor, lockfile, source identity, and local-OS build operation before handler entry."
+    },
+    "host:development.get": {
+      "review": "owner-scoped-development-run-read",
+      "change": "Adds the open, read-only lookup of one caller-owned development run, including its bounded durable status, diagnostics, and exact execution identity."
+    },
+    "host:development.list": {
+      "review": "owner-scoped-development-run-list",
+      "change": "Adds the open, read-only listing of caller-owned development runs with bounded session and state filters. It neither launches nor controls a process."
+    },
+    "host:development.events": {
+      "review": "owner-scoped-development-run-event-page",
+      "change": "Adds the open, bounded durable event page for a caller-owned development run. Live output remains delivered through the event stream; the page is recovery and catch-up only."
+    },
+    "host:development.stop": {
+      "review": "owned-native-development-build-stop",
+      "change": "Adds the open effect-reducing stop of an owned native development build. The receiver derives the exact run, requires an idempotency key, terminates only its owned process group, and records the cleanup outcome."
+    },
+    "host:development.retry": {
+      "review": "exact-native-development-build-retry",
+      "change": "Retries only a recorded retryable run after re-entering the same exact prepared development.native.execute authority used by start."
+    },
+    "host:development.keepRunRepair": {
+      "review": "development-run-repair-acknowledgement",
+      "change": "Keeps the owner-scoped run repair record and performs no cleanup or native effect."
+    },
+    "host:development.forceRetire": {
+      "review": "development-run-force-retirement",
+      "change": "Explicitly abandons a retained development execution, deleting only effects with proven ownership and retaining exact diagnostics otherwise."
     },
     "host:shellApproval.getUserlandSealedDetail": {
       "review": "exact-pending-approval-detail-read",
@@ -193,6 +389,46 @@
     "direct:workspace/workers/pubsub-channel/channel-do.ts:settleReadyWork": {
       "review": "host-only-channel-claim-settlement",
       "change": "Requires exact worker/generation settlement and a complete gap-free per-row acknowledgement for recipient batches."
+    },
+    "host:development.listNativeTools": {
+      "review": "live-reviewed-native-tool-discovery",
+      "change": "Adds an open read of the fixed reviewed native-tool roster with executor-derived availability, interactive-terminal support, and an actionable unavailable reason. It launches no process and prevents panels and agents from offering a tool the host cannot execute."
+    },
+    "host:developmentClientExecutor.register": {
+      "review": "authenticated-current-device-executor-lease",
+      "change": "Registers only the verified shell runtime and user as a short-lived current-device Electron executor. The lease is in-memory, machine-bound, and grants no launch authority by itself."
+    },
+    "host:developmentClientExecutor.claim": {
+      "review": "exact-addressed-client-launch-claim",
+      "change": "Lets only the selected initiating desktop claim one opaque request containing an integrity manifest and ordinary pairing invite. Native server paths, credentials, and foreign-user launches are not exposed."
+    },
+    "host:developmentClientExecutor.readArtifact": {
+      "review": "bounded-integrity-client-artifact-transport",
+      "change": "Lets only the exact selected desktop read a bounded chunk from its pending immutable artifact manifest. Coordinates are canonical and payload integrity is verified again on the client-owned root."
+    },
+    "host:developmentClientExecutor.launched": {
+      "review": "selected-provider-process-receipt",
+      "change": "Records the exact selected desktop's owned PID and ownership digest but cannot make a run ready without a distinct ordinarily paired child shell attesting the opaque request nonce."
+    },
+    "host:developmentClientExecutor.attest": {
+      "review": "paired-child-launch-attestation",
+      "change": "Accepts only the opaque request nonce from a newly paired shell. User, runtime, provider separation, and expected execution identity are all derived from verified caller and live pending state, never from attestation arguments."
+    },
+    "host:developmentClientExecutor.fail": {
+      "review": "bounded-selected-provider-launch-failure",
+      "change": "Lets only the exact selected desktop terminate its pending request with a bounded diagnostic. It creates no process or authority and resolves a concurrent stop as effect reduction."
+    },
+    "host:developmentClientExecutor.exited": {
+      "review": "exact-client-exit-and-cleanup-receipt",
+      "change": "Lets only the original selected desktop report exit of the exact launched PID plus private-root cleanup outcome. The receiver derives whether exit was intentional from host-owned stop state and records unexpected exit durably."
+    },
+    "host:developmentClientExecutor.bindIsolatedManager": {
+      "review": "exact-isolated-management-device-binding",
+      "change": "Binds the already ordinarily paired management shell to the process-provided exact isolated instance and generation before any client invite is issued. A different device cannot replace it."
+    },
+    "host:developmentClientExecutor.consumeAttestation": {
+      "review": "single-use-isolated-child-attestation-read",
+      "change": "Lets only the exact bound isolated management shell consume one nonce-bound child runtime receipt. The inbox is short-lived and bounded, and no device credential, artifact path, or self-reported execution digest is returned."
     }
   }
 }

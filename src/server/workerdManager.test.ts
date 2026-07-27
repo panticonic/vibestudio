@@ -21,6 +21,14 @@ import {
   type WorkerdProgramSources,
 } from "../../scripts/build-workerd-programs.mjs";
 import { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "@vibestudio/rpc/internal";
+import {
+  executionArtifactDigest,
+  executionSourceClosureDigest,
+  verifyExecutionArtifactRef,
+  type ExecutionArtifactRefV1,
+} from "@vibestudio/shared/execution/retention";
+import { sha256 } from "@vibestudio/shared/execution/identity";
+import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 
 // Mock child_process to prevent actual workerd spawning
 vi.mock("child_process", () => ({
@@ -68,31 +76,47 @@ vi.mock("./hostCore/portUtils.js", () => ({
   releaseServicePort: vi.fn(),
 }));
 
+function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
+  const stateHash = `state:${sha256(`state:${source}:${ref}`)}`;
+  const contentRoots = [{ repoPath: source, stateHash }];
+  const unsigned = {
+    version: 1 as const,
+    sourceState: {
+      kind: "workspace" as const,
+      workspaceId: "workspace:test",
+      effectiveVersion: sha256(`ev:${source}:${ref}`),
+      state: { kind: "event" as const, eventId: `event:${source}:${ref}` },
+      contentRoots,
+      sourceClosureDigest: executionSourceClosureDigest(contentRoots),
+    },
+    recipeDigest: sha256(`recipe:${source}`),
+    buildKey: sha256(`build:${source}:${ref}`),
+    artifactDigest: sha256(`artifact:${source}:${ref}`),
+  };
+  return verifyExecutionArtifactRef({
+    ...unsigned,
+    executionDigest: executionArtifactDigest(unsigned),
+  });
+}
+
 function mockWorkerBuild(
   bundle = 'export default { fetch() { return new Response("ok"); } };'
 ): BuildResult {
-  const buildKey = "build:workers/runtime-fixture:abc123";
+  const execution = runtimeArtifact("workers/runtime-fixture", "build");
+  const buildKey = execution.buildKey;
   return {
     dir: "/tmp/test-build",
     buildKey,
-    sourceStateHash: "state:test",
+    sourceStateHash: execution.sourceState.contentRoots[0]!.stateHash,
     metadata: {
       kind: "worker",
       name: "workers/runtime-fixture",
       buildKey,
       sourcePath: "workers/runtime-fixture",
-      ev: "abc123",
-      sourceStateHash: "state:test",
-      execution: {
-        version: 1,
-        source: {
-          repoPath: "workers/runtime-fixture",
-          effectiveVersion: "b".repeat(64) as never,
-        },
-        buildInputDigest: "c".repeat(64) as never,
-        artifactDigest: "d".repeat(64) as never,
-        executionDigest: "a".repeat(64) as never,
-      },
+      ev: execution.sourceState.effectiveVersion,
+      sourceStateHash: execution.sourceState.contentRoots[0]!.stateHash,
+      sourceSemanticState: execution.sourceState.state,
+      execution,
       sourcemap: false,
       authority: { requests: [] },
       details: { kind: "generic" },
@@ -136,10 +160,7 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
     bindRuntimeImage: vi.fn(async (unitPath: string, ref?: string) => ({
       source: unitPath,
       unitName: unitPath,
-      stateHash: ref?.startsWith("state:") ? ref : "state:test",
-      effectiveVersion: build.metadata.ev,
-      buildKey: `build:${unitPath}:${ref ?? "main"}`,
-      executionDigest: "a".repeat(64),
+      artifact: runtimeArtifact(unitPath, ref ?? "main"),
       authorityRequests: [],
     })),
     getBuildByKey: vi.fn(() => build),
@@ -354,9 +375,8 @@ describe("WorkerdManager", () => {
       bindRuntimeImage.mockResolvedValue({
         source: "workers/runtime-fixture",
         unitName: "workers/runtime-fixture",
-        stateHash: "main",
-        effectiveVersion: "workers/runtime-fixture@main",
-        buildKey: "build:workers/runtime-fixture:main",
+        artifact: runtimeArtifact("workers/runtime-fixture", "main"),
+        authorityRequests: [],
       });
       await mgr.startWorker(startArgs());
 
@@ -431,8 +451,9 @@ describe("WorkerdManager", () => {
         contextId: "ctx-agent",
       });
 
-      expect(prepared.effectiveVersion).toBe("abc123");
-      expect(prepared.buildKey).toBe("build:workers/new:ctx:ctx-agent");
+      const artifact = runtimeArtifact("workers/new", "ctx:ctx-agent");
+      expect(prepared.effectiveVersion).toBe(artifact.sourceState.effectiveVersion);
+      expect(prepared.buildKey).toBe(artifact.buildKey);
       expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new", "ctx:ctx-agent");
       expect(statusOf(mgr, "new-worker")?.scopeRef).toBe("ctx:ctx-agent");
     });
@@ -466,7 +487,7 @@ describe("WorkerdManager", () => {
       expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new-do", "ctx:ctx-agent");
     });
 
-    it("restores a persisted DO class at its exact sealed incarnation", async () => {
+    ledgerTest("execution.workerd-start-worker", async () => {
       const deps = createMockDeps();
       const first = new WorkerdManager(deps);
       const prepared = await first.ensureDurableObjectEntity({
@@ -516,10 +537,7 @@ describe("WorkerdManager", () => {
       vi.mocked(deps.bindRuntimeImage).mockImplementation(async (unitPath: string) => ({
         source: unitPath,
         unitName: unitPath,
-        stateHash: "state:changed",
-        effectiveVersion: "changed-version",
-        buildKey: `build:${unitPath}:changed`,
-        executionDigest: "e".repeat(64),
+        artifact: runtimeArtifact(unitPath, "changed"),
         authorityRequests: [],
       }));
       vi.mocked(deps.bindRuntimeImage).mockClear();
@@ -555,6 +573,18 @@ describe("WorkerdManager", () => {
       ).resolves.toBeUndefined();
     });
 
+    it("fails a requested fault abort when workerd is not running", async () => {
+      const manager = new WorkerdManager(createMockDeps());
+
+      await expect(
+        manager.faultAbortUserlandDOFacet({
+          source: "workers/agent-worker",
+          className: "AiChatWorker",
+          objectKey: "agent:test",
+        })
+      ).rejects.toThrow("workerd is not running");
+    });
+
     it("registers every userland DO egress caller with its complete sealed image", async () => {
       const registerEgressCaller = vi.fn();
       const deps = createMockDeps({ registerEgressCaller });
@@ -569,7 +599,7 @@ describe("WorkerdManager", () => {
         expect.objectContaining({
           code: expect.objectContaining({
             repoPath: "workers/agent-worker",
-            executionDigest: "a".repeat(64),
+            executionDigest: runtimeArtifact("workers/agent-worker", "main").executionDigest,
             requested: [],
           }),
         })
@@ -816,7 +846,7 @@ describe("WorkerdManager", () => {
   // onSourceRebuilt
   // -------------------------------------------------------------------------
   describe("onSourceRebuilt", () => {
-    it("reloads main-tracking instances via a codeVersion bump (no restart)", async () => {
+    ledgerTest("execution.worker-push-rebuild", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
@@ -882,15 +912,13 @@ describe("WorkerdManager", () => {
     });
 
     it("marks failed runtime image rebinds terminal after the warm attempt fails", async () => {
-      const buildKey = "build:workers/runtime-fixture:main";
       const bindRuntimeImage = vi
         .fn()
         .mockResolvedValueOnce({
           source: "workers/runtime-fixture",
           unitName: "workers/runtime-fixture",
-          stateHash: "state:test",
-          effectiveVersion: "workers/runtime-fixture@main",
-          buildKey,
+          artifact: runtimeArtifact("workers/runtime-fixture", "main"),
+          authorityRequests: [],
         })
         .mockRejectedValueOnce(new Error("Unknown vcs ref: ctx:deleted"));
       const deps = createMockDeps({
@@ -1155,6 +1183,9 @@ describe("WorkerdManager", () => {
       );
       expect(compiledWorkerdPrograms.universalDo).toContain(
         'this.ctx.facets.abort("do", new Error("Runtime entity retired"))'
+      );
+      expect(compiledWorkerdPrograms.universalDo).toContain(
+        'this.ctx.facets.abort("do", new Error("System-test injected vessel crash"))'
       );
       expect(compiledWorkerdPrograms.universalDo).toContain(
         "const egressIdentity = `do:${identity}:${userKey}`"

@@ -52,15 +52,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "context.clone",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "context.boundary",
           "resource": {
             "kind": "prefix",
@@ -68,6 +59,15 @@
           },
           "tier": "critical",
           "evidence": "bounded-dynamic"
+        },
+        {
+          "capability": "context.clone",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
           "capability": "context.materialize",

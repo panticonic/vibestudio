@@ -9,8 +9,8 @@ const mocks = vi.hoisted(() => ({
   testerOptions: null as Record<string, unknown> | null,
   snapshotAll: vi.fn(() => []),
   modelPolicySnapshot: vi.fn(() => ({
-    primaryModel: "openai-codex:gpt-5.4-mini",
-    activeModel: "openai-codex:gpt-5.4-mini",
+    primaryModel: "openai-codex:gpt-5.3-codex-spark",
+    activeModel: "openai-codex:gpt-5.3-codex-spark",
     fallbackModel: null,
     fallbackThinkingLevel: null,
     fallbackOn: null,
@@ -182,7 +182,7 @@ describe("system-testing CLI-neutral API", () => {
     });
   });
 
-  it("doctors only GPT-5.4 mini for the default route", async () => {
+  it("doctors only GPT-5.3 Codex Spark for the default route", async () => {
     configureHealthyDoctorModels([
       { ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } },
     ]);

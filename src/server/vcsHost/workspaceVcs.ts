@@ -15,6 +15,7 @@
 
 import { EventEmitter } from "node:events";
 import * as crypto from "node:crypto";
+import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { TextDecoder } from "node:util";
 
@@ -38,6 +39,7 @@ import {
 } from "@vibestudio/content-addressing";
 import {
   type ContextMaterializationCommand,
+  type WorkspaceMaterializationBlob,
   type WorkspaceMaterializationRepository,
 } from "@vibestudio/shared/vcs/workspaceProjection";
 import { hostRefBasisDigest } from "@vibestudio/shared/vcs/publication";
@@ -51,6 +53,10 @@ import {
   sweepUnreachableBlobs,
   type TreeDiff,
 } from "../services/blobstoreService.js";
+import {
+  assertExecutionSourceContentRoot,
+  type ExecutionSourceContentRoot,
+} from "../services/executionSourceRoots.js";
 import type {
   AppliedPublication,
   ProtectedRefPublication,
@@ -78,6 +84,23 @@ const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 const BUILDS_LOG_ID = "builds:workspace";
 const CONTENT_OBSERVATION_CONCURRENCY = 32;
 const SLOW_SEMANTIC_EFFECT_MS = 500;
+
+export interface ExactRepositorySnapshotPlan {
+  version: 1;
+  contextId: string;
+  repositoryId: string;
+  repoPath: string;
+  sourceState: VcsStateNodeRef;
+  contentRoot: string;
+  repositoryManifestDigest: string;
+  materializedTreeDigest: string;
+  requiredFiles: Array<{ path: string; contentHash: string; byteLength: number }>;
+  realization: {
+    repository: Extract<WorkspaceMaterializationRepository, { presence: "present" }>;
+    blobs: WorkspaceMaterializationBlob[];
+  };
+  planDigest: string;
+}
 
 function intrinsicContentDescriptor(bytes: Uint8Array): {
   contentKind: "text" | "bytes";
@@ -114,6 +137,11 @@ export interface WorkspaceActivationTimings {
   initializationPushMs: number;
   ensureFreshMs: number;
   totalMs: number;
+}
+
+export interface PreparedWorkspaceGc {
+  readonly epoch: number;
+  commit(): Promise<{ scanned: number; swept: number; bytes: number }>;
 }
 
 interface SemanticRequest {
@@ -215,6 +243,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   readonly contentProjection: ContentProjectionStore;
   readonly repositories: WorkspaceRepositories;
 
+  get workspaceId(): string {
+    return this.deps.workspaceId;
+  }
+
   private gadCaller: SemanticControlPlaneCaller | null = null;
   private readonly emitter = new EventEmitter();
   private readonly projector: DiskProjector;
@@ -222,6 +254,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly semanticContextInitializations = new Map<string, Promise<VcsStateNodeRef>>();
   private readonly contextInitializations = new Map<string, Promise<VcsStateNodeRef>>();
+  private readonly semanticStateByContent = new Map<string, VcsStateNodeRef>();
   /** Exact materialization receipt verified during this host generation. An
    * absent entry (including after restart) requires one disk integrity scan. */
   private readonly verifiedProjectionStates = new Map<string, string>();
@@ -252,20 +285,25 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return this.gadCaller !== null;
   }
 
-  async runGc(options: { minAgeMs: number }): Promise<{
-    scanned: number;
-    swept: number;
-    bytes: number;
-  }> {
+  async prepareGc(options: {
+    minAgeMs: number;
+    epoch: number;
+    executionSourceRoots: readonly ExecutionSourceContentRoot[];
+  }): Promise<PreparedWorkspaceGc> {
     const semantic = await this.gad().call<{
       contentRoots: string[];
       contentHashes: string[];
     }>("vcsContentGcRoots", {});
     const roots = new Set(semantic.contentRoots);
     for (const main of this.deps.refs.listMains()) roots.add(main.contentRoot);
+    for (const executionRoot of options.executionSourceRoots) {
+      roots.add(assertExecutionSourceContentRoot(executionRoot).stateHash);
+    }
     const reachable = new Set(semantic.contentHashes);
     for (const root of roots) {
-      const tree = await collectTreeReachableDigests(this.deps.blobsDir, root);
+      const tree = await collectTreeReachableDigests(this.deps.blobsDir, root, {
+        verifyContent: true,
+      });
       if (!tree) throw new Error(`GC root ${root} is missing from the content store`);
       for (const digest of tree.treeDigests) reachable.add(digest);
       for (const digest of tree.contentDigests) reachable.add(digest);
@@ -279,7 +317,51 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const cachedViews = await this.repositories.collectCachedReachableDigests();
     for (const digest of cachedViews.treeDigests) reachable.add(digest);
     for (const digest of cachedViews.contentDigests) reachable.add(digest);
-    return sweepUnreachableBlobs(this.deps.blobsDir, reachable, options.minAgeMs);
+    let committed = false;
+    return {
+      epoch: options.epoch,
+      commit: async () => {
+        if (committed) throw new Error(`Content GC epoch ${options.epoch} was already committed`);
+        committed = true;
+        return sweepUnreachableBlobs(this.deps.blobsDir, reachable, options.minAgeMs);
+      },
+    };
+  }
+
+  async runGc(options: {
+    minAgeMs: number;
+    epoch: number;
+    executionSourceRoots: readonly ExecutionSourceContentRoot[];
+  }): Promise<{
+    scanned: number;
+    swept: number;
+    bytes: number;
+  }> {
+    return (await this.prepareGc(options)).commit();
+  }
+
+  async inspectContentRoot(
+    stateHash: string
+  ): Promise<{ reconstructible: boolean; missing: readonly string[] }> {
+    try {
+      const closure = await collectTreeReachableDigests(this.deps.blobsDir, stateHash, {
+        verifyContent: true,
+      });
+      if (!closure) {
+        return {
+          reconstructible: false,
+          missing: [`source content root ${stateHash}`],
+        };
+      }
+      return { reconstructible: true, missing: [] };
+    } catch (error) {
+      return {
+        reconstructible: false,
+        missing: [
+          `source content root ${stateHash}: ${error instanceof Error ? error.message : String(error)}`,
+        ],
+      };
+    }
   }
 
   async referencesReachable(
@@ -287,6 +369,17 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     references: readonly { kind: string; value: unknown }[]
   ): Promise<boolean> {
     return this.gad().call<boolean>("vcsReferencesReachable", { contextIds, references });
+  }
+
+  async isStateDescendant(
+    ancestor: VcsStateNodeRef,
+    descendant: VcsStateNodeRef
+  ): Promise<boolean> {
+    return this.gad().call<boolean>("vcsIsStateDescendant", {
+      ancestor,
+      descendant,
+      maxEdges: 100_000,
+    });
   }
 
   async attachGad(gad: SemanticControlPlaneCaller): Promise<void> {
@@ -940,6 +1033,150 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return state?.repositories.some((repository) => repository.repoPath === normalized) ?? false;
   }
 
+  /**
+   * Resolve one exact semantic repository without writing a projection, CAS
+   * object, or checkout. The returned plan is JSON and may be sealed directly
+   * into a dispatcher prepared-authority payload.
+   */
+  async planExactContextRepository(input: {
+    contextId: string;
+    repositoryId: string;
+    requiredFiles: readonly string[];
+  }): Promise<ExactRepositorySnapshotPlan> {
+    const command = await this.gad().call<ContextMaterializationCommand>(
+      "vcsContextMaterializationCommand",
+      { contextId: input.contextId, materializedState: null }
+    );
+    const roots = await this.materializer.planContentRoots(command.repositories);
+    const repository = roots.find((candidate) => candidate.repositoryId === input.repositoryId);
+    if (!repository)
+      throw Object.assign(new Error(`Unknown repository ${input.repositoryId}`), {
+        code: "ENOENT",
+      });
+    const repositoryCommand = command.repositories.find(
+      (
+        candidate
+      ): candidate is Extract<WorkspaceMaterializationRepository, { presence: "present" }> =>
+        candidate.presence === "present" && candidate.repositoryId === input.repositoryId
+    );
+    if (!repositoryCommand) {
+      throw Object.assign(new Error(`Repository ${input.repositoryId} has no exact source`), {
+        code: "ECORRUPT",
+      });
+    }
+    const referencedContent = new Set(
+      repositoryCommand.source.kind === "snapshot"
+        ? repositoryCommand.source.files.map((file) => file.contentHash)
+        : repositoryCommand.source.kind === "delta"
+          ? repositoryCommand.source.changes.flatMap((change) =>
+              change.result ? [change.result.contentHash] : []
+            )
+          : []
+    );
+    const realizationBlobs = command.blobs.filter((blob) =>
+      referencedContent.has(blob.contentHash)
+    );
+    const requiredFiles = await Promise.all(
+      [...new Set(input.requiredFiles)].sort(compareUtf16CodeUnits).map(async (requiredPath) => {
+        const changed =
+          repositoryCommand.source.kind === "delta"
+            ? repositoryCommand.source.changes.find((change) => change.path === requiredPath)
+            : undefined;
+        const file =
+          repositoryCommand.source.kind === "snapshot"
+            ? repositoryCommand.source.files.find((candidate) => candidate.path === requiredPath)
+            : changed
+              ? changed.result
+              : await readFileAtTree(
+                  this.deps.blobsDir,
+                  repositoryCommand.source.kind === "content-root"
+                    ? repositoryCommand.source.contentRoot
+                    : repositoryCommand.source.basisContentRoot,
+                  requiredPath
+                );
+        if (!file)
+          throw Object.assign(
+            new Error(
+              `Required development input ${requiredPath} is absent from ${repository.repoPath}`
+            ),
+            { code: "EDEVELOPMENT_INPUT" }
+          );
+        const storedBytes = await getBytes(this.deps.blobsDir, file.contentHash);
+        const inline = realizationBlobs.find((blob) => blob.contentHash === file.contentHash);
+        const bytes = storedBytes ?? (inline ? Buffer.from(inline.base64, "base64") : null);
+        if (!bytes)
+          throw Object.assign(
+            new Error(`Required development input ${requiredPath} is missing from content storage`),
+            { code: "ECORRUPT" }
+          );
+        return { path: requiredPath, contentHash: file.contentHash, byteLength: bytes.byteLength };
+      })
+    );
+    const base = {
+      version: 1 as const,
+      contextId: input.contextId,
+      repositoryId: input.repositoryId,
+      repoPath: repository.repoPath,
+      sourceState: command.targetState,
+      contentRoot: repository.contentRoot,
+      repositoryManifestDigest: sha256HexSyncText(
+        canonicalJson({
+          repositoryId: input.repositoryId,
+          repoPath: repository.repoPath,
+          fileManifestId: repository.fileManifestId,
+          contentRoot: repository.contentRoot,
+        })
+      ),
+      materializedTreeDigest: sha256HexSyncText(
+        canonicalJson({ contentRoot: repository.contentRoot })
+      ),
+      requiredFiles,
+      realization: {
+        repository: repositoryCommand,
+        blobs: realizationBlobs,
+      },
+    };
+    return {
+      ...base,
+      planDigest: sha256HexSyncText(canonicalJson(base)),
+    };
+  }
+
+  /**
+   * Write a previously sealed plan into an empty private run root. This method
+   * never consults current context state, a shared projection, or a checkout.
+   */
+  async materializeExactRepositoryPlan(
+    plan: ExactRepositorySnapshotPlan,
+    destinationInput: string
+  ): Promise<void> {
+    const { planDigest, ...base } = plan;
+    if (sha256HexSyncText(canonicalJson(base)) !== planDigest) {
+      throw Object.assign(
+        new Error("Development snapshot plan digest does not match its content"),
+        {
+          code: "ECORRUPT",
+        }
+      );
+    }
+    const destination = path.resolve(destinationInput);
+    await fsp.mkdir(destination, { recursive: true, mode: 0o700 });
+    if ((await fsp.readdir(destination)).length > 0) {
+      throw Object.assign(
+        new Error(`Development materialization destination is not empty: ${destination}`),
+        { code: "ENOTEMPTY" }
+      );
+    }
+    await this.materializer.realizePlannedRepository(
+      plan.realization.repository,
+      plan.realization.blobs,
+      plan.contentRoot
+    );
+    await materializeTree(this.deps.blobsDir, plan.contentRoot, destination, {
+      strategy: "copy-on-write",
+    });
+  }
+
   // -----------------------------------------------------------------------
   // Immutable content/build adapter
   // -----------------------------------------------------------------------
@@ -953,7 +1190,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private async ensureFreshUncoalesced(): Promise<{ stateHash: string }> {
-    return this.repositories.workspaceView();
+    const view = await this.repositories.workspaceView();
+    const semanticState = this.deps.refs.readMainSemanticState?.() ?? null;
+    if (semanticState) this.semanticStateByContent.set(view.stateHash, semanticState);
+    return view;
   }
 
   private async resolveContentSelector(selector: string): Promise<string | null> {
@@ -963,8 +1203,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   async resolveContextState(contextId: string): Promise<string> {
+    const semanticState = await this.resolveWorkingState(contextId);
     const repositories = await this.contextRepoTargets(contextId);
-    return (await this.repositories.contentView(repositories)).stateHash;
+    const stateHash = (await this.repositories.contentView(repositories)).stateHash;
+    this.semanticStateByContent.set(stateHash, semanticState);
+    return stateHash;
+  }
+
+  semanticStateForContent(stateHash: string): VcsStateNodeRef | null {
+    return this.semanticStateByContent.get(stateHash) ?? null;
   }
 
   async unitHashes(stateHash: string, relPaths: string[]): Promise<Record<string, string | null>> {

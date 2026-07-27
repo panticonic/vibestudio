@@ -52,6 +52,8 @@ export interface StateChangedUnit {
 }
 
 export interface WorkspaceStateSource {
+  /** Stable identity of the semantic workspace that owns these exact states. */
+  readonly workspaceId: string;
   /**
    * Resolve the current protected workspace publication to one exact,
    * workspace-rooted content state. No disk scan or projection participates.
@@ -61,6 +63,18 @@ export interface WorkspaceStateSource {
   unitHashes(stateHash: string, relPaths: string[]): Promise<Record<string, string | null>>;
   /** Resolve a semantic context's exact working frontier to workspace content. */
   resolveContextState(contextId: string): Promise<string>;
+  /** Exact semantic coordinate paired with a previously resolved content view. */
+  semanticStateForContent?(
+    stateHash: string
+  ): { kind: "event"; eventId: string } | { kind: "application"; applicationId: string } | null;
+  /**
+   * Side-effect-free verification of a content root and every object in its
+   * closure. Retention inspection treats an unavailable verifier as missing
+   * reconstruction authority rather than assuming the source exists.
+   */
+  inspectContentRoot?(
+    stateHash: string
+  ): Promise<{ reconstructible: boolean; missing: readonly string[] }>;
   /**
    * Discover package manifests from exact workspace-rooted content. Unit
    * relative paths, effective versions, and graph edges therefore share the

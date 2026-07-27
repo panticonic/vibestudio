@@ -11,6 +11,22 @@ describe("productDirectMethodCapability", () => {
       "workspace.graph.delete"
     );
   });
+
+  it("preserves WorkspaceDO's inspect-only retention projection", () => {
+    expect(productDirectMethodCapability("WorkspaceDO", "entityListExecutionRoots")).toBe(
+      "workspace.runtime-state.inspect"
+    );
+    expect(productDirectMethodCapability("WorkspaceDO", "entityListActive")).toBe(
+      "workspace.runtime-state.manage"
+    );
+  });
+
+  it("preserves EvalDO's host-only retention projection as runtime plumbing", () => {
+    expect(productDirectMethodCapability("EvalDO", "listRetainedExecutionRoots")).toBeNull();
+    expect(productDirectMethodCapability("EvalDO", "startRun")).toBe(
+      "runtime.code-execution.manage"
+    );
+  });
 });
 
 describe("isHostIntrinsicDirectMethod", () => {

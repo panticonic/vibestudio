@@ -9,6 +9,10 @@ import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest
 import { parseSha256 } from "@vibestudio/shared/execution/identity";
 import { domainHash } from "@vibestudio/shared/execution/identity";
 import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
+import {
+  verifyExecutionArtifactRef,
+  type ExecutionArtifactRefV1,
+} from "@vibestudio/shared/execution/retention";
 import type { CapabilityScope } from "@vibestudio/rpc";
 
 const log = createDevLogger("AppOrchestrator");
@@ -60,13 +64,7 @@ interface BakedAppManifest {
     key: string;
     effectiveVersion: string;
     executionDigest: string;
-    execution: {
-      version: 1;
-      source: { repoPath: string; effectiveVersion: string };
-      buildInputDigest: string;
-      artifactDigest: string;
-      executionDigest: string;
-    };
+    execution: ExecutionArtifactRefV1;
     authorityRequests: readonly CapabilityScope[];
   };
   artifacts: Array<{
@@ -360,23 +358,16 @@ export function readBakedElectronApp(distDir: string): AppAvailableEvent | null 
 
 function verifyBakedExecutionIdentity(manifest: BakedAppManifest): string {
   const label = `Baked Electron app ${manifest.app.name}`;
-  const execution = manifest.build.execution;
+  const execution = verifyExecutionArtifactRef(manifest.build.execution);
   if (
-    !execution ||
-    execution.version !== 1 ||
-    !execution.source ||
-    execution.source.repoPath !== manifest.app.source
+    execution.sourceState.kind !== "workspace" ||
+    !execution.sourceState.contentRoots.some((root) => root.repoPath === manifest.app.source) ||
+    execution.sourceState.effectiveVersion !==
+      parseSha256(manifest.build.effectiveVersion, `${label} effective version`) ||
+    execution.buildKey !== parseSha256(manifest.build.key, `${label} build key`)
   ) {
     throw new Error(`${label} execution identity does not match its source`);
   }
-  const source = {
-    repoPath: execution.source.repoPath,
-    effectiveVersion: parseSha256(
-      execution.source.effectiveVersion,
-      `${label} execution effective version`
-    ),
-  };
-  const buildInputDigest = parseSha256(execution.buildInputDigest, `${label} build input digest`);
   const artifactDigest = domainHash(
     "vibestudio/build-v2-artifacts/v1",
     canonicalJson(
@@ -399,16 +390,11 @@ function verifyBakedExecutionIdentity(manifest: BakedAppManifest): string {
   if (parseSha256(execution.artifactDigest, `${label} artifact digest`) !== artifactDigest) {
     throw new Error(`${label} artifact manifest does not match its execution identity`);
   }
-  const executionDigest = domainHash(
-    "vibestudio/build-v2-execution/v1",
-    canonicalJson({ version: 1, source, buildInputDigest, artifactDigest })
-  );
   if (
-    parseSha256(execution.executionDigest, `${label} sealed execution digest`) !==
-      executionDigest ||
-    parseSha256(manifest.build.executionDigest, `${label} execution digest`) !== executionDigest
+    parseSha256(manifest.build.executionDigest, `${label} execution digest`) !==
+    execution.executionDigest
   ) {
     throw new Error(`${label} execution digest does not match its sealed identity`);
   }
-  return executionDigest;
+  return execution.executionDigest;
 }

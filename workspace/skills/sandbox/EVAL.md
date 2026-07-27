@@ -132,10 +132,71 @@ multi-file work, prefer a real entry file.
 | `syntax`     | `"javascript" \| "typescript" \| "jsx" \| "tsx"` | `"tsx"` | Source syntax                                                                                   |
 | `imports`    | `Record<string, string>`                         | —       | Packages to build on-demand (workspace or npm)                                                  |
 | `timeoutMs`  | positive integer                                 | —       | Optional wall-clock deadline in milliseconds; omitted means no deadline                         |
+| `authority`  | per-run authority intent                         | adaptive mutable prompt | Attenuate this run with strict semantic requests, read-only effects, pregranted-only execution, or exact prospective preauthorization |
+
+The table above is the ergonomic agent tool. Code that calls the server service
+directly uses the single typed lifecycle shape:
+
+```ts
+await rpc.call("main", "eval.start", [{
+  runId,
+  source: { kind: "inline", code, pathHint: "src/probe.ts", syntax: "typescript" },
+  scope: { key: channelId, lifecycle: "persistent" },
+  resultReceiver: { kind: "caller" }, // optional terminal push to the authenticated caller
+  authority,
+}]);
+```
+
+For a file entry use `source: {kind:"context-file", path, syntax?}`. Recovery
+and control calls use `scopeKey`, for example
+`eval.get({runId, scopeKey})`. No eval argument may name an owner, channel,
+context, agent, or arbitrary receiver runtime; those relationship facts are
+derived from the authenticated caller and its verified binding.
+
+### Per-run authority
+
+Authority intent only narrows the authority already admitted by the receiver,
+the installed harness, the verified session, live grants, relationships,
+denials, and locks:
+
+```ts
+eval({
+  code: `return await fs.readFile("README.md", "utf8")`,
+  authority: {
+    mode: "strict",
+    effects: "read-only",
+    approvals: "pregranted-only",
+    requests: [
+      {
+        capability: "fs.read",
+        resource: { kind: "exact", key: "README.md" },
+      },
+    ],
+  },
+});
+```
+
+`strict` returns a structured `run-manifest-denied` failure for an uncovered
+protected capability/resource even when a broader user grant exists.
+`pregranted-only` never opens an approval card. `read-only` is enforced at the
+same dispatcher used by every host call; it is not a separate eval method
+allowlist. `preauthorize` accepts exact `{service, method, args}` operations and
+uses the canonical host preflight/acquisition path, so approval binds the final
+prepared invocation rather than a capability string.
+
+The service also retains bounded durable lifecycle events. Interactive panels
+subscribe to `eval:run-event` through `events.watch` for live state, console,
+progress, authority, cleanup, kernel, and diagnostic records, then use
+`eval.events({runId, after, limit})` only to catch up after reconnect. Agent
+tool completion remains the terminal push path; agents do not poll event pages.
+Workspace import bundles carry their immutable execution identity into the
+EvalDO's durable run/module provenance and remain execution-GC roots until the
+finite kernel is disposed. External npm bundles are explicitly outside the
+workspace BuildStore root set.
 
 ## Injected Variables
 
-These are available in eval code. `services`, `ctx`, `scope`, `scopes`, `db`,
+These are available in eval code. `services`, `hosts`, `ctx`, `scope`, `scopes`, `db`,
 `help`, `chat`, and `agent` are eval-only ambient variables. `rpc` and `fs` are
 the same portable bindings used by panels/workers; use them ambiently or import
 them from `@workspace/runtime`. Eval also accepts importing an available ambient
@@ -146,6 +207,7 @@ same live binding rather than shadowing it.
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `rpc.call(targetId, method, args)` | Portable RPC client, same shape as panels/workers. Raw server services target `"main"`: `await rpc.call("main", "vcs.status", [{ contextId: ctx.contextId }])`                                                                                                                                                                                                                                                                                                                                                                                               |
 | `services`                         | Convenience namespace for server services. If the service name is also a rich runtime binding (`workers`, `vcs`, `fs`, `credentials`, `blobstore`, …), `services.<name>` is that ergonomic runtime client, not the raw service catalog. Raw catalog methods are always reachable with `rpc.call("main", "<svc>.<method>", [...])`; non-colliding services are also reachable as `services.<svc>.<method>(...)`. Access is still gated server-side by each method's policy. Use `help()` to list services and `help("workers")` to inspect a runtime binding. |
+| `hosts`                            | Owner-scoped attached-host clients. `const child = await hosts.attach(attachedHostSessionId)` returns `child.services`; call ordinary child methods such as `child.services.eval.start(...)` and `child.services.eval.get(...)`. The child validates its normal schema and authority policy; there is no development-specific eval bridge. |
 | `fs`                               | Context-scoped filesystem — the EvalDO resolves your context, so you do NOT pass a contextId: `await fs.readdir("/")`, `await fs.readFile("src/index.ts", "utf-8")`                                                                                                                                                                                                                                                                                                                                                                                          |
 | `ctx`                              | `{ contextId, objectKey }` for the current eval session                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `scope`                            | Live notebook scope (see below); `scope.x = …` retains object identity across cells while the current kernel activation remains resident                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -283,7 +345,7 @@ open the `about/server-logs` viewer for a live follow. See
 
 ## Result Shape
 
-`eval.run` returns
+The one-call `eval` tool returns
 `{ success, console, returnValue?, error?, scopeKeys?, kernel? }`:
 
 - `success` — whether the run completed without throwing.
@@ -329,7 +391,7 @@ auto-resolution (workspace), then brought in with a normal `import`. Both static
 per-object require, which is isolated per owner (your loaded modules never leak
 to another agent's EvalDO sharing the same isolate).
 
-Do NOT import the **ambient-only** globals (`services`, `scope`, `scopes`, `db`,
+Do NOT import the **ambient-only** globals (`services`, `hosts`, `scope`, `scopes`, `db`,
 `ctx`, `help`, `chat`) — they are injected free variables, not module exports,
 and the eval engine rejects importing them.
 

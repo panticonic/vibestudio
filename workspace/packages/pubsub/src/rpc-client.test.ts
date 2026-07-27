@@ -16,6 +16,7 @@ import {
   invocationFailedPayload,
 } from "@workspace/agentic-protocol";
 import { createRecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
+import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
 import { z } from "zod";
 
 const CHANNEL = "test-channel";
@@ -1683,7 +1684,7 @@ describe("connectViaRpc", () => {
       await client.close();
     });
 
-    it("recovers a pending method result from a replayed invocation.completed on resubscribe", async () => {
+    ledgerTest("channel.reconnect.authority-neutral", async () => {
       let recover!: () => Promise<void>;
       const registerResubscribeHandler = vi.fn((_id: string, handler: () => Promise<void>) => {
         recover = handler;

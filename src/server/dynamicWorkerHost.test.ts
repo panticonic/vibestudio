@@ -17,6 +17,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import {
@@ -27,11 +28,42 @@ import {
 import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
 import type { BuildResult } from "./buildV2/buildStore.js";
 import {
+  executionArtifactDigest,
+  executionSourceClosureDigest,
+  verifyExecutionArtifactRef,
+  type ExecutionArtifactRefV1,
+} from "@vibestudio/shared/execution/retention";
+import { sha256 } from "@vibestudio/shared/execution/identity";
+import {
   buildWorkerdPrograms,
   type WorkerdProgramSources,
 } from "../../scripts/build-workerd-programs.mjs";
 
 let compiledWorkerdPrograms: WorkerdProgramSources;
+
+function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
+  const contentRoots = [
+    { repoPath: source, stateHash: `state:${sha256(`state:${source}:${ref}`)}` },
+  ];
+  const unsigned = {
+    version: 1 as const,
+    sourceState: {
+      kind: "workspace" as const,
+      workspaceId: "workspace:test",
+      effectiveVersion: sha256(`ev:${source}:${ref}`),
+      state: { kind: "event" as const, eventId: `event:${source}:${ref}` },
+      contentRoots,
+      sourceClosureDigest: executionSourceClosureDigest(contentRoots),
+    },
+    recipeDigest: sha256(`recipe:${source}`),
+    buildKey: sha256(`build:${source}:${ref}`),
+    artifactDigest: sha256(`artifact:${source}:${ref}`),
+  };
+  return verifyExecutionArtifactRef({
+    ...unsigned,
+    executionDigest: executionArtifactDigest(unsigned),
+  });
+}
 
 beforeAll(async () => {
   compiledWorkerdPrograms = await buildWorkerdPrograms({ write: false });
@@ -143,10 +175,7 @@ async function createHarness(buildRef?: { value: BuildResult }): Promise<Harness
     bindRuntimeImage: async (unitPath: string, ref?: string) => ({
       source: unitPath,
       unitName: unitPath,
-      stateHash: ref?.startsWith("state:") ? ref : "state:test",
-      effectiveVersion: currentBuild.value.metadata.ev,
-      buildKey: `build:${unitPath}:${currentBuild.value.metadata.ev}`,
-      executionDigest: "a".repeat(64),
+      artifact: runtimeArtifact(unitPath, ref ?? "main"),
       authorityRequests: [],
     }),
     getBuildByKey: () => currentBuild.value,
@@ -299,32 +328,36 @@ describe("dynamic worker host (real workerd)", () => {
     expect(await keep.json()).toEqual({ result: { echo: "ping", workerId: "keep" } });
   }, 30_000);
 
-  it("reloads updated code via version bump with no restart", async () => {
-    const buildRef = { value: workerBuild(WORKER_BUNDLE, "ev-1") };
-    active = await createHarness(buildRef);
-    const { manager, workerdCall } = active;
+  ledgerTest(
+    "execution.durable-object-push-rebuild",
+    async () => {
+      const buildRef = { value: workerBuild(WORKER_BUNDLE, "ev-1") };
+      active = await createHarness(buildRef);
+      const { manager, workerdCall } = active;
 
-    await manager.startWorker({ source: "workers/echo", contextId: "ctx-1", key: "echo" });
-    const boot = manager.getBootGeneration();
+      await manager.startWorker({ source: "workers/echo", contextId: "ctx-1", key: "echo" });
+      const boot = manager.getBootGeneration();
 
-    const before = await workerdCall("/echo/__rpc", {
-      method: "POST",
-      body: JSON.stringify({ type: "call", method: "ping", args: [] }),
-    });
-    expect((await before.json()).result.echo).toBe("ping");
+      const before = await workerdCall("/echo/__rpc", {
+        method: "POST",
+        body: JSON.stringify({ type: "call", method: "ping", args: [] }),
+      });
+      expect((await before.json()).result.echo).toBe("ping");
 
-    // Swap the build for one that tags responses, then bump the version.
-    buildRef.value = workerBuild(
-      WORKER_BUNDLE.replace("echo: body.method", 'echo: "v2:" + body.method'),
-      "ev-2"
-    );
-    await manager.updateInstance("echo", { env: { ROLLED: "1" } });
-    expect(manager.getBootGeneration()).toBe(boot);
+      // Swap the build for one that tags responses, then bump the version.
+      buildRef.value = workerBuild(
+        WORKER_BUNDLE.replace("echo: body.method", 'echo: "v2:" + body.method'),
+        "ev-2"
+      );
+      await manager.updateInstance("echo", { env: { ROLLED: "1" } });
+      expect(manager.getBootGeneration()).toBe(boot);
 
-    const after = await workerdCall("/echo/__rpc", {
-      method: "POST",
-      body: JSON.stringify({ type: "call", method: "ping", args: [] }),
-    });
-    expect((await after.json()).result.echo).toBe("v2:ping");
-  }, 30_000);
+      const after = await workerdCall("/echo/__rpc", {
+        method: "POST",
+        body: JSON.stringify({ type: "call", method: "ping", args: [] }),
+      });
+      expect((await after.json()).result.echo).toBe("v2:ping");
+    },
+    30_000
+  );
 });

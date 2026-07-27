@@ -16,6 +16,7 @@ interface EvalStep {
   reset?: boolean;
   status?: "complete" | "error" | "cancelled";
   result?: unknown;
+  authority?: Record<string, unknown>;
 }
 
 interface ToolStep {
@@ -54,6 +55,7 @@ function execution(finalMessage: string, steps: EvalStep[]): TestExecutionResult
           code: step.code,
           ...(step.imports === undefined ? {} : { imports: step.imports }),
           ...(step.reset === undefined ? {} : { reset: step.reset }),
+          ...(step.authority === undefined ? {} : { authority: step.authority }),
         },
         result:
           step.result ??
@@ -136,6 +138,136 @@ describe("scenario tool protocol semantics", () => {
     } as unknown as TestExecutionResult["messages"][number]);
 
     expect(completedScenarioEvidence(result, [])).toMatchObject({ passed: true });
+  });
+});
+
+describe("eval authority lifecycle validators", () => {
+  const permissionsRead = {
+    capability: "permissions.read",
+    resource: { kind: "exact", key: "permissions.read" },
+  };
+
+  it("requires the exact strict manifest and structured result", () => {
+    const validator = scenario(evalLifecycleTests, "eval-strict-authority");
+    expect(
+      validator.validate(
+        execution("Read permissions.", [
+          {
+            code: "return await services.permissions.list();",
+            authority: {
+              mode: "strict",
+              effects: "read-only",
+              approvals: "pregranted-only",
+              requests: [permissionsRead],
+            },
+            returnValue: [],
+          },
+        ])
+      ).passed
+    ).toBe(true);
+    expect(
+      validator.validate(
+        execution("Read permissions.", [
+          {
+            code: "return await services.permissions.list();",
+            authority: { mode: "strict", effects: "read-only", approvals: "pregranted-only" },
+            returnValue: [],
+          },
+        ])
+      ).passed
+    ).toBe(false);
+  });
+
+  it("requires an empty pregranted-only manifest and a structured denial", () => {
+    const validator = scenario(evalLifecycleTests, "eval-pregranted-only");
+    expect(
+      validator.validate(
+        execution("The operation was denied without requesting approval.", [
+          {
+            code: "try { await services.permissions.list(); } catch (error) { return { denied: true, message: String(error) }; }",
+            authority: { mode: "strict", approvals: "pregranted-only" },
+            returnValue: { denied: true, message: "authority denied" },
+          },
+        ])
+      ).passed
+    ).toBe(true);
+    expect(
+      validator.validate(
+        execution("The operation was denied.", [
+          {
+            code: "return { denied: true, message: 'authority denied' };",
+            authority: { mode: "strict", approvals: "pregranted-only", requests: [permissionsRead] },
+            returnValue: { denied: true, message: "authority denied" },
+          },
+        ])
+      ).passed
+    ).toBe(false);
+  });
+
+  it("binds preauthorization to the exact invocation arguments", () => {
+    const validator = scenario(evalLifecycleTests, "eval-preauthorization");
+    expect(
+      validator.validate(
+        execution("Read permissions.", [
+          {
+            code: "return await services.permissions.list();",
+            authority: {
+              approvals: "prompt",
+              preauthorize: [{ service: "permissions", method: "list", args: [] }],
+            },
+            returnValue: [],
+          },
+        ])
+      ).passed
+    ).toBe(true);
+    expect(
+      validator.validate(
+        execution("Read permissions.", [
+          {
+            code: "return await services.permissions.list();",
+            authority: {
+              approvals: "prompt",
+              preauthorize: [{ service: "permissions", method: "list", args: [{ widened: true }] }],
+            },
+            returnValue: [],
+          },
+        ])
+      ).passed
+    ).toBe(false);
+  });
+
+  it("requires stable ordered cursor pages instead of a prose event claim", () => {
+    const validator = scenario(evalLifecycleTests, "eval-events");
+    const page = { events: [{ sequence: 1, kind: "state" }], next: 1, hasMore: true };
+    const finalPage = { events: [{ sequence: 2, kind: "console" }], next: 2, hasMore: false };
+    expect(
+      validator.validate({
+        messages: [],
+        duration: 0,
+        diagnostics: {
+          evalEventPages: {
+            terminal: { status: "done", result: { success: true } },
+            firstPage: page,
+            repeatedFirstPage: page,
+            pages: [page, finalPage],
+          },
+        },
+      }).passed
+    ).toBe(true);
+    expect(
+      validator.validate({
+        messages: [],
+        duration: 0,
+        diagnostics: {
+          evalEventPages: {
+            terminal: { status: "done", result: { success: true } },
+            firstPage: page,
+            repeatedFirstPage: { ...page, next: 2 },
+            pages: [page, finalPage],
+          },
+        },
+      }).passed
+    ).toBe(false);
   });
 });
 
@@ -602,6 +734,38 @@ describe("eval lifecycle semantic validators", () => {
         execution("The long run was cancelled.", [])
       ).passed
     ).toBe(false);
+  });
+
+  it("requires one original eval result after an observed live vessel abort", () => {
+    const validator = scenario(evalLifecycleTests, "eval-agent-replay");
+    const recovered = execution("The durable eval returned once.", [
+      {
+        code: 'return { marker: "EVAL_AGENT_REPLAY_OK", completionCount: 1 };',
+        returnValue: { marker: "EVAL_AGENT_REPLAY_OK", completionCount: 1 },
+      },
+    ]);
+    recovered.diagnostics = {
+      evalAgentReplay: {
+        targetId: "do:workers/agent-worker:AiChatWorker:agent-1",
+        invocationId: "eval-0",
+        statusBeforeAbort: "running",
+        aborted: true,
+      },
+    };
+    expect(validator.validate(recovered).passed).toBe(true);
+
+    const duplicate = execution("It ran twice.", [
+      {
+        code: 'return { marker: "EVAL_AGENT_REPLAY_OK", completionCount: 1 };',
+        returnValue: { marker: "EVAL_AGENT_REPLAY_OK", completionCount: 1 },
+      },
+      {
+        code: 'return { marker: "EVAL_AGENT_REPLAY_OK", completionCount: 2 };',
+        returnValue: { marker: "EVAL_AGENT_REPLAY_OK", completionCount: 2 },
+      },
+    ]);
+    duplicate.diagnostics = recovered.diagnostics;
+    expect(validator.validate(duplicate).passed).toBe(false);
   });
 });
 

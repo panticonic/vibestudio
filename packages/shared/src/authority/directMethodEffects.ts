@@ -43,6 +43,14 @@ const WORKSPACE_GRAPH_DELETE = new Set([
   "purgeRevokedUserChannelIndexes",
 ]);
 
+// Product WorkspaceDO methods are still direct RPC receivers, so their
+// semantic effect must match the receiver's reviewed declaration exactly.
+// Most entity reads deliberately retain the manage capability because they
+// expose mutable runtime topology; this retention scan is the narrow,
+// inspect-only projection declared by WorkspaceDO itself.
+const WORKSPACE_RUNTIME_STATE_INSPECT = new Set(["entityListExecutionRoots"]);
+const EVAL_RUNTIME_INTRINSIC = new Set(["listRetainedExecutionRoots"]);
+
 const HOST_INTRINSIC_DO_METHODS = new Set(["durableWorkCapabilities"]);
 
 /**
@@ -65,8 +73,14 @@ export function productDirectMethodCapability(className: string, method: string)
     if (BROWSER_DATA_DELETE.has(method)) return "browser-data.delete";
     return "browser-data.write";
   }
-  if (className === "EvalDO") return "runtime.code-execution.manage";
-  if (className === "WorkspaceDO") return "workspace.runtime-state.manage";
+  if (className === "EvalDO") {
+    return EVAL_RUNTIME_INTRINSIC.has(method) ? null : "runtime.code-execution.manage";
+  }
+  if (className === "WorkspaceDO") {
+    return WORKSPACE_RUNTIME_STATE_INSPECT.has(method)
+      ? "workspace.runtime-state.inspect"
+      : "workspace.runtime-state.manage";
+  }
   if (className === "WebhookStoreDO") return "webhooks.manage";
   if (className === "GadWorkspaceDO" && WORKSPACE_GRAPH_DELETE.has(method)) {
     return "workspace.graph.delete";

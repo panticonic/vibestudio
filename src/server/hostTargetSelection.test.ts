@@ -273,4 +273,62 @@ describe("FileHostTargetSelectionStore", () => {
     expect(warning).toHaveBeenCalledOnce();
     warning.mockRestore();
   });
+
+  it("reserves the exact pinned execution before the atomic durable selection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vibestudio-host-target-selection-"));
+    roots.push(root);
+    const filePath = stateLayout(root).hostTargetSelectionsFile;
+    const executionDigest = "e".repeat(64);
+    const reserve = vi.fn(() => {
+      expect(() => new FileHostTargetSelectionStore(root).list()).not.toThrow();
+      return { reservationId: "reservation:selection", epoch: 4 };
+    });
+    const finalize = vi.fn(() => {
+      expect(new FileHostTargetSelectionStore(root).list()[0]?.buildKey).toBe("b".repeat(64));
+    });
+    const store = new FileHostTargetSelectionStore(root, {
+      port: { reserve, finalize },
+      executionDigestForBuild: () => executionDigest,
+    });
+    store.replace({
+      workspaceId: "workspace-a",
+      target: "electron",
+      source: "apps/shell",
+      appId: "@workspace-apps/shell",
+      mode: "pinned-build",
+      buildKey: "b".repeat(64),
+      updatedAt: 1,
+    });
+
+    expect(reserve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner: "host-target-selection",
+        artifacts: [{ buildKey: "b".repeat(64), executionDigest }],
+      })
+    );
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(new FileHostTargetSelectionStore(root).list()).toHaveLength(1);
+    expect(filePath).toContain("host-targets");
+  });
+
+  it("does not write a pinned selection whose execution identity cannot be verified", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vibestudio-host-target-selection-"));
+    roots.push(root);
+    const store = new FileHostTargetSelectionStore(root, {
+      port: { reserve: vi.fn() as never, finalize: vi.fn() },
+      executionDigestForBuild: () => null,
+    });
+    expect(() =>
+      store.replace({
+        workspaceId: "workspace-a",
+        target: "electron",
+        source: "apps/shell",
+        appId: "@workspace-apps/shell",
+        mode: "pinned-build",
+        buildKey: "b".repeat(64),
+        updatedAt: 1,
+      })
+    ).toThrow(/unverifiable build/);
+    expect(new FileHostTargetSelectionStore(root).list()).toEqual([]);
+  });
 });

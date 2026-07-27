@@ -140,6 +140,11 @@ const GROUPS = {
   "context.clone": ["runtime.cloneContext"],
   "subagents.create": ["runtime.createSubagentContext"],
   "context.relationships.record": ["runtime.recordContextEdge"],
+  "development.sessions.destroy": ["development.destroySession"],
+  "development.sessions.cleanup.retry": ["development.retrySessionCleanup"],
+  "development.sessions.force-retire": ["development.forceRetireSession"],
+  "development.native.execute": ["development.start", "development.retry"],
+  "development.runs.force-retire": ["development.forceRetire"],
   "server-logs.read": ["serverLog.query", "serverLog.stats", "serverLog.tail"],
   "settings.read": ["settings.getData"],
   "approvals.read": [

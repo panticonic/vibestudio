@@ -178,7 +178,7 @@ export interface MethodSchema {
   examples?: MethodExample[];
   /** Documented error outcomes. */
   errors?: MethodError[];
-  /** Related methods, as qualified names (e.g. "eval.getRun"). */
+  /** Related methods, as qualified names (e.g. "eval.get"). */
   seeAlso?: string[];
 }
 

@@ -52,6 +52,13 @@ function fixture() {
       createEntity,
       retireEntity: vi.fn(async () => {}),
       resolveContext: vi.fn(async () => null),
+      forkDevelopmentSessionContext: vi.fn(async () => ({
+        contextId: "development-context",
+        parentContextId: "parent-context",
+        parentWorkingHead: { kind: "event" as const, eventId: "event:parent" },
+        childBaseState: { kind: "event" as const, eventId: "event:child" },
+      })),
+      discardDevelopmentSessionContext: vi.fn(async () => {}),
     },
     conduitBlessings: {
       isBlessed: vi.fn(

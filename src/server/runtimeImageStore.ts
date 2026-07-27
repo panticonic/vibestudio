@@ -10,16 +10,20 @@ import {
   saveVersionedJsonFile,
   type VersionedJsonCodec,
 } from "./hostCore/versionedJsonStore.js";
+import {
+  publishExecutionOwner,
+  verifyExecutionArtifactRef,
+  type ExecutionArtifactRefV1,
+  type ExecutionPublicationPort,
+} from "@vibestudio/shared/execution/retention";
 
 export interface RuntimeImageRecord {
   id: string;
   source: string;
   unitName: string;
-  stateHash: string;
-  buildKey: string;
-  executionDigest: string;
+  /** Complete, independently verified executable identity. */
+  artifact: ExecutionArtifactRefV1;
   authorityRequests: UnitAuthorityManifest["requests"];
-  effectiveVersion: string;
   generation: number;
   error?: RuntimeImageRecordError;
   scopeRef?: string;
@@ -40,11 +44,8 @@ const RUNTIME_IMAGE_RECORD_KEYS = [
   "id",
   "source",
   "unitName",
-  "stateHash",
-  "buildKey",
-  "executionDigest",
+  "artifact",
   "authorityRequests",
-  "effectiveVersion",
   "generation",
   "error",
   "scopeRef",
@@ -54,7 +55,7 @@ const RUNTIME_IMAGE_RECORD_KEYS = [
 function runtimeImageRecord(
   value: unknown,
   index: number,
-  schemaLabel = "runtime-images v4"
+  schemaLabel = "runtime-images v6"
 ): RuntimeImageRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${schemaLabel} record ${index} is not an object`);
@@ -70,17 +71,13 @@ function runtimeImageRecord(
   if (typeof record.id !== "string" || record.id.length === 0) invalid("id");
   if (typeof record.source !== "string" || record.source.length === 0) invalid("source");
   if (typeof record.unitName !== "string" || record.unitName.length === 0) invalid("unitName");
-  if (typeof record.stateHash !== "string" || record.stateHash.length === 0) invalid("stateHash");
-  if (typeof record.buildKey !== "string" || record.buildKey.length === 0) invalid("buildKey");
-  if (
-    typeof record.executionDigest !== "string" ||
-    !/^[0-9a-f]{64}$/.test(record.executionDigest)
-  ) {
-    invalid("executionDigest");
-  }
-  if (typeof record.effectiveVersion !== "string" || record.effectiveVersion.length === 0) {
-    invalid("effectiveVersion");
-  }
+  const artifact = (() => {
+    try {
+      return verifyExecutionArtifactRef(record.artifact as ExecutionArtifactRefV1);
+    } catch {
+      return invalid("artifact");
+    }
+  })();
   if (!Number.isSafeInteger(record.generation) || Number(record.generation) < 1) {
     invalid("generation");
   }
@@ -105,30 +102,31 @@ function runtimeImageRecord(
   );
   return {
     ...(record as RuntimeImageRecord),
+    artifact,
     authorityRequests: authority.requests,
   };
 }
 
 function decodeRuntimeImageFile(value: unknown): RuntimeImageFile {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("runtime-images v5 is not an object");
+    throw new Error("runtime-images v6 is not an object");
   }
   const file = value as Record<string, unknown>;
   const unknownKeys = Object.keys(file).filter((key) => key !== "version" && key !== "records");
   if (unknownKeys.length > 0) {
-    throw new Error(`runtime-images v4 has unknown field(s): ${unknownKeys.join(", ")}`);
+    throw new Error(`runtime-images v6 has unknown field(s): ${unknownKeys.join(", ")}`);
   }
-  if (file["version"] !== 5) {
-    throw new Error(`runtime-images v5 has invalid version ${String(file["version"])}`);
+  if (file["version"] !== 6) {
+    throw new Error(`runtime-images v6 has invalid version ${String(file["version"])}`);
   }
   if (!Array.isArray(file["records"])) {
-    throw new Error("runtime-images v5 records must be an array");
+    throw new Error("runtime-images v6 records must be an array");
   }
   const records = file["records"].map((record, index) => runtimeImageRecord(record, index));
   const ids = new Set<string>();
   for (const record of records) {
     if (ids.has(record.id)) {
-      throw new Error(`runtime-images v5 contains duplicate id ${record.id}`);
+      throw new Error(`runtime-images v6 contains duplicate id ${record.id}`);
     }
     ids.add(record.id);
   }
@@ -137,7 +135,7 @@ function decodeRuntimeImageFile(value: unknown): RuntimeImageFile {
 
 const RUNTIME_IMAGE_CODEC: VersionedJsonCodec<RuntimeImageFile> = {
   schemaName: "runtime-images",
-  currentVersion: 5,
+  currentVersion: 6,
   versionKey: "version",
   migrations: [],
   decodeCurrent: decodeRuntimeImageFile,
@@ -150,7 +148,10 @@ export class RuntimeImageStore {
   private readonly filePath: string;
   private readonly records = new Map<string, RuntimeImageRecord>();
 
-  constructor(statePath: string) {
+  constructor(
+    statePath: string,
+    private readonly publicationPort?: ExecutionPublicationPort
+  ) {
     this.filePath = stateLayout(statePath).runtimeImagesFile;
     this.load();
   }
@@ -169,11 +170,30 @@ export class RuntimeImageStore {
     const previous = this.records.get(input.id);
     const record: RuntimeImageRecord = {
       ...input,
+      artifact: verifyExecutionArtifactRef(input.artifact),
       generation: (previous?.generation ?? 0) + 1,
       updatedAt: Date.now(),
     };
-    this.records.set(record.id, record);
-    this.persist();
+    const changed =
+      previous?.artifact.buildKey !== record.artifact.buildKey ||
+      previous?.artifact.executionDigest !== record.artifact.executionDigest;
+    publishExecutionOwner(
+      changed ? this.publicationPort : undefined,
+      {
+        owner: "runtime-image",
+        ownerId: record.id,
+        artifacts: [
+          {
+            buildKey: record.artifact.buildKey,
+            executionDigest: record.artifact.executionDigest,
+          },
+        ],
+      },
+      () => {
+        this.records.set(record.id, record);
+        this.persist();
+      }
+    );
     return record;
   }
 

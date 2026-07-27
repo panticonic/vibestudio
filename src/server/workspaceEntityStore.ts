@@ -36,6 +36,12 @@ import type {
   ContextEdgeByChild,
   ContextEdgeKind,
 } from "@vibestudio/shared/runtime/contextEdges";
+import {
+  publishExecutionOwnerAsync,
+  type ExecutionPublication,
+  type ExecutionPublicationPort,
+} from "@vibestudio/shared/execution/retention";
+import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
 
 const WORKSPACE_DO_CLASS = "WorkspaceDO";
 
@@ -46,6 +52,7 @@ export interface WorkspaceEntityStoreDeps {
   doDispatch: DoDispatcher;
   workspaceId: string;
   entityCache: EntityCache;
+  executionPublicationPort?: ExecutionPublicationPort;
 }
 
 export class WorkspaceEntityStore {
@@ -70,7 +77,11 @@ export class WorkspaceEntityStore {
    * The ONLY sanctioned way to activate a WorkspaceDO-backed entity.
    */
   async activate(input: EntityActivateInput): Promise<EntityRecord> {
-    const record = await this.dispatch<EntityRecord>("entityActivate", input);
+    const record = await publishExecutionOwnerAsync(
+      this.deps.executionPublicationPort,
+      this.publication(input),
+      () => this.dispatch<EntityRecord>("entityActivate", input)
+    );
     this.deps.entityCache._onActivate(record);
     return record;
   }
@@ -88,7 +99,11 @@ export class WorkspaceEntityStore {
 
   /** Complete a reserved executable entity, or atomically advance an active one. */
   async advanceExecution(input: EntityActivateInput): Promise<EntityRecord> {
-    const record = await this.dispatch<EntityRecord>("entityAdvanceExecution", input);
+    const record = await publishExecutionOwnerAsync(
+      this.deps.executionPublicationPort,
+      this.publication(input),
+      () => this.dispatch<EntityRecord>("entityAdvanceExecution", input)
+    );
     this.deps.entityCache._onActivate(record);
     return record;
   }
@@ -134,6 +149,11 @@ export class WorkspaceEntityStore {
       : this.dispatch<EntityRecord[]>("entityListActive");
   }
 
+  /** Active executions plus retired panel-history entries that remain selectable. */
+  listExecutionRoots(): Promise<EntityRecord[]> {
+    return this.dispatch<EntityRecord[]>("entityListExecutionRoots");
+  }
+
   /** All active or retired entity records that establish a context's creator lineage. */
   listByContext(contextId: string): Promise<EntityRecord[]> {
     return this.dispatch<EntityRecord[]>("entityListByContext", contextId);
@@ -172,5 +192,31 @@ export class WorkspaceEntityStore {
   /** The hot cache, for synchronous reads (resolve/resolveActive/resolveContext/…). */
   get cache(): EntityCache {
     return this.deps.entityCache;
+  }
+
+  private publication(input: EntityActivateInput): ExecutionPublication {
+    const ownerId = canonicalEntityId({
+      kind: input.kind,
+      source: input.source.repoPath,
+      className: input.className,
+      key: input.key,
+    });
+    const current = this.deps.entityCache.resolve(ownerId);
+    const unchanged =
+      current?.activeBuildKey === (input.activeBuildKey ?? null) &&
+      current?.activeExecutionDigest === (input.activeExecutionDigest ?? null);
+    return {
+      owner: "runtime-entity",
+      ownerId,
+      artifacts:
+        !unchanged && input.activeBuildKey && input.activeExecutionDigest
+          ? [
+              {
+                buildKey: input.activeBuildKey,
+                executionDigest: input.activeExecutionDigest,
+              },
+            ]
+          : [],
+    };
   }
 }

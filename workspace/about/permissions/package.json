@@ -10,7 +10,25 @@
     "authority": {
       "requests": [
         {
-          "capability": "permissions.read",
+          "capability": "agent.credentials.manage",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "context.boundary",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "critical",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "context.materialize",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -25,15 +43,6 @@
             "prefix": ""
           },
           "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "permissions.revoke",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "critical",
           "evidence": "intentional-broad"
         },
         {
@@ -52,6 +61,60 @@
             "prefix": ""
           },
           "tier": "critical",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "permissions.read",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "permissions.revoke",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "critical",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "subagents.create",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "user-approval.request",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace-service:channel",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace-service:models",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
           "evidence": "intentional-broad"
         }
       ]

@@ -7,6 +7,10 @@ import type { PanelViewLike } from "@vibestudio/shared/panelInterfaces";
 import { domainHash } from "@vibestudio/shared/execution/identity";
 import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
 import {
+  executionArtifactDigest,
+  executionSourceClosureDigest,
+} from "@vibestudio/shared/execution/retention";
+import {
   AppOrchestrator,
   ELECTRON_APP_HOST_CAPABILITIES,
   readBakedElectronApp,
@@ -14,6 +18,8 @@ import {
 
 const EXECUTION_DIGEST_1 = "1".repeat(64);
 const EXECUTION_DIGEST_2 = "2".repeat(64);
+const BAKED_BUILD_KEY = "b".repeat(64);
+const BAKED_EFFECTIVE_VERSION = "e".repeat(64);
 
 function sealedAuthority(executionDigest = EXECUTION_DIGEST_1) {
   return {
@@ -40,19 +46,22 @@ function bakedExecution(artifacts: Array<Record<string, unknown>>) {
       })) as never
     )
   );
-  const source = { repoPath: "apps/shell", effectiveVersion: "e".repeat(64) };
-  const buildInputDigest = "b".repeat(64);
-  const executionDigest = domainHash(
-    "vibestudio/build-v2-execution/v1",
-    canonicalJson({ version: 1, source, buildInputDigest, artifactDigest })
-  );
-  return {
+  const contentRoots = [{ repoPath: "apps/shell", stateHash: `state:${"c".repeat(64)}` }] as const;
+  const unsigned = {
     version: 1 as const,
-    source,
-    buildInputDigest,
+    sourceState: {
+      kind: "workspace" as const,
+      workspaceId: "workspace:test",
+      effectiveVersion: BAKED_EFFECTIVE_VERSION as never,
+      state: { kind: "event" as const, eventId: "event:test" },
+      contentRoots,
+      sourceClosureDigest: executionSourceClosureDigest(contentRoots),
+    },
+    recipeDigest: "a".repeat(64) as never,
+    buildKey: BAKED_BUILD_KEY as never,
     artifactDigest,
-    executionDigest,
   };
+  return { ...unsigned, executionDigest: executionArtifactDigest(unsigned) };
 }
 
 function createPanelView(): PanelViewLike {
@@ -286,8 +295,8 @@ describe("AppOrchestrator", () => {
             capabilities: ["notifications"],
           },
           build: {
-            key: "build-shell",
-            effectiveVersion: "ev-shell",
+            key: BAKED_BUILD_KEY,
+            effectiveVersion: BAKED_EFFECTIVE_VERSION,
             executionDigest: execution.executionDigest,
             execution,
             authorityRequests: [],
@@ -303,7 +312,7 @@ describe("AppOrchestrator", () => {
         source: "apps/shell",
         target: "electron",
         capabilities: ["notifications"],
-        effectiveVersion: "ev-shell",
+        effectiveVersion: BAKED_EFFECTIVE_VERSION,
         executionDigest: execution.executionDigest,
         authorityRequests: [],
       });
@@ -316,7 +325,7 @@ describe("AppOrchestrator", () => {
         ["notifications"],
         {
           source: "apps/shell",
-          effectiveVersion: "ev-shell",
+          effectiveVersion: BAKED_EFFECTIVE_VERSION,
           executionDigest: execution.executionDigest,
           requested: [],
         }
@@ -389,8 +398,8 @@ describe("AppOrchestrator", () => {
             capabilities: [],
           },
           build: {
-            key: "build-shell",
-            effectiveVersion: "ev-shell",
+            key: BAKED_BUILD_KEY,
+            effectiveVersion: BAKED_EFFECTIVE_VERSION,
             executionDigest: execution.executionDigest,
             execution,
             authorityRequests: [],

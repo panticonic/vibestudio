@@ -7,11 +7,14 @@ import {
 } from "../internalDOs/controlPlane.js";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import type { WorkerdManager } from "../workerdManager.js";
-import type { VcsGcScheduler } from "../services/vcsGcScheduler.js";
+import type { GcEpochCoordinator } from "../services/gcEpochCoordinator.js";
+import type { BuildSystemV2 } from "../buildV2/index.js";
+import type { ExecutionPublicationJournal } from "../executionPublicationJournal.js";
 
 export interface VcsDurabilityBootstrapDeps {
   container: Pick<ServiceContainer, "registerManaged">;
   workspaceVcs: WorkspaceVcs;
+  executionPublicationJournal: ExecutionPublicationJournal;
   registerControlPlanePrincipal(input: {
     targetId: string;
     source: string;
@@ -67,16 +70,21 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
   });
 
   deps.container.registerManaged({
-    name: "vcsGcScheduler",
-    dependencies: ["semanticWorkspace"],
+    name: "gcEpochCoordinator",
+    dependencies: ["semanticWorkspace", "buildSystem"],
     async start(resolve) {
       const workspaceVcs = assertPresent(resolve<WorkspaceVcs>("semanticWorkspace"));
-      const { VcsGcScheduler } = await import("../services/vcsGcScheduler.js");
-      const scheduler = new VcsGcScheduler({ workspaceVcs });
-      scheduler.start();
-      return scheduler;
+      const buildSystem = assertPresent(resolve<BuildSystemV2>("buildSystem"));
+      const { GcEpochCoordinator } = await import("../services/gcEpochCoordinator.js");
+      const coordinator = new GcEpochCoordinator({
+        workspaceVcs,
+        buildSystem,
+        publicationJournal: deps.executionPublicationJournal,
+      });
+      coordinator.start();
+      return coordinator;
     },
-    async stop(instance: VcsGcScheduler | null) {
+    async stop(instance: GcEpochCoordinator | null) {
       instance?.stop();
     },
   });

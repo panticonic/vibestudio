@@ -1,5 +1,7 @@
 /** Wire-safe authority facts shared by host-service and direct-RPC dispatch. */
 
+import type { CallerKind } from "./types.js";
+
 export type PrincipalKind = "host" | "user" | "code" | "session" | "mission";
 export type Principal = `${PrincipalKind}:${string}`;
 export type AgentGrantPrincipal = `agent:${string}`;
@@ -16,6 +18,41 @@ export type ResourceScope =
 export interface CapabilityScope {
   capability: string;
   resource: ResourceScope;
+}
+
+/**
+ * A host-normalized evaluated-execution ceiling. It is an attenuation term,
+ * never a grant or receiver allowlist. Relationship and transport facts are
+ * deliberately absent because only the host may derive them.
+ */
+export interface EvalAuthorityManifest {
+  mode: "adaptive" | "strict";
+  effects: "read-only" | "mutable";
+  approvals: "prompt" | "pregranted-only";
+  requests: readonly CapabilityScope[];
+  digest: string;
+}
+
+/**
+ * Receiver-derived provenance for one owner-bound attached-host route.
+ * This is immutable attenuation and relationship evidence, never caller input,
+ * a principal, or a copied grant list.
+ */
+export interface AttachedHostExecutionFact {
+  v: 1;
+  sessionId: string;
+  /** Exact signed routed invocation; propagated only by the child host. */
+  requestId: string;
+  parentHostId: string;
+  childHostId: string;
+  childGenerationId: string;
+  developmentRunId: string;
+  ownerRuntimeId: string;
+  ownerRuntimeKind: CallerKind;
+  ownerUserId: string | null;
+  authorityCeiling: readonly CapabilityScope[];
+  authorityCeilingDigest: string;
+  expiresAt: number;
 }
 
 export interface LiveWorkspaceRelationship {
@@ -120,7 +157,12 @@ export interface AgentExecutionSessionFact {
   eval: {
     runtimeId: string;
     runId: string;
+    authorityManifest: EvalAuthorityManifest;
+    /** Host-minted producer credential for the canonical live event sink. */
+    eventSinkNonce?: string;
   };
+  /** Present only when verified attached transport created this eval run. */
+  attachedHost?: AttachedHostExecutionFact;
   causalParent: {
     logId: string;
     head: string;
@@ -310,7 +352,10 @@ export type AuthorityFailureReasonCode =
   | "receiver-undeclared"
   | "attestation-required"
   | "attestation-invalid"
-  | "eval-read-only";
+  | "eval-read-only"
+  | "run-manifest-denied"
+  | "run-pregranted-only"
+  | "attached-route-ceiling-denied";
 
 export type AuthorityRemediationKind =
   | "request-user-approval"
@@ -322,6 +367,9 @@ export type AuthorityRemediationKind =
   | "refresh-session"
   | "respect-denial"
   | "use-writable-session"
+  | "broaden-run-manifest"
+  | "use-prompt-enabled-run"
+  | "restart-attached-run"
   | "retry-through-host";
 
 /**

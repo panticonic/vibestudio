@@ -14,6 +14,11 @@ function captureServices(overrides: Partial<VcsDurabilityBootstrapDeps> = {}): {
   const deps: VcsDurabilityBootstrapDeps = {
     container: { registerManaged: (service) => services.push(service) },
     workspaceVcs: inert as WorkspaceVcs,
+    executionPublicationJournal: {
+      beginEpoch: vi.fn(() => 1),
+      protectedBuildKeys: vi.fn(() => new Set()),
+      completeEpoch: vi.fn(),
+    } as never,
     registerControlPlanePrincipal: vi.fn(),
     activateSemanticWorkspace: vi.fn(async () => undefined),
     ...overrides,
@@ -32,7 +37,10 @@ describe("wireVcsDurability", () => {
         name: "semanticWorkspace",
         dependencies: ["vcsAttach"],
       },
-      { name: "vcsGcScheduler", dependencies: ["semanticWorkspace"] },
+      {
+        name: "gcEpochCoordinator",
+        dependencies: ["semanticWorkspace", "buildSystem"],
+      },
     ]);
   });
 

@@ -358,7 +358,7 @@ export const METHOD_TIERS = {
     tier: "gated",
     session: "codeOnly",
     rationale:
-      "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+      "G5: read-only host infrastructure diagnostics; §2 durable code identity or host approval plumbing",
   },
   "build.getAboutPages": {
     tier: "open",
@@ -508,6 +508,12 @@ export const METHOD_TIERS = {
     tier: "open",
     session: "family",
     rationale: "Read-only inspection of caller-visible local build provenance",
+  },
+  "build.inspectExecution": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Read-only diagnosis of an immutable execution identity, its owners, and reconstructibility",
   },
   "build.listRecentBuildEvents": {
     tier: "open",
@@ -707,6 +713,194 @@ export const METHOD_TIERS = {
     rationale:
       "Payload-free bounded scheduler health and timing diagnostics; no work content or mutation is exposed",
   },
+  "development.closeSession": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Owner-scoped lifecycle reduction that closes the session record while retaining its semantic child context",
+  },
+  "development.checkpoint": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Owner-scoped Save operation inside an already approved native session; freezes, snapshots, imports, and resumes only its proven-owned tree and process",
+  },
+  "development.destroySession": {
+    tier: "critical",
+    session: "family",
+    rationale: "C3: permanently retires an owned semantic development context",
+  },
+  "development.events": {
+    tier: "open",
+    session: "family",
+    rationale: "Owner-scoped bounded read of durable development build events",
+  },
+  "development.get": {
+    tier: "open",
+    session: "family",
+    rationale: "Owner-scoped read of one durable development build record",
+  },
+  "development.getSession": {
+    tier: "open",
+    session: "family",
+    rationale: "Owner-scoped read of one semantic development session",
+  },
+  "development.inspectNative": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Owner-scoped bounded read of native tool ownership, checkpoint, terminal, and repair state",
+  },
+  "development.list": {
+    tier: "open",
+    session: "family",
+    rationale: "Owner-scoped listing of durable development builds",
+  },
+  "development.listRecipes": {
+    tier: "open",
+    session: "family",
+    rationale: "Read-only discovery of reviewed development build recipes",
+  },
+  "development.listNativeTools": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Read-only live discovery of reviewed native tools and executor-supplied availability reasons",
+  },
+  "development.listSessions": {
+    tier: "open",
+    session: "family",
+    rationale: "Owner-scoped listing of semantic development sessions",
+  },
+  "development.openSession": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Adaptive boundary: semantic mode is a reversible source-only fork; native-tool mode selects exact prepared gated local-tool authority",
+  },
+  "development.forceRetire": {
+    tier: "critical",
+    session: "family",
+    rationale: "C3: permanently abandons a retained development execution and its recovery path",
+  },
+  "development.forceRetireSession": {
+    tier: "critical",
+    session: "family",
+    rationale: "C3: permanently abandons a semantic development context and its recovery path",
+  },
+  "development.keepRunRepair": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Owner-scoped acknowledgement that retains all run effects and diagnostics unchanged",
+  },
+  "development.keepSessionRepair": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Owner-scoped acknowledgement that retains the session context and diagnostics unchanged",
+  },
+  "development.retry": {
+    tier: "gated",
+    session: "family",
+    rationale:
+      "G1: re-runs reviewed project build code through the same exact prepared development.native.execute authority",
+  },
+  "development.retrySessionCleanup": {
+    tier: "critical",
+    session: "family",
+    rationale:
+      "C3: retries the prior explicit destruction of an owned semantic development context",
+  },
+  "development.start": {
+    tier: "gated",
+    session: "family",
+    rationale:
+      "G1: runs reviewed project build code with local OS authority through the exact prepared development.native.execute capability",
+  },
+  "development.stop": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Owner-scoped effect reduction that terminates only the run's proven-owned process group",
+  },
+  "development.stopNativeTool": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Owner-scoped effect reduction that terminates only the native session's proven-owned process group",
+  },
+  "development.readNativeTerminal": {
+    tier: "open",
+    session: "family",
+    rationale: "Owner-scoped cursor-based bounded read of a development terminal",
+  },
+  "development.writeNativeTerminal": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Owner-scoped idempotent interactive input within an already approved native tool session",
+  },
+  "development.resizeNativeTerminal": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Owner-scoped idempotent terminal geometry update within an already approved native tool session",
+  },
+  "developmentClientExecutor.attest": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Opaque nonce acknowledgement by an ordinarily paired child; caller identity and execution facts are host-derived",
+  },
+  "developmentClientExecutor.bindIsolatedManager": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Exact-generation binding of the already paired isolated management device before any client invite exists",
+  },
+  "developmentClientExecutor.claim": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Exact selected desktop reads only its addressed bounded launch manifest and opaque pairing invite",
+  },
+  "developmentClientExecutor.consumeAttestation": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Bound isolated management device consumes one opaque nonce receipt without credential or artifact disclosure",
+  },
+  "developmentClientExecutor.exited": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Selected desktop reduces effects by reporting exact owned-process exit and private-root cleanup",
+  },
+  "developmentClientExecutor.fail": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Selected desktop terminates one pending launch with a bounded diagnostic and no widened authority",
+  },
+  "developmentClientExecutor.launched": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Selected desktop reports an exact owned-process receipt; readiness still requires independent paired-child attestation",
+  },
+  "developmentClientExecutor.readArtifact": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Exact selected desktop reads one integrity-bound artifact chunk from its addressed pending launch",
+  },
+  "developmentClientExecutor.register": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Authenticated desktop refreshes an in-memory reviewed-executor lease bound to its verified runtime and user",
+  },
   "eval.cancel": {
     tier: "open",
     session: "family",
@@ -723,7 +917,12 @@ export const METHOD_TIERS = {
     rationale:
       "Owned-resource release: the host admits disposal only when this caller declared the isolated EvalDO finite at its immutable first activation",
   },
-  "eval.getRun": {
+  "eval.events": {
+    tier: "open",
+    session: "family",
+    rationale: "Owner-scoped bounded read of durable eval lifecycle events",
+  },
+  "eval.get": {
     tier: "open",
     session: "family",
     rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
@@ -739,15 +938,22 @@ export const METHOD_TIERS = {
     rationale:
       "C3: irreversible destruction outside VCS protection; §2 default {code, session} family",
   },
-  "eval.run": {
+  "eval.start": {
     tier: "open",
     session: "family",
     rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
   },
-  "eval.startRun": {
+  "evalEventIngress.publish": {
     tier: "open",
     session: "family",
-    rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    rationale:
+      "Host-internal observability ingress; exact EvalDO/run/owner session binding is re-derived by the receiver",
+  },
+  "evalExecutionRoots.retain": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Host-internal execution-retention ingress; exact EvalDO/run/session binding and immutable artifact identity are re-derived and verified",
   },
   "events.watch": {
     tier: "open",

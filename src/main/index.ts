@@ -378,6 +378,9 @@ const getBrowserSessionPartition = (): string => {
 };
 let panelLocationForWorkspaceRelaunch: PanelLocation | null = null;
 let approvalAttention: ApprovalAttention | null = null;
+let currentHostDevelopmentExecutor:
+  | import("./currentHostDevelopmentClientExecutor.js").CurrentHostDevelopmentClientExecutor
+  | null = null;
 let isCleaningUp = false; // Prevent re-entry in will-quit handler
 type QuitIntent =
   | { kind: "ordinary"; serverDecision: "stop" | "keep" | null }
@@ -2210,6 +2213,31 @@ app.on("ready", async () => {
     }
     serverClientRef = serverSession.serverClient;
     bindHostDirectServerEvents(serverClientRef, handleServerEvent);
+    if (!IS_HEADLESS_HOST) {
+      const { CurrentHostDevelopmentClientExecutor } =
+        await import("./currentHostDevelopmentClientExecutor.js");
+      currentHostDevelopmentExecutor = new CurrentHostDevelopmentClientExecutor({
+        client: serverClientRef,
+        stateRoot: path.join(app.getPath("userData"), "development-clients"),
+        log: (message) => log.warn(message),
+      });
+      serverClientRef.onDirectEvent("development:client-launch-request", (payload) => {
+        void currentHostDevelopmentExecutor?.handleLaunchRequest(payload);
+      });
+      serverClientRef.onDirectEvent("development:client-stop-request", (payload) => {
+        void currentHostDevelopmentExecutor?.handleStopRequest(payload);
+      });
+      await currentHostDevelopmentExecutor.start().catch((error: unknown) => {
+        log.warn(`[development] current-device executor unavailable: ${formatUnknownError(error)}`);
+        currentHostDevelopmentExecutor = null;
+      });
+      const developmentLaunchRequest = process.env["VIBESTUDIO_DEVELOPMENT_LAUNCH_REQUEST"];
+      if (developmentLaunchRequest) {
+        await serverClientRef.call("developmentClientExecutor", "attest", [
+          { requestId: developmentLaunchRequest },
+        ]);
+      }
+    }
     await serverEventSubscriptions.retainAll([
       "build:complete",
       "apps:available",
@@ -2225,6 +2253,8 @@ app.on("ready", async () => {
       "shell-approval:pending-changed",
       "credential:capture-request",
       "notification:action",
+      "development:client-launch-request",
+      "development:client-stop-request",
     ]);
     // Seed badge/seen-set from approvals already pending at launch without
     // firing OS notifications for them — the bar shows them once the shell
@@ -3167,7 +3197,12 @@ app.on("will-quit", (event) => {
 
   const updateQuit = quitIntent.kind === "npm-update";
   const relaunchQuit = quitIntent.kind === "relaunch";
-  const hasResourcesToClean = serverSession || cdpHostProvider || updateQuit || relaunchQuit;
+  const hasResourcesToClean =
+    serverSession ||
+    cdpHostProvider ||
+    currentHostDevelopmentExecutor ||
+    updateQuit ||
+    relaunchQuit;
   if (!hasResourcesToClean) return;
   isCleaningUp = true;
   event.preventDefault();
@@ -3176,6 +3211,12 @@ app.on("will-quit", (event) => {
   console.log("[App] Shutting down...");
 
   const stopPromises: Promise<void>[] = [];
+
+  if (currentHostDevelopmentExecutor) {
+    const executor = currentHostDevelopmentExecutor;
+    currentHostDevelopmentExecutor = null;
+    stopPromises.push(executor.close());
+  }
 
   // Server client (device-paired WS connection) + the detached hub process
   if (serverSession) {

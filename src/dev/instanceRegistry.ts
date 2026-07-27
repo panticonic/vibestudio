@@ -230,7 +230,7 @@ export function unregisterDevInstance(repoRoot: string, id: string): void {
   fs.rmSync(registryLockPath(repoRoot, id), { force: true });
 }
 
-export function resolveDevInstance(repoRoot: string, id: string): DevInstanceRecord {
+export function readDevInstanceRecord(repoRoot: string, id: string): DevInstanceRecord {
   const file = registryPath(repoRoot, id);
   let value: unknown;
   try {
@@ -276,15 +276,65 @@ export function resolveDevInstance(repoRoot: string, id: string): DevInstanceRec
   ) {
     throw new Error(`Vibestudio instance record ${file} is invalid`);
   }
+  return record as DevInstanceRecord;
+}
+
+export function resolveDevInstance(repoRoot: string, id: string): DevInstanceRecord {
+  const record = readDevInstanceRecord(repoRoot, id);
   try {
     process.kill(record.supervisorPid, 0);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ESRCH") {
       throw new Error(
-        `Vibestudio instance ${JSON.stringify(id)} is no longer running (stale record: ${file})`
+        `Vibestudio instance ${JSON.stringify(id)} is no longer running ` +
+          `(stale record: ${registryPath(repoRoot, id)})`
       );
     }
     throw error;
   }
-  return record as DevInstanceRecord;
+  return record;
+}
+
+/** Transfer an exact surviving generation to a new trusted supervisor PID. */
+export function adoptDevInstance(
+  repoRoot: string,
+  expected: Pick<DevInstanceRecord, "id" | "generationId" | "root">,
+  supervisorPid = process.pid
+): DevInstanceRecord {
+  const current = readDevInstanceRecord(repoRoot, expected.id);
+  if (
+    current.generationId !== expected.generationId ||
+    current.root !== path.resolve(expected.root)
+  ) {
+    throw Object.assign(new Error("Developer instance generation changed before adoption"), {
+      code: "EOWNERSHIP",
+    });
+  }
+  if (current.supervisorPid !== supervisorPid) {
+    try {
+      process.kill(current.supervisorPid, 0);
+      throw Object.assign(
+        new Error(`Developer instance still has live supervisor ${current.supervisorPid}`),
+        { code: "EOWNERSHIP" }
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+  }
+  const lockPath = registryLockPath(current.repoRoot, current.id);
+  fs.rmSync(lockPath, { force: true });
+  const fd = fs.openSync(lockPath, "wx", 0o600);
+  try {
+    fs.writeFileSync(fd, `${supervisorPid}\n`, "utf8");
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  const adopted = { ...current, supervisorPid };
+  writeFileAtomicSync(
+    registryPath(adopted.repoRoot, adopted.id),
+    `${JSON.stringify(adopted, null, 2)}\n`,
+    { mode: 0o600 }
+  );
+  return adopted;
 }

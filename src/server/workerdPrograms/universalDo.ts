@@ -141,6 +141,17 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
       return new Response(null, { status: 204 });
     }
 
+    if (parts[1] === "__vibestudio_fault_abort") {
+      if (request.headers.get("X-Vibestudio-Lifecycle-Secret") !== this.env.WORKERD_LOADER_SECRET) {
+        return new Response("Forbidden", { status: 403 });
+      }
+      // Abort only the loaded userland object. Its SQLite storage and the
+      // universal host stay live, so the next ordinary request constructs a
+      // genuinely fresh vessel over the same durable state.
+      this.ctx.facets.abort("do", new Error("System-test injected vessel crash"));
+      return new Response(null, { status: 204 });
+    }
+
     const identity = `${source}:${className}`;
     const egressIdentity = `do:${identity}:${userKey}`;
     const loaderHeaders = { "X-Vibestudio-Loader-Secret": this.env.WORKERD_LOADER_SECRET };

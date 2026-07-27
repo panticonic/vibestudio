@@ -29,6 +29,7 @@ import {
 } from "@vibestudio/unit-host";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { EventName } from "@vibestudio/shared/events";
+import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import {
   isAuthorizedChromeAppSource,
@@ -330,6 +331,7 @@ export interface AppHostDeps {
   notificationService?: NotificationServiceLike;
   approvalCoordinator?: UnitApprovalCoordinator<UnitBatchEntry>;
   entityCache?: Pick<EntityCache, "resolve" | "listActive" | "_onActivate" | "_onRetire">;
+  executionPublicationPort?: ExecutionPublicationPort;
   connectionGrants?: Pick<ConnectionGrantService, "grant" | "revokeForPrincipal">;
   getGatewayUrl(): string;
   getReactNativeAppArtifactBaseUrl(): string;
@@ -376,10 +378,44 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
         lastErrorDetails: entry.lastErrorDetails ?? null,
         activationTrust: entry.activationTrust ?? null,
       }),
+      publicationPort: deps.executionPublicationPort,
+      publicationKeyForEntry: (entry) =>
+        JSON.stringify([
+          entry.activeBundleKey,
+          ...entry.previousVersions.map((version) => version.activeBundleKey),
+        ]),
+      publicationForEntry: (entry) => {
+        const buildKeys = [
+          ...(entry.activeBundleKey ? [entry.activeBundleKey] : []),
+          ...entry.previousVersions.map((version) => version.activeBundleKey),
+        ];
+        return {
+          owner: entry.target === "terminal" ? "terminal-app" : "app-generation",
+          ownerId: entry.name,
+          artifacts: buildKeys.map((buildKey) => {
+            const executionDigest =
+              deps.buildSystem.getBuildByKey?.(buildKey)?.metadata.execution?.executionDigest;
+            if (!executionDigest) {
+              throw new Error(`App ${entry.name} references unverifiable build ${buildKey}`);
+            }
+            return { buildKey, executionDigest };
+          }),
+        };
+      },
     });
     this.hostTargetSelections = new HostTargetSelectionPolicy({
       workspaceId: deps.workspaceId,
-      store: new FileHostTargetSelectionStore(deps.statePath),
+      store: new FileHostTargetSelectionStore(
+        deps.statePath,
+        deps.executionPublicationPort
+          ? {
+              port: deps.executionPublicationPort,
+              executionDigestForBuild: (buildKey) =>
+                deps.buildSystem.getBuildByKey?.(buildKey)?.metadata.execution?.executionDigest ??
+                null,
+            }
+          : undefined
+      ),
       listCandidates: (target) => this.listHostTargetCandidates(target),
       listVersions: (appId) => this.listAppVersions(appId),
       listEntries: () => this.registry.list(),
@@ -547,6 +583,11 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
   /** Declared apps are classified (entries + staged approvals); builds may still run. */
   async whenDeclarationsStaged(): Promise<void> {
     await this.unitHost.whenDeclarationsStaged();
+  }
+
+  /** Durable host-target selections that may pin a non-current build. */
+  listPersistedHostTargetSelections(): HostTargetSelection[] {
+    return this.hostTargetSelections.listPersisted();
   }
 
   async shutdown(): Promise<void> {

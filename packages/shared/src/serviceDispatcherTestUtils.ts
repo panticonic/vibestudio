@@ -60,7 +60,17 @@ export function createTestExecutionSession(input: {
       repoPath,
       effectiveVersion,
     },
-    eval: { runtimeId: input.runtimeId, runId: `run:${input.runtimeId}` },
+    eval: {
+      runtimeId: input.runtimeId,
+      runId: `run:${input.runtimeId}`,
+      authorityManifest: {
+        mode: "adaptive",
+        effects: "mutable",
+        approvals: "prompt",
+        requests: [],
+        digest: "0".repeat(64),
+      },
+    },
     causalParent: null,
     issuedAt: now,
     expiresAt: now + 60_000,

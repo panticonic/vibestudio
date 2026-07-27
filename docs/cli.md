@@ -298,7 +298,7 @@ instances isolate workspace state; separate named agent sessions provide truly
 parallel eval scopes within an instance.
 Exact test names are used to avoid accidental substring expansion.
 
-The default system-test model is `openai-codex:gpt-5.4-mini` with no implicit
+The default system-test model is `openai-codex:gpt-5.3-codex-spark` with no implicit
 usage-limit fallback. `doctor` checks that exact model, and run metadata records
 the same route.
 Tests have no implicit wall-clock deadline. Pass `--test-timeout-ms N` only to

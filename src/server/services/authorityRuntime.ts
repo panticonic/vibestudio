@@ -20,6 +20,48 @@ import { getProductBootManifest } from "../internalDOs/productBootManifest.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { productAuthorityGrants } from "./productAuthorityGrants.js";
 
+/** The exact blessed conduit allowed to create an orchestrator test session. */
+export function isBlessedSystemTestConduit(
+  caller: VerifiedCaller,
+  isConduitBlessed: (identity: NonNullable<VerifiedCaller["code"]>) => boolean
+): boolean {
+  const code = caller.code;
+  return Boolean(
+    caller.runtime.kind === "do" &&
+    caller.runtime.id.startsWith("do:workers/system-test-runner:SystemTestRunnerDO:") &&
+    code?.repoPath === "workers/system-test-runner" &&
+    code.executionDigest &&
+    isConduitBlessed(code)
+  );
+}
+
+/**
+ * The trust predicate for hidden headless-test seams after session admission.
+ * A test policy or code principal alone is deliberately insufficient: the
+ * caller must be the blessed conduit carrying its exact live execution fact.
+ */
+export function isAttestedSystemTestHarness(
+  caller: VerifiedCaller,
+  isConduitBlessed: (identity: NonNullable<VerifiedCaller["code"]>) => boolean
+): boolean {
+  const executionSession = caller.executionSession;
+  const outerRunId = executionSession?.eval.runId;
+  const code = caller.code;
+  const harness = executionSession?.harness;
+  return Boolean(
+    caller.runtime.kind === "do" &&
+    caller.runtime.id.startsWith("do:vibestudio/internal:EvalDO:") &&
+    executionSession?.eval.runtimeId === caller.runtime.id &&
+    outerRunId?.startsWith("system-test-runner:") &&
+    code?.repoPath === "workers/system-test-runner" &&
+    code.executionDigest &&
+    isConduitBlessed(code) &&
+    harness?.repoPath === code.repoPath &&
+    harness.effectiveVersion === code.effectiveVersion &&
+    harness.principal === `code:${code.repoPath}@${code.executionDigest}`
+  );
+}
+
 export interface AuthorityFacts {
   workspaceId: string;
   workspaceMember: boolean;

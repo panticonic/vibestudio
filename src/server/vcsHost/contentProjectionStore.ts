@@ -631,8 +631,15 @@ export class ContentProjectionStore {
     }
   }
 
-  /** Copy (never hardlink — editable worktrees must not share the CAS inode)
-   *  a blob to `absPath` via tmp+rename. */
+  /**
+   * Copy (never hardlink — editable worktrees must not share the CAS inode) a
+   * blob to `absPath` via tmp+rename.
+   *
+   * COPYFILE_FICLONE asks reflink-capable filesystems for copy-on-write
+   * extents and transparently falls back to an ordinary copy elsewhere. This
+   * keeps semantic and development checkouts independently writable while
+   * avoiding a full monorepo byte copy when the host can do better.
+   */
   private async writeMaterializedFile(
     source: string,
     absPath: string,
@@ -643,7 +650,7 @@ export class ContentProjectionStore {
       `.${path.basename(absPath)}.${process.pid}.${randomUUID()}.tmp`
     );
     await fsp.rm(tmp, { force: true });
-    await fsp.copyFile(source, tmp);
+    await fsp.copyFile(source, tmp, fs.constants.COPYFILE_FICLONE);
     await fsp.chmod(tmp, opts.executable ? 0o755 : 0o644);
     // The target may exist as a directory (dir→file transition) — rename onto a
     // directory fails (EISDIR/ENOTEMPTY), so clear it first. (rename atomically

@@ -10,6 +10,8 @@ import {
   callerMatchesMissionHarness,
   directAuthorityAudience,
   directAuthorityCapability,
+  isBlessedSystemTestConduit,
+  isAttestedSystemTestHarness,
   testPolicyUserlandDecision,
 } from "./authorityRuntime.js";
 import {
@@ -18,9 +20,75 @@ import {
 } from "../internalDOs/internalDoLoader.js";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 
-const digest = "a".repeat(64);
+const effectiveVersion = "a".repeat(64);
+const executionDigest = "b".repeat(64);
+const digest = "c".repeat(64);
 
 describe("authority runtime", () => {
+  it("separates the sealed test conduit from its admitted EvalDO harness", () => {
+    const conduit = createVerifiedCaller(
+      "do:workers/system-test-runner:SystemTestRunnerDO:case-1",
+      "do",
+      {
+        callerId: "do:workers/system-test-runner:SystemTestRunnerDO:case-1",
+        callerKind: "do",
+        repoPath: "workers/system-test-runner",
+        effectiveVersion,
+        executionDigest,
+      }
+    );
+    const harness = createVerifiedCaller(
+      "do:vibestudio/internal:EvalDO:system-test-doctor",
+      "do",
+      {
+        callerId: "do:vibestudio/internal:EvalDO:system-test-doctor",
+        callerKind: "do",
+        repoPath: "workers/system-test-runner",
+        effectiveVersion,
+        executionDigest,
+      },
+      null,
+      null,
+      {
+        harness: {
+          repoPath: "workers/system-test-runner",
+          effectiveVersion,
+          principal: `code:workers/system-test-runner@${executionDigest}`,
+        },
+        eval: {
+          runId: "system-test-runner:self-development:case-1",
+          runtimeId: "do:vibestudio/internal:EvalDO:system-test-doctor",
+        },
+      } as never
+    );
+    expect(isBlessedSystemTestConduit(conduit, () => true)).toBe(true);
+    expect(isAttestedSystemTestHarness(conduit, () => true)).toBe(false);
+    expect(isBlessedSystemTestConduit(harness, () => true)).toBe(false);
+    expect(isAttestedSystemTestHarness(harness, () => true)).toBe(true);
+    expect(
+      isAttestedSystemTestHarness(
+        {
+          ...harness,
+          executionSession: {
+            ...harness.executionSession!,
+            eval: { ...harness.executionSession!.eval, runId: "eval:ordinary" },
+          },
+        },
+        () => true
+      )
+    ).toBe(false);
+    expect(
+      isAttestedSystemTestHarness(
+        {
+          ...harness,
+          runtime: { ...harness.runtime, id: "do:vibestudio/internal:EvalDO:another" },
+        },
+        () => true
+      )
+    ).toBe(false);
+    expect(isAttestedSystemTestHarness(harness, () => false)).toBe(false);
+  });
+
   it("matches test userland approvals through bounded resource scopes", () => {
     const caller = createVerifiedCaller("agent:test", "agent", null, null, null, null, {
       policyId: "test:terminal-roundtrip",

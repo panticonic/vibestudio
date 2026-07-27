@@ -18,6 +18,7 @@ import { SEMANTIC_CONTROL_PLANE } from "../internalDOs/controlPlane.js";
 import type { WorkerdManager, WorkerdWorkspaceProvider } from "../workerdManager.js";
 import type { DORef } from "../workerdRpcRelay.js";
 import type { RpcServer } from "../rpcServer.js";
+import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
 import { isHostIntrinsicDirectMethod } from "@vibestudio/shared/authority/directMethodEffects";
 
 export interface WorkerdGatewayBootstrapConfig {
@@ -41,6 +42,7 @@ export interface WorkerdBootstrapDeps {
   getInternalDoEnv(className: string): Record<string, string>;
   runtimeDiagnostics: Pick<RuntimeDiagnosticsStore, "record">;
   eventService: Pick<EventService, "emit">;
+  executionPublicationPort?: ExecutionPublicationPort;
   /**
    * Join a registered image identity to its current host-owned execution
    * session and context policy. Egress is long-lived, so these facts must be
@@ -184,6 +186,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         workspaceId: deps.workspaceId,
         workspacePath: deps.workspacePath,
         statePath: deps.statePath,
+        executionPublicationPort: deps.executionPublicationPort,
         routeRegistry: deps.routeRegistry,
         getProxyPort: (caller) => deps.egressProxy.startForCaller(caller),
         getSharedEgressPort: () => deps.egressProxy.startShared(egressSecret),

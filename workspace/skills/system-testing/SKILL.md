@@ -243,7 +243,7 @@ There is no default per-test harness deadline. An explicit deadline is an
 operator cancellation boundary, never a workaround for effect, transport, or
 Durable Object liveness bugs.
 
-The default model is pinned to `openai-codex:gpt-5.4-mini`. It has no implicit
+The default model is pinned to `openai-codex:gpt-5.3-codex-spark`. It has no implicit
 usage-limit fallback: doctor and every spawned test agent name the same single
 model, so a provider failure remains visible instead of silently changing the
 experiment. An explicit model override is only for model-specific diagnosis.

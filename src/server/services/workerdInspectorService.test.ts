@@ -53,12 +53,15 @@ describe("workerdInspectorService", () => {
   it("selects one runtime.inspect leaf before issuing an endpoint", async () => {
     const service = createWorkerdInspectorService(makeDeps());
     const prepare = service.authorityPreparation?.["workerdInspector.getEndpoint.target"];
-    expect(prepare?.(panelCtx(), ["core:user:worker-host"])).toEqual([
-      expect.objectContaining({
-        capability: "runtime.inspect",
-        resourceKey: "caller:panel:panels/chat:1",
-      }),
-    ]);
+    expect(prepare?.(panelCtx(), ["core:user:worker-host"])).toEqual({
+      selections: [
+        expect.objectContaining({
+          capability: "runtime.inspect",
+          resourceKey: "caller:panel:panels/chat:1",
+        }),
+      ],
+      payload: null,
+    });
   });
 
   it("reports unavailability only after authority has passed", async () => {
@@ -73,6 +76,6 @@ describe("workerdInspectorService", () => {
     const prepare = service.authorityPreparation?.["workerdInspector.getEndpoint.target"];
     expect(
       prepare?.({ caller: createVerifiedCaller("shell:main", "shell") }, ["core:user:worker-host"])
-    ).toEqual([]);
+    ).toEqual({ selections: [], payload: null });
   });
 });

@@ -98,6 +98,59 @@ function noEffectApplication(input: {
 }
 
 describe("SemanticVcsStore reduced spine", () => {
+  it("proves exact event and application ancestry with a hard traversal bound", async () => {
+    const sql = await createInMemorySql();
+    createSemanticVcsSchema(sql);
+    const store = new SemanticVcsStore(sql, () => timestamp);
+    const initial = store.initializeWorkspace("context:lineage", "command:genesis");
+    const genesis = initial.committed.ref;
+    const root = store.stateRoot(genesis);
+    sql.exec(
+      `INSERT INTO gad_work_unit_applications
+       (application_id, work_unit_id, basis_kind, basis_id,
+        result_workspace_fact_root_id, semantic_protocol)
+       VALUES ('application:first', 'work-unit:first', 'event', ?, ?, ?)`,
+      genesis.eventId,
+      root,
+      SEMANTIC_PROTOCOL
+    );
+    sql.exec(
+      `INSERT INTO gad_workspace_events
+       (event_id, command_id, kind, result_workspace_fact_root_id, message, created_at)
+       VALUES ('event:committed', 'command:commit', 'commit', ?, NULL, ?)`,
+      root,
+      timestamp
+    );
+    sql.exec(
+      `INSERT INTO gad_workspace_event_parents (event_id, ordinal, parent_event_id)
+       VALUES ('event:committed', 0, ?)`,
+      genesis.eventId
+    );
+    sql.exec(
+      `INSERT INTO gad_workspace_event_applications (event_id, ordinal, application_id)
+       VALUES ('event:committed', 0, 'application:first')`
+    );
+    sql.exec(
+      `INSERT INTO gad_work_unit_applications
+       (application_id, work_unit_id, basis_kind, basis_id,
+        result_workspace_fact_root_id, semantic_protocol)
+       VALUES ('application:second', 'work-unit:second', 'event', 'event:committed', ?, ?)`,
+      root,
+      SEMANTIC_PROTOCOL
+    );
+    const first = { kind: "application" as const, applicationId: "application:first" };
+    const committed = { kind: "event" as const, eventId: "event:committed" };
+    const second = { kind: "application" as const, applicationId: "application:second" };
+
+    expect(store.isStateAncestor(genesis, second, 3)).toBe(true);
+    expect(store.isStateAncestor(first, committed, 1)).toBe(true);
+    expect(store.isStateAncestor(committed, second, 1)).toBe(true);
+    expect(store.isStateAncestor(second, first, 3)).toBe(false);
+    expect(() => store.isStateAncestor(first, second, 1)).toThrowError(
+      expect.objectContaining({ code: "ScopeTooLarge" })
+    );
+  });
+
   it("stores intrinsic content coordinates and has no applied-change mapping side table", async () => {
     const sql = await createInMemorySql();
     createSemanticVcsSchema(sql);

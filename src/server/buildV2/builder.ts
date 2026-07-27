@@ -1108,6 +1108,11 @@ function relativeBuildOutputPath(outdir: string, outputPath: string): string {
   return path.relative(outdir, path.resolve(outputPath)).replace(/\\/g, "/");
 }
 
+function relativeModuleSpecifier(fromDir: string, targetPath: string): string {
+  const relative = path.relative(fromDir, targetPath).replace(/\\/g, "/");
+  return relative.startsWith(".") ? relative : `./${relative}`;
+}
+
 /**
  * Inject standard transforms into a custom/template HTML file:
  * importmap, CSP, base href, bundle.js → __loader.js replacement.
@@ -2638,7 +2643,15 @@ async function buildWorker(
   const exposePath = path.join(outdir, "_expose.js");
   fs.writeFileSync(exposePath, generateExposeModuleCode(exposeModules, "worker"));
 
-  const wrapperCode = generateWorkerEntry(exposePath, entryFile);
+  // Keep generated module specifiers independent of the unique scratch
+  // directory suffix. The suffix exists for cross-process build isolation and
+  // must not leak into artifact bytes or their inline source map: rebuilding
+  // the same exact semantic state after a cold restart must reproduce the same
+  // execution identity.
+  const wrapperCode = generateWorkerEntry(
+    relativeModuleSpecifier(outdir, exposePath),
+    relativeModuleSpecifier(outdir, entryFile)
+  );
   const wrapperPath = path.join(outdir, "_entry.js");
   fs.writeFileSync(wrapperPath, wrapperCode);
 
@@ -2666,7 +2679,8 @@ async function buildWorker(
 
   try {
     await esbuild.build({
-      entryPoints: [wrapperPath],
+      entryPoints: [relativeModuleSpecifier(outdir, wrapperPath)],
+      absWorkingDir: outdir,
       bundle: true,
       platform: "neutral",
       target: "es2022",

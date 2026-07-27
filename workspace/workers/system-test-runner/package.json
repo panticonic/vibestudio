@@ -101,6 +101,7 @@
     }
   },
   "dependencies": {
+    "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "@workspace/runtime": "workspace:*"
   },

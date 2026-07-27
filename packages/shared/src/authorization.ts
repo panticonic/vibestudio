@@ -20,6 +20,7 @@ export type {
   CapabilityScope,
   ContextIntegrityFact,
   AgentExecutionSessionFact,
+  AttachedHostExecutionFact,
   LiveWorkspaceRelationship,
   Principal,
   PrincipalKind,
@@ -541,6 +542,22 @@ export function scopeCovers(scope: ResourceScope, key: string): boolean {
     }
     case "network":
       return true;
+  }
+}
+
+/** Exact set containment between two semantic resource envelopes. */
+export function resourceScopeContains(parent: ResourceScope, child: ResourceScope): boolean {
+  if (child.kind === "exact") return scopeCovers(parent, child.key);
+  if (parent.kind !== child.kind) return false;
+  switch (parent.kind) {
+    case "prefix":
+      return child.kind === "prefix" && child.prefix.startsWith(parent.prefix);
+    case "origin":
+      return child.kind === "origin" && child.origin === parent.origin;
+    case "domain":
+      return child.kind === "domain" && child.domain === parent.domain;
+    case "network":
+      return child.kind === "network";
   }
 }
 

@@ -8,6 +8,7 @@ import { setUserDataPath } from "@vibestudio/env-paths";
 
 import { buildUnit, initBuilder } from "./builder.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
+import { setBuildExecutionIdentityContext } from "./buildStore.js";
 beforeAll(() => {
   initBuilder(path.resolve(__dirname, "../../../node_modules"));
   setBuildSourceProvider(workingTreeSourceProvider());
@@ -15,6 +16,8 @@ beforeAll(() => {
 afterAll(() => setBuildSourceProvider(null));
 import { discoverPackageGraph } from "./packageGraph.js";
 import { clearBuildProvidersForTests, registerBuildProvider } from "./buildProviderRegistry.js";
+
+const SOURCE_STATE_HASH = `state:${"c".repeat(64)}`;
 
 function git(cwd: string, args: string[]): void {
   execFileSync("git", args, {
@@ -31,6 +34,10 @@ describe("buildUnit app builds", () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-app-build-"));
     workspaceRoot = path.join(root, "workspace");
     setUserDataPath(path.join(root, "state"));
+    setBuildExecutionIdentityContext({
+      workspaceId: "workspace:test",
+      semanticStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
+    });
     clearBuildProvidersForTests();
   });
 
@@ -94,7 +101,7 @@ describe("buildUnit app builds", () => {
       "a".repeat(64),
       graph,
       workspaceRoot,
-      "state:test"
+      SOURCE_STATE_HASH
     );
     const html = result.artifacts.find((artifact) => artifact.path === "index.html")?.content;
 
@@ -216,7 +223,7 @@ describe("buildUnit app builds", () => {
       "b".repeat(64),
       graph,
       workspaceRoot,
-      "state:test"
+      SOURCE_STATE_HASH
     );
 
     expect(result.metadata.details).toMatchObject({ kind: "app", target: "terminal" });
@@ -296,13 +303,13 @@ describe("buildUnit app builds", () => {
       "c".repeat(64),
       graph,
       workspaceRoot,
-      "state:test"
+      SOURCE_STATE_HASH
     );
 
     expect(result.metadata).toMatchObject({
       kind: "app",
       name: "@workspace-apps/mobile",
-      sourceStateHash: "state:test",
+      sourceStateHash: SOURCE_STATE_HASH,
       details: {
         kind: "app",
         target: "react-native",
@@ -317,7 +324,7 @@ describe("buildUnit app builds", () => {
         },
       },
     });
-    expect(result.sourceStateHash).toBe("state:test");
+    expect(result.sourceStateHash).toBe(SOURCE_STATE_HASH);
     expect(result.artifacts).toEqual([
       expect.objectContaining({
         path: "ios/main.hbc",
@@ -401,7 +408,7 @@ describe("buildUnit app builds", () => {
       "d".repeat(64),
       graph,
       workspaceRoot,
-      "state:test"
+      SOURCE_STATE_HASH
     );
     const primaryPath = result.artifacts.find((artifact) => artifact.role === "primary")?.path;
     const html = result.artifacts.find((artifact) => artifact.path === "index.html")?.content;
@@ -476,7 +483,7 @@ describe("buildUnit app builds", () => {
       "f".repeat(64),
       graph,
       workspaceRoot,
-      "state:test"
+      SOURCE_STATE_HASH
     );
     const primary = result.artifacts.find((artifact) => artifact.role === "primary");
     const lazyArtifacts = result.artifacts.filter(
@@ -524,7 +531,7 @@ describe("buildUnit app builds", () => {
         "e".repeat(64),
         graph,
         workspaceRoot,
-        "state:test"
+        SOURCE_STATE_HASH
       )
     ).rejects.toThrow(/target must be "electron", "react-native", or "terminal"/);
   });

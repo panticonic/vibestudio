@@ -90,9 +90,12 @@ async function postPairing(ready: HubReadyPayload): Promise<PairingResponse> {
  * credential remains instance-scoped and all later CLI calls use ordinary
  * authenticated routing.
  */
-export async function bootstrapInstanceCli(rawReady: unknown): Promise<DevCliBootstrapResult> {
+export async function bootstrapInstanceCli(
+  rawReady: unknown,
+  options: { credentialFile?: string } = {}
+): Promise<DevCliBootstrapResult> {
   const ready = HubReadyPayloadSchema.parse(rawReady);
-  const existing = loadCliCredentials();
+  const existing = loadCliCredentials(options.credentialFile);
   if (existing) {
     if (existing.serverId !== ready.serverId) {
       throw new Error(
@@ -140,6 +143,6 @@ export async function bootstrapInstanceCli(rawReady: unknown): Promise<DevCliBoo
     workspacePairing,
     pairedAt: Date.now(),
   };
-  saveCliCredentials(credentials);
+  saveCliCredentials(credentials, options.credentialFile);
   return { status: "paired", workspaceName: route.workspace };
 }

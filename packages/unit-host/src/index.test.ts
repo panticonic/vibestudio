@@ -57,6 +57,31 @@ function entry(overrides: Partial<UnitRegistryEntryBase> = {}): UnitRegistryEntr
 }
 
 describe("UnitRegistry", () => {
+  it("does not publish an owner record when exact execution reservation fails", () => {
+    const root = tempRoot();
+    const registry = new UnitRegistry<UnitRegistryEntryBase>({
+      statePath: root,
+      unitKind: "extension",
+      publicationPort: {
+        reserve() {
+          throw new Error("execution identity mismatch");
+        },
+        finalize() {},
+      },
+      publicationKeyForEntry: (value) => value.activeBundleKey ?? "",
+      publicationForEntry: (value) => ({
+        owner: "extension-generation",
+        ownerId: value.name,
+        artifacts: [{ buildKey: value.activeBundleKey!, executionDigest: "e".repeat(64) }],
+      }),
+    });
+
+    expect(() => registry.upsert(entry({ activeBundleKey: "b".repeat(64) }))).toThrow(
+      /identity mismatch/
+    );
+    expect(registry.list()).toEqual([]);
+  });
+
   it("persists entries by unit kind under the shared units path", () => {
     const root = tempRoot();
     const registry = new UnitRegistry<UnitRegistryEntryBase>({

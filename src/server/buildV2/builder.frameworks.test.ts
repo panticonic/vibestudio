@@ -38,11 +38,13 @@ import { setUserDataPath } from "@vibestudio/env-paths";
 
 import { buildUnit, initBuilder } from "./builder.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
+import { setBuildExecutionIdentityContext } from "./buildStore.js";
 beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
 afterAll(() => setBuildSourceProvider(null));
 import { discoverPackageGraph } from "./packageGraph.js";
 
 const REPO_ROOT = process.cwd();
+const SOURCE_STATE_HASH = `state:${"c".repeat(64)}`;
 
 function git(cwd: string, args: string[]): void {
   execFileSync("git", args, { cwd, stdio: ["ignore", "ignore", "pipe"] });
@@ -74,6 +76,10 @@ describe("buildUnit framework-agnostic panel builds", () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-frameworks-build-"));
     workspaceRoot = path.join(root, "workspace");
     setUserDataPath(path.join(root, "state"));
+    setBuildExecutionIdentityContext({
+      workspaceId: "workspace:test",
+      semanticStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
+    });
     // Resolve esbuild-svelte / svelte (and any other npm deps) from the repo's
     // real node_modules instead of a fresh install.
     initBuilder([path.join(REPO_ROOT, "node_modules")]);
@@ -178,7 +184,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
       "a".repeat(64),
       graph,
       workspaceRoot,
-      "state:test"
+      SOURCE_STATE_HASH
     );
 
     expect(result.metadata.framework).toBe("vanilla");
@@ -227,7 +233,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
       "b".repeat(64),
       graph,
       workspaceRoot,
-      "state:test"
+      SOURCE_STATE_HASH
     );
 
     expect(result.metadata.framework).toBe("svelte");

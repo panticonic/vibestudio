@@ -72,5 +72,5 @@
     "webhook handlers",
     "System Agent"
   ],
-  "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#bootstrap-acyclic"
+  "parityAssertion": "generated-census:bootstrap"
 }

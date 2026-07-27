@@ -26,15 +26,18 @@ describe("externalOpenService", () => {
     const service = createExternalOpenService({ eventService: new EventService() });
     const prepare = service.authorityPreparation?.["externalOpen.openExternal.target"];
     expect(prepare?.({ caller: panelCaller() }, ["https://example.com/path?q=1#fragment"])).toEqual(
-      [
-        expect.objectContaining({
-          capability: "external.open",
-          resourceKey: "https://example.com",
-          challenge: expect.objectContaining({
-            resource: expect.objectContaining({ value: "https://example.com" }),
+      {
+        selections: [
+          expect.objectContaining({
+            capability: "external.open",
+            resourceKey: "https://example.com",
+            challenge: expect.objectContaining({
+              resource: expect.objectContaining({ value: "https://example.com" }),
+            }),
           }),
-        }),
-      ]
+        ],
+        payload: null,
+      }
     );
   });
 
@@ -123,7 +126,7 @@ describe("externalOpenService", () => {
       prepare?.({ caller: createVerifiedCaller("shell:main", "shell") }, [
         "https://example.com/path",
       ])
-    ).toEqual([]);
+    ).toEqual({ selections: [], payload: null });
   });
 
   it("emits only after dispatcher authority and returns the unified decision", async () => {
@@ -160,15 +163,18 @@ describe("externalOpenService", () => {
     const service = createExternalOpenService({ eventService: new EventService() });
     const prepare = service.authorityPreparation?.["externalOpen.openExternal.target"];
 
-    expect(prepare?.({ caller: panelCaller() }, ["tel:+4912345"])).toEqual([
-      expect.objectContaining({
-        capability: "external.open",
-        resourceKey: "tel:",
-        challenge: expect.objectContaining({
-          resource: expect.objectContaining({ value: "tel:" }),
+    expect(prepare?.({ caller: panelCaller() }, ["tel:+4912345"])).toEqual({
+      payload: null,
+      selections: [
+        expect.objectContaining({
+          capability: "external.open",
+          resourceKey: "tel:",
+          challenge: expect.objectContaining({
+            resource: expect.objectContaining({ value: "tel:" }),
+          }),
         }),
-      }),
-    ]);
+      ],
+    });
   });
 
   it("validates OAuth redirect binding during preparation", async () => {

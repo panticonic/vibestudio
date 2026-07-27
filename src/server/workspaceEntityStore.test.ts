@@ -31,6 +31,34 @@ function makeStore(handlers: Record<string, (...args: unknown[]) => unknown>) {
 }
 
 describe("WorkspaceEntityStore", () => {
+  it("does not dispatch an executable entity write when exact reservation fails", async () => {
+    const dispatch = async () => {
+      throw new Error("owner write must not run");
+    };
+    const store = new WorkspaceEntityStore({
+      doDispatch: { dispatch } as unknown as DODispatch,
+      workspaceId: "ws_1",
+      entityCache: new EntityCache(),
+      executionPublicationPort: {
+        reserve() {
+          throw new Error("execution identity mismatch");
+        },
+        finalize() {},
+      },
+    });
+
+    await expect(
+      store.activate({
+        kind: "worker",
+        source: { repoPath: "workers/a", effectiveVersion: "v1" },
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "e".repeat(64),
+        contextId: "ctx-1",
+        key: "one",
+      })
+    ).rejects.toThrow(/identity mismatch/);
+  });
+
   it("mirrors reservation and activation as one durable panel lifecycle", async () => {
     const reserved = {
       ...RECORD,

@@ -37,6 +37,8 @@ should not be copied into prompts or maintained as parallel prose constants.
   provenance inspection.
 - `eval-lifecycle`, `harness-resilience`, `edge-cases`: cancellation,
   persistence, cleanup, transport errors, large results, and recovery.
+- `self-development`: exact dirty semantic builds, current/isolated launches,
+  native checkpoints, attached child eval/approval, recovery, and owned cleanup.
 - `skills`, `docs-discovery`, `docs-probes`: skill discovery and realistic
   goal-driven application of documentation.
 - `blobstore`: immutable blobs, ranges, search, and file-tree behavior.

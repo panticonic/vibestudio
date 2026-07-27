@@ -10,12 +10,12 @@
     "authority": {
       "requests": [
         {
-          "capability": "context.boundary",
+          "capability": "browser-data.delete",
           "resource": {
             "kind": "prefix",
-            "prefix": "context"
+            "prefix": "do:vibestudio/internal:BrowserDataDO:"
           },
-          "tier": "critical",
+          "tier": "gated",
           "evidence": "bounded-dynamic"
         },
         {
@@ -37,12 +37,12 @@
           "evidence": "bounded-dynamic"
         },
         {
-          "capability": "browser-data.delete",
+          "capability": "context.boundary",
           "resource": {
             "kind": "prefix",
-            "prefix": "do:vibestudio/internal:BrowserDataDO:"
+            "prefix": "context"
           },
-          "tier": "gated",
+          "tier": "critical",
           "evidence": "bounded-dynamic"
         },
         {

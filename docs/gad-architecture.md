@@ -188,12 +188,19 @@ host, and the host never interprets changes or integration decisions.
 
 Garbage collection asks the semantic owner for the content roots and file
 digests retained by its event/application graph and pending effects, unions
-those with protected-main roots, walks the actual Merkle trees, and sweeps only
-workspace-CAS entries older than the safety window. The managed hourly
-`VcsGcScheduler` starts after semantic activation. Protected publication
-evidence is separately acknowledgement-compacted: acknowledged history is
-discarded once it is no longer the protected head, while unacknowledged effect
-or observer evidence remains replayable.
+those with protected-main roots and verified source-state composition roots of
+retained builds, walks the actual Merkle trees, and sweeps only workspace-CAS
+entries older than the safety window. The managed hourly `GcEpochCoordinator`
+first snapshots Build V2 retention roots, verifies every stored rooted build's
+`metadata.sourceStateHash`, then runs content GC in the same monotonic epoch.
+An unmaterialized graph unit contributes no artifact root because its source is
+already protected by the protected-main root; an incomplete snapshot, an
+unresolved authoritative owner root, or absent/invalid stored metadata
+suppresses the content sweep. Build retention remains report-only until later
+lifecycle work introduces build deletion. Protected publication evidence is
+separately acknowledgement-compacted: acknowledged history is discarded once
+it is no longer the protected head, while unacknowledged effect or observer
+evidence remains replayable.
 
 ## Architectural test
 

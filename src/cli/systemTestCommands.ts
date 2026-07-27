@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
-import { EVAL_RESULT_RETURN_PREVIEW_CHARS, evalMethods } from "@vibestudio/service-schemas/eval";
+import {
+  EVAL_RESULT_RETURN_PREVIEW_CHARS,
+  createEvalExecutor,
+  evalMethods,
+} from "@vibestudio/service-schemas/eval";
 import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "./commandTable.js";
 import {
@@ -34,7 +38,7 @@ import {
 } from "./systemTestStore.js";
 
 type EvalClient = ReturnType<typeof evalClientFor>;
-type EvalStatus = Awaited<ReturnType<EvalClient["getRun"]>>;
+type EvalStatus = Awaited<ReturnType<EvalClient["get"]>>;
 
 const DEFAULT_POLL_MS = 1_000;
 const MAX_CONSECUTIVE_STATUS_READ_FAILURES = 5;
@@ -57,6 +61,12 @@ const DIRECT_SCOPE_PAGE_CHARS = 128 * 1024;
 
 function evalClientFor(scope: SessionScope) {
   return typedClient("eval", evalMethods, scope.client);
+}
+
+function evalExecutorFor(scope: SessionScope) {
+  return createEvalExecutor(<T>(method: string, args: unknown[]) =>
+    scope.client.call<T>(method, args)
+  );
 }
 
 const SYSTEM_TEST_SESSION = "system-tests";
@@ -133,14 +143,21 @@ function routing(scope: SessionScope, stored?: StoredSystemTestRun | null) {
     );
   }
   return {
-    ownerId: stored?.ownerId ?? scope.session.entityId,
-    // A session entity and its eval scope are durable, but its context is not:
-    // ephemeral workspace recovery can rebind the same session owner to a new
-    // context. The stored context is useful provenance only. Always route an
-    // old run through the owner's current, server-registered context so status,
-    // inspect, trajectory, cancel, and rerun survive a source-server restart.
-    contextId: scope.contextId,
-    subKey: stored?.subKey ?? scope.session.scopeKey,
+    // The server derives the current context from this live session entity.
+    // Stored context remains provenance only, so recovery survives rebinding.
+    target: {
+      kind: "owner-session" as const,
+      sessionId: stored?.ownerId ?? scope.session.entityId,
+    },
+    scopeKey: stored?.subKey ?? scope.session.scopeKey,
+  };
+}
+
+function startRouting(scope: SessionScope, stored?: StoredSystemTestRun | null) {
+  const route = routing(scope, stored);
+  return {
+    target: route.target,
+    scope: { key: route.scopeKey },
   };
 }
 
@@ -330,11 +347,14 @@ async function startRun(
     config,
   };
   const client = evalClientFor(scope);
-  await client.startRun({
-    ...routing(scope, stored),
+  await client.start({
+    ...startRouting(scope, stored),
     runId,
-    code: systemTestRunCode(runId, config),
-    syntax: "typescript",
+    source: {
+      kind: "inline",
+      code: systemTestRunCode(runId, config),
+      syntax: "typescript",
+    },
   });
   saveSystemTestRun(stored);
   return stored;
@@ -358,7 +378,7 @@ async function waitForRun(
     for (;;) {
       let status: EvalStatus;
       try {
-        status = await client.getRun({ ...route, runId });
+        status = await client.get({ ...route, runId });
         consecutiveReadFailures = 0;
       } catch (error) {
         const retryable =
@@ -503,7 +523,7 @@ async function status(inv: ParsedInvocation): Promise<number> {
             positiveInt(inv, "poll-ms", DEFAULT_POLL_MS) ?? DEFAULT_POLL_MS,
             scope.client
           )
-        : await client.getRun({ ...routing(scope, stored), runId });
+        : await client.get({ ...routing(scope, stored), runId });
     const progress = withElapsedProgress(state.progress);
     const value = {
       runId,
@@ -622,7 +642,7 @@ async function readPersisted(
   const runId = requireRunId(inv);
   const stored = loadSystemTestRun(runId);
   const scope = await resolveSystemTestScope(inv, stored?.sessionName ?? SYSTEM_TEST_SESSION);
-  const outer = await evalClientFor(scope).getRun({ ...routing(scope, stored), runId });
+  const outer = await evalClientFor(scope).get({ ...routing(scope, stored), runId });
   const progress =
     outer.progress && typeof outer.progress === "object" && !Array.isArray(outer.progress)
       ? (outer.progress as Record<string, unknown>)
@@ -644,10 +664,10 @@ async function readPersisted(
     );
   }
   if (outer.status === "done") resultValue(outer);
-  const result = await evalClientFor(scope).run({
-    ...routing(scope, stored),
-    code: code(runId),
-    syntax: "typescript",
+  const result = await evalExecutorFor(scope)({
+    ...startRouting(scope, stored),
+    runId: randomUUID(),
+    source: { kind: "inline", code: code(runId), syntax: "typescript" },
     timeoutMs: SYSTEM_TEST_INSPECTION_TIMEOUT_MS,
   });
   if (!result.success) throw new CliError(result.error ?? "could not inspect system-test run");
@@ -742,11 +762,14 @@ async function expandTruncatedReturn(
         encoding?: unknown;
       } | null = null;
       if (offset === 0) {
-        const page = await client.run({
-          ...routing(scope, stored),
-          code:
-            pageCode?.(offset, offset + requestedChars, pageKey) ??
-            `
+        const page = await evalExecutorFor(scope)({
+          ...startRouting(scope, stored),
+          runId: randomUUID(),
+          source: {
+            kind: "inline",
+            code:
+              pageCode?.(offset, offset + requestedChars, pageKey) ??
+              `
               const pageKey = ${JSON.stringify(pageKey)};
               if (!Object.prototype.hasOwnProperty.call(scope, pageKey)) {
                 scope[pageKey] = scope[${JSON.stringify(truncated.scopeKey)}];
@@ -762,7 +785,8 @@ async function expandTruncatedReturn(
                 chunk,
               };
             `,
-          syntax: "typescript",
+            syntax: "typescript",
+          },
           timeoutMs: SYSTEM_TEST_INSPECTION_TIMEOUT_MS,
         });
         if (!page.success) {

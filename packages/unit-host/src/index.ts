@@ -8,6 +8,11 @@ import {
   type CapabilityRequesterKind,
 } from "@vibestudio/shared/authorityPresentation";
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
+import {
+  publishExecutionOwner,
+  type ExecutionPublication,
+  type ExecutionPublicationPort,
+} from "@vibestudio/shared/execution/retention";
 
 export type UnitKind = "extension" | "app";
 
@@ -982,6 +987,10 @@ export interface UnitRegistryOptions<Entry extends UnitRegistryEntryBase> {
   unitKind: Entry["unitKind"];
   isEntry?: (value: unknown) => value is Entry;
   normalizeEntry?: (entry: Entry) => Entry;
+  publicationPort?: ExecutionPublicationPort;
+  publicationForEntry?: (entry: Entry) => ExecutionPublication | null;
+  /** Cheap durable-pointer fingerprint; avoids artifact I/O on status-only patches. */
+  publicationKeyForEntry?: (entry: Entry) => string;
 }
 
 export interface UnitIdentityApprovalStore {
@@ -1057,6 +1066,9 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
   private readonly unitKind: Entry["unitKind"];
   private readonly isEntry: (value: unknown) => value is Entry;
   private readonly normalizeEntry: (entry: Entry) => Entry;
+  private readonly publicationPort: ExecutionPublicationPort | undefined;
+  private readonly publicationForEntry: ((entry: Entry) => ExecutionPublication | null) | undefined;
+  private readonly publicationKeyForEntry: ((entry: Entry) => string) | undefined;
 
   constructor(opts: UnitRegistryOptions<Entry>) {
     this.unitKind = opts.unitKind;
@@ -1064,6 +1076,9 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
     this.isEntry =
       opts.isEntry ?? ((value): value is Entry => isUnitRegistryEntry(value, this.unitKind));
     this.normalizeEntry = opts.normalizeEntry ?? ((entry) => normalizeUnitRegistryEntry(entry));
+    this.publicationPort = opts.publicationPort;
+    this.publicationForEntry = opts.publicationForEntry;
+    this.publicationKeyForEntry = opts.publicationKeyForEntry;
     this.load();
   }
 
@@ -1082,8 +1097,10 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
 
   upsert(entry: Entry): void {
     this.assertUnitKind(entry);
-    this.entries.set(entry.name, this.normalizeEntry({ ...entry }));
-    this.save();
+    const next = this.normalizeEntry({ ...entry });
+    this.writeEntry(this.entries.get(next.name) ?? null, next, () =>
+      this.entries.set(next.name, next)
+    );
   }
 
   patch(name: string, patch: Partial<Entry>): Entry {
@@ -1091,8 +1108,7 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
     if (!current) throw new Error(`Unit is not installed: ${name}`);
     const next = this.normalizeEntry({ ...current, ...patch, unitKind: this.unitKind, name });
     this.assertUnitKind(next);
-    this.entries.set(name, next);
-    this.save();
+    this.writeEntry(current, next, () => this.entries.set(name, next));
     return { ...next };
   }
 
@@ -1131,6 +1147,27 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
     };
     fs.writeFileSync(tmp, JSON.stringify(payload, null, 2));
     fs.renameSync(tmp, this.filePath);
+  }
+
+  private writeEntry(previous: Entry | null, entry: Entry, mutate: () => void): void {
+    const changed = this.publicationKeyForEntry
+      ? this.publicationKeyForEntry(entry) !==
+        (previous ? this.publicationKeyForEntry(previous) : "")
+      : true;
+    const publication =
+      changed && this.publicationPort ? (this.publicationForEntry?.(entry) ?? null) : null;
+    publishExecutionOwner(
+      changed ? this.publicationPort : undefined,
+      publication ?? {
+        owner: this.unitKind === "app" ? "app-generation" : "extension-generation",
+        ownerId: entry.name,
+        artifacts: [],
+      },
+      () => {
+        mutate();
+        this.save();
+      }
+    );
   }
 
   private assertUnitKind(entry: Entry): void {

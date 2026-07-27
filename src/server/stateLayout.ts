@@ -35,6 +35,12 @@ export function stateLayout(statePath: string) {
     refsDir: path.join(statePath, "refs"),
     blobsDir: path.join(statePath, "blobs"),
     buildSourcesDir: path.join(statePath, "build-sources"),
+    executionRetention: {
+      root: path.join(statePath, "execution-retention"),
+      publicationsDb: path.join(statePath, "execution-retention", "publications.db"),
+      buildGcFile: path.join(statePath, "execution-retention", "build-gc.json"),
+      buildTrashDir: path.join(statePath, "execution-retention", "build-trash"),
+    },
     hostTargetSelectionsFile: path.join(statePath, "host-targets", "selections.json"),
     ownerPanelSeedsDir: path.join(statePath, "panel-tree", "seeded-owners"),
     authority: {
@@ -42,6 +48,14 @@ export function stateLayout(statePath: string) {
       grantsDb: path.join(authority, "grants.db"),
       approvedUnitVersionsFile: path.join(authority, "approved-unit-versions.json"),
       conduitBlessingsFile: path.join(authority, "conduit-blessings.json"),
+    },
+    development: {
+      root: path.join(statePath, "development"),
+      sessionsFile: path.join(statePath, "development", "sessions.json"),
+      runsDb: path.join(statePath, "development", "runs.db"),
+      attachedHostsDb: path.join(statePath, "development", "attached-hosts.db"),
+      runsDir: path.join(statePath, "development", "runs"),
+      nativeSessionsDir: path.join(statePath, "development", "native-sessions"),
     },
     governance: {
       root: path.join(statePath, "governance"),

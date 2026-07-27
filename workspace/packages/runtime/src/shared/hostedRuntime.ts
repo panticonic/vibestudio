@@ -209,6 +209,72 @@ export function createServicesProxy(rt: WorkspaceRuntime): Record<string, unknow
   );
 }
 
+export interface AttachedHostClient {
+  readonly sessionId: string;
+  readonly developmentRunId: string;
+  readonly childHostId: string;
+  readonly childGenerationId: string;
+  readonly authorityCeilingDigest: string;
+  readonly expiresAt: number;
+  readonly services: Record<string, Record<string, (...args: unknown[]) => Promise<unknown>>>;
+}
+
+export interface AttachedHostsApi {
+  attach(sessionId: string): Promise<AttachedHostClient>;
+}
+
+/** Owner-scoped child-host runtime helper. Each dynamic method remains an
+ * ordinary service/method/args invocation and is schema-validated by the child
+ * dispatcher; this helper adds no development-specific operation bridge. */
+export function createAttachedHostsApi(
+  rt: Pick<WorkspaceRuntime, "callMain">
+): AttachedHostsApi {
+  return {
+    async attach(sessionId) {
+      const session = (await rt.callMain("attachedHosts.attachClient", {
+        sessionId,
+      })) as Omit<AttachedHostClient, "services">;
+      const serviceCache = new Map<string, Record<string, (...args: unknown[]) => Promise<unknown>>>();
+      const services = new Proxy(
+        {},
+        {
+          get(_target, serviceKey) {
+            if (typeof serviceKey === "symbol") return undefined;
+            const service = String(serviceKey);
+            const existing = serviceCache.get(service);
+            if (existing) return existing;
+            const methodCache = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+            const client = new Proxy(
+              {},
+              {
+                get(_methodTarget, methodKey) {
+                  if (typeof methodKey === "symbol") return undefined;
+                  const method = String(methodKey);
+                  let invoke = methodCache.get(method);
+                  if (!invoke) {
+                    invoke = (...args: unknown[]) =>
+                      rt.callMain("attachedHosts.invokeAttached", {
+                        sessionId,
+                        service,
+                        method,
+                        args,
+                      });
+                    methodCache.set(method, invoke);
+                  }
+                  return invoke;
+                },
+              }
+            ) as Record<string, (...args: unknown[]) => Promise<unknown>>;
+            serviceCache.set(service, client);
+            return client;
+          },
+        }
+      ) as AttachedHostClient["services"];
+      return Object.freeze({ ...session, services });
+    },
+  };
+}
+
 export function createHostedRuntime(host: RuntimeHost): WorkspaceRuntime {
   const rpc = host.rpc;
   const credentials = helpfulNamespace("credentials", createCredentialClient(rpc));

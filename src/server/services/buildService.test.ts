@@ -158,6 +158,40 @@ describe("build service extension diagnostics", () => {
     });
   });
 
+  it("runs retention diagnostics without accepting caller-maintained roots", async () => {
+    const buildSystem = makeBuildSystem();
+    vi.mocked(buildSystem.gc).mockResolvedValue({
+      epoch: 0,
+      mode: "report",
+      complete: true,
+      roots: 3,
+      rootBuildKeys: ["a", "b", "c"],
+      storedRootBuildKeys: ["a", "b"],
+      unresolvedAuthoritativeRootBuildKeys: [],
+      reachableBuilds: 2,
+      unreferenced: 1,
+      unreferencedBytes: 42,
+      quarantined: 0,
+      deleted: 0,
+      retainedForGrace: 0,
+      notReconstructible: 0,
+      notReconstructibleDetails: [],
+      providerFailures: [],
+      cleanupFailures: [],
+      retainedSourceRoots: [],
+    });
+    const service = createBuildService({ buildSystem });
+
+    await expect(
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "gc", [])
+    ).resolves.toMatchObject({
+      complete: true,
+      roots: 3,
+      unreferenced: 1,
+    });
+    expect(buildSystem.gc).toHaveBeenCalledWith();
+  });
+
   it("reports build provenance for a workspace unit", async () => {
     const buildSystem = makeBuildSystem();
     vi.mocked(buildSystem.getEffectiveVersion).mockReturnValue("ev-1");

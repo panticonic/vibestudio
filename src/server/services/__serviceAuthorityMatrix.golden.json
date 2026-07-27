@@ -58,6 +58,143 @@
       }
     }
   },
+  "attachedHosts": {
+    "service": {
+      "principals": [
+        "host"
+      ]
+    },
+    "methods": {
+      "attachClient": {
+        "authority": {
+          "principals": [
+            "user",
+            "code",
+            "session"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "rationale": "Internal attached-host transport; authority is enforced by exact signed session envelopes."
+        }
+      },
+      "bootstrapConfirm": {
+        "authority": {
+          "principals": [
+            "host",
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "rationale": "Internal attached-host transport; authority is enforced by exact signed session envelopes."
+        }
+      },
+      "bootstrapExchange": {
+        "authority": {
+          "principals": [
+            "host",
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "rationale": "Internal attached-host transport; authority is enforced by exact signed session envelopes."
+        }
+      },
+      "close": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "rationale": "Internal attached-host transport; authority is enforced by exact signed session envelopes."
+        }
+      },
+      "invoke": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "rationale": "Internal attached-host transport; authority is enforced by exact signed session envelopes."
+        }
+      },
+      "invokeAttached": {
+        "authority": {
+          "principals": [
+            "user",
+            "code",
+            "session"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "rationale": "Internal attached-host transport; authority is enforced by exact signed session envelopes."
+        }
+      },
+      "listApprovalAudit": {
+        "authority": {
+          "principals": [
+            "user",
+            "code",
+            "session"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "rationale": "Internal attached-host transport; authority is enforced by exact signed session envelopes."
+        }
+      },
+      "presentApproval": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "rationale": "Internal attached-host transport; authority is enforced by exact signed session envelopes."
+        }
+      }
+    }
+  },
   "audit": {
     "service": {
       "principals": [
@@ -447,7 +584,7 @@
           "inherits": true
         },
         "access": {
-          "sensitivity": "destructive"
+          "sensitivity": "read"
         }
       },
       "getAboutPages": {
@@ -515,6 +652,14 @@
         }
       },
       "inspectBuildProvenance": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "inspectExecution": {
         "authority": {
           "inherits": true
         },
@@ -1226,6 +1371,729 @@
       }
     }
   },
+  "development": {
+    "service": {
+      "principals": [
+        "code",
+        "user",
+        "host"
+      ]
+    },
+    "methods": {
+      "checkpoint": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "closeSession": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "destroySession": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "events": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "faultFailBuildAfterSnapshotRetained": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "codeOnly",
+          "rationale": "Hidden system-test transport; the host verifies the attested harness and the service binds the fault to one owned development run."
+        }
+      },
+      "forceRetire": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "forceRetireSession": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "get": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "getSession": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "inspectNative": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "keepRunRepair": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "keepSessionRepair": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "list": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listNativeTools": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listRecipes": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "listSessions": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "openSession": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:development.openSession"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:development.openSession"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:development.openSession"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:development.openSession"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:development.openSession"
+          },
+          "prepared": {
+            "resolver": "development.open.native",
+            "leaves": [
+              {
+                "capability": "development.native.execute",
+                "requirement": {
+                  "kind": "selected",
+                  "principals": [
+                    "code",
+                    "user",
+                    "host"
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "readNativeTerminal": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "resizeNativeTerminal": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "retry": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "development.native.execute"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "development.native.execute"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "development.native.execute"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "development.native.execute"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "development.native.execute"
+          },
+          "prepared": {
+            "resolver": "development.start.native",
+            "leaves": [
+              {
+                "capability": "development.native.execute",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "development.native.execute"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "development.native.execute"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "development.native.execute"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "development.native.execute"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write",
+          "approval": [
+            {
+              "reason": "Re-runs reviewed project build code from the retained exact snapshot.",
+              "operation": {
+                "kind": "runtime",
+                "verb": "Retry exact workspace build"
+              }
+            }
+          ]
+        }
+      },
+      "retrySessionCleanup": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        }
+      },
+      "start": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "development.native.execute"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "development.native.execute"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "development.native.execute"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "development.native.execute"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "development.native.execute"
+          },
+          "prepared": {
+            "resolver": "development.start.native",
+            "leaves": [
+              {
+                "capability": "development.native.execute",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "development.native.execute"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "development.native.execute"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "development.native.execute"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "development.native.execute"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write",
+          "approval": [
+            {
+              "reason": "Installs frozen dependencies and runs reviewed project build code with local OS authority.",
+              "operation": {
+                "kind": "runtime",
+                "verb": "Build exact workspace source"
+              }
+            }
+          ]
+        }
+      },
+      "stop": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "stopNativeTool": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
+      "writeNativeTerminal": {
+        "authority": {
+          "principals": [
+            "code",
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "developmentClientExecutor": {
+    "service": {
+      "principals": [
+        "host"
+      ]
+    },
+    "methods": {
+      "attest": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "bindIsolatedManager": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "claim": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "consumeAttestation": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "exited": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "fail": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "launched": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "readArtifact": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "register": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      }
+    }
+  },
   "docs": {
     "service": {
       "principals": [
@@ -1337,7 +2205,15 @@
           "sensitivity": "destructive"
         }
       },
-      "getRun": {
+      "events": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
+      "get": {
         "authority": {
           "inherits": true
         },
@@ -1361,15 +2237,41 @@
           "sensitivity": "destructive"
         }
       },
-      "run": {
+      "start": {
         "authority": {
           "inherits": true
         },
         "access": {
           "sensitivity": "write"
         }
-      },
-      "startRun": {
+      }
+    }
+  },
+  "evalEventIngress": {
+    "service": {
+      "principals": [
+        "session"
+      ]
+    },
+    "methods": {
+      "publish": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      }
+    }
+  },
+  "evalExecutionRoots": {
+    "service": {
+      "principals": [
+        "session"
+      ]
+    },
+    "methods": {
+      "retain": {
         "authority": {
           "inherits": true
         },
@@ -6768,6 +7670,21 @@
               "reason": "destroying another agent or panel's existing context requires approval"
             }
           ]
+        }
+      },
+      "faultAbortAgentVessel": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "codeOnly",
+          "rationale": "Hidden system-test transport; the host additionally verifies the attested harness incarnation and exact target entity."
         }
       },
       "listEntities": {

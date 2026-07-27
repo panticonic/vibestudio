@@ -23,6 +23,13 @@ import { LifecycleDriver } from "./services/lifecycleDriver.js";
 import { AlarmDriver } from "./services/alarmDriver.js";
 import { attestWorkspaceDoRpc } from "./services/authorityRuntime.js";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  executionArtifactDigest,
+  executionSourceClosureDigest,
+  verifyExecutionArtifactRef,
+  type ExecutionArtifactRefV1,
+} from "@vibestudio/shared/execution/retention";
+import { sha256 } from "@vibestudio/shared/execution/identity";
 import type { BuildResult } from "./buildV2/buildStore.js";
 import {
   collectWorkspaceRpcCatalog,
@@ -36,6 +43,30 @@ import {
 
 let compiledWorkerdPrograms: WorkerdProgramSources;
 let compiledInternalDOBundle: InternalDOBundle;
+
+function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
+  const contentRoots = [
+    { repoPath: source, stateHash: `state:${sha256(`state:${source}:${ref}`)}` },
+  ];
+  const unsigned = {
+    version: 1 as const,
+    sourceState: {
+      kind: "workspace" as const,
+      workspaceId: "workspace:test",
+      effectiveVersion: sha256(`ev:${source}:${ref}`),
+      state: { kind: "event" as const, eventId: `event:${source}:${ref}` },
+      contentRoots,
+      sourceClosureDigest: executionSourceClosureDigest(contentRoots),
+    },
+    recipeDigest: sha256(`recipe:${source}`),
+    buildKey: sha256(`build:${source}:${ref}`),
+    artifactDigest: sha256(`artifact:${source}:${ref}`),
+  };
+  return verifyExecutionArtifactRef({
+    ...unsigned,
+    executionDigest: executionArtifactDigest(unsigned),
+  });
+}
 
 const PUBSUB_WORKSPACE_SERVICE = {
   source: "workers/pubsub-channel",
@@ -114,15 +145,12 @@ async function createWorkerdHarness(
     bindRuntimeImage: async (source: string, ref?: string) => {
       if (!getBuild) throw new Error("workspace builds are not used by internal DO tests");
       const build = await getBuild(source, ref);
-      const buildKey = `build:${source}:${build.metadata.ev}`;
-      builds.set(buildKey, build);
+      const artifact = runtimeArtifact(source, ref ?? "main");
+      builds.set(artifact.buildKey, build);
       return {
         source,
         unitName: source,
-        stateHash: ref?.startsWith("state:") ? ref : "state:test",
-        effectiveVersion: build.metadata.ev,
-        buildKey,
-        executionDigest: "a".repeat(64),
+        artifact,
         authorityRequests: [],
       };
     },
@@ -354,7 +382,7 @@ describe("internal storage DOs under workerd", () => {
   }, 30_000);
 
   // Manual empirical probe (~37s; opt-in via `.only` or removing `.skip`) behind
-  // the unbounded-eval.run design: real workerd does NOT cap a DO `fetch` handler
+  // the unbounded eval design: real workerd does NOT cap a DO `fetch` handler
   // the way it caps a regular Worker (~30s). Held 35s here and returned cleanly,
   // proving workerd itself is not the short cap in this path. The relay's bare
   // `fetch` adds undici's ~300s `headersTimeout`, defeatable with a custom
@@ -545,9 +573,12 @@ describe("internal storage DOs under workerd", () => {
     // The first call acknowledges the newly inserted row before background guest work runs.
     expect(
       await harness.callDurableObject(ref, "startRun", { runId: "run-1", code: "1+1" })
-    ).toEqual({
+    ).toMatchObject({
       runId: "run-1",
       status: "pending",
+      existing: false,
+      scopeInputRevision: "scope:initial",
+      runDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
 
     // Idempotent on runId and exact input: replay returns the same row in whichever durable state

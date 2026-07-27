@@ -501,7 +501,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       throw new Error("DODispatch requires token-backed workerd configuration");
     }
 
-    // `DODispatch.dispatch` is the SERVER's internal service→DO channel (eval.run,
+    // `DODispatch.dispatch` is the SERVER's internal service→DO channel (eval.start,
     // workspace methods, …), so the caller is always the server — stamp it so the
     // DO's converged envelope dispatch surfaces `callerKind: "server"` (e.g. the
     // EvalDO server-only gate). Mirrors dispatchLifecycle/dispatchAlarm.

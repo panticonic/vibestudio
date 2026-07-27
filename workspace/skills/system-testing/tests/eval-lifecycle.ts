@@ -173,8 +173,205 @@ function validateCancellation(result: TestExecutionResult) {
   return { passed: true, reason: undefined };
 }
 
+function validateAgentReplay(result: TestExecutionResult) {
+  const base = completedScenarioEvidence(result);
+  if (!base.passed) return base;
+  const probe = result.diagnostics?.["evalAgentReplay"];
+  if (!probe || typeof probe !== "object" || Array.isArray(probe)) {
+    return { passed: false, reason: "The harness did not record the exact vessel crash" };
+  }
+  const record = probe as {
+    targetId?: unknown;
+    invocationId?: unknown;
+    statusBeforeAbort?: unknown;
+    aborted?: unknown;
+  };
+  if (
+    typeof record.targetId !== "string" ||
+    typeof record.invocationId !== "string" ||
+    (record.statusBeforeAbort !== "pending" && record.statusBeforeAbort !== "running") ||
+    record.aborted !== true
+  ) {
+    return {
+      passed: false,
+      reason: `The vessel was not fault-aborted while its eval invocation was live: ${JSON.stringify(
+        probe
+      )}`,
+    };
+  }
+
+  const allEvalCalls = getToolCalls(result).filter((call) => call.name === "eval");
+  const uniqueEvalCalls = new Map(allEvalCalls.map((call) => [call.id, call]));
+  if (uniqueEvalCalls.size !== 1 || allEvalCalls.length !== 1) {
+    return {
+      passed: false,
+      reason: `Expected one durable eval invocation across replay; observed ${allEvalCalls.length} cards and ${uniqueEvalCalls.size} ids`,
+    };
+  }
+  const [call] = [...uniqueEvalCalls.values()];
+  if (
+    !call ||
+    call.id !== record.invocationId ||
+    call.execution?.status !== "complete" ||
+    call.execution.isError === true
+  ) {
+    return {
+      passed: false,
+      reason: "The original eval invocation did not settle successfully after vessel recovery",
+    };
+  }
+  const returned = invocationReturnValue(call);
+  const records = returned.present ? walkRecords([returned.value]) : [];
+  return records.some(
+    (value) =>
+      value["marker"] === "EVAL_AGENT_REPLAY_OK" && value["completionCount"] === 1
+  )
+    ? { passed: true, reason: undefined }
+    : {
+        passed: false,
+        reason: "The recovered invocation lost its result or executed the eval more than once",
+      };
+}
+
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function authorityFrom(call: ReturnType<typeof getToolCalls>[number]): Record<string, unknown> | null {
+  const authority = call.arguments?.["authority"];
+  return authority && typeof authority === "object" && !Array.isArray(authority)
+    ? (authority as Record<string, unknown>)
+    : null;
+}
+
+function exactPermissionsListIntent(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const intent = value as Record<string, unknown>;
+  return intent["service"] === "permissions" && intent["method"] === "list" &&
+    Array.isArray(intent["args"]) && intent["args"].length === 0;
+}
+
+function validateStrictAuthority(result: TestExecutionResult) {
+  const base = completedScenarioEvidence(result);
+  if (!base.passed) return base;
+  const call = successfulEvalCalls(result).find((candidate) => {
+    const authority = authorityFrom(candidate);
+    return authority?.["mode"] === "strict";
+  });
+  const authority = call && authorityFrom(call);
+  const requests = authority?.["requests"];
+  if (
+    !call ||
+    authority?.["effects"] !== "read-only" ||
+    authority?.["approvals"] !== "pregranted-only" ||
+    !Array.isArray(requests) ||
+    requests.length !== 1 ||
+    JSON.stringify(requests[0]) !==
+      JSON.stringify({ capability: "permissions.read", resource: { kind: "exact", key: "permissions.read" } })
+  ) {
+    return { passed: false, reason: "Eval did not submit the exact strict read-only authority input" };
+  }
+  const returned = invocationReturnValue(call);
+  return returned.present && Array.isArray(returned.value)
+    ? { passed: true, reason: undefined }
+    : { passed: false, reason: "Strict eval did not return the structured permissions result" };
+}
+
+function validatePregrantedOnly(result: TestExecutionResult) {
+  const base = completedScenarioEvidence(result);
+  if (!base.passed) return base;
+  const call = successfulEvalCalls(result).find(
+    (candidate) => authorityFrom(candidate)?.["approvals"] === "pregranted-only"
+  );
+  const authority = call && authorityFrom(call);
+  if (!call || authority?.["mode"] !== "strict" || authority?.["requests"] !== undefined) {
+    return {
+      passed: false,
+      reason: "The denied operation was not run under an empty strict pregranted-only manifest",
+    };
+  }
+  const returned = invocationReturnValue(call);
+  const records = returned.present ? walkRecords([returned.value]) : [];
+  return records.some(
+    (record) =>
+      record["denied"] === true &&
+      typeof record["message"] === "string" &&
+      /authority|permission|grant|denied/iu.test(record["message"])
+  )
+    ? { passed: true, reason: undefined }
+    : {
+        passed: false,
+        reason: "The ungranted operation did not return a structured authority denial",
+      };
+}
+
+function validatePreauthorization(result: TestExecutionResult) {
+  const base = completedScenarioEvidence(result);
+  if (!base.passed) return base;
+  const call = successfulEvalCalls(result).find((candidate) => {
+    const preauthorize = authorityFrom(candidate)?.["preauthorize"];
+    return Array.isArray(preauthorize) && preauthorize.some(exactPermissionsListIntent);
+  });
+  const authority = call && authorityFrom(call);
+  const preauthorize = authority?.["preauthorize"];
+  if (
+    !call ||
+    authority?.["approvals"] !== "prompt" ||
+    !Array.isArray(preauthorize) ||
+    preauthorize.length !== 1 ||
+    !exactPermissionsListIntent(preauthorize[0])
+  ) {
+    return { passed: false, reason: "Eval did not preauthorize the exact permissions.list invocation" };
+  }
+  const returned = invocationReturnValue(call);
+  return returned.present && Array.isArray(returned.value)
+    ? { passed: true, reason: undefined }
+    : { passed: false, reason: "Preauthorized eval did not return the structured permissions result" };
+}
+
+function validateEventPages(result: TestExecutionResult) {
+  if (result.error) return { passed: false, reason: result.error };
+  const probe = result.diagnostics?.["evalEventPages"];
+  if (!probe || typeof probe !== "object" || Array.isArray(probe)) {
+    return { passed: false, reason: "The harness did not record durable eval event-page evidence" };
+  }
+  const value = probe as {
+    terminal?: { status?: unknown; result?: { success?: unknown } };
+    firstPage?: { events?: Array<{ sequence?: unknown }>; next?: unknown; hasMore?: unknown };
+    repeatedFirstPage?: unknown;
+    pages?: Array<{ events?: Array<{ sequence?: unknown }>; next?: unknown; hasMore?: unknown }>;
+  };
+  if (value.terminal?.status !== "done" || value.terminal.result?.success !== true) {
+    return { passed: false, reason: "The event probe did not settle a successful eval run" };
+  }
+  if (JSON.stringify(value.firstPage) !== JSON.stringify(value.repeatedFirstPage)) {
+    return { passed: false, reason: "The same durable event cursor returned different pages" };
+  }
+  if (!Array.isArray(value.pages) || value.pages.length < 2 || value.pages.at(-1)?.hasMore !== false) {
+    return { passed: false, reason: "The event probe did not exhaust bounded durable cursor pages" };
+  }
+  const sequences = value.pages
+    .flatMap((page) => page.events ?? [])
+    .map((event) => event.sequence)
+    .filter((sequence): sequence is number => typeof sequence === "number");
+  if (
+    sequences.length < 2 ||
+    value.pages.flatMap((page) => page.events ?? []).length !== sequences.length ||
+    sequences.some((sequence, index) => index > 0 && sequence <= sequences[index - 1]!)
+  ) {
+    return { passed: false, reason: "Durable eval event pages were not strictly ordered by cursor sequence" };
+  }
+  return { passed: true, reason: undefined };
+}
+
+async function orchestrateEventPages(context: TestOrchestrationContext): Promise<TestExecutionResult> {
+  const startedAt = Date.now();
+  try {
+    const probe = await context.runner.probeEvalEventPages();
+    return { messages: [], duration: Date.now() - startedAt, diagnostics: { evalEventPages: probe } };
+  } catch (cause) {
+    return { messages: [], duration: Date.now() - startedAt, error: formatError(cause) };
+  }
 }
 
 async function orchestrateCancellation(
@@ -195,6 +392,88 @@ async function orchestrateCancellation(
       error: formatError(cause),
     };
   }
+}
+
+async function orchestrateAgentReplay(
+  context: TestOrchestrationContext
+): Promise<TestExecutionResult> {
+  const startedAt = Date.now();
+  const session = await context.runner.spawn();
+  let error: string | undefined;
+  let replayEvidence: Record<string, unknown> | undefined;
+  try {
+    const targetId = session.agentTargetId;
+    if (!targetId) throw new Error("Spawned system-test agent has no exact runtime target");
+
+    const turn = context
+      .sendAndWait(
+        session,
+        [
+          "Using exactly one eval call, run the following logic with timeoutMs 60000:",
+          "await new Promise(resolve => setTimeout(resolve, 15000));",
+          "scope.__evalAgentReplayCompletionCount = (scope.__evalAgentReplayCompletionCount ?? 0) + 1;",
+          'return { marker: "EVAL_AGENT_REPLAY_OK", completionCount: scope.__evalAgentReplayCompletionCount };',
+          "Return the eval result. Do not make any other tool call.",
+        ].join("\n"),
+        "start eval before vessel crash"
+      )
+      .then(
+        () => ({ error: null as unknown }),
+        (cause) => ({ error: cause })
+      );
+
+    const liveDeadline = Date.now() + 20_000;
+    let live:
+      | { id: string; status: "pending" | "running" }
+      | undefined;
+    while (Date.now() < liveDeadline) {
+      const invocation = session
+        .snapshot()
+        .invocations.find(
+          (candidate) =>
+            candidate.name === "eval" &&
+            (candidate.status === "pending" || candidate.status === "running")
+        );
+      if (invocation) {
+        live = {
+          id: invocation.id,
+          status: invocation.status as "pending" | "running",
+        };
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (!live) throw new Error("Eval invocation did not become live before the fault deadline");
+
+    const fault = await context.runner.faultAbortAgentVesselForReplayProbe(targetId);
+    replayEvidence = {
+      targetId,
+      invocationId: live.id,
+      statusBeforeAbort: live.status,
+      aborted: fault.aborted,
+    };
+
+    const settled = await turn;
+    if (settled.error) throw settled.error;
+  } catch (cause) {
+    error = formatError(cause);
+  }
+
+  const execution: TestExecutionResult = {
+    messages: [...session.messages],
+    duration: Date.now() - startedAt,
+    snapshot: session.snapshot(),
+    diagnostics: {
+      ...(replayEvidence ? { evalAgentReplay: replayEvidence } : {}),
+    },
+    ...(error ? { error } : {}),
+  };
+  try {
+    await session.close();
+  } catch (cause) {
+    execution.cleanupErrors = [`close: ${formatError(cause)}`];
+  }
+  return execution;
 }
 
 async function orchestrateLiveKernelContinuity(
@@ -286,6 +565,83 @@ function validateLiveKernelContinuity(result: TestExecutionResult) {
 }
 
 export const evalLifecycleTests: TestCase[] = [
+  {
+    name: "eval-strict-authority",
+    description: "A strict eval manifest admits only its exact read-only permission request",
+    category: "eval-lifecycle",
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "eval-permissions-read",
+          capability: "permissions.read",
+          resource: { kind: "exact", key: "permissions.read" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [],
+    },
+    prompt:
+      "Using exactly one eval call, invoke services.permissions.list() and return its structured result. Set authority exactly to strict read-only pregranted-only with exactly one request: capability permissions.read and exact resource permissions.read. Do not make any other tool call.",
+    validate: validateStrictAuthority,
+  },
+  {
+    name: "eval-pregranted-only",
+    description: "An ungranted strict eval operation is denied without opening an approval prompt",
+    category: "eval-lifecycle",
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "eval-permissions-read",
+          capability: "permissions.read",
+          resource: { kind: "exact", key: "permissions.read" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [],
+    },
+    prompt:
+      "Using exactly one eval call, attempt services.permissions.list() under authority { mode: 'strict', approvals: 'pregranted-only' } with no requests. Catch the operation error inside eval and return exactly { denied: true, message: String(error) }; do not ask for approval and do not make any other tool call.",
+    validate: validatePregrantedOnly,
+  },
+  {
+    name: "eval-preauthorization",
+    description: "A prompted eval preauthorizes one exact service invocation before executing it",
+    category: "eval-lifecycle",
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "eval-permissions-read",
+          capability: "permissions.read",
+          resource: { kind: "exact", key: "permissions.read" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [],
+    },
+    prompt:
+      "Using exactly one eval call, set authority approvals:'prompt' with preauthorize exactly [{ service:'permissions', method:'list', args:[] }], then invoke services.permissions.list() and return its structured result. Do not make any other tool call.",
+    validate: validatePreauthorization,
+  },
+  {
+    name: "eval-events",
+    description: "A completed eval exposes stable ordered durable event cursor pages",
+    category: "eval-lifecycle",
+    prompt: "Harness-orchestrated durable eval event pagination check.",
+    orchestrate: orchestrateEventPages,
+    validate: validateEventPages,
+  },
+  {
+    name: "eval-agent-replay",
+    description:
+      "An in-flight eval result survives an exact agent-vessel crash without duplicate execution",
+    category: "eval-lifecycle",
+    prompt: "Harness-orchestrated exact agent-vessel crash and durable eval replay check.",
+    orchestrate: orchestrateAgentReplay,
+    validate: validateAgentReplay,
+  },
   {
     name: "eval-live-kernel-continuity",
     description: "A live scope object retains its methods across idle eval cells",

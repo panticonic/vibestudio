@@ -23,6 +23,7 @@ import { portableExports } from "./runtimeSurface.portable.js";
  */
 export const EVAL_AMBIENT_ONLY = [
   "services",
+  "hosts",
   "scope",
   "scopes",
   "db",

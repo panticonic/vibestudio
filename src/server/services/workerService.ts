@@ -211,38 +211,41 @@ export function createWorkerService(deps: {
         const serviceTitle = service.title?.trim() || humanizeServiceName(service.name);
         const resourceKey =
           service.kind === "durable-object" ? service.targetId : service.routeBasePath;
-        return [
-          selectedPreparedAuthoritySelection({
-            capability,
-            resourceKey,
-            requirement: requirementForPrincipals(service.authority.principals, capability),
-            challenge: {
-              title: `Use ${serviceTitle}`,
-              description:
-                service.description?.trim() ||
-                `Use the ${serviceTitle} service provided by this workspace.`,
-              deniedReason: `${serviceTitle} access was not approved`,
-              dedupKey: `workspace-service:${service.name}:${resourceKey}`,
-              resource: { type: "workspace-service", label: "Service", value: serviceTitle },
-              operation: {
-                kind: "runtime",
-                verb: service.action,
-                object: { type: "workspace-service", label: "Service", value: serviceTitle },
-                groupKey: `workspace-service:${service.name}`,
+        return {
+          selections: [
+            selectedPreparedAuthoritySelection({
+              capability,
+              resourceKey,
+              requirement: requirementForPrincipals(service.authority.principals, capability),
+              challenge: {
+                title: `Use ${serviceTitle}`,
+                description:
+                  service.description?.trim() ||
+                  `Use the ${serviceTitle} service provided by this workspace.`,
+                deniedReason: `${serviceTitle} access was not approved`,
+                dedupKey: `workspace-service:${service.name}:${resourceKey}`,
+                resource: { type: "workspace-service", label: "Service", value: serviceTitle },
+                operation: {
+                  kind: "runtime",
+                  verb: service.action,
+                  object: { type: "workspace-service", label: "Service", value: serviceTitle },
+                  groupKey: `workspace-service:${service.name}`,
+                },
+                authorityVocabulary: {
+                  ...service.presentation,
+                  declaredBy: service.source,
+                },
+                details: [
+                  { label: "Provided by", value: service.source },
+                  ...(service.protocols.length > 0
+                    ? [{ label: "Works with", value: service.protocols.join(", ") }]
+                    : []),
+                ],
               },
-              authorityVocabulary: {
-                ...service.presentation,
-                declaredBy: service.source,
-              },
-              details: [
-                { label: "Provided by", value: service.source },
-                ...(service.protocols.length > 0
-                  ? [{ label: "Works with", value: service.protocols.join(", ") }]
-                  : []),
-              ],
-            },
-          }),
-        ];
+            }),
+          ],
+          payload: null,
+        };
       },
       "workers.resolveDurableObject.target": async (ctx, [source, className, objectKey]) => {
         const resolvedObjectKey = resolvedDurableObjectKey(
@@ -268,13 +271,16 @@ export function createWorkerService(deps: {
             });
           }
         }
-        return scoped.authority.map(({ capability, principals }) =>
-          selectedPreparedAuthoritySelection({
-            capability,
-            resourceKey: targetId,
-            requirement: requirementForPrincipals(principals, capability),
-          })
-        );
+        return {
+          selections: scoped.authority.map(({ capability, principals }) =>
+            selectedPreparedAuthoritySelection({
+              capability,
+              resourceKey: targetId,
+              requirement: requirementForPrincipals(principals, capability),
+            })
+          ),
+          payload: null,
+        };
       },
     },
     handler: defineServiceHandler("workers", methods, {

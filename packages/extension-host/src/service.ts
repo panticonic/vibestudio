@@ -16,6 +16,7 @@ import type { EventName } from "@vibestudio/shared/events";
 import type { NotificationPayload } from "@vibestudio/shared/events";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
+import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
 import type {
   BuildProvider,
@@ -235,9 +236,7 @@ interface ApprovalQueueLike {
           units: PendingUnitBatchApproval["units"];
           configWrite?: PendingUnitBatchApproval["configWrite"];
         }
-  ): Promise<
-    "once" | "task" | "agent" | "lock" | "session" | "version" | "deny" | "dismiss"
-  >;
+  ): Promise<"once" | "task" | "agent" | "lock" | "session" | "version" | "deny" | "dismiss">;
 }
 
 interface NotificationServiceLike {
@@ -251,6 +250,7 @@ export interface ExtensionHostDeps {
   readWorkspaceFileAtState(stateHash: string, filePath: string): Promise<string | null>;
   describeCapability?: CapabilityPresentationResolver;
   buildSystem: BuildSystemLike;
+  executionPublicationPort?: ExecutionPublicationPort;
   tokenManager: TokenManager;
   eventService: EventService;
   approvalQueue: ApprovalQueueLike;
@@ -302,6 +302,25 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
     this.registry = new UnitRegistry<RegistryEntry>({
       statePath: deps.statePath,
       unitKind: EXTENSION_UNIT_DESCRIPTOR.kind,
+      publicationPort: deps.executionPublicationPort,
+      publicationKeyForEntry: (entry) => entry.activeBundleKey ?? "",
+      publicationForEntry: (entry) => {
+        if (!entry.activeBundleKey) {
+          return { owner: "extension-generation", ownerId: entry.name, artifacts: [] };
+        }
+        const executionDigest = deps.buildSystem.getBuildByKey?.(entry.activeBundleKey)?.metadata
+          .execution?.executionDigest;
+        if (!executionDigest) {
+          throw new Error(
+            `Extension ${entry.name} references unverifiable build ${entry.activeBundleKey}`
+          );
+        }
+        return {
+          owner: "extension-generation",
+          ownerId: entry.name,
+          artifacts: [{ buildKey: entry.activeBundleKey, executionDigest }],
+        };
+      },
     });
     this.extensionTrustResolver = new UnitTrustResolver<RegistryEntry>({
       entryIdentity: (entry) => this.registryEntryBuildIdentity(entry),
@@ -494,9 +513,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
    * without building or activating it. Startup uses this planning phase to put
    * deferred extensions in the same review as apps, panels, and workers.
    */
-  reviewDeclared(
-    declared: UnitDeclaration[]
-  ): { units: UnitBatchEntry[]; identityKeys: string[] } {
+  reviewDeclared(declared: UnitDeclaration[]): { units: UnitBatchEntry[]; identityKeys: string[] } {
     const review = this.unitHost.approvalForDeclarations(declared);
     return { units: review.entries, identityKeys: review.identityKeys };
   }

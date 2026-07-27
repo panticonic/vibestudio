@@ -65,6 +65,13 @@ const executionSession = {
   eval: {
     runtimeId: registered.runtime.id,
     runId: "system-test-runner:run-1",
+    authorityManifest: {
+      mode: "adaptive",
+      effects: "mutable",
+      approvals: "prompt",
+      requests: [],
+      digest: "0".repeat(64),
+    },
   },
   agentBinding: {
     entityId: activeEntity.agentBinding.entityId,

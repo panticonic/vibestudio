@@ -14,6 +14,11 @@ import {
   type WorkspaceRepoFixtureState,
 } from "./workspace-repo-fixture.js";
 import type { AgentExecutionTestPolicySpec } from "@vibestudio/shared/authority/testPolicy";
+import {
+  vcsStateNodeRefSchema,
+  type VcsStateNodeRef,
+} from "@vibestudio/service-schemas/vcs";
+import type { AttachedHostApprovalAuditEvent } from "@vibestudio/service-schemas/attachedHosts";
 
 // This runner is eval'd server-side (in the orchestrating agent's EvalDO), so it
 // uses the portable client surface — NOT panel-only `getStateArgs`/`slotId`.
@@ -63,6 +68,26 @@ export interface EvalCancellationProbe {
   runId: string;
   cancel: { ok: true; forcedReset: boolean };
   terminal: { status: string; result?: unknown };
+}
+
+export interface EvalEventPagesProbe {
+  runId: string;
+  firstPage: { events: Array<{ sequence: number; kind: string }>; next: number; hasMore: boolean };
+  repeatedFirstPage: { events: Array<{ sequence: number; kind: string }>; next: number; hasMore: boolean };
+  pages: Array<{ events: Array<{ sequence: number; kind: string }>; next: number; hasMore: boolean }>;
+  terminal: { status: string; result?: unknown };
+}
+
+export interface AgentVesselFaultProbe {
+  targetId: string;
+  aborted: true;
+}
+
+export interface SelfDevelopmentRepository {
+  contextId: string;
+  repositoryId: string;
+  repoPath: "projects/vibestudio";
+  workingHead: VcsStateNodeRef;
 }
 
 function fixturePublicationAuthority(
@@ -468,30 +493,233 @@ export class HeadlessRunner {
     const subKey = `system-test-cancel-${crypto.randomUUID()}`;
     let activated = false;
     try {
-      const started = await rpc.call<{ runId: string }>("main", "eval.startRun", [
+      const started = await rpc.call<{ runId: string }>("main", "eval.start", [
         {
-          subKey,
-          lifecycle: "finite",
+          scope: { key: subKey, lifecycle: "finite" },
           runId,
-          code: "await new Promise(() => {});",
+          source: { kind: "inline", code: "await new Promise(() => {});" },
         },
       ]);
       activated = true;
       if (started.runId !== runId) {
-        throw new Error(`eval.startRun returned ${started.runId}, expected ${runId}`);
+        throw new Error(`eval.start returned ${started.runId}, expected ${runId}`);
       }
       const cancel = await rpc.call<{ ok: true; forcedReset: boolean }>("main", "eval.cancel", [
-        { subKey, runId },
+        { scopeKey: subKey, runId },
       ]);
-      const terminal = await rpc.call<{ status: string; result?: unknown }>("main", "eval.getRun", [
-        { subKey, runId },
+      const terminal = await rpc.call<{ status: string; result?: unknown }>("main", "eval.get", [
+        { scopeKey: subKey, runId },
       ]);
       return { runId, cancel, terminal };
     } finally {
       if (activated) {
-        await rpc.call("main", "eval.dispose", [{ subKey }]);
+        await rpc.call("main", "eval.dispose", [{ scopeKey: subKey }]);
       }
     }
+  }
+
+  /**
+   * Prove that a completed owner-scoped run retains a stable event stream.
+   * The same first cursor is read twice, then every subsequent page advances
+   * through the durable cursor. This is deliberately a harness probe: an eval
+   * turn cannot read its own event journal until it has already settled.
+   */
+  async probeEvalEventPages(): Promise<EvalEventPagesProbe> {
+    const runId = `system-test-events-${crypto.randomUUID()}`;
+    const subKey = `system-test-events-${crypto.randomUUID()}`;
+    let activated = false;
+    try {
+      const started = await rpc.call<{ runId: string }>("main", "eval.start", [
+        {
+          scope: { key: subKey, lifecycle: "finite" },
+          runId,
+          source: {
+            kind: "inline",
+            code: 'console.log("SYSTEM_TEST_EVAL_EVENT"); return { eventProbe: true };',
+          },
+        },
+      ]);
+      activated = true;
+      if (started.runId !== runId) {
+        throw new Error(`eval.start returned ${started.runId}, expected ${runId}`);
+      }
+      let terminal: { status: string; result?: unknown } | null = null;
+      const settleDeadline = Date.now() + 30_000;
+      while (Date.now() < settleDeadline) {
+        terminal = await rpc.call<{ status: string; result?: unknown }>("main", "eval.get", [
+          { scopeKey: subKey, runId },
+        ]);
+        if (terminal.status === "done" || terminal.status === "cancelled") break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      if (!terminal || (terminal.status !== "done" && terminal.status !== "cancelled")) {
+        throw new Error(`eval run ${runId} did not settle before event pagination`);
+      }
+      const readPage = () =>
+        rpc.call<EvalEventPagesProbe["firstPage"]>("main", "eval.events", [
+          { scopeKey: subKey, runId, after: 0, limit: 1 },
+        ]);
+      const firstPage = await readPage();
+      const repeatedFirstPage = await readPage();
+      const pages: EvalEventPagesProbe["pages"] = [];
+      let after = 0;
+      do {
+        const page = await rpc.call<EvalEventPagesProbe["firstPage"]>("main", "eval.events", [
+          { scopeKey: subKey, runId, after, limit: 1 },
+        ]);
+        pages.push(page);
+        after = page.next;
+        if (!page.hasMore) break;
+      } while (pages.length < 256);
+      if (pages.at(-1)?.hasMore) throw new Error(`eval event stream exceeded bounded pagination`);
+      return { runId, firstPage, repeatedFirstPage, pages, terminal };
+    } finally {
+      if (activated) await rpc.call("main", "eval.dispose", [{ scopeKey: subKey }]);
+    }
+  }
+
+  /**
+   * Abort one exact ordinary headless-agent facet while preserving its durable
+   * storage. This is intentionally a harness-only fault seam. Product agents
+   * do not get a crash tool; the system scenario uses it after observing one
+   * live eval invocation so durable invocation replay crosses a real vessel
+   * instance loss without disrupting unrelated agents.
+   */
+  async faultAbortAgentVesselForReplayProbe(targetId: string): Promise<AgentVesselFaultProbe> {
+    const result = await rpc.call<{ aborted: true }>(
+      "main",
+      "runtime.faultAbortAgentVessel",
+      [{ targetId }]
+    );
+    return { targetId, aborted: result.aborted };
+  }
+
+  /**
+   * Resolve the application checkout from the harness-owned semantic context.
+   * Self-development scenarios use this host-captured identity instead of
+   * asking a model to guess or restate a repository id.
+   */
+  async resolveSelfDevelopmentRepository(): Promise<SelfDevelopmentRepository> {
+    const status = await vcs.status({ contextId: this.contextId });
+    const repository = await vcs.resolveRepository({
+      state: status.workingHead,
+      repoPath: "projects/vibestudio",
+    });
+    if (!repository) {
+      throw Object.assign(
+        new Error(
+          "Self-development prerequisite unavailable: projects/vibestudio is not adopted in the harness context"
+        ),
+        { code: "ESELFDEVELOPMENT_REPOSITORY" }
+      );
+    }
+    return {
+      contextId: this.contextId,
+      repositoryId: repository.repositoryId,
+      repoPath: "projects/vibestudio",
+      workingHead: status.workingHead,
+    };
+  }
+
+  /**
+   * Harness-owned access to the ordinary public development service. Keeping
+   * the call here makes scenario orchestration use the exact same dispatcher
+   * and authority preparation as panels and eval clients, while evidence is
+   * captured by the harness rather than copied from an agent response.
+   */
+  async callSelfDevelopment<T>(
+    method:
+      | "openSession"
+      | "getSession"
+      | "listRecipes"
+      | "listNativeTools"
+      | "start"
+      | "faultFailBuildAfterSnapshotRetained"
+      | "get"
+      | "list"
+      | "events"
+      | "stop"
+      | "retry"
+      | "checkpoint"
+      | "inspectNative"
+      | "writeNativeTerminal"
+      | "stopNativeTool"
+      | "closeSession",
+    input?: unknown
+  ): Promise<T> {
+    return rpc.call<T>("main", `development.${method}`, input === undefined ? [] : [input]);
+  }
+
+  /** Invoke the owner-scoped ordinary attached-host client surface. */
+  async callAttachedDevelopmentHost<T>(
+    sessionId: string,
+    service: string,
+    method: string,
+    args: unknown[]
+  ): Promise<T> {
+    return rpc.call<T>("main", "attachedHosts.invokeAttached", [
+      { sessionId, service, method, args },
+    ]);
+  }
+
+  /** Open and attest the owner-scoped ordinary attached-host client. */
+  async attachDevelopmentHost(sessionId: string): Promise<{
+    sessionId: string;
+    developmentRunId: string;
+    childHostId: string;
+    childGenerationId: string;
+    authorityCeilingDigest: string;
+    expiresAt: number;
+  }> {
+    return rpc.call("main", "attachedHosts.attachClient", [{ sessionId }]);
+  }
+
+  /** Read bounded parent-captured approval evidence without changing child results. */
+  async listAttachedDevelopmentHostApprovalAudit(
+    sessionId: string,
+    input: { after?: string; limit?: number } = {}
+  ): Promise<{
+    events: AttachedHostApprovalAuditEvent[];
+    nextCursor: string | null;
+  }> {
+    return rpc.call("main", "attachedHosts.listApprovalAudit", [
+      { sessionId, ...input },
+    ]);
+  }
+
+  /** Author one disposable semantic marker used to prove dirty-state capture. */
+  async createSelfDevelopmentDirtyMarker(
+    repository: SelfDevelopmentRepository,
+    commandId: string
+  ): Promise<unknown> {
+    return vcs.edit({
+      contextId: repository.contextId,
+      commandId,
+      expectedWorkingHead: repository.workingHead,
+      intentSummary: "Exercise exact dirty semantic self-development input",
+      changes: [
+        {
+          kind: "file-create",
+          repositoryId: repository.repositoryId,
+          path: `.vibestudio-system-test/${commandId.replace(/[^a-zA-Z0-9._-]/gu, "-")}.txt`,
+          content: { kind: "text", text: "self-development dirty-state probe\n" },
+          mode: 0o644,
+        },
+      ],
+    });
+  }
+
+  /** Discard only the harness-authored uncommitted marker after it is captured. */
+  async discardSelfDevelopmentDirtyMarker(
+    contextId: string,
+    expectedWorkingHead: unknown,
+    commandId: string
+  ): Promise<unknown> {
+    return vcs.discard({
+      contextId,
+      commandId,
+      expectedWorkingHead: vcsStateNodeRefSchema.parse(expectedWorkingHead),
+    });
   }
 
   private requireWorkspaceRepoFixture(): NonNullable<HeadlessRunner["workspaceRepoFixture"]> {

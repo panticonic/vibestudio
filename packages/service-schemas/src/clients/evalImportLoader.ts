@@ -1,4 +1,9 @@
-import { buildMethods, type BuildBundleResult, type LibraryBuildTarget } from "../build.js";
+import {
+  buildBundleResultSchema,
+  buildMethods,
+  type BuildBundleResult,
+  type LibraryBuildTarget,
+} from "../build.js";
 import {
   createTypedServiceClient,
   type ServiceCallFn,
@@ -32,17 +37,9 @@ export function createBuildServiceClient(call: ServiceCallFn): BuildServiceClien
 }
 
 export function requireBuildBundleResult(result: unknown, message: string): BuildBundleResult {
-  if (
-    typeof result === "object" &&
-    result !== null &&
-    "bundle" in result &&
-    typeof result.bundle === "string" &&
-    "format" in result &&
-    (result.format === "cjs" || result.format === "async-cjs")
-  ) {
-    return { bundle: result.bundle, format: result.format };
-  }
-  throw new Error(message);
+  const parsed = buildBundleResultSchema.safeParse(result);
+  if (parsed.success) return parsed.data;
+  throw new Error(`${message}: ${parsed.error.message}`);
 }
 
 function parsePackageQualifiedNpmRef(value: string): { specifier: string; version: string } | null {

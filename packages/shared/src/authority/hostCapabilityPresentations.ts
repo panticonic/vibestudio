@@ -171,9 +171,10 @@ export const HOST_CAPABILITY_PRESENTATIONS = {
     group: "workspace",
   },
   "build.gc": {
-    title: "Clean unused build files",
-    action: "clean unused build files",
-    description: "Allows {requesterKind} to clean unused build files.",
+    title: "Inspect build cache retention",
+    action: "inspect build cache retention",
+    description:
+      "Allows {requesterKind} to inspect retained and unreferenced build files without removing them.",
     group: "workspace",
   },
   "build.getBuildNpm": {
@@ -207,6 +208,48 @@ export const HOST_CAPABILITY_PRESENTATIONS = {
     action: "trust this exact outside content",
     description: "Allows {requesterKind} to trust this exact outside content.",
     group: "approvals",
+  },
+  "development.destroySession": {
+    title: "Destroy a development workspace",
+    action: "permanently destroy a development workspace",
+    description:
+      "Allows {requesterKind} to permanently destroy this isolated semantic working copy.",
+    group: "runtime",
+  },
+  "development.start": {
+    title: "Build the current workspace source",
+    action: "run a reviewed build of the current workspace source",
+    description:
+      "Allows {requesterKind} to install frozen dependencies and run the reviewed build for one exact workspace snapshot.",
+    group: "runtime",
+  },
+  "development.retry": {
+    title: "Retry a development build",
+    action: "retry a reviewed build of the exact workspace source",
+    description:
+      "Allows {requesterKind} to run the reviewed build again with the same exact prepared native authority.",
+    group: "runtime",
+  },
+  "development.retrySessionCleanup": {
+    title: "Retry development-workspace cleanup",
+    action: "retry permanent cleanup of a development workspace",
+    description:
+      "Allows {requesterKind} to retry the previously requested cleanup of this isolated semantic working copy.",
+    group: "runtime",
+  },
+  "development.forceRetireSession": {
+    title: "Abandon development-workspace recovery",
+    action: "permanently abandon recovery of a development workspace",
+    description:
+      "Allows {requesterKind} to retire an isolated semantic working copy whose ownership can no longer be proven.",
+    group: "runtime",
+  },
+  "development.forceRetire": {
+    title: "Abandon development-build recovery",
+    action: "permanently abandon recovery of a development build",
+    description:
+      "Allows {requesterKind} to permanently retire a development run whose remaining native effects can no longer be proven.",
+    group: "runtime",
   },
   "credentials.audit": {
     title: "View connected-account activity",
@@ -1098,6 +1141,11 @@ export const HOST_SEMANTIC_CAPABILITY_PRESENTATIONS = {
   "context.clone": effect("Copy another task's working context", "runtime"),
   "context.materialize": effect("Create a task workspace folder", "files"),
   "context.relationships.record": effect("Record relationships between tasks", "runtime"),
+  "development.native.execute": effect("Run reviewed workspace development code", "runtime"),
+  "development.runs.force-retire": effect("Abandon development-build recovery", "runtime"),
+  "development.sessions.cleanup.retry": effect("Retry development-context cleanup", "runtime"),
+  "development.sessions.destroy": effect("Destroy development contexts", "runtime"),
+  "development.sessions.force-retire": effect("Abandon development-context recovery", "runtime"),
   "credential.use": effect("Use connected accounts", "credentials"),
   "credentials.audit.read": effect("View connected-account activity", "credentials"),
   "devices.pair": effect("Pair a device", "accounts"),

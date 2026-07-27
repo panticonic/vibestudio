@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
 
-function admission(runtimeId = "runtime:eval:one", runId = "run:one") {
+function admission(
+  runtimeId = "runtime:eval:one",
+  runId = "run:one"
+): Parameters<AgentExecutionSessionRegistry["admit"]>[0] {
   return {
     mode: "interactive" as const,
     ownerUser: "user:alice" as const,
@@ -18,7 +21,17 @@ function admission(runtimeId = "runtime:eval:one", runId = "run:one") {
       repoPath: "workers/system-agent",
       effectiveVersion: "ev:one",
     },
-    eval: { runtimeId, runId },
+    eval: {
+      runtimeId,
+      runId,
+      authorityManifest: {
+        mode: "adaptive",
+        effects: "mutable",
+        approvals: "prompt",
+        requests: [],
+        digest: "0".repeat(64),
+      },
+    },
     causalParent: { logId: "log:one", head: "head:one", invocationId: "invocation:one" },
   };
 }

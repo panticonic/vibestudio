@@ -9,6 +9,8 @@ import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { CapabilityScope } from "@vibestudio/rpc";
 import type { UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
+import type { ExecutionArtifactRefV1 } from "@vibestudio/shared/execution/retention";
+import type { Sha256 } from "@vibestudio/shared/execution/identity";
 
 export const AuthorityResourceScopeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("exact"), key: z.string() }).strict(),
@@ -49,14 +51,13 @@ const BUILD_ACCESS: MethodAccessDescriptor = {
 const RECOMPUTE_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
-const GC_ACCESS: MethodAccessDescriptor = {
-  sensitivity: "destructive",
-};
 
 export const buildBundleResultSchema = z
   .object({
     bundle: z.string(),
     format: z.enum(["cjs", "async-cjs"]),
+    /** Present for workspace-derived bundles; absent for external npm products. */
+    execution: z.lazy(() => executionArtifactRefSchema).optional(),
   })
   .strict();
 export type BuildBundleResult = z.infer<typeof buildBundleResultSchema>;
@@ -80,6 +81,14 @@ export const buildMetadataSchema = z
     buildKey: z.string().min(1),
     ev: z.string(),
     sourceStateHash: z.string().nullable(),
+    sourceSemanticState: z
+      .discriminatedUnion("kind", [
+        z.object({ kind: z.literal("event"), eventId: z.string().min(1) }).strict(),
+        z.object({ kind: z.literal("application"), applicationId: z.string().min(1) }).strict(),
+      ])
+      .nullable()
+      .optional(),
+    execution: z.lazy(() => executionArtifactRefSchema).optional(),
     sourcemap: z.boolean(),
     framework: z.string().optional(),
     authority: UnitAuthorityManifestSchema.optional(),
@@ -108,6 +117,59 @@ export const buildResultSchema = z
     }
   });
 export type BuildResultWire = z.infer<typeof buildResultSchema>;
+
+export const executionSourceContentRootSchema = z
+  .object({
+    repoPath: z.string().nullable(),
+    stateHash: z.string().regex(/^state:[0-9a-f]{64}$/u),
+  })
+  .strict();
+
+const sha256Schema = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/u)
+  .transform((value): Sha256 => value as Sha256);
+
+export const executionArtifactRefSchema = z
+  .object({
+    version: z.literal(1),
+    sourceState: z.discriminatedUnion("kind", [
+      z
+        .object({
+          kind: z.literal("workspace"),
+          workspaceId: z.string().min(1),
+          effectiveVersion: sha256Schema,
+          state: z.discriminatedUnion("kind", [
+            z.object({ kind: z.literal("event"), eventId: z.string().min(1) }).strict(),
+            z.object({ kind: z.literal("application"), applicationId: z.string().min(1) }).strict(),
+          ]),
+          contentRoots: z.array(executionSourceContentRootSchema).min(1),
+          sourceClosureDigest: sha256Schema,
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal("product-seed"),
+          workspaceId: z.string().min(1),
+          effectiveVersion: sha256Schema,
+          state: z.null(),
+          contentRoots: z
+            .array(
+              executionSourceContentRootSchema.extend({
+                repoPath: z.null(),
+              })
+            )
+            .min(1),
+          sourceClosureDigest: sha256Schema,
+        })
+        .strict(),
+    ]),
+    recipeDigest: sha256Schema,
+    buildKey: sha256Schema,
+    artifactDigest: sha256Schema,
+    executionDigest: sha256Schema,
+  })
+  .strict() satisfies z.ZodType<ExecutionArtifactRefV1, z.ZodTypeDef, unknown>;
 
 export const buildChangeSetSchema = z
   .object({
@@ -445,11 +507,87 @@ export const buildMethods = defineServiceMethods({
   },
   gc: {
     description:
-      "Garbage-collect cached build artifacts not referenced by the given active units; returns the number of artifacts freed.",
-    args: z.tuple([z.array(z.string())]),
-    returns: z.object({ freed: z.number() }).strict(),
-    access: GC_ACCESS,
-    examples: [{ args: [[]], returns: { freed: 0 } }],
+      "Inspect authoritative execution retention using host-owned roots without mutating artifacts or source content. Destructive collection is private to the coordinated host epoch.",
+    args: z.tuple([]),
+    returns: z
+      .object({
+        epoch: z.number().int().nonnegative(),
+        mode: z.literal("report"),
+        complete: z.boolean(),
+        roots: z.number().int().nonnegative(),
+        rootBuildKeys: z.array(z.string()),
+        storedRootBuildKeys: z.array(z.string()),
+        unresolvedAuthoritativeRootBuildKeys: z.array(z.string()),
+        reachableBuilds: z.number().int().nonnegative(),
+        unreferenced: z.number().int().nonnegative(),
+        unreferencedBytes: z.number().int().nonnegative(),
+        quarantined: z.number().int().nonnegative(),
+        deleted: z.number().int().nonnegative(),
+        retainedForGrace: z.number().int().nonnegative(),
+        notReconstructible: z.number().int().nonnegative(),
+        notReconstructibleDetails: z.array(
+          z.object({ buildKey: z.string(), missing: z.array(z.string()) }).strict()
+        ),
+        providerFailures: z.array(
+          z
+            .object({
+              provider: z.string(),
+              error: z.string(),
+            })
+            .strict()
+        ),
+        cleanupFailures: z.array(z.object({ buildKey: z.string(), error: z.string() }).strict()),
+        retainedSourceRoots: z.array(executionSourceContentRootSchema),
+      })
+      .strict(),
+    access: READ_ACCESS,
+    examples: [
+      {
+        args: [],
+        returns: {
+          epoch: 0,
+          mode: "report",
+          complete: true,
+          roots: 0,
+          rootBuildKeys: [],
+          storedRootBuildKeys: [],
+          unresolvedAuthoritativeRootBuildKeys: [],
+          reachableBuilds: 0,
+          unreferenced: 0,
+          unreferencedBytes: 0,
+          quarantined: 0,
+          deleted: 0,
+          retainedForGrace: 0,
+          notReconstructible: 0,
+          notReconstructibleDetails: [],
+          providerFailures: [],
+          cleanupFailures: [],
+          retainedSourceRoots: [],
+        },
+      },
+    ],
+  },
+  inspectExecution: {
+    description:
+      "Explain one immutable execution identity, its authoritative owners, and whether its artifact and source closure remain reconstructible.",
+    args: z.tuple([z.string().regex(/^[0-9a-f]{64}$/u)]),
+    returns: z
+      .object({
+        artifact: executionArtifactRefSchema.nullable(),
+        roots: z.array(
+          z
+            .object({
+              owner: z.string(),
+              ownerId: z.string(),
+              reason: z.string(),
+            })
+            .strict()
+        ),
+        reconstructible: z.boolean(),
+        missing: z.array(z.string()),
+      })
+      .strict(),
+    access: READ_ACCESS,
   },
   getAboutPages: {
     description: "List available about pages for the launcher UI.",

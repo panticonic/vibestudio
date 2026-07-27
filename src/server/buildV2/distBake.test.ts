@@ -11,9 +11,14 @@ import {
 import type { BuildResult } from "./buildStore.js";
 import { domainHash } from "@vibestudio/shared/execution/identity";
 import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
+import {
+  executionArtifactDigest,
+  executionSourceClosureDigest,
+} from "@vibestudio/shared/execution/retention";
 
 const BUILD_KEY = "b".repeat(64);
 const EFFECTIVE_VERSION = "e".repeat(64);
+const SOURCE_STATE_HASH = `state:${"c".repeat(64)}`;
 
 function integrity(content: string): string {
   return `sha256-${crypto.createHash("sha256").update(content).digest("hex")}`;
@@ -39,18 +44,22 @@ function executionIdentity(artifacts: BuildResult["artifacts"]) {
         )
     )
   );
-  const source = { repoPath: "apps/shell", effectiveVersion: EFFECTIVE_VERSION as never };
-  const executionDigest = domainHash(
-    "vibestudio/build-v2-execution/v1",
-    canonicalJson({ version: 1, source, buildInputDigest: BUILD_KEY, artifactDigest })
-  );
-  return {
+  const contentRoots = [{ repoPath: "apps/shell", stateHash: SOURCE_STATE_HASH }];
+  const unsigned = {
     version: 1 as const,
-    source,
-    buildInputDigest: BUILD_KEY as never,
+    sourceState: {
+      kind: "workspace" as const,
+      workspaceId: "workspace:test",
+      effectiveVersion: EFFECTIVE_VERSION as never,
+      state: { kind: "event" as const, eventId: "event:test" },
+      contentRoots,
+      sourceClosureDigest: executionSourceClosureDigest(contentRoots),
+    },
+    recipeDigest: BUILD_KEY as never,
+    buildKey: BUILD_KEY as never,
     artifactDigest,
-    executionDigest,
   };
+  return { ...unsigned, executionDigest: executionArtifactDigest(unsigned) };
 }
 
 function appEntry(overrides: Partial<ApprovedAppDistEntry> = {}): ApprovedAppDistEntry {
@@ -60,7 +69,7 @@ function appEntry(overrides: Partial<ApprovedAppDistEntry> = {}): ApprovedAppDis
     capabilities: ["notifications"],
     source: { repo: "workspace/apps/shell", ref: "main" },
     activeEv: EFFECTIVE_VERSION,
-    activeSourceHash: "state:shell",
+    activeSourceHash: SOURCE_STATE_HASH,
     activeBundleKey: BUILD_KEY,
     status: "running",
     ...overrides,
@@ -92,14 +101,15 @@ function appBuild(overrides: Partial<BuildResult> = {}): BuildResult {
   return {
     dir: `/builds/${BUILD_KEY}`,
     buildKey: BUILD_KEY,
-    sourceStateHash: "state:shell",
+    sourceStateHash: SOURCE_STATE_HASH,
     metadata: {
       kind: "app",
       name: "@workspace-apps/shell",
       buildKey: BUILD_KEY,
       sourcePath: "apps/shell",
       ev: EFFECTIVE_VERSION,
-      sourceStateHash: "state:shell",
+      sourceStateHash: SOURCE_STATE_HASH,
+      sourceSemanticState: { kind: "event", eventId: "event:test" },
       sourcemap: true,
       authority: {
         requests: [
@@ -147,7 +157,7 @@ describe("app dist bake", () => {
       build: {
         key: BUILD_KEY,
         effectiveVersion: EFFECTIVE_VERSION,
-        sourceStateHash: "state:shell",
+        sourceStateHash: SOURCE_STATE_HASH,
         target: "electron",
         integrity: "sha256-shell",
         executionDigest: appBuild().metadata.execution?.executionDigest,

@@ -20,8 +20,8 @@ import type { WorkspaceStateSource } from "./stateTrigger.js";
 import type { BuildSystemV2 } from "./index.js";
 import type { PackageGraph } from "./packageGraph.js";
 
-const BASE_VIEW = "state:base";
-const CANDIDATE_VIEW = "state:candidate";
+const BASE_VIEW = `state:${"a".repeat(64)}`;
+const CANDIDATE_VIEW = `state:${"b".repeat(64)}`;
 
 // Per-test hook so a unit's build can be made to fail at a specific view.
 let shouldFail: (name: string, ev: string, stateRef: string) => boolean = () => false;
@@ -59,6 +59,7 @@ function fakeSource(
   graph: PackageGraph
 ): WorkspaceStateSource & BuildSourceProvider {
   return {
+    workspaceId: "workspace:test",
     ensureFresh: async () => ({ stateHash: BASE_VIEW }),
     unitHashes: async (stateHash, relPaths) =>
       Object.fromEntries(
@@ -70,6 +71,10 @@ function fakeSource(
         })
       ),
     resolveContextState: async () => CANDIDATE_VIEW,
+    semanticStateForContent: (stateHash) => ({
+      kind: "event",
+      eventId: `event:${stateHash}`,
+    }),
     discoverGraph: async () => graph,
     onProtectedPublication: () => () => {},
     recordBuild: async () => {},

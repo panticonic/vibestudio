@@ -78,7 +78,7 @@ describe("HeadlessRunner", () => {
     expect(config.extraConfig).not.toHaveProperty("maxModelCallsPerTurn");
   });
 
-  it("keeps GPT-5.4 mini pinned without a usage-limit fallback", async () => {
+  it("keeps GPT-5.3 Codex Spark pinned without a usage-limit fallback", async () => {
     const runner = new HeadlessRunner("ctx-test");
 
     await runner.forTest("first").spawn();
@@ -112,11 +112,11 @@ describe("HeadlessRunner", () => {
   it("cancels one harness-owned asynchronous eval and disposes its finite scope", async () => {
     const runner = new HeadlessRunner("ctx-test");
     mocks.rpc.call.mockImplementation(async (_target, method, args) => {
-      if (method === "eval.startRun") {
+      if (method === "eval.start") {
         return { runId: (args[0] as { runId: string }).runId };
       }
       if (method === "eval.cancel") return { ok: true, forcedReset: false };
-      if (method === "eval.getRun") return { status: "cancelled" };
+      if (method === "eval.get") return { status: "cancelled" };
       if (method === "eval.dispose") return { ok: true };
       throw new Error(`Unexpected method ${method}`);
     });
@@ -129,25 +129,79 @@ describe("HeadlessRunner", () => {
       terminal: { status: "cancelled" },
     });
     const startArgs = mocks.rpc.call.mock.calls[0]![2][0] as {
-      subKey: string;
+      scope: { key: string };
       runId: string;
     };
-    expect(mocks.rpc.call).toHaveBeenNthCalledWith(1, "main", "eval.startRun", [
+    expect(mocks.rpc.call).toHaveBeenNthCalledWith(1, "main", "eval.start", [
       expect.objectContaining({
-        subKey: startArgs.subKey,
-        lifecycle: "finite",
+        scope: { key: startArgs.scope.key, lifecycle: "finite" },
         runId: startArgs.runId,
       }),
     ]);
     expect(mocks.rpc.call).toHaveBeenNthCalledWith(2, "main", "eval.cancel", [
-      { subKey: startArgs.subKey, runId: startArgs.runId },
+      { scopeKey: startArgs.scope.key, runId: startArgs.runId },
     ]);
-    expect(mocks.rpc.call).toHaveBeenNthCalledWith(3, "main", "eval.getRun", [
-      { subKey: startArgs.subKey, runId: startArgs.runId },
+    expect(mocks.rpc.call).toHaveBeenNthCalledWith(3, "main", "eval.get", [
+      { scopeKey: startArgs.scope.key, runId: startArgs.runId },
     ]);
     expect(mocks.rpc.call).toHaveBeenNthCalledWith(4, "main", "eval.dispose", [
-      { subKey: startArgs.subKey },
+      { scopeKey: startArgs.scope.key },
     ]);
+  });
+
+  it("reads one stable bounded durable event cursor twice before advancing pages", async () => {
+    const runner = new HeadlessRunner("ctx-test");
+    let eventRead = 0;
+    mocks.rpc.call.mockImplementation(async (_target, method, args) => {
+      const route = args[0] as { runId?: string };
+      if (method === "eval.start") return { runId: route.runId };
+      if (method === "eval.get") return { status: "done", result: { success: true } };
+      if (method === "eval.events") {
+        eventRead++;
+        return eventRead <= 3
+          ? { events: [{ sequence: 1, kind: "state" }], next: 1, hasMore: true }
+          : { events: [{ sequence: 2, kind: "console" }], next: 2, hasMore: false };
+      }
+      if (method === "eval.dispose") return { ok: true };
+      throw new Error(`Unexpected method ${method}`);
+    });
+
+    const result = await runner.probeEvalEventPages();
+
+    expect(result.terminal).toMatchObject({ status: "done", result: { success: true } });
+    expect(result.firstPage).toEqual(result.repeatedFirstPage);
+    expect(result.pages).toEqual([
+      result.firstPage,
+      { events: [{ sequence: 2, kind: "console" }], next: 2, hasMore: false },
+    ]);
+    expect(mocks.rpc.call.mock.calls.map(([, method]) => method)).toEqual([
+      "eval.start",
+      "eval.get",
+      "eval.events",
+      "eval.events",
+      "eval.events",
+      "eval.events",
+      "eval.dispose",
+    ]);
+  });
+
+  it("fault-aborts one exact agent vessel through the hidden runtime harness seam", async () => {
+    const runner = new HeadlessRunner("ctx-test");
+    mocks.rpc.call.mockResolvedValue({ aborted: true });
+
+    await expect(
+      runner.faultAbortAgentVesselForReplayProbe(
+        "do:workers/agent-worker:AiChatWorker:agent-1"
+      )
+    ).resolves.toEqual({
+      targetId: "do:workers/agent-worker:AiChatWorker:agent-1",
+      aborted: true,
+    });
+    expect(mocks.rpc.call).toHaveBeenCalledExactlyOnceWith(
+      "main",
+      "runtime.faultAbortAgentVessel",
+      [{ targetId: "do:workers/agent-worker:AiChatWorker:agent-1" }]
+    );
   });
 
   it("does not attach a fallback route to an explicit model override", async () => {

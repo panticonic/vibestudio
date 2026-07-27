@@ -8,6 +8,10 @@ import type {
 } from "@vibestudio/shared/hostTargets";
 import { normalizeUnitRepoPath as normalizeRepoPath } from "@vibestudio/unit-host";
 import { stateLayout } from "./stateLayout.js";
+import {
+  publishExecutionOwner,
+  type ExecutionPublicationPort,
+} from "@vibestudio/shared/execution/retention";
 
 interface HostTargetSelectionState {
   selections?: HostTargetSelection[];
@@ -26,7 +30,13 @@ export interface HostTargetSelectionStore {
 export class FileHostTargetSelectionStore implements HostTargetSelectionStore {
   private readonly filePath: string;
 
-  constructor(statePath: string) {
+  constructor(
+    statePath: string,
+    private readonly publication?: {
+      port: ExecutionPublicationPort;
+      executionDigestForBuild(buildKey: string): string | null;
+    }
+  ) {
     this.filePath = stateLayout(statePath).hostTargetSelectionsFile;
   }
 
@@ -53,7 +63,21 @@ export class FileHostTargetSelectionStore implements HostTargetSelectionStore {
         !(candidate.workspaceId === selection.workspaceId && candidate.target === selection.target)
     );
     selections.push(selection);
-    this.write(selections);
+    const buildKey = selection.buildKey;
+    const executionDigest =
+      buildKey && this.publication ? this.publication.executionDigestForBuild(buildKey) : null;
+    if (buildKey && this.publication && !executionDigest) {
+      throw new Error(`Host target selection references unverifiable build ${buildKey}`);
+    }
+    publishExecutionOwner(
+      this.publication?.port,
+      {
+        owner: "host-target-selection",
+        ownerId: `${selection.workspaceId}:${selection.target}`,
+        artifacts: buildKey && executionDigest ? [{ buildKey, executionDigest }] : [],
+      },
+      () => this.write(selections)
+    );
   }
 
   clear(workspaceId: string, target: HostTarget): void {
@@ -66,7 +90,9 @@ export class FileHostTargetSelectionStore implements HostTargetSelectionStore {
 
   private write(selections: HostTargetSelection[]): void {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    fs.writeFileSync(this.filePath, JSON.stringify({ selections }, null, 2), "utf8");
+    const tmpPath = `${this.filePath}.tmp.${process.pid}.${Date.now()}`;
+    fs.writeFileSync(tmpPath, JSON.stringify({ selections }, null, 2), "utf8");
+    fs.renameSync(tmpPath, this.filePath);
   }
 }
 
@@ -106,13 +132,15 @@ export interface HostTargetSelectionResult {
 export class HostTargetSelectionPolicy {
   constructor(private readonly deps: HostTargetSelectionPolicyDeps) {}
 
-  get(target: HostTarget): HostTargetSelectionResult {
-    const explicitSelection = this.deps.store
+  /** Durable explicit selections only; derived defaults do not retain artifacts. */
+  listPersisted(): HostTargetSelection[] {
+    return this.deps.store
       .list()
-      .find(
-        (candidate) =>
-          candidate.workspaceId === this.deps.workspaceId && candidate.target === target
-      );
+      .filter((selection) => selection.workspaceId === this.deps.workspaceId);
+  }
+
+  get(target: HostTarget): HostTargetSelectionResult {
+    const explicitSelection = this.listPersisted().find((candidate) => candidate.target === target);
     const selection = explicitSelection ?? this.defaultSelection(target);
     if (!selection) return { selection: null, valid: false, reason: "No app selected" };
 

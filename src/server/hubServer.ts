@@ -65,6 +65,7 @@ import {
   WorkspaceChildAgentCredentialRevokeEntityInputSchema,
   WorkspaceChildAgentCredentialRevokeInputSchema,
   WorkspaceChildDeviceTouchInputSchema,
+  WorkspaceChildDeviceInviteInputSchema,
   WorkspaceChildGovernanceAppendInputSchema,
   WorkspaceChildGovernanceQueryInputSchema,
   WorkspaceChildPresenceReportInputSchema,
@@ -1087,6 +1088,34 @@ async function handleInternalRoute(
       }
       state.identityDb.touchDevice(body.deviceId);
       sendJson(res, 200, { touched: true });
+      return;
+    }
+    if (route === "device/invite") {
+      const body = WorkspaceChildDeviceInviteInputSchema.parse(rawBody);
+      const user = state.userStore.getUser(body.userId);
+      if (!user || user.revokedAt !== undefined) {
+        throw authError("EACCES", "Development client owner is unavailable", 403);
+      }
+      if (user.role !== "root" && !state.membershipStore.has(user.id, boundWorkspaceId)) {
+        throw authError("EACCES", "Development client owner is not a workspace member", 403);
+      }
+      const workspace = requireWorkspaceName(state, boundWorkspaceId);
+      const pairing = state.deviceAuthStore.createPairingInvite(body.ttlMs, {
+        workspaceId: boundWorkspaceId,
+        userId: user.id,
+        intent: "pair-device",
+      });
+      let reach: ChildReach;
+      try {
+        reach = await armControlInvite(state, pairing);
+      } catch (error) {
+        await disarmControlInvite(state, pairing.code);
+        throw error;
+      }
+      sendJson(res, 200, {
+        workspace,
+        pairing: pairingInviteFromReach(state, pairing.code, pairing.expiresAt, reach),
+      });
       return;
     }
     if (route === "presence/report") {

@@ -48,7 +48,9 @@ import {
   evaluateAuthority,
   requirementForPrincipals,
   lineageClasses,
+  scopeCovers,
 } from "./authorization.js";
+import { capabilityPatternCovers } from "./authorityManifest.js";
 import {
   receiverAuthorityPolicy,
   standingAgentScopeEligible,
@@ -361,6 +363,9 @@ export type ServiceContext = {
    * rendezvous; durable effect owners leave this unset and journal EACQUIRE.
    */
   authorityAcquisition?: "wait" | "return";
+  /** Host-internal exact prospective authorization. The dispatcher may acquire
+   * an invocation-bound grant but must not consume it until the real call. */
+  authorityPreauthorization?: true;
   /** Immutable verified runtime that transported a live eval call. The
    * dispatcher snapshots this before replacing `caller` with evaluated code,
    * so methods with multiple authority leaves revalidate the same deputy. */
@@ -374,6 +379,12 @@ export type ServiceContext = {
     /** Set only after the host coordinator authenticates the opaque lease. */
     contextId?: string;
   };
+  /**
+   * Owner-bound attached-host provenance derived only after route signature,
+   * generation, replay, and ceiling verification. Public service arguments
+   * can never populate this field.
+   */
+  attachedHost?: import("@vibestudio/rpc").AttachedHostExecutionFact;
   /** Verified root initiator for prompts/audit when a deputy (notably EvalDO)
    * transports the operation. Domain routing still uses `caller`. */
   authorizingCaller?: VerifiedCaller;
@@ -431,6 +442,16 @@ export type ServiceContext = {
    * bypass it regardless of which transport or proxy it calls through.
    */
   readOnly?: boolean;
+  /**
+   * Receiver-owned state sealed by the method's authority preparer. It is
+   * installed only after the final handler-boundary revalidation; handlers
+   * never receive the stale pre-prompt value.
+   */
+  preparedAuthority?: {
+    resolver: string;
+    digest: string;
+    payload: unknown;
+  };
   /**
    * Streaming REQUEST body for stream-request dispatches (WebRTC uploads, plan
    * §1.6): the client pumps it as bulk-channel DATA frames keyed by the
@@ -490,6 +511,12 @@ export interface AuthorityChallengePresentation {
    * scopes with this set before presenting or accepting a decision.
    */
   allowedDecisions?: readonly ApprovalDecision[];
+  /**
+   * Optional receiver-selected bound for a durable generic capability grant.
+   * The acquisition coordinator applies it to session/version decisions; it
+   * never creates a service-specific grant path.
+   */
+  grantExpiresAt?: number;
   signal?: AbortSignal;
 }
 
@@ -573,6 +600,16 @@ export interface HostAuthorityEffect {
   sensitivity?: import("./serviceAuthority.js").MethodSensitivity;
 }
 
+interface AuthorityAssessmentBaseline {
+  caller: VerifiedCaller;
+  authorizingCaller?: VerifiedCaller;
+  authorization?: AuthorizationContext;
+  transportCaller?: VerifiedCaller;
+  readOnly?: boolean;
+  authorityDecisions?: Map<string, "once" | "session" | "version">;
+  evalContextId?: string;
+}
+
 /**
  * Service dispatcher — all services registered via registerService().
  */
@@ -592,6 +629,7 @@ export class ServiceDispatcher {
       renderedAction: string;
       resource: ResourceScope;
       presentation?: AuthorityChallengePresentation;
+      attachedHost?: import("@vibestudio/rpc").AttachedHostExecutionFact;
     }): AcquisitionInfo;
     acquire(
       input: {
@@ -602,11 +640,12 @@ export class ServiceDispatcher {
         renderedAction: string;
         resource: ResourceScope;
         presentation?: AuthorityChallengePresentation;
+        attachedHost?: import("@vibestudio/rpc").AttachedHostExecutionFact;
       },
       signal?: AbortSignal
     ): Promise<{
       state: "decided" | "closed";
-      decision?: "once" | "task" | "agent" | "lock" | "version" | "deny";
+      decision?: "once" | "session" | "task" | "agent" | "lock" | "version" | "deny";
       info?: AcquisitionInfo;
     }>;
     consume(grantId: string): boolean;
@@ -625,6 +664,18 @@ export class ServiceDispatcher {
       presentation?: AuthorityChallengePresentation;
     }): void | Promise<void>;
   };
+  private authorityObserver?: (event: {
+    executionSession: NonNullable<AuthorizationContext["executionSession"]>;
+    kind: "authority-requested" | "authority-decided";
+    payload: {
+      capability: string;
+      resourceKey: string;
+      tier: "open" | "gated" | "critical";
+      decision?: string;
+      acquisitionId?: string;
+      snapshotDigest?: string;
+    };
+  }) => void | Promise<void>;
 
   constructor(
     opts: {
@@ -638,6 +689,33 @@ export class ServiceDispatcher {
 
   setAuthorityAcquirer(acquirer: NonNullable<ServiceDispatcher["authorityAcquirer"]>): void {
     this.authorityAcquirer = acquirer;
+  }
+
+  setAuthorityObserver(observer: NonNullable<ServiceDispatcher["authorityObserver"]>): void {
+    this.authorityObserver = observer;
+  }
+
+  private async observeAuthority(
+    context: AuthorizationContext,
+    kind: "authority-requested" | "authority-decided",
+    payload: {
+      capability: string;
+      resourceKey: string;
+      tier: "open" | "gated" | "critical";
+      decision?: string;
+      acquisitionId?: string;
+      snapshotDigest?: string;
+    }
+  ): Promise<void> {
+    if (!context.executionSession || !this.authorityObserver) return;
+    try {
+      await this.authorityObserver({ executionSession: context.executionSession, kind, payload });
+    } catch (error) {
+      console.warn(
+        "[ServiceDispatcher] authority event observer failed:",
+        error instanceof Error ? error.message : error
+      );
+    }
   }
   private authorityResolver?: (input: {
     ctx: ServiceContext;
@@ -924,7 +1002,13 @@ export class ServiceDispatcher {
     method: string,
     args: unknown[]
   ): Promise<void> {
-    await this.assessAuthority(ctx, service, method, args, false);
+    delete ctx.preparedAuthority;
+    try {
+      await this.assessAuthority(ctx, service, method, args, false);
+    } catch (error) {
+      delete ctx.preparedAuthority;
+      throw error;
+    }
   }
 
   /** Execute the complete authority contract without cards, grants, consumption, or handlers. */
@@ -934,6 +1018,7 @@ export class ServiceDispatcher {
     method: string,
     args: unknown[]
   ): Promise<AuthorityPreflightResult> {
+    delete ctx.preparedAuthority;
     const methodDef = this.definitions.get(service)?.methods[method];
     if (!methodDef) throw new ServiceError(service, method, "Unknown service method");
     const normalized = normalizeServiceArgs(args, methodDef.args);
@@ -954,13 +1039,50 @@ export class ServiceDispatcher {
     ) as Promise<AuthorityPreflightResult>;
   }
 
+  /**
+   * Acquire authority for one exact prospective invocation without invoking
+   * its handler. This uses the same prepared-state resolution, invocation
+   * snapshot, grants, denials, relationships, and acquisition coordinator as
+   * ordinary dispatch; it is not a capability-string approval shortcut.
+   */
+  async preauthorizeAuthority(
+    ctx: ServiceContext,
+    service: string,
+    method: string,
+    args: unknown[]
+  ): Promise<void> {
+    delete ctx.preparedAuthority;
+    const methodDef = this.definitions.get(service)?.methods[method];
+    if (!methodDef) throw new ServiceError(service, method, "Unknown service method");
+    const normalized = normalizeServiceArgs(args, methodDef.args);
+    const parsed = methodDef.args.safeParse(normalized);
+    if (!parsed.success) {
+      throw new ServiceError(
+        service,
+        method,
+        `Invalid args: ${formatArgsValidationError(parsed.error)}${formatUsageHint(service, method, methodDef)}`
+      );
+    }
+    await this.assessAuthority(
+      { ...ctx, authorityAcquisition: "wait", authorityPreauthorization: true },
+      service,
+      method,
+      normalized,
+      false
+    );
+  }
+
   private async assessAuthority(
     ctx: ServiceContext,
     service: string,
     method: string,
     args: unknown[],
-    preflight: boolean
+    preflight: boolean,
+    baseline?: AuthorityAssessmentBaseline
   ): Promise<void | AuthorityPreflightResult> {
+    const assessmentBaseline = baseline ?? captureAuthorityAssessmentBaseline(ctx);
+    if (baseline) restoreAuthorityAssessmentBaseline(ctx, baseline);
+    delete ctx.preparedAuthority;
     if (ctx.evalInvocation && !ctx.transportCaller) ctx.transportCaller = ctx.caller;
     const serviceDef = this.definitions.get(service);
     const methodDef = serviceDef?.methods[method];
@@ -1039,8 +1161,12 @@ export class ServiceDispatcher {
       tier?: "open" | "gated" | "critical";
     };
     const prepareDescriptor = "prepared" in descriptor ? descriptor.prepared : undefined;
-    const collectPreparedSelections = async (): Promise<PreparedSelection[]> => {
-      if (!prepareDescriptor) return [];
+    type PreparedInvocationState = {
+      selections: PreparedSelection[];
+      payload: unknown;
+    };
+    const collectPreparedState = async (): Promise<PreparedInvocationState> => {
+      if (!prepareDescriptor) return { selections: [], payload: null };
       const prepare = serviceDef.authorityPreparation?.[prepareDescriptor.resolver];
       if (!prepare) {
         throw new ServiceError(
@@ -1049,10 +1175,22 @@ export class ServiceDispatcher {
           `Authority preparer '${prepareDescriptor.resolver}' is unavailable`
         );
       }
-      const selected = await prepare(ctx, args);
+      const prepared = await prepare(ctx, args);
+      if (
+        !prepared ||
+        typeof prepared !== "object" ||
+        !Array.isArray(prepared.selections) ||
+        !("payload" in prepared)
+      ) {
+        throw new ServiceError(
+          service,
+          method,
+          `Authority preparer '${prepareDescriptor.resolver}' returned an invalid prepared state`
+        );
+      }
       const collected: PreparedSelection[] = [];
       const seen = new Set<string>();
-      for (const selection of selected) {
+      for (const selection of prepared.selections) {
         const matchingLeaves = prepareDescriptor.leaves.filter((leaf) =>
           leaf.capability !== undefined
             ? leaf.capability === selection.capability
@@ -1084,14 +1222,14 @@ export class ServiceDispatcher {
           tier: resolvePreparedTier(service, method, leaf.tier, selection.tier),
         });
       }
-      return collected;
+      return { selections: collected, payload: prepared.payload };
     };
-    const preparedDigest = (selections: readonly PreparedSelection[]): string =>
+    const preparedDigest = (prepared: PreparedInvocationState): string =>
       sha256Canonical({
         service,
         method,
         args,
-        selections: selections.map(({ selection, requirement, tier }) => ({
+        selections: prepared.selections.map(({ selection, requirement, tier }) => ({
           capability: selection.capability,
           resourceKey: selection.resourceKey,
           requirement,
@@ -1112,9 +1250,10 @@ export class ServiceDispatcher {
           challenge: selection.challenge ?? null,
           tier: tier ?? null,
         })),
+        payload: prepared.payload,
       });
-    const preparedSelections = await collectPreparedSelections();
-    const preparedStateDigest = preparedDigest(preparedSelections);
+    const preparedState = await collectPreparedState();
+    const preparedStateDigest = preparedDigest(preparedState);
     ctx.authority = {
       assert: ({
         capability,
@@ -1210,7 +1349,7 @@ export class ServiceDispatcher {
         preflightPrompt ??= result.wouldPrompt;
       }
     }
-    for (const { selection, requirement, tier } of preparedSelections) {
+    for (const { selection, requirement, tier } of preparedState.selections) {
       const result = await this.enforceRequirement(
         ctx,
         service,
@@ -1238,10 +1377,17 @@ export class ServiceDispatcher {
     // anything changed. The old invocation-bound grant remains unusable because
     // the replacement snapshot has a different prepared-state digest.
     if (!preflight && prepareDescriptor) {
-      const livePrepared = await collectPreparedSelections();
+      const livePrepared = await collectPreparedState();
       if (preparedDigest(livePrepared) !== preparedStateDigest) {
-        return this.assessAuthority(ctx, service, method, args, false);
+        return this.assessAuthority(ctx, service, method, args, false, assessmentBaseline);
       }
+      ctx.preparedAuthority = {
+        resolver: prepareDescriptor.resolver,
+        digest: preparedStateDigest,
+        payload: livePrepared.payload,
+      };
+    } else if (!preflight) {
+      delete ctx.preparedAuthority;
     }
 
     // Read-only containment: a caller may request a mode in which only methods
@@ -1411,6 +1557,115 @@ export class ServiceDispatcher {
         initiatorChain: resolved.context.initiatorChain,
       });
       const snapshotDigest = invocationSnapshotDigest(snapshot);
+      const attachedHost =
+        ctx.attachedHost ?? resolved.context.executionSession?.attachedHost ?? null;
+      if (attachedHost) {
+        const ceilingDigest = sha256Canonical(attachedHost.authorityCeiling);
+        const covered = attachedHost.authorityCeiling.some(
+          (scope) =>
+            capabilityPatternCovers(scope.capability, capability) &&
+            scopeCovers(scope.resource, resourceKey)
+        );
+        if (
+          attachedHost.expiresAt <= Date.now() ||
+          ceilingDigest !== attachedHost.authorityCeilingDigest ||
+          !covered
+        ) {
+          await this.observeAuthority(resolved.context, "authority-decided", {
+            capability,
+            resourceKey,
+            tier: reviewedTier,
+            decision: "attached-route-ceiling-denied",
+            snapshotDigest,
+          });
+          const authorityFailure = {
+            reasonCode: "attached-route-ceiling-denied" as const,
+            reason: !covered
+              ? `The attached-host route ceiling does not cover ${capability} for ${resourceKey}`
+              : "The attached-host route ceiling proof is expired or inconsistent",
+            capability,
+            resourceKey,
+            remediation: {
+              kind: "restart-attached-run" as const,
+              message:
+                "Restart or reattach the exact isolated-host generation with a route ceiling covering this operation.",
+              request: {
+                capability,
+                resource: { kind: "exact" as const, key: resourceKey },
+                tier: reviewedTier === "critical" ? ("critical" as const) : ("gated" as const),
+              },
+            },
+          };
+          if (preflight) {
+            return {
+              leaf: {
+                capability,
+                resourceKey,
+                status: "denied",
+                tier: reviewedTier,
+                failure: authorityFailure,
+              },
+            };
+          }
+          throw new ServiceAccessError(
+            service,
+            method,
+            authorityFailure.reason,
+            "EROUTECEILING",
+            { denied: true, authorityFailure }
+          );
+        }
+      }
+      const runManifest = resolved.context.executionSession?.eval.authorityManifest;
+      if (
+        runManifest &&
+        reviewedTier !== "open" &&
+        runManifest.mode === "strict" &&
+        !runManifest.requests.some(
+          (scope) =>
+            capabilityPatternCovers(scope.capability, capability) &&
+            scopeCovers(scope.resource, resourceKey)
+        )
+      ) {
+        await this.observeAuthority(resolved.context, "authority-decided", {
+          capability,
+          resourceKey,
+          tier: reviewedTier,
+          decision: "run-manifest-denied",
+          snapshotDigest,
+        });
+        const authorityFailure = {
+          reasonCode: "run-manifest-denied" as const,
+          reason: `The strict eval run manifest does not cover ${capability} for ${resourceKey}`,
+          capability,
+          resourceKey,
+          remediation: {
+            kind: "broaden-run-manifest" as const,
+            message:
+              "Start a new run whose strict semantic request covers this exact capability and resource.",
+            request: {
+              capability,
+              resource: { kind: "exact" as const, key: resourceKey },
+              tier: reviewedTier === "critical" ? ("critical" as const) : ("gated" as const),
+            },
+          },
+        };
+        if (preflight) {
+          return {
+            leaf: {
+              capability,
+              resourceKey,
+              status: "denied",
+              tier: reviewedTier,
+              failure: authorityFailure,
+            },
+          };
+        }
+        throw new ServiceAccessError(service, method, authorityFailure.reason, "ERUNMANIFEST", {
+          denied: true,
+          authorityFailure,
+        });
+      }
       const evaluated = evaluateAuthority({
         context: resolved.context,
         requirement,
@@ -1430,6 +1685,15 @@ export class ServiceDispatcher {
             }
           : evaluated;
       if (decision.allowed) {
+        if (reviewedTier !== "open") {
+          await this.observeAuthority(resolved.context, "authority-decided", {
+            capability,
+            resourceKey,
+            tier: reviewedTier,
+            decision: decision.consumable ? "consumable-once" : "granted",
+            snapshotDigest,
+          });
+        }
         if (preflight) {
           return {
             leaf: {
@@ -1441,6 +1705,7 @@ export class ServiceDispatcher {
           };
         }
         if (decision.consumable && decision.grantId) {
+          if (ctx.authorityPreauthorization) return;
           if (!this.authorityAcquirer?.consume(decision.grantId)) {
             this.authorityAcquirer?.invalidate(
               snapshotDigest,
@@ -1490,6 +1755,27 @@ export class ServiceDispatcher {
           methodDef.access?.approval?.[0]?.operation.verb ??
           describeCapability(capability).action;
         if (preflight) {
+          if (runManifest?.approvals === "pregranted-only") {
+            return {
+              leaf: {
+                capability,
+                resourceKey,
+                status: "denied",
+                tier,
+                failure: {
+                  reasonCode: "run-pregranted-only",
+                  reason: `The eval run is pregranted-only and ${capability} for ${resourceKey} is not already granted`,
+                  capability,
+                  resourceKey,
+                  remediation: {
+                    kind: "use-prompt-enabled-run",
+                    message:
+                      "Obtain the grant before starting this run, or start a new prompt-enabled run.",
+                  },
+                },
+              },
+            };
+          }
           return {
             leaf: {
               capability,
@@ -1509,6 +1795,33 @@ export class ServiceDispatcher {
             },
           };
         }
+        if (runManifest?.approvals === "pregranted-only") {
+          await this.observeAuthority(resolved.context, "authority-decided", {
+            capability,
+            resourceKey,
+            tier,
+            decision: "pregranted-only-denied",
+            snapshotDigest,
+          });
+          const pregrantedFailure = {
+            reasonCode: "run-pregranted-only" as const,
+            reason: `The eval run is pregranted-only and ${capability} for ${resourceKey} is not already granted`,
+            capability,
+            resourceKey,
+            remediation: {
+              kind: "use-prompt-enabled-run" as const,
+              message:
+                "Obtain the grant before starting this run, or start a new prompt-enabled run.",
+            },
+          };
+          throw new ServiceAccessError(
+            service,
+            method,
+            pregrantedFailure.reason,
+            "ERUNPREGRANTED",
+            { denied: true, authorityFailure: pregrantedFailure }
+          );
+        }
         const acquisitionInput = {
           snapshot,
           snapshotDigest,
@@ -1518,8 +1831,15 @@ export class ServiceDispatcher {
           resource: { kind: "exact" as const, key: resourceKey },
           ...(substance ? { substance } : {}),
           ...(challenge ? { presentation: challenge } : {}),
+          ...(attachedHost ? { attachedHost } : {}),
         };
         let presented: AcquisitionInfo | undefined;
+        await this.observeAuthority(resolved.context, "authority-requested", {
+          capability,
+          resourceKey,
+          tier,
+          snapshotDigest,
+        });
         if (
           this.authorityAcquirer &&
           (ctx.authorityAcquisition === "wait" ||
@@ -1531,6 +1851,14 @@ export class ServiceDispatcher {
             resolved.context.authorizingOrigin.principal
           );
           const outcome = await this.authorityAcquirer.acquire(acquisitionInput, ctx.signal);
+          await this.observeAuthority(resolved.context, "authority-decided", {
+            capability,
+            resourceKey,
+            tier,
+            decision: outcome.decision ?? outcome.state,
+            acquisitionId: outcome.info?.acquisitionId,
+            snapshotDigest,
+          });
           if (outcome.state === "decided" && outcome.decision !== "deny") continue;
           presented = outcome.info;
           if (outcome.state === "decided" && outcome.decision === "deny") {
@@ -1553,6 +1881,13 @@ export class ServiceDispatcher {
           }
         } else if (this.authorityAcquirer) {
           presented = this.authorityAcquirer.request(acquisitionInput);
+          await this.observeAuthority(resolved.context, "authority-requested", {
+            capability,
+            resourceKey,
+            tier,
+            acquisitionId: presented.acquisitionId,
+            snapshotDigest,
+          });
           if (presented.preauthorized) {
             if (preauthorizedRetry) {
               throw new ServiceAccessError(
@@ -1802,6 +2137,41 @@ function deriveAuthorityResource(
     else throw new Error("Authority external URL must use http, https, or mailto");
   }
   return derivation.prefix ? `${derivation.prefix}${rendered}` : rendered;
+}
+
+function captureAuthorityAssessmentBaseline(ctx: ServiceContext): AuthorityAssessmentBaseline {
+  return {
+    caller: ctx.caller,
+    ...(ctx.authorizingCaller ? { authorizingCaller: ctx.authorizingCaller } : {}),
+    ...(ctx.authorization ? { authorization: ctx.authorization } : {}),
+    ...(ctx.transportCaller ? { transportCaller: ctx.transportCaller } : {}),
+    ...(ctx.readOnly !== undefined ? { readOnly: ctx.readOnly } : {}),
+    ...(ctx.authorityDecisions ? { authorityDecisions: new Map(ctx.authorityDecisions) } : {}),
+    ...(ctx.evalInvocation?.contextId ? { evalContextId: ctx.evalInvocation.contextId } : {}),
+  };
+}
+
+function restoreAuthorityAssessmentBaseline(
+  ctx: ServiceContext,
+  baseline: AuthorityAssessmentBaseline
+): void {
+  ctx.caller = baseline.caller;
+  if (baseline.authorizingCaller) ctx.authorizingCaller = baseline.authorizingCaller;
+  else delete ctx.authorizingCaller;
+  if (baseline.authorization) ctx.authorization = baseline.authorization;
+  else delete ctx.authorization;
+  if (baseline.transportCaller) ctx.transportCaller = baseline.transportCaller;
+  else delete ctx.transportCaller;
+  if (baseline.readOnly !== undefined) ctx.readOnly = baseline.readOnly;
+  else delete ctx.readOnly;
+  if (baseline.authorityDecisions) ctx.authorityDecisions = new Map(baseline.authorityDecisions);
+  else delete ctx.authorityDecisions;
+  delete ctx.authority;
+  delete ctx.preparedAuthority;
+  if (ctx.evalInvocation) {
+    if (baseline.evalContextId) ctx.evalInvocation.contextId = baseline.evalContextId;
+    else delete ctx.evalInvocation.contextId;
+  }
 }
 
 /**

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Readable } from "node:stream";
+import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 
 const processMocks = vi.hoisted(() => ({
   createProcessAdapter: vi.fn(),
@@ -54,7 +55,7 @@ function tempBuild() {
 }
 
 describe("TerminalAppRunner", () => {
-  it("launches terminal app artifacts with app principal bootstrap env", async () => {
+  ledgerTest("execution.terminal-app", async () => {
     const proc = new MockProcess();
     processMocks.createProcessAdapter.mockReturnValue(proc);
     const statuses: unknown[] = [];

@@ -766,6 +766,10 @@ const persistedEffectIntegrity = (
 export class SemanticWorkspace {
   constructor(private readonly deps: SemanticWorkspaceDeps) {}
 
+  isStateDescendant(ancestor: StateNodeRef, descendant: StateNodeRef, maxEdges: number): boolean {
+    return this.deps.store.isStateAncestor(ancestor, descendant, maxEdges);
+  }
+
   pendingEffects(): SemanticEffect[] {
     return this.deps.store.pendingEffects();
   }
@@ -3613,8 +3617,7 @@ export class SemanticWorkspace {
     const head = String(row["cause_head"]);
     const invocationId = String(row["cause_invocation_id"]);
     const turnId = row["turn_id"] == null ? null : String(row["turn_id"]);
-    const messageId =
-      row["trigger_message_id"] == null ? null : String(row["trigger_message_id"]);
+    const messageId = row["trigger_message_id"] == null ? null : String(row["trigger_message_id"]);
     let triggerText: string | null = null;
     let sender: unknown = null;
     if (messageId) {
@@ -3636,8 +3639,7 @@ export class SemanticWorkspace {
       turn: turnId ? { kind: "trajectory-turn", logId, head, turnId } : null,
       message: messageId ? { kind: "trajectory-message", logId, head, messageId } : null,
       toolName: row["tool_name"] == null ? null : String(row["tool_name"]),
-      terminalOutcome:
-        row["terminal_outcome"] == null ? null : String(row["terminal_outcome"]),
+      terminalOutcome: row["terminal_outcome"] == null ? null : String(row["terminal_outcome"]),
       requestRef:
         row["request_ref_json"] == null
           ? null
@@ -5258,10 +5260,7 @@ export class SemanticWorkspace {
           );
         }
         for (const sourceEventId of sourceEventIds) {
-          const comparison = this.integrationComparison(
-            { kind: "event", eventId },
-            sourceEventId
-          );
+          const comparison = this.integrationComparison({ kind: "event", eventId }, sourceEventId);
           if (comparison.unaccountedChangeIds.length > 0) {
             throw new SemanticVcsError(
               "IntegrationIncomplete",

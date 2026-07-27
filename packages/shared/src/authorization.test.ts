@@ -6,6 +6,7 @@ import {
   evaluateAuthority,
   relationship,
   requirementForPrincipals,
+  resourceScopeContains,
   scopeCovers,
   type AuthorizationContext,
   type AuthorityGrant,
@@ -34,6 +35,35 @@ describe("resource prefix scopes", () => {
     );
     expect(scopeCovers(scope, "workspace-repo-delete:projects/customer-data")).toBe(false);
     expect(scopeCovers(scope, "workspace-repo-delete:packages/system-test-helper")).toBe(false);
+  });
+});
+
+describe("resource scope containment", () => {
+  it("contains narrower envelopes without conflating unrelated scope kinds", () => {
+    expect(
+      resourceScopeContains(
+        { kind: "prefix", prefix: "workspace/projects/" },
+        { kind: "prefix", prefix: "workspace/projects/app/" }
+      )
+    ).toBe(true);
+    expect(
+      resourceScopeContains(
+        { kind: "prefix", prefix: "workspace/projects/" },
+        { kind: "exact", key: "workspace/projects/app/package.json" }
+      )
+    ).toBe(true);
+    expect(
+      resourceScopeContains(
+        { kind: "origin", origin: "https://example.com" },
+        { kind: "origin", origin: "https://other.example" }
+      )
+    ).toBe(false);
+    expect(
+      resourceScopeContains(
+        { kind: "network", value: "*" },
+        { kind: "prefix", prefix: "" }
+      )
+    ).toBe(false);
   });
 });
 
@@ -74,7 +104,17 @@ function sessionContext(externalKeys: readonly string[] = []): AuthorizationCont
       workspaceId: "ws-1",
       contextId: "context:s1",
       taskRef: "task:s1",
-      eval: { runtimeId: "runtime:eval:s1", runId: "run:s1" },
+      eval: {
+        runtimeId: "runtime:eval:s1",
+        runId: "run:s1",
+        authorityManifest: {
+          mode: "adaptive",
+          effects: "mutable",
+          approvals: "prompt",
+          requests: [],
+          digest: "0".repeat(64),
+        },
+      },
       harness: {
         principal: code,
         repoPath: "workers/example",

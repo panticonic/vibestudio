@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
+import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
 
 import { ExtensionHost } from "./service.js";
 import type { ExtensionHostDeps } from "./service.js";
@@ -261,7 +262,7 @@ function makeHost(
     readWorkspaceFileAtState: async (stateHash, filePath) =>
       filePath === "extensions/git-tools/package.json"
         ? fs.readFileSync(path.join(extensionNode.path, "package.json"), "utf8")
-        : (await overrides.readWorkspaceFileAtState?.(stateHash, filePath)) ?? null,
+        : ((await overrides.readWorkspaceFileAtState?.(stateHash, filePath)) ?? null),
     extensionTransport: overrides.extensionTransport ?? {
       call: vi.fn(async () => {
         throw new Error("extensionTransport.call should not be invoked in this test");
@@ -710,9 +711,9 @@ describe("ExtensionHost reconcileDeclared", () => {
       status: "available",
     });
 
-    await expect(
-      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", [])
-    ).resolves.toBe("transport-result");
+    await expect(host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", [])).resolves.toBe(
+      "transport-result"
+    );
     expect(start).toHaveBeenCalledTimes(1);
   });
 
@@ -922,7 +923,7 @@ describe("ExtensionHost reconcileDeclared", () => {
 });
 
 describe("ExtensionHost activation", () => {
-  it("starts the approved active bundle instead of rebuilding the current ref", async () => {
+  ledgerTest("execution.extension", async () => {
     const { host, buildSystem, extensionNode } = makeHost();
     const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
 
@@ -1252,11 +1253,11 @@ describe("ExtensionHost activation", () => {
 
     releaseBuild();
     await expect(invocation).resolves.toBe("transport-result");
-    expect(extensionTransport.call).toHaveBeenCalledWith(
-      extensionNode.name,
-      "extension.invoke",
-      ["blame", [], expect.objectContaining({ extensionName: extensionNode.name })]
-    );
+    expect(extensionTransport.call).toHaveBeenCalledWith(extensionNode.name, "extension.invoke", [
+      "blame",
+      [],
+      expect.objectContaining({ extensionName: extensionNode.name }),
+    ]);
   });
 
   it("fails with ENOTREADY when an extension is not running", async () => {
@@ -1276,9 +1277,9 @@ describe("ExtensionHost activation", () => {
       running.mockReturnValue(true);
     });
 
-    await expect(
-      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", [])
-    ).resolves.toBe("transport-result");
+    await expect(host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", [])).resolves.toBe(
+      "transport-result"
+    );
     expect(whenRunning).toHaveBeenCalledWith(extensionNode.name, undefined);
     expect(extensionTransport.call).toHaveBeenCalledTimes(1);
   });

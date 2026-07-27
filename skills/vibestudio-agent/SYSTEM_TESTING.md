@@ -32,7 +32,7 @@ vibestudio system-test run --all --concurrency 4
 Useful flags:
 
 - `--model REF` explicitly overrides the canonical policy for a model-specific
-  investigation. Ordinary runs use `openai-codex:gpt-5.4-mini`. The runner
+  investigation. Ordinary runs use `openai-codex:gpt-5.3-codex-spark`. The runner
   never silently falls back to another model; model-specific subagent
   scenarios configure their child model explicitly.
 - If `doctor` reports that the selected `openai-codex` subscription credential

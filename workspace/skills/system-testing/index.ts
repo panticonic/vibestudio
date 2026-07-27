@@ -61,6 +61,7 @@ export {
   panelTests,
   projectLifecycleTests,
   rpcTests,
+  selfDevelopmentTests,
   selectedTestStages,
   skillTests,
   smokeTests,

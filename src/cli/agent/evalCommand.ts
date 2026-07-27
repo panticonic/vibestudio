@@ -8,7 +8,9 @@
  * a context-relative file the server reads itself.
  */
 import * as fs from "node:fs";
-import { evalMethods } from "@vibestudio/service-schemas/eval";
+import { randomUUID } from "node:crypto";
+import { createEvalExecutor, evalMethods } from "@vibestudio/service-schemas/eval";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "../commandTable.js";
 import {
   jsonMode,
@@ -105,10 +107,11 @@ function parseSyntax(
  * eval if the deadline trips — the CLI just stops waiting and reports a
  * timeout (exit 4), preserving the previous `--timeout` contract.
  */
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeout: () => void): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new TimeoutError(`eval timed out after ${timeoutMs}ms (still running server-side)`));
+      onTimeout();
+      reject(new TimeoutError(`eval timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     promise.then(
       (value) => {
@@ -138,31 +141,81 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
     // Scope (credential + context + owner identity) is fully resolved by
     // resolveSessionScope — including the agent-token path, which has no device
     // credential or workspace selection to validate here.
-    const { client, contextId, session } = resolveSessionScope(inv);
+    const { client, session } = resolveSessionScope(inv);
 
     const evalClient = typedClient("eval", evalMethods, client);
-    const subKey = session.scopeKey;
+    const scopeKey = session.scopeKey;
 
     // --fresh-scope wipes the persistent scope (and user db) before the run, so
     // the snippet starts from an empty REPL scope.
     if (inv.flags["fresh-scope"] === true) {
-      await evalClient.reset({ ownerId: session.entityId, contextId, subKey });
+      await evalClient.reset({
+        target: { kind: "owner-session", sessionId: session.entityId },
+        scopeKey,
+      });
     }
 
     const runArgs = {
-      ownerId: session.entityId,
-      contextId,
-      subKey,
-      code,
-      path: serverPath,
-      syntax,
+      runId: randomUUID(),
+      target: { kind: "owner-session" as const, sessionId: session.entityId },
+      scope: { key: scopeKey },
+      source:
+        serverPath !== undefined
+          ? { kind: "context-file" as const, path: serverPath, syntax }
+          : { kind: "inline" as const, code: code!, syntax },
       imports,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     };
-    const result =
-      timeoutMs !== undefined
-        ? await withTimeout(evalClient.run(runArgs), timeoutMs)
-        : await evalClient.run(runArgs);
+    let streamedConsole = "";
+    let stopLiveEvents: (() => Promise<void>) | undefined;
+    if (!json) {
+      const events = new EventsClient(client);
+      const removeListener = events.on("eval:run-event", (payload) => {
+        if (
+          payload.runId !== runArgs.runId ||
+          payload.scopeKey !== scopeKey ||
+          payload.event.kind !== "console"
+        ) {
+          return;
+        }
+        const eventPayload = payload.event.payload;
+        const text =
+          eventPayload && typeof eventPayload === "object" && !Array.isArray(eventPayload)
+            ? (eventPayload as Record<string, unknown>)["text"]
+            : undefined;
+        if (typeof text !== "string" || text.length === 0) return;
+        streamedConsole += text;
+        process.stderr.write(text.endsWith("\n") ? text : `${text}\n`);
+      });
+      try {
+        await events.subscribe("eval:run-event");
+        stopLiveEvents = async () => {
+          removeListener();
+          await events.unsubscribeAll();
+        };
+      } catch {
+        // Live observation is an ergonomic accelerator. The durable executor
+        // remains authoritative if a watch cannot be established.
+        removeListener();
+      }
+    }
+    const abort = new AbortController();
+    const executeEval = createEvalExecutor(
+      <T>(method: string, args: unknown[]) => client.call<T>(method, args),
+      { signal: abort.signal }
+    );
+    let result;
+    try {
+      const execution = executeEval(runArgs);
+      result =
+        timeoutMs !== undefined
+          ? await withTimeout(execution, timeoutMs, () =>
+              abort.abort(new TimeoutError(`eval timed out after ${timeoutMs}ms`))
+            )
+          : await execution;
+    } finally {
+      await stopLiveEvents?.();
+    }
 
     if (json) {
       printResult(result, { json: true });
@@ -170,8 +223,12 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
     }
 
     // Text mode: stream captured console first, then the return value (or error).
-    if (result.console)
-      process.stderr.write(result.console.endsWith("\n") ? result.console : `${result.console}\n`);
+    if (result.console && result.console !== streamedConsole) {
+      const remaining = result.console.startsWith(streamedConsole)
+        ? result.console.slice(streamedConsole.length)
+        : result.console;
+      if (remaining) process.stderr.write(remaining.endsWith("\n") ? remaining : `${remaining}\n`);
+    }
     if (!result.success) {
       throw new CliError(result.error ?? "eval failed");
     }
@@ -191,12 +248,11 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
 async function evalReplReset(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const { client, contextId, session } = resolveSessionScope(inv);
+    const { client, session } = resolveSessionScope(inv);
     const evalClient = typedClient("eval", evalMethods, client);
     const result = await evalClient.reset({
-      ownerId: session.entityId,
-      contextId,
-      subKey: session.scopeKey,
+      target: { kind: "owner-session", sessionId: session.entityId },
+      scopeKey: session.scopeKey,
     });
     printResult(result, {
       json,

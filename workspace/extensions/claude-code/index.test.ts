@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import * as os from "node:os";
 import * as path from "node:path";
 import { assertClaudeCodeVersion } from "@vibestudio/shared/claudeLaunchProfile";
+import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 
 const childProcessMock = vi.hoisted(() => {
   const child = {
@@ -239,7 +240,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
     expect(await api.resolvePrimaryChannel({ contextId: CONTEXT })).toEqual({ channelId: CHANNEL });
   });
 
-  it("materializes a local terminal launch and returns one exact cleanup action", async () => {
+  ledgerTest("execution.claude-code", async () => {
     const { ctx } = makeCtx(tmpRoot);
     const activated = await activate(ctx as never);
 

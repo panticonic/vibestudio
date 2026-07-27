@@ -431,6 +431,23 @@ export const runtimeMethods = defineServiceMethods({
     authority: { principals: ["host"] },
     access: { sensitivity: "write" },
   },
+  faultAbortAgentVessel: {
+    description:
+      "System-test-only fault injection: abort one exact agent Durable Object facet while preserving its durable state and runtime image.",
+    args: z.tuple([
+      z.object({ targetId: z.string().min(1).max(512) }).strict(),
+    ]),
+    returns: z.object({ aborted: z.literal(true) }).strict(),
+    authority: { principals: ["code"] },
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      rationale:
+        "Hidden system-test transport; the host additionally verifies the attested harness incarnation and exact target entity.",
+    },
+    agentFacing: false,
+    access: { sensitivity: "write" },
+  },
   retireEntity: {
     description:
       "Retire a single entity, firing cleanup hooks. With removeContext, also delete the context folder when no other live entity shares the context.",

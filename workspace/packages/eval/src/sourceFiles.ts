@@ -32,8 +32,8 @@ export interface SourceFileOptions {
   compileFunction?: CompileFunction;
   /** Resolve local-module free names through the same private guest global as the entry module. */
   confinement?: ExecuteOptions["confinement"];
-  /** Harden each local module namespace before publishing it through the module map. */
-  harden?: <T>(value: T) => T;
+  /** Freeze each local module's direct export namespace before publishing it through the module map. */
+  freezeModuleNamespace?: <T>(value: T) => T;
 }
 
 export interface PreparedSource {
@@ -550,7 +550,7 @@ async function loadLocalModules(
   ensureExternalRequires: EnsureExternalRequires,
   execution: Pick<
     SourceFileOptions,
-    "moduleMap" | "require" | "compileFunction" | "confinement" | "harden"
+    "moduleMap" | "require" | "compileFunction" | "confinement" | "freezeModuleNamespace"
   >
 ): Promise<void> {
   const localModuleIds = new Set(files.keys());
@@ -594,7 +594,9 @@ async function loadLocalModules(
         compileFunction: execution.compileFunction,
         confinement: execution.confinement,
       });
-      moduleMap[normalized] = execution.harden ? execution.harden(result.exports) : result.exports;
+      moduleMap[normalized] = execution.freezeModuleNamespace
+        ? execution.freezeModuleNamespace(result.exports)
+        : result.exports;
       loadedContent.set(normalized, rewritten);
     } finally {
       loading.delete(normalized);

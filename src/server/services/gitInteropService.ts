@@ -116,8 +116,12 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
     methods: gitInteropMethods,
     authorityPreparation: {
       [GIT_PUBLISH_REPO_AUTHORITY_RESOLVER]: (ctx, [rawInput]) => {
-        if (!ctx.caller.code && !ctx.caller.executionSession) return [];
-        return [publishRepoAuthoritySelection(rawInput as GitPublishRepoInput)];
+        if (!ctx.caller.code && !ctx.caller.executionSession)
+          return { selections: [], payload: null };
+        return {
+          selections: [publishRepoAuthoritySelection(rawInput as GitPublishRepoInput)],
+          payload: null,
+        };
       },
     },
     handler: defineServiceHandler("gitInterop", gitInteropMethods, {

@@ -2428,7 +2428,17 @@ describe("RpcServer relay behavior", () => {
           repoPath: "workers/system-test-runner",
           effectiveVersion: "ev-runner",
         },
-        eval: { runtimeId, runId: "doctor" },
+        eval: {
+          runtimeId,
+          runId: "doctor",
+          authorityManifest: {
+            mode: "adaptive",
+            effects: "mutable",
+            approvals: "prompt",
+            requests: [],
+            digest: "0".repeat(64),
+          },
+        },
         causalParent: null,
         testPolicy: {
           policyId: "test:doctor:test-run",
@@ -2566,7 +2576,17 @@ describe("RpcServer relay behavior", () => {
         repoPath: "workers/system-test-runner",
         effectiveVersion: "ev-runner",
       },
-      eval: { runtimeId, runId: "run:session-boundary" },
+      eval: {
+        runtimeId,
+        runId: "run:session-boundary",
+        authorityManifest: {
+          mode: "adaptive",
+          effects: "mutable",
+          approvals: "prompt",
+          requests: [],
+          digest: "0".repeat(64),
+        },
+      },
       causalParent: null,
       issuedAt: Date.now(),
       expiresAt: Date.now() + 60_000,

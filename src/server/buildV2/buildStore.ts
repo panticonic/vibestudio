@@ -9,7 +9,8 @@
  *   ├── artifacts.json
  *   └── metadata.json
  *
- * Same key = same content. Forever. GC prunes unreferenced entries.
+ * Same key = same content. Online deletion is owned exclusively by the
+ * publication-interlocked mark/quarantine/sweep collector below.
  */
 
 import * as fs from "fs";
@@ -27,6 +28,14 @@ import {
   parseSha256,
   type Sha256,
 } from "@vibestudio/shared/execution/identity";
+import {
+  executionArtifactDigest,
+  executionSourceClosureDigest,
+  verifyExecutionArtifactRef,
+  type ExecutionArtifactRefV1,
+  type ExecutionSemanticStateRef,
+  type ExecutionSourceContentRoot,
+} from "@vibestudio/shared/execution/retention";
 import { assertPresent } from "../../lintHelpers";
 import {
   blobCasPath,
@@ -34,6 +43,7 @@ import {
   linkBlobFileSync,
   putBlobBytesSync,
 } from "../storage/blobCas.js";
+import { stateLayout } from "../stateLayout.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -79,21 +89,11 @@ export type BuildArtifactWithContent = BuildArtifactManifestEntry & { content: s
 /**
  * Immutable executable identity sealed at the build-store boundary.
  *
- * `buildInputDigest` is the full BuildV2 input hash used as the cache key. It
- * identifies source closure + recipe inputs, while `artifactDigest` identifies
- * the exact emitted manifest and bytes. `executionDigest` combines both under
- * a separate domain and is the only member suitable for code principals.
+ * The shared ref commits semantic provenance, traversable source roots,
+ * BuildV2's recipe/cache identity, and the exact emitted artifact manifest.
+ * `executionDigest` is the producer-neutral code principal commitment.
  */
-export interface BuildExecutionIdentity {
-  version: 1;
-  source: {
-    repoPath: string;
-    effectiveVersion: Sha256;
-  };
-  buildInputDigest: Sha256;
-  artifactDigest: Sha256;
-  executionDigest: Sha256;
-}
+export type BuildExecutionIdentity = ExecutionArtifactRefV1;
 
 export type BuildMetadataDetails =
   | {
@@ -143,6 +143,11 @@ export interface BuildMetadata {
   ev: string;
   /** Workspace state this artifact was materialized from; null for non-workspace builds. */
   sourceStateHash: string | null;
+  /** Exact semantic provenance paired with sourceStateHash. */
+  sourceSemanticState?:
+    | { kind: "event"; eventId: string }
+    | { kind: "application"; applicationId: string }
+    | null;
   sourcemap: boolean;
   framework?: string;
   /** Deterministic report-only panel payload baseline derived from esbuild. */
@@ -510,28 +515,42 @@ function createBuildExecutionIdentity(
   if (!metadata.sourcePath) {
     throw new Error(`Workspace build ${metadata.buildKey} is missing its source path`);
   }
-  const source = {
-    repoPath: canonicalSourcePath(metadata.sourcePath),
+  if (!metadata.sourceSemanticState) {
+    throw new Error(`Workspace build ${metadata.buildKey} is missing exact semantic source state`);
+  }
+  if (!activeExecutionIdentityContext) {
+    throw new Error(`Workspace build ${metadata.buildKey} has no execution identity context`);
+  }
+  const contentRoots = [
+    {
+      repoPath: canonicalSourcePath(metadata.sourcePath),
+      stateHash: metadata.sourceStateHash,
+    },
+  ] as const;
+  const sourceState = {
+    kind: "workspace" as const,
+    workspaceId: activeExecutionIdentityContext.workspaceId,
     effectiveVersion: parseSha256(metadata.ev, "build effective version"),
+    state: metadata.sourceSemanticState,
+    contentRoots,
+    sourceClosureDigest: executionSourceClosureDigest(contentRoots),
   };
-  const buildInputDigest = parseSha256(metadata.buildKey, "BuildV2 build input digest");
+  // BuildV2's cache key currently commits both its recipe inputs and source.
+  // The shared verifier does not impose this equality on other producers.
+  const recipeDigest = parseSha256(metadata.buildKey, "BuildV2 recipe digest");
+  const buildKey = parseSha256(metadata.buildKey, "BuildV2 build key");
   const artifactDigest = computeArtifactDigest(entries);
-  const executionDigest = domainHash(
-    "vibestudio/build-v2-execution/v1",
-    canonicalJson({
-      version: 1,
-      source,
-      buildInputDigest,
-      artifactDigest,
-    })
-  );
-  return {
+  const unsigned = {
     version: 1,
-    source,
-    buildInputDigest,
+    sourceState,
+    recipeDigest,
+    buildKey,
     artifactDigest,
-    executionDigest,
-  };
+  } as const;
+  return verifyExecutionArtifactRef({
+    ...unsigned,
+    executionDigest: executionArtifactDigest(unsigned),
+  });
 }
 
 function verifiedExecutionIdentity(
@@ -622,6 +641,15 @@ function readBuildDir(dir: string, expectedBuildKey: string): BuildResult | null
 
 const reportedSharedBuildHits = new Set<string>();
 
+/**
+ * Verify one workspace-owned build without publishing it to, or materializing
+ * it from, the shared reconstruction cache. Diagnostics and retention root
+ * snapshots must not turn a read into new local ownership.
+ */
+export function peekLocal(key: string): BuildResult | null {
+  return readBuildDir(getBuildDir(key), key);
+}
+
 export function get(key: string): BuildResult | null {
   const localDir = getBuildDir(key);
   const local = readBuildDir(localDir, key);
@@ -632,12 +660,43 @@ export function get(key: string): BuildResult | null {
 
   const sharedDir = getSharedBuildDir(key);
   if (!sharedDir) return null;
+  // A workspace GC tombstone is authoritative over the shared reconstruction
+  // cache. Without this check a successful sweep would immediately resurrect
+  // the same local record on the next lookup.
+  if (isRetiredBuildKey(key)) return null;
   const shared = readBuildDir(sharedDir, key);
-  if (shared && !reportedSharedBuildHits.has(key)) {
-    reportedSharedBuildHits.add(key);
-    console.info(`[BuildCache] Reused shared build ${shared.metadata.name} (${key.slice(0, 12)})`);
+  if (shared) {
+    // A shared result is only a reconstruction cache, never an authoritative
+    // workspace record. Materialize a local immutable link tree before it can
+    // be returned to an owner/publication path so workspace retention has one
+    // complete census and a different workspace's collector cannot break it.
+    const tmpDir = `${localDir}.tmp.${crypto.randomBytes(16).toString("hex")}`;
+    try {
+      fs.mkdirSync(path.dirname(localDir), { recursive: true });
+      linkBuildTreeSync(sharedDir, tmpDir);
+      try {
+        fs.renameSync(tmpDir, localDir);
+      } catch (error) {
+        if (!isFileSystemErrorCode(error, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) throw error;
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    } catch (error) {
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch (cleanupError) {
+        warnCleanupFailure(tmpDir, cleanupError);
+      }
+      throw error;
+    }
   }
-  return shared;
+  const materialized = readBuildDir(localDir, key);
+  if (materialized && !reportedSharedBuildHits.has(key)) {
+    reportedSharedBuildHits.add(key);
+    console.info(
+      `[BuildCache] Reused shared build ${materialized.metadata.name} (${key.slice(0, 12)})`
+    );
+  }
+  return materialized;
 }
 
 export function primaryArtifact(
@@ -706,11 +765,21 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
   if (metadata.sourceStateHash !== null && metadata.authority === undefined) {
     throw new Error(`Workspace build ${key} is missing sealed authority metadata`);
   }
-  const sealedMetadata: BuildMetadata =
-    metadata.authority === undefined
-      ? metadata
+  const metadataWithSemanticState: BuildMetadata =
+    metadata.sourceStateHash === null
+      ? { ...metadata, sourceSemanticState: null }
       : {
           ...metadata,
+          sourceSemanticState:
+            metadata.sourceSemanticState ??
+            activeExecutionIdentityContext?.semanticStateForContent(metadata.sourceStateHash) ??
+            null,
+        };
+  const sealedMetadata: BuildMetadata =
+    metadata.authority === undefined
+      ? metadataWithSemanticState
+      : {
+          ...metadataWithSemanticState,
           authority: parseUnitAuthorityManifest(metadata.authority, `build ${key} authority`),
         };
   const dir = getBuildDir(key);
@@ -763,9 +832,6 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
     if (isFileSystemErrorCode(err, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) {
       // Another build may have won the race. Accept it only after the same
       // manifest + execution-identity verification used by normal reads.
-      // Legacy or corrupt cache directories also have a metadata sentinel, so
-      // sentinel presence alone must never prevent the current build replacing
-      // them during an identity-schema migration.
       if (fs.existsSync(metadataPath)) {
         const winner = get(key);
         if (winner) {
@@ -777,24 +843,19 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
           return winner;
         }
       }
-      // Winner incomplete, corrupt, or from an obsolete identity schema —
-      // remove the disposable cache entry and promote the verified build.
+
+      // An existing immutable build directory is never removed online. A
+      // corrupt/obsolete entry needs deliberate offline repair; replacing it
+      // here would be an uncoordinated artifact deletion indistinguishable from
+      // retention GC to live registries.
       try {
-        fs.rmSync(dir, { recursive: true, force: true });
-        fs.renameSync(tmpDir, dir);
-      } catch {
-        try {
-          fs.rmSync(tmpDir, { recursive: true, force: true });
-        } catch (cleanupError) {
-          warnCleanupFailure(tmpDir, cleanupError);
-        }
-        try {
-          fs.rmSync(dir, { recursive: true, force: true });
-        } catch (cleanupError) {
-          warnCleanupFailure(dir, cleanupError);
-        }
-        throw new Error(`Build store race: failed to store build for key ${key}`);
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch (cleanupError) {
+        warnCleanupFailure(tmpDir, cleanupError);
       }
+      throw new Error(
+        `Immutable build directory ${key} already exists but is invalid; stop the server and remove it before rebuilding`
+      );
     } else {
       // Clean up tmpDir on unexpected errors
       try {
@@ -807,28 +868,413 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
   }
 
   const stored = assertPresent(readBuildDir(dir, key));
+  clearRetiredBuildKey(key);
   publishSharedBuild(key, dir);
   return stored;
 }
 
-export function gc(activeKeys: Set<string>): { freed: number } {
-  const buildsDir = getBuildsDir();
-  if (!fs.existsSync(buildsDir)) return { freed: 0 };
+let activeExecutionIdentityContext: {
+  workspaceId: string;
+  semanticStateForContent: (stateHash: string) => ExecutionSemanticStateRef | null;
+} | null = null;
 
-  let freed = 0;
-  for (const entry of fs.readdirSync(buildsDir)) {
-    if (!activeKeys.has(entry)) {
-      const entryPath = path.join(buildsDir, entry);
-      try {
-        fs.rmSync(entryPath, { recursive: true, force: true });
-        freed++;
-      } catch {
-        // Ignore cleanup errors
+export function setBuildExecutionIdentityContext(
+  context: typeof activeExecutionIdentityContext
+): void {
+  if (context && !context.workspaceId) throw new Error("Build execution workspaceId is required");
+  activeExecutionIdentityContext = context;
+}
+
+export interface BuildStoreRetentionScan {
+  builds: Array<{ key: string; bytes: number }>;
+  failures: Array<{ key: string; error: string }>;
+}
+
+export type BuildGcMode = "report" | "quarantine" | "sweep";
+
+interface QuarantinedBuild {
+  key: string;
+  firstUnmarkedEpoch: number;
+  quarantinedAt: number;
+  sourceRoots: ExecutionSourceContentRoot[];
+  deletedAtEpoch?: number;
+}
+
+interface BuildGcState {
+  version: 1;
+  quarantined: QuarantinedBuild[];
+}
+
+export interface BuildStoreGcResult {
+  quarantined: number;
+  deleted: number;
+  retainedForGrace: number;
+  notReconstructible: Array<{ buildKey: string; missing: string[] }>;
+  cleanupFailures: Array<{ buildKey: string; error: string }>;
+  /** Includes quarantine and just-deleted tombstones for content-GC ordering. */
+  retainedSourceRoots: ExecutionSourceContentRoot[];
+}
+
+function buildGcStatePath(): string {
+  return stateLayout(getUserDataPath()).executionRetention.buildGcFile;
+}
+
+function loadBuildGcState(): BuildGcState {
+  const filePath = buildGcStatePath();
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<BuildGcState>;
+    if (parsed.version !== 1 || !Array.isArray(parsed.quarantined)) {
+      throw new Error("Build GC state has an unsupported schema");
+    }
+    const quarantined = parsed.quarantined.map((record, index): QuarantinedBuild => {
+      if (
+        !record ||
+        typeof record.key !== "string" ||
+        !Number.isSafeInteger(record.firstUnmarkedEpoch) ||
+        record.firstUnmarkedEpoch < 0 ||
+        typeof record.quarantinedAt !== "number" ||
+        !Array.isArray(record.sourceRoots) ||
+        record.sourceRoots.some(
+          (root) =>
+            !root ||
+            (root.repoPath !== null && typeof root.repoPath !== "string") ||
+            !/^state:[0-9a-f]{64}$/u.test(root.stateHash)
+        ) ||
+        (record.deletedAtEpoch !== undefined &&
+          (!Number.isSafeInteger(record.deletedAtEpoch) || record.deletedAtEpoch < 0))
+      ) {
+        throw new Error(`Build GC state record ${index} is invalid`);
       }
+      return record;
+    });
+    return { version: 1, quarantined };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { version: 1, quarantined: [] };
+    }
+    throw error;
+  }
+}
+
+function saveBuildGcState(state: BuildGcState): void {
+  const filePath = buildGcStatePath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  const tmpPath = `${filePath}.tmp.${crypto.randomBytes(12).toString("hex")}`;
+  fs.writeFileSync(tmpPath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(tmpPath, filePath);
+}
+
+function isRetiredBuildKey(key: string): boolean {
+  return loadBuildGcState().quarantined.some(
+    (record) => record.key === key && record.deletedAtEpoch !== undefined
+  );
+}
+
+function clearRetiredBuildKey(key: string): void {
+  const state = loadBuildGcState();
+  const quarantined = state.quarantined.filter((record) => record.key !== key);
+  if (quarantined.length !== state.quarantined.length) {
+    saveBuildGcState({ version: 1, quarantined });
+  }
+}
+
+function sourceRootsForStoredBuild(key: string): ExecutionSourceContentRoot[] | null {
+  const build = readBuildDir(getBuildDir(key), key);
+  if (
+    !build?.metadata.execution ||
+    build.metadata.execution.sourceState.kind !== "workspace" ||
+    !build.metadata.sourceSemanticState
+  ) {
+    return null;
+  }
+  return [...build.metadata.execution.sourceState.contentRoots];
+}
+
+function retainedSourceRootsForEpoch(
+  records: Iterable<QuarantinedBuild>,
+  epoch: number
+): ExecutionSourceContentRoot[] {
+  const rootSet = new Map<string, ExecutionSourceContentRoot>();
+  for (const record of records) {
+    if (record.deletedAtEpoch !== undefined && epoch > record.deletedAtEpoch) continue;
+    for (const root of record.sourceRoots) {
+      rootSet.set(`${root.repoPath ?? ""}\0${root.stateHash}`, root);
+    }
+  }
+  return [...rootSet.values()].sort(
+    (left, right) =>
+      (left.repoPath ?? "").localeCompare(right.repoPath ?? "") ||
+      left.stateHash.localeCompare(right.stateHash)
+  );
+}
+
+/**
+ * Mark/quarantine/sweep over workspace-owned immutable build records.
+ *
+ * Quarantine is metadata-only so an old last-good remains instantly launchable.
+ * Deletion commits with an atomic rename; source roots remain in a tombstone
+ * through that whole epoch and can only be withdrawn by a later epoch.
+ */
+export async function collectRetention(input: {
+  epoch: number;
+  mode: BuildGcMode;
+  rootedBuildKeys: ReadonlySet<string>;
+  publicationProtectedBuildKeys: ReadonlySet<string>;
+  graceMs: number;
+  commitArtifactDeletion?: (buildKey: string, commit: () => void) => boolean;
+  now?: number;
+}): Promise<BuildStoreGcResult> {
+  const now = input.now ?? Date.now();
+  const state = loadBuildGcState();
+  const scan = await scanRetention();
+  const stored = new Set(scan.builds.map((build) => build.key));
+  const protectedKeys = new Set([...input.rootedBuildKeys, ...input.publicationProtectedBuildKeys]);
+  const byKey = new Map(state.quarantined.map((record) => [record.key, record]));
+  const result: BuildStoreGcResult = {
+    quarantined: 0,
+    deleted: 0,
+    retainedForGrace: 0,
+    notReconstructible: [],
+    cleanupFailures: [
+      ...scan.failures.map((failure) => ({ buildKey: failure.key, error: failure.error })),
+    ],
+    retainedSourceRoots: [],
+  };
+
+  // Recover the atomic-rename/persist crash window. The owned trash name is
+  // durable evidence that deletion committed; without it, a vanished artifact
+  // is external corruption and must remain an alarm rather than being inferred
+  // from age or epoch.
+  const trashRoot = stateLayout(getUserDataPath()).executionRetention.buildTrashDir;
+  const trashEntries = fs.existsSync(trashRoot) ? await fs.promises.readdir(trashRoot) : [];
+  const newSourceRoots = new Map<string, ExecutionSourceContentRoot[]>();
+
+  // Diagnose every deletion prerequisite before mutating anything. A corrupt
+  // artifact makes the whole pass fail closed; otherwise iteration order could
+  // delete a healthy sibling before discovering the alarm.
+  for (const [key, record] of byKey) {
+    if (record.deletedAtEpoch !== undefined || stored.has(key)) continue;
+    const matches = trashEntries.filter((entry) => entry.startsWith(`${key}.`));
+    if (matches.length !== 1) {
+      result.notReconstructible.push({
+        buildKey: key,
+        missing: matches.length === 0 ? ["artifact bytes"] : ["unambiguous owned deletion record"],
+      });
+    }
+  }
+  for (const key of stored) {
+    if (protectedKeys.has(key) || byKey.has(key)) continue;
+    const sourceRoots = sourceRootsForStoredBuild(key);
+    if (sourceRoots) {
+      newSourceRoots.set(key, sourceRoots);
+    } else {
+      result.notReconstructible.push({
+        buildKey: key,
+        missing: ["verified execution metadata or source content roots"],
+      });
+    }
+  }
+  if (input.mode === "report" || result.notReconstructible.length > 0) {
+    const retained = new Map<string, ExecutionSourceContentRoot>();
+    for (const root of retainedSourceRootsForEpoch(byKey.values(), input.epoch)) {
+      retained.set(`${root.repoPath ?? ""}\0${root.stateHash}`, root);
+    }
+    // A report is also the preparation snapshot for the coordinated
+    // collector. Every currently unreferenced artifact remains alive until a
+    // later commit, so its source must be preflighted and retained too.
+    for (const roots of newSourceRoots.values()) {
+      for (const root of roots) {
+        retained.set(`${root.repoPath ?? ""}\0${root.stateHash}`, root);
+      }
+    }
+    result.retainedSourceRoots = [...retained.values()].sort(
+      (left, right) =>
+        (left.repoPath ?? "").localeCompare(right.repoPath ?? "") ||
+        left.stateHash.localeCompare(right.stateHash)
+    );
+    return result;
+  }
+
+  for (const [key, record] of byKey) {
+    if (record.deletedAtEpoch !== undefined || stored.has(key)) continue;
+    const matches = trashEntries.filter((entry) => entry.startsWith(`${key}.`));
+    // Preflight above proved exactly one owned atomic-rename record exists.
+    const trashDir = path.join(trashRoot, matches[0]!);
+    if (protectedKeys.has(key)) {
+      try {
+        fs.renameSync(trashDir, getBuildDir(key));
+        stored.add(key);
+        byKey.delete(key);
+      } catch (error) {
+        result.cleanupFailures.push({
+          buildKey: key,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      continue;
+    }
+    record.deletedAtEpoch = input.epoch;
+    saveBuildGcState({ version: 1, quarantined: [...byKey.values()] });
+    try {
+      await fs.promises.rm(trashDir, { recursive: true, force: true });
+    } catch (error) {
+      result.cleanupFailures.push({
+        buildKey: key,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
-  return { freed };
+  // A root reappearing during grace rescues the artifact and clears quarantine.
+  for (const key of protectedKeys) {
+    const record = byKey.get(key);
+    if (record && record.deletedAtEpoch === undefined) byKey.delete(key);
+  }
+
+  for (const key of stored) {
+    if (protectedKeys.has(key)) continue;
+    let record = byKey.get(key);
+    if (!record) {
+      const sourceRoots = newSourceRoots.get(key)!;
+      record = {
+        key,
+        firstUnmarkedEpoch: input.epoch,
+        quarantinedAt: now,
+        sourceRoots,
+      };
+      byKey.set(key, record);
+      result.quarantined += 1;
+      continue;
+    }
+    if (record.deletedAtEpoch !== undefined) continue;
+    const eligible =
+      input.mode === "sweep" &&
+      input.epoch > record.firstUnmarkedEpoch &&
+      now - record.quarantinedAt >= input.graceMs &&
+      !input.publicationProtectedBuildKeys.has(key);
+    if (!eligible) {
+      result.retainedForGrace += 1;
+      continue;
+    }
+
+    const sourceDir = getBuildDir(key);
+    const sourceBuild = readBuildDir(sourceDir, key);
+    const artifactIntegrities = (sourceBuild?.artifacts ?? [])
+      .map((artifact) => artifact.integrity)
+      .filter((integrity): integrity is string => typeof integrity === "string");
+    const trashDir = path.join(
+      stateLayout(getUserDataPath()).executionRetention.buildTrashDir,
+      `${key}.${input.epoch}.${crypto.randomBytes(8).toString("hex")}`
+    );
+    try {
+      fs.mkdirSync(path.dirname(trashDir), { recursive: true, mode: 0o700 });
+      // Synchronous rename is the deletion commit point. A publication
+      // reservation cannot interleave inside this critical section.
+      const committed =
+        input.commitArtifactDeletion?.(key, () => fs.renameSync(sourceDir, trashDir)) ?? false;
+      if (!committed) {
+        result.retainedForGrace += 1;
+        continue;
+      }
+      record.deletedAtEpoch = input.epoch;
+      saveBuildGcState({ version: 1, quarantined: [...byKey.values()] });
+      result.deleted += 1;
+      let sharedTrashDir: string | null = null;
+      const sharedDir = getSharedBuildDir(key);
+      if (sharedDir) {
+        try {
+          const metadataStat = fs.statSync(path.join(sharedDir, "metadata.json"));
+          // One link belongs to the shared cache and one to the local record
+          // just moved to trash. More links prove another workspace has
+          // materialized the artifact and still owns its local lifecycle.
+          if (metadataStat.nlink <= 2) {
+            sharedTrashDir = `${sharedDir}.gc.${crypto.randomBytes(8).toString("hex")}`;
+            fs.renameSync(sharedDir, sharedTrashDir);
+          }
+        } catch (error) {
+          if (!isFileSystemErrorCode(error, ["ENOENT"])) {
+            result.cleanupFailures.push({
+              buildKey: key,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
+      try {
+        await fs.promises.rm(trashDir, { recursive: true, force: true });
+        if (sharedTrashDir) {
+          await fs.promises.rm(sharedTrashDir, { recursive: true, force: true });
+        }
+        const poolDir = getSharedArtifactPoolDir();
+        if (!poolDir) continue;
+        for (const integrity of artifactIntegrities) {
+          const blobPath = artifactBlobPath(poolDir, integrity);
+          if (!blobPath) continue;
+          try {
+            const stat = await fs.promises.stat(blobPath);
+            if (stat.nlink === 1) await fs.promises.unlink(blobPath);
+          } catch (error) {
+            if (!isFileSystemErrorCode(error, ["ENOENT"])) throw error;
+          }
+        }
+      } catch (error) {
+        result.cleanupFailures.push({
+          buildKey: key,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } catch (error) {
+      result.cleanupFailures.push({
+        buildKey: key,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  // A deleted artifact's source is retained for its deletion epoch. Only a
+  // later complete epoch may remove the tombstone and withdraw those roots.
+  saveBuildGcState({ version: 1, quarantined: [...byKey.values()] });
+
+  result.retainedSourceRoots = retainedSourceRootsForEpoch(byKey.values(), input.epoch);
+  return result;
+}
+
+async function storedPathBytes(storedPath: string): Promise<number> {
+  const stat = await fs.promises.lstat(storedPath);
+  if (!stat.isDirectory()) return stat.size;
+
+  let bytes = 0;
+  for (const entry of await fs.promises.readdir(storedPath)) {
+    bytes += await storedPathBytes(path.join(storedPath, entry));
+  }
+  return bytes;
+}
+
+/**
+ * Inspect immutable build storage without mutating it. Mutation is a separate
+ * explicit collector phase so report mode cannot accidentally reclaim bytes.
+ */
+export async function scanRetention(): Promise<BuildStoreRetentionScan> {
+  const buildsDir = getBuildsDir();
+  if (!fs.existsSync(buildsDir)) return { builds: [], failures: [] };
+
+  const builds: BuildStoreRetentionScan["builds"] = [];
+  const failures: BuildStoreRetentionScan["failures"] = [];
+  for (const entry of await fs.promises.readdir(buildsDir)) {
+    try {
+      builds.push({
+        key: entry,
+        bytes: await storedPathBytes(path.join(buildsDir, entry)),
+      });
+    } catch (error) {
+      failures.push({
+        key: entry,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return { builds, failures };
 }
 
 export interface BuildArtifactDedupeResult {

@@ -41,4 +41,17 @@ describe("runtime context-boundary authority", () => {
     expect(capabilityFor("cloneContext")).toBe("context.clone");
     expect(capabilityFor("createSubagentContext")).toBe("subagents.create");
   });
+
+  it("keeps exact vessel fault injection out of agent-facing discovery", () => {
+    expect(runtimeMethods.faultAbortAgentVessel).toMatchObject({
+      agentFacing: false,
+      authority: { principals: ["code"] },
+      tier: { tier: "open", session: "codeOnly" },
+    });
+    expect(
+      runtimeMethods.faultAbortAgentVessel.args.parse([
+        { targetId: "do:workers/agent-worker:AiChatWorker:agent-1" },
+      ])
+    ).toEqual([{ targetId: "do:workers/agent-worker:AiChatWorker:agent-1" }]);
+  });
 });

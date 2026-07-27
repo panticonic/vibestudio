@@ -9,9 +9,11 @@ import { buildUnit } from "./builder.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
 beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
 afterAll(() => setBuildSourceProvider(null));
-import { primaryTextArtifactContent } from "./buildStore.js";
+import { primaryTextArtifactContent, setBuildExecutionIdentityContext } from "./buildStore.js";
 import { discoverPackageGraph } from "./packageGraph.js";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
+
+const SOURCE_STATE_HASH = `state:${"c".repeat(64)}`;
 
 function git(cwd: string, args: string[]): void {
   execFileSync("git", args, {
@@ -28,6 +30,10 @@ describe("buildUnit extension builds", () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-build-"));
     workspaceRoot = path.join(root, "workspace");
     setUserDataPath(path.join(root, "state"));
+    setBuildExecutionIdentityContext({
+      workspaceId: "workspace:test",
+      semanticStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
+    });
   });
 
   afterEach(() => {
@@ -82,7 +88,7 @@ describe("buildUnit extension builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const node = graph.get("@workspace-extensions/hello");
-    const result = await buildUnit(node, "a".repeat(64), graph, workspaceRoot, "state:test");
+    const result = await buildUnit(node, "a".repeat(64), graph, workspaceRoot, SOURCE_STATE_HASH);
 
     expect(result.metadata).toMatchObject({
       kind: "extension",
@@ -160,7 +166,7 @@ describe("buildUnit extension builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const node = graph.get("@workspace-extensions/cjs-extension");
-    const result = await buildUnit(node, "b".repeat(64), graph, workspaceRoot, "state:test");
+    const result = await buildUnit(node, "b".repeat(64), graph, workspaceRoot, SOURCE_STATE_HASH);
     const mod = await import(`file://${path.join(result.dir, "bundle.js")}`);
     const api = await mod.activate();
 

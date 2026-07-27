@@ -2,11 +2,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { setUserDataPath } from "@vibestudio/env-paths";
 
 import {
   artifactFilePath,
+  collectRetention,
   dedupeBuildArtifacts,
   get,
   has,
@@ -14,8 +15,20 @@ import {
   primaryArtifactFilePath,
   primaryTextArtifactContent,
   put,
+  scanRetention,
+  setBuildExecutionIdentityContext,
   type BuildResult,
 } from "./buildStore.js";
+
+beforeEach(() => {
+  setBuildExecutionIdentityContext({
+    workspaceId: "workspace:test",
+    semanticStateForContent: (stateHash) => ({
+      kind: "event",
+      eventId: `event:${stateHash}`,
+    }),
+  });
+});
 
 function build(overrides: Partial<BuildResult> = {}): BuildResult {
   return {
@@ -73,6 +86,25 @@ function expectedArtifactSetIntegrity(
 }
 
 describe("build artifact helpers", () => {
+  it("reports stored bytes without removing an unreferenced build", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-retention-"));
+    try {
+      setUserDataPath(root);
+      const buildDir = path.join(root, "builds", "unreferenced");
+      fs.mkdirSync(path.join(buildDir, "nested"), { recursive: true });
+      fs.writeFileSync(path.join(buildDir, "metadata.json"), "meta");
+      fs.writeFileSync(path.join(buildDir, "nested", "bundle.js"), "bundle");
+
+      await expect(scanRetention()).resolves.toEqual({
+        builds: [{ key: "unreferenced", bytes: 10 }],
+        failures: [],
+      });
+      expect(fs.readFileSync(path.join(buildDir, "nested", "bundle.js"), "utf8")).toBe("bundle");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("returns the manifest primary artifact content", () => {
     const result = build();
 
@@ -318,6 +350,299 @@ describe("build artifact helpers", () => {
     }
   });
 
+  it("quarantines for a full epoch, rechecks publication at delete, and retains source after commit", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-gc-"));
+    const buildKey = "9".repeat(64);
+    try {
+      setUserDataPath(root);
+      put(
+        buildKey,
+        {
+          entries: [
+            {
+              path: "worker.js",
+              role: "primary",
+              contentType: "text/javascript; charset=utf-8",
+              content: "export default {};",
+            },
+          ],
+        },
+        {
+          ...build().metadata,
+          buildKey,
+          sourcePath: "workers/a",
+          ev: "8".repeat(64),
+          sourceStateHash: `state:${"7".repeat(64)}`,
+          sourceSemanticState: { kind: "event", eventId: "event:gc" },
+        }
+      );
+      const base = {
+        mode: "sweep" as const,
+        rootedBuildKeys: new Set<string>(),
+        publicationProtectedBuildKeys: new Set<string>(),
+        graceMs: 0,
+        now: 100,
+      };
+
+      const first = await collectRetention({
+        ...base,
+        epoch: 1,
+        commitArtifactDeletion: (_key, commit) => {
+          commit();
+          return true;
+        },
+      });
+      expect(first).toMatchObject({ quarantined: 1, deleted: 0 });
+      expect(has(buildKey)).toBe(true);
+      expect(first.retainedSourceRoots).toEqual([
+        { repoPath: "workers/a", stateHash: `state:${"7".repeat(64)}` },
+      ]);
+
+      const raced = await collectRetention({
+        ...base,
+        epoch: 2,
+        commitArtifactDeletion: () => false,
+      });
+      expect(raced).toMatchObject({ deleted: 0, retainedForGrace: 1 });
+      expect(has(buildKey)).toBe(true);
+
+      const deleted = await collectRetention({
+        ...base,
+        epoch: 3,
+        commitArtifactDeletion: (_key, commit) => {
+          commit();
+          return true;
+        },
+      });
+      expect(deleted.deleted).toBe(1);
+      expect(has(buildKey)).toBe(false);
+      expect(deleted.retainedSourceRoots).toHaveLength(1);
+
+      const later = await collectRetention({ ...base, mode: "quarantine", epoch: 4 });
+      expect(later.retainedSourceRoots).toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rescues a quarantined last-good when an authoritative root reappears", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-gc-rescue-"));
+    const buildKey = "6".repeat(64);
+    try {
+      setUserDataPath(root);
+      put(
+        buildKey,
+        {
+          entries: [
+            {
+              path: "worker.js",
+              role: "primary",
+              contentType: "text/javascript; charset=utf-8",
+              content: "export default {};",
+            },
+          ],
+        },
+        {
+          ...build().metadata,
+          buildKey,
+          sourcePath: "workers/a",
+          ev: "5".repeat(64),
+          sourceStateHash: `state:${"4".repeat(64)}`,
+          sourceSemanticState: { kind: "event", eventId: "event:rescue" },
+        }
+      );
+      const first = await collectRetention({
+        epoch: 1,
+        mode: "quarantine",
+        rootedBuildKeys: new Set(),
+        publicationProtectedBuildKeys: new Set(),
+        graceMs: 0,
+      });
+      expect(first.quarantined).toBe(1);
+
+      const rescued = await collectRetention({
+        epoch: 2,
+        mode: "sweep",
+        rootedBuildKeys: new Set([buildKey]),
+        publicationProtectedBuildKeys: new Set(),
+        graceMs: 0,
+        commitArtifactDeletion: (_key, commit) => {
+          commit();
+          return true;
+        },
+      });
+      expect(rescued).toMatchObject({ deleted: 0, retainedForGrace: 0 });
+      expect(has(buildKey)).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers an atomic deletion rename whose tombstone persistence was interrupted", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-gc-recovery-"));
+    const buildKey = "3".repeat(64);
+    try {
+      setUserDataPath(root);
+      put(
+        buildKey,
+        {
+          entries: [
+            {
+              path: "worker.js",
+              role: "primary",
+              contentType: "text/javascript; charset=utf-8",
+              content: "export default {};",
+            },
+          ],
+        },
+        {
+          ...build().metadata,
+          buildKey,
+          sourcePath: "workers/a",
+          ev: "2".repeat(64),
+          sourceStateHash: `state:${"1".repeat(64)}`,
+          sourceSemanticState: { kind: "event", eventId: "event:recovery" },
+        }
+      );
+      await collectRetention({
+        epoch: 1,
+        mode: "quarantine",
+        rootedBuildKeys: new Set(),
+        publicationProtectedBuildKeys: new Set(),
+        graceMs: 0,
+      });
+      const trashRoot = path.join(root, "execution-retention", "build-trash");
+      fs.mkdirSync(trashRoot, { recursive: true });
+      fs.renameSync(
+        path.join(root, "builds", buildKey),
+        path.join(trashRoot, `${buildKey}.2.interrupted`)
+      );
+
+      const recovered = await collectRetention({
+        epoch: 2,
+        mode: "sweep",
+        rootedBuildKeys: new Set(),
+        publicationProtectedBuildKeys: new Set(),
+        graceMs: 0,
+        commitArtifactDeletion: (_key, commit) => {
+          commit();
+          return true;
+        },
+      });
+      expect(recovered.notReconstructible).toEqual([]);
+      expect(recovered.retainedSourceRoots).toHaveLength(1);
+      expect(fs.existsSync(path.join(trashRoot, `${buildKey}.2.interrupted`))).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps report mode read-only even when atomic deletion recovery is pending", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-gc-report-"));
+    const buildKey = "2".repeat(64);
+    try {
+      setUserDataPath(root);
+      put(
+        buildKey,
+        { entries: build().artifacts },
+        {
+          ...build().metadata,
+          buildKey,
+          sourcePath: "workers/a",
+          ev: "3".repeat(64),
+          sourceStateHash: `state:${"4".repeat(64)}`,
+          sourceSemanticState: { kind: "event", eventId: "event:report" },
+        }
+      );
+      await collectRetention({
+        epoch: 1,
+        mode: "quarantine",
+        rootedBuildKeys: new Set(),
+        publicationProtectedBuildKeys: new Set(),
+        graceMs: 0,
+      });
+      const trashRoot = path.join(root, "execution-retention", "build-trash");
+      const trashDir = path.join(trashRoot, `${buildKey}.2.interrupted`);
+      fs.mkdirSync(trashRoot, { recursive: true });
+      fs.renameSync(path.join(root, "builds", buildKey), trashDir);
+      const stateBefore = fs.readFileSync(
+        path.join(root, "execution-retention", "build-gc.json"),
+        "utf8"
+      );
+
+      const report = await collectRetention({
+        epoch: 2,
+        mode: "report",
+        rootedBuildKeys: new Set([buildKey]),
+        publicationProtectedBuildKeys: new Set(),
+        graceMs: 0,
+      });
+
+      expect(report.notReconstructible).toEqual([]);
+      expect(fs.existsSync(trashDir)).toBe(true);
+      expect(fs.existsSync(path.join(root, "builds", buildKey))).toBe(false);
+      expect(fs.readFileSync(path.join(root, "execution-retention", "build-gc.json"), "utf8")).toBe(
+        stateBefore
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("deletes nothing when preflight finds a non-reconstructible artifact", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-gc-alarm-"));
+    const corruptKey = "4".repeat(64);
+    const healthyKey = "5".repeat(64);
+    try {
+      setUserDataPath(root);
+      for (const key of [corruptKey, healthyKey]) {
+        put(
+          key,
+          { entries: build().artifacts },
+          {
+            ...build().metadata,
+            buildKey: key,
+            sourcePath: `workers/${key}`,
+            ev: "6".repeat(64),
+            sourceStateHash: `state:${"7".repeat(64)}`,
+            sourceSemanticState: { kind: "event", eventId: `event:${key}` },
+          }
+        );
+      }
+      await collectRetention({
+        epoch: 1,
+        mode: "quarantine",
+        rootedBuildKeys: new Set(),
+        publicationProtectedBuildKeys: new Set(),
+        graceMs: 0,
+      });
+      fs.rmSync(path.join(root, "builds", corruptKey), { recursive: true });
+      let commits = 0;
+
+      const result = await collectRetention({
+        epoch: 2,
+        mode: "sweep",
+        rootedBuildKeys: new Set(),
+        publicationProtectedBuildKeys: new Set(),
+        graceMs: 0,
+        commitArtifactDeletion: (_key, commit) => {
+          commits += 1;
+          commit();
+          return true;
+        },
+      });
+
+      expect(result.notReconstructible).toEqual([
+        { buildKey: corruptKey, missing: ["artifact bytes"] },
+      ]);
+      expect(result.deleted).toBe(0);
+      expect(commits).toBe(0);
+      expect(has(healthyKey)).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects build directories without an artifact manifest", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
     try {
@@ -352,7 +677,7 @@ describe("build artifact helpers", () => {
     }
   });
 
-  it("replaces a legacy workspace cache entry without sealed execution identity", () => {
+  it("refuses to remove or replace a legacy workspace cache entry online", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-legacy-"));
     const buildKey = "a".repeat(64);
     const metadata = {
@@ -382,9 +707,10 @@ describe("build artifact helpers", () => {
       fs.writeFileSync(path.join(dir, "metadata.json"), JSON.stringify(metadata));
       expect(get(buildKey)).toBeNull();
 
-      const rebuilt = put(buildKey, { entries: build().artifacts }, metadata);
-      expect(rebuilt.metadata.execution?.executionDigest).toMatch(/^[0-9a-f]{64}$/);
-      expect(rebuilt.artifacts[0]?.content).toBe("export default {};");
+      expect(() => put(buildKey, { entries: build().artifacts }, metadata)).toThrow(
+        /stop the server and remove it/
+      );
+      expect(fs.readFileSync(path.join(dir, "worker.js"), "utf8")).toBe("legacy");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -471,7 +797,7 @@ describe("build artifact helpers", () => {
       const reused = get(buildKey);
 
       expect(reused).toMatchObject({
-        dir: path.join(sharedCache, buildKey),
+        dir: path.join(stateB, "builds", buildKey),
         sourceStateHash: `state:${"1".repeat(64)}`,
       });
       expect(reused?.artifacts[0]?.content).toBe("export default {};");

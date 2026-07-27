@@ -196,6 +196,14 @@ export class PanelRuntimeCoordinator {
     return null;
   }
 
+  resolvePresentationCallerForRuntime(runtimeEntityId: string): string | null {
+    if (!isPanelEntityId(runtimeEntityId)) return null;
+    const lease = this.leases.get(runtimeEntityId);
+    return lease
+      ? (this.clientForHostConnection(lease.hostConnectionId)?.ownerCallerId ?? null)
+      : null;
+  }
+
   adoptHostLeaseForSlot(
     slotId: string,
     runtimeEntityId: string,

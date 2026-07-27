@@ -71,29 +71,32 @@ export function createCorsApprovalService(): ServiceDefinition {
           value: target.origin,
         };
         const copy = describeCapability(CORS_RESPONSE_CAPABILITY, "panel");
-        return [
-          fixedPreparedAuthoritySelection({
-            capability: CORS_RESPONSE_CAPABILITY,
-            resourceKey: target.origin,
-            challenge: {
-              title: copy.title,
-              description: copy.description,
-              deniedReason: "Reading this website's response was not allowed",
-              dedupKey: `cors:${ctx.caller.runtime.id}:${target.origin}`,
-              resource,
-              operation: {
-                kind: "network",
-                verb: copy.action,
-                object: resource,
-                groupKey: `cors:${ctx.caller.runtime.id}:${target.origin}`,
+        return {
+          selections: [
+            fixedPreparedAuthoritySelection({
+              capability: CORS_RESPONSE_CAPABILITY,
+              resourceKey: target.origin,
+              challenge: {
+                title: copy.title,
+                description: copy.description,
+                deniedReason: "Reading this website's response was not allowed",
+                dedupKey: `cors:${ctx.caller.runtime.id}:${target.origin}`,
+                resource,
+                operation: {
+                  kind: "network",
+                  verb: copy.action,
+                  object: resource,
+                  groupKey: `cors:${ctx.caller.runtime.id}:${target.origin}`,
+                },
+                details: [
+                  { label: "Requesting website", value: request.requestOrigin ?? "unknown" },
+                  { label: "Website", value: target.origin },
+                ],
               },
-              details: [
-                { label: "Requesting website", value: request.requestOrigin ?? "unknown" },
-                { label: "Website", value: target.origin },
-              ],
-            },
-          }),
-        ];
+            }),
+          ],
+          payload: null,
+        };
       },
     },
     handler: defineServiceHandler(SERVICE_NAME, corsApprovalMethods, {

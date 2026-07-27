@@ -4,6 +4,12 @@ import { createHash } from "node:crypto";
 import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
 import { domainHash, parseSha256, sha256 } from "@vibestudio/shared/execution/identity";
 import {
+  executionArtifactDigest,
+  executionSourceClosureDigest,
+  verifyExecutionArtifactRef,
+  type ExecutionArtifactRefV1,
+} from "@vibestudio/shared/execution/retention";
+import {
   parseUnitAuthorityManifest,
   type UnitAuthorityManifest,
 } from "@vibestudio/shared/authorityManifest";
@@ -20,6 +26,7 @@ export const INTERNAL_DO_CLASSES = [
 ] as const;
 
 export type InternalDOClassName = (typeof INTERNAL_DO_CLASSES)[number];
+export const INTERNAL_DO_PRODUCT_SEED_ID = "product:vibestudio-internal-do";
 
 export interface InternalDOBundle {
   bundle: string;
@@ -33,6 +40,7 @@ export interface InternalDOExecutionIdentity {
   buildKey: string;
   effectiveVersion: string;
   executionDigest: string;
+  artifact: ExecutionArtifactRefV1;
   authorityRequests: UnitAuthorityManifest["requests"];
 }
 
@@ -77,26 +85,53 @@ export function internalDOExecutionIdentity(
     "vibestudio/internal-do-source/v1",
     canonicalJson({ version: 1, source: INTERNAL_DO_SOURCE, artifactDigest })
   );
-  const executionDigest = domainHash(
-    "vibestudio/internal-do-execution/v1",
+  const recipeDigest = domainHash(
+    "vibestudio/internal-do-recipe/v1",
     canonicalJson({
       version: 1,
       source: INTERNAL_DO_SOURCE,
       className,
-      effectiveVersion,
-      artifactDigest,
       authority,
     })
   );
+  const stateHash = `state:${artifactDigest}`;
+  const contentRoots = [{ repoPath: null, stateHash }] as const;
+  const unsignedArtifact: Omit<ExecutionArtifactRefV1, "executionDigest"> = {
+    version: 1,
+    sourceState: {
+      kind: "product-seed",
+      workspaceId: INTERNAL_DO_PRODUCT_SEED_ID,
+      effectiveVersion,
+      state: null,
+      contentRoots,
+      sourceClosureDigest: executionSourceClosureDigest(contentRoots),
+    },
+    recipeDigest,
+    buildKey: artifactDigest,
+    artifactDigest,
+  };
+  const artifact = verifyExecutionArtifactRef({
+    ...unsignedArtifact,
+    executionDigest: executionArtifactDigest(unsignedArtifact),
+  });
   return Object.freeze({
     source: INTERNAL_DO_SOURCE,
     unitName: `@vibestudio/internal-do/${className}`,
-    stateHash: artifactDigest,
-    buildKey: artifactDigest,
-    effectiveVersion,
-    executionDigest,
+    stateHash,
+    buildKey: artifact.buildKey,
+    effectiveVersion: artifact.sourceState.effectiveVersion,
+    executionDigest: artifact.executionDigest,
+    artifact,
     authorityRequests: authority.requests,
   });
+}
+
+export function internalDOExecutionArtifacts(
+  bundle: InternalDOBundle
+): readonly ExecutionArtifactRefV1[] {
+  return INTERNAL_DO_CLASSES.map(
+    (className) => internalDOExecutionIdentity(bundle, className).artifact
+  );
 }
 
 function loadBundle(): InternalDOBundle {

@@ -1,7 +1,11 @@
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 
-import { canonicalJson, compareUtf16CodeUnits } from "@vibestudio/content-addressing";
+import {
+  canonicalJson,
+  compareUtf16CodeUnits,
+  type WorktreeHashFile,
+} from "@vibestudio/content-addressing";
 import {
   contextBinding,
   CONTEXT_BINDING_FILE,
@@ -12,15 +16,24 @@ import {
   contextMaterializationReceiptProves,
   type ContextMaterializationCommand,
   type ContextMaterializationReceipt,
+  type WorkspaceMaterializationBlob,
+  type WorkspaceMaterializationChange,
   type WorkspaceMaterializationRepository,
   type WorkspaceStateRef,
 } from "@vibestudio/shared/vcs/workspaceProjection";
 import {
   collectExactTreeListing,
+  getTree,
   hasTreeObject,
   mirrorWorktreeTree,
   putBytes,
 } from "../services/blobstoreService.js";
+import {
+  encodeStateNode,
+  encodeTreeNode,
+  encodeWorktreeTree,
+  type EncodedTreeNode,
+} from "@vibestudio/shared/contentTree/treeObjects";
 import { writeFileAtomicSync } from "../../atomicFile.js";
 import { DiskProjector } from "./diskProjector.js";
 import { assertSemanticVcsPathAdmissible } from "@vibestudio/shared/vcs/pathAdmission";
@@ -34,6 +47,11 @@ export interface MaterializedRepository {
   repositoryId: string;
   repoPath: string;
   contentRoot: string;
+}
+
+/** Pure, exact repository content selected from one semantic command. */
+export interface PlannedMaterializedRepository extends MaterializedRepository {
+  fileManifestId: string;
 }
 
 const MATERIALIZATION_STATE_PROTOCOL = "vibestudio.context-materialization-state.v4" as const;
@@ -262,6 +280,71 @@ export class ContextMaterializer {
     return this.deriveContentRoots(repositories);
   }
 
+  /**
+   * Derive exact repository trees without writing blobs, manifests, projection
+   * state, or checkout bytes. Authority preparation uses this read-only path.
+   */
+  async planContentRoots(
+    repositories: readonly WorkspaceMaterializationRepository[]
+  ): Promise<PlannedMaterializedRepository[]> {
+    await this.validateRepositories(repositories);
+    const planned: PlannedMaterializedRepository[] = [];
+    for (const repository of repositories) {
+      if (repository.presence !== "present") continue;
+      const contentRoot =
+        repository.source.kind === "content-root"
+          ? repository.source.contentRoot
+          : repository.source.kind === "snapshot"
+            ? encodeWorktreeTree(
+                repository.source.files.map((file) => ({
+                  path: file.path,
+                  contentHash: file.contentHash,
+                  mode: this.treeMode(file.mode),
+                }))
+              ).stateHash
+            : await this.planDeltaContentRoot(
+                repository.source.basisContentRoot,
+                repository.source.changes
+              );
+      if (
+        repository.source.kind === "content-root" &&
+        !(await hasTreeObject(this.deps.blobsDir, contentRoot))
+      ) {
+        throw new Error(
+          `exact semantic content closure is unavailable for ${repository.repositoryId}: ${contentRoot}`
+        );
+      }
+      planned.push({
+        repositoryId: repository.repositoryId,
+        repoPath: repository.repoPath,
+        fileManifestId: repository.fileManifestId,
+        contentRoot,
+      });
+    }
+    return planned.sort((left, right) =>
+      compareUtf16CodeUnits(left.repositoryId, right.repositoryId)
+    );
+  }
+
+  /**
+   * Persist the bounded semantic closure sealed into a prepared execution plan
+   * and prove that it realizes the pre-authorized content root.
+   */
+  async realizePlannedRepository(
+    repository: Extract<WorkspaceMaterializationRepository, { presence: "present" }>,
+    blobs: readonly WorkspaceMaterializationBlob[],
+    expectedContentRoot: string
+  ): Promise<void> {
+    await this.validateRepositories([repository]);
+    await this.storeBlobRecords(blobs);
+    const contentRoot = await this.deriveRepositoryContentRoot(repository);
+    if (contentRoot !== expectedContentRoot) {
+      throw new Error(
+        `planned repository realized ${contentRoot}, expected ${expectedContentRoot}`
+      );
+    }
+  }
+
   async drop(contextId: string): Promise<void> {
     await this.locked(contextId, async () => {
       await fsp.rm(this.deps.disk.contextDir(contextId), { recursive: true, force: true });
@@ -368,8 +451,12 @@ export class ContextMaterializer {
   }
 
   private async storeBlobs(command: ContextMaterializationCommand): Promise<void> {
+    await this.storeBlobRecords(command.blobs);
+  }
+
+  private async storeBlobRecords(blobs: readonly WorkspaceMaterializationBlob[]): Promise<void> {
     const contentHashes = new Set<string>();
-    for (const blob of command.blobs) {
+    for (const blob of blobs) {
       if (!CONTENT_HASH.test(blob.contentHash) || contentHashes.has(blob.contentHash)) {
         throw new Error(`invalid materialization content hash ${blob.contentHash}`);
       }
@@ -383,6 +470,88 @@ export class ContextMaterializer {
         throw new Error(`materialization blob ${blob.contentHash} does not match its bytes`);
       }
     }
+  }
+
+  private async planDeltaContentRoot(
+    basisContentRoot: string,
+    changes: readonly WorkspaceMaterializationChange[]
+  ): Promise<string> {
+    const root = await getTree(this.deps.blobsDir, basisContentRoot);
+    if (!root) {
+      throw new Error(`materialization basis is missing: ${basisContentRoot}`);
+    }
+    const patched = await this.planPatchedTree(root, changes, "");
+    return encodeStateNode(patched.treeHash).stateHash;
+  }
+
+  private async planPatchedTree(
+    currentEntries: import("@vibestudio/content-addressing").ManifestHashEntry[],
+    changes: readonly WorkspaceMaterializationChange[],
+    prefix: string
+  ): Promise<EncodedTreeNode> {
+    const entries = new Map(currentEntries.map((entry) => [entry.name, entry]));
+    const grouped = new Map<string, WorkspaceMaterializationChange[]>();
+    for (const change of changes) {
+      const relative = prefix ? change.path.slice(prefix.length + 1) : change.path;
+      const [name] = relative.split("/");
+      if (!name) throw new Error(`invalid materialization change ${change.path}`);
+      const values = grouped.get(name) ?? [];
+      values.push(change);
+      grouped.set(name, values);
+    }
+    for (const [name, nestedChanges] of grouped) {
+      const direct = nestedChanges.find((change) => {
+        const relative = prefix ? change.path.slice(prefix.length + 1) : change.path;
+        return !relative.includes("/");
+      });
+      if (direct) {
+        if (nestedChanges.length !== 1) {
+          throw new Error(`materialization path collides at ${direct.path}`);
+        }
+        const current = entries.get(name);
+        const expected = direct.expected
+          ? {
+              name,
+              kind: "file" as const,
+              contentHash: direct.expected.contentHash,
+              mode: this.treeMode(direct.expected.mode),
+            }
+          : undefined;
+        if (
+          (expected === undefined && current !== undefined) ||
+          (expected !== undefined &&
+            (current?.kind !== "file" ||
+              current.contentHash !== expected.contentHash ||
+              current.mode !== expected.mode))
+        ) {
+          throw new Error(`materialization basis changed at ${direct.path}`);
+        }
+        if (direct.result) {
+          entries.set(name, {
+            name,
+            kind: "file",
+            contentHash: direct.result.contentHash,
+            mode: this.treeMode(direct.result.mode),
+          });
+        } else {
+          entries.delete(name);
+        }
+        continue;
+      }
+      const current = entries.get(name);
+      if (current?.kind === "file") {
+        throw new Error(`materialization path collides below ${prefix ? `${prefix}/` : ""}${name}`);
+      }
+      const childEntries = current ? await getTree(this.deps.blobsDir, current.childHash) : [];
+      if (!childEntries) {
+        throw new Error(`materialization basis tree is missing below ${name}`);
+      }
+      const childPrefix = prefix ? `${prefix}/${name}` : name;
+      const child = await this.planPatchedTree(childEntries, nestedChanges, childPrefix);
+      if (child.entries.length === 0) entries.delete(name);
+      else entries.set(name, { name, kind: "dir", childHash: child.treeHash });
+    }
+    return encodeTreeNode([...entries.values()]);
   }
 
   private async deriveContentRoots(
@@ -480,6 +649,71 @@ export class ContextMaterializer {
       }
     }
     return (await mirrorWorktreeTree(this.deps.blobsDir, [...files.values()])).stateHash;
+  }
+
+  private async planRepositoryFiles(
+    repository: Extract<WorkspaceMaterializationRepository, { presence: "present" }>
+  ): Promise<WorktreeHashFile[]> {
+    if (repository.source.kind === "snapshot") {
+      return repository.source.files
+        .map((file) => ({
+          path: file.path,
+          contentHash: file.contentHash,
+          mode: this.treeMode(file.mode),
+        }))
+        .sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
+    }
+
+    const basis =
+      repository.source.kind === "content-root"
+        ? repository.source.contentRoot
+        : repository.source.basisContentRoot;
+    const listing = await collectExactTreeListing(this.deps.blobsDir, basis);
+    if (!listing) {
+      throw new Error(`materialization basis is missing for ${repository.repositoryId}: ${basis}`);
+    }
+    const files = new Map<string, WorktreeHashFile>(
+      listing
+        .filter(
+          (entry): entry is Extract<(typeof listing)[number], { kind: "file" }> =>
+            entry.kind === "file"
+        )
+        .map((file) => [
+          file.path,
+          { path: file.path, contentHash: file.contentHash, mode: file.mode },
+        ])
+    );
+    if (repository.source.kind === "delta") {
+      for (const change of repository.source.changes) {
+        const current = files.get(change.path);
+        const expected = change.expected
+          ? {
+              path: change.path,
+              contentHash: change.expected.contentHash,
+              mode: this.treeMode(change.expected.mode),
+            }
+          : undefined;
+        if (
+          (expected === undefined && current !== undefined) ||
+          (expected !== undefined &&
+            (current === undefined ||
+              current.contentHash !== expected.contentHash ||
+              current.mode !== expected.mode))
+        ) {
+          throw new Error(`materialization basis changed at ${repository.repoPath}/${change.path}`);
+        }
+        if (change.result) {
+          files.set(change.path, {
+            path: change.path,
+            contentHash: change.result.contentHash,
+            mode: this.treeMode(change.result.mode),
+          });
+        } else {
+          files.delete(change.path);
+        }
+      }
+    }
+    return [...files.values()].sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
   }
 
   private treeMode(mode: number): number {

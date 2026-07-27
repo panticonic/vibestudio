@@ -1098,7 +1098,7 @@ describe("AgentLoopDriver", () => {
       script: { model: [toolCallReply("tc-1"), textReply("done")], tool: [] },
       executorOverride: (descriptor) => {
         if (descriptor.kind !== "local_tool") return null;
-        // Mirror the agent's eval gate: a local tool that DEFERS (eval.startRun kicked off; the
+        // Mirror the agent's eval gate: a local tool that DEFERS (eval.start kicked off; the
         // result arrives out-of-band via onEvalComplete → deliverEffectOutcome).
         return {
           kind: "local_tool",

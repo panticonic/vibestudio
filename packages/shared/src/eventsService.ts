@@ -269,6 +269,30 @@ export class EventService {
     }
   }
 
+  /**
+   * Emit only to watched responses owned by one authenticated caller. This is
+   * the canonical watched transport for owner-scoped live data: subscribers
+   * still use events.watch, while payloads never fan out across principals.
+   */
+  emitToWatchesOfCaller<E extends EventName>(
+    callerId: string,
+    event: E,
+    data?: EventPayloads[E]
+  ): boolean {
+    const sequence = ++this.sequence;
+    let delivered = false;
+    const connections = this.watchesByOwner.get(callerId);
+    if (!connections) return false;
+    for (const watches of connections.values()) {
+      for (const watch of watches.values()) {
+        if (!watch.events.has(event)) continue;
+        watch.sendEvent(event, data, sequence);
+        delivered = true;
+      }
+    }
+    return delivered;
+  }
+
   /** Direct-address every live connection for one durable caller identity. */
   emitToCaller<E extends EventName>(callerId: string, event: E, data?: EventPayloads[E]): boolean {
     const callerSubs = this.sessionsByCallerId.get(callerId);

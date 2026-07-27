@@ -10,6 +10,7 @@
  */
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import type { LifecyclePrepareInput, LifecycleResumeInput } from "@workspace/runtime/worker";
 import { ids } from "@workspace/agent-loop";
@@ -1337,9 +1338,9 @@ describe("AgentVesselBase.onEvalComplete (deferred-eval resume)", () => {
 class EvalGateProbe extends TestVessel {
   rpcCalls: Array<{ method: string; args: unknown[] }> = [];
   getRunStatus: { status: string; result?: unknown } = { status: "pending" };
-  /** When set, `eval.getRun` REJECTS with this error (a transient store/RPC hiccup). */
+  /** When set, `eval.get` REJECTS with this error (a transient store/RPC hiccup). */
   getRunError: Error | null = null;
-  /** When set, `eval.startRun` REJECTS with this error (the kick-off itself failed). */
+  /** When set, `eval.start` REJECTS with this error (the kick-off itself failed). */
   startRunError: Error | null = null;
   /** When set, `eval.cancel` REJECTS with this error. */
   cancelError: Error | null = null;
@@ -1347,11 +1348,11 @@ class EvalGateProbe extends TestVessel {
     return {
       call: async (_target: string, method: string, args: unknown[]) => {
         this.rpcCalls.push({ method, args });
-        if (method === "eval.getRun") {
+        if (method === "eval.get") {
           if (this.getRunError) throw this.getRunError;
           return this.getRunStatus;
         }
-        if (method === "eval.startRun" && this.startRunError) throw this.startRunError;
+        if (method === "eval.start" && this.startRunError) throw this.startRunError;
         if (method === "eval.cancel") {
           if (this.cancelError) throw this.cancelError;
           return { ok: true };
@@ -1679,21 +1680,22 @@ function semanticComparison(
 }
 
 describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)", () => {
-  it("kicks off eval.startRun with a distinct deterministic effect id and defers while pending", async () => {
+  it("kicks off eval.start with a distinct deterministic effect id and defers while pending", async () => {
     const probe = await makeGateProbe();
     probe.getRunStatus = { status: "pending" };
 
     const out = await probe.callGate(CHANNEL, "inv-1", { code: "1+1" });
 
     expect(out).toEqual({ deferred: true });
-    const start = probe.rpcCalls.find((c) => c.method === "eval.startRun");
+    const start = probe.rpcCalls.find((c) => c.method === "eval.start");
     expect(start?.args[0]).toMatchObject({
       runId: ids.invocationEffect("inv-1"),
-      subKey: CHANNEL,
-      code: "1+1",
+      scope: { key: CHANNEL },
+      source: { kind: "inline", code: "1+1" },
+      resultReceiver: { kind: "caller" },
     });
     // The poll backstop check happened even on the first dispatch.
-    expect(probe.rpcCalls.some((c) => c.method === "eval.getRun")).toBe(true);
+    expect(probe.rpcCalls.some((c) => c.method === "eval.get")).toBe(true);
   });
 
   it("completes INLINE when getRun already reports done (the lost-push poll backstop)", async () => {
@@ -1752,7 +1754,10 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
     const probe = await makeGateProbe();
     probe.getRunStatus = { status: "cancelled" };
     const out = await probe.callGate(CHANNEL, "inv-3", { code: "x" });
-    expect(out).toMatchObject({ isError: true, result: expect.stringContaining("cancelled") });
+    expect(out).toMatchObject({
+      isError: true,
+      result: { details: { failureKind: "cancelled" } },
+    });
   });
 
   it("uses path as an inline source hint and rejects only a missing source", async () => {
@@ -1761,10 +1766,8 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
     await expect(
       probe.callGate(CHANNEL, "inv-4", { code: "x", path: "meta", sourcePath: "src/probe.ts" })
     ).resolves.toEqual({ deferred: true });
-    expect(probe.rpcCalls.find((call) => call.method === "eval.startRun")?.args[0]).toMatchObject({
-      code: "x",
-      path: undefined,
-      sourcePath: "src/probe.ts",
+    expect(probe.rpcCalls.find((call) => call.method === "eval.start")?.args[0]).toMatchObject({
+      source: { kind: "inline", code: "x", pathHint: "src/probe.ts" },
     });
 
     const missing = await probe.callGate(CHANNEL, "inv-missing", {});
@@ -1779,9 +1782,8 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
     ).resolves.toEqual({
       deferred: true,
     });
-    expect(probe.rpcCalls.find((call) => call.method === "eval.startRun")?.args[0]).toMatchObject({
-      code: "1+1",
-      path: undefined,
+    expect(probe.rpcCalls.find((call) => call.method === "eval.start")?.args[0]).toMatchObject({
+      source: { kind: "inline", code: "1+1", pathHint: undefined },
     });
   });
 
@@ -1793,10 +1795,10 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
       probe.callGate(CHANNEL, "inv-reset", { reset: true, code: "return Object.keys(scope)" })
     ).resolves.toEqual({ deferred: true });
 
-    expect(probe.rpcCalls.find((call) => call.method === "eval.startRun")?.args[0]).toMatchObject({
+    expect(probe.rpcCalls.find((call) => call.method === "eval.start")?.args[0]).toMatchObject({
       runId: ids.invocationEffect("inv-reset"),
       reset: true,
-      code: "return Object.keys(scope)",
+      source: { kind: "inline", code: "return Object.keys(scope)" },
     });
   });
 
@@ -1811,7 +1813,7 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
       })
     ).resolves.toEqual({ deferred: true });
 
-    expect(probe.rpcCalls.find((call) => call.method === "eval.startRun")?.args[0]).toMatchObject({
+    expect(probe.rpcCalls.find((call) => call.method === "eval.start")?.args[0]).toMatchObject({
       runId: ids.invocationEffect("inv-timeout"),
       timeoutMs: 250,
     });
@@ -1830,11 +1832,11 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
     expect(out).toEqual({ deferred: true });
     expect((out as { isError?: boolean }).isError).toBeUndefined();
     // startRun still kicked off the run (so the result can arrive out-of-band).
-    expect(probe.rpcCalls.find((c) => c.method === "eval.startRun")?.args[0]).toMatchObject({
+    expect(probe.rpcCalls.find((c) => c.method === "eval.start")?.args[0]).toMatchObject({
       runId: ids.invocationEffect("inv-park"),
     });
     // The poll WAS attempted (and threw).
-    expect(probe.rpcCalls.some((c) => c.method === "eval.getRun")).toBe(true);
+    expect(probe.rpcCalls.some((c) => c.method === "eval.get")).toBe(true);
   });
 
   it("F4: a startRun failure still propagates (the run was never kicked off — fail fast)", async () => {
@@ -1847,7 +1849,7 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
       /startRun dispatch failed/
     );
     // The getRun poll was never reached.
-    expect(probe.rpcCalls.some((c) => c.method === "eval.getRun")).toBe(false);
+    expect(probe.rpcCalls.some((c) => c.method === "eval.get")).toBe(false);
   });
 });
 
@@ -1927,7 +1929,7 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     });
   });
 
-  it("keeps Pi child execution on the parent vessel source", async () => {
+  ledgerTest("execution.agent-spawn", async () => {
     const probe = await makeSubagentSpawnProbe();
 
     await probe.spawnForTest(CHANNEL, "inv-source-identity", {
@@ -2924,7 +2926,7 @@ describe("AgentVesselBase.cancelEval (pill cancel → server-side eval run)", ()
     expect(out).toEqual({ result: { ok: true } });
     const cancel = probe.rpcCalls.find((c) => c.method === "eval.cancel");
     expect(cancel?.args[0]).toEqual({
-      subKey: CHANNEL,
+      scopeKey: CHANNEL,
       runId: ids.invocationEffect("inv-9"),
     });
   });

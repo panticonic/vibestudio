@@ -342,12 +342,15 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
           const panelId = String(args[0]);
           if (method === "navigate") assertHttpUrl(args[1]);
           const target = await requireTarget(panelId);
-          return preparePanelAccessAuthority(
-            deps,
-            ctx,
-            operation as "cdp" | "navigate" | "reload" | "goBack" | "goForward" | "stop",
-            target
-          );
+          return {
+            selections: await preparePanelAccessAuthority(
+              deps,
+              ctx,
+              operation as "cdp" | "navigate" | "reload" | "goBack" | "goForward" | "stop",
+              target
+            ),
+            payload: null,
+          };
         },
       ])
     ),

@@ -693,13 +693,8 @@ export class SemanticVcsStore {
     const createdAt = this.now();
     const eventInput = {
       commandId: input.commandId,
-      kind: input.integratesEventIds.length
-        ? ("integration-commit" as const)
-        : ("commit" as const),
-      parentEventIds: [
-        context.committed.ref.eventId,
-        ...input.integratesEventIds,
-      ],
+      kind: input.integratesEventIds.length ? ("integration-commit" as const) : ("commit" as const),
+      parentEventIds: [context.committed.ref.eventId, ...input.integratesEventIds],
       applicationIds: chain.applicationIds,
       resultWorkspaceFactRootId: context.working.workspaceFactRootId,
       message: input.message,
@@ -803,6 +798,98 @@ export class SemanticVcsStore {
       .toArray();
     if (boundary.length > 0) {
       throw new SemanticVcsError("ScopeTooLarge", `Ancestry exceeds ${maxEdges} edges`);
+    }
+    return false;
+  }
+
+  /**
+   * Return whether `ancestor` is in the exact semantic basis closure of
+   * `descendant`. Events close over both their parent events and the
+   * applications they commit; applications close over their exact basis.
+   */
+  isStateAncestor(ancestor: StateNodeRef, descendant: StateNodeRef, maxEdges: number): boolean {
+    if (!Number.isSafeInteger(maxEdges) || maxEdges < 0) {
+      throw new SemanticVcsError("ScopeTooLarge", "Invalid ancestry bound");
+    }
+    // A ref which merely has the same spelling as another ref is not proof of
+    // lineage. Requiring both states also detects corrupt history before the
+    // recursive query can turn it into an authorization fact.
+    this.stateRoot(ancestor);
+    this.stateRoot(descendant);
+    const [ancestorKind, ancestorId] = stateKindAndId(ancestor);
+    const [descendantKind, descendantId] = stateKindAndId(descendant);
+    const ancestryCte = `WITH RECURSIVE ancestry(kind, id, depth) AS (
+      SELECT ?, ?, 0
+      UNION
+      SELECT application.basis_kind, application.basis_id, ancestry.depth + 1
+        FROM ancestry
+        JOIN gad_work_unit_applications application
+          ON ancestry.kind = 'application'
+         AND application.application_id = ancestry.id
+       WHERE ancestry.depth < ?
+      UNION
+      SELECT 'event', parent.parent_event_id, ancestry.depth + 1
+        FROM ancestry
+        JOIN gad_workspace_event_parents parent
+          ON ancestry.kind = 'event'
+         AND parent.event_id = ancestry.id
+       WHERE ancestry.depth < ?
+      UNION
+      SELECT 'application', committed.application_id, ancestry.depth + 1
+        FROM ancestry
+        JOIN gad_workspace_event_applications committed
+          ON ancestry.kind = 'event'
+         AND committed.event_id = ancestry.id
+       WHERE ancestry.depth < ?
+    )`;
+    const found = this.sql
+      .exec(
+        `${ancestryCte}
+         SELECT 1 FROM ancestry WHERE kind = ? AND id = ? LIMIT 1`,
+        descendantKind,
+        descendantId,
+        maxEdges,
+        maxEdges,
+        maxEdges,
+        ancestorKind,
+        ancestorId
+      )
+      .toArray();
+    if (found.length > 0) return true;
+    const boundary = this.sql
+      .exec(
+        `${ancestryCte}
+         SELECT 1
+           FROM ancestry
+          WHERE depth = ?
+            AND (
+              (kind = 'application' AND EXISTS (
+                SELECT 1 FROM gad_work_unit_applications application
+                 WHERE application.application_id = ancestry.id
+              ))
+              OR
+              (kind = 'event' AND (
+                EXISTS (
+                  SELECT 1 FROM gad_workspace_event_parents parent
+                   WHERE parent.event_id = ancestry.id
+                )
+                OR EXISTS (
+                  SELECT 1 FROM gad_workspace_event_applications committed
+                   WHERE committed.event_id = ancestry.id
+                )
+              ))
+            )
+          LIMIT 1`,
+        descendantKind,
+        descendantId,
+        maxEdges,
+        maxEdges,
+        maxEdges,
+        maxEdges
+      )
+      .toArray();
+    if (boundary.length > 0) {
+      throw new SemanticVcsError("ScopeTooLarge", `State ancestry exceeds ${maxEdges} edges`);
     }
     return false;
   }

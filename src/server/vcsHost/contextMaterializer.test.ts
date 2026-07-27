@@ -12,6 +12,7 @@ import { contextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceP
 import { ContentProjectionStore } from "./contentProjectionStore.js";
 import { ContextMaterializer } from "./contextMaterializer.js";
 import { DiskProjector } from "./diskProjector.js";
+import { hasTreeObject, materializeTree } from "../services/blobstoreService.js";
 
 describe("ContextMaterializer binding protocol", () => {
   let root: string;
@@ -103,6 +104,103 @@ describe("ContextMaterializer binding protocol", () => {
       ).toBe(0o600);
     }
     expect(await materializer.materializationState("context-1")).toEqual(privateValue);
+  });
+
+  it("plans dirty delta roots without writes and realizes that exact root only after admission", async () => {
+    const values = {
+      old: "old\n",
+      next: "next\n",
+      keep: "keep\n",
+      gone: "gone\n",
+      created: "created\n",
+    };
+    const hashes = Object.fromEntries(
+      Object.entries(values).map(([key, value]) => [key, sha256HexSyncText(value)])
+    ) as Record<keyof typeof values, string>;
+    const initial = contextMaterializationCommand({
+      contextId: "context-delta-plan",
+      commandId: "command-initial",
+      mode: "initialize",
+      previousState: null,
+      targetState: { kind: "event", eventId: "event-initial" },
+      repositories: [
+        {
+          repositoryId: "repository-1",
+          repoPath: "projects/default",
+          presence: "present",
+          fileManifestId: "manifest-initial",
+          source: {
+            kind: "snapshot",
+            files: [
+              { path: "value.txt", contentHash: hashes.old, mode: 0o644 },
+              { path: "stable/keep.txt", contentHash: hashes.keep, mode: 0o644 },
+              { path: "gone/only.txt", contentHash: hashes.gone, mode: 0o644 },
+            ],
+          },
+        },
+      ],
+      blobs: Object.entries(values)
+        .filter(([key]) => ["old", "keep", "gone"].includes(key))
+        .map(([key, value]) => ({
+          contentHash: hashes[key as keyof typeof values],
+          base64: Buffer.from(value).toString("base64"),
+        })),
+    });
+    const receipt = await materializer.materialize(initial);
+    const basisContentRoot = receipt.repositories[0]!.contentRoot;
+    const repository = {
+      repositoryId: "repository-1",
+      repoPath: "projects/default",
+      presence: "present" as const,
+      fileManifestId: "manifest-next",
+      source: {
+        kind: "delta" as const,
+        basisContentRoot,
+        changes: [
+          {
+            path: "gone/only.txt",
+            expected: { contentHash: hashes.gone, mode: 0o644 },
+            result: null,
+          },
+          {
+            path: "new/deep.txt",
+            expected: null,
+            result: { contentHash: hashes.created, mode: 0o644 },
+          },
+          {
+            path: "value.txt",
+            expected: { contentHash: hashes.old, mode: 0o644 },
+            result: { contentHash: hashes.next, mode: 0o644 },
+          },
+        ],
+      },
+    };
+    const blobs = [
+      { contentHash: hashes.next, base64: Buffer.from(values.next).toString("base64") },
+      {
+        contentHash: hashes.created,
+        base64: Buffer.from(values.created).toString("base64"),
+      },
+    ];
+
+    const [planned] = await materializer.planContentRoots([repository]);
+    expect(planned).toBeDefined();
+    await expect(hasTreeObject(blobsDir, planned!.contentRoot)).resolves.toBe(false);
+    await materializer.realizePlannedRepository(repository, blobs, planned!.contentRoot);
+    await expect(hasTreeObject(blobsDir, planned!.contentRoot)).resolves.toBe(true);
+
+    const output = path.join(root, "exact-output");
+    await materializeTree(blobsDir, planned!.contentRoot, output, {
+      strategy: "copy-on-write",
+    });
+    await expect(fsp.readFile(path.join(output, "value.txt"), "utf8")).resolves.toBe(values.next);
+    await expect(fsp.readFile(path.join(output, "new", "deep.txt"), "utf8")).resolves.toBe(
+      values.created
+    );
+    await expect(fsp.readFile(path.join(output, "stable", "keep.txt"), "utf8")).resolves.toBe(
+      values.keep
+    );
+    await expect(fsp.stat(path.join(output, "gone"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("serializes deletion after an active materialization", async () => {

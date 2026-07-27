@@ -201,18 +201,21 @@ describe("workerService workspace service resolution", () => {
         "example.store.v1",
         "chat",
       ])
-    ).resolves.toEqual([
-      expect.objectContaining({
-        challenge: expect.objectContaining({
-          operation: expect.objectContaining({ verb: "use the test service" }),
-          authorityVocabulary: {
-            domain: "automation",
-            verb: "act",
-            declaredBy: "workers/example-store",
-          },
+    ).resolves.toEqual({
+      selections: [
+        expect.objectContaining({
+          challenge: expect.objectContaining({
+            operation: expect.objectContaining({ verb: "use the test service" }),
+            authorityVocabulary: {
+              domain: "automation",
+              verb: "act",
+              declaredBy: "workers/example-store",
+            },
+          }),
         }),
-      }),
-    ]);
+      ],
+      payload: null,
+    });
   });
 
   it("lists every launchable worker with its real manifest entry point", async () => {

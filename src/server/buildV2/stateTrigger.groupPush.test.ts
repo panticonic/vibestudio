@@ -62,11 +62,16 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
 
     let publicationCb: ((event: ProtectedPublicationEvent) => void) | null = null;
     const source: WorkspaceStateSource & BuildSourceProvider = {
+      workspaceId: "workspace:test",
       ensureFresh: async () => ({ stateHash: "state:0" }),
       // New hashes per state so the touched unit registers as changed.
       unitHashes: async (stateHash, relPaths) =>
         Object.fromEntries(relPaths.map((relPath) => [relPath, `h:${relPath}:${stateHash}`])),
       resolveContextState: async () => "state:0",
+      semanticStateForContent: (stateHash) => ({
+        kind: "event",
+        eventId: `event:${stateHash}`,
+      }),
       discoverGraph: async () => graph,
       onProtectedPublication: (cb) => {
         publicationCb = cb;
@@ -127,10 +132,15 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
     });
     let materializationStarted = false;
     const source: WorkspaceStateSource & BuildSourceProvider = {
+      workspaceId: "workspace:test",
       ensureFresh: async () => ({ stateHash: "state:X" }),
       unitHashes: async (stateHash, relPaths) =>
         Object.fromEntries(relPaths.map((relPath) => [relPath, `h:${relPath}:${stateHash}`])),
       resolveContextState: async () => "state:X",
+      semanticStateForContent: (stateHash) => ({
+        kind: "event",
+        eventId: `event:${stateHash}`,
+      }),
       discoverGraph: async () => graph,
       onProtectedPublication: (cb) => {
         publicationCb = cb;

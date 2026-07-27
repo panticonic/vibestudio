@@ -337,6 +337,8 @@ export class AgentExecutionSessionRegistry {
 }
 
 function sameAdmission(fact: AgentExecutionSessionFact, input: AdmissionInput): boolean {
+  const { eventSinkNonce: _factSink, ...factEval } = fact.eval;
+  const { eventSinkNonce: _inputSink, ...inputEval } = input.eval;
   return (
     fact.mode === input.mode &&
     fact.ownerUser === input.ownerUser &&
@@ -345,7 +347,8 @@ function sameAdmission(fact: AgentExecutionSessionFact, input: AdmissionInput): 
     fact.taskRef === input.taskRef &&
     JSON.stringify(fact.agentBinding) === JSON.stringify(input.agentBinding) &&
     JSON.stringify(fact.harness) === JSON.stringify(input.harness) &&
-    JSON.stringify(fact.eval) === JSON.stringify(input.eval) &&
+    JSON.stringify(factEval) === JSON.stringify(inputEval) &&
+    JSON.stringify(fact.attachedHost ?? null) === JSON.stringify(input.attachedHost ?? null) &&
     JSON.stringify(fact.causalParent) === JSON.stringify(input.causalParent) &&
     JSON.stringify(fact.mission ?? null) === JSON.stringify(input.mission ?? null) &&
     JSON.stringify(fact.testPolicy ?? null) === JSON.stringify(input.testPolicy ?? null)

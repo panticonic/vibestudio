@@ -3,6 +3,7 @@ import type { RpcClient } from "@vibestudio/rpc";
 import {
   createHostedRuntime,
   createServicesProxy,
+  createAttachedHostsApi,
   type RuntimeHost,
   type WorkspaceRuntime,
 } from "./hostedRuntime.js";
@@ -345,5 +346,48 @@ describe("createServicesProxy", () => {
     const { host } = recordingHost();
     const services = createServicesProxy(createHostedRuntime(host)) as Record<string, unknown>;
     expect(services["someUnknownService"]).toBe(services["someUnknownService"]);
+  });
+});
+
+describe("createAttachedHostsApi", () => {
+  it("attaches once and routes arbitrary ordinary child service methods", async () => {
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const hosts = createAttachedHostsApi({
+      async callMain<T>(method: string, ...args: unknown[]): Promise<T> {
+        calls.push({ method, args });
+        if (method === "attachedHosts.attachClient") {
+          return {
+            sessionId: "attached-one",
+            developmentRunId: "development-one",
+            childHostId: "child-one",
+            childGenerationId: "1".repeat(32),
+            authorityCeilingDigest: "a".repeat(64),
+            expiresAt: Date.now() + 60_000,
+          } as T;
+        }
+        return { status: "running" } as T;
+      },
+    });
+    const child = await hosts.attach("attached-one");
+    await expect(child.services["eval"]!["get"]!({ runId: "eval-one" })).resolves.toEqual({
+      status: "running",
+    });
+    expect(calls).toEqual([
+      {
+        method: "attachedHosts.attachClient",
+        args: [{ sessionId: "attached-one" }],
+      },
+      {
+        method: "attachedHosts.invokeAttached",
+        args: [
+          {
+            sessionId: "attached-one",
+            service: "eval",
+            method: "get",
+            args: [{ runId: "eval-one" }],
+          },
+        ],
+      },
+    ]);
   });
 });

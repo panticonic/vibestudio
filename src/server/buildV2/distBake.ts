@@ -74,7 +74,10 @@ export function createAppDistBakeManifest(opts: {
     `App ${opts.entry.name} execution digest`
   );
   const source = normalizeUnitRepoPath(opts.entry.source.repo);
-  if (execution?.source.repoPath !== source) {
+  if (
+    execution?.sourceState.kind !== "workspace" ||
+    !execution.sourceState.contentRoots.some((root) => root.repoPath === source)
+  ) {
     throw new Error(`App ${opts.entry.name} execution identity does not match its source`);
   }
   const authority = parseUnitAuthorityManifest(

@@ -150,11 +150,11 @@ describe("executeSandbox", () => {
     });
   });
 
-  it("confines and hardens relative source modules before publishing their exports", async () => {
+  it("confines and freezes relative source module namespaces before publishing their exports", async () => {
     const guestContext = vm.createContext({ evaluatorSecret: "LEAKED" });
     tameRealmCodegen(vm.runInContext("globalThis", guestContext) as Record<string, unknown>);
     const moduleMap: Record<string, unknown> = {};
-    const harden = vi.fn(<T>(value: T): T => {
+    const freezeModuleNamespace = vi.fn(<T>(value: T): T => {
       if ((typeof value === "object" && value !== null) || typeof value === "function") {
         Object.freeze(value);
       }
@@ -179,12 +179,12 @@ describe("executeSandbox", () => {
           vm.runInContext(`(function (${argNames.join(", ")}) {\n${body}\n})`, guestContext) as (
             ...args: unknown[]
           ) => unknown,
-        harden,
+        freezeModuleNamespace,
       }
     );
 
     expect(result).toMatchObject({ success: true, returnValue: "undefined" });
-    expect(harden).toHaveBeenCalled();
+    expect(freezeModuleNamespace).toHaveBeenCalled();
     expect(Object.isFrozen(moduleMap["src/helper.ts"])).toBe(true);
   });
 

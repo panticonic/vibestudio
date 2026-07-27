@@ -527,7 +527,7 @@ describe("rpcClient", () => {
 
     it("opens the WS client for stream with an agent-kind caller on a raw agent token", async () => {
       const client = new RpcClient({ url: CREDS.url, token: "agent:agt_1:sec" });
-      await client.stream("main", "eval.run", []);
+      await client.stream("main", "eval.start", []);
       expect(wsMocks.ctor).toHaveBeenCalledWith(
         expect.objectContaining({ callerId: "agent:agt_1", callerKind: "agent" })
       );

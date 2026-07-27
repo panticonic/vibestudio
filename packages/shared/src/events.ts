@@ -67,7 +67,11 @@ export type EventName =
   | "server-health"
   | "host-targets:changed"
   | "host-target-launch:session-changed"
-  | "shell-approval:pending-changed";
+  | "shell-approval:pending-changed"
+  | "eval:run-event"
+  | "development:run-event"
+  | "development:client-launch-request"
+  | "development:client-stop-request";
 
 /**
  * Action button definition for notifications.
@@ -161,6 +165,44 @@ export interface HostTargetChangedPayload {
  * Event payloads for type safety.
  */
 export interface EventPayloads {
+  "development:run-event": {
+    runId: string;
+    sessionId: string;
+    event: {
+      sequence: number;
+      at: number;
+      kind: "state" | "log" | "diagnostic" | "cleanup";
+      payload?: unknown;
+    };
+  };
+  "development:client-launch-request": {
+    requestId: string;
+    runId: string;
+    expiresAt: number;
+  };
+  "development:client-stop-request": {
+    requestId: string;
+    runId: string;
+    childPid: number;
+  };
+  "eval:run-event": {
+    runId: string;
+    scopeKey: string;
+    event: {
+      sequence: number;
+      at: number;
+      kind:
+        | "state"
+        | "console"
+        | "progress"
+        | "authority-requested"
+        | "authority-decided"
+        | "kernel"
+        | "cleanup"
+        | "diagnostic";
+      payload: unknown;
+    };
+  };
   "build:complete": { source: string; error?: string };
   "system-theme-changed": "light" | "dark";
   "panel-tree-updated": PanelTreeSnapshot;
@@ -369,6 +411,9 @@ export interface EventPayloads {
  */
 export const VALID_EVENT_NAMES: EventName[] = [
   "build:complete",
+  "development:run-event",
+  "development:client-launch-request",
+  "development:client-stop-request",
   "system-theme-changed",
   "panel-tree-updated",
   "workspace-presence-changed",
@@ -406,6 +451,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "host-targets:changed",
   "host-target-launch:session-changed",
   "shell-approval:pending-changed",
+  "eval:run-event",
   "workspace:revision-bumped",
   "credential:capture-request",
   "server-log:append",

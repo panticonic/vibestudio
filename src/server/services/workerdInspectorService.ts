@@ -74,7 +74,7 @@ export function createWorkerdInspectorService(
           isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability }) ||
           (!ctx.caller.code && !ctx.caller.executionSession)
         ) {
-          return [];
+          return { selections: [], payload: null };
         }
         const targetPath = String(rawTargetPath);
         const copy = describeCapability(WORKERD_INSPECTOR_CAPABILITY);
@@ -83,26 +83,29 @@ export function createWorkerdInspectorService(
           label: "Workspace process",
           value: targetPath,
         };
-        return [
-          fixedPreparedAuthoritySelection({
-            capability: WORKERD_INSPECTOR_CAPABILITY,
-            resourceKey: `caller:${ctx.caller.runtime.id}`,
-            challenge: {
-              title: copy.title,
-              description: copy.description,
-              deniedReason: "Inspecting this workspace process was not allowed",
-              dedupKey: `runtime-inspect:${ctx.caller.runtime.id}`,
-              resource,
-              operation: {
-                kind: "inspection",
-                verb: copy.action,
-                object: resource,
-                groupKey: `runtime-inspect:${ctx.caller.runtime.id}`,
+        return {
+          selections: [
+            fixedPreparedAuthoritySelection({
+              capability: WORKERD_INSPECTOR_CAPABILITY,
+              resourceKey: `caller:${ctx.caller.runtime.id}`,
+              challenge: {
+                title: copy.title,
+                description: copy.description,
+                deniedReason: "Inspecting this workspace process was not allowed",
+                dedupKey: `runtime-inspect:${ctx.caller.runtime.id}`,
+                resource,
+                operation: {
+                  kind: "inspection",
+                  verb: copy.action,
+                  object: resource,
+                  groupKey: `runtime-inspect:${ctx.caller.runtime.id}`,
+                },
+                details: [{ label: "Workspace process", value: targetPath }],
               },
-              details: [{ label: "Workspace process", value: targetPath }],
-            },
-          }),
-        ];
+            }),
+          ],
+          payload: null,
+        };
       },
     },
     handler: defineServiceHandler("workerdInspector", methods, {

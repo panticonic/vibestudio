@@ -7,6 +7,14 @@ function textOf(out: ReturnType<typeof formatEvalResult>): string {
   return out.content.map((c) => (c as { type: string; text?: string }).text ?? "").join("\n");
 }
 
+function terminal(result: EvalRunResult): {
+  runId: string;
+  status: "terminal";
+  snapshot: { status: "done"; result: EvalRunResult };
+} {
+  return { runId: "echo", status: "terminal", snapshot: { status: "done", result } };
+}
+
 describe("formatEvalResult (shared by the eval tool's execute + the agent's deferred onEvalComplete)", () => {
   it("makes the JavaScript parser boundary explicit in the model-visible schema", () => {
     const tool = createEvalTool(async () => ({ success: true, console: "" }) as never);
@@ -82,7 +90,7 @@ describe("formatEvalResult (shared by the eval tool's execute + the agent's defe
     const calls: unknown[][] = [];
     const tool = createEvalTool(async (_method, args) => {
       calls.push(args);
-      return { success: true, console: "" } as never;
+      return terminal({ success: true, console: "" }) as never;
     });
 
     expect(Value.Check(tool.parameters, { code: "return 1" })).toBe(true);
@@ -92,78 +100,86 @@ describe("formatEvalResult (shared by the eval tool's execute + the agent's defe
     expect(tool.description).toContain("no implicit wall deadline");
 
     await tool.execute("call-timeout", { code: "return 1", timeoutMs: 250 });
-    expect(calls[0]?.[0]).toMatchObject({ code: "return 1", timeoutMs: 250 });
+    expect(calls[0]?.[0]).toMatchObject({
+      source: { kind: "inline", code: "return 1" },
+      timeoutMs: 250,
+    });
   });
 
   it("treats a transport-materialized empty path as omitted for inline code", async () => {
     const calls: unknown[][] = [];
     const tool = createEvalTool(async (_method, args) => {
       calls.push(args);
-      return { success: true, console: "" } as never;
+      return terminal({ success: true, console: "" }) as never;
     });
     await tool.execute("call-1", { code: "return 1", path: "" } as never);
-    expect(calls[0]?.[0]).toMatchObject({ code: "return 1", path: undefined });
+    expect(calls[0]?.[0]).toMatchObject({
+      source: { kind: "inline", code: "return 1", pathHint: undefined },
+    });
   });
   it("uses path as a source-base hint when inline code is present", async () => {
     const calls: unknown[][] = [];
     const tool = createEvalTool(async (_method, args) => {
       calls.push(args);
-      return { success: true, console: "" } as never;
+      return terminal({ success: true, console: "" }) as never;
     });
 
     await tool.execute("call-1", { code: "return 1", path: "meta" } as never);
 
     expect(calls[0]?.[0]).toMatchObject({
-      code: "return 1",
-      path: undefined,
-      sourcePath: "meta/__inline_eval__.tsx",
+      source: {
+        kind: "inline",
+        code: "return 1",
+        pathHint: "meta/__inline_eval__.tsx",
+      },
     });
   });
   it("forwards reset as an atomic pre-run lifecycle option", async () => {
     const calls: unknown[][] = [];
     const tool = createEvalTool(async (_method, args) => {
       calls.push(args);
-      return { success: true, console: "", scopeKeys: [] } as never;
+      return terminal({ success: true, console: "", scopeKeys: [] }) as never;
     });
 
     await tool.execute("call-reset", { reset: true, code: "return Object.keys(scope)" } as never);
 
     expect(calls[0]?.[0]).toMatchObject({
       reset: true,
-      code: "return Object.keys(scope)",
+      source: { kind: "inline", code: "return Object.keys(scope)" },
     });
   });
   it("loads a non-executable text/data path instead of parsing it as TypeScript", async () => {
     const calls: unknown[][] = [];
     const tool = createEvalTool(async (_method, args) => {
       calls.push(args);
-      return { success: true, console: "", returnValue: "# Sandbox" } as never;
+      return terminal({ success: true, console: "", returnValue: "# Sandbox" }) as never;
     });
 
     await tool.execute("call-1", { path: "skills/sandbox/SKILL.md" } as never);
 
     expect(calls[0]?.[0]).toMatchObject({
-      code: 'return await fs.readFile("skills/sandbox/SKILL.md", "utf8");',
+      source: {
+        kind: "inline",
+        code: 'return await fs.readFile("skills/sandbox/SKILL.md", "utf8");',
+      },
     });
-    expect(calls[0]?.[0]).not.toHaveProperty("path");
+    expect(calls[0]?.[0]).not.toHaveProperty("source.path");
   });
   it("executes ordinary TypeScript and JavaScript file paths", async () => {
     const calls: unknown[][] = [];
     const tool = createEvalTool(async (_method, args) => {
       calls.push(args);
-      return { success: true, console: "", returnValue: { ok: true } } as never;
+      return terminal({ success: true, console: "", returnValue: { ok: true } }) as never;
     });
 
     await tool.execute("call-ts", { path: ".vibestudio/eval/check.ts" } as never);
     await tool.execute("call-js", { path: ".vibestudio/eval/check.js" } as never);
 
     expect(calls[0]?.[0]).toMatchObject({
-      path: ".vibestudio/eval/check.ts",
-      code: undefined,
+      source: { kind: "context-file", path: ".vibestudio/eval/check.ts" },
     });
     expect(calls[1]?.[0]).toMatchObject({
-      path: ".vibestudio/eval/check.js",
-      code: undefined,
+      source: { kind: "context-file", path: ".vibestudio/eval/check.js" },
     });
   });
   it("formats a successful run: console + return value + scope keys, raw result on details", () => {

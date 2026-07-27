@@ -7,12 +7,14 @@ import { setUserDataPath } from "@vibestudio/env-paths";
 
 import { buildUnit, initBuilder } from "./builder.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
+import { setBuildExecutionIdentityContext } from "./buildStore.js";
 beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
 afterAll(() => setBuildSourceProvider(null));
 import { discoverPackageGraph } from "./packageGraph.js";
 
 const REPO_ROOT = process.cwd();
 const REAL_SHIM = path.join(REPO_ROOT, "workspace", "packages", "terminal-shim");
+const SOURCE_STATE_HASH = `state:${"c".repeat(64)}`;
 
 function git(cwd: string, args: string[]): void {
   execFileSync("git", args, { cwd, stdio: ["ignore", "ignore", "pipe"] });
@@ -49,6 +51,10 @@ describe("buildUnit terminal worker builds", () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-terminal-build-"));
     workspaceRoot = path.join(root, "workspace");
     setUserDataPath(path.join(root, "state"));
+    setBuildExecutionIdentityContext({
+      workspaceId: "workspace:test",
+      semanticStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
+    });
     // Resolve external npm deps (yoga-layout) from the repo's real node_modules.
     initBuilder([path.join(REPO_ROOT, "node_modules")]);
   });
@@ -104,7 +110,7 @@ describe("buildUnit terminal worker builds", () => {
       "a".repeat(64),
       graph,
       workspaceRoot,
-      "state:test"
+      SOURCE_STATE_HASH
     );
 
     // Multi-artifact: primary bundle.js + the extracted yoga.wasm module.
@@ -184,7 +190,7 @@ describe("buildUnit terminal worker builds", () => {
       "b".repeat(64),
       graph,
       workspaceRoot,
-      "state:test"
+      SOURCE_STATE_HASH
     );
 
     const bundle = result.artifacts.find((a) => a.role === "primary")?.content ?? "";

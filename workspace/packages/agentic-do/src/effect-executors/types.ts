@@ -125,7 +125,7 @@ export interface LocalToolPort {
         terminalReasonCode?: string;
         failure?: AgentToolFailure;
       }
-    // A long-running local tool (the agent's `eval`) defers: it kicks off the work (eval.startRun)
+    // A long-running local tool (the agent's `eval`) defers: it kicks off the work (eval.start)
     // and the result arrives out-of-band via `deliverEffectOutcome` (onEvalComplete). The driver
     // parks the leased row (deferRedrive backstop), exactly like channel_call/http_call.
     | { deferred: true }

@@ -17,7 +17,7 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "src/server/services/runtimeService.test.ts"
+      "parityAssertion": "test:execution.runtime-create-entity"
     },
     {
       "surface": "ensureDurableObjectEntity",
@@ -35,7 +35,7 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "src/server/universalDoHost.test.ts"
+      "parityAssertion": "test:execution.ensure-durable-object"
     },
     {
       "surface": "workerd.startWorker",
@@ -53,7 +53,7 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "src/server/workerdManager.test.ts"
+      "parityAssertion": "test:execution.workerd-start-worker"
     },
     {
       "surface": "worker-push-rebuild",
@@ -71,7 +71,7 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "src/server/workerdManager.test.ts"
+      "parityAssertion": "test:execution.worker-push-rebuild"
     },
     {
       "surface": "durable-object-push-rebuild",
@@ -89,7 +89,7 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "src/server/dynamicWorkerHost.test.ts"
+      "parityAssertion": "test:execution.durable-object-push-rebuild"
     },
     {
       "surface": "eval-do",
@@ -107,7 +107,7 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "src/server/services/evalService.test.ts"
+      "parityAssertion": "test:execution.eval-do"
     },
     {
       "surface": "vcs-store",
@@ -125,7 +125,7 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "src/server/internalDOs/workspaceDO.test.ts"
+      "parityAssertion": "test:execution.vcs-store"
     },
     {
       "surface": "agent-spawn",
@@ -143,7 +143,7 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "workspace/packages/agentic-do/src/agent-loop-driver.test.ts"
+      "parityAssertion": "test:execution.agent-spawn"
     },
     {
       "surface": "panel",
@@ -161,7 +161,7 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "src/server/panelRuntimeRegistration.ts"
+      "parityAssertion": "test:execution.panel"
     },
     {
       "surface": "electron-app",
@@ -179,7 +179,7 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "src/server/appHost.test.ts"
+      "parityAssertion": "test:execution.electron-app"
     },
     {
       "surface": "react-native-app",
@@ -197,7 +197,7 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "src/server/appHost.test.ts"
+      "parityAssertion": "test:execution.react-native-app"
     },
     {
       "surface": "terminal-app",
@@ -215,7 +215,7 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "src/server/terminalAppRunner.test.ts"
+      "parityAssertion": "test:execution.terminal-app"
     },
     {
       "surface": "extension",
@@ -233,43 +233,7 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "packages/extension-host/src/service.test.ts"
-    },
-    {
-      "surface": "dev-host-current-client",
-      "selector": "exact-context-snapshot",
-      "executableIdentity": "full-execution-digest",
-      "adoption": "validated-client-ready",
-      "rollback": "last-good-remains-authoritative",
-      "inFlightWork": "preserved-until-surface-boundary",
-      "durableStorage": "stable-logical-entity-namespace",
-      "visibleProgress": "surface-specific-existing-loading-or-status",
-      "provenance": [
-        "source-state",
-        "recipe",
-        "build-key",
-        "artifact-digest",
-        "execution-digest"
-      ],
-      "parityAssertion": "src/server/services/devHostService.test.ts"
-    },
-    {
-      "surface": "dev-host-isolated",
-      "selector": "exact-context-snapshot",
-      "executableIdentity": "full-execution-digest",
-      "adoption": "candidate-promotion",
-      "rollback": "last-good-remains-authoritative",
-      "inFlightWork": "preserved-until-surface-boundary",
-      "durableStorage": "stable-logical-entity-namespace",
-      "visibleProgress": "surface-specific-existing-loading-or-status",
-      "provenance": [
-        "source-state",
-        "recipe",
-        "build-key",
-        "artifact-digest",
-        "execution-digest"
-      ],
-      "parityAssertion": "workspace/extensions/dev-host/lifecycle.test.ts"
+      "parityAssertion": "test:execution.extension"
     },
     {
       "surface": "claude-code",
@@ -287,7 +251,7 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "workspace/extensions/claude-code/index.test.ts"
+      "parityAssertion": "test:execution.claude-code"
     }
   ]
 }

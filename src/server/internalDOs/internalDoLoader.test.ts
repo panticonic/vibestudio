@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { internalDOExecutionIdentity, type InternalDOBundle } from "./internalDoLoader.js";
+import {
+  internalDOExecutionArtifacts,
+  internalDOExecutionIdentity,
+  type InternalDOBundle,
+} from "./internalDoLoader.js";
+import { verifyExecutionArtifactRef } from "@vibestudio/shared/execution/retention";
 
 function bundle(content = "export class GadWorkspaceDO {};"): InternalDOBundle {
   return {
@@ -18,7 +23,7 @@ describe("internalDOExecutionIdentity", () => {
     expect(gad).toMatchObject({
       source: "vibestudio/internal",
       unitName: "@vibestudio/internal-do/GadWorkspaceDO",
-      stateHash: bundle().buildKey,
+      stateHash: `state:${bundle().buildKey}`,
       buildKey: bundle().buildKey,
       effectiveVersion: expect.stringMatching(/^[0-9a-f]{64}$/),
       executionDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
@@ -34,6 +39,21 @@ describe("internalDOExecutionIdentity", () => {
     ]);
     expect(workspace.executionDigest).not.toBe(gad.executionDigest);
     expect(evalDo.executionDigest).not.toBe(gad.executionDigest);
+    expect(verifyExecutionArtifactRef(gad.artifact)).toEqual(gad.artifact);
+    expect(gad.artifact.sourceState).toMatchObject({
+      kind: "product-seed",
+      state: null,
+      contentRoots: [{ repoPath: null, stateHash: `state:${bundle().buildKey}` }],
+    });
+  });
+
+  it("enumerates every reviewed product-seed entrypoint with one shared bundle key", () => {
+    const artifacts = internalDOExecutionArtifacts(bundle());
+    expect(artifacts).toHaveLength(5);
+    expect(new Set(artifacts.map((artifact) => artifact.buildKey))).toEqual(
+      new Set([bundle().buildKey])
+    );
+    expect(new Set(artifacts.map((artifact) => artifact.executionDigest))).toHaveLength(5);
   });
 
   it("rejects mismatched bytes and unreviewed internal exports", () => {

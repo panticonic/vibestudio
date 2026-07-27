@@ -23,48 +23,51 @@ describe("browserEnvironment authority", () => {
       requested: [],
     });
     const prepare = definition.authorityPreparation?.["browserEnvironment.broker.startImportRead"];
-    expect(prepare?.({ caller }, ["source", ["passwords"]])).toEqual([
-      expect.objectContaining({
-        capability: "service:browserEnvironment.startImportRead",
-        requirement: {
-          kind: "all",
-          requirements: [
-            {
-              kind: "any",
-              requirements: [
-                {
-                  kind: "all",
-                  requirements: [
-                    {
-                      kind: "capability",
-                      principal: "code",
-                      capability: "service:browserEnvironment.startImportRead",
-                    },
-                    { kind: "relationship", name: "workspace-member" },
-                  ],
-                },
-                {
-                  kind: "all",
-                  requirements: [
-                    {
-                      kind: "capability",
-                      principal: "session",
-                      capability: "service:browserEnvironment.startImportRead",
-                    },
-                    { kind: "relationship", name: "workspace-member" },
-                  ],
-                },
-              ],
-            },
-            {
-              kind: "relationship",
-              name: "code-source",
-              value: "extensions/browser-data",
-            },
-          ],
-        },
-      }),
-    ]);
+    expect(prepare?.({ caller }, ["source", ["passwords"]])).toEqual({
+      selections: [
+        expect.objectContaining({
+          capability: "service:browserEnvironment.startImportRead",
+          requirement: {
+            kind: "all",
+            requirements: [
+              {
+                kind: "any",
+                requirements: [
+                  {
+                    kind: "all",
+                    requirements: [
+                      {
+                        kind: "capability",
+                        principal: "code",
+                        capability: "service:browserEnvironment.startImportRead",
+                      },
+                      { kind: "relationship", name: "workspace-member" },
+                    ],
+                  },
+                  {
+                    kind: "all",
+                    requirements: [
+                      {
+                        kind: "capability",
+                        principal: "session",
+                        capability: "service:browserEnvironment.startImportRead",
+                      },
+                      { kind: "relationship", name: "workspace-member" },
+                    ],
+                  },
+                ],
+              },
+              {
+                kind: "relationship",
+                name: "code-source",
+                value: "extensions/browser-data",
+              },
+            ],
+          },
+        }),
+      ],
+      payload: null,
+    });
   });
 
   it("adds no broker-source leaf to a host-originated call", () => {
@@ -72,6 +75,6 @@ describe("browserEnvironment authority", () => {
     const prepare = definition.authorityPreparation?.["browserEnvironment.broker.nextImportFrame"];
     expect(
       prepare?.({ caller: createVerifiedCaller("shell:main", "shell") }, ["operation"])
-    ).toEqual([]);
+    ).toEqual({ selections: [], payload: null });
   });
 });

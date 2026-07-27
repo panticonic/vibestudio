@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
 import initSqlJs from "sql.js";
 
 import { createTestDO } from "@vibestudio/durable/test-utils";
@@ -96,7 +97,7 @@ describe("WorkspaceDO exact pre-release schema", () => {
     );
   });
 
-  it("creates one exact fresh schema containing the complete execution identity", async () => {
+  ledgerTest("execution.vcs-store", async () => {
     const { sql } = await createTestDO(WorkspaceDOTestable);
     for (const table of WORKSPACE_TABLES) {
       expect(

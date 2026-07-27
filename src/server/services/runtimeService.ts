@@ -56,6 +56,7 @@ import {
   parseUnitAuthorityManifest,
   type UnitAuthorityManifest,
 } from "@vibestudio/shared/authorityManifest";
+import type { VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
 
 export interface RuntimeEntityHooks {
   /**
@@ -157,6 +158,22 @@ export interface RuntimeServiceInternal {
     }
   ): Promise<WorkspaceContext>;
   resolveContext(id: string): Promise<string | null>;
+  /**
+   * Create a deterministic semantic-only child context for a development
+   * session. It intentionally does not create entities, clone DO storage, or
+   * materialize a host projection.
+   */
+  forkDevelopmentSessionContext(
+    caller: VerifiedCaller,
+    sessionId: string
+  ): Promise<{
+    contextId: string;
+    parentContextId: string;
+    parentWorkingHead: VcsStateNodeRef;
+    childBaseState: VcsStateNodeRef;
+  }>;
+  /** Undo a never-executed development-session context after admission fails. */
+  discardDevelopmentSessionContext(contextId: string): Promise<void>;
 }
 
 export interface RuntimeServiceResult {
@@ -188,6 +205,8 @@ export interface RuntimeSemanticContexts {
    * semantic context. Used by clone/subagent lifecycle orchestration.
    */
   forkContext(sourceContextId: string, targetContextId: string): Promise<void>;
+  /** Exact semantic state pointer without materializing a native projection. */
+  resolveWorkingState(contextId: string): Promise<VcsStateNodeRef>;
 }
 
 export interface RuntimeServiceDeps {
@@ -226,6 +245,11 @@ export interface RuntimeServiceDeps {
    * entity. Wired in src/server/index.ts to deviceAuthStore + tokenManager.
    */
   revokeAgentCredentials?: (entityId: string) => void | Promise<void>;
+  /**
+   * Hidden system-test fault seam. The host callback must authenticate the
+   * attested system-test harness before aborting this exact active DO facet.
+   */
+  faultAbortAgentVessel?: (caller: VerifiedCaller, record: EntityRecord) => void | Promise<void>;
 }
 
 /**
@@ -1251,6 +1275,49 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     return { contextId };
   }
 
+  async function forkDevelopmentSessionContext(
+    caller: VerifiedCaller,
+    sessionId: string
+  ): Promise<{
+    contextId: string;
+    parentContextId: string;
+    parentWorkingHead: VcsStateNodeRef;
+    childBaseState: VcsStateNodeRef;
+  }> {
+    const parentContextId = await store.resolveContext(caller.runtime.id);
+    if (!parentContextId) {
+      throw Object.assign(
+        new Error(`Development session caller ${caller.runtime.id} has no semantic context`),
+        { code: "ENOENT" }
+      );
+    }
+    const contextId = `ctx-development-${createHash("sha256")
+      .update(sessionId)
+      .digest("hex")
+      .slice(0, 32)}`;
+    const parentWorkingHead = await deps.semanticContexts.resolveWorkingState(parentContextId);
+    // Semantic state only: do not create a projection folder and do not touch
+    // entity/DO state. forkContext is valid even when the parent is empty.
+    await deps.semanticContexts.forkContext(parentContextId, contextId);
+    await store.recordContextEdge({
+      contextId,
+      ownerContextId: parentContextId,
+      kind: "lifecycle",
+      ownerEntityId: caller.runtime.id,
+    });
+    await deps.onContextCreated?.({ contextId, ownerContextId: parentContextId });
+    const childBaseState = await deps.semanticContexts.resolveWorkingState(contextId);
+    return { contextId, parentContextId, parentWorkingHead, childBaseState };
+  }
+
+  async function discardDevelopmentSessionContext(contextId: string): Promise<void> {
+    // Development contexts reach this path only before an executor exists, so
+    // semantic state and its registry edge are the entire resource set.
+    await deps.semanticContexts.dropContext(contextId);
+    await store.deleteContextEdges(contextId);
+    await deps.onContextRemoved?.({ contextId });
+  }
+
   interface EntitySummary {
     id: string;
     kind: string;
@@ -1301,58 +1368,70 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           spec.contextId === "" ||
           isExtensionOrchestratedCreate(ctx.caller, spec)
         ) {
-          return [];
+          return { selections: [], payload: null };
         }
-        return prepareContextBoundary(ctx.caller, spec.contextId, {
-          kind: "runtime",
-          verb: `Create ${spec.kind}`,
-          targetLabel: runtimeEntitySource(spec),
-          targetLabelName: "Source",
-          groupKey: `context-boundary:${spec.contextId}:${runtimeEntitySource(spec)}`,
-          ...(ctx.signal ? { signal: ctx.signal } : {}),
-        });
+        return {
+          selections: await prepareContextBoundary(ctx.caller, spec.contextId, {
+            kind: "runtime",
+            verb: `Create ${spec.kind}`,
+            targetLabel: runtimeEntitySource(spec),
+            targetLabelName: "Source",
+            groupKey: `context-boundary:${spec.contextId}:${runtimeEntitySource(spec)}`,
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
+          }),
+          payload: null,
+        };
       },
       "runtime.retireEntity.contextBoundary": async (ctx, [rawArgs]) => {
         const { id, removeContext } = rawArgs as { id: string; removeContext?: boolean };
         const target = await store.resolveRecord(id);
         if (!target || target.status !== "active" || callerOwnsEntity(ctx.caller, target))
-          return [];
-        return prepareContextBoundary(ctx.caller, target.contextId, {
-          kind: "runtime",
-          verb: removeContext ? "Retire entity and remove context" : "Retire entity",
-          targetLabel: id,
-          targetLabelName: "Runtime entity",
-          ...(removeContext ? { severity: "severe" as const } : {}),
-          ...(ctx.signal ? { signal: ctx.signal } : {}),
-        });
+          return { selections: [], payload: null };
+        return {
+          selections: await prepareContextBoundary(ctx.caller, target.contextId, {
+            kind: "runtime",
+            verb: removeContext ? "Retire entity and remove context" : "Retire entity",
+            targetLabel: id,
+            targetLabelName: "Runtime entity",
+            ...(removeContext ? { severity: "severe" as const } : {}),
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
+          }),
+          payload: null,
+        };
       },
       "runtime.createContext.contextBoundary": async (ctx, [rawArgs]) => {
         const { contextId } = rawArgs as { contextId?: string };
-        if (contextId == null || contextId === "") return [];
+        if (contextId == null || contextId === "") return { selections: [], payload: null };
         const delegatedOwnerContextId =
           ctx.caller.runtime.kind === "extension" && ctx.chainCaller
             ? await store.resolveContext(ctx.chainCaller.callerId)
             : undefined;
-        return prepareContextBoundary(
-          ctx.caller,
-          contextId,
-          {
-            kind: "runtime",
-            verb: "Set up context",
-            ...(ctx.signal ? { signal: ctx.signal } : {}),
-          },
-          delegatedOwnerContextId
-        );
+        return {
+          selections: await prepareContextBoundary(
+            ctx.caller,
+            contextId,
+            {
+              kind: "runtime",
+              verb: "Set up context",
+              ...(ctx.signal ? { signal: ctx.signal } : {}),
+            },
+            delegatedOwnerContextId
+          ),
+          payload: null,
+        };
       },
       "runtime.cloneContext.contextBoundary": async (ctx, [rawArgs]) => {
         const { sourceContextId } = rawArgs as { sourceContextId: string };
-        return prepareContextBoundary(ctx.caller, sourceContextId, {
-          kind: "runtime",
-          verb: "Clone context",
-          targetLabel: sourceContextId,
-          targetLabelName: "Source context",
-          ...(ctx.signal ? { signal: ctx.signal } : {}),
-        });
+        return {
+          selections: await prepareContextBoundary(ctx.caller, sourceContextId, {
+            kind: "runtime",
+            verb: "Clone context",
+            targetLabel: sourceContextId,
+            targetLabelName: "Source context",
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
+          }),
+          payload: null,
+        };
       },
       "runtime.destroyContext.contextBoundary": async (ctx, [rawArgs]) => {
         const { contextId } = rawArgs as { contextId: string };
@@ -1374,15 +1453,18 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
             }
             return parentId === ctx.caller.runtime.id;
           });
-        if (owned) return [];
-        return prepareContextBoundary(ctx.caller, contextId, {
-          kind: "runtime",
-          verb: "Destroy context",
-          targetLabel: contextId,
-          targetLabelName: "Context",
-          severity: "severe",
-          ...(ctx.signal ? { signal: ctx.signal } : {}),
-        });
+        if (owned) return { selections: [], payload: null };
+        return {
+          selections: await prepareContextBoundary(ctx.caller, contextId, {
+            kind: "runtime",
+            verb: "Destroy context",
+            targetLabel: contextId,
+            targetLabelName: "Context",
+            severity: "severe",
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
+          }),
+          payload: null,
+        };
       },
       "runtime.createSubagentContext.contextBoundary": async (ctx, [rawArgs]) => {
         const args = rawArgs as {
@@ -1391,14 +1473,17 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           targetKey: string;
         };
         await assertSubagentOwnerAllowed(ctx.caller, args);
-        return prepareContextBoundary(ctx.caller, args.parentContextId, {
-          kind: "runtime",
-          verb: "Create subagent context",
-          targetLabel: args.ownerEntityId,
-          targetLabelName: "Owner entity",
-          groupKey: `context-boundary:subagent:${args.parentContextId}:${args.ownerEntityId}`,
-          ...(ctx.signal ? { signal: ctx.signal } : {}),
-        });
+        return {
+          selections: await prepareContextBoundary(ctx.caller, args.parentContextId, {
+            kind: "runtime",
+            verb: "Create subagent context",
+            targetLabel: args.ownerEntityId,
+            targetLabelName: "Owner entity",
+            groupKey: `context-boundary:subagent:${args.parentContextId}:${args.ownerEntityId}`,
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
+          }),
+          payload: null,
+        };
       },
     },
     handler: defineServiceHandler("runtime", runtimeMethods, {
@@ -1407,6 +1492,17 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         reserveEntity(ctx.caller, spec as RuntimeCodeEntityCreateSpec),
       activateReservedEntity: (ctx, [spec]) =>
         activateReservedEntity(ctx.caller, spec as RuntimeCodeEntityCreateSpec),
+      faultAbortAgentVessel: async (ctx, [{ targetId }]) => {
+        if (!deps.faultAbortAgentVessel) {
+          throw new Error("Agent vessel fault injection is unavailable");
+        }
+        const target = await store.resolveRecord(targetId);
+        if (!target || target.status !== "active" || target.kind !== "do") {
+          throw new Error("Agent vessel fault target is not an active Durable Object");
+        }
+        await deps.faultAbortAgentVessel(ctx.caller, target);
+        return { aborted: true as const };
+      },
       retireEntity: async (ctx, [{ id, removeContext }]) => {
         await retireEntity(id, removeContext);
       },
@@ -1440,6 +1536,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       retireEntity: (id) => retireEntity(id),
       createContext,
       resolveContext,
+      forkDevelopmentSessionContext,
+      discardDevelopmentSessionContext,
     },
   };
 }

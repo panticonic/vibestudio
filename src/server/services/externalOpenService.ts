@@ -52,7 +52,8 @@ export function createExternalOpenService(deps: ExternalOpenServiceDeps): Servic
     methods: externalOpenMethods,
     authorityPreparation: {
       [EXTERNAL_OPEN_AUTHORITY_RESOLVER]: (ctx, [rawUrl, rawOptions]) => {
-        if (!ctx.caller.code && !ctx.caller.executionSession) return [];
+        if (!ctx.caller.code && !ctx.caller.executionSession)
+          return { selections: [], payload: null };
         const url = normalizeExternalUrl(String(rawUrl));
         const options = rawOptions as OpenExternalOptions | undefined;
         if (options?.expectedRedirectUri) {
@@ -63,26 +64,29 @@ export function createExternalOpenService(deps: ExternalOpenServiceDeps): Servic
           EXTERNAL_OPEN_CAPABILITY,
           requesterKind(ctx.caller.runtime.kind)
         );
-        return [
-          fixedPreparedAuthoritySelection({
-            capability: EXTERNAL_OPEN_CAPABILITY,
-            resourceKey: resource.key,
-            challenge: {
-              title: copy.title,
-              description: copy.description,
-              deniedReason: "Opening this link was not allowed",
-              dedupKey: `external-open:${ctx.caller.runtime.id}:${resource.key}`,
-              resource,
-              operation: {
-                kind: "browser",
-                verb: copy.action,
-                object: resource,
-                groupKey: `external-open:${ctx.caller.runtime.id}:${resource.key}`,
+        return {
+          selections: [
+            fixedPreparedAuthoritySelection({
+              capability: EXTERNAL_OPEN_CAPABILITY,
+              resourceKey: resource.key,
+              challenge: {
+                title: copy.title,
+                description: copy.description,
+                deniedReason: "Opening this link was not allowed",
+                dedupKey: `external-open:${ctx.caller.runtime.id}:${resource.key}`,
+                resource,
+                operation: {
+                  kind: "browser",
+                  verb: copy.action,
+                  object: resource,
+                  groupKey: `external-open:${ctx.caller.runtime.id}:${resource.key}`,
+                },
+                details: externalOpenDetails(url, options),
               },
-              details: externalOpenDetails(url, options),
-            },
-          }),
-        ];
+            }),
+          ],
+          payload: null,
+        };
       },
     },
     handler: defineServiceHandler("externalOpen", externalOpenMethods, {

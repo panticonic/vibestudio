@@ -58,6 +58,10 @@ import {
 } from "@workspace/agentic-protocol";
 import { sha256HexSyncText, stableSha256Hex } from "@vibestudio/content-addressing";
 import {
+  createDeferredEvalExecutor,
+  evalAuthorityInputSchema,
+} from "@vibestudio/service-schemas/eval";
+import {
   channelTrajectoryFor,
   commandIdForTrajectoryInvocation,
   logIdForChannel,
@@ -1360,7 +1364,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           }) satisfies AgentToolExecutionContext;
           try {
             // The `eval` tool DEFERS: the agent can't hold a connection for a multi-minute run.
-            // eval.startRun receives this verified parent scope and delegates it to the EvalDO.
+            // eval.start receives this verified parent scope and delegates it to the EvalDO.
             if (tool === "eval") {
               return await this.runDeferredEval(channelId, invocationId, args, execution.rpc);
             }
@@ -3559,7 +3563,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         const runId = ids.invocationEffect(invocationId);
         try {
           const result = await this.rpc.call<{ ok: boolean }>("main", "eval.cancel", [
-            { subKey: channelId, runId },
+            { scopeKey: channelId, runId },
           ]);
           return { result };
         } catch (err) {
@@ -4172,12 +4176,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   /**
-   * The deferral half of the agent's `eval` tool. Kicks off a durable background run (`eval.startRun`,
+   * The deferral half of the agent's `eval` tool. Kicks off a durable background run (`eval.start`,
    * idempotent on a deterministic effect id derived from `invocationId`, while keeping that run id
    * distinct from authorship. Crash-replay / deferRedrive therefore never duplicates the eval. It
    * returns `{deferred:true}` while in flight. The result normally
    * arrives directly from this agent's own EvalDO; if that was lost, a ~60s deferRedrive re-runs this and the
-   * `getRun` poll completes the invocation INLINE (`done` → result, `cancelled` → error).
+   * `get` backstop completes the invocation INLINE (`done` → result, `cancelled` → error).
    */
   protected async runDeferredEval(
     channelId: string,
@@ -4194,6 +4198,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       syntax?: "javascript" | "typescript" | "jsx" | "tsx";
       imports?: Record<string, string>;
       timeoutMs?: number;
+      authority?: Partial<import("@vibestudio/service-schemas/eval").EvalAuthorityIntent>;
     };
     let source;
     try {
@@ -4204,55 +4209,44 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         isError: true,
       };
     }
-    await scopedRpc.call("main", "eval.startRun", [
+    const executeDeferred = createDeferredEvalExecutor(
+      <T>(method: string, callArgs: unknown[]) =>
+        scopedRpc.call<T>("main", method, callArgs),
       {
-        subKey: channelId, // the agent's eval subKey IS its channelId
-        reset: p.reset === true,
-        ...source,
-        syntax: p.syntax,
-        imports: p.imports,
-        timeoutMs: p.timeoutMs,
-        runId,
-      },
-    ]);
-    // `getRun` is a poll BACKSTOP, not the primary settle path — the run is already
-    // in flight in its EvalDO (startRun succeeded). If the poll THROWS (a transient
-    // RPC/store hiccup), do NOT surface it as the tool result: that would settle the
-    // invocation with a spurious error AND drop the real eval result when the background
-    // run later completes (the parked row would be gone). Instead PARK: return
-    // `{deferred:true}` so the row stays leased for the `onEvalComplete` push (or the
-    // ~60s deferRedrive, which re-polls) to settle. This keeps the run parked — it
-    // never bounds the (legitimately long-running) eval.
-    let status: { status: string; result?: EvalRunResult };
-    try {
-      status = await scopedRpc.call<{ status: string; result?: EvalRunResult }>(
-        "main",
-        "eval.getRun",
-        [{ subKey: channelId, runId }]
-      );
-    } catch (err) {
-      console.warn(
-        `[AgentVessel] eval.getRun poll for ${runId} failed (run parked; push/redrive backstop covers it):`,
-        err instanceof Error ? err.message : err
-      );
-      return { deferred: true };
-    }
-    if (status.status === "done" && status.result) {
-      const formatted = formatEvalResult(status.result);
+        onBackstopError: (err) =>
+          console.warn(
+            `[AgentVessel] eval.get backstop for ${runId} failed (run parked; push/redrive covers it):`,
+            err instanceof Error ? err.message : err
+          ),
+      }
+    );
+    const settlement = await executeDeferred({
+      scope: { key: channelId },
+      reset: p.reset === true,
+      source,
+      imports: p.imports,
+      timeoutMs: p.timeoutMs,
+      authority:
+        p.authority === undefined ? undefined : evalAuthorityInputSchema.parse(p.authority),
+      runId,
+    });
+    if (!settlement.deferred) {
+      const statusResult = settlement.result;
+      const formatted = formatEvalResult(statusResult);
       const failure =
-        status.result.success === true
+        statusResult.success === true
           ? undefined
           : agentToolFailureFromUnknown(
               {
-                message: status.result.error ?? "eval failed",
-                code: status.result.failureCode,
-                errorData: status.result.errorData,
+                message: statusResult.error ?? "eval failed",
+                code: statusResult.failureCode,
+                errorData: statusResult.errorData,
               },
               {
                 operation: "tool.eval",
                 stage: "execute",
                 causal: { invocationId },
-                ...(status.result.failureKind === "infrastructure"
+                ...(statusResult.failureKind === "infrastructure"
                   ? { kind: "infrastructure" as const }
                   : {}),
               }
@@ -4264,15 +4258,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         // invocation; callers (and the system-test harness) must be able to
         // distinguish it from a successful execution and explicitly classify
         // deliberate failures when appropriate.
-        isError: status.result.success !== true,
-        ...(status.result.failureKind === "infrastructure"
+        isError: statusResult.success !== true,
+        ...(statusResult.failureKind === "infrastructure"
           ? { terminalOutcome: "infrastructure_error" as const }
           : {}),
         ...(failure ? { terminalReasonCode: failure.code, failure } : {}),
       };
-    }
-    if (status.status === "cancelled") {
-      return { result: "[eval] run cancelled", isError: true };
     }
     return { deferred: true };
   }

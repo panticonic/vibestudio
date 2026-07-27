@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
 
 import { createTestDO } from "@vibestudio/durable/test-utils";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
@@ -135,6 +136,8 @@ interface BuildDepsOptions {
     Parameters<typeof createRuntimeService>[0]["hooks"]
   >["destroyDurableStorage"];
   onContextCreated?: Parameters<typeof createRuntimeService>[0]["onContextCreated"];
+  onContextRemoved?: Parameters<typeof createRuntimeService>[0]["onContextRemoved"];
+  faultAbortAgentVessel?: Parameters<typeof createRuntimeService>[0]["faultAbortAgentVessel"];
 }
 
 /** In-memory context-folder fake tracking which contexts exist. */
@@ -187,6 +190,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     ensureContext: vi.fn(async () => {}),
     dropContext: vi.fn(async () => {}),
     forkContext: vi.fn(async () => {}),
+    resolveWorkingState: vi.fn(async () => ({ kind: "event" as const, eventId: "event:test" })),
     ...opts.semanticContexts,
   };
 
@@ -196,7 +200,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     entityCache,
   });
 
-  const service = createRuntimeService({
+  const runtimeResult = createRuntimeService({
     entityStore,
     hooks: {
       prepare: (async ({ spec, key, contextId, existingBuildKey, parent }) => {
@@ -269,8 +273,10 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     contextFolders,
     onContextCreated: opts.onContextCreated,
     setEntityTitle: opts.setEntityTitle,
+    faultAbortAgentVessel: opts.faultAbortAgentVessel,
     semanticContexts,
-  }).definition;
+  });
+  const service = runtimeResult.definition;
   const dispatcher = new ServiceDispatcher();
   dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) => {
     const resolved = testAuthority(caller, capability, resourceKey);
@@ -299,6 +305,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
 
   return {
     instance,
+    internal: runtimeResult.internal,
     service,
     spy,
     entityCache,
@@ -389,6 +396,52 @@ const doCreateSpec = (
     ...rest,
   };
 };
+
+describe("runtimeService.forkDevelopmentSessionContext", () => {
+  it("forks semantic state only and records a deterministic lifecycle edge for an empty context", async () => {
+    const forkContext = vi.fn(async () => {});
+    const resolveWorkingState = vi.fn(async (contextId: string) =>
+      contextId === "ctx-parent"
+        ? { kind: "event" as const, eventId: "event:parent" }
+        : { kind: "event" as const, eventId: "event:child" }
+    );
+    const { internal, service, contextFolders, entityCache, cloneDurableStorage } = await buildDeps(
+      {
+        semanticContexts: { forkContext, resolveWorkingState },
+      }
+    );
+    const caller = panelCaller("panel:development");
+    entityCache._onActivate({
+      id: caller.runtime.id,
+      kind: "panel",
+      source: { repoPath: "panels/caller", effectiveVersion: "v1" },
+      contextId: "ctx-parent",
+      key: "development",
+      createdAt: 1,
+      status: "active",
+      cleanupComplete: true,
+    });
+
+    const first = await internal.forkDevelopmentSessionContext(caller, "development-session-1");
+    const second = await internal.forkDevelopmentSessionContext(caller, "development-session-1");
+
+    expect(first).toMatchObject({
+      parentContextId: "ctx-parent",
+      parentWorkingHead: { kind: "event", eventId: "event:parent" },
+      childBaseState: { kind: "event", eventId: "event:child" },
+    });
+    expect(second.contextId).toBe(first.contextId);
+    expect(forkContext).toHaveBeenCalledWith("ctx-parent", first.contextId);
+    expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
+    expect(cloneDurableStorage).not.toHaveBeenCalled();
+    const edges = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
+      { contextId: "ctx-parent", kind: "lifecycle" },
+    ])) as { contexts: Array<{ contextId: string; ownerEntityId?: string }> };
+    expect(edges.contexts).toContainEqual(
+      expect.objectContaining({ contextId: first.contextId, ownerEntityId: caller.runtime.id })
+    );
+  });
+});
 
 describe("runtimeService deferred panel activation", () => {
   it("uses the same reservation lifecycle for non-panel code entities", async () => {
@@ -545,6 +598,40 @@ describe("runtimeService deferred panel activation", () => {
 });
 
 describe("runtimeService.createEntity (do kind)", () => {
+  it("fault-aborts only an exact active DO through the host-owned harness callback", async () => {
+    const faultAbortAgentVessel = vi.fn(async () => {});
+    const { service } = await buildDeps({ faultAbortAgentVessel });
+    const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
+      doCreateSpec({
+        source: "workers/agent-worker",
+        contextId: "ctx-agent",
+        className: "AiChatWorker",
+        key: "agent-1",
+      }),
+    ])) as { id: string };
+    const harnessCaller = panelCaller("do:workers/system-test-runner:SystemTestRunner:run-1");
+
+    await expect(
+      service.handler({ caller: harnessCaller }, "faultAbortAgentVessel", [{ targetId: handle.id }])
+    ).resolves.toEqual({ aborted: true });
+    expect(faultAbortAgentVessel).toHaveBeenCalledWith(
+      harnessCaller,
+      expect.objectContaining({
+        id: handle.id,
+        kind: "do",
+        className: "AiChatWorker",
+        key: "agent-1",
+        status: "active",
+      })
+    );
+
+    await expect(
+      service.handler({ caller: harnessCaller }, "faultAbortAgentVessel", [
+        { targetId: "do:workers/agent-worker:AiChatWorker:missing" },
+      ])
+    ).rejects.toThrow(/not an active Durable Object/);
+  });
+
   it("does not commit an entity row when prepareDurableObject fails", async () => {
     const prepareDurableObject = vi.fn(async () => {
       throw new Error("prepare boom");
@@ -1195,7 +1282,7 @@ describe("runtimeService.createEntity context policy", () => {
 });
 
 describe("runtimeService.createEntity build refs", () => {
-  it("starts the exact panel runtime image selected by an explicit ref", async () => {
+  ledgerTest("execution.runtime-create-entity", async () => {
     const { service, preparePanel } = await buildDeps();
 
     await service.handler({ caller: serverCaller }, "createEntity", [

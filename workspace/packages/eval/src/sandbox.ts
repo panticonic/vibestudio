@@ -99,8 +99,8 @@ export interface SandboxOptions {
   compileFunction?: CompileFunction;
   /** Keep guest free-name resolution inside an allowlisted, private global scope. */
   confinement?: "private-global";
-  /** Host hardener applied before a loaded module namespace becomes guest-reachable. */
-  harden?: <T>(value: T) => T;
+  /** Freeze a loaded module's direct export namespace before it becomes guest-reachable. */
+  freezeModuleNamespace?: <T>(value: T) => T;
   /**
    * Panel runtimes still expose a realm-local lazy loader. A confined EvalDO
    * passes false and routes module loading through closure-held runtime options,
@@ -235,7 +235,7 @@ async function loadLibraryBundle(
   moduleMap: Record<string, unknown>,
   requireFn?: (id: string) => unknown,
   compileFunction: CompileFunction = defaultCompileFunction,
-  harden?: <T>(value: T) => T,
+  freezeModuleNamespace?: <T>(value: T) => T,
   loadImport?: SandboxImportLoader,
   confinement?: "private-global"
 ): Promise<void> {
@@ -280,7 +280,7 @@ async function loadLibraryBundle(
         moduleMap,
         resolvedRequire,
         compileFunction,
-        harden,
+        freezeModuleNamespace,
         loadImport,
         confinement
       );
@@ -294,7 +294,9 @@ async function loadLibraryBundle(
     bindings: { __vibestudioImport: controlledImport },
   });
   await result.returnValue;
-  moduleMap[specifier] = harden ? harden(result.exports) : result.exports;
+  moduleMap[specifier] = freezeModuleNamespace
+    ? freezeModuleNamespace(result.exports)
+    : result.exports;
   loadedBundleContent.set(specifier, artifact.bundle);
 }
 
@@ -307,7 +309,7 @@ async function loadImports(
   moduleMapOverride?: Record<string, unknown>,
   requireFn?: (id: string) => unknown,
   compileFunction?: CompileFunction,
-  harden?: <T>(value: T) => T,
+  freezeModuleNamespace?: <T>(value: T) => T,
   confinement?: "private-global"
 ): Promise<void> {
   const moduleMap = getModuleMap(moduleMapOverride);
@@ -338,7 +340,7 @@ async function loadImports(
       moduleMap,
       requireFn,
       compileFunction,
-      harden,
+      freezeModuleNamespace,
       loadImport,
       confinement
     );
@@ -490,7 +492,7 @@ async function ensureRequires(
     moduleMap?: Record<string, unknown>;
     require?: (id: string) => unknown;
     compileFunction?: CompileFunction;
-    harden?: <T>(value: T) => T;
+    freezeModuleNamespace?: <T>(value: T) => T;
     confinement?: "private-global";
   } = {},
   context?: ExternalRequireContext
@@ -516,7 +518,7 @@ async function ensureRequires(
         options.moduleMap,
         options.require,
         options.compileFunction,
-        options.harden,
+        options.freezeModuleNamespace,
         options.confinement
       );
       validation = validateRequires(requires, requireFn);
@@ -1270,7 +1272,7 @@ export async function executeSandbox(
           moduleMap,
           requireFn,
           options.compileFunction,
-          options.harden,
+          options.freezeModuleNamespace,
           options.confinement
         ),
         signal
@@ -1290,7 +1292,7 @@ export async function executeSandbox(
             require: requireFn,
             compileFunction: options.compileFunction,
             confinement: options.confinement,
-            harden: options.harden,
+            freezeModuleNamespace: options.freezeModuleNamespace,
           },
           (requires, context) =>
             ensureRequires(
@@ -1303,7 +1305,7 @@ export async function executeSandbox(
                 moduleMap,
                 require: requireFn,
                 compileFunction: options.compileFunction,
-                harden: options.harden,
+                freezeModuleNamespace: options.freezeModuleNamespace,
                 confinement: options.confinement,
               },
               context
@@ -1391,7 +1393,7 @@ export async function executeSandbox(
             moduleMap,
             requireFn,
             options.compileFunction,
-            options.harden,
+            options.freezeModuleNamespace,
             options.confinement
           ),
           signal

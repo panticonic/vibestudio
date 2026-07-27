@@ -76,6 +76,15 @@ import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRunti
 import { ABOUT_SOURCE_PREFIX, isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
 import { assertPresent } from "../../lintHelpers";
 import { onBuildProviderChange, resolveBuildProvider } from "./buildProviderRegistry.js";
+import type {
+  ExecutionArtifactRefV1,
+  ExecutionRootProvider,
+  ExecutionSourceContentRoot,
+} from "@vibestudio/shared/execution/retention";
+import {
+  ExecutionRootProviderRegistry,
+  executionArtifactRefFromBuild,
+} from "../executionRootProviders.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -116,10 +125,8 @@ export interface BuildSystemUnitChangeEvent extends StateChangedUnit {
 export interface RuntimeImageBinding {
   source: string;
   unitName: string;
-  stateHash: string;
-  effectiveVersion: string;
-  buildKey: string;
-  executionDigest: string;
+  /** Complete immutable identity, verified from the exact built artifact. */
+  artifact: ExecutionArtifactRefV1;
   authorityRequests: UnitAuthorityManifest["requests"];
 }
 
@@ -197,6 +204,57 @@ export interface BuildSystemRootOptions {
    * under user data but dependencies are installed from <appRoot>/workspace.
    */
   dependencyWorkspaceRoot?: string;
+  /**
+   * Host-owned registries whose durable records resolve immutable build keys.
+   * Collection is intentionally late-bound so the build system can start
+   * before its consumers without making callers maintain an active-unit list.
+   */
+  executionRootProviders?: readonly ExecutionRootProvider[];
+  /** Existing host diagnostics subscriber for visible retention findings. */
+  onRetentionDiagnostic?: (report: BuildRetentionReport) => void;
+}
+
+export interface BuildRetentionReport {
+  epoch: number;
+  mode: buildStore.BuildGcMode;
+  complete: boolean;
+  roots: number;
+  /** Exact union of graph and authoritative host-owned build-key roots. */
+  rootBuildKeys: string[];
+  /** Rooted build keys currently present in build storage; metadata is verified by the coordinator. */
+  storedRootBuildKeys: string[];
+  /**
+   * Root keys named by an authoritative host owner but absent from the store.
+   * Unlike a graph key for a unit never built, this may name a live execution
+   * artifact, so downstream content collection must fail closed.
+   */
+  unresolvedAuthoritativeRootBuildKeys: string[];
+  reachableBuilds: number;
+  unreferenced: number;
+  unreferencedBytes: number;
+  quarantined: number;
+  deleted: number;
+  retainedForGrace: number;
+  notReconstructible: number;
+  notReconstructibleDetails: Array<{ buildKey: string; missing: string[] }>;
+  providerFailures: Array<{ provider: string; error: string }>;
+  cleanupFailures: Array<{ buildKey: string; error: string }>;
+  retainedSourceRoots: ExecutionSourceContentRoot[];
+}
+
+export interface PreparedBuildGc {
+  readonly epoch: number;
+  /** Read-only root/store snapshot used to preflight semantic content. */
+  readonly report: BuildRetentionReport & { mode: "report" };
+  /**
+   * Commit artifact quarantine/sweep from the prepared root snapshot.
+   * Coordinator-only: the public build service exposes report mode only.
+   */
+  commit(options: {
+    publicationProtectedBuildKeys: ReadonlySet<string>;
+    graceMs?: number;
+    commitArtifactDeletion: (buildKey: string, commit: () => void) => boolean;
+  }): Promise<BuildRetentionReport>;
 }
 
 export interface BuildSystemV2 {
@@ -210,7 +268,11 @@ export interface BuildSystemV2 {
     unitPath: string,
     ref: string | undefined,
     options: BuildUnitOptions & { library: true }
-  ): Promise<{ bundle: string; format: "cjs" | "async-cjs" }>;
+  ): Promise<{
+    bundle: string;
+    format: "cjs" | "async-cjs";
+    execution?: ExecutionArtifactRefV1;
+  }>;
   getBuild(
     unitPath: string,
     ref?: string,
@@ -249,6 +311,9 @@ export interface BuildSystemV2 {
 
   /** Get an immutable build-store artifact by build key. */
   getBuildByKey(key: string): BuildResult | null;
+
+  /** Side-effect-free verified lookup of one workspace-owned build record. */
+  peekBuildByKey(key: string): BuildResult | null;
 
   /**
    * Binder API for runtime entities. Resolves a build content selector to an
@@ -308,8 +373,18 @@ export interface BuildSystemV2 {
   /** Most recent structured build diagnostics for a unit, if any were captured. */
   getUnitDiagnostics(unitName: string): BuildDiagnostic[] | null;
 
-  /** Garbage collect unreferenced builds */
-  gc(activeUnits: string[]): Promise<{ freed: number }>;
+  /** Diagnose build retention from host-owned roots without deleting artifacts. */
+  gc(): Promise<BuildRetentionReport & { mode: "report" }>;
+
+  /** Prepare the private, two-collector retention commit for one host epoch. */
+  prepareGc(options: { epoch: number }): Promise<PreparedBuildGc>;
+
+  inspectExecution(executionDigest: string): Promise<{
+    artifact: ExecutionArtifactRefV1 | null;
+    roots: Array<{ owner: string; ownerId: string; reason: string }>;
+    reconstructible: boolean;
+    missing: string[];
+  }>;
 
   /** List available about pages (for launcher UI) */
   getAboutPages(): Promise<AboutPageMeta[]>;
@@ -369,6 +444,11 @@ export async function initBuildSystemV2(
 ): Promise<BuildSystemV2> {
   console.log("[BuildV2] Initializing...");
   const appNodeModuleRoots = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
+  const executionRootProviders = new ExecutionRootProviderRegistry();
+  for (const provider of rootOptions.executionRootProviders ?? []) {
+    executionRootProviders.register(provider);
+  }
+  if (rootOptions.executionRootProviders) executionRootProviders.assertCompleteCensus();
 
   // Build cache identity depends on dependency manifests, not on where the
   // active managed workspace copy happens to live. Server startup passes these
@@ -382,6 +462,10 @@ export async function initBuildSystemV2(
   // Declare where @vibestudio/* platform packages live (workspace:* deps).
   initBuilder(appNodeModuleRoots);
   setBuildSourceProvider(source);
+  buildStore.setBuildExecutionIdentityContext({
+    workspaceId: source.workspaceId,
+    semanticStateForContent: (stateHash) => source.semanticStateForContent?.(stateHash) ?? null,
+  });
 
   // Step 1: Snapshot the workspace + discover package graph from that state
   // (scan-on-demand —
@@ -493,10 +577,20 @@ export async function initBuildSystemV2(
 
   const libraryBuildResult = (
     build: BuildResult
-  ): { bundle: string; format: "cjs" | "async-cjs" } => ({
-    bundle: primaryTextArtifactContent(build),
-    format: build.metadata.details.kind === "library" ? build.metadata.details.format : "cjs",
-  });
+  ): {
+    bundle: string;
+    format: "cjs" | "async-cjs";
+    execution?: ExecutionArtifactRefV1;
+  } => {
+    const execution = build.metadata.execution
+      ? executionArtifactRefFromBuild(source.workspaceId, build)
+      : undefined;
+    return {
+      bundle: primaryTextArtifactContent(build),
+      format: build.metadata.details.kind === "library" ? build.metadata.details.format : "cjs",
+      ...(execution ? { execution } : {}),
+    };
+  };
 
   /** Rediscover the graph and recompute all EVs at a state (new/unknown units). */
   const contentHashesAt = async (
@@ -569,7 +663,7 @@ export async function initBuildSystemV2(
   const usableCachedBinding = (key: string): RuntimeImageBinding | null => {
     const binding = runtimeBindingCache.get(key);
     if (!binding) return null;
-    if (buildStore.get(binding.buildKey)) return binding;
+    if (buildStore.get(binding.artifact.buildKey)) return binding;
     runtimeBindingCache.delete(key);
     return null;
   };
@@ -638,12 +732,7 @@ export async function initBuildSystemV2(
     if (existingFlight) return existingFlight;
 
     const flight = (async (): Promise<RuntimeImageBinding> => {
-      const buildKey = computeBuildUnitKey(node, ev);
       const build = await buildUnit(node, ev, graphAtState, workspaceRoot, stateHash);
-      const executionDigest = build.metadata.execution?.executionDigest;
-      if (!executionDigest) {
-        throw new Error(`Runtime build ${build.buildKey} is missing its sealed execution identity`);
-      }
       const authority = build.metadata.authority;
       if (!authority) {
         throw new Error(`Runtime build ${build.buildKey} is missing its sealed authority envelope`);
@@ -651,10 +740,7 @@ export async function initBuildSystemV2(
       const binding: RuntimeImageBinding = {
         source: node.relativePath,
         unitName: node.name,
-        stateHash,
-        effectiveVersion: ev,
-        buildKey,
-        executionDigest,
+        artifact: executionArtifactRefFromBuild(source.workspaceId, build),
         authorityRequests: authority.requests,
       };
       runtimeBindingCache.set(identityKey, binding);
@@ -982,7 +1068,7 @@ export async function initBuildSystemV2(
     return options?.library ? libraryBuildResult(build) : build;
   } as BuildSystemV2["getBuild"];
 
-  return {
+  const buildSystem: BuildSystemV2 = {
     getBuild,
     bindRuntimeImage,
 
@@ -1230,6 +1316,10 @@ export async function initBuildSystemV2(
       return buildStore.get(key);
     },
 
+    peekBuildByKey(key: string): BuildResult | null {
+      return buildStore.peekLocal(key);
+    },
+
     getEffectiveVersion(unitNameOrPath: string): string | null {
       const snapshot = currentState();
       const node = resolveUnit(snapshot.graph, unitNameOrPath, workspaceRoot);
@@ -1453,17 +1543,171 @@ export async function initBuildSystemV2(
       return diagnosticsForUnit(node?.name ?? unitName);
     },
 
-    async gc(activeUnits: string[]): Promise<{ freed: number }> {
+    async prepareGc({ epoch }): Promise<PreparedBuildGc> {
       const { graph, evMap } = currentState();
-      const activeKeys = new Set<string>();
-      for (const name of activeUnits) {
-        const ev = evMap[name];
+      const roots = new Set<string>();
+      const authoritativeRoots = new Set<string>();
+      const providerSnapshot = await executionRootProviders.snapshot(epoch);
+
+      for (const node of graph.allNodes()) {
+        const ev = evMap[node.name];
         if (!ev) continue;
-        const n = graph.tryGet(name);
-        if (!n) continue;
-        activeKeys.add(computeBuildKey(name, ev, sourcemapForNode(n)));
+        roots.add(computeBuildKey(node.name, ev, sourcemapForNode(node)));
       }
-      return buildStore.gc(activeKeys);
+
+      for (const root of providerSnapshot.roots) {
+        // Product seeds are verified execution roots, but their artifacts are
+        // not owned by this workspace BuildStore (nor by workspace content GC).
+        if (root.artifact.sourceState.kind === "product-seed") continue;
+        roots.add(root.artifact.buildKey);
+        authoritativeRoots.add(root.artifact.buildKey);
+      }
+
+      const collect = async (options: {
+        mode: "report" | "sweep";
+        publicationProtectedBuildKeys: ReadonlySet<string>;
+        graceMs: number;
+        commitArtifactDeletion?: (buildKey: string, commit: () => void) => boolean;
+      }): Promise<BuildRetentionReport> => {
+        const providerFailures = [...providerSnapshot.providerFailures];
+        const scan = await buildStore.scanRetention();
+        providerFailures.push(
+          ...scan.failures.map((failure) => ({
+            provider: `build-store:${failure.key}`,
+            error: failure.error,
+          }))
+        );
+        const storedRootBuildKeys = scan.builds
+          .filter((build) => roots.has(build.key))
+          .map((build) => build.key)
+          .sort();
+        const storedBuildKeys = new Set(scan.builds.map((build) => build.key));
+        const unresolvedAuthoritativeRootBuildKeys = [...authoritativeRoots]
+          .filter((key) => !storedBuildKeys.has(key))
+          .sort();
+        const unreferencedBuilds = scan.builds.filter((build) => !roots.has(build.key));
+        const complete =
+          providerFailures.length === 0 && unresolvedAuthoritativeRootBuildKeys.length === 0;
+        const effectiveMode = complete ? options.mode : "report";
+        const collection = await buildStore.collectRetention({
+          epoch,
+          mode: effectiveMode,
+          rootedBuildKeys: roots,
+          publicationProtectedBuildKeys: options.publicationProtectedBuildKeys,
+          graceMs: options.graceMs,
+          commitArtifactDeletion: options.commitArtifactDeletion,
+        });
+        const report: BuildRetentionReport = {
+          epoch,
+          mode: effectiveMode,
+          complete,
+          roots: roots.size,
+          rootBuildKeys: [...roots].sort(),
+          storedRootBuildKeys,
+          unresolvedAuthoritativeRootBuildKeys,
+          reachableBuilds: storedRootBuildKeys.length,
+          unreferenced: unreferencedBuilds.length,
+          unreferencedBytes: unreferencedBuilds.reduce((total, build) => total + build.bytes, 0),
+          quarantined: collection.quarantined,
+          deleted: collection.deleted,
+          retainedForGrace: collection.retainedForGrace,
+          notReconstructible: collection.notReconstructible.length,
+          notReconstructibleDetails: collection.notReconstructible,
+          providerFailures,
+          cleanupFailures: collection.cleanupFailures,
+          retainedSourceRoots: collection.retainedSourceRoots,
+        };
+        if (
+          report.providerFailures.length > 0 ||
+          report.unresolvedAuthoritativeRootBuildKeys.length > 0 ||
+          report.notReconstructible > 0 ||
+          report.cleanupFailures.length > 0 ||
+          report.unreferencedBytes > 0
+        ) {
+          rootOptions.onRetentionDiagnostic?.(report);
+        }
+        return report;
+      };
+
+      const report = (await collect({
+        mode: "report",
+        publicationProtectedBuildKeys: new Set(),
+        graceMs: 24 * 60 * 60 * 1_000,
+      })) as BuildRetentionReport & { mode: "report" };
+      let committed = false;
+      return {
+        epoch,
+        report,
+        async commit(options) {
+          if (committed) throw new Error(`Build GC epoch ${epoch} was already committed`);
+          committed = true;
+          return collect({
+            mode: "sweep",
+            publicationProtectedBuildKeys: options.publicationProtectedBuildKeys,
+            graceMs: options.graceMs ?? 24 * 60 * 60 * 1_000,
+            commitArtifactDeletion: options.commitArtifactDeletion,
+          });
+        },
+      };
+    },
+
+    async gc(): Promise<BuildRetentionReport & { mode: "report" }> {
+      return (await buildSystem.prepareGc({ epoch: 0 })).report;
+    },
+
+    async inspectExecution(executionDigest: string) {
+      if (!/^[0-9a-f]{64}$/u.test(executionDigest)) {
+        throw new Error("Execution digest must be a full lowercase SHA-256 digest");
+      }
+      const snapshot = await executionRootProviders.snapshot(0);
+      const matchingRoots = snapshot.roots.filter(
+        (root) => root.artifact.executionDigest === executionDigest
+      );
+      let artifact = matchingRoots[0]?.artifact ?? null;
+      if (!artifact) {
+        const scan = await buildStore.scanRetention();
+        for (const stored of scan.builds) {
+          const build = buildStore.peekLocal(stored.key);
+          if (build?.metadata.execution?.executionDigest === executionDigest) {
+            try {
+              artifact = executionArtifactRefFromBuild(source.workspaceId, build);
+            } catch {
+              artifact = null;
+            }
+            break;
+          }
+        }
+      }
+      const missing: string[] = [];
+      if (!artifact) missing.push("artifact");
+      if (artifact && !buildStore.peekLocal(artifact.buildKey)) missing.push("artifact bytes");
+      if (artifact) {
+        if (!source.inspectContentRoot) {
+          missing.push("source content-store inspection authority");
+        } else {
+          for (const root of artifact.sourceState.contentRoots) {
+            const inspection = await source.inspectContentRoot(root.stateHash);
+            if (!inspection.reconstructible) missing.push(...inspection.missing);
+          }
+        }
+      }
+      if (!snapshot.complete) {
+        missing.push(
+          ...snapshot.providerFailures.map(
+            (failure) => `root provider ${failure.provider}: ${failure.error}`
+          )
+        );
+      }
+      return {
+        artifact,
+        roots: matchingRoots.map((root) => ({
+          owner: root.owner,
+          ownerId: root.ownerId,
+          reason: root.reason,
+        })),
+        reconstructible: artifact !== null && missing.length === 0,
+        missing,
+      };
     },
 
     async getAboutPages(): Promise<AboutPageMeta[]> {
@@ -1547,6 +1791,7 @@ export async function initBuildSystemV2(
       console.log("[BuildV2] Shut down");
     },
   };
+  return buildSystem;
 }
 
 // ---------------------------------------------------------------------------

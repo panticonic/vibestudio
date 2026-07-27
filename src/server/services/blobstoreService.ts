@@ -952,7 +952,8 @@ export async function getTree(blobsDir: string, ref: string): Promise<ManifestHa
 
 export async function collectTreeReachableDigests(
   blobsDir: string,
-  ref: string
+  ref: string,
+  options: { verifyContent?: boolean } = {}
 ): Promise<{ treeDigests: string[]; contentDigests: string[] } | null> {
   const rootHash = await resolveTreeRef(blobsDir, ref);
   if (!rootHash) return null;
@@ -976,6 +977,22 @@ export async function collectTreeReachableDigests(
   };
 
   await walk(rootHash, 0);
+  if (options.verifyContent && contentDigests.size > 0) {
+    const pending = [...contentDigests];
+    let cursor = 0;
+    const workers = Array.from(
+      { length: Math.min(32, pending.length) },
+      async (): Promise<void> => {
+        while (cursor < pending.length) {
+          const digest = pending[cursor++]!;
+          if (!(await pathExists(blobPath(blobsDir, digest)))) {
+            throw new Error(`Content object missing from store: ${digest}`);
+          }
+        }
+      }
+    );
+    await Promise.all(workers);
+  }
   return {
     treeDigests: [...treeDigests].sort(compareUtf16CodeUnits),
     contentDigests: [...contentDigests].sort(compareUtf16CodeUnits),
@@ -1671,7 +1688,9 @@ async function mkdirNoFollow(dir: string): Promise<void> {
 
 /**
  * Project a tree onto disk at `outDir` (absolute). Non-executable files
- * hardlink from the CAS by default (`link: false` copies); executables are
+ * hardlink from the CAS by default (`link: false` copies); `copy-on-write`
+ * uses a reflink (with byte-copy fallback) so writable execution roots never
+ * share a CAS inode. Executables are
  * always COPIED then chmod'd so the shared CAS inode's mode is never touched
  * (a chmod on a hardlink would flip every build-source checkout sharing the
  * blob). The outDir is treated as immutable-per-tree: an existing file is
@@ -1688,7 +1707,7 @@ export async function materializeTree(
   blobsDir: string,
   ref: string,
   outDir: string,
-  opts?: { link?: boolean }
+  opts?: { link?: boolean; strategy?: "hardlink" | "copy-on-write" }
 ): Promise<{ written: number; unchanged: number }> {
   if (!path.isAbsolute(outDir)) {
     throw new Error(
@@ -1701,7 +1720,7 @@ export async function materializeTree(
     // Validate cumulative projection bounds and every interior object before
     // creating any output path. The actual projector then streams file bodies.
   }
-  const link = opts?.link ?? true;
+  const link = opts?.strategy === "copy-on-write" ? false : (opts?.link ?? true);
   let written = 0;
   let unchanged = 0;
 
@@ -1766,7 +1785,11 @@ export async function materializeTree(
         }
       }
       if (!linked) {
-        await fsp.copyFile(source, tmp);
+        await fsp.copyFile(
+          source,
+          tmp,
+          opts?.strategy === "copy-on-write" ? fs.constants.COPYFILE_FICLONE : 0
+        );
         await fsp.chmod(tmp, executable ? 0o755 : 0o644);
       }
       // The target may exist as a directory (dir→file transition) — rename
