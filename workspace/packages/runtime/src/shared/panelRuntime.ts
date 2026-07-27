@@ -47,7 +47,16 @@ interface PanelRuntimeMetadataResult {
 
 export interface OpenPanelOptions {
   parentId?: string | null;
+  /** Display title, overriding the manifest's. Free text; carries no identity. */
+  title?: string;
+  /**
+   * Opt-in stable id segment, making the panel `{parentId}/{slug}`. The caller
+   * owns uniqueness; never derive it from a title or other user-controlled text.
+   */
+  slug?: string;
+  /** @deprecated Alias for `title`. Ignored when `title` is set. */
   name?: string;
+  /** Present the new panel (default true); false creates it in the background. */
   focus?: boolean;
   contextId?: string;
   ref?: string;

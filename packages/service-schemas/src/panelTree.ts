@@ -150,7 +150,7 @@ const CreateResultSchema = z.object({
     .optional()
     .describe("Exact immutable BuildV2 artifact selected for the panel."),
   observation: PanelObservationSchema.describe(
-    "Canonical boot-ready observation established before create returns."
+    "Canonical observation immediately after durable slot creation. Public openPanel waits for this attempt to become boot-ready."
   ),
 });
 
@@ -160,9 +160,33 @@ export const PanelTreeCreateOptionsSchema = z
       .string()
       .nullable()
       .optional()
-      .describe("Parent panel id to nest under; null/omitted creates a root-level panel."),
-    name: z.string().optional().describe("Optional display name override for the new panel."),
-    focus: z.boolean().optional().describe("Focus the new panel immediately after creation."),
+      .describe(
+        "Parent panel id to nest under. Null creates a root; omission resolves the caller's owning panel."
+      ),
+    title: z
+      .string()
+      .optional()
+      .describe(
+        "Display title for the new panel, overriding its manifest title. Free text; carries no identity."
+      ),
+    slug: z
+      .string()
+      .optional()
+      .describe(
+        "Opt-in stable id segment: the panel becomes `{parentId}/{slug}` instead of getting a generated one. " +
+          "The caller owns uniqueness — creating a second panel with the same parent and slug is an error. " +
+          "Never derive this from a title or other user-controlled text."
+      ),
+    name: z
+      .string()
+      .optional()
+      .describe("Deprecated alias for `title`. Ignored when `title` is present."),
+    focus: z
+      .boolean()
+      .optional()
+      .describe(
+        "Present and focus the new panel; defaults to true. Pass false for background creation."
+      ),
     contextId: z
       .string()
       .optional()
@@ -235,7 +259,7 @@ export const panelTreeMethods = defineServiceMethods({
   },
   create: {
     description:
-      "Create a new panel from a workspace source path, optionally nested under a parent and focused.",
+      "Internal structural primitive: durably create a panel and return its initial observation while boot continues. Application callers use openPanel, which waits for boot readiness.",
     args: z.tuple([z.string(), PanelTreeCreateOptionsSchema]),
     returns: CreateResultSchema,
     authority: panelBoundaryAuthority("create"),
@@ -261,8 +285,7 @@ export const panelTreeMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   getRuntimeLease: {
-    description:
-      "Internal host lease read. Application readiness is reported only by observe().",
+    description: "Internal host lease read. Application readiness is reported only by observe().",
     args: z.tuple([PanelIdSchema]),
     returns: PanelRuntimeLeaseSchema.nullable(),
     access: READ_ACCESS,

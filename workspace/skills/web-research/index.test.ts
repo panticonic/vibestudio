@@ -27,7 +27,7 @@ describe("search provider setup helpers", () => {
 
     expect(runtimeMock.openPanel).toHaveBeenCalledWith(
       "https://app.tavily.com/home",
-      { focus: true, name: "Tavily Search setup" }
+      { focus: true, title: "Tavily Search setup" }
     );
     expect(runtimeMock.openExternal).not.toHaveBeenCalled();
   });

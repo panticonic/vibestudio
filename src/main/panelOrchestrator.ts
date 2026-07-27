@@ -41,7 +41,6 @@ import {
   getPanelSource,
   getPanelContextId,
   getPanelRef,
-  getCurrentSnapshot,
 } from "@vibestudio/shared/panel/accessors";
 import { assertPresent } from "../lintHelpers";
 import { PanelRuntimeLeaseController } from "./panelRuntimeLeaseController.js";
@@ -201,6 +200,8 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     source: string,
     createOpts: {
       parentId?: string | null;
+      title?: string;
+      slug?: string;
       name?: string;
       contextId?: string;
       ref?: string;
@@ -232,7 +233,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       const message = err instanceof Error ? err.message : String(err);
       if (this.registry.getPanel(result.id)) {
         this.runtime.markPanelLoadError(result.id, message);
-        if (attachOpts.focus) await this.focusPanel(result.id).catch(() => {});
+        if (attachOpts.focus) await this.focusPanelLocally(result.id).catch(() => {});
       } else {
         await callPanelTree("archive", [result.id]).catch(() => {});
       }
@@ -273,13 +274,15 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       source,
       {
         parentId: options?.isRoot ? null : caller ? asPanelSlotId(callerId) : null,
+        title: options?.title,
+        slug: options?.slug,
         name: options?.name,
         contextId: options?.contextId,
         ref: options?.ref,
         stateArgs,
         ...(options?.placement ? { placement: options.placement } : {}),
       },
-      { focus: options?.focus },
+      { focus: options?.focus !== false },
       scopedCaller ? this.panelTreeCallAs(scopedCaller) : this.panelTreeCallAsServer()
     );
   }
@@ -330,7 +333,14 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   async createBrowserUrlPanel(
     callerId: string,
     url: string,
-    options?: { name?: string; focus?: boolean; placement?: "child" | "sibling" },
+    options?: {
+      title?: string;
+      slug?: string;
+      /** @deprecated Alias for `title`. */
+      name?: string;
+      focus?: boolean;
+      placement?: "child" | "sibling";
+    },
     caller?: ScopedServerCaller
   ): Promise<{ id: string; title: string }> {
     // Defensive: reject non-string or non-http(s) URLs early
@@ -344,8 +354,8 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         : this.registry.findParentId(callerId);
     return this.createViaPanelTree(
       url,
-      { parentId, name: options?.name },
-      { focus: options?.focus },
+      { parentId, title: options?.title, slug: options?.slug, name: options?.name },
+      { focus: options?.focus !== false },
       caller ? this.panelTreeCallAs(caller) : this.panelTreeCallAsServer()
     );
   }
@@ -390,7 +400,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       : this.callPanelTreeAsServer("archive", [panelId]));
 
     if (siblingToFocus) {
-      this.eventService.emit("navigate-to-panel", this.layoutIntentPayload(siblingToFocus));
+      this.eventService.emit("navigate-to-panel", { panelId: siblingToFocus });
     }
     return result;
   }
@@ -595,34 +605,23 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   // Focus
   // =========================================================================
 
-  /**
-   * Build the canonical layout-intent payload for a `navigate-to-panel` emit
-   * (multi-column plan §3.1): panelId plus, when the panel is known locally,
-   * its parent and the server-resolved placement hint from its snapshot.
-   */
-  private layoutIntentPayload(
-    panelId: string,
-    intentId?: string
-  ): { panelId: string; parentId?: string; hint?: PanelPlacementHint; intentId?: string } {
-    const panel = this.registry.getPanel(panelId);
-    const parentId = this.registry.findParentId(panelId) ?? undefined;
-    let hint: PanelPlacementHint | undefined;
-    if (panel) {
-      try {
-        hint = getCurrentSnapshot(panel).placement;
-      } catch {
-        // Panel without a resolvable snapshot: emit without a hint.
-      }
+  async focusPanel(
+    targetPanelId: string,
+    opts: { loadIfNeeded?: boolean } = {}
+  ): Promise<PanelFocusResult> {
+    const result = await this.focusPanelLocally(targetPanelId, opts);
+    if (result.focused) {
+      this.eventService.emit("navigate-to-panel", { panelId: targetPanelId });
     }
-    return {
-      panelId,
-      ...(parentId !== undefined ? { parentId } : {}),
-      ...(hint ? { hint } : {}),
-      ...(intentId ? { intentId } : {}),
-    };
+    return result;
   }
 
-  async focusPanel(
+  /**
+   * Apply host focus mechanics without inventing a shell presentation event.
+   * Authoritative panel creation calls this after panelTree.create has already
+   * published its panel-created fact.
+   */
+  private async focusPanelLocally(
     targetPanelId: string,
     opts: { loadIfNeeded?: boolean } = {}
   ): Promise<PanelFocusResult> {
@@ -676,7 +675,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       view.setViewVisible?.(targetPanelId, true);
       this.runtime.recordViewMutation();
       this.sendPanelEvent(targetPanelId, { type: "focus" });
-      this.eventService.emit("navigate-to-panel", this.layoutIntentPayload(targetPanelId));
       return {
         panelId: targetPanelId,
         status: "loaded",
@@ -686,7 +684,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     }
 
     if (panel.artifacts.buildState === "error") {
-      this.eventService.emit("navigate-to-panel", this.layoutIntentPayload(targetPanelId));
       return {
         panelId: targetPanelId,
         status: "build_failed",
@@ -704,7 +701,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
           nextView.setViewVisible?.(targetPanelId, true);
           this.runtime.recordViewMutation();
           this.sendPanelEvent(targetPanelId, { type: "focus" });
-          this.eventService.emit("navigate-to-panel", this.layoutIntentPayload(targetPanelId));
           return {
             panelId: targetPanelId,
             status: "loaded",
@@ -712,7 +708,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
             loaded: true,
           };
         }
-        this.eventService.emit("navigate-to-panel", this.layoutIntentPayload(targetPanelId));
         this.runtime.markPanelLoadError(targetPanelId, "Panel view was not created");
         return {
           panelId: targetPanelId,
@@ -726,7 +721,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         const lease = this.registry.getRuntimeLease(targetPanelId);
         const isLeaseFailure = /running on|leased by/i.test(message);
         if (!isLeaseFailure) this.runtime.markPanelLoadError(targetPanelId, message);
-        this.eventService.emit("navigate-to-panel", this.layoutIntentPayload(targetPanelId));
         return {
           panelId: targetPanelId,
           status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
@@ -738,7 +732,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       }
     }
 
-    this.eventService.emit("navigate-to-panel", this.layoutIntentPayload(targetPanelId));
     return {
       panelId: targetPanelId,
       status: "focused",
@@ -1250,7 +1243,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       throw error;
     }
     if (opts.focus) {
-      await this.focusPanel(result.panelId);
+      await this.focusPanelLocally(result.panelId);
     }
   }
 

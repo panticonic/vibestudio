@@ -52,7 +52,10 @@ import type {
   PanelSearchResult,
 } from "@vibestudio/shared/panelSearchTypes";
 import { stateLayout } from "./stateLayout.js";
-import type { CdpBridge } from "./cdpBridge.js";
+import {
+  isCdpTargetLifecycleTransitionError,
+  type CdpBridge,
+} from "./cdpBridge.js";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import type { PanelTreeBridgeRequest } from "./services/panelTreeService.js";
 import type { EventService } from "@vibestudio/shared/eventsService";
@@ -337,7 +340,7 @@ export async function seedPanelTreeIfEmpty(
       callerId: "server",
       callerKind: "server",
       method: "create",
-      args: [entry.source, { stateArgs: entry.stateArgs }],
+      args: [entry.source, { stateArgs: entry.stateArgs, focus: false }],
       // Stamp the seeded root under its owner's tree (WP3).
       subject: ownerSubject,
     });
@@ -871,12 +874,18 @@ export async function createServerPanelTreeBridge(
           []
         )) as PanelHostObservation;
       } catch (error) {
-        failure ??= panelFailure({
-          code: "host_unavailable",
-          stage: "host",
-          message: error instanceof Error ? error.message : String(error),
-          provenance,
-        });
+        // The target registered above may be replaced while this observation
+        // is in flight. In that case the result is simply stale; the next
+        // observation will read the new runtime. Treating it as a terminal
+        // panel failure makes a successfully committed create look failed.
+        if (!isCdpTargetLifecycleTransitionError(error)) {
+          failure ??= panelFailure({
+            code: "host_unavailable",
+            stage: "host",
+            message: error instanceof Error ? error.message : String(error),
+            provenance,
+          });
+        }
       }
     }
     if (!failure && host?.failure) {
@@ -1107,6 +1116,8 @@ export async function createServerPanelTreeBridge(
         const source = String(args[0]);
         const options = (args[1] ?? {}) as {
           parentId?: string | null;
+          title?: string;
+          slug?: string;
           name?: string;
           focus?: boolean;
           contextId?: string;
@@ -1114,6 +1125,7 @@ export async function createServerPanelTreeBridge(
           stateArgs?: Record<string, unknown>;
           placement?: import("@vibestudio/shared/types").PanelPlacementHint;
         };
+        const shouldFocus = options.focus !== false;
         // Resolve the owning panel TREE SLOT once, durably. Explicit null = root; an explicit id or
         // the implicit caller = walk the entity lineage to the nearest OPEN panel and return its slot
         // id (parity for panel/worker/agent/eval callers + removal-robustness, in one resolver). This
@@ -1166,6 +1178,8 @@ export async function createServerPanelTreeBridge(
         const ownerUserId = request.subject?.userId;
         const created = isBrowser
           ? await panelManager.createBrowser(parentId ?? null, source, {
+              ...(options.title !== undefined ? { title: options.title } : {}),
+              ...(options.slug !== undefined ? { slug: options.slug } : {}),
               name: options.name,
               addAsRoot: isRoot,
               ...(ownerUserId ? { ownerUserId } : {}),
@@ -1178,6 +1192,21 @@ export async function createServerPanelTreeBridge(
               ...(ownerUserId ? { ownerUserId } : {}),
             });
         emitTreeSnapshot();
+        const createdPanel = registry.getPanel(created.panelId);
+        let resolvedPlacement = options.placement;
+        if (createdPanel) {
+          try {
+            resolvedPlacement = getCurrentSnapshot(createdPanel).placement ?? resolvedPlacement;
+          } catch {
+            // Creation still has a complete semantic result without a placement hint.
+          }
+        }
+        deps.eventService?.emit("panel-created", {
+          panelId: created.panelId,
+          parentId: parentId ?? null,
+          focus: shouldFocus,
+          ...(resolvedPlacement ? { placement: resolvedPlacement } : {}),
+        });
         const finishOpening = async (): Promise<void> => {
           try {
             if (created.preparation) {
@@ -1186,7 +1215,7 @@ export async function createServerPanelTreeBridge(
             }
             await loadAndWaitForPanelReady(created.panelId, "create");
             lifecycleFailures.delete(created.panelId);
-            if (options.focus) {
+            if (shouldFocus) {
               await panelManager.notifyFocused(asPanelSlotId(created.panelId));
             }
             emitTreeSnapshot();

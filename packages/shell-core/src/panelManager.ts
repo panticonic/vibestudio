@@ -77,6 +77,15 @@ export interface PanelManagerServerInfo {
 
 export interface CreatePanelOptions {
   parentId?: PanelSlotId;
+  /** Display title, overriding the manifest's. Free text; carries no identity. */
+  title?: string;
+  /**
+   * Opt-in stable id segment, making the panel `{parentId}/{slug}`. The caller
+   * owns uniqueness: a second panel with the same parent and slug is rejected.
+   * Never derive it from a title or other user-controlled text.
+   */
+  slug?: string;
+  /** @deprecated Alias for `title`. Ignored when `title` is set. */
   name?: string;
   contextId?: string;
   env?: Record<string, string>;
@@ -309,14 +318,22 @@ export class PanelManager {
       opts?.stateArgs
     );
 
+    // Identity comes from `slug` alone. `name`/`title` are labels: deriving an
+    // id from them made ids collide whenever two panels shared a title.
     const slotId = asPanelSlotId(
       computePanelId({
         relativePath,
         parent: opts?.parentId ? { id: opts.parentId } : null,
-        requestedId: opts?.name ? panelIdSegmentFromName(opts.name) : undefined,
+        requestedId: opts?.slug ? panelIdSegmentFromName(opts.slug) : undefined,
         isRoot: opts?.isRoot,
       })
     );
+    if (opts?.slug && this.registry.getPanel(slotId)) {
+      throw new Error(
+        `Panel id already in use: ${slotId}. A slug must be unique among its parent's children.`
+      );
+    }
+    const displayTitle = (opts?.title ?? opts?.name)?.trim() || manifest.title;
     const historyEntryKey = mintHistoryEntryKey();
     const stateArgsPayload = validatedStateArgs ?? {};
     const positionId = this.rankForAppend(opts?.parentId ?? null);
@@ -376,7 +393,7 @@ export class PanelManager {
 
     const panel: Panel = {
       id: slotId,
-      title: manifest.title,
+      title: displayTitle,
       runtimeEntityId: entityId,
       effectiveVersion: handle.source.effectiveVersion,
       buildKey: handle.buildKey ?? null,
@@ -391,7 +408,7 @@ export class PanelManager {
     };
     this.registry.addPanel(panel, opts?.parentId ?? null, { addAsRoot: opts?.addAsRoot });
 
-    this.indexPanel(slotId, manifest.title, relativePath);
+    this.indexPanel(slotId, displayTitle, relativePath);
 
     const preparation = this.activateReservedPanel(slotId, entityId, entitySpec);
 
@@ -399,7 +416,7 @@ export class PanelManager {
       panelId: slotId,
       contextId,
       source: relativePath,
-      title: manifest.title,
+      title: displayTitle,
       stateArgs: stateArgsPayload,
       options: { env: opts?.env ?? {}, ...(opts?.ref ? { ref: opts.ref } : {}) },
       autoArchiveWhenEmpty: snapshot.autoArchiveWhenEmpty,
@@ -472,6 +489,11 @@ export class PanelManager {
     parentId: PanelSlotId | null,
     url: string,
     opts?: {
+      /** Display title until the page reports its own. Carries no identity. */
+      title?: string;
+      /** Opt-in stable id segment; must be unique among the parent's children. */
+      slug?: string;
+      /** @deprecated Alias for `title`. Ignored when `title` is set. */
       name?: string;
       addAsRoot?: boolean;
       ownerUserId?: string;
@@ -492,10 +514,17 @@ export class PanelManager {
       computePanelId({
         relativePath: normalizedSource,
         parent: parentId ? { id: parentId } : null,
-        requestedId: opts?.name ? panelIdSegmentFromName(opts.name) : undefined,
+        // Identity from `slug` only: page titles duplicate constantly, so
+        // deriving ids from them collided (two "New Tab"s under one parent).
+        requestedId: opts?.slug ? panelIdSegmentFromName(opts.slug) : undefined,
         isRoot: parentId == null,
       })
     );
+    if (opts?.slug && this.registry.getPanel(slotId)) {
+      throw new Error(
+        `Panel id already in use: ${slotId}. A slug must be unique among its parent's children.`
+      );
+    }
     const contextId = generateContextId(slotId);
     const historyEntryKey = mintHistoryEntryKey();
     const browserSource = `browser:${url}`;
@@ -534,7 +563,11 @@ export class PanelManager {
     this.currentEntityBySlot.set(slotId, entityId);
     this.currentEntitySourceBySlot.set(slotId, handle.source);
 
-    const title = opts?.name ?? (parsed.hostname || parsed.protocol.replace(/:$/, "") || "browser");
+    const title =
+      (opts?.title ?? opts?.name)?.trim() ||
+      parsed.hostname ||
+      parsed.protocol.replace(/:$/, "") ||
+      "browser";
     const panel: Panel = {
       id: slotId,
       title,

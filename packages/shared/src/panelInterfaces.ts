@@ -139,6 +139,11 @@ export interface PanelHttpServerLike {
 export type PanelCreateOptions = {
   /** Force root placement even when the initiating view is itself a panel. */
   isRoot?: boolean;
+  /** Display title, overriding the manifest's. Free text; carries no identity. */
+  title?: string;
+  /** Opt-in stable id segment; must be unique among the parent's children. */
+  slug?: string;
+  /** @deprecated Alias for `title`. Ignored when `title` is set. */
   name?: string;
   env?: Record<string, string>;
   ref?: string;
@@ -147,7 +152,7 @@ export type PanelCreateOptions = {
    * If provided, the panel will use this context ID instead of generating one.
    */
   contextId?: string;
-  /** If true, immediately focus the new panel after creation */
+  /** Present the new panel after creation (default true); false creates it in the background. */
   focus?: boolean;
   /** Per-call layout placement hint; wins over the manifest's `placement`. */
   placement?: PanelPlacementHint;

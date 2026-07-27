@@ -170,6 +170,7 @@ async function createSinglePanelBridge(options?: {
   };
   corruptExecution?: boolean;
   hostObservation?: Record<string, unknown>;
+  hostObservationError?: Error;
 }) {
   const now = Date.now();
   const slot = {
@@ -247,6 +248,7 @@ async function createSinglePanelBridge(options?: {
         return { kind: "synth", text: "Target", structure: { role: "heading", name: "Target" } };
       }
       if (action === "panelObservation") {
+        if (options?.hostObservationError) throw options.hostObservationError;
         return (
           options?.hostObservation ?? {
             holderLabel: "Desktop",
@@ -405,6 +407,43 @@ describe("createServerPanelTreeBridge ergonomic panel lifecycle", () => {
       runtimeEntityId: slot.current_entity_id,
       buildKey: "b".repeat(64),
       phase: "booting",
+    });
+  });
+
+  it("treats a target runtime handoff during observation as nonterminal", async () => {
+    const { bridge, slot } = await createSinglePanelBridge({
+      hostObservationError: new Error("CDP target runtime changed"),
+    });
+
+    await expect(
+      bridge({ callerId: "server", callerKind: "server", method: "observe", args: [slot.slot_id] })
+    ).resolves.toMatchObject({
+      panelId: slot.slot_id,
+      phase: "loading",
+    });
+    const observation = (await bridge({
+      callerId: "server",
+      callerKind: "server",
+      method: "observe",
+      args: [slot.slot_id],
+    })) as { failure?: unknown };
+    expect(observation.failure).toBeUndefined();
+  });
+
+  it("still reports an actual host observation failure as terminal", async () => {
+    const { bridge, slot } = await createSinglePanelBridge({
+      hostObservationError: new Error("Host command failed"),
+    });
+
+    await expect(
+      bridge({ callerId: "server", callerKind: "server", method: "observe", args: [slot.slot_id] })
+    ).resolves.toMatchObject({
+      phase: "failed",
+      failure: {
+        code: "host_unavailable",
+        stage: "host",
+        message: "Host command failed",
+      },
     });
   });
 
@@ -1061,6 +1100,11 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       source: "panels/new",
       observation: { phase: "building" },
     });
+    expect(eventService.emit).toHaveBeenCalledWith("panel-created", {
+      panelId: (rootResult as { id: string }).id,
+      parentId: null,
+      focus: true,
+    });
     expect(ensureDefaultCdpHostForSlot).not.toHaveBeenCalled();
 
     releaseActivation();
@@ -1262,6 +1306,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
           : undefined
       ),
     };
+    const eventService = { emit: vi.fn() };
     const bridge = await createServerPanelTreeBridge({
       container: { get: vi.fn(() => cdpBridge) },
       dispatcher: { dispatch },
@@ -1282,7 +1327,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
           lease: { holderLabel: "Desktop" },
         })),
       },
-      eventService: { emit: vi.fn() },
+      eventService,
       getGatewayPort: () => 0,
     } as never);
 
@@ -1291,7 +1336,7 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       callerKind: "panel",
       subject: { userId: "usr_alice", handle: "alice" },
       method: "create",
-      args: ["panels/child", {}],
+      args: ["panels/child", { placement: { disposition: "side", minWidth: 480 } }],
     });
 
     expect(result).toMatchObject({
@@ -1299,6 +1344,12 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       contextId: expect.any(String),
       source: "panels/child",
       runtimeEntityId: expect.stringMatching(/^panel:nav-new-/),
+    });
+    expect(eventService.emit).toHaveBeenCalledWith("panel-created", {
+      panelId: (result as { id: string }).id,
+      parentId: parentSlotId,
+      focus: true,
+      placement: { disposition: "side", minWidth: 480 },
     });
     const createdEntity = entities.get((result as { runtimeEntityId: string }).runtimeEntityId);
     expect(createdEntity).toMatchObject({
@@ -1539,8 +1590,11 @@ describe("seedPanelTreeIfEmpty", () => {
     const creates = calls.filter((c) => c.method === "create");
     expect(creates).toHaveLength(2);
     expect(creates.every((c) => c.callerId === "server" && c.callerKind === "server")).toBe(true);
-    expect(creates[0]?.args).toEqual(["panels/chat", { stateArgs: undefined }]);
-    expect(creates[1]?.args).toEqual(["panels/notes", { stateArgs: { folder: "inbox" } }]);
+    expect(creates[0]?.args).toEqual(["panels/chat", { stateArgs: undefined, focus: false }]);
+    expect(creates[1]?.args).toEqual([
+      "panels/notes",
+      { stateArgs: { folder: "inbox" }, focus: false },
+    ]);
   });
 
   it("seeds missing init panels when a previous seed only partially completed", async () => {
@@ -1556,7 +1610,10 @@ describe("seedPanelTreeIfEmpty", () => {
 
     const creates = calls.filter((c) => c.method === "create");
     expect(creates).toHaveLength(1);
-    expect(creates[0]?.args).toEqual(["panels/notes", { stateArgs: { folder: "inbox" } }]);
+    expect(creates[0]?.args).toEqual([
+      "panels/notes",
+      { stateArgs: { folder: "inbox" }, focus: false },
+    ]);
   });
 
   it("reconciles only the attaching owner's roots and stamps every create", async () => {
@@ -1580,7 +1637,7 @@ describe("seedPanelTreeIfEmpty", () => {
     expect(creates).toHaveLength(1);
     expect(creates[0]).toMatchObject({
       subject: { userId: "alice", handle: "alice" },
-      args: ["panels/notes", { stateArgs: undefined }],
+      args: ["panels/notes", { stateArgs: undefined, focus: false }],
     });
   });
 

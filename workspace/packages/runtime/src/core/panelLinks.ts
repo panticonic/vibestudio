@@ -28,7 +28,11 @@ export interface BuildPanelLinkOptions {
   ref?: string;
   /** State arguments for the panel (user state, validated against manifest schema) */
   stateArgs?: Record<string, unknown>;
-  /** Panel name/ID */
+  /** Display title, overriding the manifest's. Free text; carries no identity. */
+  title?: string;
+  /** Opt-in stable id segment; must be unique among the parent's children. */
+  slug?: string;
+  /** @deprecated Alias for `title`. Ignored when `title` is set. */
   name?: string;
   /** If true, immediately focus the new panel after creation */
   focus?: boolean;
@@ -67,6 +71,8 @@ function panelLocation(source: string, options?: BuildPanelLinkOptions): PanelLo
     ...(options?.ref !== undefined ? { ref: options.ref } : {}),
     ...(options?.contextId !== undefined ? { contextId: options.contextId } : {}),
     ...(options?.stateArgs !== undefined ? { stateArgs: options.stateArgs } : {}),
+    ...(options?.title !== undefined ? { title: options.title } : {}),
+    ...(options?.slug !== undefined ? { slug: options.slug } : {}),
     ...(options?.name !== undefined ? { name: options.name } : {}),
     ...(options?.focus !== undefined ? { focus: options.focus } : {}),
     ...(options?.disposition !== undefined ? { disposition: options.disposition } : {}),

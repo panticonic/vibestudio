@@ -484,7 +484,7 @@ describe("PanelOrchestrator.focusPanel", () => {
     expect(result).toMatchObject({ status: "loaded", focused: true, loaded: true });
   });
 
-  it("emits the layout intent with parentId and the snapshot's resolved placement hint", async () => {
+  it("keeps ordinary focus separate from creation placement", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const child = makePanel("panel:tree/parent/child", [], {
       snapshot: {
@@ -503,11 +503,7 @@ describe("PanelOrchestrator.focusPanel", () => {
 
     await orchestrator.focusPanel(child.id);
 
-    expect(emit).toHaveBeenCalledWith("navigate-to-panel", {
-      panelId: child.id,
-      parentId: parent.id,
-      hint: { disposition: "split-below", preferredWidth: 500 },
-    });
+    expect(emit).toHaveBeenCalledWith("navigate-to-panel", { panelId: child.id });
   });
 
   it("loads a missing native view during focus even when build is already ready", async () => {
@@ -681,7 +677,7 @@ describe("PanelOrchestrator.createPanel", () => {
       `ctx-${id}`
     );
     expect(panelView.setViewVisible).toHaveBeenCalledWith(id, true);
-    expect(emit).toHaveBeenCalledWith("navigate-to-panel", { panelId: id, parentId: caller.id });
+    expect(emit).not.toHaveBeenCalledWith("navigate-to-panel", expect.anything());
     expect(panelView.createViewForPanel.mock.invocationCallOrder[0]).toBeLessThan(
       panelView.setViewVisible.mock.invocationCallOrder[0] ?? 0
     );
@@ -720,10 +716,7 @@ describe("PanelOrchestrator.createPanel", () => {
       error: "native view failed",
       buildProgress: "native view failed",
     });
-    expect(emit).toHaveBeenCalledWith("navigate-to-panel", {
-      panelId: "panel:tree/created-1",
-      parentId: "panel:tree/caller",
-    });
+    expect(emit).not.toHaveBeenCalledWith("navigate-to-panel", expect.anything());
   });
 
   it("acquires a runtime lease before creating browser panel views", async () => {

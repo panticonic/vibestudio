@@ -812,7 +812,7 @@ export default function NewsPanel() {
           }
         }
         await openPanel("panels/chat", {
-          name: `Deep-dive: ${story.title.slice(0, 40)}`,
+          title: `Deep-dive: ${story.title.slice(0, 40)}`,
           focus: true,
           contextId: result.forkedContextId,
           stateArgs: {

@@ -347,7 +347,7 @@ describe("github skill facade", () => {
     expect(new URL(opened).origin + new URL(opened).pathname).toBe(
       "https://github.com/settings/personal-access-tokens/new"
     );
-    expect(options).toEqual({ focus: true, name: "GitHub settings" });
+    expect(options).toEqual({ focus: true, title: "GitHub settings" });
     expect(runtimeMock.openExternal).not.toHaveBeenCalled();
   });
 

@@ -554,7 +554,7 @@ export async function openGitHubTokenSettings(
 ): Promise<void> {
   const url = buildGitHubTokenSettingsUrl(opts);
   if (opts.browser === "internal") {
-    await openPanel(url, { focus: true, name: "GitHub settings" });
+    await openPanel(url, { focus: true, title: "GitHub settings" });
     return;
   }
   await openExternal(url);

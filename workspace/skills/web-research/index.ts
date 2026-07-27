@@ -173,7 +173,7 @@ export async function openSearchProviderSignup(
   if (opts.browser === "external") {
     await openExternal(spec.signupUrl);
   } else {
-    await openPanel(spec.signupUrl, { focus: true, name: `${spec.label} setup` });
+    await openPanel(spec.signupUrl, { focus: true, title: `${spec.label} setup` });
   }
 }
 

@@ -483,29 +483,88 @@ describe("PanelManager", () => {
     expect(registry.getPanel(bobGrandchild.panelId)?.owner).toBe("carol");
   });
 
-  it("coerces human-readable create names to panel id segments", async () => {
+  /** A workspace holding one trivial panel manifest, for identity/title tests. */
+  const namedPanelWorkspace = () => {
     const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
-
     const panelDir = path.join(workspacePath, "panels", "named");
     fs.mkdirSync(panelDir, { recursive: true });
     fs.writeFileSync(
       path.join(panelDir, "package.json"),
       JSON.stringify({ name: "named", vibestudio: { title: "Named Panel" } })
     );
-
     const registry = new PanelRegistry({});
     const { deps } = makeManagerDeps(workspacePath);
-    const manager = new PanelManager({ registry, ...deps });
+    return { registry, manager: new PanelManager({ registry, ...deps }) };
+  };
+
+  it("treats title as a label and never as identity", async () => {
+    const { registry, manager } = namedPanelWorkspace();
 
     const created = await manager.create("panels/named", {
       isRoot: true,
       addAsRoot: true,
-      name: "StateArgs CDP Test",
+      title: "StateArgs CDP Test",
     });
 
-    expect(created.panelId).toBe("panel:tree/StateArgs-CDP-Test");
+    // The title must not leak into the id, or panels sharing a title collide.
+    expect(created.panelId).not.toContain("StateArgs");
+    expect(created.title).toBe("StateArgs CDP Test");
+    expect(registry.getPanel(created.panelId)?.title).toBe("StateArgs CDP Test");
+  });
+
+  it("keeps name working as a deprecated alias for title", async () => {
+    const { registry, manager } = namedPanelWorkspace();
+
+    const created = await manager.create("panels/named", {
+      isRoot: true,
+      addAsRoot: true,
+      name: "Legacy Label",
+    });
+
+    expect(created.panelId).not.toContain("Legacy");
+    expect(registry.getPanel(created.panelId)?.title).toBe("Legacy Label");
+  });
+
+  it("falls back to the manifest title when no label is given", async () => {
+    const { registry, manager } = namedPanelWorkspace();
+    const created = await manager.create("panels/named", { isRoot: true, addAsRoot: true });
     expect(registry.getPanel(created.panelId)?.title).toBe("Named Panel");
+  });
+
+  it("gives panels sharing a title distinct ids", async () => {
+    const { manager } = namedPanelWorkspace();
+    const first = await manager.create("panels/named", {
+      isRoot: true,
+      addAsRoot: true,
+      title: "New Tab",
+    });
+    const second = await manager.create("panels/named", {
+      isRoot: true,
+      addAsRoot: true,
+      title: "New Tab",
+    });
+    expect(second.panelId).not.toBe(first.panelId);
+  });
+
+  it("uses slug as the id segment when the caller opts in", async () => {
+    const { manager } = namedPanelWorkspace();
+    const created = await manager.create("panels/named", {
+      isRoot: true,
+      addAsRoot: true,
+      slug: "pinned-inbox",
+      title: "Inbox",
+    });
+    expect(created.panelId).toBe("panel:tree/pinned-inbox");
+    expect(created.title).toBe("Inbox");
+  });
+
+  it("rejects a duplicate slug instead of silently reusing the slot", async () => {
+    const { manager } = namedPanelWorkspace();
+    await manager.create("panels/named", { isRoot: true, addAsRoot: true, slug: "pinned" });
+    await expect(
+      manager.create("panels/named", { isRoot: true, addAsRoot: true, slug: "pinned" })
+    ).rejects.toThrow(/already in use/);
   });
 
   it("creates panel state locally, builds panel init, updates state args, and closes panels", async () => {

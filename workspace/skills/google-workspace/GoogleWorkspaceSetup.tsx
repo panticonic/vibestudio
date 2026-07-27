@@ -94,7 +94,7 @@ export default function GoogleWorkspaceSetup({ chat }: GoogleWorkspaceSetupProps
   const openStep = (url: string) =>
     run(`open:${url}`, async () => {
       if (browser === "external") await openExternal(url);
-      else await openPanel(url, { focus: true, name: "Google Cloud setup" });
+      else await openPanel(url, { focus: true, title: "Google Cloud setup" });
     });
 
   const saveClient = () =>
