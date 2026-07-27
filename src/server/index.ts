@@ -42,6 +42,7 @@ import {
 } from "./workerdRpcRelay.js";
 import { resolveHttpRuntimeCaller } from "./httpRuntimeIdentity.js";
 import { classifyStartupDependency } from "./startupDependencyStatus.js";
+import { isSuccessfulDevTemplateMirrorExit } from "./devTemplateMirror.js";
 import { getProductBootManifest } from "./internalDOs/productBootManifest.js";
 import {
   AppliedWorkspaceUnitDeclarations,
@@ -1413,7 +1414,9 @@ async function main() {
             `${devTemplateMirrorDir}/`,
           ],
           (err) => {
-            if (err) console.warn("[DevMirror] rsync to template failed:", err.message);
+            if (!isSuccessfulDevTemplateMirrorExit(err)) {
+              console.warn("[DevMirror] rsync to template failed:", err?.message);
+            }
           }
         );
       }, 500);
