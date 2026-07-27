@@ -132,9 +132,8 @@ export const gitImportResultSchema = gitSemanticCandidateSchema
         ),
       })
       .strict()
-      .optional()
       .describe(
-        "Identity-joined evidence read back from the canonical GAD graph when supplied by the configured provider."
+        "Identity-joined evidence read back from the canonical GAD graph by the configured provider."
       ),
   })
   .strict();

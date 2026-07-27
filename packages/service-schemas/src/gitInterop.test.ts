@@ -171,7 +171,7 @@ describe("gitInterop canonical contract", () => {
           changed: result.candidate.changed,
         },
       }).success
-    ).toBe(true);
+    ).toBe(false);
     expect(
       gitInteropMethods.importProject.returns.safeParse({
         path: result.path,
@@ -312,7 +312,7 @@ describe("gitInterop canonical contract", () => {
         eventId: "event:123",
         changed: true,
       }).success
-    ).toBe(true);
+    ).toBe(false);
     expect(
       gitInteropProviderMethods.cloneRepo.returns.safeParse({
         contextId: "git-bridge-demo",
