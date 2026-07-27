@@ -1,4 +1,11 @@
-import type { TestCase } from "../types.js";
+import type { ChatMessage } from "@workspace/agentic-core";
+import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-session";
+import {
+  BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE,
+  type TestCase,
+  type TestExecutionResult,
+  type TestOrchestrationContext,
+} from "../types.js";
 import {
   findLastAgentMessage,
   getToolCalls,
@@ -12,6 +19,11 @@ interface ObservedGitImport {
   remoteUrl: string;
   contextId: string;
   eventId: string;
+  semanticEvidence?: {
+    applicationId: string;
+    workUnitId: string;
+    externalSnapshot: Record<string, unknown>;
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -40,7 +52,29 @@ function arrays(value: unknown, found: unknown[][] = []): unknown[][] {
 }
 
 function exactNumber(message: string, value: number): boolean {
-  return new RegExp(`(?:^|\\D)${value}(?:\\D|$)`, "u").test(message);
+  if (new RegExp(`(?:^|\\D)${value}(?:\\D|$)`, "u").test(message)) return true;
+  const word =
+    [
+      "zero",
+      "one",
+      "two",
+      "three",
+      "four",
+      "five",
+      "six",
+      "seven",
+      "eight",
+      "nine",
+      "ten",
+    ][value] ?? null;
+  return word ? new RegExp(`\\b${word}\\b`, "iu").test(message) : false;
+}
+
+function canonicalGitMethodMentioned(code: string, method: string): boolean {
+  return (
+    code.includes(`git.${method}`) ||
+    new RegExp(`["']gitInterop\\.${method}["']`, "u").test(code)
+  );
 }
 
 function unavailableGitResult(result: Parameters<typeof noIncompleteInvocations>[0]) {
@@ -62,7 +96,7 @@ function unavailableGitResult(result: Parameters<typeof noIncompleteInvocations>
 }
 
 function upstreamStatusChecked(result: Parameters<typeof noIncompleteInvocations>[0]) {
-  if (!/git\.upstreamStatus/iu.test(successfulEvalCode(result))) {
+  if (!canonicalGitMethodMentioned(successfulEvalCode(result), "upstreamStatus")) {
     return {
       passed: false,
       reason: "No successful canonical Git upstream-status call was observed",
@@ -103,44 +137,54 @@ function upstreamStatusChecked(result: Parameters<typeof noIncompleteInvocations
     : { passed: false, reason: "Final response did not cite an observed repository and state" };
 }
 
-function disposablePublishChecked(result: Parameters<typeof noIncompleteInvocations>[0]) {
+function disposableFollowUpPushChecked(result: TestExecutionResult) {
+  const invocations = noIncompleteInvocations(result);
+  if (!invocations.passed) return invocations;
   const code = successfulEvalCode(result);
-  const values = successfulEvalReturnValues(result);
-  const final = findLastAgentMessage(result);
-  if (/git\.publishToDisposableRemote/iu.test(code)) {
-    const published = records(values).find(
-      (item) =>
-        typeof item["repoPath"] === "string" &&
-        typeof item["branch"] === "string" &&
-        item["pushed"] === true &&
-        Number.isInteger(item["commitCount"]) &&
-        Number(item["commitCount"]) > 0 &&
-        typeof item["headCommit"] === "string"
-    );
-    if (
-      published &&
-      final.includes(String(published["repoPath"])) &&
-      exactNumber(final, Number(published["commitCount"])) &&
-      /push|publish|received/iu.test(final)
-    ) {
-      return noIncompleteInvocations(result);
-    }
+  const required = [
+    "createDisposableRemote",
+    "setSharedRemote",
+    "setUpstream",
+    "pushUpstream",
+    "inspectDisposableRemote",
+    "detachUpstream",
+    "removeDisposableRemote",
+  ];
+  if (
+    !required.every((method) => canonicalGitMethodMentioned(code, method))
+  ) {
     return {
       passed: false,
-      reason: "One-call disposable publish result was incomplete or unreported",
+      reason: "The two-phase scenario did not use the complete canonical Git upstream lifecycle",
+    };
+  }
+  const pushCount =
+    (code.match(/git\.pushUpstream/gu)?.length ?? 0) +
+    (code.match(/["']gitInterop\.pushUpstream["']/gu)?.length ?? 0);
+  if (pushCount < 2) {
+    return {
+      passed: false,
+      reason: "The initial publication and follow-up managed edit were not pushed separately",
     };
   }
 
-  const required = [
-    "createDisposableRemote",
-    "pushDisposableRemote",
-    "inspectDisposableRemote",
-    "removeDisposableRemote",
-  ];
-  if (!required.every((method) => code.includes(`git.${method}`))) {
-    return unavailableGitResult(result);
+  const calls = getToolCalls(result);
+  const managedMutations = calls.filter((call) => call.name === "edit" || call.name === "write");
+  const commits = calls.filter((call) => call.name === "commit");
+  const publications = calls.filter(
+    (call) =>
+      (call.name === "vcs" && call.arguments?.["operation"] === "push") ||
+      (call.name === "push" && call.arguments?.["operation"] === undefined)
+  );
+  if (managedMutations.length < 2 || commits.length < 2 || publications.length < 2) {
+    return {
+      passed: false,
+      reason:
+        "The scenario did not make, commit, and publish both managed GAD edits before their Git pushes",
+    };
   }
-  const all = records(values);
+
+  const all = records(successfulEvalReturnValues(result));
   const remote = all.find(
     (item) =>
       typeof item["id"] === "string" &&
@@ -148,64 +192,246 @@ function disposablePublishChecked(result: Parameters<typeof noIncompleteInvocati
       typeof item["branch"] === "string" &&
       Number.isInteger(item["expiresAt"])
   );
-  const inspected = remote
-    ? all.find(
+  const inspections = remote
+    ? all.filter(
         (item) =>
-          item !== remote &&
           item["id"] === remote["id"] &&
           item["url"] === remote["url"] &&
           Number.isInteger(item["commitCount"]) &&
-          Number(item["commitCount"]) > 0 &&
           typeof item["headCommit"] === "string"
       )
-    : undefined;
-  const removed = all.some((item) => item["removed"] === true);
+    : [];
+  const first = inspections[0];
+  const last = inspections.at(-1);
+  const final = findLastAgentMessage(result);
+  const removed =
+    all.some((item) => item["removed"] === true) ||
+    (code.includes("removeDisposableRemote") && /\b(?:cleaned|deleted|removed)\b/iu.test(final));
   if (
     !remote ||
-    !inspected ||
-    !removed ||
-    !exactNumber(final, Number(inspected["commitCount"])) ||
-    !/push|publish|received/iu.test(final) ||
-    !/remove|clean/iu.test(final)
+    !first ||
+    !last ||
+    inspections.length < 2 ||
+    Number(last["commitCount"]) <= Number(first["commitCount"]) ||
+    last["headCommit"] === first["headCommit"] ||
+    !removed
   ) {
     return {
       passed: false,
-      reason: "Stepwise disposable publish was not identity-joined and cleaned up",
+      reason: "Remote inspection did not prove a later head with more commits followed by cleanup",
     };
   }
-  return noIncompleteInvocations(result);
+  return (
+    final.includes(String(last["headCommit"])) &&
+    /after|advanced|follow-up|progression|second|later|again/iu.test(final)
+  )
+    ? { passed: true, reason: undefined }
+    : {
+        passed: false,
+        reason: "The final response did not identify the verified follow-up remote head",
+      };
+}
+
+async function orchestrateDisposableFollowUpPush(
+  context: TestOrchestrationContext
+): Promise<TestExecutionResult> {
+  const startedAt = Date.now();
+  const repoName = context.runner.workspaceRepoName;
+  if (!repoName) throw new Error("Git follow-up scenario requires a seeded repository fixture");
+  const repoPath = `packages/${repoName}`;
+  let session: HeadlessSession | undefined;
+  let snapshot: SessionSnapshot | undefined;
+  let error: string | undefined;
+  const cleanupErrors: string[] = [];
+
+  try {
+    session = await context.runner.spawn({ context: "task" });
+    await context.sendAndWait(
+      session,
+      `Work only in ${repoPath}. Make one distinctive managed source edit, commit it, and publish that exact clean GAD milestone to protected main. Stop after the GAD publication and report its exact event identity; I will give you the Git publication destination separately.`,
+      "publish the initial managed milestone through GAD"
+    );
+    await context.sendAndWait(
+      session,
+      `Create a credential-free disposable Git remote that will survive my next follow-up. Declare that exact remote as ${repoPath}'s manual upstream, call pushUpstream for the already-published protected-main milestone, and inspect the same remote. Do not use publishToDisposableRemote because it creates and deletes a separate one-call remote. Keep the created remote and tracking configuration; report the exact remote URL, head, and commit count.`,
+      "push the initial protected-main milestone to a persistent disposable upstream"
+    );
+    await context.sendAndWait(
+      session,
+      `Now make a second distinctive managed source edit in the same ${repoPath}, commit and publish it through GAD VCS, then use the configured Git Bridge to push that later protected-main snapshot upstream. Inspect the same disposable remote again and prove its head and commit count advanced. Finally call detachUpstream for this repo with { forgetRemote: true }, remove that disposable remote, and stop using the deleted URL. Report both observed Git heads and counts.`,
+      "edit through GAD and push the follow-up milestone upstream"
+    );
+    snapshot = session.snapshot();
+  } catch (cause) {
+    error = cause instanceof Error ? cause.message : String(cause);
+    try {
+      snapshot = session?.snapshot();
+    } catch {
+      // The primary orchestration error remains the useful failure.
+    }
+  }
+
+  const messages = session ? ([...session.messages] as ChatMessage[]) : [];
+  if (session) {
+    try {
+      await session.close();
+      cleanupErrors.push(
+        ...session.snapshot().cleanupErrors.map((entry) => `${entry.phase}: ${entry.message}`)
+      );
+    } catch (cause) {
+      cleanupErrors.push(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+  return {
+    messages,
+    duration: Date.now() - startedAt,
+    ...(snapshot ? { snapshot } : {}),
+    ...(error ? { error } : {}),
+    ...(cleanupErrors.length > 0
+      ? {
+          cleanupErrors,
+          error: error ?? `Headless cleanup failed: ${cleanupErrors.join("; ")}`,
+        }
+      : {}),
+    diagnostics: { orchestrated: true, repoPath, phases: 3 },
+  };
 }
 
 function commitMappingChecked(result: Parameters<typeof noIncompleteInvocations>[0]) {
-  if (!/git\.commitMapping/iu.test(successfulEvalCode(result))) return unavailableGitResult(result);
-  const mappings = successfulEvalReturnValues(result)
+  const invocations = noIncompleteInvocations(result);
+  if (!invocations.passed) return invocations;
+  const code = successfulEvalCode(result);
+  if (
+    !canonicalGitMethodMentioned(code, "publishToDisposableRemote") ||
+    !canonicalGitMethodMentioned(code, "commitMapping")
+  ) {
+    return {
+      passed: false,
+      reason: "The mapping scenario did not export and inspect the supplied repository",
+    };
+  }
+  const calls = getToolCalls(result);
+  if (
+    !calls.some((call) => call.name === "edit" || call.name === "write") ||
+    !calls.some((call) => call.name === "commit") ||
+    !calls.some(
+      (call) =>
+        (call.name === "vcs" && call.arguments?.["operation"] === "push") ||
+        (call.name === "push" && call.arguments?.["operation"] === undefined)
+    )
+  ) {
+    return {
+      passed: false,
+      reason: "The exported mapping was not produced from a managed edit, commit, and publication",
+    };
+  }
+  const values = successfulEvalReturnValues(result);
+  const published = records(values).find(
+    (item) =>
+      typeof item["repoPath"] === "string" &&
+      item["pushed"] === true &&
+      Number.isInteger(item["commitCount"]) &&
+      Number(item["commitCount"]) > 0 &&
+      typeof item["headCommit"] === "string"
+  );
+  if (!published) {
+    return {
+      passed: false,
+      reason: "Disposable Git export did not return a verified remote head",
+    };
+  }
+  const isMappingRow = (item: unknown): item is Record<string, unknown> =>
+    isRecord(item) &&
+    typeof item["gitSha"] === "string" &&
+    typeof item["eventId"] === "string" &&
+    typeof item["summary"] === "string";
+  const completeMappings = values
     .flatMap((value) => arrays(value))
-    .find(
-      (items) =>
-        items.length > 0 &&
-        items.every(
-          (item) =>
-            isRecord(item) &&
-            typeof item["gitSha"] === "string" &&
-            typeof item["eventId"] === "string" &&
-            typeof item["summary"] === "string"
-        )
-    );
-  if (!mappings)
+    .find((items) => items.length > 0 && items.every(isMappingRow));
+  const projectedMappings = records(values).find(
+    (item) =>
+      Number.isInteger(item["mappingCount"]) &&
+      Number(item["mappingCount"]) > 0 &&
+      isMappingRow(item["firstMapping"])
+  );
+  const mappingCount = completeMappings?.length ?? Number(projectedMappings?.["mappingCount"] ?? 0);
+  const observedMappings =
+    completeMappings ?? (projectedMappings ? [projectedMappings["firstMapping"]] : []);
+  if (mappingCount === 0 || observedMappings.length === 0)
     return { passed: false, reason: "Git commit mapping result had no canonical rows" };
   const final = findLastAgentMessage(result);
-  const cited = mappings.some(
+  const cited = observedMappings.some(
     (item) =>
       isRecord(item) &&
       final.includes(String(item["gitSha"])) &&
       final.includes(String(item["eventId"]))
   );
-  return cited && exactNumber(final, mappings.length)
+  return cited && exactNumber(final, mappingCount)
     ? noIncompleteInvocations(result)
     : {
         passed: false,
         reason: "Final response did not cite an observed Git/event mapping and count",
       };
+}
+
+async function orchestrateCommitMapping(
+  context: TestOrchestrationContext
+): Promise<TestExecutionResult> {
+  const startedAt = Date.now();
+  const repoName = context.runner.workspaceRepoName;
+  if (!repoName) throw new Error("Git commit-mapping scenario requires a seeded repository fixture");
+  const repoPath = `packages/${repoName}`;
+  let session: HeadlessSession | undefined;
+  let snapshot: SessionSnapshot | undefined;
+  let error: string | undefined;
+  const cleanupErrors: string[] = [];
+
+  try {
+    session = await context.runner.spawn({ context: "task" });
+    await context.sendAndWait(
+      session,
+      `Work only in ${repoPath}. Make one distinctive managed source edit, commit it, and publish that exact clean GAD milestone to protected main. Report the published event identity and wait for the external Git verification step.`,
+      "publish the managed milestone through GAD"
+    );
+    await context.sendAndWait(
+      session,
+      `Export the published ${repoPath} milestone to a fresh credential-free disposable Git remote using the self-cleaning verification operation. Then inspect ${repoPath}'s canonical Git commit mapping and report the exact mapping count plus at least one observed workspace event identity and Git SHA.`,
+      "export the milestone and inspect its Git mapping"
+    );
+    snapshot = session.snapshot();
+  } catch (cause) {
+    error = cause instanceof Error ? cause.message : String(cause);
+    try {
+      snapshot = session?.snapshot();
+    } catch {
+      // The primary orchestration error remains the useful failure.
+    }
+  }
+
+  const messages = session ? ([...session.messages] as ChatMessage[]) : [];
+  if (session) {
+    try {
+      await session.close();
+      cleanupErrors.push(
+        ...session.snapshot().cleanupErrors.map((entry) => `${entry.phase}: ${entry.message}`)
+      );
+    } catch (cause) {
+      cleanupErrors.push(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+  return {
+    messages,
+    duration: Date.now() - startedAt,
+    ...(snapshot ? { snapshot } : {}),
+    ...(error ? { error } : {}),
+    ...(cleanupErrors.length > 0
+      ? {
+          cleanupErrors,
+          error: error ?? `Headless cleanup failed: ${cleanupErrors.join("; ")}`,
+        }
+      : {}),
+    diagnostics: { orchestrated: true, repoPath, phases: 2 },
+  };
 }
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
@@ -255,18 +481,32 @@ function collectGitImports(
       remote["url"].length > 0 &&
       (remote["branch"] === undefined || typeof remote["branch"] === "string") &&
       isRecord(candidate) &&
-      hasExactKeys(candidate, ["contextId", "eventId", "changed"]) &&
+      (hasExactKeys(candidate, ["contextId", "eventId", "changed"]) ||
+        hasExactKeys(candidate, ["contextId", "eventId", "changed", "semanticEvidence"])) &&
       typeof candidate["contextId"] === "string" &&
       candidate["contextId"].length > 0 &&
       typeof candidate["eventId"] === "string" &&
       candidate["eventId"].length > 0 &&
       candidate["changed"] === true
     ) {
+      const evidence = candidate["semanticEvidence"];
       imports.push({
         path: value["path"],
         remoteUrl: remote["url"],
         contextId: candidate["contextId"],
         eventId: candidate["eventId"],
+        ...(isRecord(evidence) &&
+        typeof evidence["applicationId"] === "string" &&
+        typeof evidence["workUnitId"] === "string" &&
+        isRecord(evidence["externalSnapshot"])
+          ? {
+              semanticEvidence: {
+                applicationId: evidence["applicationId"],
+                workUnitId: evidence["workUnitId"],
+                externalSnapshot: evidence["externalSnapshot"],
+              },
+            }
+          : {}),
       });
     }
   }
@@ -296,6 +536,36 @@ function statusProvesUnpublishedCandidate(value: unknown, imported: ObservedGitI
   return Object.values(value).some((child) => statusProvesUnpublishedCandidate(child, imported));
 }
 
+function importEvidenceIsCanonical(imported: ObservedGitImport): boolean {
+  const evidence = imported.semanticEvidence;
+  if (!evidence) return false;
+  const snapshot = evidence.externalSnapshot;
+  const expectedSourceUri = canonicalGitSourceUri(imported.remoteUrl);
+  return (
+    evidence.applicationId.length > 0 &&
+    evidence.workUnitId.length > 0 &&
+    snapshot["sourceKind"] === "git" &&
+    typeof snapshot["sourceUri"] === "string" &&
+    (expectedSourceUri
+      ? snapshot["sourceUri"] === expectedSourceUri
+      : snapshot["sourceUri"].startsWith("git-local://sha256/")) &&
+    typeof snapshot["snapshotRevision"] === "string" &&
+    snapshot["snapshotRevision"].length > 0 &&
+    typeof snapshot["snapshotDigest"] === "string" &&
+    /^snapshot:[0-9a-f]{64}$/u.test(snapshot["snapshotDigest"]) &&
+    Array.isArray(snapshot["targetRepositoryIds"]) &&
+    snapshot["targetRepositoryIds"].length > 0
+  );
+}
+
+function finalReportsImport(finalMessage: string, imported: ObservedGitImport): boolean {
+  return (
+    finalMessage.includes(imported.path) &&
+    finalMessage.includes(imported.eventId) &&
+    /\b(?:unpublished|not (?:yet )?published|not published)\b/iu.test(finalMessage)
+  );
+}
+
 function requireGitImportSemanticEvidence(result: Parameters<typeof noIncompleteInvocations>[0]): {
   passed: boolean;
   reason?: string;
@@ -307,7 +577,10 @@ function requireGitImportSemanticEvidence(result: Parameters<typeof noIncomplete
       call.execution.isError !== true
   );
   const code = successfulEvalCode(result);
-  if (!code.includes("git.importProject") || !code.includes("git.upstreamStatus")) {
+  if (
+    !canonicalGitMethodMentioned(code, "importProject") ||
+    !canonicalGitMethodMentioned(code, "upstreamStatus")
+  ) {
     return {
       passed: false,
       reason: "Successful eval did not perform both Git import and upstream status observation",
@@ -365,6 +638,12 @@ function requireGitImportSemanticEvidence(result: Parameters<typeof noIncomplete
     ) {
       continue;
     }
+    if (
+      importEvidenceIsCanonical(imported) &&
+      finalReportsImport(finalMessage, imported)
+    ) {
+      return { passed: true, reason: undefined };
+    }
     const event = inspectedEvents.get(imported.eventId);
     if (
       !event ||
@@ -409,11 +688,7 @@ function requireGitImportSemanticEvidence(result: Parameters<typeof noIncomplete
       ) {
         continue;
       }
-      if (
-        finalMessage.includes(imported.path) &&
-        finalMessage.includes(imported.eventId) &&
-        /\b(?:unpublished|not (?:yet )?published)\b/iu.test(finalMessage)
-      ) {
+      if (finalReportsImport(finalMessage, imported)) {
         return { passed: true, reason: undefined };
       }
     }
@@ -422,7 +697,7 @@ function requireGitImportSemanticEvidence(result: Parameters<typeof noIncomplete
   return {
     passed: false,
     reason:
-      "Completed results did not identity-join one exact Git import result and integration-required status to its inspected candidate event, application, and import work unit with an external snapshot; the final answer must report that same path, event, and unpublished state",
+      "Completed results did not identity-join one exact Git import result and integration-required status to canonical event/application/work-unit external-snapshot evidence; the final answer must report that same path, candidate event ID, and unpublished state",
   };
 }
 
@@ -438,18 +713,85 @@ export const gitInteropTests: TestCase[] = [
   },
   {
     name: "git-publish-local-remote",
-    description: "Publish a workspace repo to a disposable external Git remote and push",
+    description: "Publish a managed repo, edit it through GAD, and push the follow-up upstream",
     category: "git-interop",
     resources: ["workspace-config:git"],
-    prompt:
-      "Publish a small disposable workspace repository to a credential-free throwaway Git remote, verify that the remote received its main history, and clean up the temporary remote afterward. If this deployment cannot do that, report the concrete blocker.",
-    validate: disposablePublishChecked,
+    workspaceRepoFixture: BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE,
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "git-remotes",
+          capability: "git.remotes.manage",
+          resource: { kind: "exact", key: "git.remotes.manage" },
+          tier: "gated",
+          decision: "once",
+        },
+        {
+          ruleId: "git-publish",
+          capability: "git.publish",
+          resource: { kind: "exact", key: "git.publish" },
+          tier: "gated",
+          decision: "once",
+        },
+        {
+          ruleId: "publish-git-config",
+          capability: "workspace-main-advance",
+          resource: {
+            kind: "exact",
+            key: "workspace-source-change:meta:main",
+          },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [],
+    },
+    prompt: "Harness-orchestrated managed edit and two-phase disposable Git publication.",
+    orchestrate: orchestrateDisposableFollowUpPush,
+    validate: disposableFollowUpPushChecked,
   },
   {
     name: "git-import-project",
     description: "Import an external Git project into the workspace",
     category: "git-interop",
     resources: ["workspace-config:git"],
+    expectedToolFailures: [{ name: "web_search", errorIncludes: "DDG_BLOCKED" }],
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "git-remotes",
+          capability: "git.remotes.manage",
+          resource: { kind: "exact", key: "git.remotes.manage" },
+          tier: "gated",
+          decision: "once",
+        },
+        {
+          ruleId: "git-import",
+          capability: "git.project.import",
+          resource: { kind: "exact", key: "git.project.import" },
+          tier: "gated",
+          decision: "once",
+        },
+        {
+          ruleId: "git-publish",
+          capability: "git.publish",
+          resource: { kind: "exact", key: "git.publish" },
+          tier: "gated",
+          decision: "once",
+        },
+        {
+          ruleId: "publish-git-config",
+          capability: "workspace-main-advance",
+          resource: {
+            kind: "exact",
+            key: "workspace-source-change:meta:main",
+          },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [],
+    },
     prompt:
       "Can you bring a small credential-free Git project into this workspace and tell me where it landed and whether it is already published?",
     validate: requireGitImportSemanticEvidence,
@@ -459,8 +801,21 @@ export const gitInteropTests: TestCase[] = [
     description: "Report the workspace-commit to git-commit mapping for an exported repo",
     category: "git-interop",
     resources: ["workspace-config:git"],
-    prompt:
-      "For a repository exported to external Git, explain how its workspace commits map to Git commits. If no suitable export can be prepared in this deployment, report the concrete blocker.",
+    workspaceRepoFixture: BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE,
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "git-publish",
+          capability: "git.publish",
+          resource: { kind: "exact", key: "git.publish" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [],
+    },
+    prompt: "Harness-orchestrated managed publication, disposable Git export, and commit mapping.",
+    orchestrate: orchestrateCommitMapping,
     validate: commitMappingChecked,
   },
 ];

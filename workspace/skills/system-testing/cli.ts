@@ -446,6 +446,49 @@ export async function systemTestDoctor(
     "server identity and workspace are reachable"
   );
   await capture(
+    "startup-units",
+    async () => {
+      const deadline = Date.now() + 15_000;
+      let extensionInventory: unknown[] = [];
+      let gitBridge: Record<string, unknown> | undefined;
+      for (;;) {
+        const observed = await rpc.call<unknown>("main", "extensions.list", []);
+        if (!Array.isArray(observed)) {
+          throw new Error("extension readiness inventory returned an invalid response");
+        }
+        extensionInventory = observed;
+        gitBridge = extensionInventory.find(
+          (entry): entry is Record<string, unknown> =>
+            Boolean(entry) &&
+            typeof entry === "object" &&
+            !Array.isArray(entry) &&
+            (entry as Record<string, unknown>)["name"] === "@workspace-extensions/git-bridge"
+        );
+        if (gitBridge) {
+          break;
+        }
+        if (Date.now() >= deadline) {
+          throw new Error("Git Bridge extension is absent after startup reconciliation");
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      }
+      if (gitBridge["status"] === "pending-approval" || gitBridge["pendingApproval"]) {
+        throw new Error(
+          "Git Bridge still requires startup approval. Resolve the bootstrap unit approval before running Git interoperability system tests"
+        );
+      }
+      if (gitBridge["status"] === "error") {
+        throw new Error(
+          String(gitBridge["lastError"] ?? "Git Bridge failed during startup reconciliation")
+        );
+      }
+      return {
+        gitBridgeStatus: String(gitBridge["status"] ?? "unknown"),
+      };
+    },
+    "workspace startup unit approvals are settled"
+  );
+  await capture(
     "system-testing-build",
     () => rpc.call("main", "build.inspectBuildProvenance", ["@workspace-skills/system-testing"]),
     "system-testing package is importable"

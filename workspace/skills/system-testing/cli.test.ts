@@ -129,6 +129,9 @@ describe("system-testing CLI-neutral API", () => {
     mocks.rpcCall.mockImplementation(async (...args: unknown[]) => {
       const method = args[1];
       if (method === "inspectModels") return { models };
+      if (method === "extensions.list") {
+        return [{ name: "@workspace-extensions/git-bridge", status: "running" }];
+      }
       return {};
     });
   }
@@ -179,6 +182,39 @@ describe("system-testing CLI-neutral API", () => {
         primary: { model: SYSTEM_TEST_AGENT_MODEL, availability: "ready" },
         usageLimitFallback: null,
       },
+    });
+  });
+
+  it("fails doctor before a pending Git Bridge approval can strand a system test", async () => {
+    configureHealthyDoctorModels([
+      { ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } },
+    ]);
+    mocks.rpcCall.mockImplementation(async (...args: unknown[]) => {
+      const method = args[1];
+      if (method === "inspectModels") {
+        return {
+          models: [
+            { ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } },
+          ],
+        };
+      }
+      if (method === "extensions.list") {
+        return [
+          {
+            name: "@workspace-extensions/git-bridge",
+            status: "pending-approval",
+          },
+        ];
+      }
+      return {};
+    });
+
+    const result = await systemTestDoctor();
+
+    expect(result.ok).toBe(false);
+    expect(result.checks.find((check) => check.name === "startup-units")).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining("Git Bridge"),
     });
   });
 
