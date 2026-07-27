@@ -61,6 +61,13 @@ Command-line workflows use `vibestudio vcs git ...`. Both reach the configured
 `gitInterop` provider. Userland code must not call the extension through
 `extensions.invoke` or hard-code its package name.
 
+In an agent conversation, keep semantic publication on the agent's
+context-aware `commit` and `vcs` tools: commit the managed edit, then call the
+`vcs` tool with `operation: "push"`. Do not import the lower-level runtime
+`vcs` client just to publish the agent's current context; that client requires
+an explicit context ID. The `git` runtime namespace below starts only after the
+desired snapshot is already protected main.
+
 ```ts
 import { git } from "@workspace/runtime";
 
@@ -117,14 +124,29 @@ const imported = await git.importProject({
 });
 ```
 
-The result carries `candidate.contextId`, `candidate.eventId`, and whether the
-snapshot changed. The import records the remote and upstream with
+The result carries `candidate.contextId`, `candidate.eventId`, whether the
+snapshot changed, and `candidate.semanticEvidence`: the exact application,
+import work unit, and external snapshot read back from the canonical GAD graph.
+The import records the remote and upstream with
 `autoPush: false`, but that setting controls only later outgoing Git pushes; it
 never publishes an import candidate. Compare the candidate event from the
 working context where it should land, integrate selected changes in small local
 steps, and test. Commit derives the candidate source from those recorded local
 decisions and rejects mixed or caller-mismatched source parents. Call
 `vcs.push` explicitly when publication is intended.
+
+Before reporting that an import succeeded, verify that the returned
+`semanticEvidence` is complete and identity-joined to the candidate event. It
+is produced by reading the event, application, and import work unit back from
+the canonical GAD graph, rather than by trusting clone transport metadata. The
+focused `provenance` tool can independently inspect the returned event,
+application, and work-unit IDs. Confirm the external snapshot has the
+credential-free source URI, exact revision, snapshot digest, and target
+repository IDs. See
+[external snapshot import](../../skills/vibestudio-vcs/references/external-snapshot-import.md)
+for the canonical verification contract. Then use `upstreamStatus` on the same
+repository path to distinguish an unpublished `integration-required` candidate
+from protected main and outgoing Git publication.
 
 ## Startup dependency completion
 
@@ -168,6 +190,11 @@ await git.pushUpstream("projects/example");
 const received = await git.inspectDisposableRemote(disposable.url);
 await git.removeDisposableRemote(disposable.url);
 ```
+
+`publishToDisposableRemote` always creates and deletes its own separate remote.
+It cannot initialize a URL returned by `createDisposableRemote`; use
+`pushUpstream` after declaring that exact URL when later calls must observe the
+same Git history.
 
 ## Import rules
 

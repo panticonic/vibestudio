@@ -10,6 +10,17 @@ import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { createGitInteropService } from "./gitInteropService.js";
 
 const BASE_WORKSPACE_CONFIG = { id: "test", systemEpoch: WORKSPACE_SYSTEM_EPOCH } as const;
+const SEMANTIC_EVIDENCE = {
+  applicationId: "application:import",
+  workUnitId: "work-unit:import",
+  externalSnapshot: {
+    sourceKind: "git" as const,
+    sourceUri: "https://github.com/example/project.git",
+    snapshotRevision: "a".repeat(40),
+    snapshotDigest: `snapshot:${"b".repeat(64)}`,
+    targetRepositoryIds: ["repository:import"],
+  },
+};
 
 type GitProviderInvoker = NonNullable<
   Parameters<typeof createGitInteropService>[0]["invokeGitProvider"]
@@ -40,6 +51,7 @@ function cloneProvider(
       contextId: `git-bridge:${input.repoPath}`,
       eventId: `event:${input.repoPath}`,
       changed: true,
+      semanticEvidence: SEMANTIC_EVIDENCE,
     };
   }) as GitProviderInvoker;
 }
@@ -219,6 +231,7 @@ describe("gitInteropService", () => {
           contextId: `git-bridge:${repoPath}`,
           eventId: `event:${repoPath}`,
           changed: true,
+          semanticEvidence: SEMANTIC_EVIDENCE,
         };
       }
       throw new Error(`Unexpected provider method: ${method}`);

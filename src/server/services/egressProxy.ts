@@ -624,7 +624,7 @@ export class EgressProxy {
     method: string;
     headers?: Record<string, string>;
     body?: Uint8Array;
-    credentialId?: string;
+    credentialId?: string | null;
     gitIntent?: GitIntentMetadata;
   }): Promise<{
     url: string;
@@ -899,7 +899,7 @@ export class EgressProxy {
     method: string;
     targetUrl: URL;
     inputHeaders: IncomingHttpHeaders | Headers | Record<string, string | string[] | undefined>;
-    credentialId?: string;
+    credentialId?: string | null;
     credentialUse?: CredentialBindingUse;
     gitIntent?: GitIntentMetadata;
     initialBytesOut?: number;
@@ -1063,30 +1063,33 @@ export class EgressProxy {
     targetUrl: URL;
     method: string;
     inputHeaders: IncomingHttpHeaders | Headers | Record<string, string | string[] | undefined>;
-    credentialId?: string;
+    credentialId?: string | null;
     credentialUse: CredentialBindingUse;
     gitIntent?: GitIntentMetadata;
   }): Promise<Authorization> {
     const caller = params.caller;
-    const attribution = caller ? this.resolveAttribution(caller, params.credentialId) : null;
+    const attribution = caller
+      ? this.resolveAttribution(caller, params.credentialId ?? undefined)
+      : null;
     const testPolicyApproved = caller
       ? testPolicyAllowsGatedInvocation(caller, undefined, {
           capability: "credential.use",
           resourceKey: "credential.use",
         })
       : false;
-    if (!params.credentialId) {
-      const credential = attribution
-        ? await this.resolveCredentialForRequest(
-            params.targetUrl,
-            attribution,
-            params.credentialUse,
-            params.method,
-            params.gitIntent,
-            caller?.subject?.userId,
-            testPolicyApproved
-          )
-        : null;
+    if (params.credentialId === undefined || params.credentialId === null) {
+      const credential =
+        params.credentialId === undefined && attribution
+          ? await this.resolveCredentialForRequest(
+              params.targetUrl,
+              attribution,
+              params.credentialUse,
+              params.method,
+              params.gitIntent,
+              caller?.subject?.userId,
+              testPolicyApproved
+            )
+          : null;
       if (caller && attribution && !credential) {
         const internallyAuthorized = await this.deps.authorizeInternalRequest?.({
           caller,

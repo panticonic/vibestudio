@@ -2,6 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 import { gitInteropMethods } from "@vibestudio/service-schemas/gitInterop";
 import { createGitClient } from "./git.js";
 
+const SEMANTIC_EVIDENCE = {
+  applicationId: "application:import",
+  workUnitId: "work-unit:import",
+  externalSnapshot: {
+    sourceKind: "git" as const,
+    sourceUri: "https://github.com/octo/demo.git",
+    snapshotRevision: "a".repeat(40),
+    snapshotDigest: `snapshot:${"b".repeat(64)}`,
+    targetRepositoryIds: ["repository:demo"],
+  },
+};
+
 describe("runtime Git client", () => {
   it("is exactly the canonical gitInterop service surface", () => {
     const rpc = { call: vi.fn() };
@@ -57,6 +69,7 @@ describe("runtime Git client", () => {
           contextId: "context:git-import",
           eventId: "event:git-import",
           changed: true,
+          semanticEvidence: SEMANTIC_EVIDENCE,
         },
       },
       completeWorkspaceDependencies: { imported: [], skipped: [], failed: [] },

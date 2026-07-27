@@ -5,6 +5,18 @@ import {
   gitInteropProviderMethods,
 } from "./gitInterop.js";
 
+const SEMANTIC_EVIDENCE = {
+  applicationId: "application:import",
+  workUnitId: "work-unit:import",
+  externalSnapshot: {
+    sourceKind: "git" as const,
+    sourceUri: "https://example.test/demo.git",
+    snapshotRevision: "a".repeat(40),
+    snapshotDigest: `snapshot:${"b".repeat(64)}`,
+    targetRepositoryIds: ["repository:demo"],
+  },
+};
+
 describe("gitInterop canonical contract", () => {
   it("exposes one exact public method table", () => {
     expect(Object.keys(gitInteropMethods)).toEqual([
@@ -65,6 +77,9 @@ describe("gitInterop canonical contract", () => {
     );
     expect(gitInteropMethods.upstreamStatus.args.safeParse([null, {}]).success).toBe(false);
     expect(gitInteropMethods.upstreamStatus.args.safeParse([undefined]).success).toBe(false);
+    expect(gitInteropMethods.upstreamStatus.description).toContain(
+      "git.upstreamStatus([imported.path], { fetch: false })"
+    );
   });
 
   it("models omitted options as shorter tuples that survive JSON transport", () => {
@@ -143,15 +158,27 @@ describe("gitInterop canonical contract", () => {
         contextId: "git-bridge-demo",
         eventId: "event:imported",
         changed: true,
+        semanticEvidence: SEMANTIC_EVIDENCE,
       },
     };
     expect(gitInteropMethods.importProject.returns.safeParse(result).success).toBe(true);
+    expect(
+      gitInteropMethods.importProject.returns.safeParse({
+        ...result,
+        candidate: {
+          contextId: result.candidate.contextId,
+          eventId: result.candidate.eventId,
+          changed: result.candidate.changed,
+        },
+      }).success
+    ).toBe(true);
     expect(
       gitInteropMethods.importProject.returns.safeParse({
         path: result.path,
         remote: result.remote,
       }).success
     ).toBe(false);
+    expect(gitInteropMethods.importProject.description).toContain("identity-joined evidence");
   });
 
   it("exposes only canonical object declarations in config mutation results", () => {
@@ -271,6 +298,14 @@ describe("gitInterop canonical contract", () => {
         { repoPath: "projects/demo", remoteUrl: "https://example.test/demo.git" },
       ]).success
     ).toBe(false);
+    expect(
+      gitInteropProviderMethods.cloneRepo.returns.safeParse({
+        contextId: "git-bridge-demo",
+        eventId: "event:123",
+        changed: true,
+        semanticEvidence: SEMANTIC_EVIDENCE,
+      }).success
+    ).toBe(true);
     expect(
       gitInteropProviderMethods.cloneRepo.returns.safeParse({
         contextId: "git-bridge-demo",

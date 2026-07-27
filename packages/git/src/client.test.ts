@@ -288,6 +288,7 @@ describe("GitClient", () => {
     });
     const pull = vi.spyOn(git, "pull").mockResolvedValueOnce(undefined);
     const fastForward = vi.spyOn(git, "fastForward").mockResolvedValueOnce(undefined);
+    const addRemote = vi.spyOn(git, "addRemote").mockResolvedValue(undefined);
     const url = "https://example.com/immutable.git";
 
     await client.fetch({ dir: "/repo", url, remote: "vibestudio-token", ref: "main" });
@@ -323,6 +324,15 @@ describe("GitClient", () => {
         })
       );
     }
+    expect(addRemote).toHaveBeenCalledTimes(3);
+    expect(addRemote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dir: "/repo",
+        remote: "vibestudio-token",
+        url,
+        force: true,
+      })
+    );
   });
 
   it("refuses to create an unattributed commit", async () => {

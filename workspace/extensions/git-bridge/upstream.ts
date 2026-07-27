@@ -195,11 +195,27 @@ export class UpstreamEngine {
       return { exported, pushed: false };
     }
     if (!opts.force && exported.headCommit === stored?.lastPushedSha) {
-      await this.updateRepoState(repo, fingerprint, {
-        status: "in-sync",
-        lastError: undefined,
+      // lastPushedSha proves what this bridge sent, not what the remote still
+      // contains. Fetch before taking the no-op path so an upstream-only
+      // advance, branch deletion, or rewritten ref can never be reported as
+      // "in-sync" from stale local bookkeeping.
+      await git.fetch({
+        dir,
+        url: remote.url,
+        remote: transportRemote,
+        ref: upstream.branch,
       });
-      return { exported, pushed: false };
+      const remoteHead = await git.resolveRef(
+        dir,
+        `refs/remotes/${transportRemote}/${upstream.branch}`
+      );
+      if (remoteHead === exported.headCommit) {
+        await this.updateRepoState(repo, fingerprint, {
+          status: "in-sync",
+          lastError: undefined,
+        });
+        return { exported, pushed: false };
+      }
     }
     let overwrites: GitOverwritePreview | undefined;
     if (opts.force) {
@@ -860,7 +876,10 @@ export class UpstreamEngine {
         }
         // Tracking always exports (local-only, keeps the checkout current).
         // Divergence/auth failures pause only the wire push, never the export.
-        const paused = scope.stored.status === "diverged" || scope.stored.status === "auth-failed";
+        const paused =
+          scope.stored.status === "behind" ||
+          scope.stored.status === "diverged" ||
+          scope.stored.status === "auth-failed";
         await this.syncLocked(repo, scope, {
           push: scope.upstream.autoPush && !paused,
         });
@@ -897,8 +916,11 @@ export class UpstreamEngine {
     if (err instanceof GitPushRejectedError) {
       // Confirm divergence deterministically before pausing pushes on it.
       const counts = await this.aheadBehind(repo, scope, { fetch: true }).catch(() => null);
-      if (counts && (counts.diverged || counts.behindBy > 0)) {
+      if (counts?.diverged) {
         return { status: "diverged", lastError: message, lastFailureAt };
+      }
+      if (counts && counts.behindBy > 0) {
+        return { status: "behind", lastError: message, lastFailureAt };
       }
       return { status: "error", lastError: message, lastFailureAt };
     }
@@ -940,7 +962,11 @@ export class UpstreamEngine {
   ): Promise<void> {
     const fingerprint = scope.fingerprint;
     const patch = await this.classifyFailure(repo, scope, err);
-    if (patch.status === "auth-failed" || patch.status === "diverged") {
+    if (
+      patch.status === "auth-failed" ||
+      patch.status === "behind" ||
+      patch.status === "diverged"
+    ) {
       if (await this.updateRepoState(repo, fingerprint, patch)) {
         await this.showFailureNotification(repo, upstream, patch.lastError ?? errorMessage(err));
       }
@@ -1178,7 +1204,7 @@ export class UpstreamEngine {
     gitIntent?: { force: boolean; overwrites?: GitOverwritePreview }
   ) {
     return this.ctx.credentials.gitHttp({
-      ...(credentialId ? { credentialId } : {}),
+      ...(credentialId !== undefined ? { credentialId } : {}),
       ...(gitIntent ? { gitIntent } : {}),
     });
   }
@@ -1271,7 +1297,10 @@ export class UpstreamEngine {
     await this.stateWrite;
     const state = await this.readState();
     const degraded = Object.entries(state.repos)
-      .filter(([, repo]) => repo.status === "auth-failed" || repo.status === "diverged")
+      .filter(
+        ([, repo]) =>
+          repo.status === "auth-failed" || repo.status === "behind" || repo.status === "diverged"
+      )
       .map(([repo, status]) => `${repo}: ${status.status}`);
     if (degraded.length === 0) {
       this.ctx.health.healthy({ summary: "git upstream healthy" });

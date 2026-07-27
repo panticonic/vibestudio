@@ -813,8 +813,8 @@ export const ProxyGitHttpParamsSchema = z
       .string()
       .optional()
       .describe("Request body as base64 (e.g. git-upload-pack payload)."),
-    credentialId: IdentifierSchema.optional().describe(
-      "Explicit credential to inject; resolved from the URL when omitted."
+    credentialId: IdentifierSchema.nullable().optional().describe(
+      "Credential to inject; resolved from the URL when omitted, or explicitly anonymous when null."
     ),
     gitIntent: z
       .object({

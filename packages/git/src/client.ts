@@ -894,6 +894,27 @@ export class GitClient {
   }
 
   /**
+   * isomorphic-git requires a configured fetch refspec even when an operation
+   * supplies its URL directly. Operation-scoped remote names isolate
+   * credential/target variants, so materialize that exact name before any
+   * fetch-capable transport instead of leaking through an unrelated `origin`.
+   */
+  private async ensureOperationRemote(
+    dir: string,
+    url: string | undefined,
+    remote: string
+  ): Promise<void> {
+    if (!url) return;
+    await git.addRemote({
+      fs: this.fs,
+      dir,
+      remote,
+      url: this.resolveUrl(url),
+      force: true,
+    });
+  }
+
+  /**
    * Clone a repository
    *
    * Handles both branch refs and commit hashes:
@@ -997,6 +1018,7 @@ export class GitClient {
       : undefined;
 
     try {
+      await this.ensureOperationRemote(checked.dir, checked.url, checked.remote ?? "origin");
       await git.pull({
         fs: this.fs,
         http: this.http,
@@ -1034,6 +1056,7 @@ export class GitClient {
       ref?: string;
     }>(options, "fetch", "fetch({ dir: string, url?: string, remote?: string, ref?: string })");
     try {
+      await this.ensureOperationRemote(checked.dir, checked.url, checked.remote ?? "origin");
       const result = await git.fetch({
         fs: this.fs,
         http: this.http,
@@ -1350,6 +1373,7 @@ export class GitClient {
       "fastForward({ dir: string, url?: string, remote?: string, ref: string, remoteRef?: string })"
     );
     try {
+      await this.ensureOperationRemote(checked.dir, checked.url, checked.remote ?? "origin");
       await git.fastForward({
         fs: this.fs,
         http: this.http,

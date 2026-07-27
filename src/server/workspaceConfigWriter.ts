@@ -1,4 +1,4 @@
-/** Publish workspace-config edits through one fresh semantic context. */
+/** Publish workspace-config edits through the caller's clean task context when available. */
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
@@ -143,11 +143,12 @@ export function createWorkspaceConfigMainWriter(deps: {
   const readConfig = async (
     contextId: string,
     causalParent: RpcCausalParent | null,
-    contextIntegrity: { class: "internal" | "external"; externalKeys: readonly string[] }
+    contextIntegrity: { class: "internal" | "external"; externalKeys: readonly string[] },
+    knownStatus?: VcsStatusResult
   ): Promise<WorkspaceConfigAtState> => {
     const call = <T>(method: string, input: unknown): Promise<T> =>
       deps.vcs.semanticCausalCall<T>(method, input, causalParent, contextIntegrity);
-    const status = await call<VcsStatusResult>("vcsStatus", { contextId });
+    const status = knownStatus ?? (await call<VcsStatusResult>("vcsStatus", { contextId }));
     const state = status.workingHead;
     const repositoryRefs = new Map<
       string,
@@ -260,6 +261,18 @@ export function createWorkspaceConfigMainWriter(deps: {
     return outcome.value;
   };
 
+  const withMutationContext = async <T>(
+    ctx: ServiceContext,
+    operation: (contextId: string, borrowed: boolean) => Promise<T>
+  ): Promise<T> => {
+    const callerContextId =
+      ctx.evalInvocation?.contextId ??
+      ctx.caller.executionSession?.contextId ??
+      ctx.authorizingCaller?.executionSession?.contextId;
+    if (callerContextId) return operation(callerContextId, true);
+    return withFreshContext((contextId) => operation(contextId, false));
+  };
+
   const render = (
     currentContent: string,
     current: WorkspaceConfig,
@@ -274,76 +287,107 @@ export function createWorkspaceConfigMainWriter(deps: {
     };
   };
 
+  const applyMutationInContext = async (
+    input: Parameters<WorkspaceConfigMainWriter["applyMutation"]>[0],
+    contextId: string,
+    borrowed: boolean
+  ): Promise<WorkspaceConfigMutationResult> => {
+    const causalParent = input.ctx.causalParent ?? null;
+    const contextIntegrity = integrityFor(input.ctx);
+    // Borrowing a clean caller context keeps it aligned with the config
+    // publication. A dirty or behind context may contain unrelated work, so
+    // preserve the established isolated-context behavior instead of either
+    // publishing that work or refusing a previously valid config mutation.
+    const borrowedStatus = borrowed
+      ? await deps.vcs.semanticCausalCall<VcsStatusResult>(
+          "vcsStatus",
+          { contextId },
+          causalParent,
+          contextIntegrity
+        )
+      : undefined;
+    if (borrowedStatus && (!borrowedStatus.clean || borrowedStatus.mainRelation !== "at")) {
+      return withFreshContext((freshContextId) =>
+        applyMutationInContext(input, freshContextId, false)
+      );
+    }
+    const current = await readConfig(contextId, causalParent, contextIntegrity, borrowedStatus);
+    const rendered = render(current.text, current.config, input.mutate);
+    if (rendered.nextContent === current.text) {
+      return { changed: false, nextConfig: rendered.nextConfig };
+    }
+
+    const commandStem = `workspace-config:${input.ctx.requestId ?? randomUUID()}`;
+    const edit = await deps.vcs.semanticCausalCall<VcsWorkingMutationResult>(
+      "vcsEdit",
+      {
+        contextId,
+        commandId: `${commandStem}:edit`,
+        expectedWorkingHead: current.status.workingHead,
+        intentSummary: input.summary,
+        changes: [
+          {
+            kind: "text-edit",
+            repositoryId: current.repositoryId,
+            fileId: current.fileId,
+            edits: [{ start: 0, end: current.text.length, text: rendered.nextContent }],
+          },
+        ],
+      },
+      causalParent,
+      contextIntegrity
+    );
+    const committed = await deps.vcs.semanticCausalCall<VcsCommitResult>(
+      "vcsCommit",
+      {
+        contextId,
+        commandId: `${commandStem}:commit`,
+        expectedWorkingHead: edit.workingHead,
+        message: input.summary,
+      },
+      causalParent,
+      contextIntegrity
+    );
+    if (committed.event.kind !== "event") {
+      throw new Error("Workspace config commit did not produce an event");
+    }
+    const pushInput = {
+      contextId,
+      commandId: `${commandStem}:push`,
+      expectedCommittedEventId: committed.event.eventId,
+      expectedMainEventId: current.status.mainEventId,
+    };
+    // Provider methods may perform a config mutation as a nested RPC while
+    // servicing an authenticated shell/agent request. The extension is the
+    // immediate transport caller, but it did not originate the protected
+    // main advance. Preserve the verified authorizing principal just as the
+    // VCS service does for other provider relays.
+    const publishingCaller = input.ctx.authorizingCaller ?? input.ctx.caller;
+    if (input.ctx.signal) {
+      await deps.vcs.semanticPublishCall<VcsPushResult>(
+        pushInput,
+        causalParent,
+        publishingCaller,
+        contextIntegrity,
+        input.ctx.signal
+      );
+    } else {
+      await deps.vcs.semanticPublishCall<VcsPushResult>(
+        pushInput,
+        causalParent,
+        publishingCaller,
+        contextIntegrity
+      );
+    }
+    return { changed: true, nextConfig: rendered.nextConfig };
+  };
+
   const applyMutation = async (
     input: Parameters<WorkspaceConfigMainWriter["applyMutation"]>[0]
   ): Promise<WorkspaceConfigMutationResult> =>
-    withFreshContext(async (contextId) => {
-      const causalParent = input.ctx.causalParent ?? null;
-      const contextIntegrity = integrityFor(input.ctx);
-      const current = await readConfig(contextId, causalParent, contextIntegrity);
-      const rendered = render(current.text, current.config, input.mutate);
-      if (rendered.nextContent === current.text) {
-        return { changed: false, nextConfig: rendered.nextConfig };
-      }
-
-      const commandStem = `workspace-config:${input.ctx.requestId ?? randomUUID()}`;
-      const edit = await deps.vcs.semanticCausalCall<VcsWorkingMutationResult>(
-        "vcsEdit",
-        {
-          contextId,
-          commandId: `${commandStem}:edit`,
-          expectedWorkingHead: current.status.workingHead,
-          intentSummary: input.summary,
-          changes: [
-            {
-              kind: "text-edit",
-              repositoryId: current.repositoryId,
-              fileId: current.fileId,
-              edits: [{ start: 0, end: current.text.length, text: rendered.nextContent }],
-            },
-          ],
-        },
-        causalParent,
-        contextIntegrity
-      );
-      const committed = await deps.vcs.semanticCausalCall<VcsCommitResult>(
-        "vcsCommit",
-        {
-          contextId,
-          commandId: `${commandStem}:commit`,
-          expectedWorkingHead: edit.workingHead,
-          message: input.summary,
-        },
-        causalParent,
-        contextIntegrity
-      );
-      if (committed.event.kind !== "event") {
-        throw new Error("Workspace config commit did not produce an event");
-      }
-      const pushInput = {
-        contextId,
-        commandId: `${commandStem}:push`,
-        expectedCommittedEventId: committed.event.eventId,
-        expectedMainEventId: current.status.mainEventId,
-      };
-      if (input.ctx.signal) {
-        await deps.vcs.semanticPublishCall<VcsPushResult>(
-          pushInput,
-          causalParent,
-          input.ctx.caller,
-          contextIntegrity,
-          input.ctx.signal
-        );
-      } else {
-        await deps.vcs.semanticPublishCall<VcsPushResult>(
-          pushInput,
-          causalParent,
-          input.ctx.caller,
-          contextIntegrity
-        );
-      }
-      return { changed: true, nextConfig: rendered.nextConfig };
-    });
+    withMutationContext(input.ctx, (contextId, borrowed) =>
+      applyMutationInContext(input, contextId, borrowed)
+    );
 
   return {
     wouldMutate: (mutate) =>

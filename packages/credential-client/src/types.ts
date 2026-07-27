@@ -521,7 +521,11 @@ export interface ProxyGitHttpRequest {
   method?: string;
   headers?: Record<string, string>;
   bodyBase64?: string;
-  credentialId?: string;
+  /**
+   * Omit to resolve a matching credential automatically, pass an id to use
+   * that credential, or pass null to make an explicitly anonymous request.
+   */
+  credentialId?: string | null;
   gitIntent?: {
     force: boolean;
     overwrites?: {

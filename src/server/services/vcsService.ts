@@ -107,7 +107,9 @@ function callerContextAuthorities(ctx: ServiceContext, deps: VcsServiceDeps): st
 }
 
 function privileged(ctx: ServiceContext, deps: VcsServiceDeps): boolean {
-  return isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability });
+  return isAuthorizedChrome(ctx.authorizingCaller ?? ctx.caller, {
+    hasAppCapability: deps.hasAppCapability,
+  });
 }
 
 /**

@@ -21,7 +21,7 @@ function commitBlob(
   };
 }
 
-function eventInspection(eventId: string) {
+function eventInspection(eventId: string, applicationId = "application:1") {
   return {
     root: { kind: "event" as const, eventId },
     node: {
@@ -33,7 +33,7 @@ function eventInspection(eventId: string) {
         kind: "commit" as const,
         workspaceFactRootId: `facts:${eventId}`,
         parentEventIds: ["event:parent"],
-        applicationIds: ["application:1"],
+        applicationIds: [applicationId],
         decisionIds: [],
         message: "Semantic snapshot",
         semanticProtocol: "semantic-v1",
@@ -67,14 +67,14 @@ function repositoryInspection(state: { kind: "event"; eventId: string }, repoPat
   };
 }
 
-function applicationInspection(applicationId = "application:1") {
+function applicationInspection(applicationId = "application:1", workUnitId = "work:import") {
   return {
     root: { kind: "application" as const, applicationId },
     node: {
       kind: "application" as const,
       value: {
         applicationId,
-        workUnitId: "work:import",
+        workUnitId,
         basis: { kind: "event" as const, eventId: "event:parent" },
         appliedChangeCount: 1,
         appliedChanges: [],
@@ -87,13 +87,17 @@ function applicationInspection(applicationId = "application:1") {
   };
 }
 
-function importWorkUnitInspection(revision: string, sourceUri: string) {
+function importWorkUnitInspection(
+  revision: string,
+  sourceUri: string,
+  workUnitId = "work:import"
+) {
   return {
-    root: { kind: "work-unit" as const, workUnitId: "work:import" },
+    root: { kind: "work-unit" as const, workUnitId },
     node: {
       kind: "work-unit" as const,
       value: {
-        workUnitId: "work:import",
+        workUnitId,
         commandId: "command:import",
         kind: "import" as const,
         authoredChangeCount: 1,
@@ -214,7 +218,20 @@ describe("GitBridge semantic snapshot boundary", () => {
     writeFileSync(path.join(dir, "binary.dat"), Buffer.from([0xff, 0xfe]));
     const { host } = baseHost(root);
     host.vcs.status = vi.fn(async ({ contextId }) => status(contextId, "event:main"));
-    host.vcs.inspect = vi.fn(async () => {
+    host.vcs.inspect = vi.fn(async ({ node }) => {
+      if (node.kind === "event" && node.eventId === "event:imported") {
+        return eventInspection(node.eventId, "application:imported");
+      }
+      if (node.kind === "application") {
+        return applicationInspection(node.applicationId, "work:imported");
+      }
+      if (node.kind === "work-unit") {
+        return importWorkUnitInspection(
+          "a".repeat(40),
+          "https://example.test/owner/demo.git",
+          node.workUnitId
+        );
+      }
       const inspected = eventInspection("event:main");
       inspected.node.value.applicationIds = [];
       return inspected;
@@ -244,6 +261,14 @@ describe("GitBridge semantic snapshot boundary", () => {
       contextId: expect.stringMatching(/^git-bridge-/),
       eventId: "event:imported",
       changed: true,
+      semanticEvidence: {
+        applicationId: "application:imported",
+        workUnitId: "work:imported",
+        externalSnapshot: expect.objectContaining({
+          sourceUri: "https://example.test/owner/demo.git",
+          snapshotRevision: "a".repeat(40),
+        }),
+      },
     });
     expect(host.ensureContext).toHaveBeenCalledWith(expect.stringMatching(/^git-bridge-/));
     expect(host.vcs.importSnapshot).toHaveBeenCalledWith(
@@ -301,7 +326,22 @@ describe("GitBridge semantic snapshot boundary", () => {
       workUnitId: "work:real-import",
       importedRepositoryIds: ["repository:projects/real-tree"],
     }));
-    host.vcs.inspect = vi.fn(async () => eventInspection("event:real-import"));
+    host.vcs.inspect = vi.fn(async ({ node }) => {
+      if (node.kind === "event") {
+        return eventInspection(node.eventId, "application:real-import");
+      }
+      if (node.kind === "application") {
+        return applicationInspection(node.applicationId, "work:real-import");
+      }
+      if (node.kind === "work-unit") {
+        return importWorkUnitInspection(
+          commitOid,
+          "https://example.test/real-tree.git",
+          node.workUnitId
+        );
+      }
+      return repositoryInspection({ kind: "event", eventId: "event:main" }, repoPath);
+    });
     const bridge = new GitBridge(host);
     await bridge.git.init(dir, "main");
     writeFileSync(path.join(dir, "one.txt"), "shared bytes\n");
@@ -322,6 +362,14 @@ describe("GitBridge semantic snapshot boundary", () => {
       contextId: expect.stringMatching(/^git-bridge-/),
       eventId: "event:real-import",
       changed: true,
+      semanticEvidence: {
+        applicationId: "application:real-import",
+        workUnitId: "work:real-import",
+        externalSnapshot: expect.objectContaining({
+          sourceUri: "https://example.test/real-tree.git",
+          snapshotRevision: commitOid,
+        }),
+      },
     });
 
     expect(host.vcs.importSnapshot).toHaveBeenCalledWith(
@@ -394,6 +442,14 @@ describe("GitBridge semantic snapshot boundary", () => {
       contextId: expect.stringMatching(/^git-bridge-/),
       eventId: main.eventId,
       changed: false,
+      semanticEvidence: {
+        applicationId: "application:1",
+        workUnitId: "work:import",
+        externalSnapshot: expect.objectContaining({
+          sourceUri: "https://example.test/demo.git",
+          snapshotRevision: "a".repeat(40),
+        }),
+      },
     });
     expect(getCurrentCommit).toHaveBeenCalledTimes(2);
     expect(statusMatrix).toHaveBeenCalledOnce();
@@ -423,11 +479,27 @@ describe("GitBridge semantic snapshot boundary", () => {
     }));
     host.vcs.inspect = vi.fn(async ({ node }) => {
       if (node.kind === "repository") return repositoryInspection(main, repoPath);
-      if (node.kind === "application") return applicationInspection(node.applicationId);
-      if (node.kind === "work-unit") {
-        return importWorkUnitInspection("a".repeat(40), "https://example.test/owner/demo.git");
+      if (node.kind === "application") {
+        return node.applicationId === "application:new"
+          ? applicationInspection(node.applicationId, "work:imported")
+          : applicationInspection(node.applicationId, "work:import");
       }
-      return eventInspection(main.eventId);
+      if (node.kind === "work-unit") {
+        return node.workUnitId === "work:imported"
+          ? importWorkUnitInspection(
+              "b".repeat(40),
+              "https://example.test/owner/demo.git",
+              node.workUnitId
+            )
+          : importWorkUnitInspection(
+              "a".repeat(40),
+              "https://example.test/owner/demo.git",
+              node.workUnitId
+            );
+      }
+      return node.kind === "event" && node.eventId === "event:imported"
+        ? eventInspection(node.eventId, "application:new")
+        : eventInspection(main.eventId, "application:old");
     });
     host.vcs.listFiles = vi.fn(async () => ({
       state: main,
@@ -463,6 +535,14 @@ describe("GitBridge semantic snapshot boundary", () => {
       contextId: expect.stringMatching(/^git-bridge-/),
       eventId: "event:imported",
       changed: true,
+      semanticEvidence: {
+        applicationId: "application:new",
+        workUnitId: "work:imported",
+        externalSnapshot: expect.objectContaining({
+          sourceUri: "https://example.test/owner/demo.git",
+          snapshotRevision: "b".repeat(40),
+        }),
+      },
     });
     expect(host.vcs.importSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({

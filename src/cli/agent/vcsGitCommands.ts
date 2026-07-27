@@ -369,7 +369,13 @@ async function gitPull(inv: ParsedInvocation): Promise<number> {
           }
         }
         if (dryRun) console.log("dry-run: no import performed");
-        else if (result.imported) console.log(`imported upstream changes into gad main`);
+        else if (result.imported) {
+          console.log(
+            `imported upstream changes as semantic candidate ${result.imported.eventId} ` +
+              `in context ${result.imported.contextId}`
+          );
+          console.log("compare and incrementally integrate that candidate before publishing main");
+        }
       },
     });
     return 0;
@@ -527,7 +533,7 @@ const vcsGitCommands: VcsGitCommand[] = [
   },
   {
     name: "pull",
-    summary: "Fetch, merge or fast-forward, and import upstream changes into gad main",
+    summary: "Fetch upstream changes and import an exact semantic candidate",
     usage: "vibestudio vcs git pull --repo REPOPATH [--dry-run]",
     flags: [REPO_FLAG, GIT_DRY_RUN_FLAG, JSON_FLAG],
     run: gitPull,

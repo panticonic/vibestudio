@@ -20,6 +20,7 @@ import { GitClient, type GitCommitTreeEntry } from "@vibestudio/git";
 import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
 import {
   vcsMethods,
+  type VcsExternalSnapshot,
   type VcsListFilesResult,
   type VcsStateNodeRef,
 } from "@vibestudio/service-schemas/vcs";
@@ -62,6 +63,11 @@ export interface ImportResult {
   contextId: string;
   eventId: string;
   changed: boolean;
+  semanticEvidence: {
+    applicationId: string;
+    workUnitId: string;
+    externalSnapshot: VcsExternalSnapshot;
+  };
 }
 
 export interface PendingImportCandidate {
@@ -340,10 +346,11 @@ export class GitBridge {
       );
     }
     const sourceUri = provenanceGitUri(observedRemote);
-    const priorRevision =
+    const priorEvidence =
       status.committed.kind === "event"
-        ? await this.importRevisionAtEvent(status.committed.eventId, sourceUri)
+        ? await this.importEvidenceAtEvent(status.committed.eventId, sourceUri)
         : null;
+    const priorRevision = priorEvidence?.externalSnapshot.snapshotRevision ?? null;
     if (
       priorRevision === gitCommit &&
       currentRepo &&
@@ -366,6 +373,7 @@ export class GitBridge {
                 throw new Error("clean import context has no committed event");
               })(),
         changed: false,
+        semanticEvidence: priorEvidence!,
       };
     }
 
@@ -390,10 +398,29 @@ export class GitBridge {
       ],
       message: summary,
     });
-    return { contextId, eventId: imported.eventId, changed: true };
+    const semanticEvidence = await this.importEvidenceAtEvent(
+      imported.eventId,
+      sourceUri,
+      imported.workUnitId
+    );
+    if (!semanticEvidence) {
+      throw new Error(
+        `Import ${repo} committed ${imported.eventId}, but its canonical import evidence is missing`
+      );
+    }
+    return {
+      contextId,
+      eventId: imported.eventId,
+      changed: true,
+      semanticEvidence,
+    };
   }
 
-  private async importRevisionAtEvent(eventId: string, sourceUri: string): Promise<string | null> {
+  private async importEvidenceAtEvent(
+    eventId: string,
+    sourceUri: string,
+    expectedWorkUnitId?: string
+  ): Promise<ImportResult["semanticEvidence"] | null> {
     const event = await this.host.vcs.inspect({
       node: { kind: "event", eventId },
       edgeLimit: 1,
@@ -412,10 +439,15 @@ export class GitBridge {
       if (
         workUnit.node.kind === "work-unit" &&
         workUnit.node.value.kind === "import" &&
+        (!expectedWorkUnitId || workUnit.node.value.workUnitId === expectedWorkUnitId) &&
         workUnit.node.value.externalSnapshot?.sourceKind === "git" &&
         workUnit.node.value.externalSnapshot.sourceUri === sourceUri
       ) {
-        return workUnit.node.value.externalSnapshot.snapshotRevision;
+        return {
+          applicationId: application.node.value.applicationId,
+          workUnitId: workUnit.node.value.workUnitId,
+          externalSnapshot: workUnit.node.value.externalSnapshot,
+        };
       }
     }
     return null;

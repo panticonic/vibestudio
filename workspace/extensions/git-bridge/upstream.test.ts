@@ -324,6 +324,25 @@ describe("UpstreamEngine", () => {
     );
   });
 
+  it("preserves URL-based credential resolution unless an upstream credential is declared", async () => {
+    const anonymousRepo = "projects/anonymous";
+    const credentialRepo = "projects/authenticated";
+    const { bridge } = createBridge();
+    const anonymous = makeEngine(buildConfig([{ repo: anonymousRepo, autoPush: true }]), bridge);
+    const authenticated = makeEngine(
+      buildConfig([{ repo: credentialRepo, autoPush: true, credentialId: "github-credential" }]),
+      bridge
+    );
+
+    await anonymous.engine.pushUpstream(anonymousRepo);
+    await authenticated.engine.pushUpstream(credentialRepo);
+
+    expect(anonymous.credentials.gitHttp).toHaveBeenCalledWith({});
+    expect(authenticated.credentials.gitHttp).toHaveBeenCalledWith({
+      credentialId: "github-credential",
+    });
+  });
+
   it("coalesces rapid onMainAdvanced calls for the same repo into one export", async () => {
     const repo = "projects/c";
     const config = buildConfig([{ repo, autoPush: false }]);
@@ -359,7 +378,7 @@ describe("UpstreamEngine", () => {
     expect(exportLockedInner).toHaveBeenCalledTimes(2);
   });
 
-  it("skips the wire push when the exported head is already the last-pushed sha", async () => {
+  it("skips the wire push only when the remote still has the last-pushed sha", async () => {
     const repo = "projects/d";
     const config = buildConfig([{ repo, autoPush: true }]);
     const files = new Map<string, string>();
@@ -373,16 +392,43 @@ describe("UpstreamEngine", () => {
 
     // A fresh engine using the same config and storage trusts that state.
     const engine2 = makeEngine(config, bridge, { files }).engine;
+    gitFns.resolveRef.mockResolvedValue("same-sha");
 
-    // Auto job: exports, but the head equals lastPushedSha so no wire push.
+    // Auto job: exports and verifies the remote ref before taking the no-op.
     engine2.onMainAdvanced([repo]);
     await tick();
+    expect(gitFns.fetch).toHaveBeenCalledTimes(1);
     expect(gitFns.push).not.toHaveBeenCalled();
 
-    // Manual push: same skip, reports pushed:false without touching the wire.
+    // Manual push: same verified skip, reports pushed:false.
     const result = await engine2.pushUpstream(repo);
     expect(result.pushed).toBe(false);
+    expect(gitFns.fetch).toHaveBeenCalledTimes(2);
     expect(gitFns.push).not.toHaveBeenCalled();
+  });
+
+  it("does not report a stale last-pushed sha as in-sync after an upstream-only advance", async () => {
+    const repo = "projects/upstream-advanced";
+    const config = buildConfig([{ repo, autoPush: true }]);
+    const files = new Map<string, string>();
+    const { bridge } = createBridge({ exportResult: { exported: 1, headCommit: "local-head" } });
+    const { engine } = makeEngine(config, bridge, { files });
+
+    await expect(engine.pushUpstream(repo)).resolves.toMatchObject({ pushed: true });
+    gitFns.push.mockRejectedValueOnce(
+      new GitPushRejectedError("Updates were rejected: non-fast-forward")
+    );
+    gitFns.resolveRef.mockResolvedValue("upstream-head");
+    gitFns.compareRefs.mockResolvedValue({ ahead: 0, behind: 1, diverged: false });
+
+    await expect(engine.pushUpstream(repo)).rejects.toThrow("non-fast-forward");
+
+    expect(gitFns.fetch).toHaveBeenCalled();
+    expect(gitFns.push).toHaveBeenCalledTimes(2);
+    expect(readStored(files).repos[repo]).toMatchObject({
+      status: "behind",
+      lastPushedSha: "local-head",
+    });
   });
 
   it("ignores version 1 state instead of migrating its last-pushed sha", async () => {
@@ -648,7 +694,9 @@ describe("UpstreamEngine", () => {
     expect(status?.lastError).toBeUndefined();
     expect(readStored(files).repos[repo]?.configFingerprint).toBe(fingerprint);
 
+    gitFns.resolveRef.mockResolvedValue("same-head");
     await expect(engine.pushUpstream(repo)).resolves.toMatchObject({ pushed: false });
+    expect(gitFns.fetch).toHaveBeenCalled();
     expect(gitFns.push).not.toHaveBeenCalled();
   });
 
@@ -1189,7 +1237,9 @@ describe("UpstreamEngine", () => {
       expect(gitFns.clone).toHaveBeenCalledWith(
         expect.objectContaining({ dir: path.join(checkoutRoot, repo) })
       );
-      await expect(fsp.access(path.join(sourceRoot, repo))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fsp.access(path.join(sourceRoot, repo))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
       expect(importLockedInner).toHaveBeenCalledWith(repo, {
         summary: "Import projects/fresh-clone from github.com/acme/fresh-clone",
         sourceUri: "https://github.com/acme/fresh-clone.git",

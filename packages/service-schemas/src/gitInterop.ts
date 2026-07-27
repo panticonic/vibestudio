@@ -14,6 +14,7 @@ import {
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
+import { vcsExternalSnapshotSchema } from "./vcs.js";
 
 export const GIT_PUBLISH_CAPABILITY = "git.publish" as const;
 export const GIT_PUBLISH_REPO_AUTHORITY_RESOLVER = "gitInterop.publishRepo.destination" as const;
@@ -122,6 +123,19 @@ export type GitSemanticCandidate = z.infer<typeof gitSemanticCandidateSchema>;
 export const gitImportResultSchema = gitSemanticCandidateSchema
   .extend({
     changed: z.boolean(),
+    semanticEvidence: z
+      .object({
+        applicationId: z.string().describe("Exact application committed by the import event."),
+        workUnitId: z.string().describe("Exact import work unit owned by that application."),
+        externalSnapshot: vcsExternalSnapshotSchema.describe(
+          "Canonical external snapshot recorded on the import work unit."
+        ),
+      })
+      .strict()
+      .optional()
+      .describe(
+        "Identity-joined evidence read back from the canonical GAD graph when supplied by the configured provider."
+      ),
   })
   .strict();
 export type GitImportResult = z.infer<typeof gitImportResultSchema>;
@@ -520,7 +534,7 @@ export const gitInteropMethods = defineServiceMethods({
   },
   upstreamStatus: {
     description:
-      "Return external Git upstream status for tracked repos, including integration-required candidate coordinates. The configured gitInterop provider performs any Git/network work.",
+      "Return external Git upstream status for tracked repos, including integration-required candidate coordinates. Arguments are positional: call `git.upstreamStatus([imported.path], { fetch: false })`, not `git.upstreamStatus([[imported.path], { fetch: false }])`. The configured gitInterop provider performs any Git/network work.",
     args: z.union([
       z.tuple([
         z
@@ -592,7 +606,7 @@ export const gitInteropMethods = defineServiceMethods({
   },
   createDisposableRemote: {
     description:
-      "Create a short-lived, credential-free smart-HTTP Git remote managed by this workspace host. Prefer publishToDisposableRemote(repoPath) for one-call verification. For a persistent stepwise flow, create a remote, call pushDisposableRemote(repoPath, url, branch), then inspect or remove it.",
+      "Create a short-lived, credential-free smart-HTTP Git remote that survives across calls. This method does not publish anything. For a tracked stepwise flow, declare this exact URL with setSharedRemote, select it with setUpstream, call pushUpstream, then inspect or remove it. publishToDisposableRemote creates and deletes a separate remote, so do not use that one-call helper when this created remote must persist.",
     args: z.union([z.tuple([]), z.tuple([gitCreateDisposableRemoteOptionsSchema])]),
     returns: gitDisposableRemoteSchema,
     access: DISPOSABLE_REMOTE_WRITE_ACCESS,
@@ -663,7 +677,7 @@ export const gitInteropMethods = defineServiceMethods({
   },
   importProject: {
     description:
-      "Clone an external Git project, record its remote/upstream config, and return the semantic candidate context and event. The import does not publish protected main; use the ordinary VCS integration path.",
+      "Clone an external Git project, record its remote/upstream config, and return the semantic candidate plus identity-joined evidence read back from its canonical GAD event, application, and import work unit. The import does not publish protected main. The returned semanticEvidence includes the external snapshot source URI, revision, digest, and target repository IDs; the provenance tool can independently inspect the same returned IDs. Check the same repo with the positional call `git.upstreamStatus([imported.path], { fetch: false })` to distinguish the unpublished integration-required candidate from protected main and outgoing Git publication, and report that same candidate event ID with the path and publication state. Use the ordinary VCS integration path when publication is intended.",
     args: z.tuple([gitImportProjectSchema]),
     returns: gitImportedWorkspaceRepoSchema,
     access: IMPORT_PROJECT_ACCESS,
