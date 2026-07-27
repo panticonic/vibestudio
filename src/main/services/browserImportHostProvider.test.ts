@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { BrowserImportProvider } from "@vibestudio/browser-data";
 import {
   BrowserImportHostProvider,
+  frameChunks,
   MAX_QUEUED_IMPORT_FRAMES,
 } from "./browserImportHostProvider.js";
 
@@ -10,6 +11,7 @@ function batchProvider(onStoreComplete: () => void): BrowserImportProvider {
     listSources: vi.fn(async () => []),
     preview: vi.fn(async () => ({
       dataTypes: [],
+      breakdowns: [],
       warnings: [],
       openTabCount: 0,
       localDataSetCount: 0,
@@ -41,6 +43,43 @@ function queuedFrames(provider: BrowserImportHostProvider, operationId: string):
     ).operations.get(operationId)?.frames.length ?? 0
   );
 }
+
+describe("frameChunks", () => {
+  it("splits by item count for small items", () => {
+    const frames = frameChunks(Array.from({ length: 120 }, (_, index) => ({ index })));
+    expect(frames).toHaveLength(3);
+    expect(frames[0]).toHaveLength(50);
+    expect(frames[2]).toHaveLength(20);
+  });
+
+  it("splits by encoded size when items are large", () => {
+    // A favicon-sized base64 payload: a handful of these must not share a frame
+    // with 49 others, or the frame exceeds the websocket ingress cap.
+    const heavy = { png32: "A".repeat(1_500_000) };
+    const frames = frameChunks(Array.from({ length: 8 }, () => heavy));
+    expect(frames.length).toBeGreaterThan(1);
+    for (const frame of frames) {
+      expect(JSON.stringify(frame).length).toBeLessThan(16 * 1024 * 1024);
+    }
+  });
+
+  it("never drops an item and never emits an empty frame", () => {
+    const items = Array.from({ length: 37 }, (_, index) => ({ index, pad: "x".repeat(index * 997) }));
+    const frames = frameChunks(items);
+    expect(frames.flat()).toEqual(items);
+    expect(frames.every((frame) => frame.length > 0)).toBe(true);
+  });
+
+  it("keeps an oversized single item in its own frame rather than dropping it", () => {
+    const frames = frameChunks([{ pad: "A".repeat(5_000_000) }, { small: true }]);
+    expect(frames[0]).toHaveLength(1);
+    expect(frames.flat()).toHaveLength(2);
+  });
+
+  it("handles an empty batch", () => {
+    expect(frameChunks([])).toEqual([]);
+  });
+});
 
 describe("BrowserImportHostProvider", () => {
   it("backpressures the producer until bounded frames are consumed", async () => {

@@ -74,8 +74,8 @@ export class CanonicalBrowserFaviconObserver implements BrowserFaviconObserver {
       pageUrl,
       origin: new URL(pageUrl).origin,
       sourceUrl,
-      png16: image.resize({ width: 16, height: 16, quality: "best" }).toPNG(),
-      png32: image.resize({ width: 32, height: 32, quality: "best" }).toPNG(),
+      png16: image.resize({ width: 16, height: 16, quality: "best" }).toPNG().toString("base64"),
+      png32: image.resize({ width: 32, height: 32, quality: "best" }).toPNG().toString("base64"),
       mimeType: "image/png",
       updatedAt,
     });

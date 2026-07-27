@@ -26,19 +26,16 @@ export function BrowserFavicon({
     void browserData
       .getPageFavicon(handle.pageUrl)
       .then((record) => {
-        const bytes = record?.png16 ?? record?.png32;
-        if (!bytes || cancelled) return;
-        const buffer = bytes.buffer.slice(
-          bytes.byteOffset,
-          bytes.byteOffset + bytes.byteLength
-        ) as ArrayBuffer;
-        const value = URL.createObjectURL(new Blob([buffer], { type: "image/png" }));
+        // Raster data arrives base64-encoded; raw bytes do not survive the
+        // JSON-encoded RPC hop between the store and this view.
+        const png = record?.png16 ?? record?.png32;
+        if (!png || cancelled) return;
+        const value = `data:image/png;base64,${png}`;
         faviconCache.set(key, value);
         while (faviconCache.size > 128) {
           const oldest = faviconCache.entries().next().value as [string, string] | undefined;
           if (!oldest) break;
           faviconCache.delete(oldest[0]);
-          URL.revokeObjectURL(oldest[1]);
         }
         setSrc(value);
       })

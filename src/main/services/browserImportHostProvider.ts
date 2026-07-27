@@ -32,6 +32,41 @@ interface ImportOperation {
 }
 
 const FRAME_ITEM_LIMIT = 50;
+/**
+ * Frames are JSON over a websocket with a 16 MiB ingress cap
+ * (`RPC_WEBSOCKET_MAX_PAYLOAD_BYTES`). An item count alone does not bound a
+ * frame: favicon items carry base64 rasters that are orders of magnitude larger
+ * than a bookmark. Exceeding the cap closes the connection mid-import, which
+ * looks like a silent stall, so frames are bounded by encoded size as well.
+ */
+const FRAME_BYTE_BUDGET = 4 * 1024 * 1024;
+
+/** Split items into frames bounded by both count and encoded size. */
+export function frameChunks(items: readonly unknown[]): unknown[][] {
+  const frames: unknown[][] = [];
+  let current: unknown[] = [];
+  let currentBytes = 0;
+  for (const item of items) {
+    const size = estimateEncodedBytes(item);
+    if (current.length > 0 && (current.length >= FRAME_ITEM_LIMIT || currentBytes + size > FRAME_BYTE_BUDGET)) {
+      frames.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(item);
+    currentBytes += size;
+  }
+  if (current.length > 0) frames.push(current);
+  return frames;
+}
+
+function estimateEncodedBytes(item: unknown): number {
+  try {
+    return JSON.stringify(item)?.length ?? 0;
+  } catch {
+    return FRAME_BYTE_BUDGET;
+  }
+}
 export const MAX_QUEUED_IMPORT_FRAMES = 8;
 const LONG_POLL_MS = 20_000;
 
@@ -154,12 +189,12 @@ export class BrowserImportHostProvider {
         dataTypes,
         {
           store: async (batch) => {
-            for (let offset = 0; offset < batch.items.length; offset += FRAME_ITEM_LIMIT) {
+            for (const items of frameChunks(batch.items)) {
               await this.push(operation, {
                 type: "batch",
                 dataType: batch.dataType,
                 batchIndex: operation.nextBatchIndex++,
-                items: [...batch.items.slice(offset, offset + FRAME_ITEM_LIMIT)],
+                items,
               });
             }
           },

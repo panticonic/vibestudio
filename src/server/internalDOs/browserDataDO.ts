@@ -52,6 +52,45 @@ interface PreparedCookiePut {
   contentHash: string;
 }
 
+/**
+ * Favicons cross RPC as base64 and live in SQLite as BLOBs. Raw typed arrays do
+ * not survive JSON transport (they arrive as `{"0":137,…}` and inflate ~6x), so
+ * the conversion happens here, at the storage boundary, in both directions.
+ */
+function decodeFaviconPng(value: string | undefined): Uint8Array | undefined {
+  if (!value) return undefined;
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function encodeFaviconPng(value: unknown): string | null {
+  if (!value) return null;
+  const bytes =
+    value instanceof Uint8Array
+      ? value
+      : ArrayBuffer.isView(value)
+        ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+        : value instanceof ArrayBuffer
+          ? new Uint8Array(value)
+          : null;
+  if (!bytes) return null;
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function encodeFaviconRow(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...row,
+    png16: encodeFaviconPng(row["png16"]),
+    png32: encodeFaviconPng(row["png32"]),
+  };
+}
+
 function browserDataAuthority(sensitivity: RpcAuthorityPolicy["sensitivity"]): RpcAuthorityPolicy {
   return {
     effect: {
@@ -974,9 +1013,11 @@ export class BrowserDataDO extends DurableObjectBase {
     ) {
       throw new Error("Favicon page association must use one matching HTTP(S) origin");
     }
-    this.assertFaviconBytes(favicon.png16);
-    this.assertFaviconBytes(favicon.png32);
-    if (!favicon.png16 && !favicon.png32) throw new Error("Favicon has no raster data");
+    const png16 = decodeFaviconPng(favicon.png16);
+    const png32 = decodeFaviconPng(favicon.png32);
+    this.assertFaviconBytes(png16);
+    this.assertFaviconBytes(png32);
+    if (!png16 && !png32) throw new Error("Favicon has no raster data");
     this.sql.exec(
       `INSERT INTO page_favicons
         (page_url, origin, source_url, png16, png32, mime_type, updated_at)
@@ -991,8 +1032,8 @@ export class BrowserDataDO extends DurableObjectBase {
       page.href,
       origin.origin,
       favicon.sourceUrl ?? null,
-      favicon.png16 ?? null,
-      favicon.png32 ?? null,
+      png16 ?? null,
+      png32 ?? null,
       favicon.updatedAt
     );
   }
@@ -1004,15 +1045,14 @@ export class BrowserDataDO extends DurableObjectBase {
     const exact = this.sql
       .exec(`SELECT * FROM page_favicons WHERE page_url = ?`, page.href)
       .toArray()[0];
-    if (exact) return exact;
-    return (
-      this.sql
-        .exec(
-          `SELECT * FROM page_favicons WHERE origin = ? ORDER BY updated_at DESC LIMIT 1`,
-          page.origin
-        )
-        .toArray()[0] ?? null
-    );
+    if (exact) return encodeFaviconRow(exact);
+    const byOrigin = this.sql
+      .exec(
+        `SELECT * FROM page_favicons WHERE origin = ? ORDER BY updated_at DESC LIMIT 1`,
+        page.origin
+      )
+      .toArray()[0];
+    return byOrigin ? encodeFaviconRow(byOrigin) : null;
   }
 
   // -- Import storage ------------------------------------------------------
