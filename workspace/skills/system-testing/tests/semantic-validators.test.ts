@@ -203,7 +203,7 @@ describe("semantic system-test validators", () => {
     expect(test.validate(execution(final, invocation("await vcs.blame(input);")))).toEqual({
       passed: false,
       reason:
-        "Completed agent tools or successful eval did not exercise vcs.inspect, vcs.neighbors",
+        "Completed tool results did not contain one identity-joined blame → change → work unit → command → invocation with request reference → turn → exact current user prompt with source message and sender identities",
     });
   });
 

@@ -241,7 +241,7 @@ function validateApprovalRoundTrip(result: TestExecutionResult) {
           ? root["afterRevokeHas"]
           : typeof root["afterRevokeHasSubject"] === "boolean"
             ? root["afterRevokeHasSubject"]
-          : inventoryContains(afterRevokeState, subjectId ?? "");
+            : inventoryContains(afterRevokeState, subjectId ?? "");
       const revokeSubjectId = subjectIdFromRevoke(String(combined.arguments?.["code"] ?? ""));
       const subjectLifecycleProof =
         subjectId !== undefined &&
@@ -436,7 +436,7 @@ export const approvalPermissionTests: TestCase[] = [
       userland: [
         {
           ruleId: "approve-harmless-resource",
-          subjectId: "system-test:harmless-resource",
+          subject: { kind: "exact", key: "system-test:harmless-resource" },
           decision: "allow",
           remember: true,
         },

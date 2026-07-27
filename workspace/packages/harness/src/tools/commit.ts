@@ -16,11 +16,12 @@ const commitSchema = Type.Object(
     message: Type.String({
       description: "Durable intent summary for the one atomic workspace event.",
     }),
-    integratesEventId: Type.Optional(
-      Type.String({
-        minLength: 1,
+    integratesEventIds: Type.Optional(
+      Type.Array(Type.String({ minLength: 1 }), {
+        minItems: 1,
+        maxItems: 200,
         description:
-          "Exact source event to add as parent after vcs compare reports every effective source change accounted for.",
+          "Exact source events to add as parents after vcs compare reports every effective source change accounted for.",
       })
     ),
   },
@@ -52,7 +53,7 @@ export function createCommitTool(
         expectedWorkingHead: workingHead,
         commandId: toolCommandId(context),
         message,
-        ...(input.integratesEventId ? { integratesEventId: input.integratesEventId } : {}),
+        ...(input.integratesEventIds ? { integratesEventIds: input.integratesEventIds } : {}),
       });
       if (signal?.aborted) throw new Error("Operation aborted");
 

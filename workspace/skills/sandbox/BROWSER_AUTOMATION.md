@@ -350,6 +350,28 @@ return {
 };
 ```
 
+Blobstore proves persistence, but it does not put pixels into an agent model's
+input. When the agent must visually diagnose a panel, write the capture to
+context-local scratch and then call the agent's `read` tool on the returned
+path in a later tool step:
+
+```typescript
+const shot = await handle.cdp.screenshot({ format: "png" });
+const path = "scratch/panel-before.png";
+await fs.mkdir("scratch", { recursive: true });
+await fs.writeFile(
+  path,
+  Uint8Array.from(atob(shot.data), (character) => character.charCodeAt(0))
+);
+return { path, mimeType: shot.mimeType, width: shot.width, height: shot.height };
+```
+
+Then use `read({ path: "scratch/panel-before.png" })`. A snapshot, DOM query,
+base64 string, digest, or successful screenshot call is not visual inspection;
+only the image attachment returned by `read` lets the model interpret the
+rendered pixels. Keep diagnostic images in scratch unless they are intentional
+workspace source.
+
 When you specifically need a screenshot from the CDP page, it returns
 raw bytes. Store those bytes with the runtime convenience method:
 

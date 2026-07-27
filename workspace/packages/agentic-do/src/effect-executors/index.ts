@@ -28,6 +28,36 @@ export {
   toProtocolBlocks,
 } from "./model-call.js";
 
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function turnControlFromToolResult(
+  result: unknown
+): Extract<EffectOutcome, { kind: "tool" }>["turnControl"] {
+  const details = objectValue(objectValue(result)?.["details"]);
+  if (details?.["suspendTurn"] !== true) return undefined;
+  const reason =
+    typeof details["reason"] === "string" && details["reason"].trim()
+      ? details["reason"].trim()
+      : "no_foreground_work";
+  const note =
+    typeof details["noteToSelf"] === "string" && details["noteToSelf"].trim()
+      ? details["noteToSelf"].trim()
+      : undefined;
+  return {
+    kind: "suspend",
+    reason,
+    summary:
+      note ??
+      (reason === "waiting_for_background"
+        ? "Suspended until background work or user input arrives"
+        : "Suspended until new relevant input arrives"),
+  };
+}
+
 /** local_tool (§2.4.2): registry execution with the mutation-replay guard. */
 export const localToolExecutor: EffectExecutor<LocalToolEffect> = {
   kind: "local_tool",
@@ -72,7 +102,14 @@ export const localToolExecutor: EffectExecutor<LocalToolEffect> = {
         isError: boolean;
         terminalReasonCode?: string;
       };
-      return { kind: "tool", ...toolOutcome } satisfies EffectOutcome;
+      const turnControl = toolOutcome.isError
+        ? undefined
+        : turnControlFromToolResult(toolOutcome.result);
+      return {
+        kind: "tool",
+        ...toolOutcome,
+        ...(turnControl ? { turnControl } : {}),
+      } satisfies EffectOutcome;
     } catch (err) {
       const terminalReasonCode = errorCode(err);
       return {

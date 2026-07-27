@@ -42,6 +42,8 @@ export interface WriteToolDetails {
   /** A recoverable policy mismatch. No file was written. */
   diagnostic?: "semantic-path-inadmissible" | "repository-not-present";
   suggestedScratchPath?: string;
+  /** The requested bytes already matched the working file, so no edit was recorded. */
+  unchanged?: boolean;
   /** Exact canonical semantic result for a managed write. */
   vcsResult?: VcsWorkingMutationResult;
 }
@@ -133,6 +135,28 @@ export function createWriteTool(
         };
       }
       const existing = await resolveToolFile(vcs, workingHead, relPath);
+      const existingText =
+        existing?.content.kind === "text"
+          ? existing.content.text
+          : existing?.content.kind === "bytes"
+            ? Buffer.from(existing.content.base64, "base64").toString("utf8")
+            : undefined;
+      if (existingText === content) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `File ${relPath} already has the requested content; no change was needed.`,
+            },
+          ],
+          details: {
+            bytesWritten: content.length,
+            path: relPath,
+            storage: "vcs",
+            unchanged: true,
+          },
+        };
+      }
       const vcsResult = await vcs.edit({
         contextId: toolContextId(context),
         expectedWorkingHead: workingHead,

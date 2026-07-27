@@ -268,6 +268,26 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     return callerId;
   }
 
+  private requireExternalControllerCaller(method: string): string {
+    const kind = this.rpcCallerKind;
+    const callerId = this.rpcCallerId ?? "";
+    if (kind === "server") return callerId;
+    const stateArgs = this.env["STATE_ARGS"];
+    const expected =
+      stateArgs && typeof stateArgs === "object"
+        ? (stateArgs as Record<string, unknown>)["externalControllerCallerId"]
+        : undefined;
+    if (typeof expected !== "string" || !expected) {
+      throw new Error(`${method}: this vessel has no external controller`);
+    }
+    if (callerId !== expected) {
+      throw new Error(
+        `${method}: caller "${callerId || "unattributed"}" is not controller "${expected}"`
+      );
+    }
+    return callerId;
+  }
+
   @rpc({
     principals: ["host"],
     effect: { kind: "runtime-intrinsic" },
@@ -687,14 +707,46 @@ export class LinkedAgentWorker extends AgentWorkerBase {
   }
 
   /**
+   * Authoritative terminal result from the extension supervising a headless
+   * external engine. The exact controller identity is stamped into STATE_ARGS
+   * when the vessel is created; no unrelated extension may settle the run.
+   */
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "runtime-intrinsic" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async reportExternalResult(opts: {
+    runId?: string;
+    report?: string;
+    outcome?: "success" | "failed";
+    code?: number | null;
+  }): Promise<{ ok: boolean; settled: boolean }> {
+    this.requireExternalControllerCaller("reportExternalResult");
+    const sub = this.subagentIdentity();
+    if (!sub) return { ok: true, settled: false };
+    if (!opts?.runId || opts.runId !== sub.runId) return { ok: true, settled: false };
+    if (this.getStateValue(COMPLETED_KEY)) return { ok: true, settled: false };
+    this.setStateValue(COMPLETED_KEY, "1");
+    await this.closeCurrentBridge("process-result");
+    const report =
+      typeof opts.report === "string" && opts.report.trim()
+        ? opts.report.trim()
+        : `External agent completed with exit code ${opts.code ?? "unknown"} and no report.`;
+    await this.completeAsSubagent(report, opts.outcome === "failed" ? "failed" : "success");
+    return { ok: true, settled: true };
+  }
+
+  /**
    * Launcher-extension report that the external headless process exited (§8.2
    * failure path). If this vessel carries subagent duty and the session never
    * called `complete`, settle the parent's run as failed instead of leaving it
    * dangling as "running". Idempotent: a post-complete exit (the normal case —
    * every headless process eventually exits) and a duplicate report both no-op;
    * the parent's `onSubagentComplete` is additionally post-terminal-idempotent.
-   * Caller gating is coarse (any extension may call); the worst a forged report
-   * can do is settle-as-failed, which is the cancel path's power.
+   * The controller identity stamped into STATE_ARGS is the authorization; an
+   * unrelated extension cannot forge a terminal exit.
    */
   @rpc({
     principals: ["host", "code"],
@@ -707,6 +759,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     code?: number | null;
     signal?: string | null;
   }): Promise<{ ok: boolean; settled: boolean }> {
+    this.requireExternalControllerCaller("reportExternalExit");
     const sub = this.subagentIdentity();
     if (!sub) return { ok: true, settled: false };
     if (opts?.runId && opts.runId !== sub.runId) return { ok: true, settled: false };

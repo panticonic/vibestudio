@@ -36,7 +36,7 @@ function execution(final: string, calls: ReturnType<typeof invocation>[]): TestE
 
 describe("reduced VCS agentic catalog", () => {
   it("keeps every agent prompt user-like and free of method choreography", () => {
-    expect([...vcsTests, ...vcsAdvancedTests]).toHaveLength(11);
+    expect([...vcsTests, ...vcsAdvancedTests]).toHaveLength(12);
     for (const test of [...vcsTests, ...vcsAdvancedTests]) {
       expect(test.prompt).not.toContain("vcs.");
       expect(test.prompt).not.toContain("expectedWorkingHead");
@@ -52,7 +52,69 @@ describe("reduced VCS agentic catalog", () => {
     }
   });
 
-  it("requires explicit move/copy tools plus a semantic adjacency walk", () => {
+  it("requires ordinary read output to carry exact blame-backed memory", () => {
+    const test = vcsAdvancedTests.find(({ name }) => name === "vcs-read-injected-memory")!;
+    const read = invocation(
+      "read-memory",
+      "read",
+      { path: "projects/demo/src/retry-policy.ts" },
+      {
+        content: [
+          { type: "text", text: "export const retryCeiling = 7;\n" },
+          {
+            type: "text",
+            text: "memory · projects/demo/src/retry-policy.ts · shown lines 1-1",
+          },
+        ],
+        details: {
+          path: "projects/demo/src/retry-policy.ts",
+          displayedRange: {
+            coordinateKind: "utf16",
+            start: 0,
+            end: 31,
+            startLine: 1,
+            endLine: 1,
+          },
+          provenance: {
+            status: "attached",
+            episodes: [
+              {
+                change: { kind: "change", changeId: "change:retry" },
+                workUnit: { kind: "work-unit", workUnitId: "work-unit:retry" },
+                command: { kind: "command", commandId: "command:retry" },
+                cause: {
+                  message: {
+                    kind: "trajectory-message",
+                    logId: "trajectory:author",
+                    head: "main",
+                    messageId: "message:author",
+                  },
+                  triggerText:
+                    "Meridian relays reserve one retry slot for delayed acknowledgements",
+                },
+              },
+            ],
+          },
+        },
+      }
+    );
+    const final =
+      "The retry ceiling stays at seven because Meridian relays reserve one slot for delayed acknowledgements.";
+
+    expect(test.validate(execution(final, [read]))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+
+    const withoutMemory = structuredClone(read);
+    const details = (
+      withoutMemory.invocation.execution.result as { details: Record<string, unknown> }
+    ).details;
+    delete details["provenance"];
+    expect(test.validate(execution(final, [withoutMemory])).passed).toBe(false);
+  });
+
+  it("accepts conclusive move/copy receipts and strictly validates an optional deeper walk", () => {
     const test = vcsAdvancedTests.find(({ name }) => name === "vcs-explicit-move-copy")!;
     const moveState = { kind: "application", applicationId: "application:move" };
     const copyState = { kind: "application", applicationId: "application:copy" };
@@ -134,6 +196,10 @@ describe("reduced VCS agentic catalog", () => {
     ];
     const final = "The relocated file retained its identity; the duplicate has linked ancestry.";
     expect(test.validate(execution(final, calls))).toEqual({ passed: true, reason: undefined });
+    expect(test.validate(execution(final, calls.slice(0, 2)))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
     expect(test.validate(execution(final, calls.slice(1))).passed).toBe(false);
 
     const arbitraryEdge = structuredClone(calls);
@@ -228,6 +294,16 @@ describe("reduced VCS agentic catalog", () => {
       passed: true,
       reason: undefined,
     });
+    const rawCall = invocation(
+      "idempotency-raw",
+      "eval",
+      "const first = await rpc.call('main', 'vcs.edit', [request]); const retry = await rpc.call('main', 'vcs.edit', [request]);",
+      { details: { returnValue: proof } }
+    );
+    expect(test.validate(execution(final, [rawCall]))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
 
     const duplicate = structuredClone(proof);
     duplicate.retry.applicationId = "application:duplicate";
@@ -263,7 +339,7 @@ describe("reduced VCS agentic catalog", () => {
           result: {
             event: { kind: "event", eventId: "event:original" },
             committedApplicationIds: ["application:original"],
-            integrationSourceEventId: null,
+            integrationSourceEventIds: [],
           },
         }
       ),
@@ -305,7 +381,7 @@ describe("reduced VCS agentic catalog", () => {
           result: {
             event: { kind: "event", eventId: "event:restored" },
             committedApplicationIds: ["application:counteraction"],
-            integrationSourceEventId: null,
+            integrationSourceEventIds: [],
           },
         }
       ),
@@ -343,6 +419,25 @@ describe("reduced VCS agentic catalog", () => {
     };
     edge.adjacency[0]!.to.changeId = "change:other";
     expect(test.validate(execution(final, arbitrary)).passed).toBe(false);
+
+    const attachedCounteraction = structuredClone(calls);
+    attachedCounteraction.splice(3, 1);
+    const finalRead = attachedCounteraction.at(-1)!.invocation.execution.result as {
+      details: Record<string, unknown>;
+    };
+    finalRead.details["provenance"] = {
+      status: "attached",
+      episodes: [
+        {
+          change: { kind: "change", changeId: "change:counteraction" },
+          counteractsChangeIds: ["change:original"],
+        },
+      ],
+    };
+    expect(test.validate(execution(final, attachedCounteraction))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
 
     const notRestored = structuredClone(calls);
     const read = notRestored[6]!.invocation.execution.result as {
@@ -487,6 +582,73 @@ describe("reduced VCS agentic catalog", () => {
     ]);
     expect(test.validate(valid)).toEqual({ passed: true, reason: undefined });
 
+    const attached = invocation(
+      "causal-read",
+      "read",
+      { path: "projects/demo/distinctive-note.txt" },
+      {
+        details: {
+          provenance: {
+            status: "attached",
+            episodes: [
+              {
+                change: { kind: "change", changeId: "change:origin" },
+                workUnit: { kind: "work-unit", workUnitId: "work-unit:origin" },
+                command: { kind: "command", commandId: "command:origin" },
+                cause: {
+                  invocation: {
+                    kind: "trajectory-invocation",
+                    logId: "log:causal",
+                    head: "head:causal",
+                    invocationId: "invocation:causal",
+                  },
+                  turn: {
+                    kind: "trajectory-turn",
+                    logId: "log:causal",
+                    head: "head:causal",
+                    turnId: "turn:causal",
+                  },
+                  message: {
+                    kind: "trajectory-message",
+                    logId: "log:causal",
+                    head: "head:causal",
+                    messageId: "message:causal",
+                  },
+                  sender: { kind: "user", id: "user:fixture", participantId: "user:fixture" },
+                  requestRef: {
+                    protocol: "vibestudio.blob-ref.v1",
+                    digest: "a".repeat(64),
+                    size: 64,
+                    encoding: "json",
+                    originalBytes: 64,
+                  },
+                  terminalOutcome: "success",
+                  triggerText: test.prompt,
+                },
+              },
+            ],
+          },
+        },
+      }
+    );
+    expect(test.validate(execution(final, [attached]))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+
+    const minimalAttached = structuredClone(attached);
+    const minimalCause = (
+      minimalAttached.invocation.execution.result as {
+        details: { provenance: { episodes: Array<{ cause: Record<string, unknown> }> } };
+      }
+    ).details.provenance.episodes[0]!.cause;
+    delete minimalCause["requestRef"];
+    delete minimalCause["terminalOutcome"];
+    expect(test.validate(execution(final, [minimalAttached]))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+
     const mismatched = structuredClone(resultValue);
     mismatched.walks[0]!.edges[0]!.to = { kind: "change", changeId: "change:other" };
     expect(
@@ -596,6 +758,34 @@ describe("reduced VCS agentic catalog", () => {
     ];
     const result = execution(final, evidenceCalls(evidence));
     expect(test.validate(result)).toEqual({ passed: true, reason: undefined });
+
+    const attached = invocation(
+      "import-read",
+      "read",
+      { path: "packages/demo/src/index.ts" },
+      {
+        details: {
+          provenance: {
+            status: "attached",
+            episodes: [
+              {
+                stop: "import-boundary",
+                changeKind: "file-create",
+                change: { kind: "change", changeId: "change:import" },
+                workUnit: { kind: "work-unit", workUnitId: "work:import" },
+                command: { kind: "command", commandId: "command:import" },
+                intentSummary,
+                externalSnapshot: snapshot,
+              },
+            ],
+          },
+        },
+      }
+    );
+    expect(test.validate(execution(final, [attached]))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
 
     const mismatched = structuredClone(evidence);
     mismatched.inspections[0]!.node.value.authoredByWorkUnitId = "work:other";

@@ -1361,6 +1361,65 @@ describe("SemanticWorkspace repository counteractions", () => {
         },
       },
     });
+    const editedContentHash = sha256Hex(new TextEncoder().encode("a😀Xz"));
+    const readMemoryDispatch = await semantic.dispatch("readMemory", {
+      ingress,
+      input: {
+        contextId: "context:test",
+        path: "packages/fixture/src/moved-copy.ts",
+        expectedContentHash: editedContentHash,
+        range: { start: 3, end: 4 },
+        episodeLimit: 4,
+        historyLimit: 3,
+      },
+    });
+    expect(readMemoryDispatch).toMatchObject({
+      kind: "complete",
+      result: {
+        status: "attached",
+        contentHash: editedContentHash,
+        range: { start: 3, end: 4 },
+        coordinateKind: "utf16",
+        episodes: [
+          {
+            ranges: [{ start: 3, end: 4 }],
+            stop: "authored",
+            change: { kind: "change", changeId: editChangeId },
+            workUnit: { kind: "work-unit", workUnitId: edited.workUnitId },
+            command: { kind: "command", commandId: "command:edit-non-ascii-copy" },
+            cause: {
+              invocation,
+              turn,
+              message,
+              toolName: "vcs-tool",
+              turnSummary: "Move the parser",
+              triggerText: "Move the parser without changing its behavior",
+              sender: { kind: "user", id: "user:alice", participantId: "user:alice" },
+            },
+          },
+        ],
+      },
+    });
+    await expect(
+      semantic.dispatch("readMemory", {
+        ingress,
+        input: {
+          contextId: "context:test",
+          path: "packages/fixture/src/moved-copy.ts",
+          expectedContentHash: nonAsciiContentHash,
+          range: { start: 3, end: 4 },
+          episodeLimit: 4,
+          historyLimit: 3,
+        },
+      })
+    ).resolves.toMatchObject({
+      kind: "complete",
+      result: {
+        status: "stale",
+        expectedContentHash: nonAsciiContentHash,
+        currentContentHash: editedContentHash,
+      },
+    });
     const messageNeighbors = await semantic.dispatch("neighbors", {
       ingress,
       input: { root: message, limit: 100 },

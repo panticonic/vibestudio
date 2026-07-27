@@ -200,7 +200,7 @@ export function validateSchemaFixtures() {
 function validateCanonicalSkill() {
   const skill = read(SKILL_PATH);
   const roster = Object.keys(vcsMethods);
-  if (roster.length !== 19) throw new Error(`public VCS surface grew to ${roster.length} methods`);
+  if (roster.length !== 20) throw new Error(`public VCS surface changed to ${roster.length} methods`);
   for (const method of roster) {
     if (!skill.includes(method)) throw new Error(`${SKILL_PATH}: does not teach vcs.${method}`);
   }

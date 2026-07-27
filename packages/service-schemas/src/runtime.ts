@@ -32,7 +32,7 @@ export const AgentExecutionTestPolicySpecSchema = z
         z
           .object({
             ruleId: z.string().min(1),
-            subjectId: z.string().min(1),
+            subject: AuthorityResourceScopeSchema,
             decision: z.string().min(1),
             remember: z.boolean(),
           })

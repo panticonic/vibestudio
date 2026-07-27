@@ -175,7 +175,7 @@ describe("VaultSemanticVcs", () => {
       contextId: "ctx",
       event: { kind: "event" as const, eventId: "event:integrated" },
       committedApplicationIds: ["application:integrated"],
-      integrationSourceEventId: "event:main",
+      integrationSourceEventIds: ["event:main"],
     }));
     const session = new VaultSemanticVcs(
       "ctx",
@@ -239,7 +239,7 @@ describe("VaultSemanticVcs", () => {
       })
     );
     expect(commit).toHaveBeenCalledWith(
-      expect.objectContaining({ integratesEventId: "event:main" })
+      expect.objectContaining({ integratesEventIds: ["event:main"] })
     );
   });
 
@@ -328,7 +328,7 @@ describe("VaultSemanticVcs", () => {
       contextId: "ctx",
       event: { kind: "event" as const, eventId: "event:integrated" },
       committedApplicationIds: ["application:first", "application:second"],
-      integrationSourceEventId: "event:main",
+      integrationSourceEventIds: ["event:main"],
     }));
     const session = new VaultSemanticVcs(
       "ctx",

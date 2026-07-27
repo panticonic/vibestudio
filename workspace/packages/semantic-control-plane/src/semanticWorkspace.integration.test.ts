@@ -602,7 +602,7 @@ describe("SemanticWorkspace derived integration prerequisites", () => {
           contextId: "context:target",
           commandId: "command:mismatched-integration-parent",
           expectedWorkingHead: adoptFirst.workingHead,
-          integratesEventId: initial.committed.ref.eventId,
+          integratesEventIds: [initial.committed.ref.eventId],
         },
       })
     ).rejects.toMatchObject({ code: "InvalidReference" });
@@ -612,13 +612,13 @@ describe("SemanticWorkspace derived integration prerequisites", () => {
         ingress,
         input: {
           contextId: "context:target",
-          commandId: "command:mix-integration-source",
+          commandId: "command:invalid-source-change",
           expectedWorkingHead: adoptFirst.workingHead,
           sourceEventId: initial.committed.ref.eventId,
           decision: { kind: "adopted", sourceChangeIds: first.changeIds },
         },
       })
-    ).rejects.toMatchObject({ code: "ConflictPresent" });
+    ).rejects.toMatchObject({ code: "InvalidReference" });
 
     const compareAfterFirst = await semantic.dispatch("compare", {
       ingress,

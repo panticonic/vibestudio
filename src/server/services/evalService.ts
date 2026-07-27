@@ -559,8 +559,16 @@ export function createEvalService(deps: {
         try {
           return await deps.doDispatch.dispatchHeld(evalDoRef, "run", assembledArgs);
         } finally {
-          deps.executionSessions.close(evalDoEntityId(evalDoRef.objectKey), runId);
-          deps.activity?.end(activityId);
+          try {
+            // The held execution may unwind before a concurrent cancel RPC's
+            // registered cleanup has settled. Keep its admission (and any
+            // descendant test admissions) through the durable `cancelling`
+            // phase; only the EvalDO's terminal row owns authorization release.
+            await closeAdmissionWhenRunEnds(deps.doDispatch, evalDoRef, runId);
+          } finally {
+            deps.executionSessions.close(evalDoEntityId(evalDoRef.objectKey), runId);
+            deps.activity?.end(activityId);
+          }
         }
       },
       startRun: async (ctx, [runArgs]) => {

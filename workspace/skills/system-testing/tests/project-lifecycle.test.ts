@@ -64,7 +64,7 @@ describe("project lifecycle prompts", () => {
     expect(panelPrompts).toEqual([
       "Create a brand-new isolated panel project and open it for use.",
       "Fork the existing panel into a new isolated panel and open the result.",
-      "Build a simple, polished To-Do list as a brand-new isolated panel. Begin with two small deliberate defects—one compiler error and one obvious usability problem—so the development loop has real failures to find. Observe the compiler defect through a structured compile or build check, then diagnose and repair only that failure while leaving the usability defect intact. Launch and inspect that compile-clean but visibly flawed panel, then repair the usability defect in a separate source edit. Refresh the same running panel with the repaired source, capture its appearance, exercise the add, complete, filter, and delete flows in the live UI, and publish the finished result. Make the final experience keyboard-friendly, responsive, visually polished, and free of runtime or console errors. Report the defects you observed and concrete final verification.",
+      "Build a simple, polished To-Do list as a brand-new isolated panel. Begin with two small deliberate defects—one compiler error and one obvious usability problem—so the development loop has real failures to find. Observe the compiler defect through a structured compile or build check, then diagnose and repair only that failure while leaving the usability defect intact. Launch the compile-clean but visibly flawed panel, save a screenshot in scratch, and read that image so your UX repair is based on the rendered pixels rather than DOM text alone. Repair the usability defect in a separate source edit. Refresh the same running panel with the repaired source, save and visually read a second screenshot, exercise the add, complete, filter, and delete flows in the live UI, and publish the finished result. Make the final experience keyboard-friendly, responsive, visually polished, and free of runtime or console errors. Report the defects you observed and concrete final verification.",
     ]);
 
     for (const prompt of panelPrompts) {
@@ -92,6 +92,30 @@ describe("project lifecycle prompts", () => {
     expect(fixtureFor("panel-todo-debug-polish")).toEqual({
       kind: "created-repository",
       section: "panels",
+    });
+  });
+
+  it("grants only panel and dependency inspection to the To-Do loop", () => {
+    const test = projectLifecycleTests.find(({ name }) => name === "panel-todo-debug-polish")!;
+
+    expect(test.authorityPolicy).toEqual({
+      authority: [
+        {
+          ruleId: "inspect-created-panel",
+          capability: "panel.inspect",
+          resource: { kind: "exact", key: "panel.inspect" },
+          tier: "gated",
+          decision: "once",
+        },
+        {
+          ruleId: "inspect-screenshot-analysis-dependency",
+          capability: "workspace.dependencies.inspect",
+          resource: { kind: "exact", key: "workspace.dependencies.inspect" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [],
     });
   });
 
@@ -165,6 +189,17 @@ describe("project lifecycle prompts", () => {
           ],
         }
       ),
+      invocation(
+        "read-flawed-screenshot",
+        "read",
+        { target: "file:/.tmp/todo-flawed-123", kind: "file" },
+        {
+          path: "/.tmp/todo-flawed-123",
+          mimeType: "image/png",
+          size: 4096,
+          dimensions: { width: 800, height: 600 },
+        }
+      ),
       invocation("ux-repair", "write", { path: `${source}/src.tsx` }, mutation(uxApplicationId)),
       invocation(
         "rebuild-and-verify",
@@ -182,6 +217,17 @@ describe("project lifecycle prompts", () => {
             },
             { consoleErrors: 0 },
           ],
+        }
+      ),
+      invocation(
+        "read-repaired-screenshot",
+        "read",
+        { target: "file:/.tmp/todo-repaired-456", kind: "file" },
+        {
+          path: "/.tmp/todo-repaired-456",
+          mimeType: "image/png",
+          size: 6144,
+          dimensions: { width: 800, height: 600 },
         }
       ),
       invocation(
@@ -206,6 +252,46 @@ describe("project lifecycle prompts", () => {
     ];
 
     expect(test.validate(todoExecution(calls))).toEqual({ passed: true, reason: undefined });
+
+    const typedGuestFailure = {
+      kind: "message" as const,
+      senderId: "agent",
+      complete: true,
+      contentType: "invocation" as const,
+      invocation: {
+        id: "expected-guest-failure",
+        name: "eval",
+        arguments: { code: "throw new Error('deliberate development probe')" },
+        execution: {
+          status: "error",
+          terminalOutcome: "tool_error",
+          terminalReasonCode: "guest_execution_failed",
+          failureKind: "user-code",
+          isError: true,
+          result: {
+            protocolContent: [],
+            details: {
+              success: false,
+              failureKind: "user-code",
+              failureCode: "guest_execution_failed",
+            },
+          },
+        },
+      },
+    };
+    expect(test.validate(todoExecution([typedGuestFailure, ...calls] as typeof calls))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+
+    const screenshotWithoutModelVision = calls.filter(
+      (call) => !call.invocation.id.startsWith("read-")
+    );
+    expect(test.validate(todoExecution(screenshotWithoutModelVision))).toEqual({
+      passed: false,
+      reason:
+        "The agent did not read the compile-clean flawed panel screenshot as image content before choosing the UX repair",
+    });
 
     const wrongBuildIdentity = calls.map((call) =>
       call.invocation.id === "broken-build"

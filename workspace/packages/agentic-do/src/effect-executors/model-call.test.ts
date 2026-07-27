@@ -556,7 +556,7 @@ describe("modelCallExecutor", () => {
     });
   });
 
-  it("returns a terminal model failure for open provider circuit breakers", async () => {
+  it("returns a delayed recoverable model failure for open provider circuit breakers", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     mocks.getModel.mockReturnValue({ baseUrl: "https://api.openai.com/v1" });
     mocks.stream.mockImplementation(() => ({
@@ -579,14 +579,10 @@ describe("modelCallExecutor", () => {
         onEphemeral: () => {},
       })
     ).resolves.toMatchObject({
-      kind: "model",
-      stopReason: "error",
-      recoverable: false,
-      failure: {
-        code: "circuit_breaker_open_terminal",
-        recoverable: false,
-        reason: "Circuit breaker is open",
-      },
+      kind: "retry",
+      code: "circuit_breaker_open_retryable",
+      reason: "Circuit breaker is open",
+      retryAfterMs: 30_000,
     });
   });
 

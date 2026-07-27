@@ -67,11 +67,17 @@ function createHarness(
     retryGetRunGate?: Promise<void>;
     finiteEvalEntityIds?: ReadonlySet<string>;
     kernelLeaseError?: Error;
+    systemTestHarness?: boolean;
+    getRunSequence?: Array<{
+      status: "pending" | "running" | "cancelling" | "done" | "cancelled" | "unknown";
+      gate?: Promise<void>;
+    }>;
   } = {}
 ) {
   const calls: Array<{ ref: unknown; method: string; args: unknown[] }> = [];
   let rejectedStartRun = false;
   let rejectedGetRun = false;
+  let getRunSequenceIndex = 0;
   const doDispatch = {
     async dispatchHeld(
       this: { dispatch: (ref: unknown, method: string, ...args: unknown[]) => Promise<unknown> },
@@ -150,6 +156,14 @@ function createHarness(
           throw new Error("simulated transient getRun transport failure");
         }
         if (rejectedGetRun && options.retryGetRunGate) await options.retryGetRunGate;
+        const sequenced =
+          options.getRunSequence?.[
+            Math.min(getRunSequenceIndex++, options.getRunSequence.length - 1)
+          ];
+        if (sequenced) {
+          if (sequenced.gate) await sequenced.gate;
+          return { status: sequenced.status };
+        }
         return { status: "done", result: { success: true, console: "", scopeKeys: [] } };
       }
       if (method === "readScopeTextPage") {
@@ -235,6 +249,7 @@ function createHarness(
     } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
     workspaceId: "ws_1",
     executionSessions,
+    ...(options.systemTestHarness ? { isSystemTestHarness: () => true } : {}),
     kernelLeases: {
       touch: vi.fn(async () => {
         if (options.kernelLeaseError) throw options.kernelLeaseError;
@@ -420,6 +435,7 @@ describe("createEvalService", () => {
         if (method === "slotResolveByEntity")
           return String(args[0]) === "panel:p" ? "panel:tree/p" : null;
         if (method === "run") return { success: true, console: "", scopeKeys: [] };
+        if (method === "getRun") return { status: "done" };
         throw new Error(`unexpected dispatch ${method}`);
       },
     } as unknown as DODispatch;
@@ -599,6 +615,111 @@ describe("createEvalService", () => {
     acceptRetry();
     await expect.poll(() => executionSessions.resolve(runtimeId)).toBeNull();
     expect(calls.filter((call) => call.method === "getRun")).toHaveLength(2);
+  });
+
+  it("retains root and descendant test admissions through cancelling and revokes them at cancelled", async () => {
+    const ownerId = "session:default";
+    const runId = "system-test-runner:cancel-lifecycle";
+    let releaseTerminal!: () => void;
+    const terminalGate = new Promise<void>((resolve) => {
+      releaseTerminal = resolve;
+    });
+    const { service, calls, executionSessions } = createHarness(
+      { [ownerId]: "ctx:orchestrator" },
+      {
+        systemTestHarness: true,
+        getRunSequence: [{ status: "cancelling" }, { status: "cancelled", gate: terminalGate }],
+      }
+    );
+
+    await service.handler(
+      activeInvocationContext(authenticatedCaller(ownerId, "shell")),
+      "startRun",
+      [{ code: "await new Promise(() => {});", runId }]
+    );
+    await expect
+      .poll(() => calls.filter((call) => call.method === "getRun").length)
+      .toBeGreaterThanOrEqual(1);
+    const objectKey = (
+      calls.find((call) => call.method === "startRun")?.ref as { objectKey: string }
+    ).objectKey;
+    const rootRuntimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`;
+    const root = executionSessions.resolve(rootRuntimeId);
+    expect(root?.testPolicy?.kind).toBe("orchestrator");
+
+    executionSessions.inheritTestContext("ctx:case", "ctx:orchestrator");
+    executionSessions.attachCasePolicy("ctx:case", "ctx:orchestrator", {
+      testId: "cancel-lifecycle-case",
+      authority: [],
+      userland: [],
+      unexpectedPrompts: "fail",
+    });
+    const casePolicy = executionSessions.testPolicyForContext("ctx:case");
+    if (!casePolicy) throw new Error("Expected inherited case policy");
+    const child = executionSessions.admit({
+      mode: "test",
+      ownerUser: "user:usr_test",
+      workspaceId: "ws_1",
+      contextId: "ctx:case",
+      agentBinding: null,
+      taskRef: "system-test:cancel-lifecycle-case",
+      harness: {
+        principal: `code:workers/system-test-runner@${"a".repeat(64)}`,
+        repoPath: "workers/system-test-runner",
+        effectiveVersion: "test",
+      },
+      eval: {
+        runtimeId: "do:vibestudio/internal:EvalDO:cancel-lifecycle-child",
+        runId: "system-test-runner:cancel-lifecycle-child",
+      },
+      causalParent: null,
+      testPolicy: casePolicy,
+    });
+
+    expect(executionSessions.resolve(rootRuntimeId)?.nonce).toBe(root?.nonce);
+    expect(executionSessions.resolve(child.eval.runtimeId)?.nonce).toBe(child.nonce);
+    await expect
+      .poll(() => calls.filter((call) => call.method === "getRun").length)
+      .toBeGreaterThanOrEqual(2);
+    expect(executionSessions.resolve(rootRuntimeId)).not.toBeNull();
+    expect(executionSessions.resolve(child.eval.runtimeId)).not.toBeNull();
+
+    releaseTerminal();
+    await expect.poll(() => executionSessions.resolve(rootRuntimeId)).toBeNull();
+    expect(executionSessions.resolve(child.eval.runtimeId)).toBeNull();
+    expect(executionSessions.testPolicyForContext("ctx:orchestrator")).toBeNull();
+    expect(executionSessions.testPolicyForContext("ctx:case")).toBeNull();
+  });
+
+  it("keeps a held run admitted until its durable cancelling phase settles", async () => {
+    const ownerId = "session:default";
+    let releaseTerminal!: () => void;
+    const terminalGate = new Promise<void>((resolve) => {
+      releaseTerminal = resolve;
+    });
+    const { service, calls, executionSessions } = createHarness(
+      { [ownerId]: "ctx:held" },
+      {
+        getRunSequence: [{ status: "cancelling" }, { status: "cancelled", gate: terminalGate }],
+      }
+    );
+
+    const run = service.handler(
+      activeInvocationContext(authenticatedCaller(ownerId, "shell")),
+      "run",
+      [{ code: "return 1;" }]
+    );
+    await expect
+      .poll(() => calls.filter((call) => call.method === "getRun").length)
+      .toBeGreaterThanOrEqual(2);
+    const objectKey = (calls.find((call) => call.method === "run")?.ref as { objectKey: string })
+      .objectKey;
+    const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`;
+    expect(executionSessions.resolve(runtimeId)).not.toBeNull();
+
+    releaseTerminal();
+    await expect(run).resolves.toMatchObject({ success: true });
+    expect(executionSessions.resolve(runtimeId)).toBeNull();
   });
 
   it("startRun without a caller runId mints a server uuid (and uses it for the run)", async () => {

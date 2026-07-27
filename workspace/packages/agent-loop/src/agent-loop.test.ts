@@ -533,6 +533,11 @@ describe("agent-loop core lifecycle", () => {
         protocolContent: [{ type: "text", text: "Turn suspended." }],
         details: { suspendTurn: true, reason: "waiting_for_background" },
       },
+      turnControl: {
+        kind: "suspend",
+        reason: "waiting_for_background",
+        summary: "Suspended until background work or user input arrives",
+      },
       isError: false,
     });
 
@@ -558,6 +563,42 @@ describe("agent-loop core lifecycle", () => {
 
     const msg1 = ids.messageId(turn1, 1);
     expect(pendingEffectIds(s)).toEqual([ids.modelEffect(msg1)]);
+  });
+
+  it("does not let a recovery wake resume a turn from its own suspension result", () => {
+    const s = scenario();
+    prompt(s);
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        {
+          type: "toolCall",
+          id: "suspend-1",
+          name: "suspend_turn",
+          arguments: { reason: "waiting_for_background" },
+        },
+      ],
+      stopReason: "completed",
+    });
+    resolveEffect(s, ids.invocationEffect("suspend-1"), {
+      kind: "tool",
+      result: {
+        protocolContent: [{ type: "text", text: "Turn suspended." }],
+        details: { suspendTurn: true, reason: "waiting_for_background" },
+      },
+      turnControl: {
+        kind: "suspend",
+        reason: "waiting_for_background",
+        summary: "Suspended until background work or user input arrives",
+      },
+      isError: false,
+    });
+
+    dispatch(s, { type: "command", command: { kind: "wake" } });
+
+    expect(s.state.openTurn?.waitingAtSeq).toBeDefined();
+    expect(pendingEffectIds(s)).toEqual([]);
+    expect(s.log.filter((row) => row.payloadKind === "message.started")).toHaveLength(1);
   });
 
   it("stamps tier primary on a direct text-only answer", () => {

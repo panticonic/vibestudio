@@ -301,6 +301,31 @@ describe("TestRunner", () => {
         }),
       },
       {
+        id: "invocation:call-3",
+        senderId: "agent",
+        kind: "message",
+        contentType: "invocation",
+        complete: true,
+        content: JSON.stringify({
+          id: "call-3",
+          name: "eval",
+          execution: {
+            status: "error",
+            terminalOutcome: "tool_error",
+            terminalReasonCode: "guest_execution_failed",
+            result: {
+              details: {
+                success: false,
+                failureKind: "user-code",
+                failureCode: "guest_execution_failed",
+                error: "Assertion failed while developing the fixture",
+              },
+            },
+            isError: true,
+          },
+        }),
+      },
+      {
         id: "answer-1",
         senderId: "agent",
         kind: "message",
@@ -337,6 +362,26 @@ describe("TestRunner", () => {
               terminalOutcome: "tool_error",
               terminalReasonCode: "WorkingChangesPresent",
               result: { error: "Push requires a clean committed event" },
+              isError: true,
+            },
+          },
+          {
+            id: "call-3",
+            name: "eval",
+            status: "error",
+            terminalReasonCode: "guest_execution_failed",
+            execution: {
+              status: "error",
+              terminalOutcome: "tool_error",
+              terminalReasonCode: "guest_execution_failed",
+              result: {
+                details: {
+                  success: false,
+                  failureKind: "user-code",
+                  failureCode: "guest_execution_failed",
+                  error: "Assertion failed while developing the fixture",
+                },
+              },
               isError: true,
             },
           },
@@ -387,6 +432,13 @@ describe("TestRunner", () => {
           expected: true,
           classification: "domain-rejection",
           terminalReasonCode: "WorkingChangesPresent",
+        }),
+        expect.objectContaining({
+          name: "eval",
+          expected: true,
+          classification: "guest-code-failure",
+          terminalReasonCode: "guest_execution_failed",
+          failureKind: "user-code",
         }),
       ])
     );

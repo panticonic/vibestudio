@@ -4,9 +4,16 @@ import { AGENTIC_EVENT_PAYLOAD_KIND, AGENTIC_PROTOCOL_VERSION } from "@workspace
 import { readChannelSubscriptionRecords } from "@workspace/pubsub";
 
 import { LinkedAgentWorker, LINKED_PERMISSION_TIMEOUT_MS } from "./linked-agent-worker.js";
+import * as workerEntry from "./index.js";
 
 const ENTITY = "session-entity-1";
 const OBJECT_KEY = ENTITY; // vessel is keyed by the entity it serves
+
+describe("linked-agent worker entry", () => {
+  it("exports only workerd handler/class values at runtime", () => {
+    expect(Object.keys(workerEntry).sort()).toEqual(["LinkedAgentWorker", "default"]);
+  });
+});
 
 class TestableLinkedAgentWorker extends LinkedAgentWorker {
   static override schemaVersion = LinkedAgentWorker.schemaVersion;
@@ -237,6 +244,7 @@ async function makeWorker(env?: Record<string, unknown>) {
 const SUBAGENT_STATE_ARGS = {
   STATE_ARGS: {
     linkedEntityId: ENTITY,
+    externalControllerCallerId: "@workspace-extensions/claude-code",
     subagent: {
       runId: "run-9",
       parentRef: "do:parent-vessel",
@@ -829,7 +837,7 @@ describe("LinkedAgentWorker", () => {
   it("settles the run as failed when the headless process exits without complete", async () => {
     const worker = await makeWorker(SUBAGENT_STATE_ARGS);
     worker.testCallerKind = "extension";
-    worker.testCallerId = "extension:@workspace-extensions/claude-code";
+    worker.testCallerId = "@workspace-extensions/claude-code";
 
     const result = await worker.reportExternalExit({ runId: "run-9", code: 1, signal: null });
     expect(result).toEqual({ ok: true, settled: true });
@@ -846,14 +854,49 @@ describe("LinkedAgentWorker", () => {
     expect(worker.parentCompletions).toHaveLength(1);
   });
 
-  it("ignores an exit report after a real complete, without duty, or for a foreign run", async () => {
+  it("settles a typed supervised result and rejects a foreign controller", async () => {
+    const worker = await makeWorker(SUBAGENT_STATE_ARGS);
+    worker.testCallerKind = "extension";
+    worker.testCallerId = "@workspace-extensions/claude-code";
+
+    expect(
+      await worker.reportExternalResult({
+        runId: "run-9",
+        code: 0,
+        outcome: "success",
+        report: "audit complete",
+      })
+    ).toEqual({ ok: true, settled: true });
+    expect(worker.parentCompletions[0]).toMatchObject({
+      target: "do:parent-vessel",
+      payload: { runId: "run-9", outcome: "success", report: "audit complete" },
+    });
+    expect(
+      await worker.reportExternalResult({
+        runId: "run-9",
+        code: 0,
+        outcome: "success",
+        report: "duplicate",
+      })
+    ).toEqual({ ok: true, settled: false });
+
+    const foreign = await makeWorker(SUBAGENT_STATE_ARGS);
+    foreign.testCallerKind = "extension";
+    foreign.testCallerId = "@workspace-extensions/not-the-controller";
+    await expect(
+      foreign.reportExternalResult({ runId: "run-9", outcome: "success", report: "forged" })
+    ).rejects.toThrow(/is not controller/);
+    expect(foreign.parentCompletions).toHaveLength(0);
+  });
+
+  it("ignores an exit report after a real complete or for a foreign run", async () => {
     const worker = await makeWorker(SUBAGENT_STATE_ARGS);
     // Real completion via the bridge first (agent caller).
     await worker.completeFromBridge({ report: "done", outcome: "success" });
     expect(worker.parentCompletions).toHaveLength(1);
 
     worker.testCallerKind = "extension";
-    worker.testCallerId = "extension:@workspace-extensions/claude-code";
+    worker.testCallerId = "@workspace-extensions/claude-code";
     const afterComplete = await worker.reportExternalExit({ runId: "run-9", code: 0 });
     expect(afterComplete).toEqual({ ok: true, settled: false });
     expect(worker.parentCompletions).toHaveLength(1);
@@ -861,18 +904,11 @@ describe("LinkedAgentWorker", () => {
     // Foreign runId on a fresh duty-bearing vessel: refused.
     const other = await makeWorker(SUBAGENT_STATE_ARGS);
     other.testCallerKind = "extension";
-    other.testCallerId = "extension:@workspace-extensions/claude-code";
+    other.testCallerId = "@workspace-extensions/claude-code";
     expect(await other.reportExternalExit({ runId: "run-OTHER", code: 1 })).toEqual({
       ok: true,
       settled: false,
     });
     expect(other.parentCompletions).toHaveLength(0);
-
-    // No subagent duty at all: no-op.
-    const plain = await makeWorker();
-    plain.testCallerKind = "extension";
-    plain.testCallerId = "extension:@workspace-extensions/claude-code";
-    expect(await plain.reportExternalExit({ code: 1 })).toEqual({ ok: true, settled: false });
-    expect(plain.parentCompletions).toHaveLength(0);
   });
 });

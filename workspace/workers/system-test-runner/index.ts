@@ -22,15 +22,9 @@ interface SystemTestRunConfig {
 }
 
 interface EvalRunStatus {
-  status: string;
+  status: "pending" | "running" | "cancelling" | "done" | "cancelled" | "unknown";
   progress?: unknown;
   result?: { success: boolean; returnValue?: unknown; error?: string };
-}
-
-interface EvalRunResult {
-  success: boolean;
-  returnValue?: unknown;
-  error?: string;
 }
 
 interface EvalCancelResult {
@@ -45,7 +39,7 @@ interface StoredSystemTestRecord {
 }
 
 export interface SystemTestRunnerSnapshot {
-  status: string;
+  status: EvalRunStatus["status"];
   progress?: unknown;
   result?: {
     success: boolean;
@@ -374,21 +368,18 @@ export class SystemTestRunnerDO extends DurableObjectBase {
       );
     }
     // The inner eval's registered cleanup serializes the complete terminal
-    // record under the same durable key as ordinary completion. Read only its
-    // envelope through eval's bounded return, then retrieve the record by page.
-    let recovered: EvalRunResult;
+    // record under the same durable key as ordinary completion. Read that
+    // finite scope directly: starting another eval would incorrectly treat the
+    // lookup as a request to reuse the scope as a persistent notebook.
+    const scopeKey = systemTestRecordScopeKey(runId);
+    let recovered: { length: number };
     try {
-      recovered = await this.rpc.call<EvalRunResult>("main", "eval.run", [
+      recovered = await this.rpc.call<{ length: number }>("main", "eval.readScopeTextPage", [
         {
           subKey: runId,
-          syntax: "javascript",
-          code: `
-          const scopeKey = ${JSON.stringify(systemTestRecordScopeKey(runId))};
-          const serialized = scope[scopeKey];
-          return typeof serialized === "string"
-            ? { kind: "system-test-record-v1", scopeKey, length: serialized.length }
-            : null;
-        `,
+          key: scopeKey,
+          offset: 0,
+          limit: 1,
         },
       ]);
     } catch (error) {
@@ -399,16 +390,11 @@ export class SystemTestRunnerDO extends DurableObjectBase {
         { cause: error }
       );
     }
-    if (!recovered.success) {
-      throw new Error(
-        `System-test run ${runId} cleanup record could not be recovered: ${recovered.error ?? "eval failed"}`
-      );
-    }
-    if (recovered.returnValue == null) return null;
-    return this.readStoredSystemTestRecord(
-      runId,
-      parseStoredSystemTestRecord(recovered.returnValue)
-    );
+    return this.readStoredSystemTestRecord(runId, {
+      kind: "system-test-record-v1",
+      scopeKey,
+      length: recovered.length,
+    });
   }
 
   private readSystemTestEvalStatus(runId: string): Promise<EvalRunStatus> {

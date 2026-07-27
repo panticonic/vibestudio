@@ -7374,6 +7374,14 @@
           "sensitivity": "read"
         }
       },
+      "readMemory": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
       "resolveRepository": {
         "authority": {
           "inherits": true

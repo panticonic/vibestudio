@@ -167,29 +167,25 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
     };
     let driver = null;
     let driverRetired = false;
+    let driverResultReleased = false;
     let driverResourcesReleased = false;
     let cancellationCleanup = null;
     const retireDriver = async () => {
       if (!driver || driverRetired) return;
-      driverRetired = true;
       await services.runtime.retireEntity({ id: driver.id });
+      driverRetired = true;
     };
     const releaseDriverResources = async () => {
       if (!driver || driverResourcesReleased) return;
-      driverResourcesReleased = true;
-      const failures = [];
       try {
-        await rpc.call(driver.targetId, "releaseSystemTestRunResult", [progressKey]);
-      } catch (error) {
-        failures.push(error);
-      }
-      try {
+        if (!driverResultReleased) {
+          await rpc.call(driver.targetId, "releaseSystemTestRunResult", [progressKey]);
+          driverResultReleased = true;
+        }
         await retireDriver();
+        driverResourcesReleased = true;
       } catch (error) {
-        failures.push(error);
-      }
-      if (failures.length > 0) {
-        throw new AggregateError(failures, "System-test driver cleanup failed");
+        throw new AggregateError([error], "System-test driver cleanup failed");
       }
     };
     try {
@@ -230,7 +226,11 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
           [progressKey],
         );
         if (snapshot?.progress) publishProgress(snapshot.progress);
-        if (snapshot?.status === "pending" || snapshot?.status === "running") {
+        if (
+          snapshot?.status === "pending" ||
+          snapshot?.status === "running" ||
+          snapshot?.status === "cancelling"
+        ) {
           await new Promise((resolve) => setTimeout(resolve, 1_000));
           continue;
         }
@@ -374,7 +374,7 @@ async function waitForRun(
         await new Promise((resolve) => setTimeout(resolve, pollMs));
         continue;
       }
-      if (!["pending", "running"].includes(status.status)) return status;
+      if (!["pending", "running", "cancelling"].includes(status.status)) return status;
       await new Promise((resolve) => setTimeout(resolve, pollMs));
     }
   } finally {

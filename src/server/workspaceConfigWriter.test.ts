@@ -107,7 +107,7 @@ function configReader(initialYaml: string) {
         contextId: (input as { contextId: string }).contextId,
         event: committedState,
         committedApplicationIds: [editedState.applicationId],
-        integrationSourceEventId: null,
+        integrationSourceEventIds: [],
       };
     }
     throw new Error(`unexpected semantic call ${method}`);

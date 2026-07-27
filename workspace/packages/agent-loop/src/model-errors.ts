@@ -5,7 +5,7 @@ export type ModelFailureClass =
   | "provider_overloaded_retryable"
   | "auth_or_credentials"
   | "request_invalid_terminal"
-  | "circuit_breaker_open_terminal"
+  | "circuit_breaker_open_retryable"
   | "context_overflow_terminal"
   | "infrastructure_terminal"
   | "unknown_retryable";
@@ -41,6 +41,7 @@ const GENERIC_RATE_LIMIT_MESSAGE = "The model provider rate limit has been reach
 const GENERIC_OVERLOADED_MESSAGE = "The model provider is temporarily overloaded.";
 const DEFAULT_RATE_LIMIT_RETRY_MS = 30_000;
 const DEFAULT_OVERLOAD_RETRY_MS = 10_000;
+const DEFAULT_CIRCUIT_BREAKER_RETRY_MS = 30_000;
 const DEFAULT_UNKNOWN_RETRY_MS = 1_000;
 const MAX_AUTOMATIC_RATE_LIMIT_RETRY_MS = 5 * 60_000;
 const UTC_MONTHS = [
@@ -167,7 +168,11 @@ export function classifyModelFailure(
   }
 
   if (isCircuitBreakerOpen(readable)) {
-    return terminal("circuit_breaker_open_terminal", readable);
+    return retryable(
+      "circuit_breaker_open_retryable",
+      readable,
+      DEFAULT_CIRCUIT_BREAKER_RETRY_MS
+    );
   }
 
   if (isOverloadedError(codeKey, status, readable)) {

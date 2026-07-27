@@ -1328,6 +1328,7 @@ async function makeGateProbe(): Promise<EvalGateProbe> {
 
 class SubagentSpawnProbe extends TestVessel {
   rpcCalls: Array<{ target: string; method: string; args: unknown[] }> = [];
+  childSettings: Record<string, unknown> = {};
   readonly vcsResponses = new Map<string, unknown[]>();
   gadLogHead: Record<string, unknown> | null = null;
   failClaudeLaunch = false;
@@ -1360,10 +1361,17 @@ class SubagentSpawnProbe extends TestVessel {
           return { contextId: "ctx-child" };
         }
         if (target === "main" && method === "runtime.createEntity") {
+          const spec = args[0] as {
+            stateArgs?: { agentConfig?: Record<string, unknown> };
+          };
+          this.childSettings = { ...(spec.stateArgs?.agentConfig ?? {}) };
           return {
             id: "do:workers/agent-worker:AiChatWorker:subagent-inv-1",
             targetId: "do:workers/agent-worker:AiChatWorker:subagent-inv-1",
           };
+        }
+        if (method === "getAgentSettings" && target.includes(":subagent-")) {
+          return this.childSettings;
         }
         if (target === "main" && method === "workers.resolveService") {
           return {
@@ -1393,12 +1401,22 @@ class SubagentSpawnProbe extends TestVessel {
               vesselEntityId: "do:workers/linked-agent:LinkedAgentWorker:linked:session-cc-1",
               vesselParticipantId: "participant-linked",
               launchId: "claude-code:inv-cc",
+              generationId: "generation:cc-1",
               pid: 4242,
               logPath: "/state/agent-launch/session:cc-1/headless.log",
             };
           }
           if (provider === "claudeCode" && providerMethod === "release") {
             return { released: true };
+          }
+          if (provider === "claudeCode" && providerMethod === "inspectLaunch") {
+            return {
+              entityId: "session:cc-1",
+              generationId: "generation:cc-1",
+              state: "running",
+              pid: 4242,
+              log: { bytes: 12, tail: "checking…", truncated: false },
+            };
           }
         }
         if (target === "main" && method === "extensions.invoke") {
@@ -1412,6 +1430,7 @@ class SubagentSpawnProbe extends TestVessel {
               vesselEntityId: "do:workers/linked-agent:LinkedAgentWorker:linked:session-codex-1",
               vesselParticipantId: "participant-linked",
               launchId: "codex:inv-codex",
+              generationId: "generation:codex-1",
               pid: 4242,
               logPath: "/state/agent-launch/session:codex-1/headless.log",
             };
@@ -1482,7 +1501,9 @@ class SubagentSpawnProbe extends TestVessel {
       startedAt: now,
       lastActivityAt: row.lastActivityAt ?? now,
       agentKind: "pi",
+      launchConfig: null,
       externalSessionEntityId: null,
+      externalGenerationId: null,
     });
   }
   async inspectSubagentForTest(runId: string, query: string, parentChannelId = CHANNEL) {
@@ -1825,12 +1846,20 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       { model: "openai-codex:gpt-5.3-codex-spark", approvalLevel: 2 },
     ]);
 
-    await probe.spawnForTest(CHANNEL, "inv-override", {
+    const out = await probe.spawnForTest(CHANNEL, "inv-override", {
       mode: "fresh",
       task: "exercise an explicit child override",
       config: { model: "openai:gpt-5.3", approvalLevel: 1 },
     });
 
+    expect(out).toMatchObject({
+      isError: false,
+      result: {
+        details: {
+          launchConfig: { model: "openai:gpt-5.3", approvalLevel: 1 },
+        },
+      },
+    });
     const create = probe.rpcCalls.find(
       (call) => call.target === "main" && call.method === "runtime.createEntity"
     );
@@ -1839,6 +1868,23 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
         agentConfig: { model: "openai:gpt-5.3", approvalLevel: 1 },
       },
     });
+  });
+
+  it("keeps Pi child execution on the parent vessel source", async () => {
+    const probe = await makeSubagentSpawnProbe();
+
+    await probe.spawnForTest(CHANNEL, "inv-source-identity", {
+      mode: "fresh",
+      task: "exercise child runtime identity",
+      // Legacy or malformed arguments must not turn an edited package into
+      // executable agent code.
+      source: "packages/disposable-task",
+    });
+
+    const create = probe.rpcCalls.find(
+      (call) => call.target === "main" && call.method === "runtime.createEntity"
+    );
+    expect(create?.args[0]).toMatchObject({ source: "test" });
   });
 
   it("reuses an existing child trajectory fork point when a forked spawn is retried", async () => {
@@ -2165,6 +2211,62 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     });
   });
 
+  it("returns a bounded parent-relative diff instead of expanding the child semantic graph", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    const runId = "inv-diff";
+    probe.insertSubagentRunForTest({ runId, status: "running" });
+    const childHead = { kind: "event" as const, eventId: "event:child" };
+    const parentHead = {
+      kind: "application" as const,
+      applicationId: "application:parent",
+    };
+    probe.respondToVcs(
+      "status",
+      semanticStatus("ctx-inv-diff-stale", "event:child", childHead, true),
+      semanticStatus("ctx-1", "event:parent", parentHead, false)
+    );
+    probe.respondToVcs(
+      "compare",
+      semanticComparison(parentHead, "event:child", [
+        {
+          changeId: "change:child",
+          disposition: { status: "actionable", applicability: "applicable" },
+        },
+      ])
+    );
+
+    const out = await probe.inspectSubagentForTest(runId, "diff");
+    const text = (out.content[0] as { text?: string } | undefined)?.text ?? "";
+
+    expect(text).toContain('"sourceEventId": "event:child"');
+    expect(text.length).toBeLessThan(20_000);
+    expect(probe.rpcCalls.filter(({ method }) => method.startsWith("vcs."))).toEqual([
+      {
+        target: "main",
+        method: "vcs.status",
+        args: [{ contextId: "ctx-inv-diff-stale" }],
+      },
+      {
+        target: "main",
+        method: "vcs.status",
+        args: [{ contextId: "ctx-1" }],
+      },
+      {
+        target: "main",
+        method: "vcs.compare",
+        args: [
+          {
+            target: parentHead,
+            sourceEventId: "event:child",
+            view: "changes",
+            limit: 20,
+          },
+        ],
+      },
+    ]);
+    expect(probe.rpcCalls.some(({ method }) => method === "vcs.inspect")).toBe(false);
+  });
+
   it("recovers a missing subagent row from the parent invocation card for transcript reads", async () => {
     const probe = await makeSubagentSpawnProbe();
     probe.seedSubagentStartedInParentChannelForTest("inv-recovered");
@@ -2350,6 +2452,20 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     const methods = probe.rpcCalls.map(({ method }) => method);
     expect(methods.filter((method) => method === "vcs.integrate")).toHaveLength(1);
     expect(methods).not.toContain("vcs.commit");
+
+    await expect(probe.closeSubagentForTest(runId)).rejects.toMatchObject({
+      code: "IntegrationIncomplete",
+      message: expect.stringContaining("unresolved integration decisions"),
+      errorData: {
+        code: "IntegrationIncomplete",
+        operation: "subagent-close",
+        runId,
+      },
+    });
+    expect(probe.subagentRunForTest(runId)).not.toBeNull();
+
+    await expect(probe.closeSubagentForTest(runId, true)).resolves.toBeTruthy();
+    expect(probe.subagentRunForTest(runId)).toBeNull();
   });
 
   it("resolves a long unique trailing-ellipsis run reference to its canonical id", async () => {
@@ -2360,7 +2476,10 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
 
     const out = await probe.readSubagentForTest("call_nnrl4WyxSSNYE7v57Bm9P...", 0);
 
-    expect(out.details).toMatchObject({ runId, empty: true });
+    expect(out.details).toMatchObject({
+      runId: "call_nnrl4WyxSSNYE7v57Bm…",
+      empty: true,
+    });
   });
 
   it("rejects ambiguous or too-short abbreviated run references", async () => {
@@ -2374,9 +2493,16 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       status: "running",
     });
 
-    await expect(probe.readSubagentForTest("call_shared_prefix_1234567890_...", 0)).rejects.toThrow(
-      "ambiguous subagent run reference"
-    );
+    await expect(
+      probe.readSubagentForTest("call_shared_prefix_1234567890_...", 0)
+    ).rejects.toMatchObject({
+      code: "InvalidReference",
+      errorData: expect.objectContaining({
+        code: "InvalidReference",
+        operation: "subagent-reference",
+      }),
+      message: expect.stringContaining("ambiguous subagent run reference"),
+    });
     await expect(probe.readSubagentForTest("call_shared...", 0)).rejects.toThrow(
       "unknown subagent run"
     );
@@ -2386,10 +2512,26 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     const probe = await makeSubagentSpawnProbe();
     const runId = "call_close_reference_1234567890_terminal";
     probe.insertSubagentRunForTest({ runId, status: "running" });
+    const parentHead = { kind: "event" as const, eventId: "event:parent" };
+    const childHead = { kind: "event" as const, eventId: "event:child" };
+    probe.respondToVcs(
+      "status",
+      semanticStatus("ctx-1", "event:parent", parentHead, true),
+      semanticStatus(`ctx-${runId}-stale`, "event:child", childHead, true)
+    );
+    probe.respondToVcs("compare", semanticComparison(parentHead, "event:child", []));
 
     const out = await probe.closeSubagentForTest("call_close_reference_1234567890_...");
 
-    expect(out).toMatchObject({ details: { runId } });
+    expect(out).toMatchObject({
+      details: { runId: "call_close_reference_123…" },
+    });
+    expect(probe.rpcCalls.map(({ method }) => method)).toEqual([
+      "vcs.status",
+      "vcs.status",
+      "vcs.compare",
+      "runtime.destroyContext",
+    ]);
     expect(probe.subagentRunForTest(runId)).toBeNull();
   });
 
@@ -2578,6 +2720,7 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       childEntityId: "do:workers/linked-agent:LinkedAgentWorker:linked:session-cc-1",
       childParticipantId: "participant-linked",
       externalSessionEntityId: "session:cc-1",
+      externalGenerationId: "generation:cc-1",
       childContextId: "ctx-child",
     });
 
@@ -2642,7 +2785,7 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     );
     expect(launchCall!.args[0]).toBe("@workspace-extensions/codex");
 
-    await probe.closeSubagentForTest("inv-codex");
+    await probe.closeSubagentForTest("inv-codex", true);
     const releaseCall = probe.rpcCalls.find(
       (c) =>
         c.method === "extensions.invoke" &&
@@ -2650,7 +2793,10 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
         c.args[1] === "release"
     );
     expect(releaseCall).toBeDefined();
-    expect((releaseCall!.args[2] as unknown[])[0]).toMatchObject({ entityId: "session:codex-1" });
+    expect((releaseCall!.args[2] as unknown[])[0]).toMatchObject({
+      entityId: "session:codex-1",
+      generationId: "generation:codex-1",
+    });
   });
 
   it("tears down the child context when the Claude extension launch fails during setup", async () => {
@@ -2681,14 +2827,27 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       task: "audit the repo",
     });
 
-    await probe.closeSubagentForTest("inv-cc");
+    const runtime = await probe.inspectSubagentForTest("inv-cc", "runtime");
+    expect((runtime.content[0] as { text?: string }).text).toContain('"state": "running"');
+    const inspectCall = probe.rpcCalls.find(
+      (c) => c.method === "extensions.invokeProvider" && c.args[1] === "inspectLaunch"
+    );
+    expect((inspectCall!.args[2] as unknown[])[0]).toEqual({
+      entityId: "session:cc-1",
+      generationId: "generation:cc-1",
+    });
+
+    await probe.closeSubagentForTest("inv-cc", true);
 
     const releaseCall = probe.rpcCalls.find(
       (c) => c.method === "extensions.invokeProvider" && (c.args[1] as string) === "release"
     );
     expect(releaseCall).toBeDefined();
     expect(releaseCall!.args[0]).toBe("claudeCode");
-    expect((releaseCall!.args[2] as unknown[])[0]).toMatchObject({ entityId: "session:cc-1" });
+    expect((releaseCall!.args[2] as unknown[])[0]).toEqual({
+      entityId: "session:cc-1",
+      generationId: "generation:cc-1",
+    });
     // Context teardown still runs.
     expect(
       probe.rpcCalls.some(

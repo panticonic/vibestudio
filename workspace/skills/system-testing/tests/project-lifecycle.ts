@@ -492,6 +492,20 @@ function observedRenderedCapture(call: InvocationCardPayloadLike): boolean {
   );
 }
 
+function isSuccessfulImageRead(call: InvocationCardPayloadLike): boolean {
+  if (call.name !== "read") return false;
+  const path = call.arguments?.["path"] ?? call.arguments?.["target"];
+  if (typeof path !== "string" || path.length === 0) return false;
+  const value = details(call);
+  return Boolean(
+    value &&
+    typeof value["mimeType"] === "string" &&
+    value["mimeType"].startsWith("image/") &&
+    typeof value["size"] === "number" &&
+    value["size"] > 0
+  );
+}
+
 function completeTodoRuntimeVerificationIndex(
   calls: readonly InvocationCardPayloadLike[],
   fromIndex: number
@@ -615,6 +629,16 @@ function validateTodoDebugLoop(result: TestExecutionResult) {
       reason: "No managed source edit repaired the UX after inspecting the running panel",
     };
   }
+  const flawedPanelImageRead = calls
+    .slice(firstInspectionIndex + 1, uxMutationIndex)
+    .some(isSuccessfulImageRead);
+  if (!flawedPanelImageRead) {
+    return {
+      passed: false,
+      reason:
+        "The agent did not read the compile-clean flawed panel screenshot as image content before choosing the UX repair",
+    };
+  }
 
   const finalCleanTypecheckIndex = calls.findIndex((call, index) => {
     const summary =
@@ -636,6 +660,14 @@ function validateTodoDebugLoop(result: TestExecutionResult) {
       passed: false,
       reason:
         "No final live-panel verification rebuilt the same panel, exercised add/complete/filter/delete behavior, captured the UI, and returned an empty console error list",
+    };
+  }
+  const repairedPanelImageRead = calls.slice(uxMutationIndex + 1).some(isSuccessfulImageRead);
+  if (!repairedPanelImageRead) {
+    return {
+      passed: false,
+      reason:
+        "The agent captured the repaired panel but did not read the screenshot as image content",
     };
   }
 
@@ -730,11 +762,18 @@ export const projectLifecycleTests: TestCase[] = [
           tier: "gated",
           decision: "once",
         },
+        {
+          ruleId: "inspect-screenshot-analysis-dependency",
+          capability: "workspace.dependencies.inspect",
+          resource: { kind: "exact", key: "workspace.dependencies.inspect" },
+          tier: "gated",
+          decision: "once",
+        },
       ],
       userland: [],
     },
     prompt:
-      "Build a simple, polished To-Do list as a brand-new isolated panel. Begin with two small deliberate defects—one compiler error and one obvious usability problem—so the development loop has real failures to find. Observe the compiler defect through a structured compile or build check, then diagnose and repair only that failure while leaving the usability defect intact. Launch and inspect that compile-clean but visibly flawed panel, then repair the usability defect in a separate source edit. Refresh the same running panel with the repaired source, capture its appearance, exercise the add, complete, filter, and delete flows in the live UI, and publish the finished result. Make the final experience keyboard-friendly, responsive, visually polished, and free of runtime or console errors. Report the defects you observed and concrete final verification.",
+      "Build a simple, polished To-Do list as a brand-new isolated panel. Begin with two small deliberate defects—one compiler error and one obvious usability problem—so the development loop has real failures to find. Observe the compiler defect through a structured compile or build check, then diagnose and repair only that failure while leaving the usability defect intact. Launch the compile-clean but visibly flawed panel, save a screenshot in scratch, and read that image so your UX repair is based on the rendered pixels rather than DOM text alone. Repair the usability defect in a separate source edit. Refresh the same running panel with the repaired source, save and visually read a second screenshot, exercise the add, complete, filter, and delete flows in the live UI, and publish the finished result. Make the final experience keyboard-friendly, responsive, visually polished, and free of runtime or console errors. Report the defects you observed and concrete final verification.",
     validate: validateTodoDebugLoop,
   },
 ];

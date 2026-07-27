@@ -147,6 +147,25 @@ describe("formatEvalResult (shared by the eval tool's execute + the agent's defe
     });
     expect(calls[0]?.[0]).not.toHaveProperty("path");
   });
+  it("executes ordinary TypeScript and JavaScript file paths", async () => {
+    const calls: unknown[][] = [];
+    const tool = createEvalTool(async (_method, args) => {
+      calls.push(args);
+      return { success: true, console: "", returnValue: { ok: true } } as never;
+    });
+
+    await tool.execute("call-ts", { path: ".vibestudio/eval/check.ts" } as never);
+    await tool.execute("call-js", { path: ".vibestudio/eval/check.js" } as never);
+
+    expect(calls[0]?.[0]).toMatchObject({
+      path: ".vibestudio/eval/check.ts",
+      code: undefined,
+    });
+    expect(calls[1]?.[0]).toMatchObject({
+      path: ".vibestudio/eval/check.js",
+      code: undefined,
+    });
+  });
   it("formats a successful run: console + return value + scope keys, raw result on details", () => {
     const result: EvalRunResult = {
       success: true,

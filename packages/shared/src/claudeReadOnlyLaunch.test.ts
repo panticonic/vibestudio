@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -40,9 +45,11 @@ describe("confineClaudeReadOnly", () => {
     );
     expect(launch.args.slice(-3)).toEqual(["claude", "--channels", "server:vibestudio"]);
     expect(launch.scratchDirectory).toBe(path.join(profileDir, "scratch"));
+    expect(launch.claudeConfigDirectory).toBe(path.join(profileDir, "claude-config"));
     expect(launch.env).toEqual({
       TMPDIR: "/tmp",
       VIBESTUDIO_LINKED_SCRATCH: path.join(profileDir, "scratch"),
+      CLAUDE_CONFIG_DIR: path.join(profileDir, "claude-config"),
     });
   });
 

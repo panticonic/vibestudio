@@ -3446,6 +3446,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "direct:workspace/workers/linked-agent/linked-agent-worker.ts:reportExternalResult",
+    rpcPlane: "workspace-do",
+    capability: "rpc:reportExternalResult",
+    authorityPrincipals: ["code", "host"],
+    owner: "workspace/workers/linked-agent/linked-agent-worker.ts",
+    source: "workers/linked-agent",
+    method: "reportExternalResult",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/workers/linked-agent/linked-agent-worker.ts",
+    },
+  },
+  {
     id: "direct:workspace/workers/linked-agent/linked-agent-worker.ts:requestPermission",
     rpcPlane: "workspace-do",
     capability: "rpc:requestPermission",
@@ -10232,6 +10246,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:vcs.readMemory",
+    rpcPlane: "host-service",
+    capability: "service:vcs.readMemory",
+    authorityPrincipals: ["user", "code", "host"],
+    owner: "vcs",
+    method: "readMemory",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:vcs.readMemory",
+    },
+  },
+  {
     id: "host:vcs.resolveRepository",
     rpcPlane: "host-service",
     capability: "service:vcs.resolveRepository",
@@ -12671,6 +12698,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "vcs",
+    method: "readMemory",
+  },
+  {
+    service: "vcs",
     method: "resolveRepository",
   },
   {
@@ -13379,6 +13410,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "rpc:postClone",
   "rpc:registerPushTarget",
   "rpc:reportExternalExit",
+  "rpc:reportExternalResult",
   "rpc:setAttentionPrefs",
   "rpc:subscribeChannel",
   "rpc:unregisterPushTarget",
@@ -13732,6 +13764,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:vcs.neighbors",
   "service:vcs.push",
   "service:vcs.readFile",
+  "service:vcs.readMemory",
   "service:vcs.resolveRepository",
   "service:vcs.revert",
   "service:vcs.status",

@@ -41,7 +41,7 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
   },
   "vcs.commit": {
     description:
-      "commit({ contextId, expectedWorkingHead, commandId, integratesEventId?, message? }) → one atomic workspace event containing the complete local application chain. Integration parents are derived from local decisions; pass integratesEventId only for a zero-change source or to confirm the derived source. There is no staging or selective commit; use another context for an independent boundary.",
+      "commit({ contextId, expectedWorkingHead, commandId, integratesEventIds?, message? }) → one atomic workspace event containing the complete local application chain. Integration parents are derived from local decisions; pass integratesEventIds only for zero-change sources or to confirm the exact derived set. There is no staging or selective commit; use another context for an independent boundary.",
   },
   "runtime.createEntity": {
     description:
@@ -85,6 +85,14 @@ export interface InjectedSurfaceDescription {
   surface: "injected-runtime";
   note: string;
   methods: Record<string, unknown>;
+}
+
+export interface InjectedSurfaceIndexDescription {
+  name: string;
+  surface: "injected-runtime-index";
+  note: string;
+  methods: Array<{ name: string; description: string }>;
+  next: string;
 }
 
 export function invalidHelpArgumentResponse(value: unknown): Record<string, unknown> {
@@ -138,5 +146,31 @@ export function describeEvalBindingSurface(
       `ergonomic client; use \`rpc.call\` for raw service-only methods. Low-level wire methods ` +
       `are intentionally hidden behind these wrappers.`,
     methods,
+  };
+}
+
+/**
+ * Keep binding-level discovery small. Exact schemas are intentionally exposed
+ * only by `help("<binding>.<method>")`; returning every nested schema from
+ * `help("<binding>")` makes the useful method list disappear inside a
+ * transport-truncated payload.
+ */
+export function describeEvalBindingIndex(
+  description: InjectedSurfaceDescription
+): InjectedSurfaceIndexDescription {
+  return {
+    name: description.name,
+    surface: "injected-runtime-index",
+    note: description.note,
+    methods: Object.entries(description.methods).map(([name, method]) => ({
+      name,
+      description:
+        method &&
+        typeof method === "object" &&
+        typeof (method as Record<string, unknown>)["description"] === "string"
+          ? ((method as Record<string, unknown>)["description"] as string)
+          : "Runtime method.",
+    })),
+    next: `Call help("${description.name}.<method>") for that method's exact arguments, return schema, and typed errors.`,
   };
 }

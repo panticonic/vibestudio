@@ -241,7 +241,7 @@ describe("canonical VCS CLI", () => {
           contextId: "context:1",
           event: { kind: "event", eventId: "event:integration" },
           committedApplicationIds: [],
-          integrationSourceEventId: input["integratesEventId"],
+          integrationSourceEventIds: input["integratesEventIds"] ?? [],
         };
       }
       throw new Error(`unexpected ${method}`);
@@ -282,7 +282,7 @@ describe("canonical VCS CLI", () => {
           expectedWorkingHead: working,
           message: "Close integration",
           commandId: "command:integration",
-          integratesEventId: "event:source",
+          integratesEventIds: ["event:source"],
         },
       ],
     });
@@ -354,7 +354,7 @@ describe("canonical VCS CLI", () => {
           contextId: "context:1",
           event: { kind: "event", eventId: "event:committed" },
           committedApplicationIds: [],
-          integrationSourceEventId: null,
+          integrationSourceEventIds: [],
         };
       }
       throw new Error(`unexpected ${method}`);

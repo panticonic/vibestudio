@@ -172,6 +172,8 @@ describe("subagent prompt contract", () => {
     });
 
     expect(prompt).toContain("Use `say` sparingly");
+    expect(prompt).toContain("You own execution of the assigned task");
+    expect(prompt).toContain("do not hand the parent a plan or code block to copy");
     expect(prompt).toContain("Finish exactly once");
     expect(prompt).toContain("Only `complete` ends this subagent run");
     expect(prompt).not.toContain("## Forked Subagent Scope");
@@ -191,6 +193,22 @@ describe("subagent prompt contract", () => {
     expect(prompt).toContain("context window cache is shared");
     expect(prompt).toContain("Assume the parent agent owns the main line of work");
     expect(prompt).toContain("Do not broaden scope");
+  });
+
+  it("uses the typed launcher result for a supervised external subagent", () => {
+    const prompt = subagentRuntimePrompt(
+      {
+        runId: "run-external",
+        parentRef: "parent",
+        parentChannelId: "ch-parent",
+        parentContextId: "ctx-parent",
+        depth: 2,
+      },
+      { completionMode: "supervised-process" }
+    );
+    expect(prompt).toContain("typed terminal result");
+    expect(prompt).toContain("Do not print or imitate tool-call syntax");
+    expect(prompt).not.toContain("Only `complete` ends");
   });
 });
 

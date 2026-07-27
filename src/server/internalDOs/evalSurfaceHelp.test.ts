@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   describeEvalBindingSurface,
+  describeEvalBindingIndex,
   EVAL_RUNTIME_METHOD_NOTES,
   invalidHelpArgumentResponse,
 } from "./evalSurfaceHelp.js";
@@ -127,6 +128,29 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
 
   it("returns null when there are no live methods (caller falls back to the service schema)", () => {
     expect(describeEvalBindingSurface("vcs", [], { applyEdits: {} })).toBeNull();
+  });
+
+  it("keeps binding discovery compact and points to exact per-method help", () => {
+    const detailed = describeEvalBindingSurface("vcs", ["status", "edit"], {
+      status: {
+        description: "Read the current frontier.",
+        argsSchema: { deliberately: "large" },
+      },
+      edit: {
+        description: "Author an exact semantic edit.",
+        argsSchema: { deliberately: "large" },
+      },
+    })!;
+    expect(describeEvalBindingIndex(detailed)).toEqual({
+      name: "vcs",
+      surface: "injected-runtime-index",
+      note: detailed.note,
+      methods: [
+        { name: "edit", description: "Author an exact semantic edit." },
+        { name: "status", description: "Read the current frontier." },
+      ],
+      next: 'Call help("vcs.<method>") for that method\'s exact arguments, return schema, and typed errors.',
+    });
   });
 });
 

@@ -15,6 +15,16 @@ import type { RuntimeFs } from "./runtime-fs.js";
 import type { RpcCaller } from "@vibestudio/rpc";
 import { createExtensionProxy } from "@vibestudio/extension";
 import { resolveToCwd } from "./path-utils.js";
+import { sha256Hex } from "@vibestudio/content-addressing";
+import { splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
+import type { VcsReadMemoryResult } from "@vibestudio/service-schemas/vcs";
+import {
+  toVcsPath,
+  toolContextId,
+  type ToolVcs,
+  type ToolWorkspaceContext,
+} from "./tool-vcs.js";
+import { renderReadMemoryBlock } from "./read-memory.js";
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
@@ -63,6 +73,20 @@ export interface ReadToolDetails {
   extensionFallback?: string;
   missing?: boolean;
   suggestions?: string[];
+  displayedRange?: {
+    coordinateKind: "utf16";
+    start: number;
+    end: number;
+    startLine: number;
+    endLine: number;
+  };
+  provenance?:
+    | VcsReadMemoryResult
+    | {
+        status: "unavailable";
+        path: string;
+        reason: string;
+      };
 }
 interface ImageResizeResult {
   /** Base64 payload: extension RPC return values are JSON, never typed-array objects. */
@@ -92,6 +116,11 @@ const IMAGE_SERVICE_EXTENSION = "@workspace-extensions/image-service";
 export interface ReadToolDeps {
   /** RPC caller — needed for image resize. */
   rpc?: RpcCaller;
+  /** Canonical GAD/VCS read-memory projection for managed source reads. */
+  provenance?: {
+    vcs: Pick<ToolVcs, "readMemory">;
+    context: ToolWorkspaceContext;
+  };
 }
 export function createReadTool(
   cwd: string,
@@ -99,6 +128,7 @@ export function createReadTool(
   deps?: ReadToolDeps
 ): AgentTool<typeof readSchema, ReadToolDetails> {
   const runtimeRpc = deps?.rpc ?? null;
+  const provenanceDeps = deps?.provenance ?? null;
   const imageService = deps?.rpc
     ? createExtensionProxy<ImageServiceApi>(deps.rpc, IMAGE_SERVICE_EXTENSION, () => false)
     : null;
@@ -115,9 +145,7 @@ export function createReadTool(
       const matches = entries.filter((entry) => entry.name === match[1]);
       if (matches.length !== 1) return null;
       const entry = matches[0]!;
-      const content = await runtimeRpc.call<string>("main", "workspace.readSkill", [
-        entry.dirPath,
-      ]);
+      const content = await runtimeRpc.call<string>("main", "workspace.readSkill", [entry.dirPath]);
       return {
         content: [{ type: "text", text: content }],
         details: {
@@ -169,6 +197,65 @@ export function createReadTool(
     };
   };
 
+  const attachReadMemory = async (
+    result: ReadResult,
+    text: string,
+    requestedPath: string,
+    signal?: AbortSignal
+  ): Promise<ReadResult> => {
+    const displayed = result.details.displayedRange;
+    if (!provenanceDeps || !displayed) return result;
+    let workspacePath: string;
+    try {
+      workspacePath = toVcsPath(requestedPath, cwd);
+    } catch {
+      return result;
+    }
+    const split = splitRepoPath(workspacePath);
+    if (!split?.repoRelPath || split.repoPath.split("/")[0] === "skills") return result;
+    if (signal?.aborted) throw new Error("Operation aborted");
+    try {
+      const provenance = await provenanceDeps.vcs.readMemory({
+        contextId: toolContextId(provenanceDeps.context),
+        path: workspacePath,
+        expectedContentHash: sha256Hex(new TextEncoder().encode(text)),
+        range: { start: displayed.start, end: displayed.end },
+        episodeLimit: 4,
+        historyLimit: 3,
+      });
+      if (signal?.aborted) throw new Error("Operation aborted");
+      if (provenance.status !== "attached") {
+        return {
+          ...result,
+          details: { ...result.details, provenance },
+        };
+      }
+      const block = renderReadMemoryBlock({
+        label: workspacePath,
+        startLine: displayed.startLine,
+        endLine: displayed.endLine,
+        result: provenance,
+      });
+      return {
+        ...result,
+        content: block
+          ? [...result.content, { type: "text" as const, text: block }]
+          : result.content,
+        details: { ...result.details, provenance },
+      };
+    } catch (error) {
+      if (signal?.aborted) throw new Error("Operation aborted");
+      const reason = error instanceof Error ? error.message : String(error);
+      return {
+        ...result,
+        details: {
+          ...result.details,
+          provenance: { status: "unavailable", path: workspacePath, reason },
+        },
+      };
+    }
+  };
+
   return {
     name: "read",
     label: "read",
@@ -199,9 +286,7 @@ export function createReadTool(
       try {
         const stats = await retryTransientRuntimeFs(() => fs.stat(absolutePath), signal);
         if (stats.isDirectory()) {
-          const entries = (
-            await retryTransientRuntimeFs(() => fs.readdir(absolutePath), signal)
-          )
+          const entries = (await retryTransientRuntimeFs(() => fs.readdir(absolutePath), signal))
             .map(String)
             .sort();
           const shown = entries.slice(0, 200);
@@ -236,10 +321,7 @@ export function createReadTool(
       }
       // Check that the file exists / is readable; preserve ENOENT semantics.
       try {
-        await retryTransientRuntimeFs(
-          () => fs.access(absolutePath, fs.constants.R_OK),
-          signal
-        );
+        await retryTransientRuntimeFs(() => fs.access(absolutePath, fs.constants.R_OK), signal);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
           return missingResult(path, absolutePath);
@@ -250,16 +332,15 @@ export function createReadTool(
         throw new Error("Operation aborted");
       }
       // --- Image/text read ---------------------------------------------------------------
-      // Text is the overwhelmingly common path and should remain a single
-      // compact UTF-8 RPC response. Binary envelopes add base64 expansion and
-      // unnecessary control-frame pressure, which is especially costly when
-      // the model reads several skills in parallel. Only likely image paths
-      // need raw bytes for detection and resize.
-      const likelyImage = isLikelyImagePath(path);
+      // Text with a recognizable filename remains a single compact UTF-8 RPC
+      // response. Runtime artifacts such as screenshots intentionally use
+      // opaque extensionless temp paths, so those paths must be read as bytes
+      // and magic-sniffed instead of being irreversibly decoded as UTF-8.
+      const shouldSniffMedia = isLikelyImagePath(path) || hasNoFileExtension(path);
       let raw: string | Buffer;
       try {
         raw = await retryTransientRuntimeFs(
-          () => fs.readFile(absolutePath, likelyImage ? undefined : "utf8"),
+          () => fs.readFile(absolutePath, shouldSniffMedia ? undefined : "utf8"),
           signal
         );
       } catch (err) {
@@ -268,7 +349,11 @@ export function createReadTool(
         }
         throw err;
       }
-      if (raw instanceof Uint8Array && imageService && likelyImage) {
+      if (
+        raw instanceof Uint8Array &&
+        imageService &&
+        (isLikelyImagePath(path) || hasSupportedImageMagic(raw))
+      ) {
         const mimeType = await imageService.detectMimeType(raw);
         if (mimeType?.startsWith("image/")) {
           const resized = await imageService.resize(raw, mimeType, {
@@ -297,7 +382,12 @@ export function createReadTool(
       }
       // --- Text branch -------------------------------------------------------------------
       const textContent = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf-8");
-      return formatTextResult(textContent, path, offset, limit);
+      return attachReadMemory(
+        formatTextResult(textContent, path, offset, limit),
+        textContent,
+        path,
+        signal
+      );
     },
   };
 }
@@ -325,6 +415,44 @@ function similarityScore(candidate: string, wanted: string): number {
 
 function isLikelyImagePath(filePath: string): boolean {
   return /\.(?:png|jpe?g|gif|webp)$/iu.test(filePath);
+}
+
+function hasNoFileExtension(filePath: string): boolean {
+  const basename = filePath.slice(filePath.lastIndexOf("/") + 1);
+  return !basename.includes(".");
+}
+
+function hasSupportedImageMagic(bytes: Uint8Array): boolean {
+  const png =
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a;
+  const jpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const gif =
+    bytes.length >= 6 &&
+    bytes[0] === 0x47 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x38 &&
+    (bytes[4] === 0x37 || bytes[4] === 0x39) &&
+    bytes[5] === 0x61;
+  const webp =
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50;
+  return png || jpeg || gif || webp;
 }
 function formatTextResult(
   textContent: string,
@@ -363,6 +491,12 @@ function formatTextResult(
     selectedContent = allLines.slice(startLine).join("\n");
   }
   const truncation = truncateHead(selectedContent);
+  const displayedStart = allLines
+    .slice(0, startLine)
+    .reduce((total, line) => total + line.length + 1, 0);
+  const displayedEnd = displayedStart + truncation.content.length;
+  const displayedEndLine =
+    startLineDisplay + Math.max(0, truncation.outputLines - 1);
   let outputText: string;
   let details: ReadToolDetails = {};
   if (truncation.firstLineExceedsLimit) {
@@ -389,7 +523,23 @@ function formatTextResult(
   }
   return {
     content: [{ type: "text", text: outputText }],
-    details: { ...details, path: displayPath, engine: "runtime-fs", extensionFallback },
+    details: {
+      ...details,
+      path: displayPath,
+      engine: "runtime-fs",
+      extensionFallback,
+      ...(!truncation.firstLineExceedsLimit
+        ? {
+            displayedRange: {
+              coordinateKind: "utf16" as const,
+              start: displayedStart,
+              end: displayedEnd,
+              startLine: startLineDisplay,
+              endLine: displayedEndLine,
+            },
+          }
+        : {}),
+    },
   };
 }
 const TRANSIENT_RUNTIME_FS_FAILURE =
@@ -408,7 +558,10 @@ async function retryTransientRuntimeFs<T>(
     } catch (error) {
       lastError = error;
       const message = error instanceof Error ? error.message : String(error);
-      if (attempt === TRANSIENT_RUNTIME_FS_ATTEMPTS || !TRANSIENT_RUNTIME_FS_FAILURE.test(message)) {
+      if (
+        attempt === TRANSIENT_RUNTIME_FS_ATTEMPTS ||
+        !TRANSIENT_RUNTIME_FS_FAILURE.test(message)
+      ) {
         throw error;
       }
       await new Promise((resolve) => setTimeout(resolve, attempt * 100));

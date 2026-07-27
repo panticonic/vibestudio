@@ -221,6 +221,36 @@ describe("workspace VCS agent tool", () => {
     });
   });
 
+  it("returns a typed invalid reference when reconciliation evidence is absent from target state", async () => {
+    const f = fixture();
+    vi.mocked(f.vcs.readFile).mockResolvedValueOnce(null);
+    const tool = createWorkspaceVcsTool("/", f.vcs, {
+      contextId: "context:test",
+      commandId: "command:missing-evidence",
+    });
+
+    await expect(
+      tool.execute("call:missing-evidence", {
+        operation: "integrate",
+        sourceEventId: "event:source",
+        decision: {
+          kind: "reconciled",
+          sourceChangeIds: ["change:source"],
+          evidence: [{ kind: "file-content", path: "packages/demo/new.ts" }],
+          rationale: "The target already has the intended generated fixture.",
+        },
+      })
+    ).rejects.toMatchObject({
+      code: "InvalidReference",
+      errorData: {
+        code: "InvalidReference",
+        referenceKind: "target-file-path",
+        reference: "packages/demo/new.ts",
+      },
+    });
+    expect(f.integrate).not.toHaveBeenCalled();
+  });
+
   it("resolves a friendly file path for bounded blame", async () => {
     const f = fixture();
     const tool = createWorkspaceVcsTool("/", f.vcs, {

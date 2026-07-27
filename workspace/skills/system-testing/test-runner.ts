@@ -6,10 +6,7 @@ import type {
   TestSuiteResultEntry,
   ToolFailureSummary,
 } from "./types.js";
-import {
-  isPreExecutionArgumentRejection,
-  isSafeVcsDomainRejection,
-} from "./tool-failure-classification.js";
+import { classifyBuiltInExpectedToolFailure } from "./tool-failure-classification.js";
 import type { HeadlessRunner } from "./runner.js";
 import type { ChatMessage } from "@workspace/agentic-core";
 import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-session";
@@ -726,12 +723,14 @@ interface InvocationLike {
   status?: unknown;
   terminalOutcome?: unknown;
   terminalReasonCode?: unknown;
+  failureKind?: unknown;
   error?: unknown;
   result?: unknown;
   execution?: {
     status?: unknown;
     terminalOutcome?: unknown;
     terminalReasonCode?: unknown;
+    failureKind?: unknown;
     description?: unknown;
     error?: unknown;
     result?: unknown;
@@ -779,11 +778,15 @@ function classifyExpectedToolFailures(
   expected: TestCase["expectedToolFailures"]
 ): ToolFailureSummary[] {
   return failures.map((failure) => {
-    if (isPreExecutionArgumentRejection(failure.error, failure.resultSummary)) {
-      return { ...failure, expected: true, classification: "argument-rejection" };
-    }
-    if (isSafeVcsDomainRejection(failure.name, failure.terminalReasonCode)) {
-      return { ...failure, expected: true, classification: "domain-rejection" };
+    const builtIn = classifyBuiltInExpectedToolFailure({
+      name: failure.name,
+      terminalReasonCode: failure.terminalReasonCode,
+      failureKind: failure.failureKind,
+      error: failure.error,
+      result: failure.resultSummary,
+    });
+    if (builtIn) {
+      return { ...failure, expected: true, classification: builtIn };
     }
     if (!expected?.length) return failure;
     const text = `${failure.error ?? ""}\n${failure.resultSummary ?? ""}`.toLowerCase();
@@ -823,6 +826,12 @@ function summarizeToolFailure(
   if (!isError && !hasFailureStatus && !hasFailureOutcome && rawError === undefined) return null;
 
   const rawResult = invocation.result ?? exec.result;
+  const resultDetails =
+    isRecord(rawResult) && isRecord(rawResult["details"]) ? rawResult["details"] : undefined;
+  const failureKind =
+    asString(exec.failureKind) ??
+    asString(invocation.failureKind) ??
+    (resultDetails ? asString(resultDetails["failureKind"]) : undefined);
   const name = asString(invocation.name) ?? asString(invocation.method) ?? "(unknown)";
   return {
     id: asString(invocation.id),
@@ -830,6 +839,11 @@ function summarizeToolFailure(
     status,
     terminalOutcome,
     terminalReasonCode,
+    ...(failureKind === "user-code" ||
+    failureKind === "infrastructure" ||
+    failureKind === "cancelled"
+      ? { failureKind }
+      : {}),
     error: summarizeError(rawError),
     resultSummary: rawResult === undefined ? undefined : summarizeValue(rawResult, 240),
     source,

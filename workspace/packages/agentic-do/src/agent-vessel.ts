@@ -197,6 +197,16 @@ const PARTICIPANT_HANDLE_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 const SUBAGENT_INTEGRATION_PROTOCOL = "vibestudio.subagent-integration.v2";
 const CHANNEL_ENVELOPE_RETRY_MS = 250;
 const CHANNEL_ENVELOPE_MAX_RETRY_MS = 30_000;
+const SUBAGENT_RUN_HANDLE_LENGTH = 24;
+
+/** Tool-facing run handle. The canonical id is the spawning invocation id and
+ *  can be extremely long; the store deliberately resolves this unique,
+ *  trailing-ellipsis prefix with a small transcription tolerance. */
+function subagentRunHandle(runId: string): string {
+  return runId.length > SUBAGENT_RUN_HANDLE_LENGTH
+    ? `${runId.slice(0, SUBAGENT_RUN_HANDLE_LENGTH)}…`
+    : runId;
+}
 
 function subagentVcsCommandId(
   phase: "integrate",
@@ -232,6 +242,8 @@ interface ExternalSubagentLaunchResult {
   vesselEntityId: string;
   vesselParticipantId: string | null;
   launchId: string;
+  /** Exact provider-owned generation used for runtime inspection and release. */
+  generationId: string;
   pid?: number | null;
 }
 
@@ -251,6 +263,32 @@ function externalSubagentExtensionId(agentKind: SubagentAgentKind): string {
 
 function externalSubagentProviderSlot(agentKind: SubagentAgentKind): string | null {
   return agentKind === "claude-code" ? "claudeCode" : null;
+}
+
+const OBSERVABLE_SUBAGENT_CONFIG_KEYS = [
+  "model",
+  "thinkingLevel",
+  "effort",
+  "fallbackModel",
+  "fallbackThinkingLevel",
+  "fallbackOn",
+  "fallbackScope",
+  "approvalLevel",
+  "respondPolicy",
+  "permissionMode",
+  "maxBudgetUsd",
+] as const;
+
+function observableSubagentLaunchConfig(
+  value: Record<string, unknown> | undefined
+): Record<string, unknown> | null {
+  if (!value) return null;
+  const selected = Object.fromEntries(
+    OBSERVABLE_SUBAGENT_CONFIG_KEYS.flatMap((key) =>
+      value[key] === undefined ? [] : [[key, value[key]]]
+    )
+  );
+  return Object.keys(selected).length > 0 ? selected : null;
 }
 
 export type ApprovalLevel = 0 | 1 | 2;
@@ -280,7 +318,7 @@ const CONFIGURABLE_FALLBACK_FAILURE_CODES = new Set([
   "rate_limited_retryable",
   "provider_overloaded_retryable",
   "auth_or_credentials",
-  "circuit_breaker_open_terminal",
+  "circuit_breaker_open_retryable",
   "unknown_retryable",
 ]);
 
@@ -1245,7 +1283,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         prepare: (channelId, signal) => this.preparePromptArtifacts(channelId, signal),
       },
       credentials: {
-        getApiKey: async ({ providerId, modelBaseUrl, requestId, idempotencyKey }) => {
+        getApiKey: async ({ providerId, modelBaseUrl, requestId, idempotencyKey, signal }) => {
           // Prefer URL-bound credentials when the model exposes a concrete
           // endpoint; fall back to provider-scoped credentials for providers
           // whose registry entries do not carry a base URL.
@@ -1260,13 +1298,15 @@ export abstract class AgentVesselBase extends DurableObjectBase {
                 {
                   idempotencyKey: idempotencyKey ?? requestId,
                   authorityAcquisition: "return",
+                  signal,
                 }
               );
             } else {
               summary = await this.rpc.call<ModelCredentialSummary | null>(
                 "main",
                 "credentials.resolveCredential",
-                [resolveRequest]
+                [resolveRequest],
+                { signal }
               );
             }
             if (!summary) throw new CredentialPendingError(providerId, modelBaseUrl);
@@ -2081,9 +2121,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     tier: "open",
     sensitivity: "write",
   })
-  adoptDurableWorkWorker(
-    workerId: string
-  ): { adopted: boolean; previousWorkerId: string | null } {
+  adoptDurableWorkWorker(workerId: string): { adopted: boolean; previousWorkerId: string | null } {
     return this.adoptDurableWorkWorkerGeneration(workerId);
   }
 
@@ -4808,7 +4846,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       const p = (args ?? {}) as {
         mode?: unknown;
         task?: unknown;
-        source?: unknown;
         config?: unknown;
         label?: unknown;
         agentKind?: unknown;
@@ -4849,7 +4886,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           return {
             result: {
               protocolContent: [
-                { type: "text", text: `subagent already exists: ${existingRun.runId}` },
+                {
+                  type: "text",
+                  text: `subagent already exists: ${subagentRunHandle(existingRun.runId)}`,
+                },
               ],
               details: this.subagentRunDetails(existingRun),
             },
@@ -4921,10 +4961,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
               ...(requestedChildConfig ?? {}),
             }
           : requestedChildConfig;
-      const source =
-        typeof p.source === "string" && p.source
-          ? p.source
-          : String(this.env["WORKER_SOURCE"] ?? "");
+      // A Pi child inherits the parent's executable identity. Letting model
+      // arguments choose an arbitrary package here conflates the task's source
+      // repository with a runtime worker and can launch the wrong code (or a
+      // non-runtime package). Different reasoning engines are selected through
+      // agentKind; they do not replace the vessel implementation.
+      const source = String(this.env["WORKER_SOURCE"] ?? "");
       const className =
         childConfig && typeof childConfig["className"] === "string"
           ? String(childConfig["className"])
@@ -5018,7 +5060,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         startedAt: now,
         lastActivityAt: now,
         agentKind: "pi",
+        launchConfig: observableSubagentLaunchConfig(childConfig),
         externalSessionEntityId: null,
+        externalGenerationId: null,
       };
       this.subagentRuns.insert(run);
 
@@ -5057,6 +5101,25 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         childParticipantId = childSubscription.participantId ?? null;
       }
       this.subagentRuns.setChildParticipantId(runId, childParticipantId);
+      const effectiveChildSettings = await this.rpc.call<Record<string, unknown>>(
+        childHandle.targetId,
+        "getAgentSettings",
+        []
+      );
+      for (const key of ["model", "thinkingLevel"] as const) {
+        const requested = requestedChildConfig?.[key];
+        if (requested !== undefined && effectiveChildSettings[key] !== requested) {
+          throw new Error(
+            `spawn_subagent effective ${key} mismatch: requested ${JSON.stringify(requested)}, ` +
+              `started ${JSON.stringify(effectiveChildSettings[key])}`
+          );
+        }
+      }
+      const effectiveLaunchConfig =
+        observableSubagentLaunchConfig(effectiveChildSettings) ??
+        observableSubagentLaunchConfig(childConfig);
+      this.subagentRuns.setLaunchConfig(runId, effectiveLaunchConfig);
+      run.launchConfig = effectiveLaunchConfig;
 
       // 6) Parent watches the task channel turn-final (buffered, log-derived).
       // The seed is published only after this, so the supervisor cannot miss
@@ -5087,7 +5150,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
       return {
         result: {
-          protocolContent: [{ type: "text", text: `spawned subagent ${runId}` }],
+          protocolContent: [{ type: "text", text: `spawned subagent ${subagentRunHandle(runId)}` }],
           details: this.subagentRunDetails(runningRun),
         },
         isError: false,
@@ -5129,8 +5192,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   /**
    * External subagent bring-up. Mirrors the Pi path but delegates the child
    * process to an extension launcher named by agentKind. Completion still flows
-   * through the same linked-vessel `completeFromBridge` → `onSubagentComplete`
-   * path, so cards, progress, merge-back, and cancellation stay shared.
+   * through the linked vessel's terminal settlement → `onSubagentComplete`
+   * path. Interactive completion can arrive from the bridge; supervised
+   * print-mode completion arrives from the launcher's typed process result.
+   * Cards, progress, merge-back, and cancellation stay shared either way.
    */
   private async runExternalSubagentSpawn(
     agentKind: SubagentAgentKind,
@@ -5181,7 +5246,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       startedAt: now,
       lastActivityAt: now,
       agentKind,
+      launchConfig: observableSubagentLaunchConfig(opts.launcherOptions),
       externalSessionEntityId: null,
+      externalGenerationId: null,
     };
     this.subagentRuns.insert(run);
 
@@ -5233,12 +5300,16 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     // when it calls back `onSubagentComplete` (the ownership gate).
     this.subagentRuns.setChildEntityId(runId, launched.vesselEntityId);
     this.subagentRuns.setChildParticipantId(runId, launched.vesselParticipantId);
-    this.subagentRuns.setExternalSessionEntityId(runId, launched.entityId);
+    this.subagentRuns.setExternalSession(runId, {
+      entityId: launched.entityId,
+      generationId: launched.generationId,
+    });
 
     // 6) Durable run card, then transition to live.
     const startedRun = this.subagentRuns.get(runId) ?? {
       ...run,
       externalSessionEntityId: launched.entityId,
+      externalGenerationId: launched.generationId,
     };
     await this.publishSubagentStarted(startedRun);
     this.subagentRuns.setStatus(runId, "running");
@@ -5253,7 +5324,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
     return {
       result: {
-        protocolContent: [{ type: "text", text: `spawned ${agentKind} subagent ${runId}` }],
+        protocolContent: [
+          {
+            type: "text",
+            text: `spawned ${agentKind} subagent ${subagentRunHandle(runId)}`,
+          },
+        ],
         details: this.subagentRunDetails(runningRun),
       },
       isError: false,
@@ -5262,7 +5338,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   private subagentRunDetails(run: SubagentRunRow): Record<string, unknown> {
     return {
-      runId: run.runId,
+      runId: subagentRunHandle(run.runId),
       mode: run.mode,
       label: run.label,
       taskChannelId: run.taskChannelId,
@@ -5273,9 +5349,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       integration: run.integration,
       // W6b: the SubagentRunCard badges the reasoning engine from this field.
       agentKind: run.agentKind,
+      ...(run.launchConfig ? { launchConfig: run.launchConfig } : {}),
       ...(run.externalSessionEntityId
         ? { externalSessionEntityId: run.externalSessionEntityId }
         : {}),
+      ...(run.externalGenerationId ? { externalGenerationId: run.externalGenerationId } : {}),
     };
   }
 
@@ -5285,8 +5363,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   ): Promise<SubagentRunRow | null> {
     const existing = this.subagentRuns.resolveReference(runId, parentChannelId);
     if (existing?.kind === "ambiguous") {
-      throw new Error(
-        `ambiguous subagent run reference ${runId}; use a longer abbreviation or the exact runId`
+      throw this.subagentReferenceError(
+        `ambiguous subagent run reference ${runId}; use a longer abbreviation or the exact runId`,
+        { runId }
       );
     }
     if (existing) return this.hydrateSubagentParentContext(existing.run);
@@ -5389,9 +5468,19 @@ export abstract class AgentVesselBase extends DurableObjectBase {
               typeof subagent["agentKind"] === "string" && subagent["agentKind"]
                 ? subagent["agentKind"]
                 : "pi",
+            launchConfig:
+              subagent["launchConfig"] &&
+              typeof subagent["launchConfig"] === "object" &&
+              !Array.isArray(subagent["launchConfig"])
+                ? (subagent["launchConfig"] as Record<string, unknown>)
+                : null,
             externalSessionEntityId:
               typeof subagent["externalSessionEntityId"] === "string"
                 ? subagent["externalSessionEntityId"]
+                : null,
+            externalGenerationId:
+              typeof subagent["externalGenerationId"] === "string"
+                ? subagent["externalGenerationId"]
                 : null,
           };
           continue;
@@ -5455,7 +5544,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     parentChannelId?: string
   ): Promise<AgentToolResult<Record<string, unknown>>> {
     const run = await this.resolveSubagentRun(runId, parentChannelId);
-    if (!run) throw new Error(`unknown subagent run ${runId}`);
+    if (!run) {
+      throw this.subagentReferenceError(`unknown subagent run ${runId}`, { runId });
+    }
     if (typeof message !== "string" || !message.trim()) {
       throw new Error("send_to_subagent requires a non-empty message");
     }
@@ -5466,19 +5557,52 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       senderMetadata: { type: "agent", name: participantId },
     });
     this.subagentRuns.touch(run.runId, Date.now());
-    return this.toolText(`sent to subagent ${run.runId}`, { runId: run.runId, messageId });
+    const handle = subagentRunHandle(run.runId);
+    return this.toolText(`sent to subagent ${handle}`, { runId: handle, messageId });
   }
 
-  /** Inspect a subagent through the sole canonical semantic VCS service.
-   *  `query` is `status` | `diff` | `log` | an exact file path. */
+  /** Inspect semantic child state through VCS, or an external engine through
+   *  its provider-owned bounded runtime diagnostics. */
   protected async inspectSubagent(
     runId: string,
     query: string,
-    parentChannelId?: string
+    parentChannelId?: string,
+    page: { limit: number; cursor?: string } = { limit: 20 }
   ): Promise<AgentToolResult<Record<string, unknown>>> {
     const run = await this.resolveSubagentRun(runId, parentChannelId);
-    if (!run) throw new Error(`unknown subagent run ${runId}`);
+    if (!run) {
+      throw this.subagentReferenceError(`unknown subagent run ${runId}`, { runId });
+    }
     const q = (query ?? "status").trim() || "status";
+    if (q === "runtime") {
+      if (!run.externalSessionEntityId || !run.externalGenerationId) {
+        throw new Error(`subagent ${run.runId} has no external runtime`);
+      }
+      const agentKind = normalizeSubagentAgentKind(run.agentKind);
+      if (!agentKind || agentKind === "pi") {
+        throw new Error(`subagent ${run.runId} has invalid external agentKind ${run.agentKind}`);
+      }
+      const providerSlot = externalSubagentProviderSlot(agentKind);
+      const result = await this.rpc.call(
+        "main",
+        providerSlot ? "extensions.invokeProvider" : "extensions.invoke",
+        [
+          providerSlot ?? externalSubagentExtensionId(agentKind),
+          "inspectLaunch",
+          [
+            {
+              entityId: run.externalSessionEntityId,
+              generationId: run.externalGenerationId,
+            },
+          ],
+        ]
+      );
+      return this.toolText(JSON.stringify(result, null, 2), {
+        runId: subagentRunHandle(run.runId),
+        query: q,
+        integration: run.integration,
+      });
+    }
     const callVcs = <T>(method: string, input: unknown): Promise<T> =>
       this.rpc.call<T>("main", `vcs.${method}`, [input]);
     const status = await callVcs<VcsStatusResult>("status", { contextId: run.childContextId });
@@ -5486,15 +5610,42 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (q === "status") {
       result = status;
     } else if (q === "diff") {
-      result = await callVcs<VcsInspectResult>("inspect", {
-        node: status.workingHead,
-        edgeLimit: 500,
+      if (!run.parentContextId) {
+        throw new Error(`subagent ${run.runId} has no parent context for a relative diff`);
+      }
+      const parentStatus = await callVcs<VcsStatusResult>("status", {
+        contextId: run.parentContextId,
       });
+      const comparison = await callVcs<VcsCompareResult>("compare", {
+        target: parentStatus.workingHead,
+        sourceEventId: status.committed.eventId,
+        view: "changes",
+        limit: page.limit,
+        ...(page.cursor ? { cursor: page.cursor } : {}),
+      });
+      result = {
+        child: {
+          contextId: status.contextId,
+          committed: status.committed,
+          workingHead: status.workingHead,
+          clean: status.clean,
+          workingCounts: status.workingCounts,
+        },
+        parent: {
+          contextId: parentStatus.contextId,
+          workingHead: parentStatus.workingHead,
+        },
+        comparison,
+        note: status.clean
+          ? "Comparison includes the child's committed work."
+          : "Comparison includes committed work only; workingCounts reports additional uncommitted semantic work.",
+      };
     } else if (q === "log") {
       result = await callVcs("history", {
         root: status.workingHead,
         direction: "past",
-        limit: 100,
+        limit: page.limit,
+        ...(page.cursor ? { cursor: page.cursor } : {}),
       });
     } else {
       const repositoryRefs = new Map<
@@ -5556,10 +5707,15 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         } while (fileCursor);
       }
       if (matches.length > 1) {
-        throw new Error(
+        throw this.subagentReferenceError(
           `ambiguous subagent file path ${q}; matches repositories ${matches
             .map((candidate) => candidate.repoPath)
-            .join(", ")}`
+            .join(", ")}`,
+          {
+            runId: run.runId,
+            path: q,
+            matchingRepositoryPaths: matches.map((candidate) => candidate.repoPath),
+          }
         );
       }
       const file = matches[0];
@@ -5572,7 +5728,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         : null;
     }
     return this.toolText(typeof result === "string" ? result : JSON.stringify(result, null, 2), {
-      runId: run.runId,
+      runId: subagentRunHandle(run.runId),
       query: q,
       integration: run.integration,
     });
@@ -5591,7 +5747,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     toolRpc: RpcClient = this.rpc
   ): Promise<AgentToolResult<Record<string, unknown>>> {
     const run = await this.resolveSubagentRun(runId, parentChannelId);
-    if (!run) throw new Error(`unknown subagent run ${runId}`);
+    if (!run) {
+      throw this.subagentReferenceError(`unknown subagent run ${runId}`, { runId });
+    }
     if (!run.parentContextId) {
       throw new Error(`subagent ${run.runId} has no recoverable parent context`);
     }
@@ -5609,7 +5767,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         `subagent ${run.runId} has uncommitted semantic work; commit the child context before integration`,
         {
           protocol: SUBAGENT_INTEGRATION_PROTOCOL,
-          runId: run.runId,
+          runId: subagentRunHandle(run.runId),
           status: "source-uncommitted",
           source: sourceStatus,
         }
@@ -5691,7 +5849,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           `subagent changes locally; remaining changes require explicit decisions`,
         {
           protocol: SUBAGENT_INTEGRATION_PROTOCOL,
-          runId: run.runId,
+          runId: subagentRunHandle(run.runId),
           status: "needs-decision",
           sourceEventId,
           initialWorkingHead,
@@ -5713,7 +5871,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         : `subagent ${run.runId} has no unaccounted changes`,
       {
         protocol: SUBAGENT_INTEGRATION_PROTOCOL,
-        runId: run.runId,
+        runId: subagentRunHandle(run.runId),
         status: adopted > 0 ? "working" : "unchanged",
         sourceEventId,
         initialWorkingHead,
@@ -5732,7 +5890,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     parentChannelId?: string
   ): Promise<AgentToolResult<Record<string, unknown>>> {
     const run = await this.resolveSubagentRun(runId, parentChannelId);
-    if (!run) throw new Error(`unknown subagent run ${runId}`);
+    if (!run) {
+      throw this.subagentReferenceError(`unknown subagent run ${runId}`, { runId });
+    }
     const envelope = await this.createChannelClient(run.taskChannelId).getReplayAfter({
       after: Number.isFinite(afterSeq) ? afterSeq : 0,
     });
@@ -5756,7 +5916,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           },
         ],
         details: {
-          runId: run.runId,
+          runId: subagentRunHandle(run.runId),
           nextSeq,
           messages,
           empty: true,
@@ -5768,7 +5928,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     }
     const rendered = messages.map((m) => `[#${m.seq} ${m.author}]\n${m.text}`).join("\n\n");
     return this.toolText(rendered, {
-      runId: run.runId,
+      runId: subagentRunHandle(run.runId),
       nextSeq,
       messages,
       empty: false,
@@ -5781,11 +5941,64 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   protected async closeSubagent(
     runId: string,
     discard: boolean,
-    parentChannelId?: string
+    parentChannelId?: string,
+    toolRpc: RpcClient = this.rpc
   ): Promise<AgentToolResult<Record<string, unknown>>> {
     const run = await this.resolveSubagentRun(runId, parentChannelId);
     if (!run) return this.toolText(`subagent ${runId} already closed`, { runId });
-    if (discard && run.integration === null) {
+    if (!discard && run.integration === "conflicted") {
+      throw this.subagentClosePrecondition(
+        "IntegrationIncomplete",
+        `subagent ${run.runId} still has unresolved integration decisions; resolve every ` +
+          "remaining change, then call integrate_subagent again, or close with discard:true " +
+          "to intentionally drop it",
+        { runId: run.runId }
+      );
+    }
+    if (!discard && run.integration === null) {
+      if (!run.parentContextId) {
+        throw this.subagentClosePrecondition(
+          "InvalidReference",
+          `subagent ${run.runId} has no recoverable parent context`,
+          { runId: run.runId }
+        );
+      }
+      const callVcs = <T>(method: string, input: unknown): Promise<T> =>
+        toolRpc.call<T>("main", `vcs.${method}`, [input]);
+      const [targetStatus, sourceStatus] = await Promise.all([
+        callVcs<VcsStatusResult>("status", { contextId: run.parentContextId }),
+        callVcs<VcsStatusResult>("status", { contextId: run.childContextId }),
+      ]);
+      if (!sourceStatus.clean || sourceStatus.committed.kind !== "event") {
+        throw this.subagentClosePrecondition(
+          "WorkingChangesPresent",
+          `subagent ${run.runId} has uncommitted work; commit and integrate it, or close with ` +
+            "discard:true to intentionally drop it",
+          { runId: run.runId, childContextId: run.childContextId }
+        );
+      }
+      const comparison = await callVcs<VcsCompareResult>("compare", {
+        target: targetStatus.workingHead,
+        sourceEventId: sourceStatus.committed.eventId,
+        view: "overview",
+        limit: 1,
+      });
+      if (!comparison.resolution.complete) {
+        throw this.subagentClosePrecondition(
+          "IntegrationIncomplete",
+          `subagent ${run.runId} has ${comparison.resolution.remainingChangeCount} unintegrated ` +
+            "effective change(s); call integrate_subagent first, or close with discard:true to " +
+            "intentionally drop them",
+          {
+            runId: run.runId,
+            sourceEventId: sourceStatus.committed.eventId,
+            remainingChangeCount: comparison.resolution.remainingChangeCount,
+          }
+        );
+      }
+      this.subagentRuns.setIntegration(run.runId, "integrated");
+    }
+    if (discard && run.integration !== "integrated") {
       this.subagentRuns.setIntegration(run.runId, "discarded");
     }
     const refreshed = this.subagentRuns.get(run.runId)!;
@@ -5798,9 +6011,28 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       );
     }
     await this.teardownRun(refreshed);
-    return this.toolText(`closed subagent ${run.runId}`, {
-      runId: run.runId,
+    const handle = subagentRunHandle(run.runId);
+    return this.toolText(`closed subagent ${handle}`, {
+      runId: handle,
       discarded: discard,
+    });
+  }
+
+  private subagentClosePrecondition(
+    code: "IntegrationIncomplete" | "InvalidReference" | "WorkingChangesPresent",
+    message: string,
+    detail: Record<string, unknown>
+  ): Error {
+    return Object.assign(new Error(message), {
+      code,
+      errorData: { code, operation: "subagent-close", ...detail },
+    });
+  }
+
+  private subagentReferenceError(message: string, detail: Record<string, unknown>): Error {
+    return Object.assign(new Error(message), {
+      code: "InvalidReference",
+      errorData: { code: "InvalidReference", operation: "subagent-reference", ...detail },
     });
   }
 
@@ -5930,6 +6162,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           childEntityId: run.childEntityId,
           label: run.label,
           agentKind: run.agentKind,
+          launchConfig: run.launchConfig,
         },
       },
       createdAt: new Date().toISOString(),
@@ -6000,7 +6233,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     this.subagentRuns.deleteWakeCursor(run.taskChannelId);
     // Release an extension-owned headless launch directly. Close/cancel/abandon
     // all route here. Idempotent — releasing an already-exited launch is a no-op.
-    if (run.externalSessionEntityId) {
+    if (run.externalSessionEntityId && run.externalGenerationId) {
       const agentKind = normalizeSubagentAgentKind(run.agentKind);
       if (agentKind && agentKind !== "pi") {
         const providerSlot = externalSubagentProviderSlot(agentKind);
@@ -6008,7 +6241,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           .call("main", providerSlot ? "extensions.invokeProvider" : "extensions.invoke", [
             providerSlot ?? externalSubagentExtensionId(agentKind),
             "release",
-            [{ entityId: run.externalSessionEntityId }],
+            [
+              {
+                entityId: run.externalSessionEntityId,
+                generationId: run.externalGenerationId,
+              },
+            ],
           ])
           .catch((err) => {
             console.error(

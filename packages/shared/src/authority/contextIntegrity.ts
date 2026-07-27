@@ -20,7 +20,7 @@ export interface ContextIntegrityLatchState {
 }
 
 const CONTENT_ADDRESSED =
-  /^(repo:.+@[^@]+|pkg:[^:]+:.+@[^#]+#[^#]+|blob:[0-9a-f]{64}|file:[^/]+\/[^@]+@.+|lineage-set:[0-9a-f]{64})$/;
+  /^(repo:.+@[^@]+|pkg:[^:]+:.+@[^#]+#[^#]+|blob:[0-9a-f]{64}|file:[^/]+\/[^@]+@.+|entry:[^@]+@.+|lineage-set:[0-9a-f]{64})$/;
 const LINEAGE_PATTERNS = [
   /^web:[a-z0-9.-]+$/,
   /^api:[^:]+(?::[^:]+)?$/,
@@ -29,6 +29,7 @@ const LINEAGE_PATTERNS = [
   /^pkg:[^:]+:.+@[^#]+#[^#]+$/,
   /^blob:[0-9a-f]{64}$/,
   /^file:[^/]+\/[^@]+@.+$/,
+  /^entry:[^@]+@.+$/,
   /^msg:[^/]+\/.+$/,
   /^log:.+$/,
   /^session:.+$/,

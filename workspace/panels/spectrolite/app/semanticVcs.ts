@@ -322,7 +322,7 @@ export class VaultSemanticVcs {
       contextId: this.contextId,
       expectedWorkingHead: revision.status.workingHead,
       commandId: commandId("commit-integration"),
-      integratesEventId: sourceEventId,
+      integratesEventIds: [sourceEventId],
       message: "Integrate published vault changes",
     });
     await this.refresh();

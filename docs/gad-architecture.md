@@ -165,11 +165,18 @@ Normal clients use small typed roots and four general walks:
 - `history` walks focused event/application/change history;
 - `blame` walks exact content coordinates.
 
-`status`, `compare`, `readFile`, and `listFiles` are task-shaped projections over
-the same graph. Responses return roots that can be handed directly to the walk
-methods. Paging uses deterministic order and an opaque cursor; a growing
-trajectory is restarted from its root. The server stores no traversal queue,
-visited set, observation proof, or stateful cursor.
+`status`, `compare`, `readFile`, `readMemory`, and `listFiles` are task-shaped
+projections over the same graph. `readMemory` is specifically bound to a
+context, canonical path, exact returned-bytes hash, and displayed range; it
+groups blame terminals into bounded episodes for automatic ordinary-read
+injection. The default model-visible rendering is a compact “why these lines
+exist” hint with one continuation target, while structured details retain the
+complete bounded roots. It does not automatically expand those roots into a
+multi-hop graph walk. It owns no facts and creates no claim layer. Responses
+return roots that can be handed directly to the walk methods. Paging uses deterministic
+order and an opaque cursor; a growing trajectory is restarted from its root.
+The server stores no traversal queue, visited set, observation proof, or
+stateful cursor.
 
 ## Host effects and durability
 

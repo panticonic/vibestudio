@@ -196,10 +196,20 @@ export async function launchAgentIntoChannel(
   rpc: AgentLaunchRpc,
   input: LaunchAgentIntoChannelInput
 ): Promise<LaunchAgentIntoChannelResult> {
-  const handle = await createAgentEntity(rpc, {
-    ...input,
-    agentChannelId: input.channelId,
-  });
+  // There are two disjoint identities behind the same subscription workflow:
+  // an ordinary agent acts as itself on the channel, while a linked vessel
+  // relays an already-bound external agent session. Giving the latter a second
+  // self-agent channel would make one entity claim both identities and is
+  // rejected by runtime.createEntity.
+  const handle = await createAgentEntity(
+    rpc,
+    input.agentBinding
+      ? input
+      : {
+          ...input,
+          agentChannelId: input.channelId,
+        }
+  );
   if (input.contextId && handle.contextId && handle.contextId !== input.contextId) {
     if (input.retireEntityOnSubscribeFailure && handle.id) {
       await retireAgentEntity(rpc, handle.id).catch(() => undefined);

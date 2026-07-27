@@ -265,6 +265,8 @@ const invocationStartedPayloadSchema = z
         // Reasoning engine of the child run — drives the SubagentRunCard kind
         // badge. Optional/tolerant: older spawn payloads simply render no badge.
         agentKind: z.string().min(1).optional(),
+        // Bounded, non-secret runtime selection captured at launch.
+        launchConfig: z.record(z.string(), z.unknown()).nullable().optional(),
       })
       .strict()
       .optional(),
@@ -317,6 +319,14 @@ const invocationCompletedPayloadSchema = z
     summary: z.string().optional(),
     terminalOutcome: z.literal("success"),
     terminalReasonCode: z.string().optional(),
+    turnControl: z
+      .object({
+        kind: z.literal("suspend"),
+        reason: z.string(),
+        summary: z.string(),
+      })
+      .strict()
+      .optional(),
     subagent: subagentTerminalSchema.optional(),
   })
   .strict();

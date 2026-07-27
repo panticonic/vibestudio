@@ -20,6 +20,25 @@ stop with an integrity failure if they disagree.
 Use `fs` to read a host or materialized path. Do not look for a raw VCS variant
 or expect VCS to fall back to disk.
 
+Inside an agent, ordinary `read` of managed text is also the default memory
+surface. After reading the exact bytes, the harness asks `vcs.readMemory` for
+the displayed UTF-16 range and includes the bytes' content hash. The service
+attaches only memory for that exact working-head file state, or reports a stale
+read in structured details instead of attaching history from different bytes
+or adding warning prose to the file content. The visible
+**workspace memory** block answers why the displayed lines exist using
+blame-selected work episodes, intent/commit/original-request evidence when
+recorded, integration decisions, and recent file history. It shows one
+copyable deeper target per episode; the structured details retain every typed
+root. This is a projection of canonical GAD facts, not a second claims store.
+
+Do not ask the model to choose a provenance level or recall keywords before
+reading. Do not repeat a graph walk when the attachment is already conclusive.
+Use the focused `provenance` tool only when its continuation reveals a question
+that needs a larger graph walk. Direct runtime clients
+may call `vcs.readMemory` for the same exact path/hash/range contract; ordinary
+historical reads at an explicitly selected state still use `vcs.readFile`.
+
 ## Author one coherent local step
 
 Use focused `write` and `edit` tools for ordinary text work. They compile to

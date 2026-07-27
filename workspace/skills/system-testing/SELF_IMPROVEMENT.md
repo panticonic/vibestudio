@@ -4,8 +4,11 @@ When system tests reveal bugs in Vibestudio, follow this workflow to fix them.
 
 For unattended live runs, launch a disposable server with
 `vibestudio remote serve --dev`. System tests carry a host-attested, per-run
-test policy for gated invocations; credential, userland, critical, and standing
-requests remain human decisions and are separate from chat tool approval
+test policy for gated invocations. Credential and standing requests remain
+human decisions. A scenario may predeclare an exact or deliberately bounded
+userland subject scope when the approval flow itself is under test; every
+unmatched userland or critical request fails closed instead of leaving a real
+approval card waiting. These decisions are separate from chat tool approval
 levels.
 
 ## Priority: Fix Infrastructure First

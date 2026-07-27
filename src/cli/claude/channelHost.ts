@@ -325,8 +325,9 @@ export function bridgeInstructions(config: BridgeConfig): string {
         "event — it is the same task you already have, not a new instruction.",
       ...(config.subagent.contract ? ["", config.subagent.contract] : []),
       "",
-      "This session is headless: do NOT end your final reply without calling `complete` — " +
-        "exiting without it leaves the run dangling and the parent never settles."
+      "This session is headless and supervised: finish with a concise final report. " +
+        "The launcher consumes Claude Code's typed terminal result and settles the parent. " +
+        "Do not print or imitate `complete({...})` tool syntax; that would only be text."
     );
   } else {
     sections.push(

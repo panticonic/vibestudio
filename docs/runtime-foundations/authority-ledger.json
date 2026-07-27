@@ -10321,6 +10321,48 @@
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
     },
     {
+      "id": "direct:workspace/workers/linked-agent/linked-agent-worker.ts:reportExternalResult",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/linked-agent/linked-agent-worker.ts",
+      "source": "workers/linked-agent",
+      "method": "reportExternalResult",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/linked-agent/linked-agent-worker.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:reportExternalResult",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "anyOf(capability(host,rpc:reportExternalResult),allOf(capability(code,rpc:reportExternalResult),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#direct-authority-census"
+    },
+    {
       "id": "direct:workspace/workers/linked-agent/linked-agent-worker.ts:requestPermission",
       "rpcPlane": "workspace-do",
       "owner": "workspace/workers/linked-agent/linked-agent-worker.ts",
@@ -31370,6 +31412,47 @@
       },
       "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
       "capability": "service:vcs.readFile"
+    },
+    {
+      "id": "host:vcs.readMemory",
+      "rpcPlane": "host-service",
+      "owner": "vcs",
+      "method": "readMemory",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:vcs.readMemory"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:vcs.readMemory),allOf(capability(user,service:vcs.readMemory),workspace-member),allOf(capability(code,service:vcs.readMemory),workspace-member))",
+      "r3b": {
+        "review": "exact-range-semantic-read-memory-projection",
+        "change": "Adds an open, read-only projection over the caller's existing context-scoped semantic VCS authority. It accepts a canonical managed path, exact returned-bytes hash, and bounded UTF-16 range; returns only bounded blame-backed episodes and typed roots; and owns no facts, claims, mutation, or traversal state."
+      },
+      "parityAssertion": "src/server/services/runtimeFoundationLedgers.test.ts#host-authority-census",
+      "capability": "service:vcs.readMemory"
     },
     {
       "id": "host:vcs.resolveRepository",

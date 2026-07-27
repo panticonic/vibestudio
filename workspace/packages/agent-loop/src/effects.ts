@@ -368,6 +368,11 @@ export type EffectOutcome =
       terminalOutcome?: "tool_error" | "infrastructure_error";
       /** Stable typed reason preserved from the tool/service boundary. */
       terminalReasonCode?: string;
+      turnControl?: {
+        kind: "suspend";
+        reason: string;
+        summary: string;
+      };
       /** Canonical failure envelope preserved unchanged into the terminal
        * invocation event. */
       failure?: AgentToolFailure;
@@ -554,6 +559,7 @@ export function outcomeEvents(
           : invocationCompletedPayload({
               result: outcome.result,
               ...(outcome.summary ? { summary: outcome.summary } : {}),
+              ...(outcome.turnControl ? { turnControl: outcome.turnControl } : {}),
             }),
         causality,
         publish: publishToolTerminal,

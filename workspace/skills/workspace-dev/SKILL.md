@@ -67,7 +67,11 @@ See the sandbox skill's [INTERACTION_PATTERNS.md](../sandbox/INTERACTION_PATTERN
 
 1. **Relative workspace paths only** — use `panels/my-app/index.tsx`, NEVER host absolute paths such as `/home/.../workspace/...`. In runtime `fs.*` calls, `/panels/...` is context-root absolute and accepted, but docs and source-edit examples prefer `panels/...` to avoid ambiguity.
 2. **NEVER use Bash** for vcs, file listing, or file creation — use the structured tools
-3. **Use filesystem tools for file edits** — Read, Edit, Write (not eval)
+3. **Use filesystem tools for file edits** — Read, Edit, Write (not eval).
+   Whole-file Write is idempotent: writing bytes already present in the
+   working file succeeds with `details.unchanged: true` and records no semantic
+   edit. Treat that as completion, not as a reason to manufacture a different
+   change.
 4. **Use eval only for runtime operations** — project creation, typecheck, tests, launching panels
 5. **Eval injected globals + package imports** — in eval, the **ambient-only** globals `services`, `scope`, `scopes`, `db`, `ctx`, `help`, and (in agent eval) `chat` are injected free variables; do **not** `import` them (the engine rejects it). `rpc` and `fs` are injected ambiently **and** importable from `@workspace/runtime`. `@workspace/runtime` is importable in eval and exposes the same portable surface as panels — including `openPanel`/`listPanels`/`getPanelHandle`/`panelTree`, `vcs`/`workspace`/`gad`/`credentials`/`git`. Both static `import` and dynamic `await import(...)` work. See `sandbox/EVAL.md` for the full surface.
 6. **Close panels you open for temporary work** — keep the one development panel the user is reviewing, but close duplicate, browser, child, and diagnostic panels with `await handle.close()` when done. Use `listPanels()` to reuse existing panels instead of opening another copy.

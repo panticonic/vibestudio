@@ -117,6 +117,16 @@ const LIVE_COMPLETED_PROBLEM_LIMIT = 4;
 const LIVE_MESSAGE_LIMIT = 20;
 const LIVE_INVOCATION_LIMIT = 30;
 const LIVE_DEBUG_EVENT_LIMIT = 40;
+const REQUIRED_SYSTEM_TEST_EXTENSIONS = [
+  "@workspace-extensions/browser-data",
+  "@workspace-extensions/claude-code",
+  "@workspace-extensions/file-tools",
+  "@workspace-extensions/git-bridge",
+  "@workspace-extensions/image-service",
+  "@workspace-extensions/shell",
+  "@workspace-extensions/test-runner",
+  "@workspace-extensions/typecheck-service",
+] as const;
 
 export function listSystemTests(): SystemTestDescriptor[] {
   return allTests().map((test) => ({
@@ -417,9 +427,7 @@ export function failedSystemTestNames(record: SystemTestRunRecord): string[] {
     .map((entry) => entry.test.name);
 }
 
-export async function systemTestDoctor(
-  expectedModel?: string
-): Promise<SystemTestDoctorResult> {
+export async function systemTestDoctor(expectedModel?: string): Promise<SystemTestDoctorResult> {
   const primaryModel = expectedModel ?? SYSTEM_TEST_AGENT_MODEL;
   const checks: SystemTestDoctorResult["checks"] = [];
   const capture = async (name: string, operation: () => Promise<unknown>, detail: string) => {
@@ -464,6 +472,39 @@ export async function systemTestDoctor(
       return agentUnit;
     },
     "agent worker is registered"
+  );
+  await capture(
+    "required-extensions",
+    async () => {
+      const extensions = (await rpc.call("main", "extensions.list", [])) as Array<{
+        name?: string;
+        status?: string;
+        lastError?: string | null;
+      }>;
+      const unready = REQUIRED_SYSTEM_TEST_EXTENSIONS.flatMap((name) => {
+        const extension = extensions.find((candidate) => candidate.name === name);
+        return extension?.status === "running" || extension?.status === "available"
+          ? []
+          : [
+              `${name}=${extension?.status ?? "missing"}${
+                extension?.lastError ? ` (${extension.lastError})` : ""
+              }`,
+            ];
+      });
+      if (unready.length > 0) {
+        throw new Error(
+          `required system-test extensions are not ready: ${unready.join(
+            ", "
+          )}. Complete the startup unit review before running agentic tests.`
+        );
+      }
+      return extensions.filter((extension) =>
+        REQUIRED_SYSTEM_TEST_EXTENSIONS.includes(
+          extension.name as (typeof REQUIRED_SYSTEM_TEST_EXTENSIONS)[number]
+        )
+      );
+    },
+    "required system-test extensions are approved and build-ready"
   );
   await capture(
     "model",

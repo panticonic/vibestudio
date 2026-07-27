@@ -290,6 +290,8 @@ describe("service schema contracts", () => {
 
     expect(evalMethods.run.returns.safeParse(result).success).toBe(true);
     expect(evalMethods.getRun.returns.safeParse({ status: "done", result }).success).toBe(true);
+    expect(evalMethods.getRun.returns.safeParse({ status: "cancelling" }).success).toBe(true);
+    expect(evalMethods.getRun.returns.safeParse({ status: "cleanup-ish" }).success).toBe(false);
   });
 
   it("reports whether eval cancellation required a shared-scope reset", () => {

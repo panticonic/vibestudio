@@ -108,6 +108,33 @@ describe("agent launch primitive", () => {
     ]);
   });
 
+  it("keeps an external relay binding disjoint from self-agent channel identity", async () => {
+    const rpc = makeRpc();
+
+    await launchAgentIntoChannel(rpc, {
+      source: "workers/linked-agent",
+      className: "LinkedAgentVessel",
+      key: "linked:session-1",
+      channelId: "ch-1",
+      contextId: "ctx-1",
+      agentBinding: { entityId: "session-1", channelId: "ch-1" },
+    });
+
+    expect(rpc.call).toHaveBeenNthCalledWith(1, "main", "runtime.createEntity", [
+      expect.objectContaining({
+        agentBinding: { entityId: "session-1", channelId: "ch-1" },
+      }),
+    ]);
+    const spec = (rpc.call.mock.calls[0]?.[2] as Array<Record<string, unknown>>)[0]!;
+    expect(spec).not.toHaveProperty("agentChannelId");
+    expect(rpc.call).toHaveBeenNthCalledWith(2, "target-1", "subscribeChannel", [
+      expect.objectContaining({
+        channelId: "ch-1",
+        contextId: "ctx-1",
+      }),
+    ]);
+  });
+
   it("retires an isolated entity when subscribe fails after creation", async () => {
     const rpc = makeRpc(async (_target, method) => {
       if (method === "runtime.createEntity") {

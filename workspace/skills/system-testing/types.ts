@@ -56,12 +56,14 @@ export interface ToolFailureSummary {
   status?: string;
   terminalOutcome?: string;
   terminalReasonCode?: string;
+  /** Boundary that produced the failure, when the tool reports it explicitly. */
+  failureKind?: "user-code" | "infrastructure" | "cancelled";
   error?: string;
   resultSummary?: string;
   /** True when the test explicitly exercises this failure mode. */
   expected?: boolean;
   /** Why a recorded failure is diagnostic-only rather than a failed platform effect. */
-  classification?: "argument-rejection" | "domain-rejection";
+  classification?: "argument-rejection" | "domain-rejection" | "guest-code-failure";
   source: "message" | "snapshot";
 }
 

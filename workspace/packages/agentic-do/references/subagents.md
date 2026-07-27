@@ -42,7 +42,10 @@ and closeout.
 5. Use `read_subagent` to read the task-channel transcript when you need the
    child's messages directly.
 6. Use `inspect_subagent` for child-context files and VCS state: `status`,
-   `diff`, `log`, or a file path.
+   parent-relative `diff`, `log`, or a file path. For an extension-owned child,
+   `runtime` returns bounded provider process state and its log tail. Diff and
+   history log are paged; follow `nextCursor` only when more detail changes your
+   decision.
 7. Call `integrate_subagent` to adopt every currently applicable child change.
    Conflicting or blocked changes remain explicit and require focused
    adopt/reconcile/decline decisions through the canonical `vcs` service.
@@ -55,6 +58,7 @@ Example:
 ```ts
 spawn_subagent({
   mode: "fresh",
+  agentKind: "pi",
   label: "API audit",
   task: [
     "Audit the workspace API docs for stale VCS integration examples.",
@@ -62,8 +66,20 @@ spawn_subagent({
     "Use say only for meaningful milestones.",
     "When finished, call complete with a concise report and list uncertainties.",
   ].join("\n"),
+  config: {
+    model: "openai-codex:gpt-5.6-luna",
+    thinkingLevel: "minimal",
+  },
 });
 ```
+
+Pi uses `thinkingLevel`, never the external-launcher field `effort`. The tool
+schema exposes both because `config` is shared across engines; choose the field
+for the selected `agentKind`. Runtime selection belongs in `config`: writing a
+model name in `task` only gives the already-launched child an instruction and
+cannot change which model is executing. The spawn result and later inspection
+report `launchConfig`, so supervisors can verify the effective selection rather
+than inferring it from prose.
 
 ## Fresh Versus Fork
 
@@ -83,6 +99,11 @@ project.
 Always include `task`. It should be self-contained enough that the child can
 recover after compaction or a tool retry.
 
+The child runtime source is not configurable. A Pi child always inherits the
+parent vessel's executable identity; the disposable package or repository being
+edited is task context, not runnable agent code. Choose a different reasoning
+engine with `agentKind` instead of trying to substitute a source package.
+
 ## External Engines (`agentKind`)
 
 `spawn_subagent` defaults to `agentKind: "pi"` — an in-process child of your own
@@ -99,7 +120,7 @@ spawn_subagent({
   mode: "fresh",
   agentKind: "claude-code",
   label: "repo audit",
-  task: "Audit packages/foo for stale contracts. Commit fixes in this context; complete with findings.",
+  task: "Audit packages/foo for stale contracts. Make no edits; complete with exact findings.",
   config: { model: "opus", effort: "high" },
 });
 ```
@@ -109,13 +130,33 @@ When to choose which engine:
 - **pi** (default): the child shares your loop machinery and model settings;
   `mode: "fork"` gives it your full trajectory with a shared context-window
   cache — the cheap option when the child needs context you already built.
-- **claude-code**: the child is a full Claude Code session with its own harness
-  (local file tools, its own skills, the `vibestudio` CLI pre-scoped to the
-  child context). Choose it for work that benefits from that harness or from a
-  different model/effort tier than yours. For frontend/UI tasks it can SEE its
-  work: `vibestudio panel screenshot` captures a running panel to an image file
-  (own-context panels only — the child opens its own preview instance on its
-  context build and iterates against screenshots + `panel console --errors`).
+- **claude-code**: the child is a Claude Code session with its own harness,
+  skills, and a `vibestudio` CLI pre-scoped to the child context. Its operating
+  system view of managed workspace source is deliberately read-only. Choose it
+  for independent audits, diagnosis, log inspection, visual review, or a
+  second-model opinion. Its native file tools cannot author attributable
+  semantic workspace changes; attempted managed-source writes fail with
+  `EROFS`. Use a Pi child for edits and integration.
+
+  Claude may write ephemeral artifacts only under
+  `$VIBESTUDIO_LINKED_SCRATCH`. For frontend/UI diagnosis,
+  `vibestudio panel screenshot` writes a running own-context panel capture
+  there; Claude can read that image and pair it with
+  `vibestudio panel console --errors`.
+
+  Each launch also receives a disposable writable `CLAUDE_CONFIG_DIR` seeded
+  from the host login. Claude can refresh OAuth state and create session-hook
+  files without weakening the read-only workspace mount. On release, a changed
+  credential is promoted back only if the host credential still matches the
+  launch's starting snapshot; concurrent host changes win. All other
+  launch-specific config is removed with the materialized profile.
+
+This is a provenance boundary, not a temporary permission-mode limitation.
+Native external-process writes do not carry the exact in-process
+invocation-to-change causality required by semantic VCS. Do not loosen the
+filesystem sandbox to make them work. A future write-capable external engine
+must mutate through a causal MCP/CLI gateway that records the authenticated
+run, invocation, work unit, and resulting Change.
 
 External-engine specifics:
 
@@ -138,14 +179,18 @@ External-engine specifics:
   headless run blocked on interactive prompts would hang. Override
   `permissionMode` only when you deliberately want the child's tool use relayed
   as workspace approvals.
-- **The child gets the same operating contract** a Pi child gets (task channel
-  etiquette, `say` sparingly, commit-before-complete, finish exactly once with
-  `complete`), delivered through its session instructions — you do not need to
-  restate it in the task.
-- **Crashes cannot dangle the run**: if the external process exits without
-  calling `complete`, the run settles as `failed` with the exit code in the
-  report. Treat that like any failed child — inspect status/diff for partial
-  work before discarding.
+- **The child gets the same task-channel etiquette** as a Pi child (`say`
+  sparingly; make one actionable final report), delivered through its session
+  instructions. A Pi child settles with the `complete` tool. A supervised
+  external print-mode child settles from the launcher's typed terminal result;
+  text that merely looks like `complete({...})` has no lifecycle meaning. The
+  commit-before-completion rule applies only to an engine with a causal mutation
+  path. Claude Code is currently read-only and must report findings without
+  claiming edits.
+- **Crashes cannot dangle the run**: a successful typed result settles with its
+  report; a missing/malformed result, signal, or non-zero exit settles as
+  `failed` with process evidence. Treat a failed child like any other — inspect
+  status/diff for partial work before discarding.
 - Cancellation (`close_subagent`) kills the external process and releases its
   session credential.
 
@@ -184,13 +229,24 @@ children get them as a runtime prompt, external children like Claude Code get
 them in their session instructions, with `say`/`complete` as MCP tools and the
 `vibestudio` CLI for workspace access):
 
+Managed Claude subagents use `--strict-mcp-config`: only the linked Vibestudio
+bridge is loaded. User/project MCP servers are intentionally not inherited
+because they would add unreviewed tools, processes, and startup latency outside
+the launch contract.
+
 1. Do the assigned task in the child context.
-2. Read required skills/docs yourself.
-3. Use `say` sparingly for parent-visible progress.
-4. Commit child-context edits when the task asks for durable work — the parent
-   integrates your committed changes from this context. Do not push
-   `main` yourself; the parent owns integration and publication decisions.
-5. Finish exactly once with:
+2. Own execution in that context. When the task asks for edits, inspect and
+   apply them with your own file tools; do not send the parent a plan or code
+   block to copy. Return advice only for an analysis task or a concrete blocker.
+3. Read required skills/docs yourself.
+4. Use `say` sparingly for parent-visible progress.
+5. If your engine has a causal workspace mutation path, run focused
+   verification and commit child-context
+   edits when the task asks for durable work — the parent integrates your
+   committed changes from this context. Do not push `main` yourself; the
+   parent owns integration and publication decisions. The current Claude Code
+   launcher is read-only: do not attempt or claim managed-source edits.
+6. Finish exactly once with:
 
 ```ts
 complete({
@@ -216,11 +272,24 @@ redo parent work unless it is necessary for that task.
 
 - `read_subagent({ runId, afterSeq })` reads the task-channel transcript since
   a cursor and returns `nextSeq`. Keep the cursor if you will poll again.
-- `inspect_subagent({ runId, query })` reads the child context's workspace
-  state. Use `query: "status"`, `"diff"`, `"log"`, or a file path.
+- `inspect_subagent({ runId, query, limit?, cursor? })` reads the child
+  context's workspace state. Use `query: "status"`, `"diff"`, `"log"`, or a
+  file path. For an external engine, `query: "runtime"` reads its bounded
+  provider-owned process state and log tail without leaking a host path. Diff
+  compares the child's committed event to the parent's current working state
+  and returns at most `limit` change records (20 by default).
+  When the child is dirty, `workingCounts` makes the uncommitted remainder
+  explicit instead of expanding the whole semantic graph into the transcript.
+  Qualify a file with its repository path, such as
+  `projects/example/src/index.ts`, whenever the same relative path may exist in
+  multiple repositories. An ambiguous run abbreviation or file path returns a
+  typed `InvalidReference` refusal with candidate repository paths and performs
+  no read; select the exact returned identity and retry.
 
-Use `read_subagent` for what the child said. Use `inspect_subagent` for what
-the child changed.
+Use `read_subagent` for what the child said, semantic inspection for what it
+changed, and `runtime` to decide whether an external child is still working.
+Never close a running external child merely because its task channel is quiet;
+suspend the parent and let the completion or exit event wake it.
 
 ## Integrate Or Discard
 
@@ -231,11 +300,15 @@ inspect_subagent({ runId, query: "status" });
 inspect_subagent({ runId, query: "diff" });
 ```
 
-`integrate_subagent` compares the parent's exact working state with the child's
+For read-only external runs, inspect semantic `status` and provider `runtime`,
+then close only after completion; there is nothing to integrate. For editing
+runs, `integrate_subagent` compares the parent's exact working state with the child's
 committed event and adopts each currently applicable child Change as an
 ordinary local application. It does not commit the parent, publish `main`,
 create marker files, or create a hidden pending-merge state. Parent work and
 adopted child work remain one local incremental chain until the parent commits.
+Several children may be integrated before that commit; the resulting event
+records every child source as an additional semantic parent.
 
 ```ts
 integrate_subagent({ runId });
@@ -244,8 +317,17 @@ integrate_subagent({ runId });
 If the result reports conflicts or dependency blocks, use `vcs.compare` with
 the `changes` view and record explicit
 `vcs.integrate` adopt/reconcile/decline decisions. Paths are inspection
-coordinates, never a substitute for Change identity. Verify the result in the
-parent context, then close the child run when inspection is no longer needed.
+coordinates, never a substitute for Change identity. Keep the child open while
+doing this: its context relationship is what makes unresolved source events
+reachable. Call `integrate_subagent` again after the decisions; only a
+`working` or `unchanged` result marks the child fully integrated. Verify the
+result in the parent context, then close it. `close_subagent` refuses
+never-integrated or unresolved work unless `discard:true` explicitly drops it.
+These precondition refusals are typed, no-effect lifecycle results:
+`IntegrationIncomplete` for unresolved source changes,
+`WorkingChangesPresent` for an uncommitted child, and `InvalidReference` when
+the parent relationship cannot be recovered. Treat them as instructions to
+repair lifecycle state, not as evidence that teardown partially happened.
 
 ## Failure And Cleanup
 

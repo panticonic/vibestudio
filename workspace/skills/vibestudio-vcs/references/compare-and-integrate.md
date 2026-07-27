@@ -51,8 +51,11 @@ evidence truthfully satisfies the intent before reconciling it. Do not decline
 a source change whose effect remains live through another unaccounted path.
 
 The compact agent tool accepts path-based evidence and resolves its stable
-identities and hashes at the exact current working state. For example, after
-authoring a truthful merged file for a conflicting text change:
+identities and hashes at the exact current target working state. The path must
+already exist there. A file created only in the source child is not target-state
+evidence: adopt the source file-create, or author the truthful target file
+first, before citing its content or placement. For example, after authoring a
+truthful merged file for a conflicting text change:
 
 ```json
 {
@@ -94,12 +97,12 @@ change, relevant target facts, and consequences without inventing marker files.
 ## Commit the integrated result
 
 When comparison shows no unaccounted effective source changes, call
-`vcs.commit` with the current working head and `integratesEventId` set to the
-same source event. Commit derives that source from the local decisions and
-rejects a chain whose decisions mix sources or disagree with the supplied
-event. A zero-decision integration supplies the source explicitly. The commit
-consumes the entire local chain and creates an event with the prior committed
-event and source event as parents.
+`vcs.commit` with the current working head. Commit derives all source events
+from the local decisions, including fan-in from multiple child contexts. If
+you pass `integratesEventIds`, its exact de-duplicated set must agree with those
+decisions. A zero-decision integration supplies its sources explicitly. The
+commit consumes the entire local chain and creates one event with the prior
+committed event first and every integrated source as an additional parent.
 
 If work must remain independently committable, integrate it in another context
 instead of trying to split the local chain.

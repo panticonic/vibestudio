@@ -64,6 +64,7 @@ export interface CredentialPort {
     modelBaseUrl?: string;
     requestId?: string;
     idempotencyKey?: string;
+    signal?: AbortSignal;
   }): Promise<{ apiKey: string; headers?: Record<string, string> }>;
   /** Register interest in a credential with the server-side service;
    *  resolution is delivered back via deliverEffectOutcome (http callback). */

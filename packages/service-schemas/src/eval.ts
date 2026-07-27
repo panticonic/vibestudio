@@ -155,10 +155,21 @@ export const evalGetRunArgsSchema = z
   })
   .strict();
 
-/** A run's status + (when terminal) its result. status ∈ pending|running|done|cancelled|unknown. */
+/** Durable eval lifecycle. `cancelling` remains non-terminal while registered
+ * cleanup still needs the run's evaluated-execution admission. */
+export const evalRunStatusValueSchema = z.enum([
+  "pending",
+  "running",
+  "cancelling",
+  "done",
+  "cancelled",
+  "unknown",
+]);
+
+/** A run's status + (when terminal) its result. */
 export const evalRunStatusSchema = z
   .object({
-    status: z.string(),
+    status: evalRunStatusValueSchema,
     result: evalRunResultSchema.optional(),
     /** Latest durable heartbeat published by the running sandbox. */
     progress: z.unknown().optional(),
@@ -282,7 +293,7 @@ export const evalMethods = defineServiceMethods({
     args: z.tuple([evalGetRunArgsSchema]),
     returns: evalRunStatusSchema,
     description:
-      "Poll an async run started with startRun: returns its status, latest durable progress heartbeat, and (when done) result.",
+      "Poll an async run started with startRun: returns its status, latest durable progress heartbeat, and (when done) result. Treat cancelling as non-terminal; registered cleanup still owns live execution authority until cancelled.",
     access: { sensitivity: "read" },
   },
   readScopeTextPage: {
@@ -309,7 +320,7 @@ export const evalMethods = defineServiceMethods({
     args: z.tuple([evalCancelArgsSchema]),
     returns: z.object({ ok: z.literal(true), forcedReset: z.boolean() }).strict(),
     description:
-      "Cancel an in-flight or pending run by runId. Cooperative cancellation preserves other runs and scope and returns forcedReset:false. If the run or its cleanup does not settle within the recovery grace period, the EvalDO cancels all non-terminal runs, resets its shared scope/user db, and returns forcedReset:true. A terminal run is a no-op with forcedReset:false.",
+      "Cancel an in-flight or pending run by runId. The durable status is cancelling while registered cleanup runs and becomes cancelled only after cleanup settles, so evaluated-execution authority remains valid for teardown. Cooperative cancellation preserves other runs and scope and returns forcedReset:false. If the run or its cleanup does not settle within the recovery grace period, the EvalDO cancels all non-terminal runs, resets its shared scope/user db, and returns forcedReset:true. A terminal run is a no-op with forcedReset:false.",
     access: { sensitivity: "write" },
   },
 });

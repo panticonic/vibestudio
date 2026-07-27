@@ -106,6 +106,45 @@ describe("SemanticWorkspace causal provenance reachability", () => {
         ]
       )
     ).toBe(false);
+
+    sql.exec(
+      `INSERT INTO gad_work_unit_applications
+       (application_id, work_unit_id, basis_kind, basis_id,
+        result_workspace_fact_root_id, semantic_protocol)
+       VALUES ('application:integration', 'work-unit:integration', 'event', ?,
+               ?, 'semantic:test')`,
+      "event:own-private",
+      root
+    );
+    sql.exec(
+      `INSERT INTO gad_integration_decisions
+       (decision_id, kind, target_state_kind, target_state_id, source_event_id,
+        work_unit_id, rationale, evidence_predicates_json, created_at)
+       VALUES ('decision:integration', 'adopted', 'event', ?, 'event:foreign-private',
+               'work-unit:integration', NULL, NULL, ?)`,
+      "event:own-private",
+      timestamp
+    );
+    sql.exec(
+      `UPDATE vcs_contexts
+          SET working_head_application_id = ?, updated_at = ?
+        WHERE context_id = ?`,
+      "application:integration",
+      timestamp,
+      "context:own"
+    );
+    expect(reachable("event:foreign-private")).toBe(true);
+    expect(
+      semantic.referencesReachable(
+        ["context:own"],
+        [
+          {
+            kind: "node",
+            value: { kind: "work-unit", workUnitId: "work-unit:foreign-private" },
+          },
+        ]
+      )
+    ).toBe(true);
   });
 
   it("follows only normalized command-to-invocation, turn, and trigger-message edges", async () => {

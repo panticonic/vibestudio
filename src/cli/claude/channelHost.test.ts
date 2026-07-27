@@ -184,7 +184,9 @@ describe("bridgeInstructions", () => {
     });
     expect(text).toContain("spawned as a SUBAGENT (run run-7)");
     expect(text).toContain("Only `complete` ends this subagent run.");
-    expect(text).toContain("do NOT end your final reply without calling `complete`");
+    expect(text).toContain("headless and supervised");
+    expect(text).toContain("typed terminal result");
+    expect(text).toContain("Do not print or imitate `complete({...})`");
     expect(text).not.toContain("If this is a task channel");
   });
 
@@ -194,7 +196,7 @@ describe("bridgeInstructions", () => {
       subagent: { runId: "run-8", parentChannelId: "chan-parent", contract: "" },
     });
     expect(text).toContain("spawned as a SUBAGENT (run run-8)");
-    expect(text).toContain("calling `complete`");
+    expect(text).toContain("finish with a concise final report");
   });
 });
 

@@ -297,7 +297,10 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       commandId: execution?.commandId ?? requireBoundMutationInvocation,
     };
     const base = [
-      createReadTool(cwd, fs, { rpc: toolRpc }),
+      createReadTool(cwd, fs, {
+        rpc: toolRpc,
+        provenance: { vcs, context: { contextId } },
+      }),
       createProvenanceTool(cwd, {
         vcs,
         contextId,
@@ -471,19 +474,40 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
               description:
                 "Self-contained task/instructions. Include goal, relevant files/docs/skills, constraints, expected output, progress expectations, done criteria, and what to do if blocked. Required for 'fresh'.",
             },
-            source: {
-              type: "string",
-              description: "Optional agent source repo path (defaults to your own).",
-            },
             config: {
               type: "object",
               description:
-                "Optional child agent config. For 'pi' children: agent settings (model/handle/etc.). " +
+                "Optional child runtime config. This object is the ONLY way to select a different " +
+                "child model or reasoning level; mentioning a model inside `task` does not configure " +
+                "the child. Omit config only when inheriting the parent's effective settings is " +
+                "intentional. For 'pi' children use model and thinkingLevel " +
+                "('minimal'|'low'|'medium'|'high'|'xhigh'|'max'), plus optional approvalLevel, " +
+                "respondPolicy, handle, and system-prompt settings. Do not use effort for Pi. " +
                 "For external kinds it maps to the launcher's CLI — claude-code supports model " +
                 "(alias like 'opus'/'sonnet' or a full model name), effort " +
                 "('low'|'medium'|'high'|'xhigh'|'max'), permissionMode ('auto' by default — the " +
                 "child runs autonomously; also 'acceptEdits'|'bypassPermissions'|'manual'|'dontAsk'|'plan'), " +
                 "fallbackModel, and maxBudgetUsd (number). Unknown keys are ignored.",
+              properties: {
+                model: { type: "string" },
+                thinkingLevel: {
+                  type: "string",
+                  enum: ["minimal", "low", "medium", "high", "xhigh", "max"],
+                  description: "Pi child reasoning level. External launchers ignore this field.",
+                },
+                effort: {
+                  type: "string",
+                  enum: ["low", "medium", "high", "xhigh", "max"],
+                  description: "External-launcher effort. Pi children ignore this field.",
+                },
+                approvalLevel: { type: "integer", minimum: 0, maximum: 3 },
+                respondPolicy: { type: "string" },
+                handle: { type: "string" },
+                permissionMode: { type: "string" },
+                fallbackModel: { type: "string" },
+                maxBudgetUsd: { type: "number", exclusiveMinimum: 0 },
+              },
+              additionalProperties: true,
             },
             label: { type: "string", description: "Optional short label for the run." },
             agentKind: {
@@ -529,7 +553,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "inspect_subagent",
         label: "inspect_subagent",
         description:
-          "Inspect a subagent's child-context workspace state via VCS. Use this for what the child changed: query 'status', 'diff', 'log', or a file path. Use read_subagent instead for what the child said.",
+          "Inspect a subagent. Use 'status', bounded parent-relative 'diff'/'log', or a file path for semantic workspace state. Use 'runtime' for bounded process/log diagnostics from an external engine such as Claude. Use read_subagent for what the child said.",
         parameters: {
           type: "object",
           properties: {
@@ -540,17 +564,40 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
             },
             query: {
               type: "string",
-              description: "'status' | 'diff' | 'log' | a file path (default 'status').",
+              description:
+                "'status' | 'diff' | 'log' | 'runtime' | a file path (default 'status').",
+            },
+            limit: {
+              type: "integer",
+              minimum: 1,
+              maximum: 100,
+              description: "Maximum diff/log records to return (default 20).",
+            },
+            cursor: {
+              type: "string",
+              description: "Opaque nextCursor from an earlier diff/log page.",
             },
           },
           required: ["runId"],
         } as never,
         execute: async (_toolCallId, params) => {
-          const p = params as { runId?: unknown; query?: unknown };
+          const p = params as {
+            runId?: unknown;
+            query?: unknown;
+            limit?: unknown;
+            cursor?: unknown;
+          };
           return this.inspectSubagent(
             String(p.runId ?? ""),
             String(p.query ?? "status"),
-            channelId
+            channelId,
+            {
+              limit:
+                typeof p.limit === "number" && Number.isInteger(p.limit)
+                  ? Math.max(1, Math.min(100, p.limit))
+                  : 20,
+              cursor: typeof p.cursor === "string" && p.cursor ? p.cursor : undefined,
+            }
           );
         },
       } as AgentTool,
@@ -608,7 +655,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "close_subagent",
         label: "close_subagent",
         description:
-          "Close a subagent run when you are done inspecting it. Cancels it if still open, then tears down its context and its own subagents. Set discard:true when intentionally dropping unintegrated work.",
+          "Close a completed read-only subagent, or an editing subagent after integrate_subagent reports working or unchanged and every conflict has been resolved. The server verifies a never-integrated child has no effective changes before teardown. Set discard:true only when intentionally dropping unintegrated work.",
         parameters: {
           type: "object",
           properties: {
@@ -619,14 +666,20 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
             },
             discard: {
               type: "boolean",
-              description: "Discard the child's work (record it as discarded).",
+              description:
+                "Explicitly discard any unintegrated or unresolved child work. Omit after complete integration.",
             },
           },
           required: ["runId"],
         } as never,
         execute: async (_toolCallId, params) => {
           const p = params as { runId?: unknown; discard?: unknown };
-          return this.closeSubagent(String(p.runId ?? ""), p.discard === true, channelId);
+          return this.closeSubagent(
+            String(p.runId ?? ""),
+            p.discard === true,
+            channelId,
+            toolRpc
+          );
         },
       } as AgentTool,
     ];

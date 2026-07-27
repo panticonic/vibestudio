@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
@@ -47,8 +47,20 @@ export interface MaterializedClaudeLaunch {
   env: ClaudeLaunchEnvironment & {
     VIBESTUDIO_SERVER_URL: string;
     VIBESTUDIO_LAUNCH_PROFILE: string;
+    CLAUDE_CONFIG_DIR: string;
   };
+  credentialState: ClaudeCredentialState | null;
 }
+
+export interface ClaudeCredentialState {
+  hostPath: string;
+  isolatedPath: string;
+  sourceDigest: string;
+}
+
+export type ClaudeCredentialReconciliation =
+  | { status: "absent" | "unchanged" | "updated" }
+  | { status: "conflict"; hostPath: string };
 
 export function claudeLaunchProfile(input: {
   launchId: string;
@@ -83,6 +95,8 @@ export async function materializeClaudeLaunch(input: {
   profile: ClaudeLaunchProfile;
   profilesRoot: string;
   serverUrl: string;
+  /** Test seam; defaults to CLAUDE_CONFIG_DIR or ~/.claude on the launch host. */
+  hostClaudeConfigDirectory?: string;
 }): Promise<MaterializedClaudeLaunch> {
   const profile = parseClaudeLaunchProfile(input.profile);
   if (!input.serverUrl) throw new Error("Claude launch materialization requires a serverUrl");
@@ -98,8 +112,31 @@ export async function materializeClaudeLaunch(input: {
     const mcpPath = path.join(stageDir, "mcp.json");
     const settingsPath = path.join(stageDir, "settings.json");
     const envPath = path.join(stageDir, "env.json");
+    const claudeConfigDirectory = path.join(stageDir, "claude-config");
     const finalMcpPath = path.join(profileDir, "mcp.json");
     const finalSettingsPath = path.join(profileDir, "settings.json");
+    const finalClaudeConfigDirectory = path.join(profileDir, "claude-config");
+    await mkdir(claudeConfigDirectory, { mode: 0o700 });
+
+    const hostClaudeConfigDirectory = path.resolve(
+      input.hostClaudeConfigDirectory ??
+        process.env["CLAUDE_CONFIG_DIR"] ??
+        path.join(process.env["HOME"] ?? "", ".claude")
+    );
+    const hostCredentialPath = path.join(hostClaudeConfigDirectory, ".credentials.json");
+    const isolatedCredentialPath = path.join(claudeConfigDirectory, ".credentials.json");
+    let credentialState: ClaudeCredentialState | null = null;
+    try {
+      const credentialBytes = await readFile(hostCredentialPath);
+      await writeFile(isolatedCredentialPath, credentialBytes, { mode: 0o600 });
+      credentialState = {
+        hostPath: hostCredentialPath,
+        isolatedPath: path.join(finalClaudeConfigDirectory, ".credentials.json"),
+        sourceDigest: digestBytes(credentialBytes),
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
 
     const hooks: Record<string, unknown> = {};
     for (const event of HOOK_EVENTS) {
@@ -125,6 +162,7 @@ export async function materializeClaudeLaunch(input: {
       ...profile.environment,
       VIBESTUDIO_SERVER_URL: input.serverUrl,
       VIBESTUDIO_LAUNCH_PROFILE: profileDir,
+      CLAUDE_CONFIG_DIR: finalClaudeConfigDirectory,
     };
 
     await Promise.all([
@@ -133,11 +171,49 @@ export async function materializeClaudeLaunch(input: {
       writeFile(envPath, `${JSON.stringify({ ...env, argv }, null, 2)}\n`, { mode: 0o600 }),
     ]);
     await rename(stageDir, profileDir);
-    return { profileDir, argv, env };
+    return { profileDir, argv, env, credentialState };
   } catch (error) {
     await rm(stageDir, { recursive: true, force: true });
     throw error;
   }
+}
+
+function digestBytes(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
+ * Promote an OAuth refresh performed in the isolated launch config back to the
+ * host login only when the host credential is still the exact snapshot this
+ * launch started from. Concurrent host changes win; a stale launch never
+ * overwrites them.
+ */
+export async function reconcileClaudeLaunchCredential(
+  launch: Pick<MaterializedClaudeLaunch, "credentialState">
+): Promise<ClaudeCredentialReconciliation> {
+  const state = launch.credentialState;
+  if (!state) return { status: "absent" };
+  const isolatedBytes = await readFile(state.isolatedPath);
+  const isolatedDigest = digestBytes(isolatedBytes);
+  if (isolatedDigest === state.sourceDigest) return { status: "unchanged" };
+
+  const hostBytes = await readFile(state.hostPath);
+  if (digestBytes(hostBytes) !== state.sourceDigest) {
+    return { status: "conflict", hostPath: state.hostPath };
+  }
+
+  const temporaryPath = path.join(
+    path.dirname(state.hostPath),
+    `.${path.basename(state.hostPath)}.${randomUUID()}.tmp`
+  );
+  try {
+    await writeFile(temporaryPath, isolatedBytes, { mode: 0o600 });
+    await chmod(temporaryPath, 0o600);
+    await rename(temporaryPath, state.hostPath);
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
+  return { status: "updated" };
 }
 
 /** Release exactly one materialization. Parallel materializations of the same

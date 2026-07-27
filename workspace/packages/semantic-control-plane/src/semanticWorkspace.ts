@@ -23,6 +23,7 @@ import {
   type VcsNeighborsInput,
   type VcsPushInput,
   type VcsReadFileInput,
+  type VcsReadMemoryInput,
   type VcsResolveRepositoryInput,
   type VcsResolveRepositoryResult,
   type VcsRevertInput,
@@ -57,6 +58,7 @@ import {
   type WorkspaceMaterializationRepository,
 } from "@vibestudio/shared/vcs/workspaceProjection";
 import { assertSemanticVcsPathAdmissible } from "@vibestudio/shared/vcs/pathAdmission";
+import { splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import {
   SemanticVcsError,
   appliedChangeIdentity,
@@ -89,6 +91,14 @@ type PresentRepositoryState = Extract<WorkspaceRepositoryMember, { presence: "pr
 
 const MAX_WORKING_APPLICATIONS = 10_000;
 const MAX_ANCESTRY_EDGES = 100_000;
+
+const boundedMemoryText = (value: string, maximum: number): string | null => {
+  const normalized = value.trim();
+  if (!normalized) return null;
+  return normalized.length <= maximum
+    ? normalized
+    : `${normalized.slice(0, Math.max(0, maximum - 1)).trimEnd()}…`;
+};
 
 const trajectorySenderRef = (value: unknown) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -828,6 +838,16 @@ export class SemanticWorkspace {
       const context = this.deps.store.context(contextId);
       if (!context) continue;
       readableEventRoots.add(context.committed.ref.eventId);
+      // An integration decision is a deliberate causal edge from this
+      // context's live working chain to its source event. Keep that source
+      // readable through the target context even after a supervised child is
+      // safely closed; otherwise an exact commit-source confirmation can be
+      // rejected immediately before commit despite the same service deriving
+      // that source from the recorded decision.
+      const workingChain = this.deps.store.workingChain(contextId, MAX_WORKING_APPLICATIONS);
+      for (const sourceEventId of this.integrationSourceEventIds(workingChain.applicationIds)) {
+        readableEventRoots.add(sourceEventId);
+      }
       const workingApplicationId =
         context.working.ref.kind === "application" ? context.working.ref.applicationId : null;
       if (state["kind"] === "application" && typeof state["applicationId"] === "string") {
@@ -1108,6 +1128,11 @@ export class SemanticWorkspace {
         return { kind: "complete", result: this.history(parsed as VcsHistoryInput, request) };
       case "blame":
         return { kind: "complete", result: this.blame(parsed as VcsBlameInput, request) };
+      case "readMemory":
+        return {
+          kind: "complete",
+          result: this.readMemory(parsed as VcsReadMemoryInput, request),
+        };
       case "resolveRepository":
         return {
           kind: "complete",
@@ -1155,7 +1180,7 @@ export class SemanticWorkspace {
             expectedWorkingHead: working.workingHead,
             commandId: pending.commandId,
             message: importInput.message ?? `Import ${importInput.source.snapshotRevision}`,
-            integratesEventId: null,
+            integratesEventIds: [],
             maxApplications: MAX_WORKING_APPLICATIONS,
           });
           const result = {
@@ -1423,6 +1448,7 @@ export class SemanticWorkspace {
       neighbors: true,
       history: true,
       blame: true,
+      readMemory: true,
       resolveRepository: true,
       readFile: true,
       listDirectory: true,
@@ -2080,19 +2106,6 @@ export class SemanticWorkspace {
           `Unknown source event ${input.sourceEventId}`
         );
       }
-      const working = this.deps.store.workingChain(input.contextId, MAX_WORKING_APPLICATIONS);
-      const existingSources = this.integrationSourceEventIds(working.applicationIds);
-      if (existingSources.some((sourceEventId) => sourceEventId !== input.sourceEventId)) {
-        throw new SemanticVcsError(
-          "ConflictPresent",
-          "One local commit cannot integrate more than one source event",
-          {
-            sourceEventIds: [...new Set([...existingSources, input.sourceEventId])].sort(
-              compareUtf16CodeUnits
-            ),
-          }
-        );
-      }
       const comparison = this.integrationComparison(
         asState(input.expectedWorkingHead),
         input.sourceEventId
@@ -2657,50 +2670,51 @@ export class SemanticWorkspace {
     return this.runMutation("commit", input, request, () => {
       const before = this.deps.store.workingChain(input.contextId, MAX_WORKING_APPLICATIONS);
       const derivedSources = this.integrationSourceEventIds(before.applicationIds);
-      if (derivedSources.length > 1) {
-        throw new SemanticVcsError(
-          "IntegrityFailure",
-          "The local working chain contains decisions for multiple integration sources"
-        );
-      }
-      const derivedSourceEventId = derivedSources[0] ?? null;
+      const explicitSources = [...new Set(input.integratesEventIds ?? [])].sort(
+        compareUtf16CodeUnits
+      );
       if (
-        input.integratesEventId &&
-        derivedSourceEventId &&
-        input.integratesEventId !== derivedSourceEventId
+        explicitSources.length > 0 &&
+        derivedSources.length > 0 &&
+        canonicalJson(explicitSources) !== canonicalJson(derivedSources)
       ) {
         throw new SemanticVcsError(
           "InvalidReference",
-          `Commit source ${input.integratesEventId} disagrees with integrated source ${derivedSourceEventId}`
+          "Explicit commit sources disagree with the sources recorded by integration decisions",
+          { explicitSourceEventIds: explicitSources, derivedSourceEventIds: derivedSources }
         );
       }
-      const integrationSourceEventId = derivedSourceEventId ?? input.integratesEventId ?? null;
-      const comparison = integrationSourceEventId
-        ? this.integrationComparison(asState(input.expectedWorkingHead), integrationSourceEventId)
-        : null;
-      if (comparison?.unaccountedChangeIds.length) {
-        throw new SemanticVcsError(
-          "IntegrationIncomplete",
-          `Integration of ${integrationSourceEventId} has unaccounted effective changes`,
-          {
-            sourceEventId: integrationSourceEventId,
-            unaccountedChangeIds: comparison.unaccountedChangeIds,
-          }
+      const integrationSourceEventIds =
+        derivedSources.length > 0 ? derivedSources : explicitSources;
+      for (const sourceEventId of integrationSourceEventIds) {
+        const comparison = this.integrationComparison(
+          asState(input.expectedWorkingHead),
+          sourceEventId
         );
+        if (comparison.unaccountedChangeIds.length) {
+          throw new SemanticVcsError(
+            "IntegrationIncomplete",
+            `Integration of ${sourceEventId} has unaccounted effective changes`,
+            {
+              sourceEventId,
+              unaccountedChangeIds: comparison.unaccountedChangeIds,
+            }
+          );
+        }
       }
       const committed = this.deps.store.commit({
         contextId: input.contextId,
         expectedWorkingHead: asState(input.expectedWorkingHead),
         commandId: input.commandId,
         message: input.message ?? null,
-        integratesEventId: integrationSourceEventId,
+        integratesEventIds: integrationSourceEventIds,
         maxApplications: MAX_WORKING_APPLICATIONS,
       });
       const result = {
         contextId: input.contextId,
         event: { kind: "event", eventId: committed.event.eventId },
         committedApplicationIds: before.applicationIds,
-        integrationSourceEventId,
+        integrationSourceEventIds,
       };
       const effect = this.queueMaterialization(
         input.contextId,
@@ -3358,6 +3372,271 @@ export class SemanticWorkspace {
       coordinateKind,
       spans: page,
       nextCursor: next ? blameCursor(cursorBasis, Number(next["start"])) : null,
+    };
+  }
+
+  /**
+   * Compact read-time memory derived entirely from the canonical semantic graph.
+   *
+   * This is a projection, not another provenance store: blame selects the
+   * exact authored work for the bytes the caller actually read, and the
+   * normalized command/trajectory/event tables hydrate the bounded context a
+   * future agent needs to understand that work.
+   */
+  private readMemory(input: VcsReadMemoryInput, request: SemanticDispatchRequest): Row {
+    const context = this.deps.store.context(input.contextId);
+    if (!context) {
+      throw new SemanticVcsError("InvalidReference", `Unknown context ${input.contextId}`);
+    }
+    const split = splitRepoPath(input.path);
+    if (!split?.repoRelPath) {
+      return { status: "unmanaged", path: input.path };
+    }
+    const state = context.working.ref;
+    const repository = this.resolveRepository({ state, repoPath: split.repoPath });
+    if (!repository) return { status: "unmanaged", path: input.path };
+    const root = this.deps.store.stateRoot(asState(state));
+    const point = this.deps.store.facts.fileAtPath(
+      root,
+      repository.repositoryId,
+      split.repoRelPath
+    );
+    if (!point || point.state.presence !== "placed") {
+      return { status: "unmanaged", path: input.path };
+    }
+    if (point.state.contentHash !== input.expectedContentHash) {
+      return {
+        status: "stale",
+        path: input.path,
+        expectedContentHash: input.expectedContentHash,
+        currentContentHash: point.state.contentHash,
+      };
+    }
+    if (point.state.contentKind !== "text") {
+      return { status: "unsupported", path: input.path, reason: "non-text" };
+    }
+    if (input.range.end > point.state.coordinateExtent) {
+      throw new SemanticVcsError(
+        "InvalidReference",
+        "Read-memory range exceeds the exact file extent"
+      );
+    }
+
+    const blamed = this.blame(
+      {
+        state,
+        repositoryId: repository.repositoryId,
+        fileId: point.state.fileId,
+        range: input.range,
+        limit: 500,
+      },
+      request
+    );
+    const rawSpans = Array.isArray(blamed["spans"]) ? (blamed["spans"] as Row[]) : [];
+    const grouped = new Map<
+      string,
+      {
+        span: Row;
+        ranges: Array<{ start: number; end: number }>;
+      }
+    >();
+    for (const span of rawSpans) {
+      const change = span["change"] as Row;
+      const appliedChange = span["appliedChange"] as Row;
+      const key = `${String(change["changeId"])}\u0000${String(appliedChange["appliedChangeId"])}`;
+      const existing = grouped.get(key);
+      const range = { start: Number(span["start"]), end: Number(span["end"]) };
+      if (existing) existing.ranges.push(range);
+      else grouped.set(key, { span, ranges: [range] });
+    }
+
+    const episodes = [...grouped.values()]
+      .sort(
+        (left, right) =>
+          left.ranges[0]!.start - right.ranges[0]!.start ||
+          left.ranges[0]!.end - right.ranges[0]!.end
+      )
+      .slice(0, input.episodeLimit)
+      .map(({ span, ranges }) => this.readMemoryEpisode(span, ranges, input.contextId));
+
+    const fileRoot = {
+      kind: "file",
+      state,
+      repositoryId: repository.repositoryId,
+      fileId: point.state.fileId,
+    } as const;
+    const historyRows =
+      input.historyLimit === 0
+        ? []
+        : this.historyEntries(fileRoot, "past", undefined, input.historyLimit + 1);
+    return {
+      status: "attached",
+      state,
+      repositoryId: repository.repositoryId,
+      fileId: point.state.fileId,
+      path: input.path,
+      contentHash: point.state.contentHash,
+      range: input.range,
+      coordinateKind: "utf16",
+      episodes,
+      history: historyRows.slice(0, input.historyLimit).map(({ entry }) => entry),
+      truncated:
+        blamed["nextCursor"] != null ||
+        grouped.size > input.episodeLimit ||
+        historyRows.length > input.historyLimit,
+    };
+  }
+
+  private readMemoryEpisode(
+    span: Row,
+    ranges: Array<{ start: number; end: number }>,
+    contextId: string
+  ): Row {
+    const changeRef = span["change"] as Row;
+    const appliedChangeRef = span["appliedChange"] as Row;
+    const workUnitRef = span["workUnit"] as Row;
+    const commandRef = span["command"] as Row;
+    const changeNode = this.inspectNode(changeRef);
+    const workUnitNode = this.inspectNode(workUnitRef);
+    const change = changeNode["value"] as Row;
+    const workUnit = workUnitNode["value"] as Row;
+    const commandId = String(commandRef["commandId"]);
+    const workUnitId = String(workUnitRef["workUnitId"]);
+    const changeId = String(changeRef["changeId"]);
+
+    const commitRow = this.deps.sql
+      .exec(
+        `SELECT event.event_id, event.message, event.created_at
+           FROM gad_work_unit_applications application
+           JOIN gad_workspace_event_applications event_application
+             ON event_application.application_id = application.application_id
+           JOIN gad_workspace_events event
+             ON event.event_id = event_application.event_id
+          WHERE application.work_unit_id = ?
+          ORDER BY event.created_at, event.event_id
+          LIMIT 1`,
+        workUnitId
+      )
+      .toArray()[0] as Row | undefined;
+
+    const decisionRows = this.deps.sql
+      .exec(
+        `SELECT decision.decision_id, decision.kind, decision.rationale
+           FROM gad_decision_source_changes source
+           JOIN gad_integration_decisions decision
+             ON decision.decision_id = source.decision_id
+          WHERE source.change_id = ?
+          ORDER BY decision.created_at DESC, decision.decision_id
+          LIMIT 32`,
+        changeId
+      )
+      .toArray() as Row[];
+    const decisions = decisionRows
+      .filter((row) =>
+        this.provenanceNodeReachable([contextId], {
+          kind: "decision",
+          decisionId: String(row["decision_id"]),
+        })
+      )
+      .slice(0, 8)
+      .map((row) => ({
+        decision: { kind: "decision", decisionId: String(row["decision_id"]) },
+        kind: String(row["kind"]),
+        rationale: row["rationale"] == null ? null : String(row["rationale"]),
+      }));
+
+    return {
+      ranges,
+      stop: span["stop"],
+      change: changeRef,
+      appliedChange: appliedChangeRef,
+      workUnit: workUnitRef,
+      command: commandRef,
+      changeKind: change["kind"],
+      counteractsChangeIds: change["counteractsChangeIds"],
+      intentSummary: workUnit["intentSummary"],
+      createdAt: workUnit["createdAt"],
+      externalSnapshot: workUnit["externalSnapshot"],
+      commit: commitRow
+        ? {
+            event: { kind: "event", eventId: String(commitRow["event_id"]) },
+            message: commitRow["message"] == null ? null : String(commitRow["message"]),
+            createdAt: String(commitRow["created_at"]),
+          }
+        : null,
+      cause: this.readMemoryCause(commandId),
+      decisions,
+    };
+  }
+
+  private readMemoryCause(commandId: string): Row | null {
+    const row = this.deps.sql
+      .exec(
+        `SELECT command.cause_log_id, command.cause_head, command.cause_invocation_id,
+                invocation.turn_id, invocation.kind AS tool_name,
+                invocation.terminal_outcome, invocation.request_ref_json,
+                turn.summary AS turn_summary, turn.trigger_message_id
+           FROM vcs_command_journal command
+           LEFT JOIN trajectory_invocations invocation
+             ON invocation.log_id = command.cause_log_id
+            AND invocation.head = command.cause_head
+            AND invocation.invocation_id = command.cause_invocation_id
+           LEFT JOIN trajectory_turns turn
+             ON turn.log_id = invocation.log_id
+            AND turn.head = invocation.head
+            AND turn.turn_id = invocation.turn_id
+          WHERE command.command_id = ?
+          LIMIT 1`,
+        commandId
+      )
+      .toArray()[0] as Row | undefined;
+    if (
+      !row ||
+      row["cause_log_id"] == null ||
+      row["cause_head"] == null ||
+      row["cause_invocation_id"] == null
+    ) {
+      return null;
+    }
+    const logId = String(row["cause_log_id"]);
+    const head = String(row["cause_head"]);
+    const invocationId = String(row["cause_invocation_id"]);
+    const turnId = row["turn_id"] == null ? null : String(row["turn_id"]);
+    const messageId =
+      row["trigger_message_id"] == null ? null : String(row["trigger_message_id"]);
+    let triggerText: string | null = null;
+    let sender: unknown = null;
+    if (messageId) {
+      const message = this.inspectNode({
+        kind: "trajectory-message",
+        logId,
+        head,
+        messageId,
+      })["value"] as Row;
+      const blocks = Array.isArray(message["textBlocks"]) ? (message["textBlocks"] as Row[]) : [];
+      triggerText = boundedMemoryText(
+        blocks.map((block) => String(block["content"] ?? "")).join("\n"),
+        1_200
+      );
+      sender = message["senderRef"] ?? null;
+    }
+    return {
+      invocation: { kind: "trajectory-invocation", logId, head, invocationId },
+      turn: turnId ? { kind: "trajectory-turn", logId, head, turnId } : null,
+      message: messageId ? { kind: "trajectory-message", logId, head, messageId } : null,
+      toolName: row["tool_name"] == null ? null : String(row["tool_name"]),
+      terminalOutcome:
+        row["terminal_outcome"] == null ? null : String(row["terminal_outcome"]),
+      requestRef:
+        row["request_ref_json"] == null
+          ? null
+          : trajectoryRequestRef(JSON.parse(String(row["request_ref_json"]))),
+      turnSummary: boundedMemoryText(
+        row["turn_summary"] == null ? "" : String(row["turn_summary"]),
+        600
+      ),
+      triggerText,
+      sender,
     };
   }
 
@@ -4969,23 +5248,28 @@ export class SemanticWorkspace {
       const event = this.deps.store.event(eventId);
       if (!event) throw new SemanticVcsError("IntegrityFailure", `Missing event ${eventId}`);
       if (event.kind === "integration-commit") {
-        const sourceEventId = event.parentEventIds[1];
-        if (!sourceEventId) {
+        const sourceEventIds = event.parentEventIds.slice(1);
+        if (sourceEventIds.length === 0) {
           throw new SemanticVcsError(
             "IntegrityFailure",
             `Integration event ${eventId} has no source parent`
           );
         }
-        const comparison = this.integrationComparison({ kind: "event", eventId }, sourceEventId);
-        if (comparison.unaccountedChangeIds.length > 0) {
-          throw new SemanticVcsError(
-            "IntegrationIncomplete",
-            `Integration event ${eventId} no longer validates`,
-            {
-              sourceEventId,
-              unaccountedChangeIds: comparison.unaccountedChangeIds,
-            }
+        for (const sourceEventId of sourceEventIds) {
+          const comparison = this.integrationComparison(
+            { kind: "event", eventId },
+            sourceEventId
           );
+          if (comparison.unaccountedChangeIds.length > 0) {
+            throw new SemanticVcsError(
+              "IntegrationIncomplete",
+              `Integration event ${eventId} no longer validates source ${sourceEventId}`,
+              {
+                sourceEventId,
+                unaccountedChangeIds: comparison.unaccountedChangeIds,
+              }
+            );
+          }
         }
       }
       traversedEdges += event.parentEventIds.length;

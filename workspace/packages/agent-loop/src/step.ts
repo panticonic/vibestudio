@@ -53,7 +53,7 @@ const PROVIDER_LEVEL_FAILURE_CODES = new Set<ModelFailureInfo["code"]>([
   "rate_limited_retryable",
   "provider_overloaded_retryable",
   "auth_or_credentials",
-  "circuit_breaker_open_terminal",
+  "circuit_breaker_open_retryable",
   "unknown_retryable",
 ]);
 
@@ -744,30 +744,24 @@ function wakeGuardSatisfied(state: AgentState): boolean {
   return currentAttempts.size === 0;
 }
 
-function payloadObject(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function suspendTurnFromInvocationPayload(
   payload: Record<string, unknown>
 ): { reason: string; summary: string } | null {
-  const result = payloadObject(payload["result"]);
-  const details = payloadObject(result?.["details"]);
-  if (details?.["suspendTurn"] !== true) return null;
+  const turnControl =
+    payload["turnControl"] && typeof payload["turnControl"] === "object"
+      ? (payload["turnControl"] as Record<string, unknown>)
+      : null;
+  if (turnControl?.["kind"] !== "suspend") return null;
   const reason =
-    typeof details["reason"] === "string" && details["reason"].trim()
-      ? details["reason"].trim()
+    typeof turnControl["reason"] === "string" && turnControl["reason"].trim()
+      ? turnControl["reason"].trim()
       : "no_foreground_work";
-  const note =
-    typeof details["noteToSelf"] === "string" && details["noteToSelf"].trim()
-      ? details["noteToSelf"].trim()
-      : undefined;
   return {
     reason,
     summary:
-      note ??
+      (typeof turnControl["summary"] === "string" && turnControl["summary"].trim()
+        ? turnControl["summary"].trim()
+        : undefined) ??
       (reason === "waiting_for_background"
         ? "Suspended until background work or user input arrives"
         : "Suspended until new relevant input arrives"),
@@ -776,10 +770,14 @@ function suspendTurnFromInvocationPayload(
 
 function hasFreshInput(state: AgentState): boolean {
   if (state.steeringQueue.length > 0) return true;
-  // fresh tool results since the last model call: the last entry is a
-  // tool-result newer than the in-flight snapshot
+  // A parked turn resumes only for transcript input appended after its
+  // turn.waiting boundary. In particular, the suspend_turn tool result is
+  // older than that boundary and must not stimulate its own recovery wake.
   const lastEntry = state.entries[state.entries.length - 1];
-  return lastEntry?.kind === "tool-result";
+  if (lastEntry?.kind !== "tool-result") return false;
+  return (
+    state.openTurn?.waitingAtSeq === undefined || lastEntry.seq > state.openTurn.waitingAtSeq
+  );
 }
 
 export const DEFAULT_MAX_CONSECUTIVE_MODEL_FAILURES = 3;

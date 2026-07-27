@@ -53,11 +53,20 @@ describe("canonical commit tool", () => {
     const tool = createCommitTool(vcs, authority);
     await tool.execute("invocation:integration", {
       message: "Close the incremental integration",
-      integratesEventId: "event:source",
+      integratesEventIds: ["event:source"],
     });
     expect(vcs.lastCommitInput).toMatchObject({
       commandId: "command:commit",
-      integratesEventId: "event:source",
+      integratesEventIds: ["event:source"],
+    });
+  });
+
+  it("requires at least one source when integration parents are supplied", () => {
+    const tool = createCommitTool(new StubVcs(), authority);
+
+    expect(tool.parameters.properties.integratesEventIds).toMatchObject({
+      minItems: 1,
+      maxItems: 200,
     });
   });
 });

@@ -56,7 +56,9 @@ describe("SubagentRunStore schema", () => {
       startedAt: 1,
       lastActivityAt: 2,
       agentKind: "pi",
+      launchConfig: null,
       externalSessionEntityId: null,
+      externalGenerationId: null,
     });
     sql.exec(`UPDATE subagent_runs SET ${column} = ? WHERE run_id = 'run-1'`, value);
 

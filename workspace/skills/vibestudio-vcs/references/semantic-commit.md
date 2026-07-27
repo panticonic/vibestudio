@@ -13,13 +13,15 @@ commit without pretending to be an agent; its causal walk ends honestly at the
 semantic command.
 
 When finishing an integration, commit derives the source from decisions in the
-local application chain. Those decisions must all name one source event. If
-you also provide `integratesEventId`, it must match the derived source; it
-cannot select a different parent. A chain containing decisions for multiple
-sources and a caller/decision mismatch are both rejected. For a zero-decision
-integration, provide `integratesEventId` explicitly. Commit still checks that
-every effective source change is shared or covered by a compatible local
-decision. On success, the new event records that source as its second parent.
+local application chain. The chain may contain decisions for multiple source
+events—this is the normal fan-in shape for integrating several subagents. If
+you also provide `integratesEventIds`, its de-duplicated set must match the
+derived sources; it cannot select different parents. For zero-decision
+integration, provide one or more `integratesEventIds` explicitly. Omit the
+field for an ordinary commit; an empty array is not an integration. Commit checks every
+effective change from every source is shared or covered by a compatible local
+decision. On success, the new event records the prior committed event first,
+then every integration source as an ordered additional parent.
 
 After success the context is clean: both the committed pointer and working head
 name the returned event.

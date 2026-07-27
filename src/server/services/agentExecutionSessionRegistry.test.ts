@@ -90,7 +90,7 @@ describe("AgentExecutionSessionRegistry test policy", () => {
       userland: [
         {
           ruleId: "choice",
-          subjectId: "system-test:harmless-resource",
+          subject: { kind: "exact", key: "system-test:harmless-resource" },
           decision: "allow",
           remember: true,
         },
@@ -122,7 +122,7 @@ describe("AgentExecutionSessionRegistry test policy", () => {
         userland: [
           {
             ruleId: "choice",
-            subjectId: "system-test:harmless-resource",
+            subject: { kind: "exact", key: "system-test:harmless-resource" },
             decision: "allow",
             remember: true,
           },

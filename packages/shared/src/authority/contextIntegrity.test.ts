@@ -82,6 +82,10 @@ describe("context integrity", () => {
     expect(parseLineageKey(`repo:vibestudio://workspace/source@state:${"a".repeat(64)}`)).toBe(
       `repo:vibestudio://workspace/source@state:${"a".repeat(64)}`
     );
+    expect(parseLineageKey("entry:file%3Afile%3Afixture@change:fixture")).toBe(
+      "entry:file%3Afile%3Afixture@change:fixture"
+    );
+    expect(isContentAddressedLineageKey("entry:file%3Afile%3Afixture@change:fixture")).toBe(true);
     expect(isContentAddressedLineageKey(`blob:${"a".repeat(64)}`)).toBe(true);
     expect(isContentAddressedLineageKey("web:example.com")).toBe(false);
     expect(() => parseLineageKey("web: example.com")).toThrow(/Invalid lineage/);

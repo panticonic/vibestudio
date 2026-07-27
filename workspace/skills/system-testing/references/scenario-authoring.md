@@ -61,6 +61,43 @@ then-current main. Give each session a normal user goal. The orchestrator may
 sequence phases, but agents must not spoof another context or write private
 state directly.
 
+## Exercise approvals without bypassing them
+
+`TestCase.authorityPolicy` is a host-attested fixture for the ordinary
+production authority path. List each gated/critical capability and each
+userland subject the scenario expects. Userland rules use `ResourceScope`:
+prefer `{ kind: "exact", key }`; use `{ kind: "prefix", prefix }` only when the
+production subject is intentionally dynamic, such as the digest-bearing
+`user.exec.*` namespace. Keep the prefix at the narrowest stable semantic
+boundary.
+
+The receiver still constructs the real approval request and resolves it
+through the normal approval service. The policy supplies the unattended user's
+answer; it is not an alternate API or a blanket auto-approve switch. An
+unmatched request must remain `EUNEXPECTEDTESTPROMPT`. Never compute a
+test-only subject, patch the extension to skip approval, or weaken the
+production gate for harness convenience.
+
+The canonical workspace test runner uses the digest-bearing
+`workspace-test:<digest>` subject. A scenario that intentionally runs focused
+workspace verification must declare both the gated `user-approval.request`
+authority capability and a `{ kind: "prefix", prefix: "workspace-test:" }`
+userland rule. Do not broaden that rule to other workspace operations or
+replace it with blanket auto-approval.
+
+Validators for corrective workflows must fold the latest successful state by
+stable identity. An earlier `needs-decision`, failed build report, or guarded
+close remains useful trajectory evidence, but it must not override a later
+resolved integration, passing verification, or successful close. Conversely,
+do not accept “structured output” alone: inspect its semantic success fields
+and the final causal effect. Do not require one ceremonial property name such
+as `ok`: a focused verifier may return positive coverage counts together with
+domain checks such as `allParsed: true`. Accept equivalent structured proof
+only when it contains positive coverage and affirmative checks, and reject any
+failed status, non-zero diagnostics, or false verification check. This keeps
+validators semantic without teaching prompts a harness-specific response
+shape.
+
 ## Semantic VCS scenarios
 
 VCS scenarios are protocol tests, not API-recitation tests. Before authoring

@@ -335,7 +335,7 @@ function createPort() {
     contextId,
     event: event("event:removal"),
     committedApplicationIds: ["application:revert"],
-    integrationSourceEventId: null,
+    integrationSourceEventIds: [],
   }));
   const push = vi.fn(async ({ contextId }: { contextId: string }) => {
     published = false;

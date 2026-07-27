@@ -450,6 +450,27 @@ describe("createProvenanceTool", () => {
     });
   });
 
+  it("resolves a repository-root path without pretending it is a file", async () => {
+    const f = fixture();
+    const tool = createProvenanceTool("/", f.value);
+    const result = await tool.execute("call:repo", { target: "packages/foo" });
+
+    const root = {
+      kind: "repository" as const,
+      state: working,
+      repositoryId: "repository:packages/foo",
+    };
+    expect(f.resolveRepository).toHaveBeenCalledWith({
+      state: working,
+      repoPath: "packages/foo",
+    });
+    expect(f.neighbors).toHaveBeenLastCalledWith({ root, limit: 100 });
+    expect(f.inspect).toHaveBeenCalledWith({ node: root, edgeLimit: 1 });
+    expect(f.readFile).not.toHaveBeenCalled();
+    expect(f.history).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({ target: "packages/foo", root });
+  });
+
   it("walks the exact session trajectory node", async () => {
     const f = fixture();
     const tool = createProvenanceTool("/", f.value);

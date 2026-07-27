@@ -551,7 +551,7 @@ export class ExplorerAgentWorker extends SilentAgentWorker {
           commandId: command("commit-integration", sourceEventId),
           contextId,
           expectedWorkingHead: workingHead,
-          integratesEventId: sourceEventId,
+          integratesEventIds: [sourceEventId],
           message: `${op.summary}; integrate protected main`,
         },
       ]

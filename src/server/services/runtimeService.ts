@@ -1067,6 +1067,16 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         ownerContextId: sourceContextId,
         kind: "lineage",
       });
+      // Runtime context topology and execution-policy topology must advance
+      // together. A cloned context created inside a system test inherits the
+      // source context's exact case policy, so any subsequently activated agent
+      // remains unattended and unexpected prompts still fail closed.
+      for (const srcCtx of sourceContexts) {
+        await deps.onContextCreated?.({
+          contextId: newContextIdOf.get(srcCtx) as string,
+          ownerContextId: srcCtx,
+        });
+      }
     } catch (err) {
       // Best-effort rollback: retire clones, delete cloned storage, drop every
       // context created in this call (edges + VCS + folder).
@@ -1251,6 +1261,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       ownerContextId: args.parentContextId,
       kind: "lifecycle",
       ownerEntityId: args.ownerEntityId,
+    });
+    // Subagents are part of the same test case, not independent interactive
+    // sessions. Propagate the resident case policy before the child entity is
+    // created, otherwise its first credential/tool gate silently waits for a
+    // human and defeats unattended orchestration.
+    await deps.onContextCreated?.({
+      contextId,
+      ownerContextId: args.parentContextId,
     });
     return { contextId };
   }

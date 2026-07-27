@@ -931,6 +931,7 @@ async function executeModelCall(
         ...(modelBaseUrl ? { modelBaseUrl } : {}),
         requestId: descriptor.effectId,
         idempotencyKey: descriptor.idempotencyKey,
+        signal,
       });
       throwIfAborted();
       trace("credential.resolve.completed", {

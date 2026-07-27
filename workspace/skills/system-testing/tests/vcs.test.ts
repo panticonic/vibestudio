@@ -59,7 +59,7 @@ function commit(eventId: string, applicationIds: string[], sourceEventId: string
       contextId: "context:test",
       event: { kind: "event", eventId },
       committedApplicationIds: applicationIds,
-      integrationSourceEventId: sourceEventId,
+      integrationSourceEventIds: [sourceEventId],
     },
   };
 }
@@ -280,7 +280,7 @@ describe("joined VCS scenario validators", () => {
       invocation(
         "commit",
         "commit",
-        { message: "Integrate", integratesEventId: sourceEventId },
+        { message: "Integrate", integratesEventIds: [sourceEventId] },
         commit(integratedEventId, [applicationId], sourceEventId)
       ),
       invocation("status", "vcs", { operation: "status" }, status(integratedEventId)),

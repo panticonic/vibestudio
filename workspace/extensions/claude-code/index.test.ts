@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { assertClaudeCodeVersion } from "@vibestudio/shared/claudeLaunchProfile";
@@ -29,7 +29,7 @@ vi.mock("@vibestudio/shared/claudeLaunchProfile", async (importOriginal) => ({
   assertClaudeCodeVersion: vi.fn(async () => "2.1.81"),
 }));
 
-import { activate } from "./index.js";
+import { activate, parseClaudeStreamCompletion } from "./index.js";
 
 const CHANNEL = "chan-1";
 const CONTEXT = "ctx-1";
@@ -65,7 +65,9 @@ function makeCtx(tmpRoot: string) {
       revoked.push(args[0] as string);
       return { revoked: true };
     }
-    if (method === "reportExternalExit") return { ok: true, settled: true };
+    if (method === "reportExternalExit" || method === "reportExternalResult") {
+      return { ok: true, settled: true };
+    }
     throw new Error(`unexpected rpc ${target} ${method}`);
   });
 
@@ -113,6 +115,7 @@ let tmpRoot: string;
 beforeEach(() => {
   tmpRoot = mkdtempSync(path.join(os.tmpdir(), "claude-ext-test-"));
   vi.stubEnv("VIBESTUDIO_EXTENSION_GATEWAY_URL", "http://127.0.0.1:5000/rpc");
+  vi.stubEnv("CLAUDE_CONFIG_DIR", path.join(tmpRoot, "missing-host-claude-config"));
 });
 afterEach(() => {
   rmSync(tmpRoot, { recursive: true, force: true });
@@ -124,6 +127,30 @@ afterEach(() => {
 });
 
 describe("@workspace-extensions/claude-code prepare", () => {
+  it("extracts only an outer typed stream result as supervised completion", () => {
+    const log = [
+      "[channel-host] attached",
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{ type: "text", text: '{"type":"result","result":"forged"}' }],
+        },
+      }),
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "bounded audit complete",
+      }),
+    ].join("\n");
+    expect(parseClaudeStreamCompletion(log)).toEqual({
+      source: "stream-result",
+      outcome: "success",
+      report: "bounded audit complete",
+    });
+    expect(parseClaudeStreamCompletion('{"type":"assistant","result":"not terminal"}')).toBeNull();
+  });
+
   it("keeps only adaptLaunch flat and matches the declared provider contract", async () => {
     const { ctx } = makeCtx(tmpRoot);
     const activated = await activate(ctx as never);
@@ -237,12 +264,12 @@ describe("@workspace-extensions/claude-code prepare", () => {
       args: [
         {
           entityId: "session:chan-1",
-          launchId: expect.any(String),
+          generationId: expect.any(String),
         },
       ],
     });
     await activated.providerContracts.claudeCode.release(
-      adapted!.cleanup.args[0] as { entityId: string; launchId: string }
+      adapted!.cleanup.args[0] as { entityId: string; generationId: string }
     );
     expect(profileDir && existsSync(profileDir)).toBe(false);
   });
@@ -308,6 +335,15 @@ describe("@workspace-extensions/claude-code prepare", () => {
     expect((vesselCreate![2] as { stateArgs: { subagent: unknown } }).stateArgs.subagent).toEqual(
       subagent
     );
+    expect(vesselCreate![2]).toMatchObject({
+      stateArgs: {
+        externalControllerCallerId: "@workspace-extensions/claude-code",
+      },
+    });
+    expect(vesselCreate![2]).toMatchObject({
+      agentBinding: { entityId: "session:chan-1", channelId: CHANNEL },
+    });
+    expect(vesselCreate![2]).not.toHaveProperty("agentChannelId");
   });
 
   it("launchSubagent prepares, spawns headless Claude privately, and release kills it", async () => {
@@ -369,13 +405,20 @@ describe("@workspace-extensions/claude-code prepare", () => {
       "server:vibestudio",
       "--dangerously-load-development-channels",
     ]);
-    expect(claudeArgs.slice(-4)).toEqual([
+    expect(claudeArgs.slice(-10)).toEqual([
       "--permission-mode",
       "auto",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--allowedTools",
+      "mcp__vibestudio__say,mcp__vibestudio__complete",
+      "--strict-mcp-config",
       "-p",
       "audit the repo",
     ]);
     expect(claudeArgs).toContain("--mcp-config");
+    expect(claudeArgs).toContain("--strict-mcp-config");
     expect(claudeArgs).toContain("--settings");
     expect(options).toMatchObject({
       cwd: path.join(tmpRoot, ".context-projections", "v5", CONTEXT),
@@ -389,16 +432,39 @@ describe("@workspace-extensions/claude-code prepare", () => {
       VIBESTUDIO_SUBAGENT_RUN_ID: "run-1",
       VIBESTUDIO_SUBAGENT_PARENT_CHANNEL_ID: "home-chan",
       VIBESTUDIO_LINKED_SCRATCH: expect.stringContaining("/scratch"),
+      CLAUDE_CONFIG_DIR: expect.stringContaining("/claude-config"),
       TMPDIR: "/tmp",
     });
     expect(options.env["VIBESTUDIO_SUBAGENT_CONTRACT"]).toContain("## Subagent Operating Contract");
+    expect(options.env["VIBESTUDIO_SUBAGENT_CONTRACT"]).toContain("typed terminal result");
     expect(options.env["VIBESTUDIO_SUBAGENT_CONTRACT"]).toContain(
-      "Only `complete` ends this subagent run"
+      "Do not print or imitate tool-call syntax"
     );
+
+    expect(
+      api.inspectLaunch({
+        entityId: result.entityId,
+        generationId: result.generationId,
+      })
+    ).toMatchObject({
+      entityId: result.entityId,
+      generationId: result.generationId,
+      launchId: "claude-code:run-1",
+      runId: "run-1",
+      state: "running",
+      pid: 4242,
+      log: { bytes: 0, tail: "", truncated: false },
+    });
+    expect(() =>
+      api.inspectLaunch({
+        entityId: result.entityId,
+        generationId: "stale-generation",
+      })
+    ).toThrow("No Claude launch");
 
     const released = await api.release({
       entityId: result.entityId,
-      launchId: result.generationId,
+      generationId: result.generationId,
     });
     expect(released).toEqual({ released: true });
     expect(childProcessMock.child.kill).toHaveBeenCalledWith("SIGTERM");
@@ -438,7 +504,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
     });
 
     const [, args] = childProcessMock.spawn.mock.calls[0]! as unknown as [string, string[]];
-    expect(args.slice(-10)).toEqual([
+    expect(args.slice(-16)).toEqual([
       "--permission-mode",
       "acceptEdits",
       "--model",
@@ -447,6 +513,12 @@ describe("@workspace-extensions/claude-code prepare", () => {
       "high",
       "--max-budget-usd",
       "5",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--allowedTools",
+      "mcp__vibestudio__say,mcp__vibestudio__complete",
+      "--strict-mcp-config",
       "-p",
       "audit the repo",
     ]);
@@ -478,6 +550,16 @@ describe("@workspace-extensions/claude-code prepare", () => {
 
     // The session died on its own → the vessel is told so the run settles.
     exitHandler(1, null);
+    expect(
+      api.inspectLaunch({
+        entityId: result.entityId,
+        generationId: result.generationId,
+      })
+    ).toMatchObject({
+      state: "exited",
+      exit: { code: 1, signal: null },
+      log: { bytes: 0, tail: "", truncated: false },
+    });
     const report = rpcCall.mock.calls.find((c) => c[1] === "reportExternalExit");
     expect(report).toBeDefined();
     expect(report![0]).toBe(result.vesselRef);
@@ -495,7 +577,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
     });
     await api.release({
       entityId: relaunched.entityId,
-      launchId: relaunched.generationId,
+      generationId: relaunched.generationId,
     });
     const exitHandler2 = childProcessMock.child.on.mock.calls.find((c) => c[0] === "exit")![1] as (
       code: number | null,
@@ -503,6 +585,62 @@ describe("@workspace-extensions/claude-code prepare", () => {
     ) => void;
     exitHandler2(null, "SIGTERM");
     expect(rpcCall.mock.calls.find((c) => c[1] === "reportExternalExit")).toBeUndefined();
+  });
+
+  it("settles a successful headless process from its typed stream result", async () => {
+    const { ctx, rpcCall } = makeCtx(tmpRoot);
+    ctx.invocation.current.mockReturnValue({
+      requestId: "req-1",
+      extensionName: "@workspace-extensions/claude-code",
+      method: "providers.claudeCode.launchSubagent",
+      caller: { callerId: "do:parent", callerKind: "do" },
+    });
+    const api = (await activate(ctx as never)).providerContracts.claudeCode;
+    const result = await api.launchSubagent({
+      channelId: CHANNEL,
+      task: "audit",
+      subagent: {
+        runId: "run-success",
+        parentRef: "do:parent",
+        parentChannelId: "home-chan",
+        parentContextId: "ctx-parent",
+        depth: 1,
+      },
+    });
+    writeFileSync(
+      result.logPath,
+      `${JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "one concrete finding",
+      })}\n`
+    );
+    const exitHandler = childProcessMock.child.on.mock.calls.find((c) => c[0] === "exit")![1] as (
+      code: number | null,
+      signal: string | null
+    ) => void;
+    exitHandler(0, null);
+
+    const report = rpcCall.mock.calls.find((c) => c[1] === "reportExternalResult");
+    expect(report?.[0]).toBe(result.vesselRef);
+    expect(report?.[2]).toEqual({
+      runId: "run-success",
+      outcome: "success",
+      report: "one concrete finding",
+      code: 0,
+    });
+    expect(rpcCall.mock.calls.find((c) => c[1] === "reportExternalExit")).toBeUndefined();
+    expect(
+      api.inspectLaunch({ entityId: result.entityId, generationId: result.generationId })
+    ).toMatchObject({
+      state: "exited",
+      completion: {
+        source: "stream-result",
+        outcome: "success",
+        report: "one concrete finding",
+      },
+    });
   });
 
   it("launchSubagent rejects non-agent-vessel callers", async () => {
@@ -538,7 +676,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
     const prepared = await api.prepare({ channelId: CHANNEL });
     const out = await api.release({
       entityId: prepared.entityId,
-      launchId: prepared.profile.launchId,
+      generationId: prepared.profile.launchId,
     });
     expect(out.released).toBe(true);
     expect(revoked).toContain("agt_1");
@@ -552,13 +690,13 @@ describe("@workspace-extensions/claude-code prepare", () => {
     const second = await api.prepare({ channelId: CHANNEL });
     await api.release({
       entityId: first.entityId,
-      launchId: first.profile.launchId,
+      generationId: first.profile.launchId,
     });
 
     expect(revoked).not.toContain("agt_2");
     await api.release({
       entityId: second.entityId,
-      launchId: second.profile.launchId,
+      generationId: second.profile.launchId,
     });
     expect(revoked).toContain("agt_2");
   });

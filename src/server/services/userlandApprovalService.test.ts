@@ -161,7 +161,7 @@ describe("userlandApprovalService", () => {
             userland: [
               {
                 ruleId: "approve-harmless",
-                subjectId,
+                subject: { kind: "exact", key: subjectId },
                 decision: "allow",
                 remember: true,
               },
@@ -220,6 +220,59 @@ describe("userlandApprovalService", () => {
     await expect(
       service.handler(ctx, "request", [
         { ...request, subject: { id: "system-test:unexpected", label: "Unexpected" } },
+      ])
+    ).rejects.toMatchObject({ code: "EUNEXPECTEDTESTPROMPT" });
+  });
+
+  it("inherits a test choice through an attributed extension callback", async () => {
+    const { service, queued, record } = createDeps();
+    const authorizingCaller = createVerifiedCaller(
+      "do:workers/agent-worker:Agent:system-test",
+      "do",
+      null,
+      null,
+      null,
+      null,
+      {
+        policyId: "test:run:case:terminal",
+        kind: "case",
+        orchestratorPolicyId: "test:run",
+        case: {
+          testId: "terminal",
+          authority: [],
+          userland: [
+            {
+              ruleId: "terminal-exec",
+              subject: { kind: "prefix", prefix: "user.exec." },
+              decision: "allow",
+              remember: false,
+            },
+          ],
+          unexpectedPrompts: "fail",
+        },
+      }
+    );
+    const ctx: ServiceContext = {
+      ...extensionCtx,
+      authorizingCaller,
+    };
+
+    await expect(
+      service.handler(ctx, "request", [
+        {
+          subject: { id: `user.exec.${"a".repeat(48)}`, label: "printf" },
+          title: "Run a command",
+        },
+      ])
+    ).resolves.toEqual({ kind: "choice", choice: "allow" });
+    expect(queued).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+    await expect(
+      service.handler(ctx, "request", [
+        {
+          subject: { id: "user.open.unexpected", label: "terminal" },
+          title: "Open a terminal",
+        },
       ])
     ).rejects.toMatchObject({ code: "EUNEXPECTEDTESTPROMPT" });
   });

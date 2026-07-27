@@ -74,7 +74,7 @@ const provenanceSchema = Type.Object({
       [
         Type.String({
           description:
-            'Friendly workspace file path, "session", or semantic shorthand such as "workspace-event:...", "applied-change:...", "change:...", or "decision:...".',
+            'Existing managed file path (not an intermediate directory), exact repository root, "session", or semantic shorthand such as "workspace-event:...", "applied-change:...", "change:...", or "decision:...".',
         }),
         semanticRootSchema,
       ],
@@ -193,15 +193,41 @@ export async function neighborsForWorkspacePath(
   options: { cursor?: string; limit?: number } = {}
 ): Promise<{
   label: string;
-  root: Extract<VcsSemanticNodeRef, { kind: "file" }>;
+  root: Extract<VcsSemanticNodeRef, { kind: "file" | "repository" }>;
   result: CanonicalProvenanceResult;
 }> {
   const workspacePath = toVcsPath(rawPath, cwd);
   const workingHead = await resolveToolWorkingState(deps.vcs, {
     contextId: () => contextIdOf(deps),
   });
+  const split = splitRepoPath(workspacePath);
+  if (!split) throw new Error(`No workspace repository at ${workspacePath}`);
+  if (!split.repoRelPath) {
+    const repository = await deps.vcs.resolveRepository({
+      state: workingHead,
+      repoPath: split.repoPath,
+    });
+    if (!repository) {
+      throw new Error(`No repository identity at ${workspacePath} in the working state`);
+    }
+    const root: Extract<VcsSemanticNodeRef, { kind: "repository" }> = {
+      kind: "repository",
+      state: workingHead,
+      repositoryId: repository.repositoryId,
+    };
+    const result = await deps.vcs.neighbors({
+      root,
+      limit: options.limit ?? 10,
+      ...(options.cursor ? { cursor: options.cursor } : {}),
+    });
+    return { label: workspacePath, root, result };
+  }
   const file = await resolveToolFile(deps.vcs, workingHead, workspacePath);
-  if (!file) throw new Error(`No file identity at ${workspacePath} in the working state`);
+  if (!file) {
+    throw new Error(
+      `No file identity at ${workspacePath} in the working state. Provenance paths must name an existing managed file or an exact repository root; use ls for intermediate directories.`
+    );
+  }
   const root: Extract<VcsSemanticNodeRef, { kind: "file" }> = {
     kind: "file",
     state: workingHead,
@@ -284,7 +310,9 @@ export function createProvenanceTool(
         const page = await neighborsForWorkspacePath(cwd, deps, path, { cursor, limit: 100 });
         const [inspection, history] = await Promise.all([
           deps.vcs.inspect({ node: page.root, edgeLimit: 1 }),
-          deps.vcs.history({ root: page.root, direction: "past", limit: 5 }),
+          page.root.kind === "file"
+            ? deps.vcs.history({ root: page.root, direction: "past", limit: 5 })
+            : Promise.resolve(undefined),
         ]);
         return toolResult(page.label, inspection, page.result, history, {
           kind: "target",

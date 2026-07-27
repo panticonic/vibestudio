@@ -674,6 +674,10 @@ return fs.readFileSync("/tmp/a");`,
     expect(result.success).toBe(false);
     expect(result.error).toContain('Module "left-pad" not available');
     expect(result.error).toContain('"left-pad":"npm:latest"');
+    expect(result).toMatchObject({
+      failureKind: "user-code",
+      failureCode: "module_not_available",
+    });
     expect(loadImport).not.toHaveBeenCalled();
   });
 

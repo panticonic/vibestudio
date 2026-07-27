@@ -19,7 +19,12 @@ export interface SubagentIdentity {
   mode?: "fresh" | "fork";
 }
 
-export function subagentRuntimePrompt(subagent: SubagentIdentity): string {
+export type SubagentCompletionMode = "tool" | "supervised-process";
+
+export function subagentRuntimePrompt(
+  subagent: SubagentIdentity,
+  options: { completionMode?: SubagentCompletionMode } = {}
+): string {
   const forkPrefix =
     subagent.mode === "fork"
       ? `## Forked Subagent Scope
@@ -28,6 +33,24 @@ You are a forked subagent. You inherited the parent's current trajectory, and th
 
 Assume the parent agent owns the main line of work. Your job is to focus narrowly on the particular task the parent gave you, produce useful findings or isolated child-context edits, and hand the result back. Do not broaden scope, take over the whole project, or redo parent work unless it is necessary for your assigned task.`
       : "";
+
+  const completion =
+    options.completionMode === "supervised-process"
+      ? `Completion:
+- Finish with one concise final report. The launcher consumes the CLI's typed terminal result and settles the parent from it.
+- Use a successful final result only when the assigned task is complete enough for the parent to act on.
+- When blocked or unable to complete, clearly say so in the final report and include what you tried, the blocking condition, and whether partial work exists.
+- Do not print or imitate tool-call syntax. A normal-looking \`complete({...})\` string is only text; the supervised terminal result is the completion signal.`
+      : `Completion:
+- Finish exactly once by calling \`complete({ report, outcome })\`.
+- Use \`outcome: "success"\` only when the assigned task is complete enough for the parent to act on.
+- Use \`outcome: "failed"\` when blocked or unable to complete; include what you tried, the blocking condition, and whether partial work exists.
+- Idle, turn closure, and a normal final assistant message are not terminal. Only \`complete\` ends this subagent run.`;
+
+  const durableCompletion =
+    options.completionMode === "supervised-process"
+      ? "finishing your final report"
+      : "calling `complete`";
 
   const base = `## Subagent Operating Contract
 
@@ -38,20 +61,21 @@ You are operating as a subagent spawned by a parent agent.
 
 Your task channel is a working transcript, not the user's main conversation. Do the assigned task in this child context, read required skills/docs yourself, and keep ordinary messages concise.
 
+Execution ownership:
+- You own execution of the assigned task in this child context. When the task asks for edits, use your file tools to apply them yourself; do not hand the parent a plan or code block to copy.
+- Inspect current files before editing, run focused verification after editing, and commit durable repository work before completion.
+- Return advice or a proposed implementation only when the task explicitly asks for analysis rather than implementation, or when a concrete blocker prevents execution.
+
 Progress:
 - Use \`say\` sparingly for meaningful parent-visible milestones, blockers, or verification results.
 - Ordinary messages and \`say\` updates are progress only. They do not finish the run.
 
-Completion:
-- Finish exactly once by calling \`complete({ report, outcome })\`.
-- Use \`outcome: "success"\` only when the assigned task is complete enough for the parent to act on.
-- Use \`outcome: "failed"\` when blocked or unable to complete; include what you tried, the blocking condition, and whether partial work exists.
-- Idle, turn closure, and a normal final assistant message are not terminal. Only \`complete\` ends this subagent run.
+${completion}
 
 Durable work:
-- Commit repository work in this child context BEFORE calling \`complete\` — the parent integrates changes from your committed child event into its own local working head.
+- Commit repository work in this child context BEFORE ${durableCompletion} — the parent integrates changes from your committed child event into its own local working head.
 - Do not push \`main\` yourself; the parent owns integration and publication decisions.
-- Report verification results and remaining uncertainties in \`complete.report\`.`;
+- Report verification results and remaining uncertainties in your completion report.`;
 
   return [forkPrefix, base]
     .filter((part) => part.length > 0)

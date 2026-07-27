@@ -129,12 +129,29 @@ describe("system-testing CLI-neutral API", () => {
     mocks.rpcCall.mockImplementation(async (...args: unknown[]) => {
       const method = args[1];
       if (method === "inspectModels") return { models };
+      if (method === "extensions.list") {
+        return [
+          "browser-data",
+          "claude-code",
+          "file-tools",
+          "git-bridge",
+          "image-service",
+          "shell",
+          "test-runner",
+          "typecheck-service",
+        ].map((name) => ({
+          name: `@workspace-extensions/${name}`,
+          status: "running",
+        }));
+      }
       return {};
     });
   }
 
   it("doctors only an explicitly selected model when the run has no fallback", async () => {
-    configureHealthyDoctorModels([{ ref: "anthropic:test-model", availability: { state: "ready" } }]);
+    configureHealthyDoctorModels([
+      { ref: "anthropic:test-model", availability: { state: "ready" } },
+    ]);
 
     const result = await systemTestDoctor("anthropic:test-model");
 
@@ -179,6 +196,65 @@ describe("system-testing CLI-neutral API", () => {
         primary: { model: SYSTEM_TEST_AGENT_MODEL, availability: "ready" },
         usageLimitFallback: null,
       },
+    });
+  });
+
+  it("fails doctor before a required extension can strand an agent turn", async () => {
+    configureHealthyDoctorModels([
+      { ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } },
+    ]);
+    mocks.rpcCall.mockImplementation(async (...args: unknown[]) => {
+      const method = args[1];
+      if (method === "inspectModels") {
+        return {
+          models: [{ ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } }],
+        };
+      }
+      if (method === "extensions.list") {
+        return [{ name: "@workspace-extensions/shell", status: "pending-approval" }];
+      }
+      return {};
+    });
+
+    const result = await systemTestDoctor();
+
+    expect(result.ok).toBe(false);
+    expect(result.checks.find((check) => check.name === "required-extensions")).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining("@workspace-extensions/shell=pending-approval"),
+    });
+  });
+
+  it("accepts approved lazy extensions without forcing eager startup", async () => {
+    configureHealthyDoctorModels([
+      { ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } },
+    ]);
+    const priorImplementation = mocks.rpcCall.getMockImplementation();
+    mocks.rpcCall.mockImplementation(async (...args: unknown[]) => {
+      if (args[1] === "extensions.list") {
+        return [
+          "browser-data",
+          "claude-code",
+          "file-tools",
+          "git-bridge",
+          "image-service",
+          "shell",
+          "test-runner",
+          "typecheck-service",
+        ].map((name) => ({
+          name: `@workspace-extensions/${name}`,
+          status: name === "shell" ? "running" : "available",
+        }));
+      }
+      return priorImplementation?.(...args);
+    });
+
+    const result = await systemTestDoctor();
+
+    expect(result.ok).toBe(true);
+    expect(result.checks.find((check) => check.name === "required-extensions")).toMatchObject({
+      ok: true,
+      detail: "required system-test extensions are approved and build-ready",
     });
   });
 

@@ -46,6 +46,30 @@ describe("canonical write tool", () => {
     });
   });
 
+  it("treats an identical whole-file write as an idempotent success", async () => {
+    const vcs = new StubVcs({ files: { "meta/out.txt": "same" } });
+    const tool = createWriteTool(CWD, vcs, authority);
+    const result = await tool.execute("invocation:unchanged", {
+      path: "meta/out.txt",
+      content: "same",
+    });
+
+    expect(result.details).toEqual({
+      bytesWritten: 4,
+      path: "meta/out.txt",
+      storage: "vcs",
+      unchanged: true,
+    });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: "File meta/out.txt already has the requested content; no change was needed.",
+      },
+    ]);
+    expect(vcs.read("meta/out.txt")).toBe("same");
+    expect(vcs.lastEditInput).toBeUndefined();
+  });
+
   it("writes non-repository scratch paths directly", async () => {
     const vcs = new StubVcs();
     const fs = new StubFs();

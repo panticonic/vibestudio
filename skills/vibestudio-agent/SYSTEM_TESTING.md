@@ -14,7 +14,7 @@ vibestudio system-test list --category smoke --json
 ```
 
 `doctor` verifies that the test catalog builds, the agent worker is healthy,
-and both models in the canonical test policy are usable. The server automatically keeps a
+and the one pinned model in the canonical test policy is usable. The server automatically keeps a
 headless renderer available for panel/CDP work; an individual CDP test remains
 the authoritative end-to-end check of that path.
 
@@ -32,9 +32,9 @@ vibestudio system-test run --all --concurrency 4
 Useful flags:
 
 - `--model REF` explicitly overrides the canonical policy for a model-specific
-  investigation. Ordinarily, tests start on
-  `openai-codex:gpt-5.3-codex-spark`; only a concrete terminal usage-limit
-  result activates `openai-codex:gpt-5.6-luna` at minimal reasoning effort.
+  investigation. Ordinary runs use `openai-codex:gpt-5.4-mini`. The runner
+  never silently falls back to another model; model-specific subagent
+  scenarios configure their child model explicitly.
 - If `doctor` reports that the selected `openai-codex` subscription credential
   is expired and cannot refresh, do not bypass the failure with a different
   prompt or hidden token. Ask the operator to run
@@ -42,15 +42,18 @@ Useful flags:
   canonical browser sign-in. Then rerun `doctor`; the command replaces the
   credential through the ordinary credential coordinator and never prints
   OAuth URLs or token material.
-- Each test has one five-minute agent-turn budget by default. Multi-phase tests
-  share it rather than restarting the clock for each phase. `--test-timeout-ms N`
-  replaces that budget for a deliberately longer or shorter investigation.
+- Tests are unbounded by default so a slow provider is not misclassified as a
+  product liveness failure. `--test-timeout-ms N` establishes one explicit
+  test budget; multi-phase tests share it rather than restarting the clock.
   It is not a liveness fix; inspect the terminal errored result and repair the
   underlying system whenever it fires.
 - Cancellation becomes terminal only after the active test interrupts its agent
   turn, retires the headless session/context, and cleans any exact repository
   fixture. Inspect cleanup failures on cancelled records; partial work is never
   hidden by the cancellation status.
+- While that teardown is active the durable eval status is `cancelling`, not
+  `cancelled`. Status waiters keep polling and the orchestrator plus descendant
+  execution admissions remain authorized until cleanup settles.
 - `--detach` starts the durable EvalDO job and immediately returns its run ID.
 - `--out-dir DIR` writes result artifacts below `DIR/<run-id>/`. The default is
   the CLI config root with mode `0600` files.

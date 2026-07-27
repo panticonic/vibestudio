@@ -229,6 +229,12 @@ export interface OpenTurn {
   interrupted: boolean;
   /** count of turn.waiting events (drives waiting envelope id suffix). */
   waitingCount: number;
+  /**
+   * Log boundary at which the turn was parked. Recovery wakes must only resume
+   * when transcript input newer than this boundary exists; otherwise the tool
+   * result that requested suspension would wake itself forever.
+   */
+  waitingAtSeq?: number;
   metadata?: AgentTurnMetadata;
   /** A soft "flush queued steers" interrupt is in flight: the in-flight model
    *  call is being aborted, but the turn must CONTINUE (re-run the model with

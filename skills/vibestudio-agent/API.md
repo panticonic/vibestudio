@@ -193,10 +193,10 @@ Authority principals: `code`, `host`, `user`
 | `eval.reset` | Reset the eval context: wipe the live/durable scope and user `db` tables while preserving kernel infrastructure. The owner's existing eval data is cleared. |
 | `eval.dispose` | Permanently release one owner-scoped eval kernel and erase its scope, run records, loaded modules, runtime image, and entity registration. Use this for explicitly finite eval scopes; ordinary notebooks remain durable until disposed. |
 | `eval.startRun` | Start an asynchronous eval for an agent DO: returns a runId after the EvalDO durably records and schedules the idempotent run; reset:true atomically clears scope/db before first insertion. The owning EvalDO delivers the result directly to its agent, while getRun reads the canonical durable result for recovery. Panels/CLI should use run for a one-request result. |
-| `eval.getRun` | Poll an async run started with startRun: returns its status, latest durable progress heartbeat, and (when done) result. |
+| `eval.getRun` | Poll an async run started with startRun: returns its status, latest durable progress heartbeat, and (when done) result. Treat cancelling as non-terminal; registered cleanup still owns live execution authority until cancelled. |
 | `eval.readScopeTextPage` | Read a bounded page from a string in the caller's current durable eval scope. Use this to retrieve a large eval result losslessly after an eval caches it under a scope key; pages are UTF-16LE base64 so every JavaScript string code unit round-trips exactly. |
 | `eval.deleteScopeValue` | Delete one value from the caller's current durable eval scope and persist the deletion. Intended for cleaning up temporary keys used by lossless large-result paging. |
-| `eval.cancel` | Cancel an in-flight or pending run by runId. Cooperative cancellation preserves other runs and scope and returns forcedReset:false. If the run or its cleanup does not settle within the recovery grace period, the EvalDO cancels all non-terminal runs, resets its shared scope/user db, and returns forcedReset:true. A terminal run is a no-op with forcedReset:false. |
+| `eval.cancel` | Cancel an in-flight or pending run by runId. The durable status is cancelling while registered cleanup runs and becomes cancelled only after cleanup settles, so evaluated-execution authority remains valid for teardown. Cooperative cancellation preserves other runs and scope and returns forcedReset:false. If the run or its cleanup does not settle within the recovery grace period, the EvalDO cancels all non-terminal runs, resets its shared scope/user db, and returns forcedReset:true. A terminal run is a no-op with forcedReset:false. |
 
 ## `events`
 
@@ -568,7 +568,7 @@ Authority principals: `code`, `host`, `user`
 | `vcs.copy` | Copy exact source files into new identities with immediate coordinate provenance. |
 | `vcs.integrate` | Take one local adopt, reconcile, or decline step against an exact source event. |
 | `vcs.revert` | Author explicit counteractions of exact semantic changes. |
-| `vcs.commit` | Commit the complete local application chain; derive its unique integration parent from recorded decisions, or accept an explicit zero-change source. |
+| `vcs.commit` | Commit the complete local application chain; derive all integration parents from recorded decisions, or accept explicit zero-change sources. |
 | `vcs.discard` | Discard the complete uncommitted chain and return to the committed event. |
 | `vcs.importSnapshot` | Import one exact complete external snapshot as ordinary changes on an import work unit. |
 | `vcs.push` | Publish one exact already-committed event to protected main. |
@@ -578,6 +578,7 @@ Authority principals: `code`, `host`, `user`
 | `vcs.neighbors` | Page immediate typed provenance edges without persisting traversal state. |
 | `vcs.history` | Page event history in either direction or past file history from one exact state. |
 | `vcs.blame` | Trace an exact bounded file range through immediate content-coordinate mappings. |
+| `vcs.readMemory` | Project bounded blame-backed workspace memory for the exact text range and content hash returned by a managed file read. |
 | `vcs.resolveRepository` | Resolve one canonical repository path at one exact semantic state. |
 | `vcs.readFile` | Read one file from an exact semantic state. |
 | `vcs.listDirectory` | Page immediate visible children of one workspace directory with stable identities and attached name provenance. |

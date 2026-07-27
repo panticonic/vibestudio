@@ -1436,6 +1436,8 @@ export async function executeSandbox(
         success: false,
         consoleOutput: "",
         error: `Module "${missing}" not available.${packageHint} For npm packages, add the imports parameter:\n  imports: ${JSON.stringify(suggestedImports)}\nCurrently loaded: ${available.join(", ")}`,
+        failureKind: "user-code",
+        failureCode: "module_not_available",
       };
     }
 

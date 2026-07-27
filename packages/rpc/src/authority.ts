@@ -61,7 +61,8 @@ export interface AgentExecutionTestAuthorityRule {
 
 export interface AgentExecutionTestUserlandRule {
   ruleId: string;
-  subjectId: string;
+  /** Exact or deliberately bounded userland subject namespace. */
+  subject: ResourceScope;
   decision: string;
   remember: boolean;
 }

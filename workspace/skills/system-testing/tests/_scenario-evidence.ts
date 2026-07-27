@@ -7,7 +7,7 @@ import {
   successfulEvalReturnValues,
   type InvocationCardPayloadLike,
 } from "./_helpers.js";
-import { isPreExecutionArgumentRejection } from "../tool-failure-classification.js";
+import { classifyBuiltInExpectedToolFailure } from "../tool-failure-classification.js";
 
 export interface ScenarioEvidence {
   calls: InvocationCardPayloadLike[];
@@ -50,20 +50,43 @@ export function completedScenarioEvidence(
   const calls = getToolCalls(result);
   const failed = calls.filter(
     (call) =>
-      !isPreExecutionArgumentRejection(
-        call.execution?.error,
-        call.execution?.result,
-        call.execution?.description
-      ) &&
-      (call.execution?.isError === true ||
-        call.execution?.status === "error" ||
-        call.execution?.status === "failed" ||
-        call.execution?.status === "cancelled" ||
-        call.execution?.status === "abandoned" ||
-        call.execution?.terminalOutcome === "cancelled" ||
-        call.execution?.terminalOutcome === "abandoned")
+      call.execution?.isError === true ||
+      call.execution?.status === "error" ||
+      call.execution?.status === "failed" ||
+      call.execution?.status === "cancelled" ||
+      call.execution?.status === "abandoned" ||
+      call.execution?.terminalOutcome === "cancelled" ||
+      call.execution?.terminalOutcome === "abandoned"
   );
-  const unexpected = failed.filter((call) => !options.allowFailed?.(call));
+  const unexpected = failed.filter((call) => {
+    const resultDetails =
+      call.execution?.result &&
+      typeof call.execution.result === "object" &&
+      !Array.isArray(call.execution.result) &&
+      "details" in call.execution.result &&
+      call.execution.result.details &&
+      typeof call.execution.result.details === "object" &&
+      !Array.isArray(call.execution.result.details)
+        ? (call.execution.result.details as Record<string, unknown>)
+        : undefined;
+    const terminalReasonCode = call.execution?.terminalReasonCode ?? call.terminalReasonCode;
+    const failureKind =
+      call.execution?.failureKind ??
+      call.failureKind ??
+      (typeof resultDetails?.["failureKind"] === "string"
+        ? resultDetails["failureKind"]
+        : undefined);
+    return (
+      classifyBuiltInExpectedToolFailure({
+        name: call.name,
+        terminalReasonCode,
+        failureKind,
+        error: call.execution?.error ?? call.error,
+        result: call.execution?.result ?? call.result,
+        description: call.execution?.description ?? call.description,
+      }) === null && !options.allowFailed?.(call)
+    );
+  });
   if (unexpected.length > 0) {
     return {
       passed: false,
@@ -122,15 +145,13 @@ function importedFsOperation(code: string, token: string): boolean {
   const operation = match[1];
   if (!operation) return false;
 
-  const imports =
-    /import\s*\{([^}]*)\}\s*from\s*["'](?:node:)?fs(?:\/promises)?["']/gu;
+  const imports = /import\s*\{([^}]*)\}\s*from\s*["'](?:node:)?fs(?:\/promises)?["']/gu;
   for (const declaration of code.matchAll(imports)) {
     const members = declaration[1]?.split(",") ?? [];
     for (const member of members) {
-      const parsed =
-        /^\s*(?:type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?\s*$/u.exec(
-          member
-        );
+      const parsed = /^\s*(?:type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?\s*$/u.exec(
+        member
+      );
       if (parsed?.[1] !== operation) continue;
       const localName = parsed[2] ?? parsed[1];
       if (new RegExp(`\\b${escapeRegExp(localName)}\\s*\\(`, "u").test(code)) return true;

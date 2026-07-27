@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:91c7660f1966eed2a05d8431d101f654e23970f25878b3b80b24f399bfa52e67",
+  "censusDigest": "sha256:1e9efecb7a0377b1b21573a7c99742f0a0099ecb02707688c0c641cd1a366dd1",
   "decisions": {
     "direct:src/server/internalDOs/evalDO.ts:acquireKernelLease": {
       "review": "host-only-eval-kernel-residency-refresh",
@@ -33,6 +33,10 @@
     "host:vcs.listDirectory": {
       "review": "bounded-semantic-immediate-child-read",
       "change": "Adds an open, read-only immediate-child directory projection over the caller's existing semantic VCS read authority. Work is bounded by returned visible entries and does not enumerate descendant file content."
+    },
+    "host:vcs.readMemory": {
+      "review": "exact-range-semantic-read-memory-projection",
+      "change": "Adds an open, read-only projection over the caller's existing context-scoped semantic VCS authority. It accepts a canonical managed path, exact returned-bytes hash, and bounded UTF-16 range; returns only bounded blame-backed episodes and typed roots; and owns no facts, claims, mutation, or traversal state."
     },
     "host:permissions.safetyStatus": {
       "review": "bounded-live-authority-safety-read",

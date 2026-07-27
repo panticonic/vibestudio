@@ -102,7 +102,8 @@ eval({ path: ".vibestudio/eval/check-project.ts" })
 
 File-loaded eval reads the entry file from the current context, supports static
 relative imports from that file, and resolves bare imports from the nearest
-`package.json` when it can find one.
+`package.json` when it can find one. Ordinary `.ts` and `.js` entry files are
+executable, as are `.tsx`, `.jsx`, `.mts`, `.cts`, `.mjs`, and `.cjs`.
 
 When `path` names a non-executable document/data file (for example `.md`,
 `.json`, `.yaml`, or `.txt`), eval returns its UTF-8 contents instead of trying
@@ -111,8 +112,15 @@ to parse it as TypeScript. Executable `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`,
 
 Inline `code` eval normally has no source file. To resolve relative imports,
 pass `sourcePath` as a context-relative virtual filename, or pass `path` with
-inline code as a directory/file hint. With no inline code, `path` retains its
-file-loaded meaning. For substantial multi-file work, prefer a real entry file.
+inline code as a directory/file hint. The hint establishes the inline module's
+location; it does not import or execute that file. When inline code imports
+`./index.ts`, use the containing directory or a distinct virtual filename such
+as `src/eval-check.ts`—using `src/index.ts` would make `./index.ts` a self-import.
+The tool rejects such unavailable/self imports with the typed, no-effect
+`module_not_available` code so an agent can correct the importer path without
+misclassifying it as runtime infrastructure failure.
+With no inline code, `path` retains its file-loaded meaning. For substantial
+multi-file work, prefer a real entry file.
 
 ## Parameters
 
@@ -145,7 +153,7 @@ same live binding rather than shadowing it.
 | `db`                               | Synchronous in-DO SQLite (see below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `chat`                             | The full chat API for the current channel — `publish`/`send`, custom-message cards, `registerMessageType`, `callMethod`, etc. (agent eval only; see below)                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `agent`                            | Inspect/configure THIS agent's own state — `await agent.describe()`, `await agent.setModel("provider:model")`, etc. (agent eval only; see below)                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `help()`                           | `await help()` lists services + import guidance; `await help("vcs")` describes one service                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `help()`                           | `await help()` lists services + import guidance; `await help("vcs")` returns a compact live method index; `await help("vcs.edit")` returns that method's exact schema and typed errors                                                                                                                                                                                                                                                                                                                                                                       |
 
 ```
 eval({ code: `
@@ -739,7 +747,9 @@ eval({ code: `
 ```
 
 Use `await help()` for live discovery and `await help("vcs")` or
-`await help("workers")` for one runtime binding's actual eval surface. Pass the
+`await help("workers")` for one runtime binding's compact live method index.
+Then request only the method you need, such as `await help("vcs.edit")`, for
+its exact arguments, return schema, and typed errors. Pass the
 name as a string; do not call `help(workers)`.
 
 ## Worker Management
@@ -807,7 +817,8 @@ a substitute for testing the actual worker.
 ## Workspace VCS
 
 The runtime `vcs` namespace and the server `vcs.*` service share one generated
-semantic method registry. Use `await help("vcs")` for exact transport schemas
+semantic method registry. Use `await help("vcs")` for the method index and
+`await help("vcs.edit")` for an exact transport schema
 and read [vibestudio-vcs](../vibestudio-vcs/SKILL.md) for the protocol.
 
 From eval, keep these boundaries explicit:
@@ -1036,3 +1047,11 @@ cleanup did not settle during the cancellation grace period, so the EvalDO
 cancelled every non-terminal run and reset its shared scope/user `db` to recover
 without hanging. Do not attempt to read cleanup records from that reset scope;
 report the forced recovery and start fresh.
+
+Cancellation has an explicit durable `cancelling` phase. It is non-terminal:
+the run and every admitted descendant retain their evaluated-execution
+authority while registered cleanup unwinds child work, persists terminal
+records, and releases owned resources. Pollers must continue through
+`cancelling`; only `cancelled` means teardown has settled. A cleanup failure is
+still returned to the cancel caller and recorded visibly, but the run is
+terminalized so it cannot leak a permanent admission.

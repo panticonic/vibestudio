@@ -4,6 +4,7 @@ const SAFE_VCS_REJECTIONS = new Set([
   "DependencyBlocked",
   "DestinationOccupied",
   "IntegrationIncomplete",
+  "InvalidReference",
   "NoEffect",
   "RevisionChanged",
   "WorkingChangesPresent",
@@ -20,10 +21,11 @@ export function isPreExecutionArgumentRejection(...values: unknown[]): boolean {
 }
 
 /**
- * These typed VCS refusals are optimistic-concurrency or state preconditions.
- * The service guarantees that they perform no effect and the agent is expected
- * to re-observe and correct its request. Keep them in the trajectory, but do
- * not conflate a successful fail-closed guard with an infrastructure failure.
+ * These typed VCS refusals are optimistic-concurrency, reference, or state
+ * preconditions. The service/tool adapter guarantees that they perform no
+ * effect and the agent is expected to re-observe and correct its request. Keep
+ * them in the trajectory, but do not conflate a successful fail-closed guard
+ * with an infrastructure failure.
  */
 export function isSafeVcsDomainRejection(
   toolName: string,
@@ -34,4 +36,97 @@ export function isSafeVcsDomainRejection(
     terminalReasonCode !== undefined &&
     SAFE_VCS_REJECTIONS.has(terminalReasonCode)
   );
+}
+
+/**
+ * Static module resolution happens before any eval guest code executes. A
+ * typed unavailable-module result is therefore a correctable, no-effect input
+ * rejection, not an infrastructure failure.
+ */
+export function isSafeEvalDomainRejection(
+  toolName: string,
+  terminalReasonCode: string | undefined
+): boolean {
+  return toolName === "eval" && terminalReasonCode === "module_not_available";
+}
+
+/**
+ * The eval runtime distinguishes a guest program throwing from its own
+ * infrastructure failing. Agentic development is expected to execute,
+ * diagnose, edit, and rerun imperfect user code, so a typed guest-code
+ * exception remains visible in diagnostics but is not a failed platform
+ * effect. Untyped eval errors and every infrastructure/cancellation failure
+ * remain unexpected.
+ */
+export function isEvalGuestCodeFailure(
+  toolName: string,
+  terminalReasonCode: string | undefined,
+  failureKind: string | undefined
+): boolean {
+  return (
+    toolName === "eval" &&
+    terminalReasonCode === "guest_execution_failed" &&
+    failureKind === "user-code"
+  );
+}
+
+const SAFE_SUBAGENT_CLOSE_REJECTIONS = new Set([
+  "IntegrationIncomplete",
+  "InvalidReference",
+  "WorkingChangesPresent",
+]);
+
+/**
+ * Subagent tools expose typed no-effect domain refusals. inspect_subagent
+ * reports ambiguous references before reading anything. close_subagent checks
+ * lifecycle preconditions before cancellation, context teardown, or
+ * subscription removal. Keep both visible without treating the guard itself as
+ * a platform execution failure.
+ */
+export function isSafeSubagentDomainRejection(
+  toolName: string,
+  terminalReasonCode: string | undefined
+): boolean {
+  if (toolName === "inspect_subagent" && terminalReasonCode === "InvalidReference") {
+    return true;
+  }
+  return (
+    toolName === "close_subagent" &&
+    terminalReasonCode !== undefined &&
+    SAFE_SUBAGENT_CLOSE_REJECTIONS.has(terminalReasonCode)
+  );
+}
+
+export type BuiltInExpectedToolFailureClassification =
+  | "argument-rejection"
+  | "domain-rejection"
+  | "guest-code-failure";
+
+/**
+ * One canonical classifier is shared by suite accounting and semantic
+ * validators. This prevents a scenario from rejecting the same typed,
+ * no-effect failure that the runner correctly keeps as diagnostic evidence.
+ */
+export function classifyBuiltInExpectedToolFailure(input: {
+  name: string;
+  terminalReasonCode?: string;
+  failureKind?: string;
+  error?: unknown;
+  result?: unknown;
+  description?: unknown;
+}): BuiltInExpectedToolFailureClassification | null {
+  if (isPreExecutionArgumentRejection(input.error, input.result, input.description)) {
+    return "argument-rejection";
+  }
+  if (
+    isSafeVcsDomainRejection(input.name, input.terminalReasonCode) ||
+    isSafeEvalDomainRejection(input.name, input.terminalReasonCode) ||
+    isSafeSubagentDomainRejection(input.name, input.terminalReasonCode)
+  ) {
+    return "domain-rejection";
+  }
+  if (isEvalGuestCodeFailure(input.name, input.terminalReasonCode, input.failureKind)) {
+    return "guest-code-failure";
+  }
+  return null;
 }

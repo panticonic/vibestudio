@@ -568,6 +568,149 @@ describe("EvalDO cancellation + forced recovery", () => {
     });
   });
 
+  it("keeps the durable run non-terminal while gated cleanup is still running", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const { runLocked, started } = blockUntilAborted();
+    setPriv(instance, "runLocked", runLocked);
+    seedPendingRun(sql, "run-cancelling-state");
+
+    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+      instance,
+      "run-cancelling-state"
+    );
+    await started;
+    let announceCleanup!: () => void;
+    let releaseCleanup!: () => void;
+    const cleanupStarted = new Promise<void>((resolve) => (announceCleanup = resolve));
+    const cleanupGate = new Promise<void>((resolve) => (releaseCleanup = resolve));
+    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+      "run-cancelling-state",
+      new Set([
+        async () => {
+          announceCleanup();
+          await cleanupGate;
+        },
+      ])
+    );
+
+    const cancellation = priv<(id: string) => Promise<{ ok: boolean; forcedReset: boolean }>>(
+      instance,
+      "cancel"
+    ).call(instance, "run-cancelling-state");
+    await cleanupStarted;
+    await expect(runP).resolves.toMatchObject({
+      success: false,
+      error: expect.stringMatching(/cancelled/i),
+    });
+    expect(
+      sql.exec(`SELECT status FROM runs WHERE run_id = 'run-cancelling-state'`).toArray()[0]
+    ).toMatchObject({ status: "cancelling" });
+
+    releaseCleanup();
+    await expect(cancellation).resolves.toEqual({ ok: true, forcedReset: false });
+    expect(
+      sql.exec(`SELECT status FROM runs WHERE run_id = 'run-cancelling-state'`).toArray()[0]
+    ).toMatchObject({ status: "cancelled" });
+  });
+
+  it("joins concurrent cancel callers to one cleanup phase", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const { runLocked, started } = blockUntilAborted();
+    setPriv(instance, "runLocked", runLocked);
+    seedPendingRun(sql, "run-concurrent-cancel");
+
+    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+      instance,
+      "run-concurrent-cancel"
+    );
+    await started;
+    let announceCleanup!: () => void;
+    let releaseCleanup!: () => void;
+    const cleanupStarted = new Promise<void>((resolve) => (announceCleanup = resolve));
+    const cleanupGate = new Promise<void>((resolve) => (releaseCleanup = resolve));
+    const cleanup = vi.fn(async () => {
+      announceCleanup();
+      await cleanupGate;
+    });
+    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+      "run-concurrent-cancel",
+      new Set([cleanup])
+    );
+
+    const cancel = priv<(id: string) => Promise<{ ok: boolean; forcedReset: boolean }>>(
+      instance,
+      "cancel"
+    ).bind(instance);
+    const first = cancel("run-concurrent-cancel");
+    await cleanupStarted;
+    const second = cancel("run-concurrent-cancel");
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(priv<Map<string, Promise<unknown>>>(instance, "inFlightCancellations").size).toBe(1);
+    expect(
+      sql.exec(`SELECT status FROM runs WHERE run_id = 'run-concurrent-cancel'`).toArray()[0]
+    ).toMatchObject({ status: "cancelling" });
+
+    releaseCleanup();
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { ok: true, forcedReset: false },
+      { ok: true, forcedReset: false },
+    ]);
+    await runP;
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(priv<Map<string, Promise<unknown>>>(instance, "inFlightCancellations").size).toBe(0);
+    expect(
+      sql.exec(`SELECT status FROM runs WHERE run_id = 'run-concurrent-cancel'`).toArray()[0]
+    ).toMatchObject({ status: "cancelled" });
+  });
+
+  it("terminalizes a run after cleanup rejection while preserving the failure", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const { runLocked, started } = blockUntilAborted();
+    setPriv(instance, "runLocked", runLocked);
+    seedPendingRun(sql, "run-cleanup-rejects");
+    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+      instance,
+      "run-cleanup-rejects"
+    );
+    await started;
+    const scope: Record<string, unknown> = {};
+    const persisted: Array<Record<string, unknown>> = [];
+    setPriv(instance, "scopeManager", {
+      current: scope,
+      api: {},
+      hydrate: () => Promise.resolve(),
+      persist: async () => {
+        persisted.push(structuredClone(scope));
+      },
+      enterEval: () => undefined,
+      exitEval: () => Promise.resolve(),
+    });
+    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+      "run-cleanup-rejects",
+      new Set([
+        async () => {
+          scope["terminalRecord"] = { status: "cancelled", cleanupFailed: true };
+          throw new Error("cleanup rejected visibly");
+        },
+      ])
+    );
+
+    await expect(
+      priv<(id: string) => Promise<{ ok: boolean }>>(instance, "cancel").call(
+        instance,
+        "run-cleanup-rejects"
+      )
+    ).rejects.toThrow(/cleanup rejected visibly/);
+    await runP;
+    expect(
+      sql.exec(`SELECT status FROM runs WHERE run_id = 'run-cleanup-rejects'`).toArray()[0]
+    ).toMatchObject({ status: "cancelled" });
+    expect(persisted.at(-1)).toEqual({
+      terminalRecord: { status: "cancelled", cleanupFailed: true },
+    });
+    expect(priv<Map<string, Promise<unknown>>>(instance, "inFlightCancellations").size).toBe(0);
+  });
+
   it("persists scope mutations made by cancellation cleanup after the run unwinds", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const { runLocked, started } = blockUntilAborted();
@@ -762,6 +905,8 @@ describe("EvalDO cancellation + forced recovery", () => {
     const { runLocked: wedge, started: wedgeStarted } = blockUntilAborted();
     setPriv(instance, "runLocked", wedge);
     seedPendingRun(sql, "wedged");
+    seedPendingRun(sql, "already-cancelling");
+    sql.exec(`UPDATE runs SET status = 'cancelling' WHERE run_id = 'already-cancelling'`);
     const wedgedP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
       instance,
       "wedged"
@@ -805,6 +950,9 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'wedged'`).toArray()[0]).toMatchObject({
       status: "cancelled",
     });
+    expect(
+      sql.exec(`SELECT status FROM runs WHERE run_id = 'already-cancelling'`).toArray()[0]
+    ).toMatchObject({ status: "cancelled" });
     const wedgedResult = await wedgedP;
     expect(wedgedResult.success).toBe(false);
 
@@ -844,6 +992,18 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(sql.exec(`SELECT status FROM runs WHERE run_id = 'after'`).toArray()[0]).toMatchObject({
       status: "done",
     });
+  });
+
+  it("reconciles a stale cancelling row as terminal cancellation after restart", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    seedPendingRun(sql, "stale-cancelling");
+    sql.exec(`UPDATE runs SET status = 'cancelling' WHERE run_id = 'stale-cancelling'`);
+
+    priv<() => void>(instance, "reconcileOrphanedRuns").call(instance);
+
+    expect(
+      sql.exec(`SELECT status FROM runs WHERE run_id = 'stale-cancelling'`).toArray()[0]
+    ).toMatchObject({ status: "cancelled" });
   });
 
   it("dispose erases terminal jobs and releases every loaded kernel reference", async () => {

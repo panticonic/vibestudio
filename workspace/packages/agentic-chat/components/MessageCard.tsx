@@ -92,7 +92,7 @@ const PROVIDER_LEVEL_FAILURE_CODES = new Set([
   "rate_limited_retryable",
   "provider_overloaded_retryable",
   "auth_or_credentials",
-  "circuit_breaker_open_terminal",
+  "circuit_breaker_open_retryable",
   "unknown_retryable",
 ]);
 

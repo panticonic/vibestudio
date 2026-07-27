@@ -116,7 +116,7 @@
             "applicationId": "application:integrate"
           },
           "message": "Adopt the compatible source changes",
-          "integratesEventId": "event:source"
+          "integratesEventIds": ["event:source"]
         }
       ]
     },
@@ -303,6 +303,21 @@
           "repositoryId": "repository:app",
           "prefix": "src/",
           "limit": 100
+        }
+      ]
+    },
+    {
+      "name": "project-exact-read-memory",
+      "method": "readMemory",
+      "valid": true,
+      "args": [
+        {
+          "contextId": "context:task",
+          "path": "projects/app/src/example.ts",
+          "expectedContentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "range": { "start": 12, "end": 44 },
+          "episodeLimit": 4,
+          "historyLimit": 3
         }
       ]
     },

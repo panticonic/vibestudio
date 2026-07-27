@@ -225,8 +225,22 @@ await page.locator('input[name="email"]').fill("user@example.com");
 ```
 
 `page.screenshot()` returns `Uint8Array` and has no filesystem `path` option.
-Persist it explicitly with `blobstore.putBytes(bytes)`. Unsupported options are
-rejected rather than ignored.
+Persist a screenshot for visual inspection with an opaque context-local temp
+path, then pass the returned file reference directly to the `read` tool:
+
+```ts
+const bytes = await page.screenshot({ fullPage: true });
+const path = await fs.mktemp("panel-capture");
+await fs.writeFile(path, bytes);
+return { screenshot: `file:${path}`, byteLength: bytes.length };
+```
+
+`read({ target: screenshot, kind: "file" })` magic-sniffs extensionless runtime
+artifacts and returns image content to the model. Do not decode PNG/JPEG bytes
+as text or import a package merely to make the image visible. For durable
+content-addressed storage rather than immediate visual inspection, use
+`blobstore.putBytes(bytes)`. Unsupported screenshot options are rejected rather
+than ignored.
 
 Page callbacks are intentionally moved into the browser realm. Functions passed
 to `page.evaluate`, `page.waitForFunction`, `locator.evaluate`, and

@@ -32,6 +32,7 @@ export { webhookTests } from "./tests/webhooks.js";
 export { extensionSurfaceTests } from "./tests/extensions-surface.js";
 export { harnessToolTests } from "./tests/harness-tools.js";
 export { credentialTests } from "./tests/credentials.js";
+export { agentOrchestrationTests } from "./tests/agent-orchestration.js";
 
 import { smokeTests as _smoke } from "./tests/smoke.js";
 import { filesystemTests as _fs } from "./tests/filesystem.js";
@@ -65,6 +66,7 @@ import { webhookTests as _webhooks } from "./tests/webhooks.js";
 import { extensionSurfaceTests as _extensionSurface } from "./tests/extensions-surface.js";
 import { harnessToolTests as _harnessTools } from "./tests/harness-tools.js";
 import { credentialTests as _credentials } from "./tests/credentials.js";
+import { agentOrchestrationTests as _agentOrchestration } from "./tests/agent-orchestration.js";
 import { deterministicTestCases as _deterministic } from "./deterministic.js";
 
 export type TestStage = {
@@ -113,6 +115,7 @@ export function allTests(): TestCase[] {
     ..._rpc,
     ..._edge,
     ..._agenticRuntime,
+    ..._agentOrchestration,
     ..._evalLifecycle,
     ..._blobstore,
     ..._serverLogs,

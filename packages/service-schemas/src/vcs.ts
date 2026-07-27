@@ -2,7 +2,10 @@ import { z } from "zod";
 
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods, type MethodSchema } from "@vibestudio/shared/typedServiceClient";
-import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
+import {
+  normalizeWorkspaceRepoPath,
+  splitRepoPath,
+} from "@vibestudio/shared/runtime/entitySpec";
 import {
   SEMANTIC_VCS_MAX_PATH_UTF8_BYTES,
   semanticVcsPathAdmission,
@@ -501,7 +504,7 @@ export const vcsWorkspaceEventSchema = z
     commandId: id("Originating semantic command."),
     kind: z.enum(["genesis", "commit", "integration-commit"]),
     workspaceFactRootId: id("Authenticated workspace-fact root."),
-    parentEventIds: z.array(id("Parent event.")).max(2),
+    parentEventIds: z.array(id("Parent event.")).max(201),
     applicationIds: z.array(id("Complete local application chain committed here.")).max(10_000),
     decisionIds: z.array(id("Reachable integration decision.")).max(10_000),
     message: nonEmptyText.nullable(),
@@ -713,8 +716,8 @@ export const vcsCommitInputSchema = z
   .object({
     ...mutationEnvelope,
     message: nonEmptyText.optional(),
-    integratesEventId: id(
-      "Optional source for a zero-change integration; when decisions exist, the parent is derived and this value may only confirm it."
+    integratesEventIds: boundedIds(
+      "Optional sources for zero-change integration; when decisions exist, parents are derived and this value may only confirm the exact set."
     ).optional(),
   })
   .strict();
@@ -871,7 +874,7 @@ export const vcsCommitResultSchema = z
       message: "commit must return an event state",
     }),
     committedApplicationIds: z.array(id("Committed application.")).max(10_000),
-    integrationSourceEventId: id("Integration parent event.").nullable(),
+    integrationSourceEventIds: z.array(id("Integration parent event.")).max(200),
   })
   .strict();
 export type VcsCommitResult = z.infer<typeof vcsCommitResultSchema>;
@@ -1447,6 +1450,134 @@ export const vcsBlameResultSchema = z
   .strict();
 export type VcsBlameResult = z.infer<typeof vcsBlameResultSchema>;
 
+const vcsReadMemoryRangeSchema = z
+  .object({
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative(),
+  })
+  .strict()
+  .refine((range) => range.end >= range.start, { message: "end must be >= start" });
+
+const vcsReadMemoryWorkspacePathSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (value) => {
+      const split = splitRepoPath(value);
+      return Boolean(split?.repoRelPath) && semanticVcsPathAdmission(value).admissible;
+    },
+    {
+      message:
+        "Expected an admissible canonical workspace file path inside a managed repository",
+    }
+  );
+
+export const vcsReadMemoryInputSchema = z
+  .object({
+    contextId,
+    path: vcsReadMemoryWorkspacePathSchema,
+    expectedContentHash: DigestSchema.describe(
+      "Hash of the bytes actually returned by the file read; prevents memory from being attached to a different revision."
+    ),
+    range: vcsReadMemoryRangeSchema,
+    episodeLimit: z.number().int().positive().max(12).default(4),
+    historyLimit: z.number().int().nonnegative().max(8).default(3),
+  })
+  .strict();
+export type VcsReadMemoryInput = z.infer<typeof vcsReadMemoryInputSchema>;
+
+export const vcsReadMemoryCauseSchema = z
+  .object({
+    invocation: vcsTrajectoryInvocationRefSchema,
+    turn: vcsTrajectoryTurnRefSchema.nullable(),
+    message: vcsTrajectoryMessageRefSchema.nullable(),
+    toolName: nonEmptyText.nullable(),
+    terminalOutcome: nonEmptyText.nullable(),
+    requestRef: vcsTrajectoryRequestRefSchema.nullable(),
+    turnSummary: nonEmptyText.nullable(),
+    triggerText: z.string().nullable(),
+    sender: vcsTrajectorySenderRefSchema.nullable(),
+  })
+  .strict();
+export type VcsReadMemoryCause = z.infer<typeof vcsReadMemoryCauseSchema>;
+
+export const vcsReadMemoryDecisionSchema = z
+  .object({
+    decision: z
+      .object({ kind: z.literal("decision"), decisionId: id("Integration decision.") })
+      .strict(),
+    kind: z.enum(["adopted", "reconciled", "declined"]),
+    rationale: nonEmptyText.nullable(),
+  })
+  .strict();
+
+export const vcsReadMemoryEpisodeSchema = z
+  .object({
+    ranges: z.array(vcsReadMemoryRangeSchema).min(1).max(500),
+    stop: z.enum(["authored", "import-boundary"]),
+    change: vcsChangeNodeRefSchema,
+    appliedChange: vcsAppliedChangeNodeRefSchema,
+    workUnit: vcsWorkUnitNodeRefSchema,
+    command: vcsCommandNodeRefSchema,
+    changeKind: vcsChangeKindSchema,
+    counteractsChangeIds: z.array(id("Counteracted change.")).max(200),
+    intentSummary: nonEmptyText.nullable(),
+    createdAt: timestamp,
+    externalSnapshot: vcsExternalSnapshotSchema.nullable(),
+    commit: z
+      .object({
+        event: vcsEventNodeRefSchema,
+        message: nonEmptyText.nullable(),
+        createdAt: timestamp,
+      })
+      .strict()
+      .nullable(),
+    cause: vcsReadMemoryCauseSchema.nullable(),
+    decisions: z.array(vcsReadMemoryDecisionSchema).max(8),
+  })
+  .strict();
+export type VcsReadMemoryEpisode = z.infer<typeof vcsReadMemoryEpisodeSchema>;
+
+export const vcsReadMemoryResultSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("attached"),
+      state: vcsStateNodeRefSchema,
+      repositoryId: id("Repository containing the read file."),
+      fileId: id("Stable file identity."),
+      path: vcsReadMemoryWorkspacePathSchema,
+      contentHash: DigestSchema,
+      range: vcsReadMemoryRangeSchema,
+      coordinateKind: z.literal("utf16"),
+      episodes: z.array(vcsReadMemoryEpisodeSchema).max(12),
+      history: z.array(vcsHistoryEntrySchema).max(8),
+      truncated: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("stale"),
+      path: vcsReadMemoryWorkspacePathSchema,
+      expectedContentHash: DigestSchema,
+      currentContentHash: DigestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("unmanaged"),
+      path: vcsReadMemoryWorkspacePathSchema,
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("unsupported"),
+      path: vcsReadMemoryWorkspacePathSchema,
+      reason: z.literal("non-text"),
+    })
+    .strict(),
+]);
+export type VcsReadMemoryResult = z.infer<typeof vcsReadMemoryResultSchema>;
+
 export const vcsResolveRepositoryInputSchema = z
   .object({
     state: vcsStateNodeRefSchema,
@@ -1853,12 +1984,12 @@ export const vcsMethods = defineVcsMethods({
   },
   commit: {
     description:
-      "Commit the complete local application chain; derive its unique integration parent from recorded decisions, or accept an explicit zero-change source.",
+      "Commit the complete local application chain; derive all integration parents from recorded decisions, or accept explicit zero-change sources.",
     args: z.tuple([vcsCommitInputSchema]),
     returns: vcsCommitResultSchema,
     access: WRITE_ACCESS,
     operationClass: "context-write",
-    references: [...commonMutationRefs, ref("event", "source", "integratesEventId")],
+    references: [...commonMutationRefs, ref("event", "source", "integratesEventIds", "*")],
     errors: [...MUTATION_ERRORS, ...methodErrors("IntegrationIncomplete")],
     seeAlso: ["vcs.status", "vcs.push"],
   },
@@ -1978,6 +2109,17 @@ export const vcsMethods = defineVcsMethods({
     ],
     errors: READ_ERRORS,
     seeAlso: ["vcs.neighbors", "vcs.history"],
+  },
+  readMemory: {
+    description:
+      "Project bounded blame-backed workspace memory for the exact text range and content hash returned by a managed file read.",
+    args: z.tuple([vcsReadMemoryInputSchema]),
+    returns: vcsReadMemoryResultSchema,
+    access: READ_ACCESS,
+    operationClass: "read",
+    references: [ref("context", "context", "contextId")],
+    errors: READ_ERRORS,
+    seeAlso: ["vcs.blame", "vcs.inspect", "vcs.history"],
   },
   resolveRepository: {
     description: "Resolve one canonical repository path at one exact semantic state.",

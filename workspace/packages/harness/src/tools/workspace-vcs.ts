@@ -109,7 +109,7 @@ const workspaceVcsSchema = Type.Union([
               minItems: 1,
               maxItems: 200,
               description:
-                "Exact target-state evidence. Prefer path-based file-content, file-placement, or repository-present entries; the tool resolves their stable identities at the current working state.",
+                "Exact target-state evidence. Paths must already exist in the current target working state; a source-only file-create cannot be cited before it is adopted or authored in the target. Prefer path-based file-content, file-placement, or repository-present entries; the tool resolves their stable identities at the current working state.",
             }),
             rationale: Type.String({ minLength: 1 }),
           },
@@ -439,7 +439,21 @@ async function resolveAgentIntegrationDecision(
     if (item.kind === "file-content" || item.kind === "file-placement") {
       const path = toVcsPath(item.path, cwd);
       const file = await resolveToolFile(vcs, state, path);
-      if (!file) throw new Error(`No managed file at ${item.path}`);
+      if (!file) {
+        throw Object.assign(
+          new Error(
+            `No managed target file at ${item.path}; reconciliation evidence must exist in the current target working state`
+          ),
+          {
+            code: "InvalidReference",
+            errorData: {
+              code: "InvalidReference",
+              referenceKind: "target-file-path",
+              reference: item.path,
+            },
+          }
+        );
+      }
       evidence.push(
         item.kind === "file-content"
           ? { kind: item.kind, fileId: file.fileId, contentHash: file.contentHash }

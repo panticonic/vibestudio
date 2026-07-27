@@ -399,12 +399,13 @@ const commit = (inv: ParsedInvocation) =>
     if (!message) throw new UsageError("commit requires -m MESSAGE");
     const integratesEventId =
       typeof inv.flags["integrates"] === "string" ? inv.flags["integrates"] : null;
+    const integrationArgs = integratesEventId ? { integratesEventIds: [integratesEventId] } : {};
     return runRetriableMutation(
       inv,
       vcs,
       { contextId, serverUrl },
       "commit",
-      { message, integratesEventId },
+      { message, ...integrationArgs },
       async (id) => {
         const current = await vcs.status({ contextId });
         const input: VcsCommitInput = {
@@ -412,7 +413,7 @@ const commit = (inv: ParsedInvocation) =>
           expectedWorkingHead: current.workingHead,
           message,
           commandId: id,
-          ...(integratesEventId ? { integratesEventId } : {}),
+          ...integrationArgs,
         };
         return input;
       }

@@ -198,7 +198,7 @@ describe("classifyModelFailure", () => {
     });
   });
 
-  it("treats open provider circuit breakers as terminal for the current turn", () => {
+  it("waits through an open provider circuit breaker before retrying the current turn", () => {
     const failure = classifyModelFailure({
       provider: "openai-codex",
       rawReason: "Circuit breaker is open",
@@ -206,9 +206,10 @@ describe("classifyModelFailure", () => {
     });
 
     expect(failure).toMatchObject({
-      code: "circuit_breaker_open_terminal",
-      recoverable: false,
+      code: "circuit_breaker_open_retryable",
+      recoverable: true,
       reason: "Circuit breaker is open",
+      retryAfterMs: 30_000,
     });
   });
 

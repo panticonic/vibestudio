@@ -39,9 +39,12 @@ For CLI-driven verification, diagnosis, or repair, follow this order:
    Model readiness is lifecycle-aware: an expired URL-bound credential counts
    as ready only when it has both durable refresh material and an exact refresh
    recipe. Reconnect a nonrenewable credential; do not retry around it or import
-   credentials from another tool's private store. `doctor` proves catalog and
-   credential readiness; it does not spend a provider request, so provider
-   quota is established only by the journaled model attempt in a run.
+   credentials from another tool's private store. `doctor` proves catalog,
+   required extension, and credential readiness; approved lazy extensions may
+   remain `available` until first use, while a pending startup unit review fails
+   before a scenario can strand itself inside an unavailable native extension.
+   It does not spend a provider request, so provider quota is
+   established only by the journaled model attempt in a run.
 
 2. Discover the exact current test name:
 
@@ -66,6 +69,10 @@ For CLI-driven verification, diagnosis, or repair, follow this order:
    retired, and any exact repository fixture is cleaned. Inspect a cancelled
    record's cleanup failures just as you would an errored record; do not assume
    cancellation made partial work disappear.
+
+   The intermediate durable status is `cancelling`. Treat it as live work:
+   cleanup retains the orchestrator and descendant evaluated-execution
+   admissions until teardown and terminal-record persistence have settled.
 
    For a long run, start with `--detach` and observe it with
    `system-test status RUN_ID --wait --json`. Each running case reports its

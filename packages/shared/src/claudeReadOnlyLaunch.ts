@@ -6,6 +6,7 @@ export interface ClaudeReadOnlyLaunch {
   args: string[];
   env: Record<string, string>;
   scratchDirectory: string;
+  claudeConfigDirectory: string;
 }
 
 export interface ClaudeReadOnlyLaunchInput {
@@ -35,8 +36,11 @@ function executableOnPath(name: string, pathValue: string | undefined): string |
  * Build the only supported linked-Claude process launch.
  *
  * The host tree is mounted read-only, including the materialized context. A
- * disposable profile directory and /tmp are the only writable mounts. This is
- * an OS boundary, not a prompt convention: native Edit/Write/Bash calls receive
+ * disposable profile directory and /tmp are the only writable mounts. The
+ * profile contains isolated writable Claude state prepared by the launch
+ * materializer, so token refresh and session hooks never need to write directly
+ * into the host's ~/.claude while managed source remains immutable. This is an
+ * OS boundary, not a prompt convention: native Edit/Write/Bash calls receive
  * EROFS for managed projection paths. Server-side semantic reads still work,
  * and scratch is explicit through VIBESTUDIO_LINKED_SCRATCH.
  *
@@ -63,7 +67,9 @@ export function confineClaudeReadOnly(input: ClaudeReadOnlyLaunchInput): ClaudeR
   const profileDir = path.resolve(input.profileDir);
   const contextDirectory = path.resolve(input.contextDirectory);
   const scratchDirectory = path.join(profileDir, "scratch");
+  const claudeConfigDirectory = path.join(profileDir, "claude-config");
   mkdirSync(scratchDirectory, { recursive: true, mode: 0o700 });
+  mkdirSync(claudeConfigDirectory, { recursive: true, mode: 0o700 });
 
   return {
     command: bwrap,
@@ -94,14 +100,19 @@ export function confineClaudeReadOnly(input: ClaudeReadOnlyLaunchInput): ClaudeR
       "--setenv",
       "VIBESTUDIO_LINKED_SCRATCH",
       scratchDirectory,
+      "--setenv",
+      "CLAUDE_CONFIG_DIR",
+      claudeConfigDirectory,
       "--",
       ...argv,
     ],
     env: {
       TMPDIR: "/tmp",
       VIBESTUDIO_LINKED_SCRATCH: scratchDirectory,
+      CLAUDE_CONFIG_DIR: claudeConfigDirectory,
     },
     scratchDirectory,
+    claudeConfigDirectory,
   };
 }
 

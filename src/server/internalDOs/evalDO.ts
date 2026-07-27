@@ -28,7 +28,11 @@ import { docsMethods } from "@vibestudio/service-schemas/docs";
 import { EVAL_AMBIENT_ONLY } from "@vibestudio/service-schemas/runtime/runtimeSurface.eval";
 import { buildOwnerBindings } from "./evalOwnerBindings.js";
 import { ConsoleStreamer } from "./consoleStreamer.js";
-import { describeEvalBindingSurface, invalidHelpArgumentResponse } from "./evalSurfaceHelp.js";
+import {
+  describeEvalBindingIndex,
+  describeEvalBindingSurface,
+  invalidHelpArgumentResponse,
+} from "./evalSurfaceHelp.js";
 import { createEvalNodeCompat } from "./evalNodeCompat.js";
 import {
   createTypedServiceClient,
@@ -81,6 +85,8 @@ interface EvalCancelResult {
   ok: true;
   forcedReset: boolean;
 }
+
+type EvalRunStatusValue = "pending" | "running" | "cancelling" | "done" | "cancelled";
 
 type TimedSettlement<T> = { settled: true; value: T } | { settled: false };
 
@@ -365,6 +371,10 @@ export class EvalDO extends DurableObjectBase {
    *  `executeRun` (e.g. a deferRedrive that races the first dispatch) SHARES this promise instead of
    *  starting a second sandbox run; it also lets `reset` abort live runs. */
   private readonly inFlightRuns = new Map<string, Promise<RunResult>>();
+  /** One cancellation phase per run. Concurrent cancel RPCs join this promise
+   *  so no caller can publish a terminal status while another caller's cleanup
+   *  is still running. */
+  private readonly inFlightCancellations = new Map<string, Promise<EvalCancelResult>>();
   /** Abort controllers per in-flight run — used by `reset` and the `timeoutMs` deadline. */
   private readonly runAborts = new Map<string, AbortController>();
   /**
@@ -491,6 +501,10 @@ export class EvalDO extends DurableObjectBase {
         failureCode: "eval_runtime_restarted",
       })
     );
+    // A cancelling row means the old activation had already prevented normal
+    // completion, but its in-memory cleanup phase was lost in the restart.
+    // It is terminal cancellation, never an execution to replay.
+    this.sql.exec(`UPDATE runs SET status = 'cancelled' WHERE status = 'cancelling'`);
   }
 
   private createExecutionContext(
@@ -917,7 +931,7 @@ export class EvalDO extends DurableObjectBase {
         failureCode: "eval_run_missing",
       };
     }
-    const claimed = String(row["status"]);
+    const claimed = String(row["status"]) as EvalRunStatusValue;
     if (claimed !== "running") {
       // Already terminal (idempotent re-dispatch, or cancelled before we claimed it).
       if (claimed === "done" && row["result"] != null) {
@@ -927,8 +941,12 @@ export class EvalDO extends DurableObjectBase {
         success: false,
         console: "",
         error: `eval: run ${runId} is ${claimed}`,
-        failureKind: claimed === "cancelled" ? "cancelled" : "infrastructure",
-        failureCode: claimed === "cancelled" ? "eval_cancelled" : "eval_invalid_run_state",
+        failureKind:
+          claimed === "cancelling" || claimed === "cancelled" ? "cancelled" : "infrastructure",
+        failureCode:
+          claimed === "cancelling" || claimed === "cancelled"
+            ? "eval_cancelled"
+            : "eval_invalid_run_state",
       };
     }
 
@@ -1033,7 +1051,7 @@ export class EvalDO extends DurableObjectBase {
     const finalStatus = this.sql
       .exec(`SELECT status FROM runs WHERE run_id = ?`, runId)
       .toArray()[0]?.["status"];
-    if (String(finalStatus) === "cancelled") {
+    if (String(finalStatus) === "cancelling" || String(finalStatus) === "cancelled") {
       return this.compactRunResult({
         success: false,
         console: result.console,
@@ -1046,19 +1064,24 @@ export class EvalDO extends DurableObjectBase {
     return terminalResult;
   }
 
-  /** Poll backstop: a run's status + result (`status` is 'pending'|'running'|'done'|'cancelled'|'unknown'). */
+  /** Poll backstop for the durable run state. `cancelling` is deliberately
+   * non-terminal: execution admission remains live until cleanup settles. */
   @rpc({
     principals: ["host"],
     effect: { kind: "semantic", capability: "runtime.code-execution.manage" },
     tier: "gated",
     sensitivity: "read",
   })
-  getRun(runId: string): { status: string; result?: RunResult; progress?: unknown } {
+  getRun(runId: string): {
+    status: EvalRunStatusValue | "unknown";
+    result?: RunResult;
+    progress?: unknown;
+  } {
     const row = this.sql
       .exec(`SELECT status, result FROM runs WHERE run_id = ?`, runId)
       .toArray()[0];
     if (!row) return { status: "unknown" };
-    const status = String(row["status"]);
+    const status = String(row["status"]) as EvalRunStatusValue;
     const progressRow = this.sql
       .exec(`SELECT progress FROM run_progress WHERE run_id = ?`, runId)
       .toArray()[0];
@@ -1251,12 +1274,10 @@ export class EvalDO extends DurableObjectBase {
   }
 
   /**
-   * Cancel ONE run without touching scope or other runs. CAS the row to `cancelled` FIRST (only if
-   * still pending/running) so a late finish loses — `runEval`'s persist requires `status='running'`
-   * and its post-write status read returns the cancelled failure instead of resurrecting `done`.
-   * Cleanup handlers and ordinary execution settle as one cancellation phase:
-   * handlers may initiate nested teardown while the run's abort signal unwinds
-   * its ordinary calls. A no-op for an already-terminal run.
+   * Cancel ONE run without touching scope or other runs. `cancelling` is a
+   * durable non-terminal state: it defeats `runEval`'s `status='running'`
+   * completion CAS while retaining the evaluated-execution admission needed by
+   * cleanup. Only a settled cleanup phase publishes `cancelled`.
    */
   @rpc({
     principals: ["host"],
@@ -1265,10 +1286,31 @@ export class EvalDO extends DurableObjectBase {
     sensitivity: "destructive",
   })
   async cancel(runId: string): Promise<EvalCancelResult> {
+    const existing = this.inFlightCancellations.get(runId);
+    if (existing) return existing;
+    const cancellation = this.cancelRun(runId);
+    this.inFlightCancellations.set(runId, cancellation);
+    try {
+      return await cancellation;
+    } finally {
+      if (this.inFlightCancellations.get(runId) === cancellation) {
+        this.inFlightCancellations.delete(runId);
+      }
+    }
+  }
+
+  private async cancelRun(runId: string): Promise<EvalCancelResult> {
     this.sql.exec(
-      `UPDATE runs SET status = 'cancelled' WHERE run_id = ? AND status IN ('pending', 'running')`,
+      `UPDATE runs SET status = 'cancelling'
+       WHERE run_id = ? AND status IN ('pending', 'running')`,
       runId
     );
+    const status = this.sql.exec(`SELECT status FROM runs WHERE run_id = ?`, runId).toArray()[0]?.[
+      "status"
+    ];
+    if (String(status) !== "cancelling") {
+      return { ok: true, forcedReset: false };
+    }
     const inFlight = this.inFlightRuns.get(runId);
     const cleanupPhase = this.runCleanupPhases.get(runId);
     if (cleanupPhase) cleanupPhase.active = true;
@@ -1278,21 +1320,45 @@ export class EvalDO extends DurableObjectBase {
       Promise.allSettled([inFlight ?? Promise.resolve(undefined), cleanup]),
       this.cancellationGraceMs
     );
-    if (!settlement.settled) {
-      console.warn(
-        `[EvalDO] run ${runId} did not settle within ${this.cancellationGraceMs}ms; resetting its eval scope`
+    try {
+      if (!settlement.settled) {
+        console.warn(
+          `[EvalDO] run ${runId} did not settle within ${this.cancellationGraceMs}ms; resetting its eval scope`
+        );
+        await this.forceReset();
+        return { ok: true, forcedReset: true };
+      }
+      const [, cleanupResult] = settlement.value;
+      // runLocked and cleanup race intentionally so a cleanup owner can release
+      // the resource on which the sandbox is blocked. Once both are terminal,
+      // persist the shared scope again: cleanup may have recorded terminal state
+      // after runLocked's exitEval() snapshot. Persist even when a handler
+      // rejects: partial terminal diagnostics must remain inspectable rather
+      // than disappearing behind the cleanup error.
+      let persistenceFailure: unknown;
+      try {
+        await this.scopeManager?.persist();
+      } catch (error) {
+        persistenceFailure = error;
+      }
+      if (cleanupResult.status === "rejected" && persistenceFailure !== undefined) {
+        throw new AggregateError(
+          [cleanupResult.reason, persistenceFailure],
+          `eval: cancellation cleanup and terminal scope persistence failed for run ${runId}`
+        );
+      }
+      if (cleanupResult.status === "rejected") throw cleanupResult.reason;
+      if (persistenceFailure !== undefined) throw persistenceFailure;
+      return { ok: true, forcedReset: false };
+    } finally {
+      // Terminalization is guaranteed even when cleanup reports a failure. The
+      // cancel RPC still rejects in that case, but admission monitors can now
+      // retire the failed run instead of leaking a permanent cancelling fact.
+      this.sql.exec(
+        `UPDATE runs SET status = 'cancelled' WHERE run_id = ? AND status = 'cancelling'`,
+        runId
       );
-      await this.forceReset();
-      return { ok: true, forcedReset: true };
     }
-    const [, cleanupResult] = settlement.value;
-    if (cleanupResult.status === "rejected") throw cleanupResult.reason;
-    // runLocked and cleanup race intentionally so a cleanup owner can release
-    // the resource on which the sandbox is blocked. Once both are terminal,
-    // persist the shared scope again: cleanup may have recorded terminal state
-    // after runLocked's exitEval() snapshot.
-    await this.scopeManager?.persist();
-    return { ok: true, forcedReset: false };
   }
 
   private async executeRunCancelHandlers(runId: string): Promise<void> {
@@ -1353,7 +1419,10 @@ export class EvalDO extends DurableObjectBase {
    * status already discarded its result, so a fresh run is unaffected.
    */
   private async forceReset(): Promise<{ ok: boolean }> {
-    this.sql.exec(`UPDATE runs SET status = 'cancelled' WHERE status IN ('pending', 'running')`);
+    this.sql.exec(
+      `UPDATE runs SET status = 'cancelled'
+       WHERE status IN ('pending', 'running', 'cancelling')`
+    );
     const runIds = new Set([...this.runAborts.keys(), ...this.runCancelHandlers.keys()]);
     for (const id of runIds) {
       const phase = this.runCleanupPhases.get(id);
@@ -1599,7 +1668,11 @@ export class EvalDO extends DurableObjectBase {
                 injected as Record<string, unknown>,
                 execution.docs
               );
-              if (described) return described;
+              if (described && typeof described === "object") {
+                return describeEvalBindingIndex(
+                  described as import("./evalSurfaceHelp.js").InjectedSurfaceDescription
+                );
+              }
             }
             // A function/value runtime export (openPanel, getPanelHandle, listPanels, callMain, …) —
             // NOT an RPC service. Point to the docs instead of throwing "Unknown service".

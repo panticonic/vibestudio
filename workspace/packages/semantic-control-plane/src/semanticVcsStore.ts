@@ -676,27 +676,28 @@ export class SemanticVcsStore {
     expectedWorkingHead: StateNodeRef;
     commandId: string;
     message: string | null;
-    integratesEventId: string | null;
+    integratesEventIds: readonly string[];
     maxApplications: number;
   }): { context: ContextRecord; event: WorkspaceEventRecord } {
     const context = this.assertExpectedWorking(input.contextId, input.expectedWorkingHead);
     const chain = this.workingChain(input.contextId, input.maxApplications);
-    if (chain.applicationIds.length === 0 && !input.integratesEventId) {
+    if (chain.applicationIds.length === 0 && input.integratesEventIds.length === 0) {
       throw new SemanticVcsError("RevisionChanged", "Nothing is working");
     }
-    if (input.integratesEventId && !this.event(input.integratesEventId)) {
-      throw new SemanticVcsError(
-        "InvalidReference",
-        `Unknown source event ${input.integratesEventId}`
-      );
+    for (const sourceEventId of input.integratesEventIds) {
+      if (!this.event(sourceEventId)) {
+        throw new SemanticVcsError("InvalidReference", `Unknown source event ${sourceEventId}`);
+      }
     }
     const createdAt = this.now();
     const eventInput = {
       commandId: input.commandId,
-      kind: input.integratesEventId ? ("integration-commit" as const) : ("commit" as const),
+      kind: input.integratesEventIds.length
+        ? ("integration-commit" as const)
+        : ("commit" as const),
       parentEventIds: [
         context.committed.ref.eventId,
-        ...(input.integratesEventId ? [input.integratesEventId] : []),
+        ...input.integratesEventIds,
       ],
       applicationIds: chain.applicationIds,
       resultWorkspaceFactRootId: context.working.workspaceFactRootId,

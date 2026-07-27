@@ -45,8 +45,12 @@ export interface SubagentRunRow {
   lastActivityAt: number;
   /** Reasoning engine kind (default "pi"). */
   agentKind: SubagentAgentKind;
+  /** Effective Pi settings, or launcher options selected for an external run. */
+  launchConfig: Record<string, unknown> | null;
   /** External session entity id for extension-launched kinds, or null. */
   externalSessionEntityId: string | null;
+  /** Exact provider launch generation. Required for inspect/release ownership. */
+  externalGenerationId: string | null;
 }
 
 export type SubagentRunReferenceResolution =
@@ -128,7 +132,9 @@ interface SubagentRunSqlRow {
   started_at: number;
   last_activity_at: number;
   agent_kind: string;
+  launch_config_json: string | null;
   external_session_entity_id: string | null;
+  external_generation_id: string | null;
 }
 
 interface SubagentProgressOutboxSqlRow {
@@ -198,6 +204,18 @@ function toRow(row: SubagentRunSqlRow): SubagentRunRow {
   if (typeof row.agent_kind !== "string" || row.agent_kind.trim().length === 0) {
     throw new Error(`Invalid subagent_runs.agent_kind: ${JSON.stringify(row.agent_kind)}`);
   }
+  let launchConfig: Record<string, unknown> | null = null;
+  if (row.launch_config_json !== null) {
+    try {
+      const parsed = JSON.parse(row.launch_config_json) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+      launchConfig = parsed as Record<string, unknown>;
+    } catch {
+      throw new Error(
+        `Invalid subagent_runs.launch_config_json: ${JSON.stringify(row.launch_config_json)}`
+      );
+    }
+  }
   return {
     runId: row.run_id,
     taskChannelId: row.task_channel_id,
@@ -214,7 +232,9 @@ function toRow(row: SubagentRunSqlRow): SubagentRunRow {
     startedAt: Number(row.started_at),
     lastActivityAt: Number(row.last_activity_at),
     agentKind: row.agent_kind,
+    launchConfig,
     externalSessionEntityId: row.external_session_entity_id ?? null,
+    externalGenerationId: row.external_generation_id ?? null,
   };
 }
 
@@ -248,7 +268,9 @@ export class SubagentRunStore {
         started_at INTEGER NOT NULL,
         last_activity_at INTEGER NOT NULL,
         agent_kind TEXT NOT NULL,
-        external_session_entity_id TEXT
+        launch_config_json TEXT,
+        external_session_entity_id TEXT,
+        external_generation_id TEXT
       )
     `);
     assertExactSqlTableSchema(this.sql, {
@@ -269,7 +291,9 @@ export class SubagentRunStore {
         ["started_at", "INTEGER", true],
         ["last_activity_at", "INTEGER", true],
         ["agent_kind", "TEXT", true],
+        ["launch_config_json", "TEXT", false],
         ["external_session_entity_id", "TEXT", false],
+        ["external_generation_id", "TEXT", false],
       ],
       primaryKey: ["run_id"],
     });
@@ -330,8 +354,9 @@ export class SubagentRunStore {
     this.sql.exec(
       `INSERT OR IGNORE INTO subagent_runs
          (run_id, task_channel_id, parent_context_id, child_context_id, child_entity_id, child_participant_id, parent_channel_id,
-          mode, label, depth, status, integration_status, started_at, last_activity_at, agent_kind, external_session_entity_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          mode, label, depth, status, integration_status, started_at, last_activity_at, agent_kind,
+          launch_config_json, external_session_entity_id, external_generation_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       row.runId,
       row.taskChannelId,
       row.parentContextId,
@@ -347,7 +372,9 @@ export class SubagentRunStore {
       row.startedAt,
       row.lastActivityAt,
       row.agentKind,
-      row.externalSessionEntityId
+      row.launchConfig ? JSON.stringify(row.launchConfig) : null,
+      row.externalSessionEntityId,
+      row.externalGenerationId
     );
   }
 
@@ -442,10 +469,24 @@ export class SubagentRunStore {
     );
   }
 
-  setExternalSessionEntityId(runId: string, entityId: string | null): void {
+  setLaunchConfig(runId: string, launchConfig: Record<string, unknown> | null): void {
     this.sql.exec(
-      `UPDATE subagent_runs SET external_session_entity_id = ? WHERE run_id = ?`,
-      entityId,
+      `UPDATE subagent_runs SET launch_config_json = ? WHERE run_id = ?`,
+      launchConfig ? JSON.stringify(launchConfig) : null,
+      runId
+    );
+  }
+
+  setExternalSession(
+    runId: string,
+    session: { entityId: string; generationId: string } | null
+  ): void {
+    this.sql.exec(
+      `UPDATE subagent_runs
+       SET external_session_entity_id = ?, external_generation_id = ?
+       WHERE run_id = ?`,
+      session?.entityId ?? null,
+      session?.generationId ?? null,
       runId
     );
   }

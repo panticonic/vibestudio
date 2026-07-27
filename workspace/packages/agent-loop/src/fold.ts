@@ -12,6 +12,7 @@ import type {
   AgentTurnMetadata,
   DeferredPrompt,
   ModelRequestDescriptor,
+  OpenTurn,
   PendingInvocation,
   SessionEntry,
 } from "./state.js";
@@ -35,6 +36,18 @@ function metadataFromPayload(payload: Record<string, unknown>): AgentTurnMetadat
 function sourceMessageIdFromPayload(payload: Record<string, unknown>): string | undefined {
   const value = payload["sourceMessageId"];
   return typeof value === "string" && value ? value : undefined;
+}
+
+function resumeOpenTurn(turn: OpenTurn, request: ModelRequestDescriptor): OpenTurn {
+  const { waitingAtSeq: _waitingAtSeq, ...resumed } = turn;
+  return {
+    ...resumed,
+    modelCallCount: turn.modelCallCount + 1,
+    activeModelRequest: request,
+    // A new model call consumes any soft flush intent.
+    ...(turn.pendingFlush ? { pendingFlush: undefined } : {}),
+    ...(turn.lastFailedModelRequest ? { lastFailedModelRequest: undefined } : {}),
+  };
 }
 
 /** The ORIGINAL sender, carried on the recv payload — the private recv
@@ -123,7 +136,11 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
       if (foreignAuthor || !state.openTurn) return state;
       return {
         ...state,
-        openTurn: { ...state.openTurn, waitingCount: state.openTurn.waitingCount + 1 },
+        openTurn: {
+          ...state.openTurn,
+          waitingCount: state.openTurn.waitingCount + 1,
+          waitingAtSeq: envelope.seq,
+        },
       };
     }
 
@@ -149,18 +166,7 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
           contextThroughSeq,
           request,
         },
-        openTurn: state.openTurn
-          ? {
-              ...state.openTurn,
-              modelCallCount: state.openTurn.modelCallCount + 1,
-              activeModelRequest: request,
-              // A new model call consumes any soft flush intent.
-              ...(state.openTurn.pendingFlush ? { pendingFlush: undefined } : {}),
-              ...(state.openTurn.lastFailedModelRequest
-                ? { lastFailedModelRequest: undefined }
-                : {}),
-            }
-          : state.openTurn,
+        openTurn: state.openTurn ? resumeOpenTurn(state.openTurn, request) : state.openTurn,
         // Steered messages covered by this call's context snapshot are consumed.
         steeringQueue: state.steeringQueue.filter((entry) => entry.seq > contextThroughSeq),
       };

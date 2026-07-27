@@ -24,6 +24,35 @@ result details retain the typed node and edge endpoints. Prefer it for ordinary
 orientation; use direct VCS reads for custom adjacency, history pagination, or
 range tracing.
 
+## Use read-time memory
+
+An agent's ordinary `read` of managed text automatically requests
+`vcs.readMemory` after the bytes are known. The request binds the current
+context, canonical workspace path, hash of the bytes actually returned, and
+the exact displayed UTF-16 range. A concurrent semantic-state change yields
+`stale`; it never attaches plausible memory to mismatched content. Stale,
+unmanaged, and temporarily unavailable projections stay out of model-visible
+file content and remain available in structured read details for diagnostics.
+
+The visible attachment is headed **workspace memory · why … lines … exist** so
+its role is apparent without learning graph vocabulary. It groups the terminal
+blame spans for that range into a small number of work episodes and hydrates
+only the recorded facts a future agent can use:
+work intent, commit message, counteractions, reachable integration decisions,
+external snapshot boundary, originating invocation/turn/trigger message, and
+recent file history. The prose shows one copyable
+`provenance({ target: ... })` continuation per episode; complete typed roots
+remain in structured read details for custom `inspect`, `neighbors`, `history`,
+or `blame` work.
+
+This projection is intentionally automatic and bounded. It has no model-chosen
+tier, keyword recall parameter, ranking store, suppression ledger, or copied
+claim authority. `memory_recall` remains a topical discovery index across
+messages and committed files; read-time memory answers the different question
+"why do these exact displayed coordinates exist?" from the canonical GAD graph.
+When the attachment already proves the requested fact, answer from it. A second
+graph walk is useful only when it can add or falsify something.
+
 ## Read immediate semantics
 
 Common edges explain:

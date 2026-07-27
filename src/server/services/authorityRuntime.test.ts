@@ -10,6 +10,7 @@ import {
   callerMatchesMissionHarness,
   directAuthorityAudience,
   directAuthorityCapability,
+  testPolicyUserlandDecision,
 } from "./authorityRuntime.js";
 import {
   getInternalDOBundle,
@@ -20,6 +21,39 @@ import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 const digest = "a".repeat(64);
 
 describe("authority runtime", () => {
+  it("matches test userland approvals through bounded resource scopes", () => {
+    const caller = createVerifiedCaller("agent:test", "agent", null, null, null, null, {
+      policyId: "test:terminal-roundtrip",
+      kind: "case",
+      orchestratorPolicyId: "test:orchestrator",
+      case: {
+        testId: "terminal-roundtrip",
+        authority: [],
+        userland: [
+          {
+            ruleId: "terminal-exec",
+            subject: { kind: "prefix", prefix: "user.exec." },
+            decision: "allow",
+            remember: false,
+          },
+        ],
+        unexpectedPrompts: "fail",
+      },
+    });
+
+    expect(
+      testPolicyUserlandDecision(caller, undefined, `user.exec.${"a".repeat(48)}`)
+    ).toMatchObject({
+      policyId: "test:terminal-roundtrip",
+      testId: "terminal-roundtrip",
+      ruleId: "terminal-exec",
+      decision: "allow",
+      remember: false,
+    });
+    expect(testPolicyUserlandDecision(caller, undefined, "user.execution.fake")).toBeNull();
+    expect(testPolicyUserlandDecision(caller, undefined, "user.open.fake")).toBeNull();
+  });
+
   it("joins mission harnesses to the exact canonical sealed code identity", () => {
     const caller = createVerifiedCaller("do:workers/system-agent:SystemAgentWorker:run", "do", {
       callerId: "do:workers/system-agent:SystemAgentWorker:run",

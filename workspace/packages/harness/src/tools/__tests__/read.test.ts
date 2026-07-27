@@ -16,6 +16,152 @@ describe("createReadTool", () => {
     expect(readFile).toHaveBeenCalledWith(`${CWD}/hello.txt`, "utf8");
   });
 
+  it("injects bounded blame-backed memory for the exact managed text range", async () => {
+    const fs = new StubFs({
+      files: { ["/packages/example/src/value.ts"]: "first\nsecond\nthird" },
+    });
+    const readMemory = vi.fn(async () => ({
+      status: "attached" as const,
+      state: { kind: "event" as const, eventId: "event:current" },
+      repositoryId: "repository:example",
+      fileId: "file:value",
+      path: "packages/example/src/value.ts",
+      contentHash: "a".repeat(64),
+      range: { start: 6, end: 12 },
+      coordinateKind: "utf16" as const,
+      episodes: [
+        {
+          ranges: [{ start: 6, end: 12 }],
+          stop: "authored" as const,
+          change: { kind: "change" as const, changeId: "change:value" },
+          appliedChange: {
+            kind: "applied-change" as const,
+            appliedChangeId: "applied-change:value",
+          },
+          workUnit: { kind: "work-unit" as const, workUnitId: "work-unit:value" },
+          command: { kind: "command" as const, commandId: "command:value" },
+          changeKind: "text-edit" as const,
+          counteractsChangeIds: [],
+          intentSummary: "Keep the retry budget owned by the caller",
+          createdAt: "2026-07-01T10:00:00.000Z",
+          externalSnapshot: null,
+          commit: {
+            event: { kind: "event" as const, eventId: "event:value" },
+            message: "Preserve caller-owned retries",
+            createdAt: "2026-07-01T10:01:00.000Z",
+          },
+          cause: {
+            invocation: {
+              kind: "trajectory-invocation" as const,
+              logId: "trajectory:value",
+              head: "main",
+              invocationId: "invocation:value",
+            },
+            turn: {
+              kind: "trajectory-turn" as const,
+              logId: "trajectory:value",
+              head: "main",
+              turnId: "turn:value",
+            },
+            message: {
+              kind: "trajectory-message" as const,
+              logId: "trajectory:value",
+              head: "main",
+              messageId: "message:value",
+            },
+            toolName: "edit",
+            terminalOutcome: "success",
+            requestRef: null,
+            turnSummary: null,
+            triggerText: "Do not move retry ownership into the transport",
+            sender: { kind: "user", id: "user:test", participantId: "user:test" },
+          },
+          decisions: [],
+        },
+      ],
+      history: [],
+      truncated: false,
+    }));
+    const tool = createReadTool("/", fs, {
+      provenance: {
+        vcs: { readMemory } as never,
+        context: { contextId: "context:test" },
+      },
+    });
+
+    const result = await tool.execute("call-memory", {
+      path: "packages/example/src/value.ts",
+      offset: 2,
+      limit: 1,
+    });
+
+    expect(readMemory).toHaveBeenCalledWith({
+      contextId: "context:test",
+      path: "packages/example/src/value.ts",
+      expectedContentHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      range: { start: 6, end: 12 },
+      episodeLimit: 4,
+      historyLimit: 3,
+    });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringMatching(/^second(?:\n|$)/u),
+    });
+    expect(result.content[1]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining(
+        "workspace memory · why packages/example/src/value.ts lines 2-2 exist"
+      ),
+    });
+    expect((result.content[1] as { text: string }).text).toContain(
+      'why "Keep the retry budget owned by the caller"'
+    );
+    expect((result.content[1] as { text: string }).text).toContain(
+      'provenance({ target: {"kind":"change","changeId":"change:value"} })'
+    );
+    expect(result.details).toMatchObject({
+      displayedRange: {
+        coordinateKind: "utf16",
+        start: 6,
+        end: 12,
+        startLine: 2,
+        endLine: 2,
+      },
+      provenance: { status: "attached", fileId: "file:value" },
+    });
+  });
+
+  it("keeps managed file content visible when read-time memory is unavailable", async () => {
+    const fs = new StubFs({
+      files: { ["/packages/example/src/value.ts"]: "export const value = 1;" },
+    });
+    const tool = createReadTool("/", fs, {
+      provenance: {
+        vcs: {
+          readMemory: vi.fn(async () => {
+            throw new Error("semantic projection unavailable");
+          }),
+        } as never,
+        context: { contextId: "context:test" },
+      },
+    });
+
+    const result = await tool.execute("call-memory-failure", {
+      path: "packages/example/src/value.ts",
+    });
+
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: "export const value = 1;",
+    });
+    expect(result.content).toHaveLength(1);
+    expect(result.details.provenance).toEqual({
+      status: "unavailable",
+      path: "packages/example/src/value.ts",
+      reason: "semantic projection unavailable",
+    });
+  });
+
   it("retries a transient runtime transport failure inside the same read invocation", async () => {
     const fs = new StubFs({ files: { [`${CWD}/hello.txt`]: "hello" } });
     const originalReadFile = fs.readFile.bind(fs);
@@ -263,6 +409,49 @@ describe("createReadTool", () => {
       "extensions.invoke",
       expect.arrayContaining(["@workspace-extensions/file-tools", "read"])
     );
+  });
+
+  it("magic-sniffs extensionless runtime screenshots as image content", async () => {
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const screenshotPath = `${CWD}/.tmp/panel-capture-123`;
+    const fs = new StubFs({ files: { [screenshotPath]: pngBytes } });
+    const readFile = vi.spyOn(fs, "readFile");
+    const rpc = {
+      call: vi.fn().mockImplementation((_target: string, method: string, args: unknown[]) => {
+        if (method === "extensions.streamingMethods") return Promise.resolve([]);
+        const [, extensionMethod] = args;
+        if (extensionMethod === "detectMimeType") return Promise.resolve("image/png");
+        if (extensionMethod === "resize") {
+          return Promise.resolve({
+            data: Buffer.from(pngBytes).toString("base64"),
+            mimeType: "image/png",
+            width: 8,
+            height: 8,
+            originalWidth: 8,
+            originalHeight: 8,
+            wasResized: false,
+          });
+        }
+        return Promise.resolve(null);
+      }),
+      stream: vi.fn(async () => new Response()),
+    };
+    const tool = createReadTool(CWD, fs, { rpc });
+
+    const result = await tool.execute("call-opaque-image", {
+      target: "file:/.tmp/panel-capture-123",
+      kind: "file",
+    });
+
+    expect(result.content).toEqual([
+      expect.objectContaining({ type: "image", mimeType: "image/png" }),
+    ]);
+    expect(result.details).toMatchObject({
+      path: screenshotPath,
+      mimeType: "image/png",
+      originalSize: pngBytes.length,
+    });
+    expect(readFile).toHaveBeenCalledWith(screenshotPath, undefined);
   });
 
   it("returns a non-poisoning discovery result when a file is missing", async () => {

@@ -322,7 +322,7 @@ describe("SemanticVcsStore reduced spine", () => {
       expectedWorkingHead: working.working.ref,
       commandId: "command:commit",
       message: "two local steps",
-      integratesEventId: null,
+      integratesEventIds: [],
       maxApplications: 10,
     });
 
@@ -334,6 +334,39 @@ describe("SemanticVcsStore reduced spine", () => {
       kind: "event",
       eventId: committed.event.eventId,
     });
+    expect(() => store.assertIntegrity()).not.toThrow();
+  });
+
+  it("commits multiple integration sources as ordered semantic parents", async () => {
+    const sql = await createInMemorySql();
+    createSemanticVcsSchema(sql);
+    const store = new SemanticVcsStore(sql, () => timestamp);
+    const target = store.initializeWorkspace("context:target", "command:target-genesis");
+    const left = store.initializeWorkspace("context:left", "command:left-genesis");
+    const right = store.initializeWorkspace("context:right", "command:right-genesis");
+
+    const local = noEffectApplication({
+      contextId: target.contextId,
+      commandId: "command:target-local",
+      basis: target.working.ref,
+      workspaceFactRootId: target.working.workspaceFactRootId,
+    });
+    const working = store.applyApplication(local);
+    const committed = store.commit({
+      contextId: target.contextId,
+      expectedWorkingHead: working.working.ref,
+      commandId: "command:octopus-integration",
+      message: "integrate two child contexts",
+      integratesEventIds: [left.committed.ref.eventId, right.committed.ref.eventId],
+      maxApplications: 10,
+    });
+
+    expect(committed.event.kind).toBe("integration-commit");
+    expect(committed.event.parentEventIds).toEqual([
+      target.committed.ref.eventId,
+      left.committed.ref.eventId,
+      right.committed.ref.eventId,
+    ]);
     expect(() => store.assertIntegrity()).not.toThrow();
   });
 

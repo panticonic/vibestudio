@@ -1325,7 +1325,7 @@ describe("SemanticWorkspace snapshot import", () => {
         contextId: "context:integration-target",
         commandId: "command:commit-incremental-import",
         expectedWorkingHead: fileHead,
-        integratesEventId: source.eventId,
+        integratesEventIds: [source.eventId],
         message: "Integrate imported project incrementally",
       },
     });

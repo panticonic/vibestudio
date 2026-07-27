@@ -55,13 +55,13 @@ const evalSchema = Type.Union(
         path: Type.Optional(
           Type.String({
             description:
-              "Optional context-relative source file or directory hint for inline code; relative imports resolve from it.",
+              "Optional context-relative directory or virtual filename hint for inline code; it does not execute that file. Relative imports resolve from the hint, so do not use src/index.ts when the inline code imports ./index.ts (use src/eval-check.ts or src/ instead).",
           })
         ),
         sourcePath: Type.Optional(
           Type.String({
             description:
-              "Optional context-relative virtual filename for inline code; relative imports resolve from it.",
+              "Optional context-relative virtual filename for inline code; relative imports resolve from it. The virtual file is the importer, so it cannot import itself.",
           })
         ),
       },
@@ -81,7 +81,7 @@ const evalSchema = Type.Union(
   ],
   {
     description:
-      "Execute inline code or a context-relative file. Inline code may include a sourcePath/path hint for relative imports.",
+      "Execute inline code or a context-relative file. With code, sourcePath/path is only a virtual importer hint and does not load that file; without code, path executes the file.",
   }
 );
 
@@ -115,7 +115,7 @@ export interface NormalizedEvalToolSource {
   sourcePath?: string;
 }
 
-const EXECUTABLE_EVAL_PATH = /\.(?:[cm]js|[cm]ts|jsx|tsx)$/i;
+const EXECUTABLE_EVAL_PATH = /\.(?:[cm]?js|[cm]?ts|jsx|tsx)$/i;
 
 /** Shared by the immediate tool and AgentVessel's deferred eval gate. */
 export function normalizeEvalToolSource(params: {

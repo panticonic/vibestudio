@@ -46,6 +46,12 @@ Treat source history and provenance as one small, walkable graph.
   public mutation payload.
 - Use `vcs.readFile` only for an exact event/application state. Use `fs` for a
   host or projected filesystem read; there is no raw VCS read mode.
+- An ordinary in-agent `read` of managed text automatically appends bounded
+  **workspace memory** explaining why the displayed lines exist. The
+  attachment is derived from `vcs.readMemory` for the exact bytes; agents do
+  not select tiers or keywords. Answer from it when it is conclusive. Use its
+  copyable `provenance({ target })` continuation only when deeper context can
+  change the answer or action.
 - Use `vcs.listDirectory` when only immediate visible names are needed. It
   returns stable entry identities and each name's exact provenance without
   walking descendant files; reserve `vcs.listFiles` for an explicit repository
@@ -88,11 +94,13 @@ make a direct operation appear agent-authored.
 5. Run relevant typechecks, tests, or explicit context builds while the work
    remains local. These checks are advisory observations, not publication
    authority.
-6. Call `commit({ message })` to commit the complete local chain. Commit derives an
-   integration source from the chain's recorded decisions; if an agent tool
-   call also passes `integratesEventId`, it must name that same event. Use the
-   explicit source for a zero-decision integration. If the complete local chain
-   is unwanted instead, call `vcs({ operation: "discard" })`; it derives the
+6. Call `commit({ message })` to commit the complete local chain. Commit derives
+   every integration source from the chain's recorded decisions, so several
+   subagent integrations can become one multi-parent event. If an agent tool
+   call also passes `integratesEventIds`, its exact set must match those
+   sources. Use one or more explicit sources for a zero-decision integration;
+   omit the field instead of passing an empty array for an ordinary commit. If
+   the complete local chain is unwanted instead, call `vcs({ operation: "discard" })`; it derives the
    live head and command identity exactly like the other compact mutations.
 7. Call `vcs({ operation: "push" })` only when the user wants the clean committed event published.
    Push validates semantic ancestry and integration, obtains approval, and
@@ -118,14 +126,15 @@ stop and repair that caller's manifest before retrying.
 
 ## Discover exact call shapes
 
-Use `await help("vcs")`, the live service schema, or the generated
+Use `await help("vcs")` for a compact live method index, then
+`await help("vcs.edit")` (or the exact method needed) for its full schema. The generated
 [public contract](references/public-contract.md). Do not guess methods or copy
 request schemas into operational prose. The public surface is:
 
 ```text
 edit  move  copy  integrate  revert  commit  discard  importSnapshot  push
-status  compare  inspect  neighbors  history  blame  resolveRepository  readFile
-listDirectory  listFiles
+status  compare  inspect  neighbors  history  blame  readMemory
+resolveRepository  readFile  listDirectory  listFiles
 ```
 
 ## Load only the needed reference

@@ -92,7 +92,7 @@ describe("PublishController", () => {
       event: { kind: "event" as const, eventId: "event:all" },
       contextId: "ctx",
       committedApplicationIds: ["application:all"],
-      integrationSourceEventId: null,
+      integrationSourceEventIds: [],
     }));
     const commitWorkingCopy = vi.fn(async () => ({ eventId: "", changed: false }));
     let refreshCount = 0;

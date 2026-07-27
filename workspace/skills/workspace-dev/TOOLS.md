@@ -260,6 +260,11 @@ service names. Do **not** import the injected names from `@workspace/runtime`.
 | `imports` | `Record<string, string>` | No | Packages to build on-demand. Workspace packages: `"latest"` or a git ref. npm packages: `"npm:<version>"` (e.g. `"npm:^4.17.21"`, `"npm:latest"`) |
 | `timeoutMs` | positive integer | No | Optional wall-clock deadline in milliseconds; omitted means no deadline |
 
+For inline code with relative imports, `sourcePath` (or the inline `path` hint)
+is the virtual location of the eval module. It is not the module being imported:
+to import `./index.ts`, use its directory or a distinct filename such as
+`src/eval-check.ts`, not `src/index.ts` (which would be a self-import).
+
 ### Panel APIs
 
 `openPanel`/`listPanels`/`getPanelHandle`/`panelTree` are part of the **portable runtime surface** — importable from `@workspace/runtime` (and injected ambiently) in panel, worker, **and server-side eval**. They are host-mediated over RPC: in eval they create/inspect panels via the server. A handful of panel-only extras (`panel.focusPanel`, `buildPanelLink`, `panel.reopen`, `panel.stateArgs`, `adblock`, `journal.Journal`, `agentApi`) are NOT in the eval surface — those need a real panel host:
@@ -339,6 +344,38 @@ eval({
 ```
 
 If an extension isn't declared, adding it to `meta/vibestudio.yml` raises a joint approval. If the user denies it, stop and report that the extension is required for the requested operation.
+
+#### Shell command execution
+
+Use the shell extension's `exec` method for a finite command whose complete
+stdout/stderr belongs in one structured result. Prefer argv mode
+(`shell: false`) so arguments are not reinterpreted by `/bin/sh`:
+
+```ts
+const result = await services.extensions.invoke("@workspace-extensions/shell", "exec", [
+  {
+    command: "/usr/bin/printf",
+    args: ["hello from argv mode"],
+    shell: false,
+    timeoutMs: 5_000,
+    maxOutputBytes: 64 * 1024,
+  },
+]);
+return result;
+```
+
+The request fields are `command`, `args`, `cwd`, `env`, `shell`, `timeoutMs`,
+`stdin`, `maxOutputBytes`, and optionally `contextId` plus a freshly issued
+`contextAttachToken`. Do not use `timeout`, `cancelled`, or a shell command
+string as aliases. The result is `{ exitCode, stdout, stderr, durationMs,
+timedOut?, truncated? }`.
+
+`exec` always creates a userland approval subject in the dynamic
+`user.exec.*` namespace. The attributed panel, worker, DO, or agent eval
+remains the approval principal even though the native extension performs the
+spawn. A call that waits instead of returning an approval choice is an
+attribution/approval propagation defect; do not work around it with a
+temporary panel or an unapproved process path.
 
 **Pre-injected** (use directly, do NOT import):
 

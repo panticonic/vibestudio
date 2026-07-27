@@ -27,11 +27,12 @@ This register states the resulting product contract.
 ## Public VCS protocol
 
 The sole public VCS contract is generated from `vcsMethods` in
-`@vibestudio/service-schemas`. It contains eighteen methods:
+`@vibestudio/service-schemas`. It contains twenty methods:
 
 ```text
 edit move copy integrate revert commit discard importSnapshot push
-status compare inspect neighbors history blame resolveRepository readFile listFiles
+status compare inspect neighbors history blame readMemory resolveRepository
+readFile listDirectory listFiles
 ```
 
 Mutation inputs carry a stable command ID, context ID, and exact expected
@@ -75,6 +76,11 @@ history.
 - Work units and changes reach that command; actor and turn are derived by
   walking the trajectory edge.
 - Immediate content edges record preservation, copy, and incorporation.
+- Ordinary managed-text reads automatically project bounded memory from the
+  exact returned bytes hash and displayed blame range. The projection exposes
+  one compact reason and continuation target by default; complete typed graph
+  roots remain in structured details and deeper walks are explicit. It is not a
+  claims store or compatibility path.
 - Managed writes record semantic state first, then materialize the resulting
   context state to disk.
 - Managed move and copy operations are explicit so the filesystem adapter never

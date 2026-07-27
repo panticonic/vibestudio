@@ -345,6 +345,16 @@ export type InvocationCompletedPayload = {
   summary?: string;
   terminalOutcome: "success";
   terminalReasonCode?: string;
+  /**
+   * Bounded loop-control disposition copied out of an opaque tool result.
+   * `result` is always blob-backed and therefore must never carry fields that
+   * the trajectory fold needs in order to decide what happens next.
+   */
+  turnControl?: {
+    kind: "suspend";
+    reason: string;
+    summary: string;
+  };
   /** Present when this invocation is a subagent run terminating on the parent
    *  trajectory; `integration` records its semantic disposition. */
   subagent?: { integration?: "integrated" | "conflicted" | "discarded" };

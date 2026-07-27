@@ -62,7 +62,11 @@ export class AgentExecutionSessionRegistry {
             Object.freeze({ ...rule, resource: Object.freeze({ ...rule.resource }) })
           )
         ),
-        userland: Object.freeze(spec.userland.map((rule) => Object.freeze({ ...rule }))),
+        userland: Object.freeze(
+          spec.userland.map((rule) =>
+            Object.freeze({ ...rule, subject: Object.freeze({ ...rule.subject }) })
+          )
+        ),
         unexpectedPrompts: spec.unexpectedPrompts,
       }),
     });

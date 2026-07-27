@@ -358,8 +358,9 @@ export function createUserlandApprovalService(deps: {
       await deps.grantStore.revokeUserland(principal, decoratedReq.subject.id, issuer);
     }
 
+    const policyCaller = ctx.authorizingCaller ?? ctx.caller;
     const testDecision = testPolicyUserlandDecision(
-      ctx.caller,
+      policyCaller,
       ctx.authorization,
       decoratedReq.subject.id
     );
@@ -387,8 +388,8 @@ export function createUserlandApprovalService(deps: {
     }
     const testPolicy =
       ctx.authorization?.testPolicy ??
-      ctx.caller.testPolicy ??
-      ctx.caller.executionSession?.testPolicy;
+      policyCaller.testPolicy ??
+      policyCaller.executionSession?.testPolicy;
     if (testPolicy?.kind === "case" && testPolicy.case.unexpectedPrompts === "fail") {
       throw new ServiceError(
         SERVICE_NAME,

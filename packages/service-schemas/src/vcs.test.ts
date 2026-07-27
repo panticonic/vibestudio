@@ -96,13 +96,14 @@ const expectedMethods = [
   "neighbors",
   "push",
   "readFile",
+  "readMemory",
   "resolveRepository",
   "revert",
   "status",
 ] as const;
 
 describe("minimal semantic VCS surface", () => {
-  it("has exactly the nineteen plan methods", () => {
+  it("has exactly the canonical methods", () => {
     expect(Object.keys(vcsMethods).sort()).toEqual([...expectedMethods].sort());
 
     for (const removed of [
@@ -405,7 +406,7 @@ describe("simple local mutations", () => {
       vcsCommitInputSchema.parse({
         ...commonMutation,
         message: "Complete local work",
-        integratesEventId: "event:source",
+        integratesEventIds: ["event:source"],
       })
     ).toBeTruthy();
     expect(vcsDiscardInputSchema.parse(commonMutation)).toEqual(commonMutation);

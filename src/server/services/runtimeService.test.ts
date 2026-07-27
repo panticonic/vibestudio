@@ -115,6 +115,7 @@ interface BuildDepsOptions {
   destroyDurableStorage?: NonNullable<
     Parameters<typeof createRuntimeService>[0]["hooks"]
   >["destroyDurableStorage"];
+  onContextCreated?: Parameters<typeof createRuntimeService>[0]["onContextCreated"];
 }
 
 /** In-memory context-folder fake tracking which contexts exist. */
@@ -196,6 +197,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
         entityCache.listActive().find((e) => e.contextId === id)?.id,
     },
     contextFolders,
+    onContextCreated: opts.onContextCreated,
     setEntityTitle: opts.setEntityTitle,
     semanticContexts,
   }).definition;
@@ -1859,8 +1861,10 @@ interface OwnedContexts {
 describe("runtimeService.cloneContext", () => {
   it("clones every durable entity into a fresh isolated context, mapping source→clone", async () => {
     const forkContext = vi.fn(async () => {});
+    const onContextCreated = vi.fn(async () => {});
     const { service, entityCache, cloneDurableStorage, contextFolders } = await buildDeps({
       semanticContexts: { forkContext },
+      onContextCreated,
     });
     const { ch, agent } = await seedConversation(service, "ctx-src");
 
@@ -1874,6 +1878,10 @@ describe("runtimeService.cloneContext", () => {
     // File state snapshotted source→target, folder materialized.
     expect(forkContext).toHaveBeenCalledWith("ctx-src", result.contextId);
     expect(contextFolders.existing.has(result.contextId)).toBe(true);
+    expect(onContextCreated).toHaveBeenCalledWith({
+      contextId: result.contextId,
+      ownerContextId: "ctx-src",
+    });
 
     // Both DOs mapped; new keys are distinct from the source keys.
     expect(result.entities).toHaveLength(2);
@@ -2354,7 +2362,11 @@ describe("runtimeService context-relationship registry", () => {
 describe("runtimeService.createSubagentContext", () => {
   it("forks the parent, materializes the folder, records a lifecycle edge, idempotent under targetKey", async () => {
     const forkContext = vi.fn(async () => {});
-    const { service, contextFolders } = await buildDeps({ semanticContexts: { forkContext } });
+    const onContextCreated = vi.fn(async () => {});
+    const { service, contextFolders } = await buildDeps({
+      semanticContexts: { forkContext },
+      onContextCreated,
+    });
     const owner = await seedDO(service, "ctx-parent", "a1");
 
     const out1 = (await service.handler({ caller: serverCaller }, "createSubagentContext", [
@@ -2363,6 +2375,10 @@ describe("runtimeService.createSubagentContext", () => {
     expect(out1.contextId).toMatch(/^ctx-[0-9a-f]{32}$/);
     expect(forkContext).toHaveBeenCalledWith("ctx-parent", out1.contextId);
     expect(contextFolders.existing.has(out1.contextId)).toBe(true);
+    expect(onContextCreated).toHaveBeenCalledWith({
+      contextId: out1.contextId,
+      ownerContextId: "ctx-parent",
+    });
 
     const owned = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
       { contextId: "ctx-parent", kind: "lifecycle" },

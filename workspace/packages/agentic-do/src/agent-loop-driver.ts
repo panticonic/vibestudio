@@ -712,7 +712,7 @@ export class AgentLoopDriver {
 
     const cascade = await this.latestCascadeEnvelopeForOpenTurn(loop);
     if (cascade) {
-      await this.runStep(loop, { type: "event-appended", envelope: cascade }, APPEND_RETRIES);
+      await this.runEventCascade(loop, cascade, APPEND_RETRIES);
       await this.settle(channelId);
       loop = await this.loop(channelId);
       if (!this.isOpenTurnStranded(loop)) return;
@@ -987,8 +987,34 @@ export class AgentLoopDriver {
     this.kill("after-outbox-insert");
     // event-appended cascade (depth-first, like the scenario harness)
     for (const envelope of envelopes) {
-      await this.runStep(loop, { type: "event-appended", envelope }, retries);
+      await this.runEventCascade(loop, envelope, retries);
     }
+  }
+
+  /**
+   * The durable log and fold intentionally retain blob references for
+   * fold-opaque values such as tool arguments. Step policies are semantic
+   * consumers, however: an ask-user policy must inspect the actual question,
+   * and the same interpretation must survive replay. Hydrate only the
+   * transient cascade input while preserving the encoded envelope in the fold.
+   */
+  private async runEventCascade(
+    loop: LoopInstance,
+    envelope: LogEnvelope,
+    retries: number
+  ): Promise<void> {
+    const semanticEnvelope = {
+      ...envelope,
+      payload: await hydrateStoredValueRefs(
+        envelope.payload,
+        { getText: (digest) => this.executorDeps(loop.channelId).blobstore.getText(digest) },
+        {
+          strict: true,
+          context: `event cascade ${envelope.envelopeId}`,
+        }
+      ),
+    } as LogEnvelope;
+    await this.runStep(loop, { type: "event-appended", envelope: semanticEnvelope }, retries);
   }
 
   private async ingestCommandAlreadyJournaled(
@@ -1537,7 +1563,7 @@ export class AgentLoopDriver {
       });
     }
     for (const envelope of envelopes) {
-      await this.runStep(loop, { type: "event-appended", envelope }, APPEND_RETRIES);
+      await this.runEventCascade(loop, envelope, APPEND_RETRIES);
     }
     // settle() re-fetches the live loop (the cascade may have reloaded) and
     // checks compaction now that a turn may have closed.

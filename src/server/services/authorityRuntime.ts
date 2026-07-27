@@ -100,7 +100,7 @@ export function testPolicyUserlandDecision(
   const policy =
     authorization?.testPolicy ?? caller.testPolicy ?? caller.executionSession?.testPolicy;
   if (!policy || policy.kind !== "case") return null;
-  const rule = policy.case.userland.find((candidate) => candidate.subjectId === subjectId);
+  const rule = policy.case.userland.find((candidate) => scopeCovers(candidate.subject, subjectId));
   return rule
     ? {
         policyId: policy.policyId,

@@ -2185,6 +2185,12 @@ export const METHOD_TIERS = {
     rationale:
       "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
   },
+  "vcs.readMemory": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+  },
   "vcs.resolveRepository": {
     tier: "open",
     session: "family",
