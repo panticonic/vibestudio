@@ -15,6 +15,35 @@ function render(inspection: CanonicalProvenanceInspection): string {
 }
 
 describe("provenance formatting", () => {
+  it("makes a sole event application directly inspectable", () => {
+    const root = { kind: "event" as const, eventId: "event:import" };
+    const rendered = render({
+      root,
+      node: {
+        kind: "event",
+        value: {
+          eventId: root.eventId,
+          workspaceId: "workspace:test",
+          commandId: "command:import",
+          parentEventIds: ["event:base"],
+          applicationIds: ["application:import"],
+          decisionIds: [],
+          kind: "commit",
+          message: "Import project",
+          createdAt: "2026-07-15T10:00:00.000Z",
+          semanticProtocol: "semantic:test",
+          workspaceFactRootId: "workspace-facts:import",
+        },
+      },
+      edges: [],
+      hasMoreEdges: false,
+    });
+
+    expect(rendered).toContain(
+      'inspect sole application → provenance({"target":{"kind":"application","applicationId":"application:import"}})'
+    );
+  });
+
   it("makes exact external evidence visible on its owning import work unit", () => {
     const root = { kind: "work-unit" as const, workUnitId: "work:import" };
     const rendered = render({
@@ -110,6 +139,9 @@ describe("provenance formatting", () => {
     });
 
     expect(rendered).toContain("243 applied changes (0 in preview)");
+    expect(rendered).toContain(
+      'inspect owning work → provenance({"target":{"kind":"work-unit","workUnitId":"work:import"}})'
+    );
   });
 
   it("renders an applied change as a reusable basis-specific graph node", () => {
