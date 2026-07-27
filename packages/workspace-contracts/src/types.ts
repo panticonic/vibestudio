@@ -143,8 +143,11 @@ export interface WorkspaceGitUpstreamConfig {
   branch?: string;
   /** Push automatically after protected main advances. */
   autoPush?: boolean;
-  /** Credential id used for credentialed git HTTP. */
-  credentialId?: string;
+  /**
+   * Omit to resolve a URL-bound credential automatically, provide an id to
+   * select it exactly, or use null to require anonymous Git HTTP.
+   */
+  credentialId?: string | null;
   /** Optional exported-commit author email override. */
   authorEmail?: string;
   /** Optional exported-commit author name override. Suppresses per-actor names. */
@@ -191,14 +194,7 @@ export type WorkspaceServiceDecl = {
   action: string;
   description?: string;
   presentation: {
-    domain:
-      | "files"
-      | "sharing"
-      | "accounts"
-      | "web"
-      | "automation"
-      | "people"
-      | "computer";
+    domain: "files" | "sharing" | "accounts" | "web" | "automation" | "people" | "computer";
     verb: "see" | "act" | "manage";
     substanceKind?: "change-set" | "send" | "deletion" | "custom";
   };

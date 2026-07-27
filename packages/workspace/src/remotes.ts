@@ -51,7 +51,7 @@ export interface ResolvedWorkspaceGitUpstream {
   remote: string;
   branch: string;
   autoPush: boolean;
-  credentialId?: string;
+  credentialId?: string | null;
   authorEmail?: string;
   authorName?: string;
 }
@@ -170,7 +170,17 @@ export function validateWorkspaceGitUpstream(
   const branch =
     upstream.branch === undefined ? undefined : validateWorkspaceGitRemoteBranch(upstream.branch);
   const autoPush = upstream.autoPush;
-  const credentialId = normalizeOptionalNonEmpty("credentialId", upstream.credentialId);
+  if (
+    upstream.credentialId !== undefined &&
+    upstream.credentialId !== null &&
+    typeof upstream.credentialId !== "string"
+  ) {
+    throw new Error("Upstream credentialId must be a string, null, or omitted");
+  }
+  const credentialId =
+    upstream.credentialId === null
+      ? null
+      : normalizeOptionalNonEmpty("credentialId", upstream.credentialId);
   const authorEmail = normalizeOptionalNonEmpty("authorEmail", upstream.authorEmail);
   const authorName = normalizeOptionalNonEmpty("authorName", upstream.authorName);
   return {
@@ -357,7 +367,11 @@ export function normalizeRemoteUrl(value: string): string {
   if (url.username || url.password) {
     throw new Error("Remote URL must not contain embedded credentials");
   }
-  url.hash = "";
+  if (url.search || url.hash) {
+    throw new Error(
+      "Remote URL must not contain query parameters or fragments; use the credential system for authentication"
+    );
+  }
   return url.href;
 }
 

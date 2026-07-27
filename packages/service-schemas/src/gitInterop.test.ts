@@ -41,6 +41,49 @@ describe("gitInterop canonical contract", () => {
     ]);
   });
 
+  it("models automatic, explicit, and anonymous Git credential selection distinctly", () => {
+    for (const credentialId of [undefined, "credential:github", null]) {
+      const upstream = {
+        remote: "origin",
+        ...(credentialId !== undefined ? { credentialId } : {}),
+      };
+      expect(
+        gitInteropMethods.setUpstream.args.safeParse(["projects/demo", upstream]).success
+      ).toBe(true);
+    }
+  });
+
+  it("requires truthful force-overwrite relationship metadata", () => {
+    const base = {
+      exported: 1,
+      headCommit: "abc",
+      pushed: true,
+      status: "in-sync",
+    };
+    expect(
+      gitInteropMethods.pushUpstream.returns.safeParse({
+        ...base,
+        overwrites: {
+          relationship: "unrelated",
+          count: null,
+          commits: [{ sha: "remote", summary: "Remote history" }],
+          truncated: false,
+        },
+      }).success
+    ).toBe(true);
+    expect(
+      gitInteropMethods.pushUpstream.returns.safeParse({
+        ...base,
+        overwrites: {
+          relationship: "related",
+          count: null,
+          commits: [],
+          truncated: false,
+        },
+      }).success
+    ).toBe(false);
+  });
+
   it("exposes a strict stepwise disposable-remote push", () => {
     expect(
       gitInteropMethods.pushDisposableRemote.args.safeParse([
@@ -289,7 +332,7 @@ describe("gitInterop canonical contract", () => {
       "pushDisposableRemote",
       "cloneRepo",
       "remoteDefaultBranch",
-      "onMainAdvanced",
+      "reconcileUpstreams",
     ]);
     expect(GIT_INTEROP_PROVIDER_METHOD_NAMES).toEqual(Object.keys(gitInteropProviderMethods));
 
@@ -341,10 +384,10 @@ describe("gitInterop canonical contract", () => {
       ]).success
     ).toBe(false);
     expect(
-      gitInteropProviderMethods.onMainAdvanced.args.safeParse([["projects/demo"]]).success
+      gitInteropProviderMethods.reconcileUpstreams.args.safeParse([["projects/demo"]]).success
     ).toBe(true);
     expect(
-      gitInteropProviderMethods.onMainAdvanced.returns.safeParse({ queued: 1, ignored: false })
+      gitInteropProviderMethods.reconcileUpstreams.returns.safeParse({ queued: 1, ignored: false })
         .success
     ).toBe(false);
   });

@@ -1,4 +1,6 @@
 import type {
+  GitDetachUpstreamResult,
+  GitImportedWorkspaceRepo,
   GitOverwritePreview,
   GitPublishRepoResult,
   GitPullUpstreamResult,
@@ -54,7 +56,8 @@ const GIT_FORCE_PUSH_FLAG: FlagSpec = {
 const GIT_DRY_RUN_FLAG: FlagSpec = {
   name: "dry-run",
   takesValue: false,
-  description: "Fetch and preview incoming commits without importing",
+  description:
+    "Preview incoming commits in a disposable checkout without changing managed or semantic state",
 };
 
 const GIT_NAME_FLAG: FlagSpec = {
@@ -104,6 +107,12 @@ const GIT_CREDENTIAL_FLAG: FlagSpec = {
   name: "credential",
   takesValue: true,
   description: "Stored credential id to use for this remote",
+};
+
+const GIT_ANONYMOUS_FLAG: FlagSpec = {
+  name: "anonymous",
+  takesValue: false,
+  description: "Require anonymous Git HTTP; never resolve a stored credential",
 };
 
 const GIT_FORGET_REMOTE_FLAG: FlagSpec = {
@@ -182,6 +191,16 @@ function optionalFlagString(inv: ParsedInvocation, name: string): string | undef
   return typeof value === "string" && value ? value : undefined;
 }
 
+function gitCredentialSelection(inv: ParsedInvocation): { credentialId?: string | null } {
+  const credentialId = optionalFlagString(inv, "credential");
+  const anonymous = inv.flags["anonymous"] === true;
+  if (credentialId && anonymous) {
+    throw new UsageError("--credential and --anonymous are mutually exclusive");
+  }
+  if (anonymous) return { credentialId: null };
+  return credentialId ? { credentialId } : {};
+}
+
 function isActionableGitState(state: GitUpstreamState): boolean {
   return state === "diverged" || state === "auth-failed" || state === "error";
 }
@@ -245,13 +264,12 @@ async function gitEnable(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const repo = requireGitRepo(inv);
+    const credential = gitCredentialSelection(inv);
     const upstream = {
       remote: optionalFlagString(inv, "remote") ?? "origin",
       ...(optionalFlagString(inv, "branch") ? { branch: optionalFlagString(inv, "branch") } : {}),
       autoPush: inv.flags["auto-push"] === true,
-      ...(optionalFlagString(inv, "credential")
-        ? { credentialId: optionalFlagString(inv, "credential") }
-        : {}),
+      ...credential,
     };
     const result = await invokeGitInterop("setUpstream", [repo, upstream]);
     printResult(result, {
@@ -265,6 +283,13 @@ async function gitEnable(inv: ParsedInvocation): Promise<number> {
             ? "auto-push: on"
             : `auto-push: off - enable with \`vibestudio vcs git auto --repo ${repo}\``
         );
+        console.log(
+          upstream.credentialId === null
+            ? "credentials: anonymous"
+            : upstream.credentialId
+              ? `credentials: ${upstream.credentialId}`
+              : "credentials: resolve automatically from the remote URL"
+        );
       },
     });
     return 0;
@@ -277,18 +302,26 @@ async function gitDisable(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const repo = requireGitRepo(inv);
-    const result = await invokeGitInterop("removeUpstream", [repo]);
-    if (inv.flags["forget-remote"] === true) {
-      await invokeGitInterop("removeSharedRemote", [
-        repo,
-        optionalFlagString(inv, "remote") ?? "origin",
-      ]);
-    }
-    printResult(result, {
+    const forgetRemote = inv.flags["forget-remote"] === true;
+    const result = await invokeGitInterop<GitDetachUpstreamResult>(
+      "detachUpstream",
+      forgetRemote
+        ? [
+            repo,
+            {
+              forgetRemote: true,
+              ...(optionalFlagString(inv, "remote")
+                ? { remote: optionalFlagString(inv, "remote") }
+                : {}),
+            },
+          ]
+        : [repo]
+    );
+    printResult(result.upstreams, {
       json,
       human: () => {
         console.log(`detached git upstream for ${repo}`);
-        if (inv.flags["forget-remote"] === true) console.log("declared remote removed");
+        if (result.removedRemote) console.log(`declared remote ${result.removedRemote} removed`);
       },
     });
     return 0;
@@ -314,10 +347,25 @@ async function gitAuto(inv: ParsedInvocation): Promise<number> {
 }
 
 function printOverwritePreview(preview: GitOverwritePreview | undefined): void {
-  if (!preview || preview.count === 0) return;
-  console.log(`overwrote ${preview.count} upstream commit(s):`);
+  if (!preview) return;
+  if (preview.relationship === "unrelated") {
+    console.log("replaced unrelated upstream history (the total commit count is not comparable):");
+  } else {
+    console.log(`overwrote ${preview.count} upstream commit(s):`);
+  }
   for (const commit of preview.commits) {
     console.log(`  ${shortSha(commit.sha)} ${commit.summary}`);
+  }
+  if (preview.truncated) console.log("  … additional upstream commits not shown");
+}
+
+function printClobberedLocalEdits(paths: string[] | undefined): void {
+  if (!paths || paths.length === 0) return;
+  console.log(
+    `warning: restored ${paths.length} managed path(s), overwriting checkout-only edits:`
+  );
+  for (const path of paths) {
+    console.log(`  ${path}`);
   }
 }
 
@@ -333,10 +381,13 @@ async function gitPush(inv: ParsedInvocation): Promise<number> {
       json,
       human: () => {
         printOverwritePreview(result.overwrites);
+        printClobberedLocalEdits(result.clobberedLocalEdits);
         if (result.pushed) {
           console.log(`pushed ${repo} (${shortSha(result.headCommit)})`);
           if (result.exported > 0)
             console.log(`exported ${result.exported} gad commit(s) as git history`);
+        } else if (result.status === "empty") {
+          console.log(`${repo} has no published gad history to push`);
         } else {
           console.log(`${repo} already in sync`);
         }
@@ -360,6 +411,7 @@ async function gitPull(inv: ParsedInvocation): Promise<number> {
     printResult(result, {
       json,
       human: () => {
+        printClobberedLocalEdits(result.clobberedLocalEdits);
         if (result.incoming.length === 0) {
           console.log(`${repo} has no incoming upstream commits`);
         } else {
@@ -426,13 +478,12 @@ async function gitImport(inv: ParsedInvocation): Promise<number> {
     if (!url) throw new UsageError("missing Git URL");
     const repoPath = requireFlagString(inv, "path");
     const branch = optionalFlagString(inv, "branch");
-    const result = await invokeGitInterop("importProject", [
+    const credential = gitCredentialSelection(inv);
+    const result = await invokeGitInterop<GitImportedWorkspaceRepo>("importProject", [
       {
         path: repoPath,
         remote: { name: "origin", url, ...(branch ? { branch } : {}) },
-        ...(optionalFlagString(inv, "credential")
-          ? { credentialId: optionalFlagString(inv, "credential") }
-          : {}),
+        ...credential,
       },
     ]);
     printResult(result, {
@@ -441,8 +492,20 @@ async function gitImport(inv: ParsedInvocation): Promise<number> {
         console.log(`imported ${repoPath} from ${url}${branch ? ` (branch ${branch})` : ""}`);
         console.log(`  tracking: on`);
         console.log(
-          `  upstream push: manual - \`vibestudio vcs git push --repo ${repoPath}\`, or \`vibestudio vcs git auto --repo ${repoPath}\``
+          credential.credentialId === null
+            ? "  credentials: anonymous"
+            : credential.credentialId
+              ? `  credentials: ${credential.credentialId}`
+              : "  credentials: resolve automatically from the remote URL"
         );
+        console.log(
+          `  semantic candidate: ${result.candidate.eventId} in context ${result.candidate.contextId}`
+        );
+        console.log(
+          "  next: compare and incrementally integrate this candidate, commit the integration, " +
+            "then publish protected main with `vibestudio vcs push`"
+        );
+        console.log("  Git push is available only after that semantic publication");
       },
     });
     return 0;
@@ -499,13 +562,14 @@ const vcsGitCommands: VcsGitCommand[] = [
     name: "enable",
     summary: "Track a repo on a declared Git remote",
     usage:
-      "vibestudio vcs git enable --repo REPOPATH [--remote origin] [--branch main] [--auto-push]",
+      "vibestudio vcs git enable --repo REPOPATH [--remote origin] [--branch main] [--auto-push] [--credential ID|--anonymous]",
     flags: [
       REPO_FLAG,
       GIT_REMOTE_FLAG,
       GIT_BRANCH_FLAG,
       GIT_AUTO_PUSH_FLAG,
       GIT_CREDENTIAL_FLAG,
+      GIT_ANONYMOUS_FLAG,
       JSON_FLAG,
     ],
     run: gitEnable,
@@ -556,8 +620,16 @@ const vcsGitCommands: VcsGitCommand[] = [
   {
     name: "import",
     summary: "Import an external Git repo through gitInterop",
-    usage: "vibestudio vcs git import URL --path REPOPATH [--branch main] [--credential ID]",
-    flags: [GIT_URL_FLAG, GIT_PATH_FLAG, GIT_BRANCH_FLAG, GIT_CREDENTIAL_FLAG, JSON_FLAG],
+    usage:
+      "vibestudio vcs git import URL --path REPOPATH [--branch main] [--credential ID|--anonymous]",
+    flags: [
+      GIT_URL_FLAG,
+      GIT_PATH_FLAG,
+      GIT_BRANCH_FLAG,
+      GIT_CREDENTIAL_FLAG,
+      GIT_ANONYMOUS_FLAG,
+      JSON_FLAG,
+    ],
     run: gitImport,
   },
   {

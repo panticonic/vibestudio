@@ -94,10 +94,19 @@ const GITHUB_BINDING_CATALOG_VERSION = "github:v2";
 
 interface GitIntentMetadata {
   force: boolean;
-  overwrites?: {
-    count: number;
-    commits: Array<{ sha: string; summary: string }>;
-  };
+  overwrites?:
+    | {
+        relationship: "related";
+        count: number;
+        commits: Array<{ sha: string; summary: string }>;
+        truncated: boolean;
+      }
+    | {
+        relationship: "unrelated";
+        count: null;
+        commits: Array<{ sha: string; summary: string }>;
+        truncated: boolean;
+      };
 }
 
 export interface CredentialStore {

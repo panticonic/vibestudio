@@ -813,17 +813,33 @@ export const ProxyGitHttpParamsSchema = z
       .string()
       .optional()
       .describe("Request body as base64 (e.g. git-upload-pack payload)."),
-    credentialId: IdentifierSchema.nullable().optional().describe(
-      "Credential to inject; resolved from the URL when omitted, or explicitly anonymous when null."
-    ),
+    credentialId: IdentifierSchema.nullable()
+      .optional()
+      .describe(
+        "Credential to inject; resolved from the URL when omitted, or explicitly anonymous when null."
+      ),
     gitIntent: z
       .object({
         force: z.boolean(),
         overwrites: z
-          .object({
-            count: z.number().int().nonnegative(),
-            commits: z.array(z.object({ sha: z.string(), summary: z.string() })),
-          })
+          .discriminatedUnion("relationship", [
+            z
+              .object({
+                relationship: z.literal("related"),
+                count: z.number().int().nonnegative(),
+                commits: z.array(z.object({ sha: z.string(), summary: z.string() })),
+                truncated: z.boolean(),
+              })
+              .strict(),
+            z
+              .object({
+                relationship: z.literal("unrelated"),
+                count: z.null(),
+                commits: z.array(z.object({ sha: z.string(), summary: z.string() })),
+                truncated: z.boolean(),
+              })
+              .strict(),
+          ])
           .optional(),
       })
       .optional()
@@ -1102,10 +1118,7 @@ export const credentialsMethods = defineServiceMethods({
     returns: z.void(),
     access: DELETE_CLIENT_CONFIG_ACCESS,
     authority: {
-      requirement: requirementForPrincipals(
-        ["code", "user", "host"],
-        "account-providers.delete"
-      ),
+      requirement: requirementForPrincipals(["code", "user", "host"], "account-providers.delete"),
       resource: { kind: "argument", index: 0, path: ["configId"] },
     },
     examples: [{ args: [{ configId: "google-workspace" }] }],

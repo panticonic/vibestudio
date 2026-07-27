@@ -157,6 +157,14 @@ async function completeImport(
   contextId: string;
   eventId: string;
   workUnitId: string;
+  applicationId: string;
+  externalSnapshot: {
+    sourceKind: "git" | "archive" | "filesystem" | "upload" | "generated";
+    sourceUri: string;
+    snapshotRevision: string;
+    snapshotDigest: string;
+    targetRepositoryIds: string[];
+  };
   importedRepositoryIds: string[];
 }> {
   const observation = await semantic.dispatch("importSnapshot", request);
@@ -166,6 +174,14 @@ async function completeImport(
     contextId: string;
     eventId: string;
     workUnitId: string;
+    applicationId: string;
+    externalSnapshot: {
+      sourceKind: "git" | "archive" | "filesystem" | "upload" | "generated";
+      sourceUri: string;
+      snapshotRevision: string;
+      snapshotDigest: string;
+      targetRepositoryIds: string[];
+    };
     importedRepositoryIds: string[];
   };
   acknowledgeMaterialization(semantic, projection);
@@ -298,11 +314,27 @@ describe("SemanticWorkspace snapshot import", () => {
     const imported = importedDispatch.result as {
       eventId: string;
       workUnitId: string;
+      applicationId: string;
+      externalSnapshot: {
+        sourceKind: string;
+        sourceUri: string;
+        snapshotRevision: string;
+        snapshotDigest: string;
+        targetRepositoryIds: string[];
+      };
       importedRepositoryIds: string[];
     };
     const state = { kind: "event" as const, eventId: imported.eventId };
     const root = store.stateRoot(state);
     const repositoryId = imported.importedRepositoryIds[0]!;
+    expect(imported.applicationId).toMatch(/^application:/);
+    expect(imported.externalSnapshot).toEqual({
+      sourceKind: "git",
+      sourceUri: "https://example.test/project.git",
+      snapshotRevision: "commit:head",
+      snapshotDigest: expect.any(String),
+      targetRepositoryIds: [repositoryId],
+    });
     const file = store.facts.fileAtPath(root, repositoryId, "src/index.ts")?.state;
     if (!file || file.presence !== "placed") throw new Error("imported file is absent");
 

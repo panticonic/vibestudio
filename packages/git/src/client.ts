@@ -359,6 +359,21 @@ function describeGitOperationError(
   );
 }
 
+function isMissingRequestedRemoteRef(error: unknown, requestedRef: string): boolean {
+  if (!(error instanceof git.Errors.NotFoundError)) return false;
+  const missing = (error as { data?: { what?: unknown } }).data?.what;
+  if (typeof missing !== "string") return false;
+  const requestedRefForms = new Set([
+    requestedRef,
+    `refs/${requestedRef}`,
+    `refs/tags/${requestedRef}`,
+    `refs/heads/${requestedRef}`,
+    `refs/remotes/${requestedRef}`,
+    `refs/remotes/${requestedRef}/HEAD`,
+  ]);
+  return requestedRefForms.has(missing);
+}
+
 /**
  * Check if content is binary by looking for null bytes in first 8KB
  */
@@ -1056,19 +1071,38 @@ export class GitClient {
       ref?: string;
     }>(options, "fetch", "fetch({ dir: string, url?: string, remote?: string, ref?: string })");
     try {
-      await this.ensureOperationRemote(checked.dir, checked.url, checked.remote ?? "origin");
-      const result = await git.fetch({
-        fs: this.fs,
-        http: this.http,
-        dir: checked.dir,
-        url: checked.url,
-        remote: checked.remote ?? "origin",
-        ref: checked.ref,
-        singleBranch: true,
-      });
+      const remote = checked.remote ?? "origin";
+      await this.ensureOperationRemote(checked.dir, checked.url, remote);
+      let result: Awaited<ReturnType<typeof git.fetch>>;
+      try {
+        result = await git.fetch({
+          fs: this.fs,
+          http: this.http,
+          dir: checked.dir,
+          url: checked.url,
+          remote,
+          ref: checked.ref,
+          singleBranch: true,
+        });
+      } catch (err) {
+        if (checked.ref && isMissingRequestedRemoteRef(err, checked.ref)) {
+          await this.deleteRemoteTrackingRef(checked.dir, remote, checked.ref);
+          return {
+            fetchHead: null,
+            fetchHeadDescription: null,
+            remoteRefExists: false,
+          };
+        }
+        throw err;
+      }
+      const remoteRefExists = result.fetchHead !== null;
+      if (!remoteRefExists && checked.ref) {
+        await this.deleteRemoteTrackingRef(checked.dir, remote, checked.ref);
+      }
       return {
         fetchHead: result.fetchHead ?? null,
         fetchHeadDescription: result.fetchHeadDescription,
+        remoteRefExists,
       };
     } catch (err) {
       const authFailure = getAuthFailureInfo(err);
@@ -1076,6 +1110,28 @@ export class GitClient {
         throw new GitAuthError(authFailure.message, authFailure.statusCode);
       }
       throw describeGitOperationError("fetch", checked, err);
+    }
+  }
+
+  private async deleteRemoteTrackingRef(
+    dir: string,
+    remote: string,
+    requestedRef: string
+  ): Promise<void> {
+    const branch = requestedRef.startsWith("refs/heads/")
+      ? requestedRef.slice("refs/heads/".length)
+      : requestedRef.startsWith("refs/")
+        ? null
+        : requestedRef;
+    if (!branch) return;
+    try {
+      await git.deleteRef({
+        fs: this.fs,
+        dir,
+        ref: `refs/remotes/${remote}/${branch}`,
+      });
+    } catch (err) {
+      if (!(err instanceof git.Errors.NotFoundError)) throw err;
     }
   }
 

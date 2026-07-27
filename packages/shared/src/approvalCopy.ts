@@ -880,8 +880,11 @@ export function getApprovalCopy(approval: PendingApproval): {
     const remote = operation?.remote ? formatGitRemoteSummary(operation.remote) : audience;
     const label = operation?.label ?? "git operation";
     if (operation?.force) {
-      const count = operation.overwrites?.count ?? 0;
-      return HOST_APPROVAL_COPY.headlines.forcePush(remote, approval.credentialLabel, count);
+      return HOST_APPROVAL_COPY.headlines.forcePush(
+        remote,
+        approval.credentialLabel,
+        operation.overwrites
+      );
     }
     return HOST_APPROVAL_COPY.headlines.git(
       operation?.action === "write" ? "write" : "read",

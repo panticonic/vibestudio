@@ -2,6 +2,7 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { rpcErrorDataOf } from "@vibestudio/rpc";
+import { isDeepStrictEqual } from "node:util";
 import type {
   WorkspaceConfig,
   WorkspaceGitRemoteConfig,
@@ -64,11 +65,22 @@ type GitInteropServiceDeps = {
     method: M,
     args: GitInteropProviderArgs<M>
   ) => Promise<GitInteropProviderResult<M>>;
+  /** Queue provider reconciliation without making a config write depend on provider readiness. */
+  requestGitReconciliation?: (repoPaths: string[]) => void;
   disposableRemotes?: Pick<DisposableGitRemoteManager, "create" | "inspect" | "remove">;
 };
 
 type WorkspaceConfigMutation = (currentConfig: WorkspaceConfig) => WorkspaceConfig;
 type WorkspaceConfigMutationResult = { changed: boolean; nextConfig: WorkspaceConfig };
+type WorkspaceRepoGitDeclarationSnapshot = {
+  remote: WorkspaceGitRemoteConfig | null;
+  upstream: WorkspaceGitUpstreamConfig | null;
+};
+type WorkspaceRepoConfigTransaction = {
+  changed: boolean;
+  rollbackIfCurrent: WorkspaceConfigMutation;
+  matchesPrevious: (config: WorkspaceConfig) => boolean;
+};
 
 function operationErrorDetail(error: unknown): {
   message: string;
@@ -122,6 +134,7 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
           summary: workspaceConfigRemoteSummary(validRepoPath, normalizedRemote, "set"),
         });
         await propagateSharedRemote(deps, validRepoPath);
+        deps.requestGitReconciliation?.([validRepoPath]);
         return persisted.nextConfig.git?.remotes ?? {};
       },
 
@@ -152,6 +165,7 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
           summary: workspaceConfigRemoteSummary(validRepoPath, existing, "remove"),
         });
         await propagateSharedRemote(deps, validRepoPath);
+        deps.requestGitReconciliation?.([validRepoPath]);
         return persisted.nextConfig.git?.remotes ?? {};
       },
 
@@ -186,6 +200,7 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
           summary: workspaceConfigUpstreamSummary(validRepoPath, normalizedUpstream, "set"),
         });
         await propagateSharedRemote(deps, validRepoPath);
+        deps.requestGitReconciliation?.([validRepoPath]);
         return persisted.nextConfig.git?.upstreams ?? {};
       },
 
@@ -207,6 +222,7 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
           summary: workspaceConfigUpstreamSummary(validRepoPath, existing, "remove"),
         });
         await propagateSharedRemote(deps, validRepoPath);
+        deps.requestGitReconciliation?.([validRepoPath]);
         return persisted.nextConfig.git?.upstreams ?? {};
       },
 
@@ -221,7 +237,7 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
           remote: existing.remote,
           ...(existing.branch ? { branch: existing.branch } : {}),
           autoPush: enabled,
-          ...(existing.credentialId ? { credentialId: existing.credentialId } : {}),
+          ...(existing.credentialId !== undefined ? { credentialId: existing.credentialId } : {}),
           ...(existing.authorEmail ? { authorEmail: existing.authorEmail } : {}),
           ...(existing.authorName ? { authorName: existing.authorName } : {}),
         };
@@ -236,7 +252,7 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
               remote: currentUpstream.remote,
               branch: currentUpstream.branch,
               autoPush: enabled,
-              ...(currentUpstream.credentialId
+              ...(currentUpstream.credentialId !== undefined
                 ? { credentialId: currentUpstream.credentialId }
                 : {}),
               ...(currentUpstream.authorEmail ? { authorEmail: currentUpstream.authorEmail } : {}),
@@ -246,6 +262,7 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
           summary: workspaceConfigUpstreamSummary(validRepoPath, nextUpstream, "set"),
         });
         await propagateSharedRemote(deps, validRepoPath);
+        deps.requestGitReconciliation?.([validRepoPath]);
         return persisted.nextConfig.git?.upstreams ?? {};
       },
 
@@ -496,6 +513,7 @@ async function detachUpstream(
       (forgetRemote && remoteName ? ` and removes remote ${remoteName}` : ""),
   });
   await propagateSharedRemote(deps, validRepoPath);
+  deps.requestGitReconciliation?.([validRepoPath]);
   return {
     upstreams: persisted.nextConfig.git?.upstreams ?? {},
     remotes: persisted.nextConfig.git?.remotes ?? {},
@@ -547,10 +565,17 @@ async function completeWorkspaceDependencies(
       continue;
     }
     try {
-      const imported = await importWorkspaceRepo(ctx, deps, {
-        path: dependency.path,
+      const transaction = await updateConfiguredDependencyCredential(
+        ctx,
+        deps,
+        dependency.path,
+        options?.credentialId
+      );
+      const imported = await cloneWorkspaceRepo(ctx, deps, {
+        operation: "git.completeWorkspaceDependencies",
+        repoPath: dependency.path,
         remote: dependency.remote,
-        credentialId: options?.credentialId,
+        transaction,
       });
       result.imported.push(imported);
     } catch (err) {
@@ -584,6 +609,45 @@ function listConfiguredWorkspaceRemotes(config: WorkspaceConfig): Array<{
   });
 }
 
+async function updateConfiguredDependencyCredential(
+  ctx: ServiceContext,
+  deps: GitInteropServiceDeps,
+  repoPath: string,
+  credentialId: string | null | undefined
+): Promise<WorkspaceRepoConfigTransaction | undefined> {
+  if (credentialId === undefined) return undefined;
+
+  let previousUpstream: WorkspaceGitUpstreamConfig | undefined;
+  const persisted = await persistWorkspaceConfigMutation(ctx, deps, {
+    mutate: (currentConfig) => {
+      const currentUpstream = getDeclaredUpstreamConfig(currentConfig, repoPath);
+      previousUpstream = currentUpstream;
+      return setDeclaredUpstreamInConfig(currentConfig, repoPath, {
+        ...currentUpstream,
+        credentialId,
+      });
+    },
+    summary:
+      credentialId === null
+        ? `meta/vibestudio.yml requires anonymous Git HTTP for ${repoPath}`
+        : `meta/vibestudio.yml selects credential ${credentialId} for ${repoPath}`,
+  });
+  if (!previousUpstream) {
+    throw new Error(`No upstream tracking is declared for ${repoPath}`);
+  }
+  const upstreamBeforeOverride = previousUpstream;
+  const writtenUpstream = getDeclaredUpstreamConfig(persisted.nextConfig, repoPath);
+  return {
+    changed: persisted.changed,
+    rollbackIfCurrent: (currentConfig) =>
+      isDeepStrictEqual(getDeclaredUpstreamConfigOrNull(currentConfig, repoPath), writtenUpstream)
+        ? setDeclaredUpstreamInConfig(currentConfig, repoPath, upstreamBeforeOverride)
+        : currentConfig,
+    matchesPrevious: (config) =>
+      isDeepStrictEqual(getDeclaredUpstreamConfigOrNull(config, repoPath), upstreamBeforeOverride),
+  };
+}
+
 async function importWorkspaceRepo(
   ctx: ServiceContext,
   deps: GitInteropServiceDeps,
@@ -606,7 +670,7 @@ async function importWorkspaceRepo(
     const discovered = await invokeConfiguredGitProvider(deps, ctx, "remoteDefaultBranch", [
       {
         url: normalizedRemote.url,
-        ...(request.credentialId ? { credentialId: request.credentialId } : {}),
+        ...(request.credentialId !== undefined ? { credentialId: request.credentialId } : {}),
       },
     ]).catch(() => ({ branch: null }));
     if (discovered.branch) {
@@ -614,42 +678,90 @@ async function importWorkspaceRepo(
     }
   }
   const mutateConfig: WorkspaceConfigMutation = (currentConfig) => {
+    previousDeclaration = snapshotWorkspaceRepoGitDeclaration(
+      currentConfig,
+      validRepoPath,
+      normalizedRemote.name
+    );
     const withRemote = setDeclaredRemoteInConfig(currentConfig, validRepoPath, normalizedRemote);
     return setDeclaredUpstreamInConfig(withRemote, validRepoPath, {
       remote: normalizedRemote.name,
       branch: normalizedRemote.branch,
       autoPush: false,
-      ...(request.credentialId ? { credentialId: request.credentialId } : {}),
+      ...(request.credentialId !== undefined ? { credentialId: request.credentialId } : {}),
     });
   };
+  let previousDeclaration: WorkspaceRepoGitDeclarationSnapshot | undefined;
 
   const persisted = await persistWorkspaceConfigMutation(ctx, deps, {
     mutate: mutateConfig,
     summary: workspaceConfigImportSummary(validRepoPath, normalizedRemote),
   });
+  if (!previousDeclaration) {
+    throw new Error(`Workspace config persistence did not evaluate the import of ${validRepoPath}`);
+  }
+  const declarationBeforeImport = previousDeclaration;
+  const writtenDeclaration = snapshotWorkspaceRepoGitDeclaration(
+    persisted.nextConfig,
+    validRepoPath,
+    normalizedRemote.name
+  );
+  return cloneWorkspaceRepo(ctx, deps, {
+    operation: "git.importProject",
+    repoPath: validRepoPath,
+    remote: normalizedRemote,
+    transaction: {
+      changed: persisted.changed,
+      rollbackIfCurrent: (currentConfig) =>
+        isDeepStrictEqual(
+          snapshotWorkspaceRepoGitDeclaration(currentConfig, validRepoPath, normalizedRemote.name),
+          writtenDeclaration
+        )
+          ? restoreWorkspaceRepoGitDeclaration(
+              currentConfig,
+              validRepoPath,
+              normalizedRemote.name,
+              declarationBeforeImport
+            )
+          : currentConfig,
+      matchesPrevious: (config) =>
+        isDeepStrictEqual(
+          snapshotWorkspaceRepoGitDeclaration(config, validRepoPath, normalizedRemote.name),
+          declarationBeforeImport
+        ),
+    },
+  });
+}
+
+async function cloneWorkspaceRepo(
+  ctx: ServiceContext,
+  deps: GitInteropServiceDeps,
+  input: {
+    operation: "git.importProject" | "git.completeWorkspaceDependencies";
+    repoPath: string;
+    remote: WorkspaceGitRemoteConfig;
+    transaction?: WorkspaceRepoConfigTransaction;
+  }
+): Promise<GitImportedWorkspaceRepo> {
   let candidate: GitImportResult;
   try {
     candidate = await invokeConfiguredGitProvider(deps, ctx, "cloneRepo", [
-      { repoPath: validRepoPath },
+      { repoPath: input.repoPath },
     ]);
   } catch (err) {
-    // Never leave a phantom declaration behind a failed clone: roll the
-    // remote/upstream config back (when this call wrote it) and say exactly
-    // what happened and how to retry.
+    // Restore the declaration this operation replaced only while the values it
+    // wrote are still current. A newer edit owns the declaration and must win.
     let rolledBack = false;
+    let rollbackConflict = false;
     let rollbackFailure: unknown;
-    if (persisted.changed) {
+    if (input.transaction?.changed) {
       try {
-        await persistWorkspaceConfigMutation(ctx, deps, {
-          mutate: (currentConfig) =>
-            removeDeclaredRemoteFromConfig(
-              removeDeclaredUpstreamFromConfig(currentConfig, validRepoPath),
-              validRepoPath,
-              normalizedRemote.name
-            ),
-          summary: `meta/vibestudio.yml rolls back failed import of ${validRepoPath}`,
+        const rollback = await persistWorkspaceConfigMutation(ctx, deps, {
+          mutate: input.transaction.rollbackIfCurrent,
+          summary: `meta/vibestudio.yml rolls back failed import of ${input.repoPath}`,
         });
-        rolledBack = true;
+        rolledBack = input.transaction.matchesPrevious(rollback.nextConfig);
+        rollbackConflict = !rolledBack;
       } catch (error) {
         rollbackFailure = error;
         // The error below reports that the declaration survived. There is no
@@ -658,25 +770,30 @@ async function importWorkspaceRepo(
       }
     }
     const detail = err instanceof Error ? err.message : String(err);
+    const configOutcome = !input.transaction?.changed
+      ? `Workspace Git configuration was unchanged.`
+      : rolledBack
+        ? `The workspace Git declaration was restored to its prior value.`
+        : rollbackConflict
+          ? `Workspace Git configuration changed again while the clone was running, so rollback ` +
+            `was skipped to preserve the newer edit.`
+          : `Workspace Git configuration WAS changed but could not be rolled back.`;
     const failure = new Error(
-      `Import of ${validRepoPath} failed during clone: ${detail}. ` +
-        (rolledBack || !persisted.changed
-          ? `Nothing was persisted — re-run the same import command to retry.`
-          : `The remote/upstream declaration WAS persisted but could not be rolled back; ` +
-            `\`vibestudio vcs git status\` will show it as not-materialized — re-run the same ` +
-            `import command to finish, or \`vibestudio vcs git disable --repo ${validRepoPath} ` +
-            `--forget-remote\` to remove it.`),
+      `Import of ${input.repoPath} failed during clone: ${detail}. ` +
+        `${configOutcome} Inspect meta/vibestudio.yml and \`vibestudio vcs git status\` before ` +
+        `re-running the import because the Git provider may have retained import state.`,
       { cause: err }
     );
     Object.defineProperty(failure, "errorData", {
       value: {
-        operation: "git.importProject",
-        repoPath: validRepoPath,
+        operation: input.operation,
+        repoPath: input.repoPath,
         stage: "clone",
         primary: operationErrorDetail(err),
         config: {
-          changed: persisted.changed,
+          changed: input.transaction?.changed ?? false,
           rolledBack,
+          ...(rollbackConflict ? { rollbackConflict: true } : {}),
           ...(rollbackFailure === undefined
             ? {}
             : { rollbackFailure: operationErrorDetail(rollbackFailure) }),
@@ -687,7 +804,65 @@ async function importWorkspaceRepo(
     });
     throw failure;
   }
-  return { path: validRepoPath, remote: normalizedRemote, candidate };
+  return { path: input.repoPath, remote: input.remote, candidate };
+}
+
+function snapshotWorkspaceRepoGitDeclaration(
+  config: WorkspaceConfig,
+  repoPath: string,
+  remoteName: string
+): WorkspaceRepoGitDeclarationSnapshot {
+  const remote = getDeclaredRemoteForRepo(config, repoPath, remoteName);
+  return {
+    remote:
+      remote === null
+        ? null
+        : {
+            name: remote.name,
+            url: remote.url,
+            ...(remote.branch !== undefined ? { branch: remote.branch } : {}),
+          },
+    upstream: getDeclaredUpstreamConfigOrNull(config, repoPath),
+  };
+}
+
+function restoreWorkspaceRepoGitDeclaration(
+  config: WorkspaceConfig,
+  repoPath: string,
+  remoteName: string,
+  snapshot: WorkspaceRepoGitDeclarationSnapshot
+): WorkspaceConfig {
+  const withRemote =
+    snapshot.remote === null
+      ? removeDeclaredRemoteFromConfig(config, repoPath, remoteName)
+      : setDeclaredRemoteInConfig(config, repoPath, snapshot.remote);
+  return snapshot.upstream === null
+    ? removeDeclaredUpstreamFromConfig(withRemote, repoPath)
+    : setDeclaredUpstreamInConfig(withRemote, repoPath, snapshot.upstream);
+}
+
+function getDeclaredUpstreamConfig(
+  config: WorkspaceConfig,
+  repoPathInput: string
+): WorkspaceGitUpstreamConfig {
+  const upstream = getDeclaredUpstreamConfigOrNull(config, repoPathInput);
+  if (!upstream) {
+    throw new Error(
+      `No upstream tracking is declared for ${normalizeWorkspaceRepoPath(repoPathInput)}`
+    );
+  }
+  return upstream;
+}
+
+function getDeclaredUpstreamConfigOrNull(
+  config: WorkspaceConfig,
+  repoPathInput: string
+): WorkspaceGitUpstreamConfig | null {
+  const repoPath = normalizeWorkspaceRepoPath(repoPathInput);
+  const [section, ...repoParts] = repoPath.split("/");
+  if (!section) return null;
+  const declaration = config.git?.upstreams?.[section]?.[repoParts.join("/")];
+  return declaration === undefined ? null : validateWorkspaceGitUpstream(declaration);
 }
 
 async function persistWorkspaceConfigMutation(
@@ -762,7 +937,10 @@ function workspaceConfigRemoteSummary(
 
 function workspaceConfigUpstreamSummary(
   unitPath: string,
-  upstream: Pick<WorkspaceGitUpstreamConfig, "remote" | "branch" | "autoPush"> | null,
+  upstream: Pick<
+    WorkspaceGitUpstreamConfig,
+    "remote" | "branch" | "autoPush" | "credentialId"
+  > | null,
   operation: "set" | "remove"
 ): string {
   if (operation === "remove") {
@@ -770,5 +948,14 @@ function workspaceConfigUpstreamSummary(
   }
   const branch = upstream?.branch ? ` ${upstream.branch}` : "";
   const autoPush = upstream?.autoPush ? "auto-push on" : "auto-push off";
-  return `meta/vibestudio.yml tracks ${unitPath} on ${upstream?.remote ?? "origin"}${branch} (${autoPush})`;
+  const credentials =
+    upstream?.credentialId === null
+      ? "anonymous"
+      : upstream?.credentialId
+        ? `credential ${upstream.credentialId}`
+        : "credential auto-resolution";
+  return (
+    `meta/vibestudio.yml tracks ${unitPath} on ${upstream?.remote ?? "origin"}${branch} ` +
+    `(${autoPush}, ${credentials})`
+  );
 }

@@ -1663,6 +1663,10 @@ async function main() {
     workspacePath,
     workspaceConfig,
     invokeGitProvider: invokeGitInteropProvider,
+    requestGitReconciliation: (repoPaths) => {
+      for (const repo of repoPaths) pendingGitUpstreamRepos.add(repo);
+      void flushGitUpstreamRepos();
+    },
     disposableRemotes: disposableGitRemotes,
     persistWorkspaceConfigMutation: async (input) => {
       const result = await workspaceConfigWriter.applyMutation(input);
@@ -1696,9 +1700,11 @@ async function main() {
         const repos = [...pendingGitUpstreamRepos];
         pendingGitUpstreamRepos.clear();
         try {
-          await invokeGitInteropProvider({ caller: createHostCaller("server") }, "onMainAdvanced", [
-            repos,
-          ]);
+          await invokeGitInteropProvider(
+            { caller: createHostCaller("server") },
+            "reconcileUpstreams",
+            [repos]
+          );
           readinessAttempts = 0;
         } catch (err) {
           const code =

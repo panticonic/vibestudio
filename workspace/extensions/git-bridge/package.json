@@ -22,7 +22,7 @@
             "pushDisposableRemote",
             "cloneRepo",
             "remoteDefaultBranch",
-            "onMainAdvanced"
+            "reconcileUpstreams"
           ]
         }
       }

@@ -50,7 +50,7 @@ describe("Git interop provider dispatch", () => {
   it("fails before dispatch when the extension host is unavailable", async () => {
     const invoke = createGitInteropProviderInvoker(() => null);
 
-    await expect(invoke(ctx, "onMainAdvanced", [["projects/demo"]])).rejects.toThrow(
+    await expect(invoke(ctx, "reconcileUpstreams", [["projects/demo"]])).rejects.toThrow(
       "Git upstream provider is unavailable: extension host not started"
     );
   });

@@ -475,11 +475,24 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
           service: z.string().optional(),
           force: z.boolean().optional(),
           overwrites: z
-            .object({
-              count: z.number(),
-              commits: z.array(z.object({ sha: z.string(), summary: z.string() }).strict()),
-            })
-            .strict()
+            .discriminatedUnion("relationship", [
+              z
+                .object({
+                  relationship: z.literal("related"),
+                  count: z.number().int().nonnegative(),
+                  commits: z.array(z.object({ sha: z.string(), summary: z.string() }).strict()),
+                  truncated: z.boolean(),
+                })
+                .strict(),
+              z
+                .object({
+                  relationship: z.literal("unrelated"),
+                  count: z.null(),
+                  commits: z.array(z.object({ sha: z.string(), summary: z.string() }).strict()),
+                  truncated: z.boolean(),
+                })
+                .strict(),
+            ])
             .optional(),
         })
         .strict()
