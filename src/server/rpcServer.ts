@@ -198,6 +198,13 @@ const SERVER_RESPONDER = { callerId: "main", callerKind: "server" as const };
 export const SYSTEM_SUBJECT: UserSubject = { userId: "system", handle: "system" };
 
 /**
+ * Caller kinds whose subject is derived from a runtime entity record rather
+ * than a human credential: when they fail the membership gate, the cause is a
+ * missing or retired entity, not workspace membership.
+ */
+const RUNTIME_CALLER_KINDS: ReadonlySet<string> = new Set(["panel", "do", "worker"]);
+
+/**
  * Resolve the `userId` to denormalize onto a connection whose `VerifiedCaller`
  * carries no host-verified `subject` (WP4 §2.1). Only the in-process `server`
  * principal is intentionally synthetic. Every shell, including the local
@@ -1582,13 +1589,22 @@ export class RpcServer {
       const gateSubject =
         subject ?? this.resolveSubject(callerId, callerKind, agentBinding) ?? undefined;
       if (!this.deps.membershipGate(gateSubject)) {
+        // Two very different failures reach this point: a real human who is not
+        // a member, and a runtime whose entity is unknown or no longer active
+        // (so no subject could be derived at all). Reporting both as
+        // non-membership sends debugging into the identity system when the
+        // fault is in the runtime registry, so name the actual condition.
+        const reason =
+          gateSubject === undefined && RUNTIME_CALLER_KINDS.has(callerKind)
+            ? `Unknown or inactive runtime entity: ${callerId}`
+            : "Not a member of this workspace";
         const msg: WsServerMessage = {
           type: "ws:auth-result",
           success: false,
-          error: "Not a member of this workspace",
+          error: reason,
         };
         ws.send(JSON.stringify(msg));
-        ws.close(4403, "Not a member of this workspace");
+        ws.close(4403, reason);
         return;
       }
     }

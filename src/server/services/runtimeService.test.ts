@@ -710,6 +710,56 @@ describe("runtimeService.createEntity (do kind)", () => {
     ).rejects.toThrow(/did not select an immutable BuildV2 artifact/);
   });
 
+  it("creates browser panels without requiring a build artifact", async () => {
+    // A host-rendered document has no code of ours to seal. Requiring an
+    // immutable build here rejected every browser panel, so nothing could open
+    // a link as a panel.
+    const preparePanel = vi.fn(async () => ({ effectiveVersion: "" }));
+    const { service } = await buildDeps({ preparePanel });
+
+    const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "panel",
+        source: "browser:https://example.com/",
+        key: "nav-browser-panel",
+        contextId: "ctx-browser",
+      },
+    ])) as { id: string; buildKey?: string };
+
+    expect(handle.id).toContain("panel:");
+    expect(handle.buildKey).toBeUndefined();
+    // The build system is never consulted for an external document.
+    expect(preparePanel).not.toHaveBeenCalled();
+  });
+
+  it("rejects a browser panel whose source is not an openable URL", async () => {
+    const { service } = await buildDeps({});
+    await expect(
+      service.handler({ caller: serverCaller }, "createEntity", [
+        {
+          kind: "panel",
+          source: "browser:javascript:alert(1)",
+          key: "nav-bad-browser-panel",
+          contextId: "ctx-bad",
+        },
+      ])
+    ).rejects.toThrow(/Invalid external browser panel source/);
+  });
+
+  it("refuses to reserve a browser source, which has no build to pin", async () => {
+    const { service } = await buildDeps({});
+    await expect(
+      service.handler({ caller: serverCaller }, "reservePanelEntity", [
+        {
+          kind: "panel",
+          source: "browser:https://example.com/",
+          key: "nav-reserved-browser",
+          contextId: "ctx-reserve",
+        },
+      ])
+    ).rejects.toThrow(/created directly, not reserved/);
+  });
+
   it("creates app entities as first-class runtime records", async () => {
     const resolveAppExecution = vi.fn(async () => ({
       effectiveVersion: "ev-app-shell",

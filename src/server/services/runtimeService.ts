@@ -49,6 +49,10 @@ import {
 } from "./contextBoundary.js";
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import { requireActiveExecutionIdentity } from "../runtimeExecutionIdentity.js";
+import {
+  browserUrlFromPanelSource,
+  isOpenPanelBrowserUrl,
+} from "@vibestudio/shared/panelChrome";
 
 export interface RuntimeEntityHooks {
   /** Immutable authority facts sealed into the selected build artifact. */
@@ -454,6 +458,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     if (!isTrustedRuntimeHost(caller)) {
       throw new Error("Deferred panel runtime entities are host-managed");
     }
+    // Reservation exists to pin an immutable build before activation, which a
+    // host-rendered document has none of: browser panels go through
+    // createEntity instead.
+    if (browserUrlFromPanelSource(spec.source) !== null) {
+      throw new Error(
+        `Browser panel sources are created directly, not reserved: ${spec.source}`
+      );
+    }
     // A panel without an explicit shared context gets a fresh semantic world.
     // The bridge retains the verified creator id under host attestation, so the
     // runtime can attach that world to the creator's context without exposing a
@@ -670,6 +682,21 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       // eagerly materializing the context folder so host callers (e.g.
       // agent CLIs) get a working tree immediately.
       await deps.contextFolders.ensureContextFolder(contextId);
+      effectiveVersion = existing?.status === "retired" ? existing.source.effectiveVersion : "";
+      targetId = canonicalId;
+    } else if (browserUrlFromPanelSource(spec.source) !== null) {
+      // Browser panels are host-rendered external documents, not workspace
+      // code. They take a durable entity so slot lineage, contexts, and leases
+      // work exactly as they do for code panels — but there is no build
+      // artifact, execution digest, or authority manifest to seal, because
+      // nothing of ours executes. Requiring one here rejected every browser
+      // panel outright.
+      const externalUrl = browserUrlFromPanelSource(spec.source) ?? "";
+      if (!isOpenPanelBrowserUrl(externalUrl)) {
+        throw new Error(`Invalid external browser panel source: ${spec.source}`);
+      }
+      canonicalId = canonicalEntityId({ kind: "panel", key });
+      existing = await store.resolveRecord(canonicalId);
       effectiveVersion = existing?.status === "retired" ? existing.source.effectiveVersion : "";
       targetId = canonicalId;
     } else {
