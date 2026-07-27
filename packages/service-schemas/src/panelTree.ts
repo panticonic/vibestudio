@@ -9,6 +9,7 @@ import { z } from "zod";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import {
+  type ArgsOf,
   defineServiceMethods,
   fixedPreparedAuthorityRequirement,
 } from "@vibestudio/shared/typedServiceClient";
@@ -468,3 +469,10 @@ export const panelTreeMethods = defineServiceMethods({
     examples: [{ args: [["panel-1", "panel-2"]] }],
   },
 });
+
+export type PanelTreeMethod = keyof typeof panelTreeMethods & string;
+
+/** Exact parsed argument tuple for one panel-tree method. */
+export type PanelTreeMethodArgs<M extends PanelTreeMethod> = ArgsOf<
+  z.output<(typeof panelTreeMethods)[M]["args"]>
+>;

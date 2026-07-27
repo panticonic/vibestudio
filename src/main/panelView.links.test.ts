@@ -47,6 +47,7 @@ function createHarness(
     viewType?: "panel" | "app";
     externalHost?: string;
     gatewayServerUrl?: string;
+    managedNavigationInFlight?: boolean;
   } = {}
 ) {
   const panelId = options.viewType === "app" ? "@workspace-apps/shell" : "panel:tree/current";
@@ -55,6 +56,7 @@ function createHarness(
   const viewManager = {
     hasView: vi.fn(() => false),
     getViewUrl: vi.fn(() => null),
+    isManagedNavigationInFlight: vi.fn(() => options.managedNavigationInFlight ?? false),
     navigateView: vi.fn(async () => undefined),
     updateAppView: vi.fn(async () => undefined),
     createView: vi.fn(() => ({ webContents: wc.webContents })),
@@ -242,6 +244,36 @@ describe("PanelView plain panel links", () => {
       panelId,
       "runtime:child-creation-error",
       expect.anything()
+    );
+  });
+
+  it("accepts an external-classified URL while the host owns that navigation", async () => {
+    const { panelId, panelView, webContents, sendPanelEvent } = createHarness({
+      managedNavigationInFlight: true,
+    });
+    await panelView.createViewForPanel(panelId, "about:blank", "ctx-current");
+
+    webContents.emit("did-navigate", {}, "about:blank");
+
+    expect(sendPanelEvent).not.toHaveBeenCalledWith(
+      panelId,
+      "runtime:child-creation-error",
+      expect.anything()
+    );
+  });
+
+  it("still rejects the same raw external navigation without host ownership", async () => {
+    const { panelId, panelView, webContents, sendPanelEvent } = createHarness();
+    await panelView.createViewForPanel(panelId, "http://127.0.0.1:1234/about/new/", "ctx-current");
+
+    webContents.emit("did-navigate", {}, "about:blank");
+
+    expect(sendPanelEvent).toHaveBeenCalledWith(
+      panelId,
+      "runtime:child-creation-error",
+      expect.objectContaining({
+        error: expect.stringContaining("Unexpected raw external main-frame navigation"),
+      })
     );
   });
 

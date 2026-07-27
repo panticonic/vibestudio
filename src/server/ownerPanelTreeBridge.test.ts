@@ -304,6 +304,25 @@ async function createSinglePanelBridge(options?: {
 }
 
 describe("createServerPanelTreeBridge ergonomic panel lifecycle", () => {
+  it("validates raw internal bridge arguments before dispatching them", async () => {
+    const { bridge, dispatch } = await createSinglePanelBridge();
+
+    await expect(
+      bridge({
+        callerId: "server",
+        callerKind: "server",
+        method: "getTreeSnapshot",
+        args: [undefined],
+      } as never)
+    ).rejects.toThrow("Invalid internal panelTree.getTreeSnapshot bridge arguments");
+    expect(dispatch).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "workspace-state",
+      "panelTree.snapshot",
+      expect.anything()
+    );
+  });
+
   it("hydrates panel authority from the durable runtime incarnation", async () => {
     const activeExecution = {
       buildKey: "b".repeat(64),

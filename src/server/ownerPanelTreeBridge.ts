@@ -28,6 +28,8 @@ import {
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
+import { parseServiceHandlerArgs } from "@vibestudio/shared/serviceHandlers";
+import { panelTreeMethods, type PanelTreeMethod } from "@vibestudio/service-schemas/panelTree";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import {
@@ -53,7 +55,7 @@ import type {
 import { stateLayout } from "./stateLayout.js";
 import { isCdpTargetLifecycleTransitionError, type CdpBridge } from "./cdpBridge.js";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
-import type { PanelTreeBridgeRequest } from "./services/panelTreeService.js";
+import type { PanelTreeBridge, PanelTreeBridgeRequest } from "./services/panelTreeService.js";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import {
   panelAttemptId,
@@ -131,8 +133,6 @@ export interface OwnerPanelTreeBridgeDeps {
     | undefined;
   registerSlotStateListener: ((listener: () => void) => () => void) | undefined;
 }
-
-export type PanelTreeBridge = (request: PanelTreeBridgeRequest) => Promise<unknown>;
 
 export const PANEL_PARENT_RESOLUTION_TIMEOUT_MS = 5_000;
 
@@ -272,9 +272,7 @@ type InitPanelRoot = {
  * on its first attach.
  */
 export async function seedPanelTreeIfEmpty(
-  bridge: (
-    request: import("./services/panelTreeService.js").PanelTreeBridgeRequest
-  ) => Promise<unknown>,
+  bridge: PanelTreeBridge,
   initPanels: ReadonlyArray<{ source: string; stateArgs?: Record<string, unknown> }>,
   ownerSubject: UserSubject
 ): Promise<void> {
@@ -387,12 +385,10 @@ export function createOwnerPanelSeedStore(statePath: string): OwnerPanelSeedStor
  * must never recreate the retired anonymous shared root tree.
  */
 export function createOwnerSeedingPanelTreeBridge(
-  bridge: (
-    request: import("./services/panelTreeService.js").PanelTreeBridgeRequest
-  ) => Promise<unknown>,
+  bridge: PanelTreeBridge,
   initPanels: ReadonlyArray<{ source: string; stateArgs?: Record<string, unknown> }>,
   seedStore?: OwnerPanelSeedStore
-): (request: import("./services/panelTreeService.js").PanelTreeBridgeRequest) => Promise<unknown> {
+): PanelTreeBridge {
   const ownerSeedPromises = new Map<string, Promise<void>>();
 
   const seedForOwner = (ownerSubject: UserSubject): Promise<void> => {
@@ -411,7 +407,7 @@ export function createOwnerSeedingPanelTreeBridge(
     return pending;
   };
 
-  return async (request) => {
+  return async (request: PanelTreeBridgeRequest) => {
     const ownerSubject = request.subject;
     if (ownerSubject && ownerSubject.userId !== "system") {
       await seedForOwner(ownerSubject);
@@ -422,9 +418,7 @@ export function createOwnerSeedingPanelTreeBridge(
 
 export async function createServerPanelTreeBridge(
   deps: OwnerPanelTreeBridgeDeps
-): Promise<
-  (request: import("./services/panelTreeService.js").PanelTreeBridgeRequest) => Promise<unknown>
-> {
+): Promise<PanelTreeBridge> {
   const registry = new PanelRegistry({});
   const serverCtx: ServiceContext = { caller: createHostCaller("server") };
   const callerContext = new AsyncLocalStorage<VerifiedCaller>();
@@ -1012,9 +1006,7 @@ export async function createServerPanelTreeBridge(
     );
   };
 
-  const handleBridgeRequest = async (
-    request: import("./services/panelTreeService.js").PanelTreeBridgeRequest
-  ): Promise<unknown> => {
+  const handleBridgeRequest = async (request: PanelTreeBridgeRequest): Promise<unknown> => {
     const method = request.method;
     const args = request.args;
     switch (method) {
@@ -1634,7 +1626,7 @@ export async function createServerPanelTreeBridge(
 
   // Every bridge request runs on the shared op-chain so mutations and the
   // self-heal reload never interleave (prevents mirror oscillation).
-  return (request) => {
+  const bridge: PanelTreeBridge = (request) => {
     // The panelTree service has already authorized the external caller. Its
     // bridge is a trusted product deputy for lower-level workspace-state and
     // runtime operations, so it must carry genuine host attestation rather
@@ -1643,11 +1635,37 @@ export async function createServerPanelTreeBridge(
     const mediatedCaller = createHostCaller(request.callerId, "server", request.subject);
     return scheduleOperation("user", async () => {
       log.verbose(`Handling ${request.method} for ${request.callerId}`);
-      const result = await callerContext.run(mediatedCaller, () => handleBridgeRequest(request));
+      const validatedRequest = validatePanelTreeBridgeRequest(request);
+      const result = await callerContext.run(mediatedCaller, () =>
+        handleBridgeRequest(validatedRequest)
+      );
       log.verbose(`Handled ${request.method} for ${request.callerId}`);
       return result;
     });
   };
+  return bridge;
+}
+
+function validatePanelTreeBridgeRequest(request: PanelTreeBridgeRequest): PanelTreeBridgeRequest {
+  if (request.method === "historyTargetContext") {
+    const [panelId, delta, ...extra] = request.args as unknown[];
+    if (
+      typeof panelId !== "string" ||
+      panelId.length === 0 ||
+      (delta !== -1 && delta !== 1) ||
+      extra.length > 0
+    ) {
+      throw new Error("Invalid internal panelTree.historyTargetContext bridge arguments");
+    }
+    return { ...request, method: "historyTargetContext", args: [panelId, delta] };
+  }
+  const method = request.method as PanelTreeMethod;
+  try {
+    const args = parseServiceHandlerArgs(panelTreeMethods[method], request.args as unknown[]);
+    return { ...request, method, args } as PanelTreeBridgeRequest;
+  } catch (error) {
+    throw new Error(`Invalid internal panelTree.${method} bridge arguments`, { cause: error });
+  }
 }
 
 export async function snapshotBrowserPanelFromCdpBridge(

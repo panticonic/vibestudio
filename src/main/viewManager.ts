@@ -2224,6 +2224,18 @@ export class ViewManager {
     await this.loadManagedViewUrl(managed, url);
   }
 
+  /**
+   * Whether the host currently owns the main-frame navigation to `url`.
+   *
+   * PanelView uses this at the did-navigate boundary to distinguish a host
+   * preparation/load from a page-authored navigation. The ownership is scoped
+   * to the in-flight revision and disappears as soon as loadURL settles.
+   */
+  isManagedNavigationInFlight(id: string, url: string): boolean {
+    const managed = this.views.get(id);
+    return managed?.navigation?.url === url;
+  }
+
   private async loadManagedViewUrl(managed: ManagedView, url: string): Promise<void> {
     const contents = managed.view.webContents;
     if (managed.navigation?.url === url) return managed.navigation.promise;

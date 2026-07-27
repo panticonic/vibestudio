@@ -6,18 +6,20 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { UserSubject } from "@vibestudio/identity/types";
 import type { PanelAccessOperation } from "@vibestudio/shared/panelAccessPolicy";
-import { panelTreeMethods } from "@vibestudio/service-schemas/panelTree";
+import {
+  panelTreeMethods,
+  type PanelTreeMethod,
+  type PanelTreeMethodArgs,
+} from "@vibestudio/service-schemas/panelTree";
 import type {
   PanelAccessPermissionDeps,
   PanelAccessPermissionTarget,
 } from "./panelAccessPermission.js";
 import { preparePanelAccessAuthority } from "./panelAccessPermission.js";
 
-export interface PanelTreeBridgeRequest {
+interface PanelTreeBridgeCaller {
   callerId: string;
   callerKind: CallerKind;
-  method: string;
-  args: unknown[];
   /**
    * Host-verified acting user. Threaded intact so entity creation preserves
    * both the human owner and the original runtime lineage. Attribution only;
@@ -25,6 +27,25 @@ export interface PanelTreeBridgeRequest {
    */
   subject?: UserSubject;
 }
+
+export type PanelTreeBridgeRequestFor<M extends PanelTreeBridgeMethod> = PanelTreeBridgeCaller & {
+  method: M;
+  args: PanelTreeBridgeMethodArgs<M>;
+};
+
+export type PanelTreeBridgeMethod = PanelTreeMethod | "historyTargetContext";
+export type PanelTreeBridgeMethodArgs<M extends PanelTreeBridgeMethod> = M extends PanelTreeMethod
+  ? PanelTreeMethodArgs<M>
+  : M extends "historyTargetContext"
+    ? [panelId: string, delta: -1 | 1]
+    : never;
+
+/** Method and arguments remain correlated all the way to the internal bridge. */
+export type PanelTreeBridgeRequest = {
+  [M in PanelTreeBridgeMethod]: PanelTreeBridgeRequestFor<M>;
+}[PanelTreeBridgeMethod];
+
+export type PanelTreeBridge = (request: PanelTreeBridgeRequest) => Promise<unknown>;
 
 export interface PanelTreeSourceValidationRequest {
   method: "create" | "navigate";
@@ -34,7 +55,7 @@ export interface PanelTreeSourceValidationRequest {
 }
 
 export interface PanelTreeServiceDeps extends PanelAccessPermissionDeps {
-  bridge(request: PanelTreeBridgeRequest): Promise<unknown>;
+  bridge: PanelTreeBridge;
   validateOpenPanelSource?(request: PanelTreeSourceValidationRequest): Promise<void>;
 }
 
@@ -86,7 +107,11 @@ function assertContextIsNotPanelState(method: string, args: unknown[]): void {
 }
 
 export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefinition {
-  async function bridge(ctx: ServiceContext, method: string, args: unknown[]): Promise<unknown> {
+  async function bridge<M extends PanelTreeBridgeMethod>(
+    ctx: ServiceContext,
+    method: M,
+    args: PanelTreeBridgeMethodArgs<M>
+  ): Promise<unknown> {
     return deps.bridge({
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
@@ -94,7 +119,7 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
       args,
       // Stamp the acting user as owner on create/move (WP3). Attribution only.
       ...(ctx.caller.subject ? { subject: ctx.caller.subject } : {}),
-    });
+    } as PanelTreeBridgeRequest);
   }
 
   async function targetFor(
@@ -192,16 +217,16 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
     sourceValidatedArgs.add(args);
   }
 
-  async function dispatch(
+  async function dispatch<M extends PanelTreeMethod>(
     ctx: ServiceContext,
-    method: keyof typeof panelTreeMethods & string,
-    args: unknown[]
+    method: M,
+    args: PanelTreeMethodArgs<M>
   ): Promise<unknown> {
     assertAllowedAgentMethod(method, args);
     assertContextIsNotPanelState(method, args);
     await validatePanelSourceOnce(method, args);
     try {
-      return await bridge(ctx, method, args);
+      return await bridge(ctx, method, args as PanelTreeBridgeMethodArgs<M>);
     } finally {
       sourceValidatedArgs.delete(args);
     }
@@ -236,7 +261,10 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
           target.requestedContextId = navContextId;
         }
       } else if (method === "navigateHistory") {
-        const destContextId = (await bridge(ctx, "historyTargetContext", args)) as string | null;
+        const [panelId, delta] = args as PanelTreeMethodArgs<"navigateHistory">;
+        const destContextId = (await bridge(ctx, "historyTargetContext", [panelId, delta])) as
+          | string
+          | null;
         if (typeof destContextId === "string" && destContextId.length > 0) {
           target.requestedContextId = destContextId;
         }

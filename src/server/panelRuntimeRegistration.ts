@@ -233,7 +233,7 @@ export interface CommonDeps {
 export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   const { container, workspace, workspaceConfig, adminToken, hostConfig } = deps;
   let serverPanelTreeBridgePromise: Promise<
-    (request: import("./services/panelTreeService.js").PanelTreeBridgeRequest) => Promise<unknown>
+    import("./services/panelTreeService.js").PanelTreeBridge
   > | null = null;
   const getPanelTreeBridge = () => {
     serverPanelTreeBridgePromise ??= createServerPanelTreeBridge({

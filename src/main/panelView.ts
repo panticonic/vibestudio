@@ -552,7 +552,12 @@ export class PanelView implements PanelViewLike {
           return;
         }
 
-        if (classifyPanelUrl(url).disposition === "browser-panel" && !this.isManagedUrl(url)) {
+        const hostOwnsNavigation = this.viewManager.isManagedNavigationInFlight(panelId, url);
+        if (
+          classifyPanelUrl(url).disposition === "browser-panel" &&
+          !this.isManagedUrl(url) &&
+          !hostOwnsNavigation
+        ) {
           this.handlePanelLinkError(
             panelId,
             new Error("Unexpected raw external main-frame navigation"),
