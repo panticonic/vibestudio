@@ -64,7 +64,10 @@ describe("frameChunks", () => {
   });
 
   it("never drops an item and never emits an empty frame", () => {
-    const items = Array.from({ length: 37 }, (_, index) => ({ index, pad: "x".repeat(index * 997) }));
+    const items = Array.from({ length: 37 }, (_, index) => ({
+      index,
+      pad: "x".repeat(index * 997),
+    }));
     const frames = frameChunks(items);
     expect(frames.flat()).toEqual(items);
     expect(frames.every((frame) => frame.length > 0)).toBe(true);

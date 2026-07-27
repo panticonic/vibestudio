@@ -49,10 +49,7 @@ import {
 } from "./contextBoundary.js";
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import { requireActiveExecutionIdentity } from "../runtimeExecutionIdentity.js";
-import {
-  browserUrlFromPanelSource,
-  isOpenPanelBrowserUrl,
-} from "@vibestudio/shared/panelChrome";
+import { browserUrlFromPanelSource, isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
 
 export interface RuntimeEntityHooks {
   /** Immutable authority facts sealed into the selected build artifact. */
@@ -462,9 +459,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     // host-rendered document has none of: browser panels go through
     // createEntity instead.
     if (browserUrlFromPanelSource(spec.source) !== null) {
-      throw new Error(
-        `Browser panel sources are created directly, not reserved: ${spec.source}`
-      );
+      throw new Error(`Browser panel sources are created directly, not reserved: ${spec.source}`);
     }
     // A panel without an explicit shared context gets a fresh semantic world.
     // The bridge retains the verified creator id under host attestation, so the

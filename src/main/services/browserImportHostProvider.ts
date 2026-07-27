@@ -48,7 +48,10 @@ export function frameChunks(items: readonly unknown[]): unknown[][] {
   let currentBytes = 0;
   for (const item of items) {
     const size = estimateEncodedBytes(item);
-    if (current.length > 0 && (current.length >= FRAME_ITEM_LIMIT || currentBytes + size > FRAME_BYTE_BUDGET)) {
+    if (
+      current.length > 0 &&
+      (current.length >= FRAME_ITEM_LIMIT || currentBytes + size > FRAME_BYTE_BUDGET)
+    ) {
       frames.push(current);
       current = [];
       currentBytes = 0;
