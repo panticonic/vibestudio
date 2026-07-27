@@ -51,7 +51,7 @@ export type ApprovalCardIntentBody =
   // Diff-review (P3.5): the overlay surface has no RPC, so the presentational
   // card asks the chrome coordinator to fetch a payload blob by content hash,
   // and the result comes back down as an updated `blobResults` prop.
-  | { type: "fetch-blob"; hash: string }
+  | { type: "fetch-blob"; hash: string; refresh?: boolean }
   // Diff-review escape hatch: the reviewer wants to inspect a file in the
   // gad-browser panel (the only surface with a real file-inspection view).
   // The chrome coordinator opens/focuses gad-browser with this target as
@@ -129,11 +129,13 @@ export function diffReviewPayloadHashes(entries: DiffReviewEntry[]): Set<string>
   return hashes;
 }
 
-/** Host-sealed detail hashes the trusted card may fetch for this exact prompt. */
+/** Human-review detail hashes the trusted card may fetch for this exact prompt. */
 export function sealedDetailPayloadHashes(approval: PendingApproval): Set<string> {
   return new Set(
     approval.kind === "userland"
-      ? (approval.sealedDetails ?? []).map((detail) => detail.digest)
+      ? (approval.sealedDetails ?? [])
+          .filter((detail) => (detail.disclosure ?? "review") === "review")
+          .map((detail) => detail.digest)
       : []
   );
 }

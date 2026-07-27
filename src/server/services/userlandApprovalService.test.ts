@@ -354,23 +354,10 @@ describe("userlandApprovalService", () => {
     expect(queued).not.toHaveBeenCalled();
   });
 
-  it("binds cached approval reuse and returned sealed bytes to the exact host review digest", async () => {
+  it("reuses the declared capability while returning the current exact sealed bytes", async () => {
     const { service, lookup, queued } = createDeps();
     const content = '{"command":"deploy","environmentProfile":"local-dev@abc123"}';
     const contentDigest = createHash("sha256").update(content, "utf8").digest("hex");
-    const reviewDigest = createHash("sha256")
-      .update(
-        JSON.stringify([
-          {
-            label: "Execution plan",
-            digest: contentDigest,
-            byteLength: Buffer.byteLength(content, "utf8"),
-            format: "code",
-          },
-        ]),
-        "utf8"
-      )
-      .digest("hex");
     lookup.mockReturnValueOnce({
       principal: {
         callerId: "worker:alpha",
@@ -379,7 +366,6 @@ describe("userlandApprovalService", () => {
         effectiveVersion: "hash-1",
       },
       subject: { id: "team-x:foo" },
-      reviewDigest,
       choice: "allow",
       grantedAt: 10,
     });
@@ -404,8 +390,7 @@ describe("userlandApprovalService", () => {
         effectiveVersion: "hash-1",
       },
       "team-x:foo",
-      undefined,
-      reviewDigest
+      undefined
     );
     expect(queued).not.toHaveBeenCalled();
   });
@@ -440,7 +425,7 @@ describe("userlandApprovalService", () => {
       undefined,
       expect.any(Number),
       undefined,
-      true
+      false
     );
     expect(queued).toHaveBeenCalledTimes(1);
   });
@@ -651,7 +636,7 @@ describe("userlandApprovalService", () => {
       choice: "allow",
     });
     const issuer = { kind: "extension", id: "@workspace-extensions/shell" };
-    expect(lookup).toHaveBeenCalledWith(extensionCtx.chainCaller, "team-x:foo", issuer, undefined);
+    expect(lookup).toHaveBeenCalledWith(extensionCtx.chainCaller, "team-x:foo", issuer);
     expect(queued).toHaveBeenCalledWith(
       expect.objectContaining({
         principal: extensionCtx.chainCaller,

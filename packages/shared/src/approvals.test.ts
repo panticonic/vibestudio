@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  USERLAND_APPROVAL_REVIEW_DETAILS_MAX_BYTES,
   USERLAND_APPROVAL_SEALED_DETAILS_MAX_BYTES,
   userlandApprovalRequestSchema,
   userlandApprovalSubjectIdSchema,
@@ -121,5 +122,22 @@ describe("userland approval validation", () => {
         ],
       })
     ).toThrow(/reviewed immutable file or artifact/);
+  });
+
+  it("bounds review projections without preventing larger sealed-only invocation payloads", () => {
+    const content = "x".repeat(USERLAND_APPROVAL_REVIEW_DETAILS_MAX_BYTES + 1);
+    expect(() =>
+      userlandApprovalRequestSchema.parse({
+        ...validRequest,
+        sealedDetails: [{ label: "Review", content, disclosure: "review" }],
+      })
+    ).toThrow(/too large for an interactive prompt/);
+
+    expect(
+      userlandApprovalRequestSchema.parse({
+        ...validRequest,
+        sealedDetails: [{ label: "Execution seal", content, disclosure: "sealed-only" }],
+      }).sealedDetails?.[0]
+    ).toMatchObject({ content, disclosure: "sealed-only" });
   });
 });

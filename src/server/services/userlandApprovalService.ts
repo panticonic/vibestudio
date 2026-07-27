@@ -51,6 +51,7 @@ function sealUserlandDetails(
       digest: createHash("sha256").update(detail.content, "utf8").digest("hex"),
       byteLength: Buffer.byteLength(detail.content, "utf8"),
       ...(detail.format ? { format: detail.format } : {}),
+      disclosure: detail.disclosure ?? "review",
     },
     content: detail.content,
   }));
@@ -74,36 +75,6 @@ function approvedChoice(
   };
 }
 
-function sealedReviewDigest(
-  details:
-    | ReadonlyArray<SealedUserlandDetail>
-    | ReadonlyArray<{
-        label: string;
-        digest: string;
-        byteLength: number;
-        format?: "plain" | "code";
-      }>
-    | undefined
-): string | undefined {
-  if (!details?.length) return undefined;
-  return createHash("sha256")
-    .update(
-      JSON.stringify(
-        details.map((detail) =>
-          "ref" in detail
-            ? detail.ref
-            : {
-                label: detail.label,
-                digest: detail.digest,
-                byteLength: detail.byteLength,
-                ...(detail.format ? { format: detail.format } : {}),
-              }
-        )
-      ),
-      "utf8"
-    )
-    .digest("hex");
-}
 /**
  * A relayed external-agent permission auto-denies at the workspace card after
  * this long with no user answer. Agent runtimes use the same horizon so
@@ -143,7 +114,7 @@ function scopedAllowOptions(principal: ApprovalPrincipal): UserlandApprovalOptio
     {
       value: "session",
       label: "Allow this session",
-      description: "Remember for this caller until Vibestudio restarts.",
+      description: "Remember this capability for this caller until Vibestudio restarts.",
       tone: "neutral",
     },
     {
@@ -154,8 +125,8 @@ function scopedAllowOptions(principal: ApprovalPrincipal): UserlandApprovalOptio
           : "Trust this workspace service"
         : "Trust this version",
       description: identityScoped
-        ? `Remember for ${identityLabel}. Its executable capabilities remain limited by version review.`
-        : "Remember for this exact code version.",
+        ? `Remember this capability for ${identityLabel}'s exact code version.`
+        : "Remember this capability for this exact code version.",
       tone: "primary",
     },
     { value: "deny", label: "Deny", description: "Do not allow this request.", tone: "danger" },
@@ -418,18 +389,12 @@ export function createUserlandApprovalService(deps: {
     const decoratedReq = decorateForIssuer(req, issuer);
     const { sealedDetails: rawSealedDetails, ...promptReq } = decoratedReq;
     const sealedDetails = sealUserlandDetails(rawSealedDetails);
-    const reviewDigest = sealedReviewDigest(sealedDetails);
     const promptOptions = decoratedReq.promptOptions ?? "scoped";
     const options =
       promptOptions === "scoped"
         ? scopedOptionsFor(principal, decoratedReq)
         : (decoratedReq.options ?? BINARY_OPTIONS);
-    const hit = deps.grantStore.lookupUserland(
-      principal,
-      promptReq.subject.id,
-      issuer,
-      reviewDigest
-    );
+    const hit = deps.grantStore.lookupUserland(principal, promptReq.subject.id, issuer);
     if (hit) {
       if (isCachedChoiceValid(promptOptions, options, hit.choice)) {
         return approvedChoice(hit.choice, sealedDetails);
@@ -439,8 +404,8 @@ export function createUserlandApprovalService(deps: {
         promptReq.subject.id,
         issuer,
         Date.now(),
-        reviewDigest,
-        true
+        undefined,
+        false
       );
     }
 
@@ -469,7 +434,7 @@ export function createUserlandApprovalService(deps: {
           provenance: "preauthorization",
           decidedBy: `host:${testDecision.policyId}:${testDecision.ruleId}`,
         },
-        reviewDigest
+        undefined
       );
       return approvedChoice(resolved.choice, sealedDetails);
     }
@@ -510,7 +475,7 @@ export function createUserlandApprovalService(deps: {
         issuer,
         resolved.scope,
         undefined,
-        reviewDigest
+        undefined
       );
       if (typeof deps.approvalQueue.resolveMatchingUserland === "function") {
         deps.approvalQueue.resolveMatchingUserland((approval) => {
@@ -529,7 +494,7 @@ export function createUserlandApprovalService(deps: {
             },
             approval.subject.id,
             approval.issuer,
-            sealedReviewDigest(approval.sealedDetails)
+            undefined
           );
           return !!hit && isCachedChoiceValid(approval.promptOptions, approval.options, hit.choice);
         }, result.choice);

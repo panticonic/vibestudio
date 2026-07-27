@@ -12,7 +12,7 @@ import type {
 } from "@vibestudio/shared/approvals";
 import { authorityRow } from "@vibestudio/shared/authority/authorityRows";
 import { ApprovalCard } from "./ApprovalCard";
-import { resolveCallerInfo, type ApprovalCardIntent } from "./approvalCardModel";
+import { resolveCallerInfo, type ApprovalCardIntent, type BlobResult } from "./approvalCardModel";
 import { ApprovalCardSurface } from "../overlay/ApprovalCardSurface";
 
 function userlandApproval(
@@ -142,7 +142,7 @@ function renderCard(
 }
 
 describe("ApprovalCard", () => {
-  it("lazily renders complete host-sealed content beyond inline detail limits", async () => {
+  it("reveals review content only on demand and keeps the exact digest visible", async () => {
     const suffix = "dangerous-suffix-after-one-thousand";
     const content = `${"x".repeat(1_100)}${suffix}`;
     const digest = "a".repeat(64);
@@ -158,10 +158,52 @@ describe("ApprovalCard", () => {
       { fetchContent }
     );
 
-    fireEvent.click(screen.getByText("Inspect complete execution plan"));
+    fireEvent.click(screen.getByText("Inspect request content"));
+    expect(fetchContent).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("Reveal Complete execution plan"));
     await waitFor(() => expect(fetchContent).toHaveBeenCalledWith(digest));
     expect(screen.getByText((value) => value.endsWith(suffix))).toBeTruthy();
     expect(screen.getByText(new RegExp(`sha256:${digest}`))).toBeTruthy();
+  });
+
+  it("does not expose sealed-only payloads and lets a failed review fetch retry", async () => {
+    const reviewDigest = "b".repeat(64);
+    const exactDigest = "c".repeat(64);
+    const fetchContent = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary connection loss"))
+      .mockResolvedValueOnce("reviewed command");
+    renderCard(
+      userlandApproval({
+        approvalId: "sealed-retry",
+        title: "Run a command",
+        sealedDetails: [
+          {
+            label: "Command and input",
+            digest: reviewDigest,
+            byteLength: 20,
+            disclosure: "review",
+          },
+          {
+            label: "Exact execution seal",
+            digest: exactDigest,
+            byteLength: 1_000,
+            disclosure: "sealed-only",
+          },
+        ],
+      }),
+      { fetchContent }
+    );
+
+    fireEvent.click(screen.getByText("Inspect request content"));
+    expect(screen.queryByText("Exact execution seal")).toBeNull();
+    fireEvent.click(screen.getByText("Reveal Command and input"));
+    await screen.findByText(/temporary connection loss/);
+    fireEvent.click(screen.getByText("Retry Command and input"));
+    await screen.findByText("reviewed command");
+    expect(fetchContent).toHaveBeenCalledTimes(2);
+    expect(fetchContent).toHaveBeenNthCalledWith(1, reviewDigest);
+    expect(fetchContent).toHaveBeenNthCalledWith(2, reviewDigest);
   });
 
   it("exposes a labelled, described dialog and assertive decision errors with long copy", () => {
@@ -467,6 +509,53 @@ describe("ApprovalCard", () => {
     const { emit } = renderCard(userlandApproval({ approvalId: "m", title: "Minimizable" }));
     fireEvent.click(screen.getByLabelText("Minimize approval"));
     expect(emit).toHaveBeenCalledWith({ type: "minimize", approvalId: "m" });
+  });
+
+  it("requests a fresh host fetch when retrying failed review content", async () => {
+    const digest = "d".repeat(64);
+    const approval = userlandApproval({
+      approvalId: "review-retry",
+      title: "Run a command",
+      sealedDetails: [
+        {
+          label: "Command and input",
+          digest,
+          byteLength: 20,
+          disclosure: "review",
+        },
+      ],
+    });
+    const emitIntent = vi.fn<(intent: unknown) => void>();
+    const renderSurface = (blobResults?: Record<string, BlobResult>) => (
+      <Theme>
+        <ApprovalCardSurface
+          props={{ approval, queue: null, decisionError: null, blobResults }}
+          emitIntent={emitIntent}
+        />
+      </Theme>
+    );
+    const { rerender } = render(renderSurface());
+
+    fireEvent.click(screen.getByText("Inspect request content"));
+    fireEvent.click(screen.getByText("Reveal Command and input"));
+    expect(emitIntent).toHaveBeenLastCalledWith({
+      type: "fetch-blob",
+      hash: digest,
+      approvalId: "review-retry",
+    });
+
+    rerender(renderSurface({ [digest]: { error: "temporary connection loss" } }));
+    await screen.findByText(/temporary connection loss/);
+    fireEvent.click(screen.getByText("Retry Command and input"));
+    expect(emitIntent).toHaveBeenLastCalledWith({
+      type: "fetch-blob",
+      hash: digest,
+      approvalId: "review-retry",
+      refresh: true,
+    });
+
+    rerender(renderSurface({ [digest]: { text: "reviewed command" } }));
+    expect(await screen.findByText("reviewed command")).toBeTruthy();
   });
 
   it("remounts the overlay card when the approval changes so secret inputs reset", () => {

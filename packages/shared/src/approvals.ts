@@ -77,6 +77,13 @@ const SHA256_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
  * the remainder.
  */
 export const USERLAND_APPROVAL_SEALED_DETAILS_MAX_BYTES = 15 * 1024 * 1024;
+/**
+ * Reviewable text is rendered directly in trusted approval surfaces. Keep it
+ * comfortably bounded so opening an approval can never monopolize the UI
+ * thread. Larger exact payloads remain sealable, but must be represented by a
+ * bounded human review projection or a content-addressed artifact.
+ */
+export const USERLAND_APPROVAL_REVIEW_DETAILS_MAX_BYTES = 128 * 1024;
 
 /**
  * Large, security-relevant approval detail submitted for host sealing.
@@ -90,6 +97,7 @@ export const userlandApprovalSealedDetailInputSchema = z
     label: approvalCleanString("sealed detail label", { min: 1, max: 40 }),
     content: z.string(),
     format: z.enum(["plain", "code"]).optional(),
+    disclosure: z.enum(["review", "sealed-only"]).optional(),
   })
   .strict();
 
@@ -100,6 +108,7 @@ export const userlandApprovalSealedDetailRefSchema = z
     digest: z.string().regex(SHA256_DIGEST_PATTERN),
     byteLength: z.number().int().nonnegative(),
     format: z.enum(["plain", "code"]).optional(),
+    disclosure: z.enum(["review", "sealed-only"]).optional(),
   })
   .strict();
 
@@ -165,6 +174,17 @@ export const userlandApprovalRequestSchema = z
         path: ["sealedDetails"],
         message:
           "sealed approval details exceed the RPC frame budget; execute a reviewed immutable file or artifact instead",
+      });
+    }
+    const reviewBytes = (req.sealedDetails ?? [])
+      .filter((detail) => (detail.disclosure ?? "review") === "review")
+      .reduce((total, detail) => total + new TextEncoder().encode(detail.content).byteLength, 0);
+    if (reviewBytes > USERLAND_APPROVAL_REVIEW_DETAILS_MAX_BYTES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sealedDetails"],
+        message:
+          "reviewable approval details are too large for an interactive prompt; provide a bounded review projection or a content-addressed artifact",
       });
     }
     const values = new Set<string>();
@@ -452,7 +472,14 @@ export interface ApprovalPrincipal {
   requester?: ApprovalRequesterIdentity;
 }
 
-/** What a userland approval is about. The issuing provider supplies this. */
+/**
+ * What reusable authority the userland approval is about.
+ *
+ * `id` is the capability identity used by host-managed session/version
+ * grants. It must include behavior-changing inputs, but should not include
+ * incidental execution limits or opaque review-payload digests. Exact bytes
+ * for the current invocation belong in `sealedDetails`.
+ */
 export interface UserlandApprovalSubject {
   id: string;
   label?: string;
@@ -913,7 +940,11 @@ export interface UserlandApprovalRequest {
     value: string;
     format?: ApprovalDetailFormat;
   }>;
-  /** Complete immutable detail content for the host to seal and expose lazily. */
+  /**
+   * Immutable content sealed to this invocation. `review` details are bounded
+   * human projections revealed on demand; `sealed-only` details are returned
+   * to the requester after approval but never disclosed by approval surfaces.
+   */
   sealedDetails?: UserlandApprovalSealedDetailInput[];
   /** Positive proof for security claims displayed by the prompt. */
   positiveEvidence?: Array<{

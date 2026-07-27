@@ -8,7 +8,7 @@ const options = [
 ];
 
 function truncate(value: string, max: number): string {
-  return value.length > max ? `${value.slice(0, Math.max(0, max - 3))}...` : value;
+  return value.length > max ? `${value.slice(0, Math.max(0, max - 1))}…` : value;
 }
 
 function subjectLabel(value: string): string {
@@ -74,17 +74,24 @@ export function buildExecApproval(plan: SealedExecPlan): UserlandApprovalRequest
   const content = serializeExecPlan(plan);
   const planDigest = execPlanDigest(content);
   const overrideEntries = plan.environment.overrides;
+  const inputSummary =
+    plan.stdin === undefined
+      ? "No standard input."
+      : `Standard input: ${Buffer.byteLength(plan.stdin, "utf8").toLocaleString()} bytes · sha256:${execPlanDigest(plan.stdin)}`;
+  const authorityDigest = execAuthorityDigest(plan);
   return {
     subject: {
-      id: `user.exec.${planDigest.slice(0, 48)}`,
+      id: `user.exec.${authorityDigest.slice(0, 48)}`,
       label: subjectLabel(presentation.label),
     },
     title: "Run a command",
-    summary: summaryValue(["Run this command:", "", presentation.summary].join("\n")),
+    summary: summaryValue(["Run this command:", inputSummary, "", presentation.summary].join("\n")),
     warning:
       plan.intent.kind === "script"
-        ? "Runs the complete sealed script with /bin/sh. Shell operators and expansions will be acted on."
-        : undefined,
+        ? "Runs the sealed script with /bin/sh. Shell operators and expansions will be acted on."
+        : plan.stdin !== undefined
+          ? "The command will receive sealed standard input. Reveal it before approving if its contents are unfamiliar."
+          : undefined,
     details: [
       {
         label: "Plan digest",
@@ -100,16 +107,107 @@ export function buildExecApproval(plan: SealedExecPlan): UserlandApprovalRequest
       ...(overrideEntries.length > 0
         ? [
             {
-              label: "Overrides preview",
-              value: detailValue(renderEnvironment(overrideEntries)),
+              label: "Environment overrides",
+              value: detailValue(
+                `${overrideEntries.map(([key]) => key).join(", ")} · values sealed, not displayed`
+              ),
+              format: "code" as const,
+            },
+          ]
+        : []),
+      ...(plan.stdin !== undefined
+        ? [
+            {
+              label: "Standard input",
+              value: `${Buffer.byteLength(plan.stdin, "utf8").toLocaleString()} bytes · sha256:${execPlanDigest(plan.stdin)} · reveal on demand`,
               format: "code" as const,
             },
           ]
         : []),
     ],
-    sealedDetails: [{ label: "Complete execution plan", content, format: "code" }],
+    sealedDetails: [
+      {
+        label: "Command and input",
+        content: buildExecReviewProjection(plan),
+        format: "code",
+        disclosure: "review",
+      },
+      {
+        label: "Exact execution seal",
+        content,
+        format: "code",
+        disclosure: "sealed-only",
+      },
+    ],
     options,
   };
+}
+
+/**
+ * Reusable authority follows behavior-changing inputs, not transient resource
+ * limits or a snapshot of the inherited host environment. The exact snapshot
+ * remains sealed per invocation and is what execution consumes.
+ */
+function execAuthorityDigest(plan: SealedExecPlan): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        version: 1,
+        intent: plan.intent,
+        cwd: plan.cwd,
+        environmentProfile: plan.environment.profile.id,
+        overrides: plan.environment.overrides,
+        ...(plan.stdin !== undefined ? { stdin: plan.stdin } : {}),
+      }),
+      "utf8"
+    )
+    .digest("hex");
+}
+
+function buildExecReviewProjection(plan: SealedExecPlan): string {
+  const intent = boundedReviewText(
+    plan.intent.kind === "script"
+      ? `Script executed by /bin/sh:\n${plan.intent.script}`
+      : `Direct argv execution (no shell):\n${[plan.intent.executable, ...plan.intent.args]
+          .map((value) => JSON.stringify(value))
+          .join("\n")}`,
+    56 * 1024
+  );
+  const stdin =
+    plan.stdin === undefined
+      ? "Standard input: none"
+      : boundedReviewText(
+          [
+            `Standard input (${Buffer.byteLength(plan.stdin, "utf8")} bytes, may contain sensitive data):`,
+            plan.stdin,
+          ].join("\n"),
+          32 * 1024
+        );
+  const context = [
+    `Working folder: ${plan.cwd}`,
+    `Environment profile: ${plan.environment.profile.label} (${plan.environment.profile.id})`,
+    `Environment override names: ${
+      plan.environment.overrides.map(([key]) => key).join(", ") || "none"
+    }`,
+    "Environment values are bound into the exact seal but intentionally not displayed.",
+    `Timeout: ${plan.timeoutMs} ms`,
+    `Maximum captured output: ${plan.maxOutputBytes} bytes`,
+  ].join("\n");
+  return [intent, stdin, context].join("\n\n");
+}
+
+function boundedReviewText(value: string, maxBytes: number): string {
+  const encoded = Buffer.from(value, "utf8");
+  if (encoded.byteLength <= maxBytes) return value;
+  const notice =
+    "\n\n… content omitted from the interactive review …\n" +
+    "For very large programs, execute a content-addressed or otherwise reviewed immutable file.\n\n";
+  const noticeBytes = Buffer.byteLength(notice, "utf8");
+  const remaining = maxBytes - noticeBytes;
+  const tailBytes = Math.min(16 * 1024, Math.floor(remaining / 3));
+  return `${encoded.subarray(0, remaining - tailBytes).toString("utf8")}${notice}${encoded
+    .subarray(encoded.byteLength - tailBytes)
+    .toString("utf8")}`;
 }
 
 function sortedEntries(values: Record<string, string>): Array<[string, string]> {
@@ -137,12 +235,6 @@ function presentExecIntent(intent: ExecIntent): {
 
 function singleLine(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
-}
-
-function renderEnvironment(entries: Array<[string, string]>): string {
-  return entries
-    .map(([key, value]) => `${JSON.stringify(key)}=${JSON.stringify(value)}`)
-    .join("\n");
 }
 
 function visibleControlCharacters(value: string): string {
@@ -203,7 +295,11 @@ export function buildContextAttachApproval(req: {
 }
 
 function markdownShellBlock(value: string): string {
-  return `\`\`\`sh\n${truncate(value, 500).replace(/```/g, "'''")}\n\`\`\``;
+  const truncated = value.length > 500;
+  const preview = truncate(value, 500).replace(/```/g, "'''");
+  return `\`\`\`sh\n${preview}\n\`\`\`${
+    truncated ? "\nPreview truncated — inspect command and input for the reviewed projection." : ""
+  }`;
 }
 
 function shellQuoteForDisplay(value: string): string {

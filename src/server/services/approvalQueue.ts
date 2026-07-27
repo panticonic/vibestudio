@@ -2027,7 +2027,13 @@ export function createApprovalQueue(deps: {
     getUserlandSealedDetail(approvalId, digest) {
       const entry = entriesById.get(approvalId);
       if (!entry || entry.approval.kind !== "userland") return null;
-      if (!entry.approval.sealedDetails?.some((detail) => detail.digest === digest)) return null;
+      if (
+        !entry.approval.sealedDetails?.some(
+          (detail) => detail.digest === digest && (detail.disclosure ?? "review") === "review"
+        )
+      ) {
+        return null;
+      }
       return entry.userlandSealedDetails?.get(digest) ?? null;
     },
 

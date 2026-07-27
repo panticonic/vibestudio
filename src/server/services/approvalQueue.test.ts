@@ -856,6 +856,36 @@ describe("approvalQueue", () => {
       expect(queue.getUserlandSealedDetail(pending.approvalId, digest)).toBeNull();
     });
 
+    it("returns sealed-only bytes to the requester but never to approval surfaces", async () => {
+      const { queue } = createQueue();
+      const content = '{"environment":{"TOKEN":"secret"}}';
+      const digest = "f".repeat(64);
+      const result = queue.requestUserland({
+        ...userlandRequest,
+        sealedDetails: [
+          {
+            ref: {
+              label: "Exact execution seal",
+              digest,
+              byteLength: Buffer.byteLength(content),
+              format: "code",
+              disclosure: "sealed-only",
+            },
+            content,
+          },
+        ],
+      });
+      const pending = queue.listPending()[0]!;
+
+      expect(queue.getUserlandSealedDetail(pending.approvalId, digest)).toBeNull();
+      await queue.resolveUserland(pending.approvalId, "allow");
+      await expect(result).resolves.toMatchObject({
+        kind: "choice",
+        choice: "allow",
+        sealedDetails: [{ digest, content }],
+      });
+    });
+
     it("drops sealed detail bytes on dismiss, abort, and caller cancellation", async () => {
       const digest = "b".repeat(64);
       const content = "x".repeat(USERLAND_APPROVAL_PENDING_SEALED_BYTES_PER_CALLER);

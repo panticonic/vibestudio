@@ -639,6 +639,7 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
               digest: z.string().regex(/^[0-9a-f]{64}$/),
               byteLength: z.number().int().nonnegative(),
               format: z.enum(["plain", "code"]).optional(),
+              disclosure: z.enum(["review", "sealed-only"]).optional(),
             })
             .strict()
         )
@@ -814,7 +815,7 @@ export const shellApprovalMethods = defineServiceMethods({
   },
   getUserlandSealedDetail: {
     description:
-      "Fetch one complete host-sealed detail for a pending userland approval. The digest must be named by that approval; content disappears when the request settles.",
+      "Fetch one bounded human-review detail for a pending userland approval. The digest must name a review-disclosed detail on that approval; sealed-only invocation payloads are never exposed, and content disappears when the request settles.",
     args: z.tuple([z.string(), z.string().regex(/^[0-9a-f]{64}$/)]),
     returns: z.string().nullable(),
     access: LIST_PENDING_ACCESS,

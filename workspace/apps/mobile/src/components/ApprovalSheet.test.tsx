@@ -448,7 +448,7 @@ describe("ApprovalSheet", () => {
     await waitFor(() => expect(onResolveUserland).toHaveBeenCalledWith("approval-1", "allow"));
   });
 
-  it("fetches and renders complete sealed userland detail on the trusted mobile sheet", async () => {
+  it("reveals sealed userland review detail only when the user asks", async () => {
     const suffix = "dangerous-mobile-suffix-after-one-thousand";
     const content = `${"x".repeat(1_100)}${suffix}`;
     const digest = "b".repeat(64);
@@ -462,11 +462,50 @@ describe("ApprovalSheet", () => {
     const { getByText } = renderSheet(approval, { onFetchUserlandSealedDetail });
 
     fireEvent.press(getByText("Request details"));
+    expect(onFetchUserlandSealedDetail).not.toHaveBeenCalled();
+    fireEvent.press(getByText("Reveal content"));
     await waitFor(() =>
       expect(onFetchUserlandSealedDetail).toHaveBeenCalledWith("approval-1", digest)
     );
     expect(getByText(content)).toBeTruthy();
     expect(getByText(`sha256:${digest}`)).toBeTruthy();
+  });
+
+  it("hides sealed-only content and lets an unavailable review detail retry", async () => {
+    const reviewDigest = "c".repeat(64);
+    const exactDigest = "d".repeat(64);
+    const onFetchUserlandSealedDetail = jest
+      .fn<Promise<string | null>, [string, string]>()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce("reviewed input");
+    const approval: PendingApproval = {
+      ...userland,
+      sealedDetails: [
+        {
+          label: "Command and input",
+          digest: reviewDigest,
+          byteLength: 20,
+          disclosure: "review",
+        },
+        {
+          label: "Exact execution seal",
+          digest: exactDigest,
+          byteLength: 1_000,
+          disclosure: "sealed-only",
+        },
+      ],
+    };
+    const { getByText, queryByText } = renderSheet(approval, {
+      onFetchUserlandSealedDetail,
+    });
+
+    fireEvent.press(getByText("Request details"));
+    expect(queryByText("Exact execution seal")).toBeNull();
+    fireEvent.press(getByText("Reveal content"));
+    await waitFor(() => expect(getByText("This request is no longer available.")).toBeTruthy());
+    fireEvent.press(getByText("Retry"));
+    await waitFor(() => expect(getByText("reviewed input")).toBeTruthy());
+    expect(onFetchUserlandSealedDetail).toHaveBeenCalledTimes(2);
   });
 
   it("renders the caller chip with the kind icon and label", () => {

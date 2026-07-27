@@ -150,8 +150,45 @@ describe("@workspace-extensions/shell", () => {
     });
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe("hello;not-a-shell");
-    const sealedPlan = request.mock.calls[0]![0].sealedDetails?.[0]?.content;
+    const sealedPlan = request.mock.calls[0]![0].sealedDetails?.find(
+      (detail) => detail.disclosure === "sealed-only"
+    )?.content;
     expect(sealedPlan).toContain('"hello;not-a-shell"');
+  });
+
+  it("makes sealed stdin visible on deliberate review without exposing it in prompt chrome", async () => {
+    const { api, request } = await makeApi("allow");
+    const stdin = "sensitive-input;still-data";
+    const result = await api.exec({
+      intent: {
+        kind: "argv",
+        executable: "node",
+        args: ["-e", "process.stdin.pipe(process.stdout)"],
+      },
+      stdin,
+    });
+
+    expect(result.stdout).toBe(stdin);
+    const approval = request.mock.calls[0]![0];
+    expect(approval.summary).toContain("Standard input:");
+    expect(approval.summary).not.toContain(stdin);
+    expect(approval.details?.map((detail) => detail.value).join("\n")).not.toContain(stdin);
+    expect(
+      approval.sealedDetails?.find((detail) => detail.disclosure === "review")?.content
+    ).toContain(stdin);
+    expect(
+      approval.sealedDetails?.find((detail) => detail.disclosure === "sealed-only")?.content
+    ).toContain(stdin);
+
+    await api.exec({
+      intent: {
+        kind: "argv",
+        executable: "node",
+        args: ["-e", "process.stdin.pipe(process.stdout)"],
+      },
+      stdin: `${stdin}-changed`,
+    });
+    expect(request.mock.calls[1]![0].subject.id).not.toBe(approval.subject.id);
   });
 
   it("executes and approves exact script bytes without reconstructing them from argv", async () => {
@@ -162,13 +199,19 @@ describe("@workspace-extensions/shell", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("first second;still-data");
     expect(request.mock.calls[0]![0]).toMatchObject({
-      warning: expect.stringContaining("complete sealed script"),
-      sealedDetails: [
+      warning: expect.stringContaining("sealed script"),
+      sealedDetails: expect.arrayContaining([
         expect.objectContaining({
-          label: "Complete execution plan",
+          label: "Command and input",
           content: expect.stringContaining(script),
+          disclosure: "review",
         }),
-      ],
+        expect.objectContaining({
+          label: "Exact execution seal",
+          content: expect.stringContaining(script),
+          disclosure: "sealed-only",
+        }),
+      ]),
     });
   });
 
@@ -180,7 +223,9 @@ describe("@workspace-extensions/shell", () => {
 
     expect(result.stdout).toBe("reviewed-dangerous-suffix");
     const approval = request.mock.calls[0]![0];
-    const content = approval.sealedDetails?.[0]?.content;
+    const content = approval.sealedDetails?.find(
+      (detail) => detail.disclosure === "sealed-only"
+    )?.content;
     expect(content).toContain(dangerousSuffix);
     expect(content?.length).toBeGreaterThan(1_000);
     const digest = createHash("sha256").update(content!, "utf8").digest("hex");
@@ -200,7 +245,7 @@ describe("@workspace-extensions/shell", () => {
       },
     });
     const first = request.mock.calls[0]![0];
-    expect(first.details?.some((detail) => detail.label === "Overrides preview")).toBe(false);
+    expect(first.details?.some((detail) => detail.label === "Environment overrides")).toBe(false);
     expect(first.details).toContainEqual(
       expect.objectContaining({
         label: "Environment profile",
@@ -241,11 +286,29 @@ describe("@workspace-extensions/shell", () => {
       expect.arrayContaining([
         expect.objectContaining({ label: "Folder", value: join(root, "nested") }),
         expect.objectContaining({
-          label: "Overrides preview",
-          value: expect.stringContaining('"EXEC_MODE"="reviewed-value"'),
+          label: "Environment overrides",
+          value: "EXEC_MODE · values sealed, not displayed",
         }),
       ])
     );
+    expect(third.details?.map((detail) => detail.value).join("\n")).not.toContain("reviewed-value");
+
+    await api.exec({
+      intent: {
+        kind: "argv",
+        executable: "node",
+        args: ["-e", "process.stdout.write(process.env.EXEC_MODE ?? '')"],
+      },
+      cwd: "nested",
+      env: { EXEC_MODE: "reviewed-value" },
+      timeoutMs: 60_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+    });
+    const resourceAdjusted = request.mock.calls[3]![0];
+    expect(resourceAdjusted.subject.id).toBe(third.subject.id);
+    expect(
+      resourceAdjusted.sealedDetails?.find((detail) => detail.disclosure === "sealed-only")?.content
+    ).not.toBe(third.sealedDetails?.find((detail) => detail.disclosure === "sealed-only")?.content);
   });
 
   it("rejects the removed command/args/shell exec shape", async () => {

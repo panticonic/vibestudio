@@ -164,9 +164,22 @@ export function ConsentApprovalBar() {
 
   // Fetch one payload blob on the surface's behalf. Only hashes named in the
   // current approval's payload are fetchable; any other hash is ignored.
-  const fetchBlob = (hash: string) => {
+  const fetchBlob = (hash: string, refresh = false) => {
     if (!current || !payloadHashes.has(hash)) return;
-    if (blobResultsRef.current[hash] || inFlightBlobsRef.current.has(hash)) return;
+    const existing = blobResultsRef.current[hash];
+    // Immutable successful content remains cached. A refresh is meaningful
+    // only for a prior missing/error result and never duplicates in-flight IO.
+    if ((existing && (!refresh || "text" in existing)) || inFlightBlobsRef.current.has(hash)) {
+      return;
+    }
+    if (refresh) {
+      setBlobResults((previous) => {
+        if (!(hash in previous)) return previous;
+        const next = { ...previous };
+        delete next[hash];
+        return next;
+      });
+    }
     inFlightBlobsRef.current.add(hash);
     const content = sealedHashes.has(hash)
       ? shellApproval.getUserlandSealedDetail(current.approvalId, hash)
@@ -365,7 +378,7 @@ export function ConsentApprovalBar() {
         resolveMissionReview(intent.resolution);
         return;
       case "fetch-blob":
-        fetchBlob(intent.hash);
+        fetchBlob(intent.hash, intent.refresh);
         return;
       case "open-in-gad-browser":
         openInGadBrowser(intent.target);

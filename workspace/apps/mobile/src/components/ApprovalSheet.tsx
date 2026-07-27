@@ -1274,31 +1274,6 @@ function UserlandDetails({
   const issuer = approval.issuer;
   const showIssuer =
     issuer && (issuer.kind !== approval.callerKind || issuer.id !== approval.callerId);
-  const [sealedContent, setSealedContent] = useState<Record<string, string | null>>({});
-  const [sealedErrors, setSealedErrors] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    let cancelled = false;
-    for (const detail of approval.sealedDetails ?? []) {
-      void onFetchSealedDetail(approval.approvalId, detail.digest)
-        .then((content) => {
-          if (!cancelled) {
-            setSealedContent((current) => ({ ...current, [detail.digest]: content }));
-          }
-        })
-        .catch((error: unknown) => {
-          if (!cancelled) {
-            setSealedErrors((current) => ({
-              ...current,
-              [detail.digest]: error instanceof Error ? error.message : "Content unavailable",
-            }));
-          }
-        });
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [approval.approvalId, approval.sealedDetails, onFetchSealedDetail]);
 
   return (
     <>
@@ -1324,27 +1299,126 @@ function UserlandDetails({
           format={detail.format}
         />
       ))}
-      {(approval.sealedDetails ?? []).map((detail) => {
-        const content = sealedContent[detail.digest];
-        const error = sealedErrors[detail.digest];
-        return (
-          <DetailRow
+      {(approval.sealedDetails ?? [])
+        .filter((detail) => (detail.disclosure ?? "review") === "review")
+        .map((detail) => (
+          <SealedUserlandReviewDetail
             key={`sealed:${detail.digest}`}
-            icon={Lock}
-            label={detail.label}
-            value={
-              content ??
-              (error
-                ? `Complete content unavailable: ${error}`
-                : `Loading complete content… (${detail.byteLength.toLocaleString()} bytes)`)
-            }
-            secondary={`sha256:${detail.digest}`}
-            secondarySelectable
-            code
+            approvalId={approval.approvalId}
+            detail={detail}
+            onFetch={onFetchSealedDetail}
           />
-        );
-      })}
+        ))}
     </>
+  );
+}
+
+function SealedUserlandReviewDetail({
+  approvalId,
+  detail,
+  onFetch,
+}: {
+  approvalId: string;
+  detail: NonNullable<PendingUserlandApproval["sealedDetails"]>[number];
+  onFetch: (approvalId: string, digest: string) => Promise<string | null>;
+}) {
+  const colors = useAtomValue(themeColorsAtom);
+  const [state, setState] = useState<
+    | { kind: "hidden" }
+    | { kind: "loading" }
+    | { kind: "content"; content: string }
+    | { kind: "error"; message: string }
+  >({ kind: "hidden" });
+  const requestGeneration = useRef(0);
+
+  useEffect(() => {
+    requestGeneration.current += 1;
+    setState({ kind: "hidden" });
+  }, [approvalId, detail.digest]);
+
+  const reveal = () => {
+    const generation = ++requestGeneration.current;
+    setState({ kind: "loading" });
+    void onFetch(approvalId, detail.digest)
+      .then((content) => {
+        if (generation !== requestGeneration.current) return;
+        setState(
+          content === null
+            ? { kind: "error", message: "This request is no longer available." }
+            : { kind: "content", content }
+        );
+      })
+      .catch((error: unknown) => {
+        if (generation !== requestGeneration.current) return;
+        setState({
+          kind: "error",
+          message: error instanceof Error ? error.message : "Content unavailable",
+        });
+      });
+  };
+
+  return (
+    <View style={styles.detailRow}>
+      <Lock size={14} color={colors.textSecondary} />
+      <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>{detail.label}</Text>
+      <View style={styles.detailValueColumn}>
+        {state.kind === "content" ? (
+          <Text
+            style={[
+              styles.detailValue,
+              styles.codeText,
+              { color: colors.text, backgroundColor: colors.codeBackground },
+            ]}
+          >
+            {state.content}
+          </Text>
+        ) : (
+          <>
+            <Text
+              accessibilityRole={state.kind === "error" ? "alert" : undefined}
+              style={[
+                styles.detailValue,
+                { color: state.kind === "error" ? colors.danger : colors.textSecondary },
+              ]}
+            >
+              {state.kind === "loading"
+                ? "Loading…"
+                : state.kind === "error"
+                  ? state.message
+                  : `Hidden until revealed · ${detail.byteLength.toLocaleString()} bytes`}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{
+                disabled: state.kind === "loading",
+                busy: state.kind === "loading",
+              }}
+              disabled={state.kind === "loading"}
+              onPress={reveal}
+              style={({ pressed }) => [
+                styles.sealedDetailReveal,
+                { borderColor: colors.border },
+                pressed ? styles.pressed : null,
+              ]}
+            >
+              <Text style={[styles.detailValue, { color: colors.primary }]}>
+                {state.kind === "error" ? "Retry" : "Reveal content"}
+              </Text>
+            </Pressable>
+          </>
+        )}
+        <Text
+          selectable
+          style={[
+            styles.detailValueSecondary,
+            styles.codeText,
+            { color: colors.textSecondary, backgroundColor: colors.codeBackground },
+          ]}
+        >
+          sha256:{detail.digest}
+        </Text>
+      </View>
+    </View>
   );
 }
 
@@ -2658,6 +2732,15 @@ const styles = StyleSheet.create({
     alignSelf: "flex-start",
     borderRadius: radius.sm - 2,
     lineHeight: 16,
+  },
+  sealedDetailReveal: {
+    alignSelf: "flex-start",
+    borderRadius: radius.sm,
+    borderWidth: hairline,
+    minHeight: touchTarget,
+    justifyContent: "center",
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
   },
   codeText: {
     fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),

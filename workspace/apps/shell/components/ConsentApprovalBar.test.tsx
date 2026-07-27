@@ -344,6 +344,36 @@ describe("ConsentApprovalBar coordinator", () => {
     expect(shellClient.getText).not.toHaveBeenCalledWith("not-in-payload");
   });
 
+  it("refreshes failed payloads on retry while retaining successful immutable content", async () => {
+    shellClient.listPending.mockResolvedValueOnce([diffApproval("retry")]);
+    shellClient.getText
+      .mockRejectedValueOnce(new Error("temporary connection loss"))
+      .mockResolvedValueOnce("recovered content");
+    mountBar();
+    await waitFor(() => expect(overlay.options?.open).toBe(true));
+
+    emit({ type: "fetch-blob", hash: "h-new", approvalId: "retry" });
+    await waitFor(() => {
+      const props = overlay.options?.props as {
+        blobResults?: Record<string, unknown>;
+      };
+      expect(props.blobResults?.["h-new"]).toEqual({ error: "temporary connection loss" });
+    });
+
+    emit({ type: "fetch-blob", hash: "h-new", approvalId: "retry", refresh: true });
+    await waitFor(() => {
+      expect(shellClient.getText).toHaveBeenCalledTimes(2);
+      const props = overlay.options?.props as {
+        blobResults?: Record<string, unknown>;
+      };
+      expect(props.blobResults?.["h-new"]).toEqual({ text: "recovered content" });
+    });
+
+    emit({ type: "fetch-blob", hash: "h-new", approvalId: "retry", refresh: true });
+    await Promise.resolve();
+    expect(shellClient.getText).toHaveBeenCalledTimes(2);
+  });
+
   it("routes sealed approval detail fetches through the queue-owned trusted service", async () => {
     const digest = "a".repeat(64);
     shellClient.listPending.mockResolvedValueOnce([
@@ -365,6 +395,31 @@ describe("ConsentApprovalBar coordinator", () => {
       const props = overlay.options?.props as { blobResults?: Record<string, unknown> };
       expect(props.blobResults?.[digest]).toEqual({ text: "sealed-plan-text" });
     });
+  });
+
+  it("never routes sealed-only invocation payloads into the approval renderer", async () => {
+    const digest = "b".repeat(64);
+    shellClient.listPending.mockResolvedValueOnce([
+      userlandApproval({
+        approvalId: "opaque-seal",
+        title: "Run a command",
+        sealedDetails: [
+          {
+            label: "Exact execution seal",
+            digest,
+            byteLength: 16,
+            format: "code",
+            disclosure: "sealed-only",
+          },
+        ],
+      }),
+    ]);
+    mountBar();
+    await waitFor(() => expect(overlay.options?.open).toBe(true));
+
+    emit({ type: "fetch-blob", hash: digest, approvalId: "opaque-seal" });
+    await Promise.resolve();
+    expect(shellClient.getUserlandSealedDetail).not.toHaveBeenCalledWith("opaque-seal", digest);
   });
 
   const gadTarget = {

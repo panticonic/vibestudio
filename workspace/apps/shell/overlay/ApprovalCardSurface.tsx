@@ -86,14 +86,19 @@ function ApprovalCardSurfaceInner({
     (hash) =>
       new Promise<string>((resolve, reject) => {
         const existing = blobsRef.current[hash];
-        if (existing) {
+        if (existing && "text" in existing) {
           resolveWaiter({ resolve, reject }, existing);
           return;
         }
         const waiters = pendingRef.current.get(hash) ?? [];
         waiters.push({ resolve, reject });
         pendingRef.current.set(hash, waiters);
-        emitRef.current({ type: "fetch-blob", hash, approvalId });
+        emitRef.current({
+          type: "fetch-blob",
+          hash,
+          approvalId,
+          ...(existing ? { refresh: true } : {}),
+        });
       }),
     [approvalId]
   );

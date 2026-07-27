@@ -5,7 +5,7 @@
  * its host, which performs the actual `shellApproval.*` calls. Secret-input
  * values stay local and are only emitted on submit.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ComponentProps, CSSProperties, KeyboardEvent, ReactNode } from "react";
 import {
   Badge,
@@ -525,48 +525,65 @@ function SealedApprovalDetails({
   details: NonNullable<PendingUserlandApproval["sealedDetails"]>;
   fetchContent: DiffContentFetcher;
 }) {
-  const [open, setOpen] = useState(false);
+  const reviewDetails = details.filter((detail) => (detail.disclosure ?? "review") === "review");
   const [contents, setContents] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState<Set<string>>(new Set());
+  const nextRequestId = useRef(0);
+  const activeRequests = useRef<Record<string, number>>({});
 
   useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    for (const detail of details) {
-      if (contents[detail.digest] !== undefined || errors[detail.digest] !== undefined) continue;
-      void fetchContent(detail.digest)
-        .then((content) => {
-          if (cancelled) return;
-          const text = typeof content === "string" ? content : new TextDecoder().decode(content);
-          setContents((current) => ({ ...current, [detail.digest]: text }));
-        })
-        .catch((error: unknown) => {
-          if (cancelled) return;
-          setErrors((current) => ({
-            ...current,
-            [detail.digest]: error instanceof Error ? error.message : "Content unavailable",
-          }));
+    activeRequests.current = {};
+    setContents({});
+    setErrors({});
+    setLoading(new Set());
+  }, [approvalId]);
+
+  const reveal = (digest: string) => {
+    const requestId = ++nextRequestId.current;
+    activeRequests.current[digest] = requestId;
+    setLoading((current) => new Set(current).add(digest));
+    setErrors((current) => {
+      const next = { ...current };
+      delete next[digest];
+      return next;
+    });
+    void fetchContent(digest)
+      .then((content) => {
+        if (requestId !== activeRequests.current[digest]) return;
+        const text = typeof content === "string" ? content : new TextDecoder().decode(content);
+        setContents((current) => ({ ...current, [digest]: text }));
+      })
+      .catch((error: unknown) => {
+        if (requestId !== activeRequests.current[digest]) return;
+        setErrors((current) => ({
+          ...current,
+          [digest]: error instanceof Error ? error.message : "Content unavailable",
+        }));
+      })
+      .finally(() => {
+        if (requestId !== activeRequests.current[digest]) return;
+        setLoading((current) => {
+          const next = new Set(current);
+          next.delete(digest);
+          return next;
         });
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [approvalId, contents, details, errors, fetchContent, open]);
+      });
+  };
+
+  if (reviewDetails.length === 0) return null;
 
   return (
-    <details
-      className="approval-details"
-      open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-    >
+    <details className="approval-details">
       <summary>
         <ChevronDownIcon className="approval-details-chevron" width={13} height={13} />
-        Inspect complete execution plan
+        Inspect request content
       </summary>
       <Flex direction="column" gap="2" pt="2">
-        {details.map((detail) => {
+        {reviewDetails.map((detail) => {
           const content = contents[detail.digest];
           const detailError = errors[detail.digest];
+          const detailLoading = loading.has(detail.digest);
           return (
             <Box key={detail.digest}>
               <Flex align="center" gap="2" mb="1" wrap="wrap">
@@ -592,14 +609,30 @@ function SealedApprovalDetails({
                 >
                   {content}
                 </Code>
-              ) : detailError ? (
-                <Text size="1" color="red" role="alert">
-                  Complete content unavailable: {detailError}
-                </Text>
               ) : (
-                <Text size="1" color="gray" role="status">
-                  Loading complete content…
-                </Text>
+                <Flex direction="column" align="start" gap="1">
+                  {detailError ? (
+                    <Text size="1" color="red" role="alert">
+                      Content unavailable: {detailError}
+                    </Text>
+                  ) : (
+                    <Text size="1" color="gray">
+                      Hidden until you choose to reveal it. It may contain sensitive request input.
+                    </Text>
+                  )}
+                  <Button
+                    size="1"
+                    variant="soft"
+                    disabled={detailLoading}
+                    onClick={() => reveal(detail.digest)}
+                  >
+                    {detailLoading
+                      ? "Loading…"
+                      : detailError
+                        ? `Retry ${detail.label}`
+                        : `Reveal ${detail.label}`}
+                  </Button>
+                </Flex>
               )}
             </Box>
           );
