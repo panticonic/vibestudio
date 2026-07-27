@@ -7,10 +7,10 @@
  * WebSocket to it.
  *
  *  - WEBHOOK profile (stateful). Third-party webhooks arrive at `/i/<sub>`,
- *    are signed with the carried-over HMAC relay envelope (`./envelope`),
- *    buffered durably (DO storage, per-subscription, TTL + alarm retry) and
- *    delivered down the owning server's backhaul. The provider gets a fast
- *    ack; the home server may be briefly offline without losing deliveries.
+ *    are buffered durably (DO storage, per-subscription, TTL + alarm retry)
+ *    and delivered down the owning workspace's authenticated backhaul. The
+ *    provider gets a fast ack; the workspace may be briefly offline without
+ *    losing deliveries.
  *
  *  - OAUTH profile (dumb / single-handoff). A `transactionId ->
  *    {platform, serverId}` map populated over the backhaul. It is persisted in
@@ -22,24 +22,17 @@
  *    missing transaction fails loud. OAuth is interactive with the client
  *    online, so a broken path fails loud and the user retries.
  *
- * Trust model. The per-server backhaul connection is the trust anchor, NOT the
- * shared `VIBESTUDIO_RELAY_SIGNING_SECRET` (one un-versioned key, too weak for
- * tenant isolation — it only gates "is this a Vibestudio server at all"). Webhook
- * ownership is FIRST-WRITER-WINS bound to the backhaul identity (`serverId`):
- * once a server registers a subscriptionId, no other server can claim it.
+ * Trust model. Each workspace proves possession of its persistent P-256 key.
+ * Its relay id is the SHA-256 digest of that public key, so no product-wide
+ * credential is shipped to home servers. Webhook ownership is
+ * FIRST-WRITER-WINS bound to that self-certifying relay identity.
  */
 
-import { sha256Hex, signRelayEnvelope, hmacSha256Hex } from "./envelope";
-import {
-  handleOAuthLanding,
-  type OAuthPlatform,
-  type OAuthRegistration,
-} from "./oauthLanding";
+import { sha256Hex } from "./envelope";
+import { handleOAuthLanding, type OAuthPlatform, type OAuthRegistration } from "./oauthLanding";
 
 export interface Env {
   ENVIRONMENT?: string;
-  /** HMAC key — signs the relay envelope AND authenticates the backhaul. */
-  VIBESTUDIO_RELAY_SIGNING_SECRET?: string;
   /** Apple universal-link app IDs (`<teamId>.<bundleId>`), comma-separated. */
   VIBESTUDIO_APPLE_APP_ID?: string;
   /** Android App Links package + signing-cert fingerprints. */
@@ -48,7 +41,7 @@ export interface Env {
   RELAY_REGISTRY: DurableObjectNamespace;
 }
 
-/** Backhaul auth timestamp skew window (mirrors the server's envelope tolerance). */
+/** Backhaul proof timestamp skew window. */
 const BACKHAUL_AUTH_TOLERANCE_MS = 5 * 60 * 1000;
 /** How long a buffered webhook is retried before it is dropped. */
 const WEBHOOK_BUFFER_TTL_MS = 24 * 60 * 60 * 1000;
@@ -158,36 +151,55 @@ function safeSend(ws: WebSocket, data: string): boolean {
   }
 }
 
-/** Constant-time hex/ASCII string compare. */
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
+function decodeBase64Url(value: string): Uint8Array | null {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) return null;
+  try {
+    return decodeBase64(
+      value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (value.length % 4)) % 4)
+    );
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Verify a backhaul WS-upgrade. The server presents `?serverId&ts&sig` where
- * `sig = v1=HMAC(secret, "<serverId>\n<ts>")`. This authenticates "a legitimate
- * Vibestudio server" and fails closed; it does NOT prove WHICH tenant — that is
- * first-writer-wins on the (unguessable) subscriptionId, bound to `serverId`.
+ * Verify a backhaul WS-upgrade using a self-certifying workspace identity.
+ * `relayId` must equal SHA-256(SPKI), and `sig` proves possession of the
+ * corresponding P-256 private key over the identity and fresh timestamp.
  */
-export async function verifyBackhaulAuth(
-  params: URLSearchParams,
-  secret: string | undefined,
-  nowMs: number,
-): Promise<boolean> {
-  if (!secret) return false;
-  const serverId = params.get("serverId");
+export async function verifyBackhaulAuth(params: URLSearchParams, nowMs: number): Promise<boolean> {
+  const relayId = params.get("relayId");
   const ts = params.get("ts");
+  const encodedKey = params.get("key");
   const sig = params.get("sig");
-  if (!serverId || !ts || !sig) return false;
+  if (!relayId || !ts || !encodedKey || !sig) return false;
+  if (!/^rly_[a-f0-9]{64}$/.test(relayId)) return false;
   const parsedTs = Number(ts);
   if (!Number.isFinite(parsedTs) || Math.abs(nowMs - parsedTs) > BACKHAUL_AUTH_TOLERANCE_MS) {
     return false;
   }
-  const expected = `v1=${await hmacSha256Hex(secret, `${serverId}\n${ts}`)}`;
-  return timingSafeEqual(sig, expected);
+  const publicKeyBytes = decodeBase64Url(encodedKey);
+  const signatureBytes = decodeBase64Url(sig);
+  if (!publicKeyBytes || !signatureBytes || publicKeyBytes.byteLength > 256) return false;
+  const publicKeyBuffer = new Uint8Array(publicKeyBytes).buffer;
+  if (`rly_${await sha256Hex(publicKeyBuffer)}` !== relayId) return false;
+  try {
+    const publicKey = await crypto.subtle.importKey(
+      "spki",
+      publicKeyBytes,
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["verify"]
+    );
+    return crypto.subtle.verify(
+      { name: "ECDSA", hash: "SHA-256" },
+      publicKey,
+      signatureBytes,
+      new TextEncoder().encode(`${relayId}\n${ts}`)
+    );
+  } catch {
+    return false;
+  }
 }
 
 export class RelayRegistry {
@@ -195,18 +207,15 @@ export class RelayRegistry {
   now: () => number = () => Date.now();
 
   /** In-flight delivery acks awaited by a live ingress request. */
-  private readonly pending = new Map<string, { resolve: (a: AckResult) => void; timer: ReturnType<typeof setTimeout> }>();
+  private readonly pending = new Map<
+    string,
+    { resolve: (a: AckResult) => void; timer: ReturnType<typeof setTimeout> }
+  >();
 
   constructor(
     private readonly state: DurableObjectState,
-    private readonly env: Env,
+    private readonly env: Env
   ) {}
-
-  private secret(): string {
-    const secret = this.env.VIBESTUDIO_RELAY_SIGNING_SECRET;
-    if (!secret) throw new Error("VIBESTUDIO_RELAY_SIGNING_SECRET is not configured");
-    return secret;
-  }
 
   // ---- HTTP / WS entry ----------------------------------------------------
 
@@ -230,10 +239,10 @@ export class RelayRegistry {
   }
 
   private async handleBackhaulUpgrade(url: URL): Promise<Response> {
-    if (!(await verifyBackhaulAuth(url.searchParams, this.env.VIBESTUDIO_RELAY_SIGNING_SECRET, this.now()))) {
+    if (!(await verifyBackhaulAuth(url.searchParams, this.now()))) {
       return new Response("unauthorized backhaul", { status: 401 });
     }
-    const serverId = url.searchParams.get("serverId")!;
+    const serverId = url.searchParams.get("relayId")!;
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
     this.acceptBackhaul(serverId, server);
@@ -263,7 +272,9 @@ export class RelayRegistry {
     }
     this.state.acceptWebSocket(ws, [serverId]);
     ws.serializeAttachment({ serverId });
-    console.log(`[relay] backhaul connected serverId=${serverId}${evicted ? ` (evicted ${evicted} incumbent)` : ""}`);
+    console.log(
+      `[relay] backhaul connected serverId=${serverId}${evicted ? ` (evicted ${evicted} incumbent)` : ""}`
+    );
   }
 
   // ---- Backhaul frames ----------------------------------------------------
@@ -285,13 +296,16 @@ export class RelayRegistry {
       case "register-webhook":
         return this.registerWebhook(serverId, frame.subscriptionId, ws);
       case "unregister-webhook":
-        return this.unregisterWebhook(serverId, frame.subscriptionId);
+        return this.unregisterWebhook(serverId, frame.subscriptionId, ws);
       case "register-oauth":
         return this.registerOAuth(serverId, frame.transactionId, frame.platform, ws);
       case "ack":
         return this.settleDelivery(frame.deliveryId, { ok: true, response: frame.response });
       case "nack":
-        return this.settleDelivery(frame.deliveryId, { ok: false, permanent: frame.permanent === true });
+        return this.settleDelivery(frame.deliveryId, {
+          ok: false,
+          permanent: frame.permanent === true,
+        });
       default:
         return;
     }
@@ -306,28 +320,60 @@ export class RelayRegistry {
 
   // ---- Webhook registration (first-writer-wins) ---------------------------
 
-  private async registerWebhook(serverId: string, subscriptionId: string, ws: WebSocket): Promise<void> {
+  private async registerWebhook(
+    serverId: string,
+    subscriptionId: string,
+    ws: WebSocket
+  ): Promise<void> {
     const key = WEBHOOK_REG_PREFIX + subscriptionId;
     const existing = await this.state.storage.get<WebhookRegistration>(key);
     if (existing && existing.serverId !== serverId) {
-      console.warn(`[relay] webhook register rejected subscriptionId=${subscriptionId} serverId=${serverId} owner=${existing.serverId}`);
-      safeSend(ws, JSON.stringify({ t: "register-rejected", kind: "webhook", id: subscriptionId, reason: "already-registered" }));
+      console.warn(
+        `[relay] webhook register rejected subscriptionId=${subscriptionId} serverId=${serverId} owner=${existing.serverId}`
+      );
+      safeSend(
+        ws,
+        JSON.stringify({
+          t: "register-rejected",
+          kind: "webhook",
+          id: subscriptionId,
+          reason: "already-registered",
+        })
+      );
       return;
     }
     if (!existing) {
-      await this.state.storage.put<WebhookRegistration>(key, { serverId, registeredAt: this.now() });
+      await this.state.storage.put<WebhookRegistration>(key, {
+        serverId,
+        registeredAt: this.now(),
+      });
     }
     safeSend(ws, JSON.stringify({ t: "registered", kind: "webhook", id: subscriptionId }));
     // Reconnect / first-registration: drain anything buffered while offline.
     await this.flushSubscription(subscriptionId, serverId);
   }
 
-  private async unregisterWebhook(serverId: string, subscriptionId: string): Promise<void> {
+  private async unregisterWebhook(
+    serverId: string,
+    subscriptionId: string,
+    ws: WebSocket
+  ): Promise<void> {
     const key = WEBHOOK_REG_PREFIX + subscriptionId;
     const existing = await this.state.storage.get<WebhookRegistration>(key);
-    if (existing && existing.serverId === serverId) {
-      await this.state.storage.delete(key);
+    if (existing && existing.serverId !== serverId) {
+      safeSend(
+        ws,
+        JSON.stringify({
+          t: "unregister-rejected",
+          kind: "webhook",
+          id: subscriptionId,
+          reason: "not-owner",
+        })
+      );
+      return;
     }
+    if (existing) await this.state.storage.delete(key);
+    safeSend(ws, JSON.stringify({ t: "unregistered", kind: "webhook", id: subscriptionId }));
   }
 
   // ---- OAuth registration (single-use, durable in DO storage) -------------
@@ -337,9 +383,18 @@ export class RelayRegistry {
    * Durable (survives hibernation) but still single-handoff: the landing deletes
    * it on read. No buffering/retry — a missing tx at landing time fails loud.
    */
-  private async registerOAuth(serverId: string, transactionId: string, platform: OAuthPlatform, ws: WebSocket): Promise<void> {
+  private async registerOAuth(
+    serverId: string,
+    transactionId: string,
+    platform: OAuthPlatform,
+    ws: WebSocket
+  ): Promise<void> {
     await this.pruneExpiredOAuth();
-    const entry: OAuthRegistration = { platform, serverId, expiresAt: this.now() + OAUTH_TX_TTL_MS };
+    const entry: OAuthRegistration = {
+      platform,
+      serverId,
+      expiresAt: this.now() + OAUTH_TX_TTL_MS,
+    };
     await this.state.storage.put<OAuthRegistration>(this.oauthKey(transactionId), entry);
     safeSend(ws, JSON.stringify({ t: "registered", kind: "oauth", id: transactionId }));
   }
@@ -396,34 +451,51 @@ export class RelayRegistry {
   // ---- Webhook ingress ----------------------------------------------------
 
   private async handleWebhookIngress(request: Request, url: URL): Promise<Response> {
-    const subscriptionId = safeDecodeURIComponent(url.pathname.slice("/i/".length).split("/")[0] ?? "");
-    if (!subscriptionId) return json({ error: "missing or malformed subscriptionId" }, { status: 400 });
+    const subscriptionId = safeDecodeURIComponent(
+      url.pathname.slice("/i/".length).split("/")[0] ?? ""
+    );
+    if (!subscriptionId)
+      return json({ error: "missing or malformed subscriptionId" }, { status: 400 });
 
-    const registration = await this.state.storage.get<WebhookRegistration>(WEBHOOK_REG_PREFIX + subscriptionId);
+    const registration = await this.state.storage.get<WebhookRegistration>(
+      WEBHOOK_REG_PREFIX + subscriptionId
+    );
     if (!registration) {
       // No server has claimed this subscription over the backhaul — reject.
       // (The shared secret cannot stand in for tenant ownership.)
       return json({ error: "subscription not registered", subscriptionId }, { status: 404 });
     }
 
-    if (!this.env.VIBESTUDIO_RELAY_SIGNING_SECRET) {
-      return json({ error: "VIBESTUDIO_RELAY_SIGNING_SECRET is not configured" }, { status: 500 });
-    }
-
     const rawBody = await request.arrayBuffer();
     if (rawBody.byteLength > MAX_WEBHOOK_BODY_BYTES) {
       // Explicit fail-loud: over the DO value cap. Without this the storage.put
       // throws an opaque 500 and the delivery is lost.
-      console.warn(`[relay] webhook body too large subscriptionId=${subscriptionId} bytes=${rawBody.byteLength} cap=${MAX_WEBHOOK_BODY_BYTES}`);
-      return json({ error: "webhook body too large", maxBytes: MAX_WEBHOOK_BODY_BYTES, bytes: rawBody.byteLength }, { status: 413 });
+      console.warn(
+        `[relay] webhook body too large subscriptionId=${subscriptionId} bytes=${rawBody.byteLength} cap=${MAX_WEBHOOK_BODY_BYTES}`
+      );
+      return json(
+        {
+          error: "webhook body too large",
+          maxBytes: MAX_WEBHOOK_BODY_BYTES,
+          bytes: rawBody.byteLength,
+        },
+        { status: 413 }
+      );
     }
 
     // Bound per-subscription buffer growth: a server offline while a provider
     // floods it must not grow storage without limit.
-    const bufferedForSub = (await this.listBuffer()).filter((b) => b.subscriptionId === subscriptionId).length;
+    const bufferedForSub = (await this.listBuffer()).filter(
+      (b) => b.subscriptionId === subscriptionId
+    ).length;
     if (bufferedForSub >= MAX_BUFFER_PER_SUB) {
-      console.warn(`[relay] webhook buffer full subscriptionId=${subscriptionId} serverId=${registration.serverId} cap=${MAX_BUFFER_PER_SUB}`);
-      return json({ error: "webhook buffer full for subscription", subscriptionId, cap: MAX_BUFFER_PER_SUB }, { status: 507 });
+      console.warn(
+        `[relay] webhook buffer full subscriptionId=${subscriptionId} serverId=${registration.serverId} cap=${MAX_BUFFER_PER_SUB}`
+      );
+      return json(
+        { error: "webhook buffer full for subscription", subscriptionId, cap: MAX_BUFFER_PER_SUB },
+        { status: 507 }
+      );
     }
 
     const bodySha256 = await sha256Hex(rawBody);
@@ -465,18 +537,14 @@ export class RelayRegistry {
 
   // ---- Delivery -----------------------------------------------------------
 
-  private async deliverBuffered(buffered: BufferedWebhook, waitForAck: boolean): Promise<AckResult> {
+  private async deliverBuffered(
+    buffered: BufferedWebhook,
+    waitForAck: boolean
+  ): Promise<AckResult> {
     const ws = this.openBackhaul(buffered.serverId);
     if (!ws) return { ok: false, offline: true };
 
     const timestamp = String(this.now());
-    const signature = await signRelayEnvelope(this.secret(), {
-      method: buffered.method,
-      path: buffered.path,
-      query: buffered.query,
-      timestamp,
-      bodySha256: buffered.bodySha256,
-    });
     const frame = {
       t: "webhook",
       deliveryId: buffered.deliveryId,
@@ -486,14 +554,16 @@ export class RelayRegistry {
       query: buffered.query,
       headers: buffered.headers,
       bodyBase64: buffered.bodyBase64,
-      relay: { timestamp, bodySha256: buffered.bodySha256, signature },
+      relay: { timestamp, bodySha256: buffered.bodySha256 },
     };
 
     buffered.attempts += 1;
     buffered.lastAttemptAt = this.now();
     await this.state.storage.put<BufferedWebhook>(this.bufKey(buffered.deliveryId), buffered);
 
-    console.log(`[relay] delivering webhook subscriptionId=${buffered.subscriptionId} serverId=${buffered.serverId} deliveryId=${buffered.deliveryId} attempt=${buffered.attempts} wait=${waitForAck}`);
+    console.log(
+      `[relay] delivering webhook subscriptionId=${buffered.subscriptionId} serverId=${buffered.serverId} deliveryId=${buffered.deliveryId} attempt=${buffered.attempts} wait=${waitForAck}`
+    );
     if (!waitForAck) {
       // Background re-send (alarm/flush): the ack arrives later and cleans up. A
       // throw here means the socket died between the open check and the send; the
@@ -520,7 +590,9 @@ export class RelayRegistry {
 
   /** Resolve an awaited delivery and evict the buffer entry on terminal acks. */
   private async settleDelivery(deliveryId: string, result: AckResult): Promise<void> {
-    console.log(`[relay] webhook settle deliveryId=${deliveryId} ok=${result.ok === true} permanent=${result.permanent === true}`);
+    console.log(
+      `[relay] webhook settle deliveryId=${deliveryId} ok=${result.ok === true} permanent=${result.permanent === true}`
+    );
     if (result.ok || result.permanent) {
       await this.state.storage.delete(this.bufKey(deliveryId));
     }
@@ -559,7 +631,9 @@ export class RelayRegistry {
     let remaining = 0;
     for (const buffered of await this.listBuffer()) {
       if (now > buffered.expiresAt) {
-        console.warn(`[relay] webhook expired (TTL) subscriptionId=${buffered.subscriptionId} serverId=${buffered.serverId} deliveryId=${buffered.deliveryId} attempts=${buffered.attempts}`);
+        console.warn(
+          `[relay] webhook expired (TTL) subscriptionId=${buffered.subscriptionId} serverId=${buffered.serverId} deliveryId=${buffered.deliveryId} attempts=${buffered.attempts}`
+        );
         await this.state.storage.delete(this.bufKey(buffered.deliveryId));
         continue;
       }

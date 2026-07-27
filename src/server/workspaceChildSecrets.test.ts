@@ -9,7 +9,6 @@ describe("consumeWorkspaceChildSecrets", () => {
       VIBESTUDIO_HUB_URL: "http://127.0.0.1:3030",
       VIBESTUDIO_WORKSPACE_CHILD_TOKEN: "child-runtime",
       VIBESTUDIO_ADMIN_TOKEN: "child-admin-capability",
-      VIBESTUDIO_RELAY_SIGNING_SECRET: "relay-signing-secret",
     };
 
     expect(consumeWorkspaceChildSecrets(env)).toEqual({
@@ -17,7 +16,6 @@ describe("consumeWorkspaceChildSecrets", () => {
       hubUrl: "http://127.0.0.1:3030",
       workspaceChildToken: "child-runtime",
       adminToken: "child-admin-capability",
-      relaySigningSecret: "relay-signing-secret",
     });
     expect(env).toEqual({ PATH: "/usr/bin" });
   });

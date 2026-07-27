@@ -7,16 +7,15 @@ Cloudflare Worker bound to the apex `https://vibestudio.app` host. It owns:
 - public **webhooks**
 - OAuth **redirect callbacks**
 
-Webhook and OAuth callbacks ride one shared, authenticated **backhaul** the home
+Webhook and OAuth callbacks ride an authenticated **backhaul** each workspace
 server holds open to this relay; they differ only in durability (plan §7).
 
 There is **no** `VIBESTUDIO_SERVER_BASE_URL` anymore. Routing is multi-tenant: each
-home server opens one outbound WebSocket to `/backhaul` (into the global
+workspace opens one outbound WebSocket to `/backhaul` (into the global
 `RelayRegistry` Durable Object) and claims its own `subscriptionId`s
-**first-writer-wins**, bound to that backhaul connection. The shared
-`VIBESTUDIO_RELAY_SIGNING_SECRET` only proves "a Vibestudio server" — it is one
-un-versioned key, too weak for tenant isolation, so the per-server connection is
-the trust anchor.
+**first-writer-wins**, bound to that backhaul connection. It proves possession
+of its persistent P-256 identity; no product-wide credential is shipped to
+home servers.
 
 ## Profiles
 
@@ -25,11 +24,9 @@ the trust anchor.
 | **Webhook** (stateful)       | Durable per-subscription buffer in DO storage, TTL + alarm retry, response relayed back to the provider. Survives a briefly-offline server. | `POST /i/<subscriptionId>`                       |
 | **OAuth** (dumb / ephemeral) | None. Interactive, client online; a broken handoff fails loud and the user retries.                                                         | `GET /oauth/callback/<transactionId>?code&state` |
 
-The HMAC relay envelope (`src/envelope.ts`) carries over verbatim: every buffered
-webhook is signed `method\npath\nquery\ntimestamp\nbodySha256` and the home
-server verifies it byte-for-byte (`verifyRelayEnvelope`). It is re-signed with a
-fresh timestamp on each delivery attempt so buffered/retried deliveries stay
-inside the server's skew window.
+Every buffered webhook carries a fresh timestamp and SHA-256 body digest. The
+workspace verifies both after receiving the frame on its authenticated TLS
+socket; provider-level HMAC/OIDC verification still runs independently.
 
 ### OAuth — one path per platform (fails loud, no silent second path)
 
@@ -49,25 +46,22 @@ token — relayed verbatim, never re-signed. Lookup is by the explicit
 
 ## Routes
 
-| Method | Path                                      | Auth                     | Purpose                                                                                  |
-| ------ | ----------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------- |
-| GET    | `/healthz` or `/health`                   | none                     | Liveness.                                                                                |
-| GET    | `/`                                       | none                     | Operator/browser sanity landing.                                                         |
-| GET    | `/pair`                                   | none                     | Pairing trampoline from `https://vibestudio.app/pair#...` to `vibestudio://connect?...`. |
-| WS     | `/backhaul?serverId&ts&sig`               | HMAC handshake           | Home server's persistent backhaul into the registry DO.                                  |
-| POST   | `/i/:subscriptionId`                      | first-writer-wins owner  | Webhook ingress → buffered → delivered over the backhaul.                                |
-| GET    | `/oauth/callback/:transactionId`          | transaction registration | OAuth landing (desktop backhaul-forward; mobile deep-link host).                         |
-| GET    | `/.well-known/apple-app-site-association` | none                     | Apple universal-link host.                                                               |
-| GET    | `/.well-known/assetlinks.json`            | none                     | Android App Links host.                                                                  |
+| Method | Path                                      | Auth                      | Purpose                                                                                  |
+| ------ | ----------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------- |
+| GET    | `/healthz` or `/health`                   | none                      | Liveness.                                                                                |
+| GET    | `/`                                       | none                      | Operator/browser sanity landing.                                                         |
+| GET    | `/pair`                                   | none                      | Pairing trampoline from `https://vibestudio.app/pair#...` to `vibestudio://connect?...`. |
+| WS     | `/backhaul?relayId&ts&key&sig`            | P-256 proof of possession | Workspace's persistent backhaul into the registry DO.                                    |
+| POST   | `/i/:subscriptionId`                      | first-writer-wins owner   | Webhook ingress → buffered → delivered over the backhaul.                                |
+| GET    | `/oauth/callback/:transactionId`          | transaction registration  | OAuth landing (desktop backhaul-forward; mobile deep-link host).                         |
+| GET    | `/.well-known/apple-app-site-association` | none                      | Apple universal-link host.                                                               |
+| GET    | `/.well-known/assetlinks.json`            | none                      | Android App Links host.                                                                  |
 
 ## Deploy
 
 ```bash
 cd apps/webhook-relay
 pnpm install
-
-# Backhaul auth + relay-envelope signing (required).
-wrangler secret put VIBESTUDIO_RELAY_SIGNING_SECRET
 
 # Optional until mobile app-link verification is ready. When set, these power
 # /.well-known/apple-app-site-association and /.well-known/assetlinks.json.
@@ -83,9 +77,9 @@ are in `wrangler.toml`.
 
 ## Configuration
 
-- `VIBESTUDIO_RELAY_SIGNING_SECRET` — HMAC key. Authenticates the backhaul upgrade
-  (`sig = v1=HMAC(secret, "<serverId>\n<ts>")`) and signs the relay envelope. The
-  Worker/DO fail closed when it is unset.
+- Backhaul authentication has no deployment secret: the workspace signs a
+  fresh timestamp with its persistent P-256 key and the relay verifies that
+  `relayId = SHA-256(publicKey)` before accepting the socket.
 - `VIBESTUDIO_APPLE_APP_ID` — `<teamId>.<bundleId>` (comma-separated for multiple);
   powers the Apple App Site Association. The AASA covers `/oauth/callback/*`,
   `/oauth/linkback/*`, and `/pair`.

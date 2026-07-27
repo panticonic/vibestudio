@@ -387,8 +387,11 @@ async function main() {
     hubUrl,
     workspaceChildToken,
     adminToken: childAdminToken,
-    relaySigningSecret,
   } = consumeWorkspaceChildSecrets(process.env);
+  const workspaceIdentityPemFile = process.env["VIBESTUDIO_WEBRTC_IDENTITY"];
+  if (!workspaceIdentityPemFile) {
+    throw new Error("Workspace runtime requires a hub-owned WebRTC identity path");
+  }
 
   const wsDir = args.workspaceDir ?? process.env["VIBESTUDIO_WORKSPACE_DIR"];
   const wsName = args.workspaceName ?? process.env["VIBESTUDIO_WORKSPACE"];
@@ -2000,6 +2003,8 @@ async function main() {
   // before the credential/webhook services so its client can be their
   // registrar, with handlers that close over the refs assigned below. ──
   const { startRelayBackhaul, getRelayOrigin } = await import("./services/relayBackhaulClient.js");
+  const { ensurePersistentCert: ensureRelayIdentity } = await import("../node/webrtc/cert.js");
+  ensureRelayIdentity({ identityPemFile: workspaceIdentityPemFile });
   // Holder (not bare `let`s) so the backhaul handler closures can read the
   // service refs without TypeScript narrowing them to null across the closure
   // boundary; both are filled once the container builds the services.
@@ -2022,7 +2027,7 @@ async function main() {
     } | null;
   } = { credential: null, webhook: null };
   const relayBackhaul = startRelayBackhaul({
-    serverId: deviceAuthStore.getServerId(),
+    identityPemFile: workspaceIdentityPemFile,
     onWebhook: async (frame) => {
       if (!relayServices.webhook) {
         return { ok: false, permanent: false, reason: "webhook ingress not ready" };
@@ -2035,12 +2040,10 @@ async function main() {
   });
   // The credential registrar wants `.register`; the client exposes
   // `.registerOAuth`. Adapt (client is const, so the narrowing survives here).
-  const relayOAuthRegistrar = relayBackhaul
-    ? {
-        register: (id: string, platform: "mobile" | "desktop") =>
-          relayBackhaul.client.registerOAuth(id, platform),
-      }
-    : undefined;
+  const relayOAuthRegistrar = {
+    register: (id: string, platform: "mobile" | "desktop") =>
+      relayBackhaul.client.registerOAuth(id, platform),
+  };
 
   // ── Credential service ──
   const { wireCredentialService } = await import("./bootstrap/credentials.js");
@@ -2643,9 +2646,8 @@ async function main() {
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
         );
         webhookIngress = createWebhookIngressService({
-          relaySigningSecret,
           relayOrigin: getRelayOrigin(),
-          relayRegistrar: relayBackhaul?.client,
+          relayRegistrar: relayBackhaul.client,
           // No public ingress: direct-mode webhooks only resolve co-located (loopback).
           // Remote webhooks ride the multi-tenant callback relay over the backhaul.
           directPublicBaseUrl: getLocalGatewayUrl("webhook direct base URL"),
@@ -4744,7 +4746,7 @@ async function main() {
   // The webhook + credential services are built now, so their refs are set:
   // start the backhaul (no-op when no relay is configured) and re-announce any
   // persisted relay-mode webhook subscriptions so the relay resumes routing.
-  relayBackhaul?.start();
+  relayBackhaul.start();
   await relayServices.webhook?.internal
     .reannounceRelaySubscriptions()
     .catch((err: unknown) => console.warn("[Server] relay subscription re-announce failed:", err));
@@ -4761,12 +4763,8 @@ async function main() {
       const { assertNodeDatachannelAvailable } =
         await import("../node/webrtc/nodeDatachannelPeer.js");
       assertNodeDatachannelAvailable();
-      const identityPemFile = process.env["VIBESTUDIO_WEBRTC_IDENTITY"];
-      if (!identityPemFile) {
-        throw new Error("Workspace runtime requires a hub-owned WebRTC identity path");
-      }
       const cert = ensurePersistentCert({
-        identityPemFile,
+        identityPemFile: workspaceIdentityPemFile,
       });
       const iceTransportPolicy: import("@vibestudio/shared/connect").TurnPolicy =
         process.env["VIBESTUDIO_WEBRTC_ICE"] === "relay" ? "relay" : "all";
@@ -5249,7 +5247,7 @@ async function main() {
       .catch((err) => console.warn("[Server] alarm scheduler quiesce failed:", err));
 
     await relayBackhaul
-      ?.stop()
+      .stop()
       .catch((err) => console.warn("[Server] relay backhaul stop failed:", err));
 
     // Close the WebRTC ingress pool (started outside the service container, so

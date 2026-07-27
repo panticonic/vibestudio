@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import * as nodeCrypto from "node:crypto";
 
 import { RelayRegistry, verifyBackhaulAuth, type Env } from "./registry";
-import { hmacSha256Hex, sha256Hex } from "./envelope";
+import { sha256Hex } from "./envelope";
 
 // ---- Fakes ------------------------------------------------------------------
 //
@@ -79,10 +80,7 @@ class FakeState {
 
 function makeRegistry(env: Partial<Env> = {}): { registry: RelayRegistry; state: FakeState } {
   const state = new FakeState();
-  const registry = new RelayRegistry(
-    state as unknown as DurableObjectState,
-    { VIBESTUDIO_RELAY_SIGNING_SECRET: "relay-secret", ...env } as Env,
-  );
+  const registry = new RelayRegistry(state as unknown as DurableObjectState, env as Env);
   return { registry, state };
 }
 
@@ -92,10 +90,7 @@ function makeRegistry(env: Partial<Env> = {}): { registry: RelayRegistry; state:
  * `ctx.storage`. Anything kept only in memory would be gone for this instance.
  */
 function freshInstanceOver(state: FakeState, env: Partial<Env> = {}): RelayRegistry {
-  return new RelayRegistry(
-    state as unknown as DurableObjectState,
-    { VIBESTUDIO_RELAY_SIGNING_SECRET: "relay-secret", ...env } as Env,
-  );
+  return new RelayRegistry(state as unknown as DurableObjectState, env as Env);
 }
 
 async function until(pred: () => boolean, label = "condition"): Promise<void> {
@@ -110,13 +105,24 @@ function send(registry: RelayRegistry, ws: FakeWebSocket, frame: unknown): Promi
   return registry.webSocketMessage(ws as unknown as WebSocket, JSON.stringify(frame));
 }
 
-function ingress(registry: RelayRegistry, subscriptionId: string, body: string, query = ""): Promise<Response> {
+function ingress(
+  registry: RelayRegistry,
+  subscriptionId: string,
+  body: string,
+  query = ""
+): Promise<Response> {
   const url = `https://relay.example/i/${subscriptionId}${query ? `?${query}` : ""}`;
-  return registry.fetch(new Request(url, { method: "POST", headers: { "content-type": "application/json", "x-provider-sig": "psig", cookie: "drop-me" }, body }));
+  return registry.fetch(
+    new Request(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-provider-sig": "psig", cookie: "drop-me" },
+      body,
+    })
+  );
 }
 
 describe("RelayRegistry — webhook profile", () => {
-  it("buffers a webhook, delivers it over the backhaul with a valid relay envelope, and returns the server's response", async () => {
+  it("buffers a webhook, delivers it with a verified body digest, and returns the server's response", async () => {
     const { registry, state } = makeRegistry();
     const ws = new FakeWebSocket();
     registry.acceptBackhaul("serverA", ws as unknown as WebSocket);
@@ -136,11 +142,10 @@ describe("RelayRegistry — webhook profile", () => {
     expect(frame.headers.cookie).toBeUndefined();
     expect(atobToString(frame.bodyBase64)).toBe(body);
 
-    // The relay envelope must be byte-identical to what the server verifies.
+    // The authenticated backhaul frame carries a byte-exact body digest.
     const bodySha256 = await sha256Hex(new TextEncoder().encode(body).buffer as ArrayBuffer);
     expect(frame.relay.bodySha256).toBe(bodySha256);
-    const canonical = ["POST", "/i/sub-1", "x=1", frame.relay.timestamp, bodySha256].join("\n");
-    expect(frame.relay.signature).toBe(`v1=${await hmacSha256Hex("relay-secret", canonical)}`);
+    expect(frame.relay.signature).toBeUndefined();
 
     // Server acks with a body to relay back to the provider.
     await send(registry, ws, {
@@ -184,14 +189,44 @@ describe("RelayRegistry — webhook profile", () => {
     expect(await resp.json()).toMatchObject({ error: "subscription not registered" });
   });
 
-  it("fails closed when the relay signing secret is missing", async () => {
-    const { registry } = makeRegistry({ VIBESTUDIO_RELAY_SIGNING_SECRET: undefined });
+  it("does not require a deploy-wide secret to deliver on an authenticated socket", async () => {
+    const { registry } = makeRegistry();
     const ws = new FakeWebSocket();
     registry.acceptBackhaul("serverA", ws as unknown as WebSocket);
     await send(registry, ws, { t: "register-webhook", subscriptionId: "sub-3" });
-    const resp = await ingress(registry, "sub-3", "{}");
-    expect(resp.status).toBe(500);
-    expect(await resp.json()).toMatchObject({ error: "VIBESTUDIO_RELAY_SIGNING_SECRET is not configured" });
+    const response = ingress(registry, "sub-3", "{}");
+    await until(() => ws.frames().some((frame) => frame.t === "webhook"), "webhook frame");
+    const frame = ws.frames().find((candidate) => candidate.t === "webhook")!;
+    await send(registry, ws, { t: "ack", deliveryId: frame.deliveryId });
+    const resp = await response;
+    expect(resp.status).toBe(202);
+  });
+
+  it("acknowledges owned registration cleanup and rejects a non-owner", async () => {
+    const { registry } = makeRegistry();
+    const owner = new FakeWebSocket();
+    const stranger = new FakeWebSocket();
+    registry.acceptBackhaul("serverA", owner as unknown as WebSocket);
+    registry.acceptBackhaul("serverB", stranger as unknown as WebSocket);
+    await send(registry, owner, { t: "register-webhook", subscriptionId: "sub-cleanup" });
+
+    await send(registry, stranger, {
+      t: "unregister-webhook",
+      subscriptionId: "sub-cleanup",
+    });
+    expect(
+      stranger
+        .frames()
+        .some((frame) => frame.t === "unregister-rejected" && frame.id === "sub-cleanup")
+    ).toBe(true);
+
+    await send(registry, owner, { t: "unregister-webhook", subscriptionId: "sub-cleanup" });
+    expect(
+      owner.frames().some((frame) => frame.t === "unregistered" && frame.id === "sub-cleanup")
+    ).toBe(true);
+
+    const response = await ingress(registry, "sub-cleanup", "{}");
+    expect(response.status).toBe(404);
   });
 });
 
@@ -265,7 +300,7 @@ describe("RelayRegistry — OAuth profile (state-keyed handoff, one path per pla
     await send(registry, ws, { t: "register-oauth", transactionId: "tx-d", platform: "desktop" });
 
     const resp = await registry.fetch(
-      new Request("https://relay.example/oauth/callback/tx-d?code=AUTHCODE&state=CSRFSTATE"),
+      new Request("https://relay.example/oauth/callback/tx-d?code=AUTHCODE&state=CSRFSTATE")
     );
     expect(resp.status).toBe(200);
     expect(resp.headers.get("content-type")).toContain("text/html");
@@ -276,7 +311,7 @@ describe("RelayRegistry — OAuth profile (state-keyed handoff, one path per pla
 
     // Single-use: a replay of the same landing no longer resolves.
     const replay = await registry.fetch(
-      new Request("https://relay.example/oauth/callback/tx-d?code=AUTHCODE&state=CSRFSTATE"),
+      new Request("https://relay.example/oauth/callback/tx-d?code=AUTHCODE&state=CSRFSTATE")
     );
     expect(replay.status).toBe(404);
   });
@@ -288,7 +323,7 @@ describe("RelayRegistry — OAuth profile (state-keyed handoff, one path per pla
     await send(registry, ws, { t: "register-oauth", transactionId: "tx-m", platform: "mobile" });
 
     const resp = await registry.fetch(
-      new Request("https://relay.example/oauth/callback/tx-m?code=AUTHCODE&state=CSRFSTATE"),
+      new Request("https://relay.example/oauth/callback/tx-m?code=AUTHCODE&state=CSRFSTATE")
     );
     // Reaching the landing for a mobile tx means the deep-link failed: fail loud
     // with a non-200 (monitoring sees it), never silently forward down desktop.
@@ -300,7 +335,7 @@ describe("RelayRegistry — OAuth profile (state-keyed handoff, one path per pla
   it("rejects an unknown OAuth transaction (negative)", async () => {
     const { registry } = makeRegistry();
     const resp = await registry.fetch(
-      new Request("https://relay.example/oauth/callback/tx-ghost?code=x&state=y"),
+      new Request("https://relay.example/oauth/callback/tx-ghost?code=x&state=y")
     );
     expect(resp.status).toBe(404);
   });
@@ -312,7 +347,7 @@ describe("RelayRegistry — OAuth profile (state-keyed handoff, one path per pla
     await send(registry, ws, { t: "register-oauth", transactionId: "tx-off", platform: "desktop" });
     ws.close();
     const resp = await registry.fetch(
-      new Request("https://relay.example/oauth/callback/tx-off?code=x&state=y"),
+      new Request("https://relay.example/oauth/callback/tx-off?code=x&state=y")
     );
     expect(resp.status).toBe(503);
   });
@@ -323,7 +358,11 @@ describe("RelayRegistry — OAuth tx durability across DO eviction (FIX: durable
     const { registry, state } = makeRegistry();
     const ws = new FakeWebSocket();
     registry.acceptBackhaul("serverA", ws as unknown as WebSocket);
-    await send(registry, ws, { t: "register-oauth", transactionId: "tx-durable", platform: "desktop" });
+    await send(registry, ws, {
+      t: "register-oauth",
+      transactionId: "tx-durable",
+      platform: "desktop",
+    });
     // The handoff binding is in durable storage, not just memory.
     expect(state.storage.keys("oauth-tx:")).toHaveLength(1);
 
@@ -331,7 +370,7 @@ describe("RelayRegistry — OAuth tx durability across DO eviction (FIX: durable
     // same ctx.storage. An in-memory-only map would have been lost here.
     const revived = freshInstanceOver(state);
     const resp = await revived.fetch(
-      new Request("https://relay.example/oauth/callback/tx-durable?code=AUTHCODE&state=CSRFSTATE"),
+      new Request("https://relay.example/oauth/callback/tx-durable?code=AUTHCODE&state=CSRFSTATE")
     );
     expect(resp.status).toBe(200);
     const cb = ws.frames().find((f) => f.t === "oauth-callback");
@@ -341,7 +380,7 @@ describe("RelayRegistry — OAuth tx durability across DO eviction (FIX: durable
     // Single-use: the delete-on-read was flushed durably, so a replay on the
     // revived instance (and the durable store) now fails loud.
     const replay = await revived.fetch(
-      new Request("https://relay.example/oauth/callback/tx-durable?code=AUTHCODE&state=CSRFSTATE"),
+      new Request("https://relay.example/oauth/callback/tx-durable?code=AUTHCODE&state=CSRFSTATE")
     );
     expect(replay.status).toBe(404);
     expect(state.storage.keys("oauth-tx:")).toHaveLength(0);
@@ -351,14 +390,18 @@ describe("RelayRegistry — OAuth tx durability across DO eviction (FIX: durable
     const { registry, state } = makeRegistry();
     const ws = new FakeWebSocket();
     registry.acceptBackhaul("serverA", ws as unknown as WebSocket);
-    await send(registry, ws, { t: "register-oauth", transactionId: "tx-survive", platform: "desktop" });
+    await send(registry, ws, {
+      t: "register-oauth",
+      transactionId: "tx-survive",
+      platform: "desktop",
+    });
     ws.close(); // owner offline at landing time
 
     // Revived instance: the durable tx is found, but the handoff fails loud (503)
     // because the owner's backhaul is down — and the tx is NOT consumed.
     const revived = freshInstanceOver(state);
     const resp = await revived.fetch(
-      new Request("https://relay.example/oauth/callback/tx-survive?code=x&state=y"),
+      new Request("https://relay.example/oauth/callback/tx-survive?code=x&state=y")
     );
     expect(resp.status).toBe(503);
     // No silent 200, and the durable tx remains for the user's retry.
@@ -371,13 +414,17 @@ describe("RelayRegistry — OAuth tx durability across DO eviction (FIX: durable
     registry.now = () => clock;
     const ws = new FakeWebSocket();
     registry.acceptBackhaul("serverA", ws as unknown as WebSocket);
-    await send(registry, ws, { t: "register-oauth", transactionId: "tx-stale", platform: "desktop" });
+    await send(registry, ws, {
+      t: "register-oauth",
+      transactionId: "tx-stale",
+      platform: "desktop",
+    });
 
     // Jump past the OAuth TTL (10 min) before the landing arrives.
     const revived = freshInstanceOver(state);
     revived.now = () => clock + 11 * 60 * 1000;
     const resp = await revived.fetch(
-      new Request("https://relay.example/oauth/callback/tx-stale?code=x&state=y"),
+      new Request("https://relay.example/oauth/callback/tx-stale?code=x&state=y")
     );
     expect(resp.status).toBe(404);
     // The expired entry is evicted on read rather than lingering forever.
@@ -403,36 +450,57 @@ describe("RelayRegistry — OAuth tx durability across DO eviction (FIX: durable
 });
 
 describe("RelayRegistry — backhaul auth (the trust anchor)", () => {
-  const secret = "relay-secret";
+  function identity() {
+    const { publicKey, privateKey } = nodeCrypto.generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+    });
+    const key = (publicKey.export({ type: "spki", format: "der" }) as Buffer).toString("base64url");
+    const relayId = `rly_${nodeCrypto
+      .createHash("sha256")
+      .update(Buffer.from(key, "base64url"))
+      .digest("hex")}`;
+    return {
+      relayId,
+      key,
+      params(ts: string) {
+        const sig = nodeCrypto
+          .sign("sha256", Buffer.from(`${relayId}\n${ts}`), {
+            key: privateKey,
+            dsaEncoding: "ieee-p1363",
+          })
+          .toString("base64url");
+        return new URLSearchParams({ relayId, ts, key, sig });
+      },
+    };
+  }
 
   it("accepts a freshly-signed handshake", async () => {
+    const signer = identity();
     const ts = String(Date.now());
-    const sig = `v1=${await hmacSha256Hex(secret, `serverA\n${ts}`)}`;
-    const params = new URLSearchParams({ serverId: "serverA", ts, sig });
-    expect(await verifyBackhaulAuth(params, secret, Date.now())).toBe(true);
+    expect(await verifyBackhaulAuth(signer.params(ts), Date.now())).toBe(true);
   });
 
-  it("rejects a forged signature, a stale timestamp, and a missing secret (negative)", async () => {
+  it("rejects a forged signature, mismatched public key, and stale timestamp", async () => {
+    const signer = identity();
     const ts = String(Date.now());
-    const good = `v1=${await hmacSha256Hex(secret, `serverA\n${ts}`)}`;
+    const forged = signer.params(ts);
+    forged.set("sig", Buffer.alloc(64).toString("base64url"));
+    expect(await verifyBackhaulAuth(forged, Date.now())).toBe(false);
 
-    expect(await verifyBackhaulAuth(new URLSearchParams({ serverId: "serverA", ts, sig: "v1=deadbeef" }), secret, Date.now())).toBe(false);
-    // Right signature for serverA but presented as serverB — fails closed.
-    expect(await verifyBackhaulAuth(new URLSearchParams({ serverId: "serverB", ts, sig: good }), secret, Date.now())).toBe(false);
-    // Stale beyond tolerance.
+    const mismatched = signer.params(ts);
+    mismatched.set("key", identity().key);
+    expect(await verifyBackhaulAuth(mismatched, Date.now())).toBe(false);
+
     const staleTs = String(Date.now() - 10 * 60 * 1000);
-    const staleSig = `v1=${await hmacSha256Hex(secret, `serverA\n${staleTs}`)}`;
-    expect(await verifyBackhaulAuth(new URLSearchParams({ serverId: "serverA", ts: staleTs, sig: staleSig }), secret, Date.now())).toBe(false);
-    // No secret configured.
-    expect(await verifyBackhaulAuth(new URLSearchParams({ serverId: "serverA", ts, sig: good }), undefined, Date.now())).toBe(false);
+    expect(await verifyBackhaulAuth(signer.params(staleTs), Date.now())).toBe(false);
   });
 
   it("rejects an un-authed backhaul upgrade at the fetch boundary (negative)", async () => {
     const { registry } = makeRegistry();
     const resp = await registry.fetch(
-      new Request("https://relay.example/backhaul?serverId=serverA&ts=1&sig=v1=bad", {
+      new Request("https://relay.example/backhaul?relayId=rly_bad&ts=1&key=bad&sig=bad", {
         headers: { upgrade: "websocket" },
-      }),
+      })
     );
     expect(resp.status).toBe(401);
   });
@@ -452,9 +520,13 @@ describe("RelayRegistry — backhaul eviction (zombie duplicate)", () => {
 
     // A desktop OAuth handoff must reach ws2, never the dead ws1 (which would
     // silently lose it while the landing showed "Sign-in complete").
-    await send(registry, ws2, { t: "register-oauth", transactionId: "tx-evict", platform: "desktop" });
+    await send(registry, ws2, {
+      t: "register-oauth",
+      transactionId: "tx-evict",
+      platform: "desktop",
+    });
     const resp = await registry.fetch(
-      new Request("https://relay.example/oauth/callback/tx-evict?code=C&state=S"),
+      new Request("https://relay.example/oauth/callback/tx-evict?code=C&state=S")
     );
     expect(resp.status).toBe(200);
     expect(ws2.frames().some((f) => f.t === "oauth-callback")).toBe(true);
@@ -515,7 +587,7 @@ describe("RelayRegistry — OAuth landing hardening", () => {
   it("fails closed with 400 (not 500) on a malformed transactionId %-escape", async () => {
     const { registry } = makeRegistry();
     const resp = await registry.fetch(
-      new Request("https://relay.example/oauth/callback/%zz?code=c&state=s"),
+      new Request("https://relay.example/oauth/callback/%zz?code=c&state=s")
     );
     expect(resp.status).toBe(400);
   });
@@ -527,8 +599,8 @@ describe("RelayRegistry — OAuth landing hardening", () => {
     await send(registry, ws, { t: "register-oauth", transactionId: "tx-err", platform: "desktop" });
     const resp = await registry.fetch(
       new Request(
-        "https://relay.example/oauth/callback/tx-err?error=access_denied&error_description=User%20denied&state=S",
-      ),
+        "https://relay.example/oauth/callback/tx-err?error=access_denied&error_description=User%20denied&state=S"
+      )
     );
     expect(resp.status).toBe(400);
     const body = await resp.text();

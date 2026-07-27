@@ -13,7 +13,6 @@ function makeEnv(overrides: Partial<Env> = {}): {
 } {
   const stub = { fetch: vi.fn(async () => new Response("from-do", { status: 222 })) };
   const env = {
-    VIBESTUDIO_RELAY_SIGNING_SECRET: "relay-secret",
     VIBESTUDIO_APPLE_APP_ID: "ABCDE12345.app.vibestudio.mobile",
     VIBESTUDIO_ANDROID_PACKAGE_NAME: "app.vibestudio.mobile",
     VIBESTUDIO_ANDROID_SHA256_CERT_FINGERPRINTS: "aa:bb:cc",

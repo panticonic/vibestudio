@@ -2089,6 +2089,9 @@ export function buildWorkspaceChildEnv(input: {
     delete env["VIBESTUDIO_WORKSPACE_EPHEMERAL"];
   }
   delete env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"];
+  // Obsolete product-wide relay credentials must never enter a workspace
+  // process. Backhaul auth is derived from the workspace's persistent key.
+  delete env["VIBESTUDIO_RELAY_SIGNING_SECRET"];
   return env;
 }
 

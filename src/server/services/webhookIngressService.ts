@@ -36,7 +36,7 @@ import type { RelayWebhookFrame, WebhookAck } from "./relayBackhaulClient.js";
 import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
 
 /**
- * Skew tolerance for the relay envelope timestamp. Generous fail-loud backstop:
+ * Skew tolerance for the authenticated backhaul frame timestamp. Generous fail-loud backstop:
  * wide enough that a slow-but-healthy buffered redelivery is never rejected,
  * tight enough that a stale/replayed frame eventually fails closed.
  */
@@ -143,7 +143,6 @@ export interface WebhookRelayRegistrar {
 }
 
 export interface WebhookIngressServiceDeps {
-  relaySigningSecret?: string;
   /**
    * The single apex relay origin (VIBESTUDIO_RELAY_URL), e.g.
    * `https://vibestudio.app`. Relay-mode subscriptions publish
@@ -393,33 +392,19 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
   }
 
   /**
-   * Verify the relay envelope carried IN a backhaul webhook frame. The relay
-   * signs `canonical(method,path,query,timestamp,bodySha256)` with the shared
-   * secret; we recompute the body hash from the decoded body (integrity) and
-   * the HMAC (authenticity), and bound the timestamp skew. Fails closed.
+   * Verify the freshness and body digest carried on the authenticated
+   * backhaul. Socket authenticity comes from the workspace-key handshake and
+   * TLS; the frame digest detects malformed/corrupted payload construction.
    */
-  function verifyRelayFrameEnvelope(frame: RelayWebhookFrame, rawBody: Buffer): boolean {
-    if (!deps.relaySigningSecret) return false;
+  function verifyRelayFrameIntegrity(frame: RelayWebhookFrame, rawBody: Buffer): boolean {
     const relay = frame.relay;
-    if (!relay || !relay.timestamp || !relay.bodySha256 || !relay.signature) return false;
+    if (!relay || !relay.timestamp || !relay.bodySha256) return false;
     const parsedTs = Number(relay.timestamp);
     if (!Number.isFinite(parsedTs) || Math.abs(now() - parsedTs) > RELAY_ENVELOPE_TOLERANCE_MS) {
       return false;
     }
     const actualBodySha = crypto.createHash("sha256").update(rawBody).digest("hex");
-    if (!timingSafeStringEqual(relay.bodySha256, actualBodySha)) return false;
-    const canonical = [
-      frame.method.toUpperCase(),
-      frame.path,
-      frame.query ?? "",
-      relay.timestamp,
-      relay.bodySha256,
-    ].join("\n");
-    const expected = `v1=${crypto
-      .createHmac("sha256", deps.relaySigningSecret)
-      .update(canonical)
-      .digest("hex")}`;
-    return timingSafeStringEqual(relay.signature, expected);
+    return timingSafeStringEqual(relay.bodySha256, actualBodySha);
   }
 
   function pruneSeenDeliveries(nowMs: number): void {
@@ -468,7 +453,7 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
       return remember({ ok: false, permanent: true, reason: "webhook-body-too-large" });
     }
     const rawBody = Buffer.from(frame.bodyBase64 ?? "", "base64");
-    if (!verifyRelayFrameEnvelope(frame, rawBody)) {
+    if (!verifyRelayFrameIntegrity(frame, rawBody)) {
       return remember({ ok: false, permanent: true, reason: "invalid-relay-envelope" });
     }
 
@@ -551,7 +536,7 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     }
     // The co-located HTTP route serves DIRECT subscriptions only. Relay-mode
     // deliveries ride the authenticated backhaul; accepting one here (with no
-    // relay envelope) would be an unauthenticated inbound path — reject it.
+    // authenticated relay socket) would be an unauthenticated inbound path — reject it.
     if (subscription.delivery.mode !== "direct") {
       req.resume();
       return sendJson(res, 404, { error: "webhook subscription not found" });

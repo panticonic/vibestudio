@@ -15,10 +15,11 @@
  *     server backhaul client receives `{transactionId, state, code}`.
  *
  * The bridge authenticates the dial with the worker's own `verifyBackhaulAuth`,
- * so the HMAC handshake the client mints is proven byte-compatible with what the
+ * so the P-256 handshake the client mints is proven byte-compatible with what the
  * relay verifies.
  */
 import { EventEmitter } from "node:events";
+import * as crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -29,6 +30,7 @@ import {
 import {
   createRelayBackhaulClient,
   type RelayBackhaulClient,
+  type RelayBackhaulIdentity,
   type RelayOAuthCallbackFrame,
   type RelayWebhookFrame,
   type WebhookAck,
@@ -40,9 +42,27 @@ import {
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { WebhookIngressSubscriptionSummary } from "../../../packages/shared/src/webhooks/ingress.js";
 
-const RELAY_SECRET = "seam-relay-secret";
 const RELAY_ORIGIN = "https://vibestudio.app";
-const SERVER_ID = "server-under-test";
+const TEST_IDENTITY = createTestIdentity();
+
+function createTestIdentity(): RelayBackhaulIdentity {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("ec", {
+    namedCurve: "prime256v1",
+  });
+  const publicKeyDer = publicKey.export({ type: "spki", format: "der" }) as Buffer;
+  const relayId = `rly_${crypto.createHash("sha256").update(publicKeyDer).digest("hex")}`;
+  return {
+    relayId,
+    publicKey: publicKeyDer.toString("base64url"),
+    sign: (payload) =>
+      crypto
+        .sign("sha256", Buffer.from(payload), {
+          key: privateKey,
+          dsaEncoding: "ieee-p1363",
+        })
+        .toString("base64url"),
+  };
+}
 
 // ---- Relay DO fakes (mirror registry.test.ts: node-drivable, no workerd) ----
 
@@ -128,13 +148,13 @@ function makeBridgeCtor(registry: RelayRegistry, state: FakeState) {
 
     private async connect(url: string): Promise<void> {
       const params = new URL(url).searchParams;
-      const authed = await verifyBackhaulAuth(params, RELAY_SECRET, Date.now());
+      const authed = await verifyBackhaulAuth(params, Date.now());
       if (!authed) {
         this.readyState = BridgeSocket.CLOSED;
         queueMicrotask(() => this.emit("close", 1006, Buffer.from("unauthorized")));
         return;
       }
-      const serverId = params.get("serverId")!;
+      const serverId = params.get("relayId")!;
       // The relay pushes to the client by "sending" on the relay-side socket.
       this.relaySocket = new RelaySideSocket((data) =>
         queueMicrotask(() => this.emit("message", data))
@@ -168,10 +188,7 @@ function makeBridgeCtor(registry: RelayRegistry, state: FakeState) {
 
 function makeRegistry(): { registry: RelayRegistry; state: FakeState } {
   const state = new FakeState();
-  const registry = new RelayRegistry(
-    state as unknown as DurableObjectState,
-    { VIBESTUDIO_RELAY_SIGNING_SECRET: RELAY_SECRET } as Env
-  );
+  const registry = new RelayRegistry(state as unknown as DurableObjectState, {} as Env);
   return { registry, state };
 }
 
@@ -201,7 +218,6 @@ describe("server ↔ relay seam", () => {
     const dispatched: unknown[] = [];
     let client!: RelayBackhaulClient;
     const webhook = createWebhookIngressService({
-      relaySigningSecret: RELAY_SECRET,
       relayOrigin: RELAY_ORIGIN,
       store,
       relayRegistrar: {
@@ -215,8 +231,7 @@ describe("server ↔ relay seam", () => {
 
     client = createRelayBackhaulClient({
       relayOrigin: RELAY_ORIGIN,
-      serverId: SERVER_ID,
-      signingSecret: RELAY_SECRET,
+      identity: TEST_IDENTITY,
       WebSocketCtor: makeBridgeCtor(registry, new FakeState()),
       onWebhook: (frame: RelayWebhookFrame): Promise<WebhookAck> =>
         webhook.internal.deliverRelayWebhook(frame),
@@ -276,7 +291,6 @@ describe("server ↔ relay seam", () => {
     // Pre-seed a registered subscription directly in the store (as if created
     // earlier) so we can bring the backhaul up AFTER a provider delivery.
     const sub = (await createWebhookIngressService({
-      relaySigningSecret: RELAY_SECRET,
       relayOrigin: RELAY_ORIGIN,
       store,
     }).definition.handler(shellCtx(), "createSubscription", [
@@ -294,12 +308,10 @@ describe("server ↔ relay seam", () => {
     const mkClient = () =>
       createRelayBackhaulClient({
         relayOrigin: RELAY_ORIGIN,
-        serverId: SERVER_ID,
-        signingSecret: RELAY_SECRET,
+        identity: TEST_IDENTITY,
         WebSocketCtor: makeBridgeCtor(registry, new FakeState()),
         onWebhook: (frame) =>
           createWebhookIngressService({
-            relaySigningSecret: RELAY_SECRET,
             relayOrigin: RELAY_ORIGIN,
             store,
             dispatchToTarget: async (_t, event) => {
@@ -344,8 +356,7 @@ describe("server ↔ relay seam", () => {
     const received: RelayOAuthCallbackFrame[] = [];
     const client = createRelayBackhaulClient({
       relayOrigin: RELAY_ORIGIN,
-      serverId: SERVER_ID,
-      signingSecret: RELAY_SECRET,
+      identity: TEST_IDENTITY,
       WebSocketCtor: makeBridgeCtor(registry, new FakeState()),
       onWebhook: async () => ({ ok: true }),
       onOAuthCallback: (frame) => {
@@ -381,8 +392,7 @@ describe("server ↔ relay seam", () => {
     const { registry, state } = makeRegistry();
     const client = createRelayBackhaulClient({
       relayOrigin: RELAY_ORIGIN,
-      serverId: SERVER_ID,
-      signingSecret: RELAY_SECRET,
+      identity: TEST_IDENTITY,
       WebSocketCtor: makeBridgeCtor(registry, state),
       onWebhook: async () => ({ ok: true }),
       onOAuthCallback: () => {},

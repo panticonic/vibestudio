@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 // Production smoke for the apex Vibestudio Worker.
+import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import process from "node:process";
+import { WebSocket } from "ws";
 
 const DEFAULT_ORIGIN = "https://vibestudio.app";
+const BACKHAUL_TIMEOUT_MS = 10_000;
 
 try {
   await main();
@@ -46,6 +49,9 @@ async function main() {
 
   await checkWellKnown(origin, options.expectAppLinks);
   console.log("[smoke:cloudflare:apex] well-known ok");
+
+  await checkBackhaul(origin);
+  console.log("[smoke:cloudflare:apex] authenticated backhaul ok");
   console.log("[smoke:cloudflare:apex] ok");
 }
 
@@ -100,6 +106,79 @@ function normalizeOrigin(raw) {
   url.search = "";
   url.hash = "";
   return url;
+}
+
+async function checkBackhaul(origin) {
+  const { publicKey, privateKey } = generateKeyPairSync("ec", {
+    namedCurve: "prime256v1",
+  });
+  const publicKeyDer = publicKey.export({ type: "spki", format: "der" });
+  const relayId = `rly_${createHash("sha256").update(publicKeyDer).digest("hex")}`;
+  const timestamp = String(Date.now());
+  const signature = sign("sha256", Buffer.from(`${relayId}\n${timestamp}`), {
+    key: privateKey,
+    dsaEncoding: "ieee-p1363",
+  }).toString("base64url");
+  const url = new URL(origin);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "/backhaul";
+  url.search = new URLSearchParams({
+    relayId,
+    ts: timestamp,
+    key: publicKeyDer.toString("base64url"),
+    sig: signature,
+  }).toString();
+
+  const subscriptionId = `smoke_${randomUUID().replaceAll("-", "")}`;
+  await new Promise((resolve, reject) => {
+    const socket = new WebSocket(url);
+    let done = false;
+    const timeout = setTimeout(
+      () => finish(new Error(`backhaul timed out after ${BACKHAUL_TIMEOUT_MS}ms`)),
+      BACKHAUL_TIMEOUT_MS
+    );
+
+    const finish = (error) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timeout);
+      if (socket.readyState === WebSocket.OPEN) socket.close(1000, "smoke complete");
+      else if (socket.readyState !== WebSocket.CLOSED) socket.terminate();
+      if (error) reject(error);
+      else resolve();
+    };
+
+    socket.on("open", () => {
+      socket.send(JSON.stringify({ t: "register-webhook", subscriptionId }));
+    });
+    socket.on("message", (raw) => {
+      let frame;
+      try {
+        frame = JSON.parse(String(raw));
+      } catch {
+        finish(new Error("backhaul returned a non-JSON frame"));
+        return;
+      }
+      if (frame.t === "registered" && frame.kind === "webhook" && frame.id === subscriptionId) {
+        socket.send(JSON.stringify({ t: "unregister-webhook", subscriptionId }));
+        return;
+      }
+      if (frame.t === "unregistered" && frame.kind === "webhook" && frame.id === subscriptionId) {
+        finish();
+        return;
+      }
+      if (frame.t === "register-rejected" || frame.t === "unregister-rejected") {
+        finish(new Error(`backhaul ${frame.t}: ${String(frame.reason ?? "unknown")}`));
+      }
+    });
+    socket.on("unexpected-response", (_request, response) => {
+      finish(new Error(`backhaul upgrade failed: HTTP ${response.statusCode}`));
+    });
+    socket.on("error", (error) => finish(error));
+    socket.on("close", (code, reason) => {
+      finish(new Error(`backhaul closed before cleanup ack: ${code} ${String(reason)}`));
+    });
+  });
 }
 
 async function checkWellKnown(origin, expectAppLinks) {

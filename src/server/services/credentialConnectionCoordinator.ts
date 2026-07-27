@@ -70,7 +70,7 @@ import {
   canonicalCredentialUrl as canonicalUrl,
   validateCredentialClientConfigUrls as validateClientConfigUrls,
 } from "./credentialClientConfig.js";
-import { getRelayOrigin, RELAY_URL_ENV } from "./relayBackhaulClient.js";
+import { getRelayOrigin } from "./relayBackhaulClient.js";
 
 const log = createDevLogger("CredentialConnectionCoordinator");
 type BrowserHandoffCallerKind = "app" | "panel" | "shell";
@@ -441,14 +441,7 @@ export function createCredentialConnectionCoordinator(
     requested: OAuthRedirectStrategy | undefined
   ): OAuthRedirectStrategy {
     if (requested) return requested;
-    // The "public" default routes the IdP through the callback relay (parity: desktop
-    // + mobile share it). But the relay is optional — `pnpm dev` sets no
-    // VIBESTUDIO_RELAY_URL — and "public" then throws redirect_unavailable on
-    // every connect that doesn't pass an explicit redirect. Fall back to loopback when
-    // no relay is configured so co-located dev OAuth works; production configures the
-    // relay and keeps the parity path. (Remote sessions still need the relay set — a
-    // server-loopback redirect is unreachable from a remote browser by design.)
-    return getRelayOrigin() ? "public" : "loopback";
+    return "public";
   }
 
   /**
@@ -468,12 +461,6 @@ export function createCredentialConnectionCoordinator(
    */
   function buildRelayOAuthCallbackUrl(transactionId: string): string {
     const base = getRelayOrigin();
-    if (!base) {
-      throw new OAuthConnectionError(
-        "redirect_unavailable",
-        `OAuth callback relay is not configured — set ${RELAY_URL_ENV} to the relay origin.`
-      );
-    }
     return `${base}${RELAY_OAUTH_CALLBACK_PATH}/${encodeURIComponent(transactionId)}`;
   }
 

@@ -119,9 +119,6 @@ Configure secrets/vars:
 ```bash
 cd apps/webhook-relay
 
-# Required for relay backhaul auth and webhook envelope signing.
-wrangler secret put VIBESTUDIO_RELAY_SIGNING_SECRET
-
 # Required when mobile app-link / universal-link verification should be live.
 wrangler secret put VIBESTUDIO_APPLE_APP_ID
 wrangler secret put VIBESTUDIO_ANDROID_PACKAGE_NAME
@@ -142,8 +139,9 @@ Smoke it:
 pnpm smoke:cloudflare:apex
 ```
 
-The smoke checks `/healthz`, `/`, `/pair`, and the two `.well-known` app-link
-documents.
+The smoke checks `/healthz`, `/`, `/pair`, the two `.well-known` app-link
+documents, and a real P-256-authenticated `/backhaul` registration/unregistration
+round trip.
 
 Before Apple/Android identifiers are configured, the smoke accepts `503` for the
 two `.well-known` routes so the apex Worker can be deployed early. Once app-link
@@ -276,16 +274,15 @@ OAuth redirect URIs should use the apex Worker:
 https://vibestudio.app/oauth/callback/<transactionId>
 ```
 
-Set server-side relay origin configuration to the same apex origin when enabling
-remote OAuth/webhooks:
+Remote OAuth/webhooks use this apex by default. Override the origin only for a
+local or staging relay deployment:
 
 ```bash
-export VIBESTUDIO_RELAY_URL=https://vibestudio.app
-export VIBESTUDIO_RELAY_SIGNING_SECRET='<same secret configured on the relay worker>'
+export VIBESTUDIO_RELAY_URL=https://relay.staging.example
 ```
 
-Both variables are required together; the home server and relay worker must use
-the same signing secret.
+Each workspace authenticates with its persistent P-256 identity; there is no
+shared relay credential to configure or distribute.
 
 Relay webhook subscriptions default to their 1,500,000-byte transport ceiling
 and may choose a smaller budget. Direct subscriptions default to the home

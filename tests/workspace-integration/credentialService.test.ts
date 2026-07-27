@@ -283,7 +283,8 @@ async function startOAuthConnection(
   service: ReturnType<typeof createCredentialService>,
   emit: ReturnType<typeof vi.fn>,
   ctx: ServiceContext,
-  request: unknown
+  request: unknown,
+  options: { preserveDefaultRedirect?: boolean } = {}
 ) {
   // Round-trip OAuth tests deliver the callback to a server-local listener via
   // http.get(redirect_uri). The PRODUCTION default redirect is now the relay (§7,
@@ -292,7 +293,7 @@ async function startOAuthConnection(
   // Tests that assert a specific redirect (client-loopback / public-relay) pass
   // their own `spec.redirect` and are unaffected.
   const req = request as { redirect?: unknown; spec?: { redirect?: unknown } };
-  if (req && typeof req === "object") {
+  if (!options.preserveDefaultRedirect && req && typeof req === "object") {
     if (req.spec && typeof req.spec === "object") {
       if (req.spec.redirect === undefined) req.spec.redirect = { type: "loopback" };
     } else if (req.redirect === undefined) {
@@ -1315,44 +1316,56 @@ describe("credentialService", () => {
     );
   });
 
-  it("fails loud for an explicit public redirect when no relay is configured (the default falls back to loopback)", async () => {
-    // The relay path is deliberately fail-loud when unconfigured — it must not
-    // silently emit a server URL no third party can reach. The DEFAULT, by
-    // contrast, falls back to loopback when no relay is set (see
-    // resolveDefaultRedirectStrategy) so co-located `pnpm dev` OAuth still works.
-    // This is the negative the harness previously masked by stubbing the relay env.
+  it("uses the hosted relay for default OAuth when no override is configured", async () => {
     delete process.env["VIBESTUDIO_RELAY_URL"];
     const store = new MemoryCredentialStore();
     const emit = vi.fn();
+    const register = vi.fn();
     const service = createCredentialService({
       credentialStore: store as never,
       eventService: targetedOpenEventService(emit) as never,
       approvalQueue: approvingQueue("version") as never,
+      relayOAuthRegistrar: { register },
     });
     const ctx = { caller: verifiedTestCaller("panel-test", "panel") };
 
-    await expect(
-      service.handler(ctx, "connect", [
-        {
-          redirect: { type: "public" },
-          flow: {
-            type: "oauth2-auth-code-pkce",
-            authorizeUrl: "https://auth.example.test/oauth/authorize",
-            tokenUrl: "https://auth.example.test/oauth/token",
-            clientId: "client-1",
-            scopes: ["read"],
-          },
-          credential: {
-            label: "Relay OAuth",
-            audience: [{ url: "https://api.example.test/v1", match: "path-prefix" }],
-            injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
-            accountIdentity: { email: "dev@example.test" },
-          },
+    const started = await startOAuthConnection(
+      service,
+      emit,
+      ctx,
+      {
+        flow: {
+          type: "oauth2-auth-code-pkce",
+          authorizeUrl: "https://auth.example.test/oauth/authorize",
+          tokenUrl: "https://auth.example.test/oauth/token",
+          clientId: "client-1",
+          scopes: ["read"],
         },
-      ])
-    ).rejects.toThrow(/relay is not configured|redirect_unavailable/i);
-    // The authorize URL is never emitted — connect fails at redirect resolution.
-    expect(emit).not.toHaveBeenCalledWith("external-open:open", expect.anything());
+        credential: {
+          label: "Relay OAuth",
+          audience: [{ url: "https://api.example.test/v1", match: "path-prefix" }],
+          injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+          accountIdentity: { email: "dev@example.test" },
+        },
+      },
+      { preserveDefaultRedirect: true }
+    );
+    const redirect = new URL(started.redirectUri);
+    const transactionId = redirect.pathname.split("/").at(-1)!;
+
+    expect(redirect.origin).toBe("https://vibestudio.app");
+    expect(redirect.pathname).toBe(`/oauth/callback/${transactionId}`);
+    expect(register).toHaveBeenCalledWith(transactionId, "desktop");
+
+    await service.resolveRelayOAuthCallback({
+      transactionId,
+      state: started.state,
+      error: "access_denied",
+    });
+    await expect(started.pending).rejects.toMatchObject({
+      code: "approval_denied",
+      message: expect.stringMatching(/access_denied/i),
+    });
   });
 
   it("creates URL-bound credentials through generic OAuth PKCE and discards refresh tokens", async () => {

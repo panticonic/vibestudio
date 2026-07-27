@@ -425,9 +425,9 @@ hard-coded `VIBESTUDIO_SERVER_BASE_URL` (`apps/webhook-relay/src/index.ts:59`) w
 not confidentiality) — decidedly _not_ "dumb."
 
 **Shared by both:** the authenticated **persistent backhaul** (server → relay DO)
-and **first-writer-wins registration** bound to that backhaul identity (the shared
-`VIBESTUDIO_RELAY_SIGNING_SECRET` is one un-versioned key — too weak for tenant
-isolation; the per-server connection is the trust anchor). Repoint
+and **first-writer-wins registration** bound to a self-certifying workspace
+identity (`relayId = SHA-256(P-256 public key)`; the fresh handshake signature
+proves possession without a product-wide secret). Repoint
 `relayPublicBaseUrl` / `buildPublicUrl` at the relay hostname.
 
 ## 8. Decommission — the legacy remote-server / Tailscale / TLS-pinning surface
@@ -548,7 +548,7 @@ integrate at the end against agreed interfaces, not in sequence.
   DO + first-writer-wins registration, with **two delivery profiles** —
   durable buffer/retry for webhooks, and a **dumb ephemeral OAuth landing +
   universal-link host** (`state`-keyed handoff, no buffering). **Net-new high-risk
-  infra** — only the relay envelope/signing model carries over; durable buffering,
+  infra** — only the authenticated callback-delivery requirements carry over; durable buffering,
   registration, first-writer-wins identity, and the persistent backhaul are all new
   protocol surface. _Contract:_ registration + backhaul-delivery protocol + OAuth
   landing/universal-link association + the `transactionId`/redirect-URL/trusted-backhaul

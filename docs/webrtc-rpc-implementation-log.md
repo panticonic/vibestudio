@@ -34,9 +34,10 @@ issues flagged by the parallel build (verify before production):
 - **node-datachannel 0.32 method names** — `remoteFingerprint()`/`restartIce()`/
   `getSelectedCandidatePair()` shapes are best-effort with loud fallbacks; verify
   against the live module during the §11-style native smoke test.
-- **Relay backhaul auth + OAuth tx-store** — the shared signing secret gates access
-  but not subscription ownership; the in-memory OAuth tx map needs DO-storage
-  durability against hibernation eviction.
+- **Relay backhaul auth + OAuth tx-store** — resolved: each workspace proves
+  possession of its persistent P-256 identity, webhook registration is
+  first-writer-wins, and OAuth transactions live in Durable Object storage
+  across hibernation.
   | **D — Loopback origin + shell-bridge panel RPC** | ◻ **Remaining** |
   | **F — Decommission** (TLS-pin / Tailscale / public-URL) | ◻ **Remaining** |
 

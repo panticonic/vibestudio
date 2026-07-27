@@ -22,7 +22,6 @@ import {
 } from "../../../packages/shared/src/webhooks/ingress.js";
 import { resolveWebhookDirectMaxBodyBytes } from "./webhookIngressService.js";
 
-const RELAY_SECRET = "relay-secret-for-tests-only";
 const RELAY_BASE_URL = "https://hooks.test";
 const DIRECT_BASE_URL = "https://direct.test";
 
@@ -116,7 +115,7 @@ function createMockReqRes(
 
 /**
  * Build a backhaul webhook frame exactly as the relay's RelayRegistry would —
- * with a valid relay envelope (HMAC over canonical(method,path,query,ts,sha)).
+ * with a fresh body digest carried by the authenticated relay socket.
  * This is the on-the-wire contract the server must accept.
  */
 function buildRelayFrame(opts: {
@@ -126,18 +125,14 @@ function buildRelayFrame(opts: {
   query?: string;
   deliveryId?: string;
   ts?: number;
-  secret?: string;
   signBodySha?: string;
 }): RelayWebhookFrame {
   const method = "POST";
   const path = `/i/${opts.subscriptionId}`;
   const query = opts.query ?? "";
   const ts = opts.ts ?? Date.now();
-  const secret = opts.secret ?? RELAY_SECRET;
   const bodySha = crypto.createHash("sha256").update(opts.body).digest("hex");
   const signedSha = opts.signBodySha ?? bodySha;
-  const canonical = [method, path, query, String(ts), signedSha].join("\n");
-  const signature = `v1=${crypto.createHmac("sha256", secret).update(canonical).digest("hex")}`;
   return {
     t: "webhook",
     deliveryId: opts.deliveryId ?? crypto.randomUUID(),
@@ -147,7 +142,7 @@ function buildRelayFrame(opts: {
     query,
     headers: opts.providerHeaders ?? {},
     bodyBase64: opts.body.toString("base64"),
-    relay: { timestamp: String(ts), bodySha256: signedSha, signature },
+    relay: { timestamp: String(ts), bodySha256: signedSha },
   };
 }
 
@@ -157,7 +152,6 @@ function setup(extra: Partial<WebhookIngressServiceDeps> = {}) {
   const registered: string[] = [];
   const unregistered: string[] = [];
   const svc = createWebhookIngressService({
-    relaySigningSecret: RELAY_SECRET,
     relayOrigin: RELAY_BASE_URL,
     directPublicBaseUrl: DIRECT_BASE_URL,
     store,
@@ -461,7 +455,6 @@ describe("webhookIngressService — public ingress route", () => {
     expect(created.maxBodyBytes).toBe(2_000_000);
 
     const restarted = createWebhookIngressService({
-      relaySigningSecret: RELAY_SECRET,
       relayOrigin: RELAY_BASE_URL,
       directPublicBaseUrl: DIRECT_BASE_URL,
       directMaxBodyBytes: 8_000_000,
@@ -490,7 +483,6 @@ describe("webhookIngressService — public ingress route", () => {
       { delivery: { mode: "direct" }, maxBodyBytes: 8_000_000 }
     );
     const restarted = createWebhookIngressService({
-      relaySigningSecret: RELAY_SECRET,
       relayOrigin: RELAY_BASE_URL,
       directPublicBaseUrl: DIRECT_BASE_URL,
       directMaxBodyBytes: 2_000_000,
@@ -563,14 +555,14 @@ describe("webhookIngressService — public ingress route", () => {
     ).rejects.toThrow(/configured ceiling of 2000000/);
   });
 
-  it("rejects a backhaul frame whose relay envelope signature is forged (permanent nack)", async () => {
+  it("rejects a stale backhaul frame (permanent nack)", async () => {
     const { svc, dispatched } = setup();
     const sub = await provision(svc, { type: "hmac-sha256", headerName: "X-Sig", secret: "shh" });
     const body = Buffer.from(`{"hello":"world"}`);
     const frame = buildRelayFrame({
       subscriptionId: sub.subscriptionId,
       body,
-      secret: "wrong-secret",
+      ts: Date.now() - 10 * 60 * 1000,
     });
     const ack = await svc.internal.deliverRelayWebhook(frame);
     expect(ack).toMatchObject({ ok: false, permanent: true, reason: "invalid-relay-envelope" });
@@ -843,7 +835,7 @@ describe("webhookIngressService — public ingress route", () => {
     expect(dispatched).toHaveLength(0);
   });
 
-  it("accepts direct query-token deliveries without the relay envelope", async () => {
+  it("accepts direct query-token deliveries without an authenticated backhaul frame", async () => {
     const { svc, dispatched } = setup();
     const sub = await provision(
       svc,
