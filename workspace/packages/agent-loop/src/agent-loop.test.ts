@@ -1642,6 +1642,37 @@ describe("ask user policy", () => {
 });
 
 describe("channel tools", () => {
+  it("never routes the executing agent's own participant methods back to itself", () => {
+    const s = scenario({
+      roster: {
+        participants: [
+          {
+            participantId: "agent:self",
+            ref: { kind: "agent", id: "agent:self", participantId: "agent:self" },
+            type: "agent",
+            methods: [{ name: "getDebugState" }],
+          },
+          {
+            participantId: "panel:user",
+            ref: { kind: "panel", id: "panel:user", participantId: "panel:user" },
+            type: "panel",
+            methods: [{ name: "set_title" }],
+          },
+        ],
+      },
+    });
+
+    prompt(s);
+
+    expect(s.state.inFlightModelCall?.request.channelToolOwners).toEqual({
+      set_title: {
+        kind: "panel",
+        id: "panel:user",
+        participantId: "panel:user",
+      },
+    });
+  });
+
   it("routes roster participant methods over the channel transport", () => {
     const s = scenario({
       roster: {

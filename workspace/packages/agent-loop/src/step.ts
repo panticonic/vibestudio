@@ -91,17 +91,22 @@ function latestUserParticipantId(state: AgentState): string | undefined {
 
 function channelToolOwnersFor(
   roster: AgentLoopConfig["roster"],
-  preferredParticipantId?: string
+  preferredParticipantId?: string,
+  selfId?: string
 ): Record<string, ParticipantRef> {
   const owners: Record<string, ParticipantRef> = {};
-  const preferred = preferredParticipantId
-    ? roster.participants.find(
-        (participant) => participantId(participant.ref) === preferredParticipantId
+  const participants = selfId
+    ? roster.participants.filter(
+        (participant) =>
+          participant.participantId !== selfId && participantId(participant.ref) !== selfId
       )
+    : roster.participants;
+  const preferred = preferredParticipantId
+    ? participants.find((participant) => participantId(participant.ref) === preferredParticipantId)
     : undefined;
   const ordered = preferred
-    ? [preferred, ...roster.participants.filter((participant) => participant !== preferred)]
-    : roster.participants;
+    ? [preferred, ...participants.filter((participant) => participant !== preferred)]
+    : participants;
   for (const participant of ordered) {
     for (const method of participant.methods) {
       owners[method.name] ??= participant.ref;
@@ -145,7 +150,11 @@ function modelStartItems(
     ...(config.skillIndexHash ? { skillIndexHash: config.skillIndexHash } : {}),
     ...(config.toolSchemasHash ? { toolSchemasHash: config.toolSchemasHash } : {}),
     activeToolNames: config.activeToolNames,
-    channelToolOwners: channelToolOwnersFor(config.roster, latestUserParticipantId(state)),
+    channelToolOwners: channelToolOwnersFor(
+      config.roster,
+      latestUserParticipantId(state),
+      state.selfId
+    ),
     askUserParticipants: config.roster.participants
       .filter((participant) => participant.ref.kind === "user")
       .map((participant) => ({
@@ -670,7 +679,7 @@ function expandToolCalls(
   const attemptId = messageId ? ids.attemptId(messageId) : "";
   const channelToolOwners =
     state.openTurn?.activeModelRequest?.channelToolOwners ??
-    channelToolOwnersFor(state.config.roster, latestUserParticipantId(state));
+    channelToolOwnersFor(state.config.roster, latestUserParticipantId(state), state.selfId);
   let projected = state;
   for (const block of toolCalls) {
     const invocationId = block.id;
@@ -775,9 +784,7 @@ function hasFreshInput(state: AgentState): boolean {
   // older than that boundary and must not stimulate its own recovery wake.
   const lastEntry = state.entries[state.entries.length - 1];
   if (lastEntry?.kind !== "tool-result") return false;
-  return (
-    state.openTurn?.waitingAtSeq === undefined || lastEntry.seq > state.openTurn.waitingAtSeq
-  );
+  return state.openTurn?.waitingAtSeq === undefined || lastEntry.seq > state.openTurn.waitingAtSeq;
 }
 
 export const DEFAULT_MAX_CONSECUTIVE_MODEL_FAILURES = 3;
