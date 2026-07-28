@@ -34,6 +34,9 @@ export interface SubagentRunState {
   /** Reasoning engine of the child run. Drives the card's kind badge; tolerant
    *  of absence for older spawn payloads. */
   agentKind?: string;
+  /** Effective, host-attested launch settings. This is the canonical place for
+   *  consumers to verify the child model and other runtime configuration. */
+  launchConfig?: Record<string, unknown> | null;
 }
 
 export interface ToolExecutionState {

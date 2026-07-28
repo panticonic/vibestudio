@@ -10,6 +10,7 @@ import {
   AgentVesselBase,
   deriveSubagentParticipantHandle,
   resolveRespondFromHandles,
+  subagentFirstTaskPrompt,
   subagentRuntimePrompt,
 } from "./agent-vessel.js";
 
@@ -73,6 +74,7 @@ describe("subagent participant handles", () => {
         subagent: {
           runId:
             "call_pvAoQf2smkmA9mfbqmPt4i3H|fc_068771be153a5f7a016a48f4f3fb4c81978442476a01b8a1a5",
+          task: "Inspect the assigned package.",
           parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
           parentChannelId: "ch-parent",
         },
@@ -88,6 +90,7 @@ describe("subagent participant handles", () => {
       STATE_ARGS: {
         subagent: {
           runId: "run-1",
+          task: "Inspect the assigned package.",
           parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
           parentChannelId: "ch-parent",
         },
@@ -112,6 +115,7 @@ describe("subagent prompt contract", () => {
       STATE_ARGS: {
         subagent: {
           runId: "run-1",
+          task: "Review the inherited implementation.",
           mode: "fork",
           parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
           parentChannelId: "ch-parent",
@@ -150,6 +154,7 @@ describe("subagent prompt contract", () => {
       STATE_ARGS: {
         subagent: {
           runId: "run-fresh",
+          task: "Inspect the assigned package and report its exports.",
           parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
           parentChannelId: "ch-parent",
           depth: 1,
@@ -160,11 +165,15 @@ describe("subagent prompt contract", () => {
     await expect(vessel.prepareImmediatePromptForTest()).resolves.toBe(
       vessel.immediatePromptForTest()
     );
+    await expect(vessel.prepareImmediatePromptForTest()).resolves.toContain(
+      "Inspect the assigned package and report its exports."
+    );
   });
 
   it("keeps the standalone subagent runtime prompt focused on terminal semantics", () => {
     const prompt = subagentRuntimePrompt({
       runId: "run-2",
+      task: "Implement the assigned fixture and verify it.",
       parentRef: "parent",
       parentChannelId: "ch-parent",
       parentContextId: "ctx-parent",
@@ -172,6 +181,9 @@ describe("subagent prompt contract", () => {
     });
 
     expect(prompt).toContain("Use `say` sparingly");
+    expect(prompt).toContain("## Durable Assigned Task");
+    expect(prompt).toContain("Implement the assigned fixture and verify it.");
+    expect(prompt).toContain("Do not search for a different task");
     expect(prompt).toContain("You own execution of the assigned task");
     expect(prompt).toContain("do not hand the parent a plan or code block to copy");
     expect(prompt).toContain("Finish exactly once");
@@ -182,6 +194,7 @@ describe("subagent prompt contract", () => {
   it("adds a narrow-scope prefix for forked subagents", () => {
     const prompt = subagentRuntimePrompt({
       runId: "run-3",
+      task: "Review the inherited implementation for one concrete defect.",
       parentRef: "parent",
       parentChannelId: "ch-parent",
       parentContextId: "ctx-parent",
@@ -192,13 +205,41 @@ describe("subagent prompt contract", () => {
     expect(prompt).toContain("## Forked Subagent Scope");
     expect(prompt).toContain("context window cache is shared");
     expect(prompt).toContain("Assume the parent agent owns the main line of work");
+    expect(prompt).toContain("durable assigned task below is your authoritative current instruction");
+    expect(prompt).toContain("Earlier parent and user messages are inherited context");
     expect(prompt).toContain("Do not broaden scope");
+    expect(prompt).toContain("spawn more subagents unless your assigned child task explicitly");
+  });
+
+  it("renders an explicit assignment boundary in a fork's first task prompt", () => {
+    const prompt = subagentFirstTaskPrompt({
+      mode: "fork",
+      task: "Review the inherited implementation for one concrete defect.",
+    });
+
+    expect(prompt).toContain("## Fork Assignment Boundary");
+    expect(prompt).toContain("not a continuation of the parent agent's plan");
+    expect(prompt).toContain("inherited parent trajectory is reference context only");
+    expect(prompt).toContain("Do not reproduce the parent's orchestration");
+    expect(prompt).toContain(
+      "<assigned_task>\nReview the inherited implementation for one concrete defect.\n</assigned_task>"
+    );
+  });
+
+  it("keeps a fresh child's first task prompt literal", () => {
+    expect(
+      subagentFirstTaskPrompt({
+        mode: "fresh",
+        task: "Inspect one package.",
+      })
+    ).toBe("Inspect one package.");
   });
 
   it("uses the typed launcher result for a supervised external subagent", () => {
     const prompt = subagentRuntimePrompt(
       {
         runId: "run-external",
+        task: "Audit the subagent documentation without editing files.",
         parentRef: "parent",
         parentChannelId: "ch-parent",
         parentContextId: "ctx-parent",

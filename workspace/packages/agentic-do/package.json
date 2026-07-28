@@ -18,6 +18,7 @@
     "@workspace/agentic-protocol": "workspace:*",
     "@workspace/harness": "workspace:*",
     "@workspace/model-catalog": "workspace:*",
+    "@workspace/pi-core": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",

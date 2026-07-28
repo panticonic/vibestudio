@@ -17,7 +17,7 @@ import type {
   Participant,
   RegisterMessageTypeInput,
 } from "@workspace/pubsub";
-import type { MessageTier } from "@workspace/agentic-protocol";
+import type { MessageTier, ParticipantRef } from "@workspace/agentic-protocol";
 import type { RecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
 import type { SandboxOptions, SandboxResult, ScopesApi } from "@workspace/eval";
 import type { ChatMethodResult } from "./invocation-result.js";
@@ -28,6 +28,18 @@ import type { DefaultAgentConfig, ModelCatalog } from "@workspace/model-catalog/
 // lower-level packages (like @workspace/agentic-do, which can't depend on
 // agentic-core) and higher-level chat consumers see exactly the same type.
 export type { ChatParticipantMetadata } from "@workspace/pubsub";
+
+/** Stable, eval-friendly view of one live conversation participant. */
+export interface ChatParticipantSummary {
+  id: string;
+  ref: ParticipantRef;
+  type: ChatParticipantMetadata["type"];
+  name: string;
+  isPerson: boolean;
+  isAgent: boolean;
+  handle?: string;
+  methods?: ChatParticipantMetadata["methods"];
+}
 
 // ===========================================================================
 // Injection Interfaces
@@ -218,6 +230,8 @@ export interface ChatSandboxValue {
   getMessageType: (typeId: string) => Promise<MessageTypeDefinition | null>;
   /** List all registered message types on the channel. */
   getMessageTypes: () => Promise<MessageTypeDefinition[]>;
+  /** List the current conversation channel's participants. */
+  getParticipants: () => Promise<ChatParticipantSummary[]>;
   /** Look up one durable channel envelope by stable id; null when absent. */
   replayEnvelope: (envelopeId: string) => Promise<unknown | null>;
   /** Call a participant method and resolve to the provider's result payload. */

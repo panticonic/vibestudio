@@ -1119,6 +1119,9 @@ importers:
       '@workspace/model-catalog':
         specifier: workspace:*
         version: link:../model-catalog
+      '@workspace/pi-core':
+        specifier: workspace:*
+        version: link:../pi-core
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../pubsub

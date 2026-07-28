@@ -207,7 +207,7 @@ describe("agent launch primitive", () => {
       config: {
         model: "openai:gpt-5.3",
         handle: "child",
-        wakePolicy: "turn-final",
+        wakePolicy: "explicit",
       },
     });
 
@@ -217,7 +217,7 @@ describe("agent launch primitive", () => {
         seq: 42,
         taskChannelId: "task-1",
         contextId: "ctx-child",
-        config: { handle: "child", wakePolicy: "turn-final" },
+        config: { handle: "child", wakePolicy: "explicit" },
       },
     ]);
   });

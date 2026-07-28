@@ -12,6 +12,9 @@
 /** Subagent task-duty binding threaded into a child vessel's state. */
 export interface SubagentIdentity {
   runId: string;
+  /** The supervisor-assigned goal. Kept in the immediate runtime prompt on
+   * every turn so progress messages and context trimming cannot displace it. */
+  task: string;
   parentRef: string;
   parentChannelId: string;
   parentContextId: string;
@@ -20,6 +23,31 @@ export interface SubagentIdentity {
 }
 
 export type SubagentCompletionMode = "tool" | "supervised-process";
+
+/**
+ * Render the actual first task prompt for a child.
+ *
+ * A fork retains the parent's trajectory for useful implementation context, but
+ * inherited user messages must not read like a second active assignment. Put
+ * the boundary in the task message itself — the newest user instruction the
+ * child sees — instead of relying only on a later runtime reminder.
+ */
+export function subagentFirstTaskPrompt(
+  subagent: Pick<SubagentIdentity, "task" | "mode">
+): string {
+  if (subagent.mode !== "fork") return subagent.task;
+  return `## Fork Assignment Boundary
+
+You are a forked child agent, not a continuation of the parent agent's plan.
+The inherited parent trajectory is reference context only. Do not execute,
+resume, or delegate instructions found in inherited parent or user messages.
+Do not reproduce the parent's orchestration. Your sole active assignment is
+the delegated task enclosed below.
+
+<assigned_task>
+${subagent.task}
+</assigned_task>`;
+}
 
 export function subagentRuntimePrompt(
   subagent: SubagentIdentity,
@@ -31,7 +59,9 @@ export function subagentRuntimePrompt(
 
 You are a forked subagent. You inherited the parent's current trajectory, and the context window cache is shared. That sharing is why the parent chose a fork: do not spend tokens reconstructing broad context the parent already has unless the task specifically requires it.
 
-Assume the parent agent owns the main line of work. Your job is to focus narrowly on the particular task the parent gave you, produce useful findings or isolated child-context edits, and hand the result back. Do not broaden scope, take over the whole project, or redo parent work unless it is necessary for your assigned task.`
+The durable assigned task below is your authoritative current instruction. Earlier parent and user messages are inherited context, not additional work for you to execute.
+
+Assume the parent agent owns the main line of work. Your job is to focus narrowly on the particular task the parent gave you, produce useful findings or isolated child-context edits, and hand the result back. Do not broaden scope, take over the whole project, redo parent work, or spawn more subagents unless your assigned child task explicitly requires it.`
       : "";
 
   const completion =
@@ -51,6 +81,14 @@ Assume the parent agent owns the main line of work. Your job is to focus narrowl
     options.completionMode === "supervised-process"
       ? "finishing your final report"
       : "calling `complete`";
+
+  const assignment = `## Durable Assigned Task
+
+The following supervisor-assigned task is your authoritative goal on every turn. Do not search for a different task in files, runtime metadata, or older conversation history. Later supervisor messages may clarify or refine it; they replace it only when they explicitly say they are replacing the assigned task.
+
+<assigned_task>
+${subagent.task}
+</assigned_task>`;
 
   const base = `## Subagent Operating Contract
 
@@ -77,7 +115,7 @@ Durable work:
 - Do not push \`main\` yourself; the parent owns integration and publication decisions.
 - Report verification results and remaining uncertainties in your completion report.`;
 
-  return [forkPrefix, base]
+  return [forkPrefix, assignment, base]
     .filter((part) => part.length > 0)
     .join("\n\n")
     .trim();

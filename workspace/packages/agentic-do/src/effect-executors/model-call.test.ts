@@ -884,6 +884,78 @@ describe("modelCallExecutor", () => {
     expect(JSON.stringify(messages)).toContain("call-new");
   });
 
+  it("keeps an assistant tool call when pushed steering arrives before its result", async () => {
+    const tinySpec = { ...modelSpec, contextWindow: 4_000, maxTokens: 2_000 };
+    const inputDescriptor = descriptor({ modelSpec: tinySpec });
+    inputDescriptor.request.contextThroughSeq = 4;
+    const inputDeps = deps();
+    inputDeps.blobstore.getText = async (digest) => (digest === "sys" ? "BASE SYSTEM" : "");
+    let streamedContext: { messages?: unknown[] } | undefined;
+    mocks.stream.mockImplementation((_model, context) => {
+      streamedContext = context;
+      return {
+        async *[Symbol.asyncIterator]() {},
+        result: async () => ({
+          content: [{ type: "text", text: "ok" }],
+          stopReason: "stop",
+          usage: { input: 1, output: 1 },
+        }),
+      };
+    });
+
+    await expect(
+      modelCallExecutor.execute({
+        descriptor: inputDescriptor,
+        state: {
+          ...initialAgentState({ channelId: "channel-1", config }),
+          entries: [
+            {
+              kind: "user",
+              seq: 1,
+              envelopeId: "env-large-request",
+              content: "x".repeat(30_000),
+            },
+            {
+              kind: "assistant",
+              seq: 2,
+              messageId: "msg-inspect",
+              blocks: [
+                {
+                  type: "toolCall",
+                  id: "call-interleaved",
+                  name: "inspect_subagent",
+                  arguments: {},
+                },
+              ],
+            },
+            {
+              kind: "user",
+              seq: 3,
+              envelopeId: "env-child-completed",
+              content: "A child completed while inspection was running.",
+            },
+            {
+              kind: "tool-result",
+              seq: 4,
+              invocationId: "call-interleaved",
+              name: "inspect_subagent",
+              result: "inspection result",
+              isError: false,
+            },
+          ],
+        },
+        signal: new AbortController().signal,
+        deps: inputDeps,
+        onEphemeral: () => {},
+      })
+    ).resolves.toMatchObject({ kind: "model", stopReason: "completed" });
+
+    const serialized = JSON.stringify(streamedContext?.messages ?? []);
+    expect(serialized).toContain("call-interleaved");
+    expect(serialized).toContain("inspection result");
+    expect(serialized).toContain("A child completed while inspection was running.");
+  });
+
   it("rejects orphaned tool results before provider submission", async () => {
     mocks.getModel.mockReturnValue({ baseUrl: "https://model.test" });
     const inputDescriptor = descriptor();
@@ -964,7 +1036,7 @@ describe("modelCallExecutor", () => {
     expect(mocks.stream).not.toHaveBeenCalled();
   });
 
-  it("follows an explicit first read action through the real tool loop in deterministic test mode", async () => {
+  it("follows an explicit prompt read instruction through the real tool loop in deterministic test mode", async () => {
     const previous = process.env["VIBESTUDIO_TEST_MODE"];
     delete process.env["VIBESTUDIO_TEST_MODE"];
     try {
@@ -975,7 +1047,8 @@ describe("modelCallExecutor", () => {
       inputDeps.env = { VIBESTUDIO_TEST_MODE: "1" };
       inputDeps.blobstore.getText = async (digest) =>
         digest === "sys"
-          ? 'BASE SYSTEM\n\n## Your first action\n\nRun `read("skills/onboarding/SKILL.md")`.\n\n## Next'
+          ? "BASE SYSTEM\n\nRead `packages/agentic-do/SKILL.md` when working on the runtime." +
+            "\n\n## Opening turn\n\nRead `skills/onboarding/SKILL.md`, then continue."
           : "";
       const inputDescriptor = descriptor();
       inputDescriptor.request.provider = "openai-codex";

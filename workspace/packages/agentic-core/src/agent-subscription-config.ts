@@ -10,13 +10,14 @@ export type AgentRespondPolicy =
 export type AgentSystemPromptMode = "append" | "replace" | "replace-vibestudio";
 /**
  * When the agent WAKES to run a turn on a channel. "every-envelope" (default,
- * current behavior) = every inbound envelope wakes it. "turn-final" = buffer and
- * wake only on turn closure / `saliency:"say"` messages / invocation.* addressed
- * to us / mentions (supervisor discipline). "manual" = never auto-wake; the agent
- * pulls channel envelopes on its own (e.g. via `read_subagent`). RESOLVED in the
- * vessel (addressing) — declared here as the pinned literal union only.
+ * current behavior) = every inbound envelope wakes it. "explicit" = retain the
+ * channel stream without turning ordinary output into prompts, and wake only for
+ * an explicit `saliency:"say"` message or direct address. "manual" = never
+ * auto-wake; the agent pulls channel envelopes on its own (e.g. via
+ * `read_subagent`). RESOLVED in the vessel (addressing) — declared here as the
+ * pinned literal union only.
  */
-export type AgentWakePolicy = "every-envelope" | "turn-final" | "manual";
+export type AgentWakePolicy = "every-envelope" | "explicit" | "manual";
 
 /**
  * The per-agent BEHAVIOR settings. These are PER-AGENT: seeded into the agent's

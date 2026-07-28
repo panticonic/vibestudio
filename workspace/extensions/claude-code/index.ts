@@ -15,6 +15,7 @@ import {
 import { confineClaudeReadOnly } from "@vibestudio/shared/claudeReadOnlyLaunch";
 import {
   launchAgentIntoChannel,
+  subagentFirstTaskPrompt,
   subagentRuntimePrompt,
   type AgentLaunchRpc,
 } from "@workspace/agentic-core";
@@ -46,6 +47,7 @@ interface LaunchRecord {
  *  it, not a human prompt). Shape mirrors agentic-core's SubagentIdentity. */
 export interface PrepareSubagentBinding {
   runId: string;
+  task: string;
   parentRef: string;
   parentChannelId: string;
   parentContextId: string;
@@ -125,7 +127,6 @@ export function subagentCliArgs(options: Record<string, unknown> | undefined): s
 export interface LaunchSubagentInput {
   channelId: string;
   title?: string;
-  task: string;
   /** Launcher CLI options (see {@link SubagentCliOptions}); forwarded from the
    *  parent's `spawn_subagent` config, whitelisted here. */
   options?: Record<string, unknown>;
@@ -360,7 +361,7 @@ export async function activate(ctx: ExtensionContext) {
     if (!input.subagent?.runId || !input.subagent.parentChannelId || !input.subagent.parentRef) {
       throw error("EINVAL", "launchSubagent requires a complete subagent binding");
     }
-    if (!input.task.trim()) {
+    if (!input.subagent.task.trim()) {
       throw error("EINVAL", "launchSubagent requires a non-empty task");
     }
   }
@@ -488,7 +489,7 @@ export async function activate(ctx: ExtensionContext) {
         // Vibestudio bridge.
         "--strict-mcp-config",
         "-p",
-        input.task,
+        subagentFirstTaskPrompt(input.subagent),
       ];
       const confined = confineClaudeReadOnly({
         argv,
@@ -665,6 +666,7 @@ export async function activate(ctx: ExtensionContext) {
       "runtime.createEntity",
       {
         kind: "session",
+        execution: { surface: "inert" },
         source: "claude-code",
         key: channelId,
         contextId,

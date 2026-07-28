@@ -192,7 +192,11 @@ describe("@workspace-extensions/claude-code prepare", () => {
     const sessionCreate = rpcCall.mock.calls.find(
       (c) => c[1] === "runtime.createEntity" && (c[2] as { kind: string }).kind === "session"
     );
-    expect((sessionCreate?.[2] as { agentChannelId?: string }).agentChannelId).toBe(CHANNEL);
+    expect(sessionCreate?.[2]).toMatchObject({
+      execution: { surface: "inert" },
+      source: "claude-code",
+      agentChannelId: CHANNEL,
+    });
     const agentCreate = rpcCall.mock.calls.find(
       (c) => c[1] === "runtime.createEntity" && (c[2] as { kind: string }).kind === "do"
     );
@@ -315,6 +319,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
 
     const subagent = {
       runId: "run-1",
+      task: "audit the repo",
       parentRef: "do:parent",
       parentChannelId: "home-chan",
       parentContextId: "ctx-parent",
@@ -359,6 +364,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
 
     const subagent = {
       runId: "run-1",
+      task: "audit the repo",
       parentRef: "do:parent",
       parentChannelId: "home-chan",
       parentContextId: "ctx-parent",
@@ -368,7 +374,6 @@ describe("@workspace-extensions/claude-code prepare", () => {
     const result = await api.launchSubagent({
       channelId: CHANNEL,
       title: "Audit",
-      task: "audit the repo",
       subagent,
     });
 
@@ -484,7 +489,6 @@ describe("@workspace-extensions/claude-code prepare", () => {
 
     await api.launchSubagent({
       channelId: CHANNEL,
-      task: "audit the repo",
       options: {
         model: "opus",
         effort: "high",
@@ -496,6 +500,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
       },
       subagent: {
         runId: "run-1",
+        task: "audit the repo",
         parentRef: "do:parent",
         parentChannelId: "home-chan",
         parentContextId: "ctx-parent",
@@ -536,13 +541,14 @@ describe("@workspace-extensions/claude-code prepare", () => {
     const api = (await activate(ctx as never)).providerContracts.claudeCode;
     const subagent = {
       runId: "run-1",
+      task: "audit",
       parentRef: "do:parent",
       parentChannelId: "home-chan",
       parentContextId: "ctx-parent",
       depth: 1,
       mode: "fresh" as const,
     };
-    const result = await api.launchSubagent({ channelId: CHANNEL, task: "audit", subagent });
+    const result = await api.launchSubagent({ channelId: CHANNEL, subagent });
 
     const exitHandler = childProcessMock.child.on.mock.calls.find((c) => c[0] === "exit")![1] as (
       code: number | null,
@@ -573,7 +579,6 @@ describe("@workspace-extensions/claude-code prepare", () => {
     childProcessMock.child.on.mockClear();
     const relaunched = await api.launchSubagent({
       channelId: CHANNEL,
-      task: "audit again",
       subagent,
     });
     await api.release({
@@ -599,9 +604,9 @@ describe("@workspace-extensions/claude-code prepare", () => {
     const api = (await activate(ctx as never)).providerContracts.claudeCode;
     const result = await api.launchSubagent({
       channelId: CHANNEL,
-      task: "audit",
       subagent: {
         runId: "run-success",
+        task: "audit",
         parentRef: "do:parent",
         parentChannelId: "home-chan",
         parentContextId: "ctx-parent",
@@ -657,9 +662,9 @@ describe("@workspace-extensions/claude-code prepare", () => {
     await expect(
       api.launchSubagent({
         channelId: CHANNEL,
-        task: "audit",
         subagent: {
           runId: "run-1",
+          task: "audit",
           parentRef: "do:parent",
           parentChannelId: "home-chan",
           parentContextId: "ctx-parent",

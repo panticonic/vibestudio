@@ -424,6 +424,66 @@ function toolCallIdFromBlock(block: unknown): string | null {
   return typeof id === "string" && id.length > 0 ? id : null;
 }
 
+/**
+ * Tool calls and their results are one causal transcript unit even when
+ * asynchronous steering messages arrive between them. Expand a retained
+ * selection in both directions so context trimming can never keep one side
+ * while dropping the other.
+ */
+function closeOverToolInteractions(
+  messages: readonly ModelMessage[],
+  selected: Set<number>
+): Set<number> {
+  const ownerByToolCall = new Map<string, number>();
+  const resultsByToolCall = new Map<string, number[]>();
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index]!;
+    if (message.role === "assistant") {
+      for (const block of message.blocks ?? []) {
+        const id = toolCallIdFromBlock(block);
+        if (id) ownerByToolCall.set(id, index);
+      }
+    } else if (message.role === "toolResult" && message.toolCallId) {
+      const indexes = resultsByToolCall.get(message.toolCallId) ?? [];
+      indexes.push(index);
+      resultsByToolCall.set(message.toolCallId, indexes);
+    }
+  }
+
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const index of [...selected]) {
+      const message = messages[index]!;
+      if (message.role === "toolResult" && message.toolCallId) {
+        const owner = ownerByToolCall.get(message.toolCallId);
+        if (owner !== undefined && !selected.has(owner)) {
+          selected.add(owner);
+          changed = true;
+        }
+      } else if (message.role === "assistant") {
+        for (const block of message.blocks ?? []) {
+          const id = toolCallIdFromBlock(block);
+          if (!id) continue;
+          for (const resultIndex of resultsByToolCall.get(id) ?? []) {
+            if (!selected.has(resultIndex)) {
+              selected.add(resultIndex);
+              changed = true;
+            }
+          }
+        }
+      }
+    }
+  }
+  return selected;
+}
+
+function toolInteractionIndexes(
+  messages: readonly ModelMessage[],
+  assistantIndex: number
+): Set<number> {
+  return closeOverToolInteractions(messages, new Set([assistantIndex]));
+}
+
 /** Journaled protocol blocks carry `content`; pi-ai message blocks carry
  *  `text` / `thinking`. Passing protocol blocks through raw makes pi-ai call
  *  `text.replace` on undefined for every historical text block — which fails
@@ -553,11 +613,12 @@ function deterministicTestModeModelOutcome(
   if (testMode !== "1" && processEnv?.["VIBESTUDIO_TEST_MODE"] !== "1") return null;
 
   // This deterministic endpoint substitutes only for model inference,
-  // independently of whichever provider a fresh profile resolves. Honor
-  // an explicit first read action from the hydrated system prompt so E2E still
-  // exercises the real invocation, file transport, and continuation loop.
-  const firstAction = systemPrompt.match(/##\s+Your first action\b([\s\S]*?)(?=\n##\s|$)/i)?.[1];
-  const requestedRead = firstAction?.match(/\bread\(\s*["']([^"']+)["']\s*\)/)?.[1];
+  // independently of whichever provider a fresh profile resolves. The opening
+  // turn is the prompt's executable startup contract; honor its explicit
+  // Markdown-path read so E2E still exercises the real invocation, file
+  // transport, and continuation loop.
+  const openingTurn = systemPrompt.match(/##\s+Opening turn\b([\s\S]*?)(?=\n##\s|$)/i)?.[1];
+  const requestedRead = openingTurn?.match(/\bread\s+`([^`]+)`/i)?.[1];
   if (requestedRead && descriptor.request.activeToolNames.includes("read")) {
     const turnOpenedAt = state.openTurn?.openedAtSeq ?? 0;
     const readCompleted = state.entries.some(
@@ -1463,29 +1524,36 @@ function boundModelInput(input: {
     };
   }
 
-  const messages = [...input.messages];
+  let messages = [...input.messages];
   let removedMessages = 0;
   let windowedToolResults = 0;
 
   // Prior turns are the cheapest context to discard. Preserve the newest user
-  // request and everything after it.
+  // request and everything after it. Steering can arrive while tools from an
+  // earlier assistant message are still settling, so retain the complete
+  // assistant/result interaction for every result that crosses this boundary.
   const lastUser = findLastUserMessageIndex(messages);
   if (lastUser > 0) {
-    removedMessages += lastUser;
-    messages.splice(0, lastUser);
+    const retained = closeOverToolInteractions(
+      messages,
+      new Set(messages.map((_message, index) => index).filter((index) => index >= lastUser))
+    );
+    removedMessages += messages.length - retained.size;
+    messages = messages.filter((_message, index) => retained.has(index));
   }
 
   // Within a tool-heavy current turn, discard oldest completed interactions
-  // while retaining at least the newest assistant/result unit.
+  // while retaining at least the newest assistant/result unit. Results need
+  // not be contiguous with their assistant because pushed child/user steering
+  // may be interleaved.
   while (serializedMessageChars(messages) > messageCharBudget) {
     const assistantIndexes = messages
       .map((message, index) => (message.role === "assistant" ? index : -1))
       .filter((index) => index >= 0);
     if (assistantIndexes.length <= 1) break;
-    const start = assistantIndexes[0]!;
-    const end = assistantIndexes[1]!;
-    removedMessages += end - start;
-    messages.splice(start, end - start);
+    const remove = toolInteractionIndexes(messages, assistantIndexes[0]!);
+    removedMessages += remove.size;
+    messages = messages.filter((_message, index) => !remove.has(index));
   }
 
   // A single returned artifact can still exceed the whole model budget. Keep
@@ -1512,10 +1580,9 @@ function boundModelInput(input: {
   while (serializedMessageChars(messages) > messageCharBudget) {
     const assistant = messages.findIndex((message) => message.role === "assistant");
     if (assistant < 0) break;
-    let end = assistant + 1;
-    while (messages[end]?.role === "toolResult") end += 1;
-    removedMessages += end - assistant;
-    messages.splice(assistant, end - assistant);
+    const remove = toolInteractionIndexes(messages, assistant);
+    removedMessages += remove.size;
+    messages = messages.filter((_message, index) => !remove.has(index));
   }
 
   if (removedMessages > 0 && messages.length > 0) {

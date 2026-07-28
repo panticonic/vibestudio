@@ -4,6 +4,41 @@ import type { SqlStorage } from "@workspace/runtime/worker";
 import { SubagentRunStore } from "./subagent-runs.js";
 
 describe("SubagentRunStore schema", () => {
+  it("retains closed receipts without consuming an owned child slot", async () => {
+    const sql = (await createInMemorySql()) as unknown as SqlStorage;
+    const store = new SubagentRunStore(sql);
+    store.createTables();
+    store.insert({
+      runId: "run-1",
+      taskChannelId: "task-1",
+      parentContextId: "parent-1",
+      childContextId: "child-1",
+      childEntityId: "entity-1",
+      childParticipantId: null,
+      parentChannelId: "channel-1",
+      mode: "fresh",
+      label: "child",
+      depth: 1,
+      status: "running",
+      integration: "integrated",
+      startedAt: 1,
+      lastActivityAt: 2,
+      agentKind: "pi",
+      launchConfig: { model: "openai-codex:gpt-5.3-codex-spark" },
+      externalSessionEntityId: null,
+      externalGenerationId: null,
+    });
+
+    expect(store.countAllocated()).toBe(1);
+    store.setStatus("run-1", "closed");
+
+    expect(store.countAllocated()).toBe(0);
+    expect(store.resolveReference("run-1")).toMatchObject({
+      kind: "exact",
+      run: { status: "closed", integration: "integrated" },
+    });
+  });
+
   it("rejects the obsolete merge_status shape instead of migrating it", async () => {
     const sql = (await createInMemorySql()) as unknown as SqlStorage;
     sql.exec(`

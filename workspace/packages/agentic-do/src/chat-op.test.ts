@@ -16,7 +16,11 @@ import type { LifecyclePrepareInput, LifecycleResumeInput } from "@workspace/run
 import { ids } from "@workspace/agent-loop";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import { rpc, type RpcClient } from "@vibestudio/rpc";
-import { AGENTIC_EVENT_PAYLOAD_KIND, type AgenticEvent } from "@workspace/agentic-protocol";
+import {
+  AGENTIC_EVENT_PAYLOAD_KIND,
+  type AgenticEvent,
+  type ParticipantRef,
+} from "@workspace/agentic-protocol";
 import { sha256HexSyncText } from "@vibestudio/content-addressing";
 import type { ChannelEvent, ParticipantDescriptor } from "@workspace/harness";
 import type { RpcChannelMessage } from "@workspace/pubsub";
@@ -107,8 +111,19 @@ class TestVessel extends AgentVesselBase {
     }>,
     messageTypes: new Map<string, Record<string, unknown>>(),
     calls: [] as Array<{ callId: string; targetPid: string; method: string; args: unknown }>,
-    participants: [] as Array<{ participantId: string; metadata: Record<string, unknown> }>,
+    participants: [] as Array<{
+      participantId: string;
+      ref: ParticipantRef;
+      metadata: Record<string, unknown>;
+    }>,
     subscriptions: [] as Array<{ channelId: string; participantId: string }>,
+    sent: [] as Array<{
+      channelId: string;
+      participantId: string;
+      messageId: string;
+      content: string;
+      options?: Record<string, unknown>;
+    }>,
     replay: new Map<string, ChannelEvent[]>(),
     envelopes: new Map<string, ChannelEvent>(),
   };
@@ -313,7 +328,16 @@ class TestVessel extends AgentVesselBase {
         }
       },
       getEnvelope: vi.fn(async (envelopeId: string) => stub.envelopes.get(envelopeId) ?? null),
-      send: vi.fn(async () => undefined),
+      send: vi.fn(
+        async (
+          participantId: string,
+          messageId: string,
+          content: string,
+          options?: Record<string, unknown>
+        ) => {
+          stub.sent.push({ channelId, participantId, messageId, content, options });
+        }
+      ),
       recordTaskProvenance: vi.fn(async () => undefined),
       openSubscription: vi.fn(async (participantId: string) => {
         operationLog.push(`channel:${channelId}:subscribe`);
@@ -727,13 +751,13 @@ describe("AgentVesselBase channel ready wake policy", () => {
     expect(instance.wakeSpy).toHaveBeenCalledWith(CHANNEL);
   });
 
-  it("does not generic-wake turn-final supervisor subscriptions after subscribe replay", async () => {
+  it("does not generic-wake explicit supervisor subscriptions after subscribe replay", async () => {
     const { instance } = await createTestDO(ReadyWakeProbe, TEST_AGENT_ENV);
 
     await instance.subscribeChannel({
       channelId: CHANNEL,
       contextId: "ctx-1",
-      config: { wakePolicy: "turn-final" },
+      config: { wakePolicy: "explicit" },
       replay: false,
     });
 
@@ -754,9 +778,9 @@ describe("AgentVesselBase channel ready wake policy", () => {
     expect(instance.wakeSpy).toHaveBeenCalledWith(CHANNEL);
   });
 
-  it("does not generic-wake turn-final supervisor subscriptions on ready", async () => {
+  it("does not generic-wake explicit supervisor subscriptions on ready", async () => {
     const { instance } = await createTestDO(ReadyWakeProbe, TEST_AGENT_ENV);
-    await instance.registerSubscriptionForTest(CHANNEL, { wakePolicy: "turn-final" });
+    await instance.registerSubscriptionForTest(CHANNEL, { wakePolicy: "explicit" });
     instance.callerKindForTest = "do";
     instance.callerIdForTest = "do:workers/pubsub-channel:PubSubChannel:chan-1";
 
@@ -1003,6 +1027,29 @@ describe("AgentVesselBase.chatOp", () => {
     await expect(vessel.chatOp(CHANNEL, "replayEnvelope", ["env-7"])).resolves.toEqual(event);
     await expect(vessel.chatOp(CHANNEL, "replayEnvelope", ["missing"])).resolves.toBeNull();
     await expect(vessel.chatOp(CHANNEL, "replayEnvelope", [""])).resolves.toBeNull();
+  });
+
+  it("getParticipants exposes the canonical chat participant shape", async () => {
+    const vessel = await makeVessel();
+    vessel.callerIdForTest = await expectedEvalCaller();
+    vessel.channelStub.participants = [
+      {
+        participantId: "participant-1",
+        ref: { kind: "agent", id: "agent-1" },
+        metadata: { type: "agent", name: "Agent" },
+      },
+    ];
+
+    await expect(vessel.chatOp(CHANNEL, "getParticipants", [])).resolves.toEqual([
+      {
+        id: "participant-1",
+        ref: { kind: "agent", id: "agent-1" },
+        type: "agent",
+        name: "Agent",
+        isPerson: false,
+        isAgent: true,
+      },
+    ]);
   });
 
   it("configureAgent + describeSelf expose per-agent config to the eval `agent` binding", async () => {
@@ -1390,6 +1437,8 @@ class SubagentSpawnProbe extends TestVessel {
   readonly vcsResponses = new Map<string, unknown[]>();
   gadLogHead: Record<string, unknown> | null = null;
   failClaudeLaunch = false;
+  failExternalReleaseCount = 0;
+  failDestroyContextCount = 0;
   ownerRuntimeContextId = "ctx-1";
   readonly handleIncomingSpy = vi.fn(async (_channelId: string, _incoming: unknown) => {});
   protected override async ensurePromptArtifacts(): Promise<void> {}
@@ -1417,6 +1466,13 @@ class SubagentSpawnProbe extends TestVessel {
         }
         if (target === "main" && method === "runtime.createSubagentContext") {
           return { contextId: "ctx-child" };
+        }
+        if (target === "main" && method === "runtime.destroyContext") {
+          if (this.failDestroyContextCount > 0) {
+            this.failDestroyContextCount -= 1;
+            throw new Error("destroyContext boom");
+          }
+          return { destroyed: true };
         }
         if (target === "main" && method === "runtime.createEntity") {
           const spec = args[0] as {
@@ -1465,6 +1521,10 @@ class SubagentSpawnProbe extends TestVessel {
             };
           }
           if (provider === "claudeCode" && providerMethod === "release") {
+            if (this.failExternalReleaseCount > 0) {
+              this.failExternalReleaseCount -= 1;
+              throw new Error("release boom");
+            }
             return { released: true };
           }
           if (provider === "claudeCode" && providerMethod === "inspectLaunch") {
@@ -1494,6 +1554,10 @@ class SubagentSpawnProbe extends TestVessel {
             };
           }
           if (ext === "@workspace-extensions/codex" && extMethod === "release") {
+            if (this.failExternalReleaseCount > 0) {
+              this.failExternalReleaseCount -= 1;
+              throw new Error("release boom");
+            }
             return { released: true };
           }
         }
@@ -1576,6 +1640,9 @@ class SubagentSpawnProbe extends TestVessel {
   async readSubagentForTest(runId: string, afterSeq: number, parentChannelId = CHANNEL) {
     return this.readSubagent(runId, afterSeq, parentChannelId);
   }
+  async sendToSubagentForTest(runId: string, message: string, parentChannelId = CHANNEL) {
+    return this.sendToSubagent("send-test", runId, message, parentChannelId);
+  }
   async completeSubagentForTest(runId: string, report: string, outcome: "success" | "failed") {
     const run = this.subagentRuns.get(runId);
     if (!run) throw new Error(`missing run ${runId}`);
@@ -1588,6 +1655,9 @@ class SubagentSpawnProbe extends TestVessel {
         closeSubagent(runId: string, discard: boolean): Promise<unknown>;
       }
     ).closeSubagent(runId, discard);
+  }
+  immediatePromptForTest(channelId = CHANNEL) {
+    return this.immediatePrompt(channelId);
   }
   async dispatchSubagentProgressForTest(now = Date.now()) {
     const [claim] = this.claimReadyWork("agent-inbox", {
@@ -1948,6 +2018,24 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     });
   });
 
+  it("requires one durable task for forked children too", async () => {
+    const probe = await makeSubagentSpawnProbe();
+
+    const out = await probe.spawnForTest(CHANNEL, "inv-missing-task", {
+      mode: "fork",
+    });
+
+    expect(out).toEqual({
+      result: "spawn_subagent requires a non-empty durable task",
+      isError: true,
+    });
+    expect(
+      probe.rpcCalls.some(
+        (call) => call.target === "main" && call.method === "runtime.createSubagentContext"
+      )
+    ).toBe(false);
+  });
+
   it("reuses an existing child trajectory fork point when a forked spawn is retried", async () => {
     const probe = await makeSubagentSpawnProbe();
     const parentLogId = logIdForChannel(CHANNEL);
@@ -2006,6 +2094,25 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     expect(supervisorSubscribeIndex).toBeGreaterThanOrEqual(0);
     expect(forkIndex).toBeLessThan(initIndex);
     expect(initIndex).toBeLessThan(supervisorSubscribeIndex);
+    const seed = probe.channelStub.published.find(
+      (published) => published.idempotencyKey === "subagent-seed:inv-1"
+    );
+    expect(seed?.event).toMatchObject({
+      payload: {
+        blocks: [
+          {
+            type: "text",
+            content: expect.stringContaining("## Fork Assignment Boundary"),
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(seed?.event)).toContain(
+      "inherited parent trajectory is reference context only"
+    );
+    expect(JSON.stringify(seed?.event)).toContain(
+      "<assigned_task>\\nstart the forked child\\n</assigned_task>"
+    );
   });
 
   it("fails before context creation when the owner entity and channel subscription contexts diverge", async () => {
@@ -2328,6 +2435,44 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     expect(probe.rpcCalls.some(({ method }) => method === "vcs.inspect")).toBe(false);
   });
 
+  it("pages child log history from the committed event when the working head is an application", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    const runId = "inv-log";
+    probe.insertSubagentRunForTest({ runId, status: "running" });
+    const committed = { kind: "event" as const, eventId: "event:child-commit" };
+    const workingHead = {
+      kind: "application" as const,
+      applicationId: "application:child-working",
+    };
+    probe.respondToVcs(
+      "status",
+      semanticStatus("ctx-inv-log-stale", committed.eventId, workingHead, false)
+    );
+    probe.respondToVcs("history", {
+      root: committed,
+      entries: [{ node: committed, createdAt: null, summary: "Child fixture commit" }],
+      nextCursor: null,
+    });
+
+    const out = await probe.inspectSubagentForTest(runId, "log");
+
+    expect((out.content[0] as { text?: string } | undefined)?.text).toContain(
+      "Child fixture commit"
+    );
+    expect(probe.rpcCalls.filter(({ method }) => method.startsWith("vcs."))).toEqual([
+      {
+        target: "main",
+        method: "vcs.status",
+        args: [{ contextId: "ctx-inv-log-stale" }],
+      },
+      {
+        target: "main",
+        method: "vcs.history",
+        args: [{ root: committed, direction: "past", limit: 20 }],
+      },
+    ]);
+  });
+
   it("recovers a missing subagent row from the parent invocation card for transcript reads", async () => {
     const probe = await makeSubagentSpawnProbe();
     probe.seedSubagentStartedInParentChannelForTest("inv-recovered");
@@ -2526,18 +2671,31 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     expect(probe.subagentRunForTest(runId)).not.toBeNull();
 
     await expect(probe.closeSubagentForTest(runId, true)).resolves.toBeTruthy();
-    expect(probe.subagentRunForTest(runId)).toBeNull();
+    expect(probe.subagentRunForTest(runId)).toMatchObject({
+      status: "closed",
+      integration: "discarded",
+    });
   });
 
-  it("resolves a long unique trailing-ellipsis run reference to its canonical id", async () => {
+  it("resolves a long unique run prefix with or without its display ellipsis", async () => {
     const probe = await makeSubagentSpawnProbe();
     const runId =
       "call_nnrl4WyxSSNYE7v57Bm9QPtD|fc_028d12fc097db4d5016a549442191c81918d66c1c1c324a9eb";
     probe.insertSubagentRunForTest({ runId, status: "running" });
 
-    const out = await probe.readSubagentForTest("call_nnrl4WyxSSNYE7v57Bm9P...", 0);
+    const withEllipsis = await probe.readSubagentForTest("call_nnrl4WyxSSNYE7v57Bm9P...", 0);
+    const withoutEllipsis = await probe.readSubagentForTest("call_nnrl4WyxSSNYE7v57Bm9QPtD", 0);
+    const lightlyMistyped = await probe.readSubagentForTest("call_nnrWyxSSNYE7v57Bm…", 0);
 
-    expect(out.details).toMatchObject({
+    expect(withEllipsis.details).toMatchObject({
+      runId: "call_nnrl4WyxSSNYE7v57Bm…",
+      empty: true,
+    });
+    expect(withoutEllipsis.details).toMatchObject({
+      runId: "call_nnrl4WyxSSNYE7v57Bm…",
+      empty: true,
+    });
+    expect(lightlyMistyped.details).toMatchObject({
       runId: "call_nnrl4WyxSSNYE7v57Bm…",
       empty: true,
     });
@@ -2593,7 +2751,109 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       "vcs.compare",
       "runtime.destroyContext",
     ]);
-    expect(probe.subagentRunForTest(runId)).toBeNull();
+    expect(probe.subagentRunForTest(runId)).toMatchObject({
+      runId,
+      status: "closed",
+      integration: "integrated",
+    });
+    await expect(
+      probe.inspectSubagentForTest("call_close_reference_1234567890_...", "status")
+    ).resolves.toMatchObject({
+      details: {
+        runId: "call_close_reference_123…",
+        status: "closed",
+        integration: "integrated",
+        available: false,
+        reason: "closed",
+      },
+    });
+    expect(probe.immediatePromptForTest()).toContain("## Durable Supervised Subagent Ledger");
+    expect(probe.immediatePromptForTest()).toContain(
+      "call_close_reference_123… (stale subagent): status=closed"
+    );
+  });
+
+  it("targets follow-up instructions to the exact child participant", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      label: "background audit",
+      task: "audit this in the child",
+    });
+
+    await probe.sendToSubagentForTest("inv-1", "Correct the focused verification.");
+
+    expect(probe.channelStub.sent).toContainEqual({
+      channelId: "task-inv-1",
+      participantId: AGENT_ID,
+      messageId: "subagent-msg:send-test",
+      content: "Correct the focused verification.",
+      options: {
+        senderMetadata: { type: "agent", name: AGENT_ID },
+        to: [{ kind: "participant", participantId: "participant-child" }],
+      },
+    });
+  });
+
+  it("holds three owned child slots until runs are explicitly closed", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    for (const runId of ["inv-1", "inv-2", "inv-3"]) {
+      const result = await probe.spawnForTest(CHANNEL, runId, {
+        mode: "fresh",
+        label: runId,
+        task: `work for ${runId}`,
+      });
+      expect(result).toMatchObject({ isError: false });
+    }
+    await probe.completeSubagentForTest("inv-1", "Done.", "success");
+
+    const blocked = await probe.spawnForTest(CHANNEL, "inv-4", {
+      mode: "fresh",
+      label: "replacement",
+      task: "replace an existing child",
+    });
+
+    expect(blocked).toMatchObject({
+      isError: true,
+      result: expect.stringContaining("close an existing run before spawning a replacement"),
+    });
+    expect(probe.subagentRunForTest("inv-4")).toBeNull();
+
+    probe.failDestroyContextCount = 1;
+    await expect(probe.closeSubagentForTest("inv-1", true)).rejects.toMatchObject({
+      code: "SubagentCleanupIncomplete",
+      message: expect.stringContaining("retry close_subagent with the same runId"),
+      errorData: {
+        code: "SubagentCleanupIncomplete",
+        operation: "subagent-close-cleanup",
+        runId: "inv-1",
+        failures: [{ stage: "context-destroy", message: "destroyContext boom" }],
+      },
+    });
+    expect(probe.subagentRunForTest("inv-1")).toMatchObject({
+      status: "completed",
+      integration: "discarded",
+    });
+
+    const stillBlocked = await probe.spawnForTest(CHANNEL, "inv-4", {
+      mode: "fresh",
+      label: "replacement",
+      task: "do not replace a child whose cleanup is incomplete",
+    });
+    expect(stillBlocked).toMatchObject({
+      isError: true,
+      result: expect.stringContaining("close an existing run before spawning a replacement"),
+    });
+
+    const closed = await probe.closeSubagentForTest("inv-1");
+    expect(closed).toMatchObject({ details: { discarded: true } });
+    const replacement = await probe.spawnForTest(CHANNEL, "inv-4", {
+      mode: "fresh",
+      label: "replacement",
+      task: "replace a released child slot",
+    });
+    expect(replacement).toMatchObject({ isError: false });
+    expect(probe.subagentRunForTest("inv-1")).toMatchObject({ status: "closed" });
   });
 
   it("relays child task-channel activity onto the parent subagent card", async () => {
@@ -2629,6 +2889,105 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
         subagent: { kind: "turn-started", messageSeq: 42 },
       },
     });
+  });
+
+  it("keeps ordinary child turn output as progress without replacing the supervisor goal", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      label: "background audit",
+      task: "audit this in the child",
+    });
+
+    await probe.processChannelEvent("task-inv-1", {
+      id: 41,
+      messageId: "child-message-41",
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: {
+        kind: "message.completed",
+        actor: { kind: "agent", id: "participant-child", displayName: "Child" },
+        causality: { messageId: "child-message-41" },
+        payload: {
+          protocol: "agentic.trajectory.v1",
+          role: "assistant",
+          blocks: [{ type: "text", content: "Focused child progress." }],
+          outcome: "completed",
+        },
+        createdAt: new Date().toISOString(),
+      } as unknown as AgenticEvent,
+      senderId: "participant-child",
+      ts: Date.now(),
+    });
+    await probe.processChannelEvent("task-inv-1", {
+      id: 42,
+      messageId: "child-turn-closed",
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: {
+        kind: "turn.closed",
+        actor: { kind: "agent", id: "participant-child", displayName: "Child" },
+        causality: { turnId: "child-turn-1" },
+        payload: { protocol: "agentic.trajectory.v1" },
+        createdAt: new Date().toISOString(),
+      } as unknown as AgenticEvent,
+      senderId: "participant-child",
+      ts: Date.now(),
+    });
+
+    expect(probe.handleIncomingSpy).not.toHaveBeenCalled();
+  });
+
+  it("routes an explicit child update to the supervisor's parent channel with goal context", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      label: "background audit",
+      task: "audit this in the child",
+    });
+
+    await probe.processChannelEvent("task-inv-1", {
+      id: 41,
+      messageId: "child-message-41",
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: {
+        kind: "message.completed",
+        actor: { kind: "agent", id: "participant-child", displayName: "Child" },
+        causality: { messageId: "child-message-41" },
+        payload: {
+          protocol: "agentic.trajectory.v1",
+          role: "assistant",
+          blocks: [{ type: "text", content: "Found a meaningful blocker." }],
+          outcome: "completed",
+          saliency: "say",
+        },
+        createdAt: new Date().toISOString(),
+      } as unknown as AgenticEvent,
+      senderId: "participant-child",
+      ts: Date.now(),
+    });
+
+    expect(probe.handleIncomingSpy).toHaveBeenCalledOnce();
+    expect(probe.handleIncomingSpy).toHaveBeenCalledWith(
+      CHANNEL,
+      expect.objectContaining({
+        type: "command",
+        command: expect.objectContaining({
+          kind: "prompt",
+          channelId: CHANNEL,
+          source: { envelopeId: "subagent-explicit:inv-1:41" },
+          sourceMessageId: "child-message-41",
+          content: expect.stringContaining("Found a meaningful blocker."),
+        }),
+      })
+    );
+    expect(probe.handleIncomingSpy.mock.calls[0]?.[1]).toMatchObject({
+      command: {
+        content: expect.stringContaining("This is not a new request"),
+      },
+    });
+    expect(probe.handleIncomingSpy).not.toHaveBeenCalledWith(
+      "task-inv-1",
+      expect.anything()
+    );
   });
 
   it("durably retries child progress in order after a publication failure", async () => {
@@ -2722,6 +3081,49 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
         }),
       })
     );
+    expect(probe.handleIncomingSpy.mock.calls[0]?.[1]).toMatchObject({
+      command: {
+        content: expect.stringContaining(
+          "All subagents currently owned by this supervisor channel are now terminal"
+        ),
+      },
+    });
+  });
+
+  it("resumes the supervisor only after the whole sibling group is terminal", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      label: "first audit",
+      task: "audit the first area",
+    });
+    await probe.spawnForTest(CHANNEL, "inv-2", {
+      mode: "fresh",
+      label: "second audit",
+      task: "audit the second area",
+    });
+
+    await probe.completeSubagentForTest("inv-1", "First result.", "success");
+
+    expect(probe.subagentRunForTest("inv-1")).toMatchObject({ status: "completed" });
+    expect(probe.subagentRunForTest("inv-2")).toMatchObject({ status: "running" });
+    expect(probe.handleIncomingSpy).not.toHaveBeenCalled();
+
+    await probe.completeSubagentForTest("inv-2", "Second result.", "success");
+
+    expect(probe.subagentRunForTest("inv-2")).toMatchObject({ status: "completed" });
+    expect(probe.handleIncomingSpy).toHaveBeenCalledOnce();
+    expect(probe.handleIncomingSpy.mock.calls[0]?.[1]).toMatchObject({
+      command: {
+        channelId: CHANNEL,
+        content: expect.stringContaining("All subagents currently owned"),
+      },
+    });
+    const wake = probe.handleIncomingSpy.mock.calls[0]?.[1] as {
+      command?: { content?: string };
+    };
+    expect(wake.command?.content).toContain("inv-1 (first audit): completed");
+    expect(wake.command?.content).toContain("inv-2 (second audit): completed");
   });
 
   it("keeps child completion retryable when waking the parent fails", async () => {
@@ -2794,17 +3196,22 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     expect(launchCall!.args[0]).toBe("claudeCode");
     const launchArg = (launchCall!.args[2] as unknown[])[0] as {
       channelId: string;
-      task: string;
       options?: Record<string, unknown>;
-      subagent: { runId: string; parentRef: string; parentChannelId: string; depth: number };
+      subagent: {
+        runId: string;
+        task: string;
+        parentRef: string;
+        parentChannelId: string;
+        depth: number;
+      };
     };
     expect(launchArg.channelId).toBe("task-inv-cc");
-    expect(launchArg.task).toBe("audit the repo");
     // The spawn `config` reaches the launcher as CLI options (the extension
     // whitelists what its CLI supports).
     expect(launchArg.options).toEqual({ model: "opus", effort: "high" });
     expect(launchArg.subagent).toMatchObject({
       runId: "inv-cc",
+      task: "audit the repo",
       parentChannelId: CHANNEL,
       depth: 1,
     });
@@ -2898,24 +3305,73 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       generationId: "generation:cc-1",
     });
 
+    probe.failExternalReleaseCount = 1;
+    probe.failDestroyContextCount = 1;
+    await expect(probe.closeSubagentForTest("inv-cc", true)).rejects.toMatchObject({
+      code: "SubagentCleanupIncomplete",
+      errorData: {
+        code: "SubagentCleanupIncomplete",
+        operation: "subagent-close-cleanup",
+        runId: "inv-cc",
+        failures: [
+          { stage: "external-release", message: "release boom" },
+          { stage: "context-destroy", message: "destroyContext boom" },
+        ],
+      },
+    });
+    expect(probe.subagentRunForTest("inv-cc")).toMatchObject({
+      status: "cancelled",
+      integration: "discarded",
+    });
+
     await probe.closeSubagentForTest("inv-cc", true);
 
-    const releaseCall = probe.rpcCalls.find(
+    const releaseCalls = probe.rpcCalls.filter(
       (c) => c.method === "extensions.invokeProvider" && (c.args[1] as string) === "release"
     );
-    expect(releaseCall).toBeDefined();
-    expect(releaseCall!.args[0]).toBe("claudeCode");
-    expect((releaseCall!.args[2] as unknown[])[0]).toEqual({
+    expect(releaseCalls).toHaveLength(2);
+    expect(releaseCalls[0]!.args[0]).toBe("claudeCode");
+    expect((releaseCalls[0]!.args[2] as unknown[])[0]).toEqual({
       entityId: "session:cc-1",
       generationId: "generation:cc-1",
     });
-    // Context teardown still runs.
+    // Context teardown is attempted even when launcher release fails, and both
+    // idempotent stages are retried together.
     expect(
-      probe.rpcCalls.some(
+      probe.rpcCalls.filter(
         (c) => c.method === "runtime.destroyContext" && JSON.stringify(c.args).includes("ctx-child")
       )
-    ).toBe(true);
-    expect(probe.subagentRunForTest("inv-cc")).toBeNull();
+    ).toHaveLength(2);
+    expect(probe.subagentRunForTest("inv-cc")).toMatchObject({
+      status: "closed",
+      integration: "discarded",
+    });
+  });
+
+  it("reports external runtime inspection as not applicable for a Pi subagent", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    probe.insertSubagentRunForTest({ runId: "inv-pi", status: "running" });
+
+    const runtime = await probe.inspectSubagentForTest("inv-pi", "runtime");
+
+    expect(runtime).toMatchObject({
+      details: {
+        runId: "inv-pi",
+        query: "runtime",
+        available: false,
+        reason: "not-external",
+        agentKind: "pi",
+        status: "running",
+      },
+    });
+    expect(
+      probe.rpcCalls.some(
+        (call) =>
+          (call.method === "extensions.invoke" ||
+            call.method === "extensions.invokeProvider") &&
+          call.args[1] === "inspectLaunch"
+      )
+    ).toBe(false);
   });
 });
 

@@ -1,6 +1,6 @@
 /**
  * SubagentRunStore — durable bookkeeping for the subagent runs a supervising
- * vessel owns, plus the per-channel turn-final wake cursor.
+ * vessel owns.
  *
  * The log is the source of truth for a run's transcript (the task channel) and
  * its trajectory record (parent invocation events); this table is the vessel's
@@ -20,7 +20,10 @@ export type SubagentRunStatus =
   | "completed"
   | "failed"
   | "cancelled"
-  | "abandoned";
+  | "abandoned"
+  /** Child resources were released; the row remains as the supervisor's
+   * durable, handle-resolvable lifecycle receipt. */
+  | "closed";
 
 export type SubagentRunIntegration = "integrated" | "conflicted" | "discarded";
 
@@ -66,6 +69,7 @@ const SUBAGENT_RUN_STATUSES = [
   "failed",
   "cancelled",
   "abandoned",
+  "closed",
 ] as const satisfies readonly SubagentRunStatus[];
 const SUBAGENT_RUN_INTEGRATIONS = [
   "integrated",
@@ -73,11 +77,11 @@ const SUBAGENT_RUN_INTEGRATIONS = [
   "discarded",
 ] as const satisfies readonly SubagentRunIntegration[];
 
-function stripTrailingEllipsis(reference: string): string | null {
+function normalizeAbbreviatedReference(reference: string): string {
   const trimmed = reference.trim();
   if (trimmed.endsWith("...")) return trimmed.slice(0, -3).trimEnd();
   if (trimmed.endsWith("…")) return trimmed.slice(0, -1).trimEnd();
-  return null;
+  return trimmed;
 }
 
 /** Return edit distance when it is within `limit`, otherwise stop early. */
@@ -105,7 +109,7 @@ function boundedEditDistance(left: string, right: string, limit: number): number
 }
 
 function abbreviatedReferenceScore(reference: string, runId: string): number | null {
-  const maxDistance = reference.length >= 32 ? 2 : 1;
+  const maxDistance = reference.length >= MIN_ABBREVIATED_RUN_ID_LENGTH ? 2 : 1;
   let best: number | null = null;
   const shortest = Math.max(1, reference.length - maxDistance);
   const longest = Math.min(runId.length, reference.length + maxDistance);
@@ -298,20 +302,6 @@ export class SubagentRunStore {
       primaryKey: ["run_id"],
     });
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS subagent_wake_cursors (
-        channel_id TEXT PRIMARY KEY,
-        last_seq INTEGER NOT NULL
-      )
-    `);
-    assertExactSqlTableSchema(this.sql, {
-      table: "subagent_wake_cursors",
-      columns: [
-        ["channel_id", "TEXT", false],
-        ["last_seq", "INTEGER", true],
-      ],
-      primaryKey: ["channel_id"],
-    });
-    this.sql.exec(`
       CREATE TABLE IF NOT EXISTS subagent_progress_outbox (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
         idempotency_key TEXT NOT NULL UNIQUE,
@@ -386,18 +376,18 @@ export class SubagentRunStore {
   }
 
   /**
-   * Resolve the durable id first, then an explicitly abbreviated display copy.
-   * Abbreviations must end in an ellipsis, be long enough to be meaningful,
-   * and identify one best run in the caller's parent channel. A tiny edit
-   * allowance covers display/model truncation at the boundary without turning
-   * arbitrary strings into run handles.
+   * Resolve the durable id first, then a sufficiently long unique prefix.
+   * Display handles include an ellipsis, but callers may naturally retain or
+   * omit it when copying a prefix. A tiny edit allowance covers
+   * display/model truncation at the boundary without turning arbitrary strings
+   * into run handles.
    */
   resolveReference(reference: string, parentChannelId?: string): SubagentRunReferenceResolution {
     const exact = this.get(reference);
     if (exact) return { kind: "exact", run: exact };
 
-    const abbreviated = stripTrailingEllipsis(reference);
-    if (!abbreviated || abbreviated.length < MIN_ABBREVIATED_RUN_ID_LENGTH) return null;
+    const abbreviated = normalizeAbbreviatedReference(reference);
+    if (abbreviated.length < MIN_ABBREVIATED_RUN_ID_LENGTH) return null;
 
     const candidates = this.listAll()
       .filter((run) => !parentChannelId || run.parentChannelId === parentChannelId)
@@ -433,10 +423,11 @@ export class SubagentRunStore {
     ).map(toRow);
   }
 
-  /** Number of live (not-yet-terminal) runs — the fan-out gate. */
-  countRunning(): number {
+  /** Number of child contexts still owned by the supervisor. Closed receipt
+   * rows remain queryable but no longer consume a slot. */
+  countAllocated(): number {
     const row = this.sql
-      .exec(`SELECT COUNT(*) AS cnt FROM subagent_runs WHERE status IN ('starting', 'running')`)
+      .exec(`SELECT COUNT(*) AS cnt FROM subagent_runs WHERE status <> 'closed'`)
       .toArray()[0];
     return Number(row?.["cnt"] ?? 0);
   }
@@ -513,25 +504,6 @@ export class SubagentRunStore {
 
   delete(runId: string): void {
     this.sql.exec(`DELETE FROM subagent_runs WHERE run_id = ?`, runId);
-  }
-
-  getWakeCursor(channelId: string): number {
-    const row = this.sql
-      .exec(`SELECT last_seq FROM subagent_wake_cursors WHERE channel_id = ?`, channelId)
-      .toArray()[0];
-    return Number(row?.["last_seq"] ?? 0);
-  }
-
-  setWakeCursor(channelId: string, seq: number): void {
-    this.sql.exec(
-      `INSERT OR REPLACE INTO subagent_wake_cursors (channel_id, last_seq) VALUES (?, ?)`,
-      channelId,
-      seq
-    );
-  }
-
-  deleteWakeCursor(channelId: string): void {
-    this.sql.exec(`DELETE FROM subagent_wake_cursors WHERE channel_id = ?`, channelId);
   }
 
   /**

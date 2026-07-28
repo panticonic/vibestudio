@@ -593,6 +593,14 @@ integration of its child context. Fan-out, depth gating, and cancellation reuse
 the existing subagent-run machinery without modification; kill/cancel releases
 the extension-owned headless launch.
 
+The launcher receives one canonical subagent binding. Its required
+`subagent.task` both supplies Claude's print-mode prompt and feeds the shared
+durable subagent contract; there is no duplicate top-level launch task that can
+drift from the vessel identity. In fork mode, that first `-p` prompt begins with
+the same explicit fork-assignment boundary as Pi: inherited parent/user
+instructions are reference context, not active work, and the enclosed delegated
+task is the child's sole assignment.
+
 The spawn's `config` maps onto the launcher CLI (extension-whitelisted, values
 validated so they can't smuggle flags): `model`, `effort`
 (low/medium/high/xhigh/max), `permissionMode`, `fallbackModel`, `maxBudgetUsd`.

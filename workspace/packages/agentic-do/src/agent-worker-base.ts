@@ -17,7 +17,6 @@ import {
   createWriteTool,
   createMoveFileTool,
   createCopyFileTool,
-  createCommitTool,
   createWorkspaceVcsTool,
   createSuspendTurnTool,
   createEvalTool,
@@ -76,6 +75,10 @@ type StandardAgentMethodOptions = {
 };
 
 const PROMPT_RESOURCE_CACHE_TTL_MS = 5_000;
+
+export function hasAskableUser(roster: readonly { ref: { kind: string } }[]): boolean {
+  return roster.some((participant) => participant.ref.kind === "user");
+}
 
 function requireBoundMutationInvocation(): never {
   throw new Error("A semantic mutation cannot execute without a bound trajectory invocation");
@@ -314,7 +317,6 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       createMoveFileTool(cwd, vcs, mutationContext, fs),
       createCopyFileTool(cwd, vcs, mutationContext, fs),
       createWorkspaceVcsTool(cwd, vcs, mutationContext),
-      createCommitTool(vcs, mutationContext),
       createEvalTool(
         <T>(method: string, methodArgs: unknown[]) => toolRpc.call<T>("main", method, methodArgs),
         // Scope the agent's EvalDO per channel (matches the old per-(channel,panel) scope),
@@ -337,7 +339,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
           toolRpc.call("main", "workspace.validateConfig", [content]).then(() => undefined),
       }),
       createSuspendTurnTool(),
-      this.createAskUserTool(),
+      ...(hasAskableUser(this.rosterSnapshot(channelId)) ? [this.createAskUserTool()] : []),
       ...createWebTools({
         rpc: {
           call: (target, method, args) => toolRpc.call(target, method, args),
@@ -459,7 +461,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "spawn_subagent",
         label: "spawn_subagent",
         description:
-          "Delegate separable work to a child agent in its own task channel and child context. Returns immediately with a runId while the child continues in the background. Use for independent investigation, parallel work, or isolated edits; do small linear work yourself. mode:'fresh' seeds a child from `task`; mode:'fork' starts the child from your current trajectory and can save substantial tokens because the context window cache is shared. Track the returned runId exactly, keep doing useful foreground work, steer with send_to_subagent only when you have new instructions, inspect files with inspect_subagent, then integrate or close. Progress is pushed; do not poll read_subagent. If nothing foreground remains, call suspend_turn({ reason:'waiting_for_background' }). The child finishes only by calling complete.",
+          "Delegate separable work to a child agent in its own task channel and child context. Returns immediately with a runId while the child continues in the background. Use for independent investigation, parallel work, or isolated edits; do small linear work yourself. mode:'fresh' seeds a child from `task`; mode:'fork' starts the child from your current trajectory and can save substantial tokens because the context window cache is shared. Track the returned runId exactly, keep doing useful foreground work, steer with send_to_subagent only when you have new instructions, inspect files with inspect_subagent, then integrate or close. A supervisor owns at most three child contexts by default; terminal runs keep their slot until closed, so do not spawn replacement groups. Progress is pushed onto the invocation card without replacing your current goal. An explicit child say can resume you; terminal cards accumulate and the final terminal sibling resumes you with the whole supervised group. Do not poll read_subagent. If nothing foreground remains, call suspend_turn({ reason:'waiting_for_background' }). The child finishes only by calling complete.",
         parameters: {
           type: "object",
           properties: {
@@ -472,7 +474,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
             task: {
               type: "string",
               description:
-                "Self-contained task/instructions. Include goal, relevant files/docs/skills, constraints, expected output, progress expectations, done criteria, and what to do if blocked. Required for 'fresh'.",
+                "The child's durable authoritative assignment, restated by the runtime on every model call. Include goal, relevant files/docs/skills, constraints, expected output, progress expectations, done criteria, and what to do if blocked.",
             },
             config: {
               type: "object",
@@ -516,7 +518,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
                 "Reasoning engine for the child (default 'pi', an in-process agent). Any other value names an external launcher extension @workspace-extensions/<agentKind>; the task is required and the launched child reports progress, completes, and integrates its committed changes exactly like a 'pi' subagent.",
             },
           },
-          required: ["mode"],
+          required: ["mode", "task"],
         } as never,
         execute: async () => {
           throw new Error("spawn_subagent is handled by the local-tool executor");
@@ -526,14 +528,14 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "send_to_subagent",
         label: "send_to_subagent",
         description:
-          "Post steering or new information into a running subagent's task channel. Use this to correct course or add context, not to poll for progress.",
+          "Send steering or new information directly to the exact child participant. Use this to correct course or add context, not to poll for progress.",
         parameters: {
           type: "object",
           properties: {
             runId: {
               type: "string",
               description:
-                "The exact subagent runId, or a sufficiently long unique trailing-ellipsis abbreviation.",
+                "The exact subagent runId or any sufficiently long unique prefix; the display ellipsis is optional.",
             },
             message: { type: "string", description: "Message to send to the subagent." },
           },
@@ -560,7 +562,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
             runId: {
               type: "string",
               description:
-                "The exact subagent runId, or a sufficiently long unique trailing-ellipsis abbreviation.",
+                "The exact subagent runId or any sufficiently long unique prefix; the display ellipsis is optional.",
             },
             query: {
               type: "string",
@@ -612,7 +614,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
             runId: {
               type: "string",
               description:
-                "The exact subagent runId, or a sufficiently long unique trailing-ellipsis abbreviation.",
+                "The exact subagent runId or any sufficiently long unique prefix; the display ellipsis is optional.",
             },
           },
           required: ["runId"],
@@ -626,14 +628,14 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "read_subagent",
         label: "read_subagent",
         description:
-          "Catch up on what a subagent said on its task channel since a cursor. Returns messages plus nextSeq; pass nextSeq as afterSeq only for deliberate transcript catch-up or debugging. Do not poll this tool waiting for progress; progress is pushed, and suspend_turn({ reason:'waiting_for_background' }) parks the parent when no foreground work remains. Use inspect_subagent instead for child files/status/diff/log.",
+          "Catch up on what a subagent said on its task channel since a cursor. Returns messages plus nextSeq; pass nextSeq as afterSeq only for deliberate transcript catch-up or debugging. Do not poll this tool waiting for progress; progress is pushed onto the invocation card without replacing the current goal, and suspend_turn({ reason:'waiting_for_background' }) parks the parent when no foreground work remains. Use inspect_subagent instead for child files/status/diff/log.",
         parameters: {
           type: "object",
           properties: {
             runId: {
               type: "string",
               description:
-                "The exact subagent runId, or a sufficiently long unique trailing-ellipsis abbreviation.",
+                "The exact subagent runId or any sufficiently long unique prefix; the display ellipsis is optional.",
             },
             afterSeq: {
               type: "number",
@@ -655,14 +657,14 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "close_subagent",
         label: "close_subagent",
         description:
-          "Close a completed read-only subagent, or an editing subagent after integrate_subagent reports working or unchanged and every conflict has been resolved. The server verifies a never-integrated child has no effective changes before teardown. Set discard:true only when intentionally dropping unintegrated work.",
+          "Close a completed read-only subagent, or an editing subagent after integrate_subagent reports working or unchanged and every conflict has been resolved. The server verifies a never-integrated child has no effective changes before teardown. Closing releases the child context and concurrency slot only after teardown succeeds, then retains a durable, handle-resolvable supervision receipt. A cleanup error is retryable with the same runId and keeps the slot owned. Set discard:true only when intentionally dropping unintegrated work.",
         parameters: {
           type: "object",
           properties: {
             runId: {
               type: "string",
               description:
-                "The exact subagent runId, or a sufficiently long unique trailing-ellipsis abbreviation.",
+                "The exact subagent runId or any sufficiently long unique prefix; the display ellipsis is optional.",
             },
             discard: {
               type: "boolean",
@@ -674,12 +676,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         } as never,
         execute: async (_toolCallId, params) => {
           const p = params as { runId?: unknown; discard?: unknown };
-          return this.closeSubagent(
-            String(p.runId ?? ""),
-            p.discard === true,
-            channelId,
-            toolRpc
-          );
+          return this.closeSubagent(String(p.runId ?? ""), p.discard === true, channelId, toolRpc);
         },
       } as AgentTool,
     ];
