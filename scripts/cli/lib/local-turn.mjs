@@ -1,5 +1,7 @@
 import fsp from "node:fs/promises";
 import { randomBytes } from "node:crypto";
+import dgram from "node:dgram";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -51,39 +53,92 @@ export function relayOnlyServerEnv(turn) {
   return turn ? { VIBESTUDIO_WEBRTC_ICE: "relay" } : {};
 }
 
+async function allocateTcpPort() {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "0.0.0.0", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : null;
+      server.close((error) => {
+        if (error) reject(error);
+        else if (port) resolve(port);
+        else reject(new Error("Could not allocate a local TURN port"));
+      });
+    });
+  });
+}
+
+async function probeTurnUdp(host, port, timeoutMs = 5_000) {
+  const transactionId = randomBytes(12);
+  const request = Buffer.alloc(20);
+  request.writeUInt16BE(0x0001, 0);
+  request.writeUInt16BE(0, 2);
+  request.writeUInt32BE(0x2112a442, 4);
+  transactionId.copy(request, 8);
+
+  await new Promise((resolve, reject) => {
+    const socket = dgram.createSocket("udp4");
+    const deadline = Date.now() + timeoutMs;
+    let timer;
+    const finish = (error) => {
+      if (timer) clearTimeout(timer);
+      socket.close();
+      if (error) reject(error);
+      else resolve();
+    };
+    const attempt = () => {
+      if (Date.now() >= deadline) {
+        finish(new Error(`coturn did not answer a STUN binding probe on ${host}:${port}`));
+        return;
+      }
+      socket.send(request, Number(port), host);
+      timer = setTimeout(attempt, 100);
+    };
+    socket.once("error", finish);
+    socket.on("message", (message) => {
+      if (
+        message.length >= 20 &&
+        message.readUInt32BE(4) === 0x2112a442 &&
+        message.subarray(8, 20).equals(transactionId)
+      ) {
+        finish();
+      }
+    });
+    attempt();
+  });
+}
+
 /**
  * Start the relay required by Android Emulator/QEMU NAT. There is deliberately
- * no direct-ICE fallback: failure to spawn or early coturn exit rejects setup.
+ * no direct-ICE fallback: setup completes only after a real STUN response.
  */
 export async function startLocalTurnRelay({
   spawnManaged,
   waitForSpawn,
-  sleep,
   networkInterfaces = os.networkInterfaces(),
   tempDir = os.tmpdir(),
   pid = process.pid,
+  allocatePort = allocateTcpPort,
+  probeReady = probeTurnUdp,
 }) {
   const host = privateLanIpv4(networkInterfaces);
   if (!host) throw new Error("No private LAN IPv4 found for the local TURN relay");
 
-  const port = "47000";
+  const port = String(await allocatePort());
   const user = `vs-${randomBytes(9).toString("base64url")}`;
   const pass = randomBytes(24).toString("base64url");
   const suffix = `${pid}-${Date.now()}`;
   const configPath = path.join(tempDir, `vibestudio-coturn-${suffix}.conf`);
   const pidPath = path.join(tempDir, `vibestudio-coturn-${suffix}.pid`);
   const cleanupArtifacts = async () => {
-    await Promise.all([
-      fsp.rm(configPath, { force: true }),
-      fsp.rm(pidPath, { force: true }),
-    ]);
+    await Promise.all([fsp.rm(configPath, { force: true }), fsp.rm(pidPath, { force: true })]);
   };
 
   await fsp.writeFile(
     configPath,
     [
       `listening-port=${port}`,
-      "listening-ip=127.0.0.1",
       `listening-ip=${host}`,
       `relay-ip=${host}`,
       "realm=vibestudio.local",
@@ -91,9 +146,9 @@ export async function startLocalTurnRelay({
       `user=${user}:${pass}`,
       "no-tls",
       "no-dtls",
+      "no-cli",
+      "no-tcp-relay",
       `allowed-peer-ip=${host}`,
-      "min-port=48000",
-      "max-port=48100",
       `pidfile=${pidPath}`,
       "",
     ].join("\n"),
@@ -104,9 +159,12 @@ export async function startLocalTurnRelay({
   try {
     child = spawnManaged("turnserver", ["-c", configPath], { label: "coturn" });
     await waitForSpawn(child, "turnserver", ["-c", configPath]);
-    await sleep(1_500);
     if (child.exitCode != null) {
       throw new Error(`coturn exited before readiness with code ${child.exitCode}`);
+    }
+    await probeReady(host, port);
+    if (child.exitCode != null) {
+      throw new Error(`coturn exited during readiness with code ${child.exitCode}`);
     }
     return { child, host, port, user, pass, configPath, pidPath, cleanupArtifacts };
   } catch (error) {

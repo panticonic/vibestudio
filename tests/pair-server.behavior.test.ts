@@ -68,6 +68,7 @@ function hubReady(rootInvite: ReturnType<typeof invite> | null) {
     gatewayPort: 3456,
     pid: 4242,
     version: "0.1.0-test",
+    buildId: "a".repeat(64),
     workspaces: [],
   };
 }
@@ -404,6 +405,9 @@ describe("pair-server runner", () => {
     expect(() =>
       parseHubReadyPayload({ ...valid, connectUrl: valid.gatewayUrl })
     ).toThrow(/unsupported fields/);
+    expect(() => parseHubReadyPayload({ ...valid, buildId: "not-a-digest" })).toThrow(
+      /buildId/
+    );
     expect(() =>
       parseHubReadyPayload({
         ...valid,

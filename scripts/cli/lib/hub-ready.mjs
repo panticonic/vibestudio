@@ -13,6 +13,7 @@ const READY_KEYS = new Set([
   "gatewayPort",
   "pid",
   "version",
+  "buildId",
   "workspaces",
 ]);
 const INVITE_KEYS = new Set([
@@ -174,6 +175,9 @@ export function parseHubReadyPayload(value) {
     throw new Error("hub ready file serverBootId has an unexpected format");
   }
   assertNonEmptyString(ready.version, "hub ready file version");
+  if (typeof ready.buildId !== "string" || !/^[a-f0-9]{64}$/.test(ready.buildId)) {
+    throw new Error("hub ready file buildId must be a lowercase SHA-256 digest");
+  }
   if (
     !Number.isSafeInteger(ready.gatewayPort) ||
     ready.gatewayPort < 1 ||

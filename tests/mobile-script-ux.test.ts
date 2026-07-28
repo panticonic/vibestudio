@@ -64,27 +64,32 @@ describe("mobile script platform and relay guarantees", () => {
     const child = new FakeChild();
     const spawnManaged = vi.fn(() => child);
     const waitForSpawn = vi.fn(async () => undefined);
+    const probeReady = vi.fn(async () => undefined);
     const turn = await startLocalTurnRelay({
       spawnManaged,
       waitForSpawn,
-      sleep: async () => undefined,
       networkInterfaces: {
         wifi: [{ family: "IPv4", internal: false, address: "10.10.0.5" }],
       },
       tempDir,
       pid: 123,
+      allocatePort: async () => 49123,
+      probeReady,
     });
 
-    expect(spawnManaged).toHaveBeenCalledWith(
-      "turnserver",
-      ["-c", turn.configPath],
-      { label: "coturn" }
-    );
+    expect(spawnManaged).toHaveBeenCalledWith("turnserver", ["-c", turn.configPath], {
+      label: "coturn",
+    });
     expect(waitForSpawn).toHaveBeenCalledWith(child, "turnserver", ["-c", turn.configPath]);
+    expect(probeReady).toHaveBeenCalledWith("10.10.0.5", "49123");
     const config = fs.readFileSync(turn.configPath, "utf8");
+    expect(config).toContain("listening-port=49123");
     expect(config).toContain("listening-ip=10.10.0.5");
+    expect(config).not.toContain("listening-ip=127.0.0.1");
     expect(config).toContain("relay-ip=10.10.0.5");
     expect(config).toContain("no-tls\nno-dtls");
+    expect(config).toContain("no-cli\nno-tcp-relay");
+    expect(config).not.toContain("min-port=");
     expect(config).toContain(`user=${turn.user}:${turn.pass}`);
     expect(turn.user).toMatch(/^vs-[A-Za-z0-9_-]{12}$/);
     expect(turn.pass).toMatch(/^[A-Za-z0-9_-]{32}$/);
@@ -95,7 +100,7 @@ describe("mobile script platform and relay guarantees", () => {
       "--var",
       "VIBESTUDIO_LOCAL_TURN_HOST:10.10.0.5",
       "--var",
-      "VIBESTUDIO_LOCAL_TURN_PORT:47000",
+      "VIBESTUDIO_LOCAL_TURN_PORT:49123",
       "--var",
       `VIBESTUDIO_LOCAL_TURN_USER:${turn.user}`,
       "--var",
@@ -116,14 +121,38 @@ describe("mobile script platform and relay guarantees", () => {
         waitForSpawn: async () => {
           throw new Error("spawn ENOENT");
         },
-        sleep: async () => undefined,
         networkInterfaces: {
           wifi: [{ family: "IPv4", internal: false, address: "192.168.5.10" }],
         },
         tempDir,
         pid: 456,
+        allocatePort: async () => 49124,
+        probeReady: vi.fn(async () => undefined),
       })
     ).rejects.toThrow(/Local TURN relay is required[\s\S]*spawn ENOENT/u);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(fs.readdirSync(tempDir)).toEqual([]);
+  });
+
+  it("fails closed and removes relay artifacts when coturn never answers STUN", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-turn-probe-test-"));
+    roots.push(tempDir);
+    const child = new FakeChild();
+    await expect(
+      startLocalTurnRelay({
+        spawnManaged: () => child,
+        waitForSpawn: async () => undefined,
+        networkInterfaces: {
+          wifi: [{ family: "IPv4", internal: false, address: "192.168.5.10" }],
+        },
+        tempDir,
+        pid: 789,
+        allocatePort: async () => 49125,
+        probeReady: async () => {
+          throw new Error("no STUN response");
+        },
+      })
+    ).rejects.toThrow(/Local TURN relay is required[\s\S]*no STUN response/u);
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     expect(fs.readdirSync(tempDir)).toEqual([]);
   });

@@ -493,39 +493,61 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
 }
 
 /**
- * Test-side human driver for cold-start unit reviews. This goes through the
- * real shell resolver and queue; it deliberately does not grant a process-wide
- * bypass. Callers remain responsible for non-unit approval kinds.
+ * Test-side human driver for the Electron launch review. This drives the same
+ * launch session as the shell UI, so a fresh workspace waits for its review to
+ * be published while an already-trusted workspace converges directly to ready.
+ * It deliberately does not grant a process-wide bypass. Callers remain
+ * responsible for non-launch approval kinds.
  */
 export async function approvePendingStartupUnits(
   app: ElectronApplication,
   timeoutMs = 180_000
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  let sawReview = false;
-  let emptySince = 0;
+  let launchSessionId: string | null = null;
   while (Date.now() < deadline) {
     try {
-      const pending = (await app.evaluate(async () => {
+      const state = await app.evaluate(async () => {
+        const testApi = (
+          globalThis as {
+            __testApi?: Pick<TestApi, "rpcCall" | "getHostViewDebugInfo">;
+          }
+        ).__testApi;
+        if (!testApi) throw new Error("Test API not available");
+        return {
+          launch: null as unknown,
+          hostView: testApi.getHostViewDebugInfo(),
+        };
+      });
+      state.launch = await app.evaluate(async (_electron, sessionId) => {
         const testApi = (globalThis as { __testApi?: Pick<TestApi, "rpcCall"> }).__testApi;
         if (!testApi) throw new Error("Test API not available");
-        return testApi.rpcCall("shellApproval", "listPending", []);
-      })) as Array<{ approvalId: string; kind: string }>;
-      const reviews = pending.filter((approval) => approval.kind === "unit-batch");
-      for (const review of reviews) {
-        sawReview = true;
-        await app.evaluate(async (_electron, approvalId) => {
+        return sessionId
+          ? testApi.rpcCall("workspace", "hostTargets.getLaunchSession", [sessionId])
+          : testApi.rpcCall("workspace", "hostTargets.beginLaunch", ["electron"]);
+      }, launchSessionId);
+      const launch = state.launch as {
+        sessionId?: unknown;
+        status?: unknown;
+        settled?: unknown;
+        approvals?: unknown;
+      } | null;
+      if (typeof launch?.sessionId === "string") launchSessionId = launch.sessionId;
+      if (launchSessionId && Array.isArray(launch?.approvals) && launch.approvals.length > 0) {
+        await app.evaluate(async (_electron, sessionId) => {
           const testApi = (globalThis as { __testApi?: Pick<TestApi, "rpcCall"> }).__testApi;
           if (!testApi) throw new Error("Test API not available");
-          await testApi.rpcCall("shellApproval", "resolve", [approvalId, "once"]);
-        }, review.approvalId);
+          await testApi.rpcCall("workspace", "hostTargets.resolveLaunchSessionApproval", [
+            sessionId,
+            "once",
+          ]);
+        }, launchSessionId);
       }
-      if (sawReview && reviews.length === 0) {
-        emptySince ||= Date.now();
-        if (Date.now() - emptySince >= 750) return;
-      } else {
-        emptySince = 0;
-      }
+      const hostedShellReady =
+        typeof state.hostView.visibleHostChromeAppId === "string" &&
+        typeof state.hostView.hostedShellUrl === "string" &&
+        state.hostView.hostedShellUrl.includes("/_a/");
+      if (launch?.status === "ready" && launch.settled === true && hostedShellReady) return;
     } catch (error) {
       if (!isAutomationContextReplacement(error)) throw error;
     }

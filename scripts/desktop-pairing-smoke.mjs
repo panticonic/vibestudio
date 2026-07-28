@@ -567,7 +567,7 @@ async function waitForRenderedPanel(app, timeoutMs) {
             true
           );
           if (
-            /\bBuild Failed\b|\bfailed to build\b|Panel asset bridge error|Workspace server unavailable/i.test(
+            /\bBuild Failed\b|\bfailed to build\b|Panel failed to start|A panel asset failed to load|The panel bundle could not be loaded|Panel asset bridge error|Workspace server unavailable/i.test(
               dom.text
             )
           ) {

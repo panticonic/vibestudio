@@ -807,12 +807,19 @@ test.describe("Terminal Startup", () => {
         intervals: [100, 250, 500],
       })
       .toContain("Copy all");
+    await setElectronClipboardText(app, "vibestudio-copy-sentinel");
     expect(await clickPanelText(app, terminalPanelId, "[role='menuitem']", "Copy all")).toBe(true);
     await expect
-      .poll(async () => getElectronClipboardText(app), {
-        timeout: 5_000,
-        intervals: [100, 250, 500],
-      })
+      .poll(
+        async () => {
+          await approvePendingTerminalWork(app, testApp.window);
+          return getElectronClipboardText(app);
+        },
+        {
+          timeout: 5_000,
+          intervals: [100, 250, 500],
+        }
+      )
       .toContain("vibestudio-paste-input");
 
     await clickPanelSelector(app, terminalPanelId, "[aria-label='Pane menu']");

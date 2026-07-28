@@ -13,8 +13,10 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
-import { envelopeFromMessage } from "@vibestudio/rpc";
-import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
+import { createRpcClient, envelopeFromMessage } from "@vibestudio/rpc";
+import { NodeWsLike } from "@vibestudio/rpc/transports/nodeWsLike";
+import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
+import { serverRpcWsUrl } from "@vibestudio/shared/connect";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
 
@@ -363,7 +365,7 @@ async function runMultiUserPhase(options, resultsDir) {
   hub.stderr?.on("data", (chunk) => appendLog(chunk));
 
   const results = [];
-  const sockets = [];
+  const connections = [];
   const step = async (name, fn) => {
     try {
       await fn();
@@ -453,70 +455,31 @@ async function runMultiUserPhase(options, resultsDir) {
       }
       return message?.result;
     };
-    const openChildSocket = async (session, label) => {
-      const url = new URL(session.serverUrl);
-      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-      url.pathname = `${url.pathname.replace(/\/+$/, "")}/rpc`;
-      const socket = new WebSocket(url);
-      await new Promise((resolve, reject) => {
-        const timer = setTimeout(
-          () => reject(new Error(`WebSocket auth timed out for ${label}`)),
-          10_000
-        );
-        const fail = (error) => {
-          clearTimeout(timer);
-          reject(error);
-        };
-        socket.once("error", fail);
-        socket.once("open", () =>
-          socket.send(
-            JSON.stringify({
-              type: "ws:auth",
-              contractVersion: RPC_CONTRACT_VERSION,
-              token: session.shellToken,
-              clientLabel: label,
-              clientPlatform: "test",
-            })
-          )
-        );
-        socket.on("message", function onMessage(chunk) {
-          const message = JSON.parse(String(chunk));
-          if (message?.type !== "ws:auth-result") return;
-          socket.off("message", onMessage);
-          socket.off("error", fail);
-          clearTimeout(timer);
-          if (!message.success) reject(new Error(message.error ?? "WebSocket auth failed"));
-          else resolve();
-        });
+    const openChildConnection = async (session, label, callerKind = "shell") => {
+      const transport = wsClientTransport({
+        selfId: session.callerId,
+        getWsUrl: () => serverRpcWsUrl(session.serverUrl),
+        reconnect: false,
+        logPrefix: `full-system-smoke:${label}`,
+        getAuthMessageFields: () => ({
+          clientLabel: label,
+          clientPlatform: "headless",
+        }),
+        adapter: {
+          now: () => Date.now(),
+          getAuthToken: async () => session.shellToken,
+          createSocket: (url, protocols) => new NodeWsLike(new WebSocket(url, protocols)),
+        },
       });
-      sockets.push(socket);
-      return socket;
-    };
-    const childWsRpc = (socket, callerId, callerKind, method, ...args) => {
-      const requestId = `smoke-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-      const envelope = envelopeFromMessage({
-        from: callerId,
-        target: "main",
+      await transport.connectAndWait(10_000);
+      const rpc = createRpcClient({
+        selfId: session.callerId,
         callerKind,
-        message: { type: "request", requestId, fromId: callerId, method, args },
+        transport,
+        authorityAcquisition: "wait",
       });
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          socket.off("message", onMessage);
-          reject(new Error(`WebSocket RPC ${method} timed out`));
-        }, 15_000);
-        const onMessage = (chunk) => {
-          const frame = JSON.parse(String(chunk));
-          const response = frame?.envelope?.message ?? frame?.message;
-          if (response?.type !== "response" || response.requestId !== requestId) return;
-          clearTimeout(timer);
-          socket.off("message", onMessage);
-          if (response.error) reject(new Error(response.error));
-          else resolve(response.result);
-        };
-        socket.on("message", onMessage);
-        socket.send(JSON.stringify({ type: "ws:rpc", envelope, message: envelope.message }));
-      });
+      connections.push(transport);
+      return { rpc, transport };
     };
     say(`hub ready at ${base}`);
 
@@ -531,6 +494,7 @@ async function runMultiUserPhase(options, resultsDir) {
     let aliceChild = null;
     let bobChild = null;
     let bobSecondChild = null;
+    let bobLiveConnections = [];
 
     // WP10 §5.5 — identity invariants: root bootstrap issues the FIRST device
     // as the root user; the subject is host-stamped from the device credential.
@@ -735,10 +699,15 @@ async function runMultiUserPhase(options, resultsDir) {
         JSON.stringify(aliceIds) === JSON.stringify(bobIds),
         "members must inspect the same approval queue"
       );
-      const created = await childRpc(aliceChild, "panelTree.create", "panels/chat", {
-        name: "Shared smoke panel",
-        focus: false,
-      });
+      const created = await childRpc(
+        aliceChild,
+        "panelTree.create",
+        { surface: "code", source: "panels/chat" },
+        {
+          name: "Shared smoke panel",
+          focus: false,
+        }
+      );
       const bobSnapshot = await childRpc(bobChild, "panelTree.getTreeSnapshot");
       const flatten = (panels) =>
         panels.flatMap((panel) => [panel, ...flatten(panel.children ?? [])]);
@@ -754,7 +723,10 @@ async function runMultiUserPhase(options, resultsDir) {
       async () => {
         const requester = await childRpc(aliceChild, "runtime.createEntity", {
           kind: "worker",
-          source: "workers/agent-worker",
+          execution: {
+            surface: "code",
+            source: "workers/agent-worker",
+          },
           key: `multi-user-provenance-${Date.now().toString(36)}`,
         });
         const grant = await childRpc(aliceChild, "auth.grantConnection", requester.id);
@@ -763,40 +735,61 @@ async function runMultiUserPhase(options, resultsDir) {
           shellToken: grant.token,
           callerId: requester.id,
         };
-        const requesterSocket = await openChildSocket(requesterSession, "provenance-requester");
-        const approvalRequest = childWsRpc(
-          requesterSocket,
-          requester.id,
-          "worker",
-          "userlandApproval.request",
-          {
-            subject: {
-              id: `full-system-smoke:${requester.id}`,
-              label: "Shared approval provenance smoke",
-            },
-            title: "Approve the shared smoke request",
-            summary: "Verifies that another workspace member can resolve one shared request.",
-            promptOptions: "choices",
-            options: [
-              { value: "allow", label: "Allow", tone: "primary" },
-              { value: "deny", label: "Deny", tone: "danger" },
-            ],
-          }
-        ).then(
-          (result) => ({ ok: true, result }),
-          (error) => ({ ok: false, error })
+        const requesterConnection = await openChildConnection(
+          requesterSession,
+          "provenance-requester",
+          "worker"
         );
-        const deadline = Date.now() + 10_000;
-        let approval = null;
-        while (!approval && Date.now() < deadline) {
-          const pending = await childRpc(bobChild, "shellApproval.listPending");
-          approval = pending.find(
-            (entry) =>
-              entry.kind === "userland" &&
-              entry.subject?.id === `full-system-smoke:${requester.id}`
+        const approvalRequest = requesterConnection.rpc
+          .call("main", "userlandApproval.request", [
+            {
+              subject: {
+                id: `full-system-smoke:${requester.id}`,
+                label: "Shared approval provenance smoke",
+              },
+              title: "Approve the shared smoke request",
+              summary: "Verifies that another workspace member can resolve one shared request.",
+              promptOptions: "choices",
+              options: [
+                { value: "allow", label: "Allow", tone: "primary" },
+                { value: "deny", label: "Deny", tone: "danger" },
+              ],
+            },
+          ])
+          .then(
+            (result) => ({ ok: true, result }),
+            (error) => ({ ok: false, error })
           );
-          if (!approval) await new Promise((resolve) => setTimeout(resolve, 100));
-        }
+        const waitForApproval = async (predicate, description) => {
+          const deadline = Date.now() + 10_000;
+          let pending = [];
+          while (Date.now() < deadline) {
+            pending = await childRpc(bobChild, "shellApproval.listPending");
+            const match = pending.find(predicate);
+            if (match) return match;
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+          throw new Error(
+            `${description}; pending=${JSON.stringify(
+              pending.map((entry) => ({
+                approvalId: entry.approvalId,
+                kind: entry.kind,
+                capability: entry.capability,
+                subject: entry.subject?.id,
+              }))
+            )}`
+          );
+        };
+        const capabilityApproval = await waitForApproval(
+          (entry) => entry.kind === "capability" && entry.capability === "user-approval.request",
+          "installed code must expose its user-approval capability acquisition"
+        );
+        await childRpc(bobChild, "shellApproval.resolve", capabilityApproval.approvalId, "version");
+        const approval = await waitForApproval(
+          (entry) =>
+            entry.kind === "userland" && entry.subject?.id === `full-system-smoke:${requester.id}`,
+          "installed code must expose its custom userland approval"
+        );
         expect(approval?.approvalId, "installed-code request must expose a shared approval");
         await childRpc(bobChild, "shellApproval.resolveUserland", approval.approvalId, "allow");
         const approvalOutcome = await approvalRequest;
@@ -823,9 +816,10 @@ async function runMultiUserPhase(options, resultsDir) {
     );
 
     await step("workspace and hub presence aggregate physical endpoints", async () => {
-      await openChildSocket(aliceChild, "alice-desktop");
-      await openChildSocket(bobChild, "bob-phone");
-      await openChildSocket(bobSecondChild, "bob-laptop");
+      await openChildConnection(aliceChild, "alice-desktop");
+      const bobPhone = await openChildConnection(bobChild, "bob-phone");
+      const bobLaptop = await openChildConnection(bobSecondChild, "bob-laptop");
+      bobLiveConnections = [bobPhone.transport, bobLaptop.transport];
       const deadline = Date.now() + 10_000;
       let presence = [];
       let hubPresence = null;
@@ -857,10 +851,47 @@ async function runMultiUserPhase(options, resultsDir) {
     });
 
     await step("membership removal closes the removed user's live child sessions", async () => {
-      const removed = await rpc(alice.shellToken, "hubControl.removeWorkspaceMember", {
+      const removalRequest = rpc(alice.shellToken, "hubControl.removeWorkspaceMember", {
         handle: "bob",
         workspace: visibleWorkspace,
       });
+      const approvalDeadline = Date.now() + 10_000;
+      let pending = [];
+      let approval = null;
+      while (Date.now() < approvalDeadline) {
+        const listed = await rpc(alice.shellToken, "shellApproval.listPending");
+        expect(
+          listed.status === 200 && Array.isArray(listed.payload?.result),
+          `listPending failed: ${JSON.stringify(listed.payload)}`
+        );
+        pending = listed.payload.result;
+        approval = pending.find(
+          (entry) => entry.kind === "capability" && entry.capability === "workspace.members.remove"
+        );
+        if (approval) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(
+        approval,
+        `member removal must require its critical one-shot confirmation; pending=${JSON.stringify(
+          pending.map((entry) => ({
+            approvalId: entry.approvalId,
+            kind: entry.kind,
+            capability: entry.capability,
+          }))
+        )}`
+      );
+      const resolved = await rpc(
+        alice.shellToken,
+        "shellApproval.resolve",
+        approval.approvalId,
+        "once"
+      );
+      expect(
+        resolved.status === 200 && !resolved.payload?.error,
+        `resolve removal approval failed: ${JSON.stringify(resolved.payload)}`
+      );
+      const removed = await removalRequest;
       expect(
         removed.status === 200 && removed.payload?.result?.removed,
         `removeMember failed: ${JSON.stringify(removed.payload)}`
@@ -869,22 +900,24 @@ async function runMultiUserPhase(options, resultsDir) {
         removed.payload.result.closedSessions >= 1,
         "removeMember must close Bob's live child sessions"
       );
-      let refused = false;
-      try {
-        await childRpc(bobChild, "panelTree.getTreeSnapshot");
-      } catch {
-        refused = true;
+      const deadline = Date.now() + 10_000;
+      while (
+        bobLiveConnections.some((connection) => connection.status() !== "disconnected") &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
       }
-      expect(refused, "removed member must lose child access immediately");
+      expect(
+        bobLiveConnections.every((connection) => connection.status() === "disconnected"),
+        "removed member's live child transports must disconnect promptly"
+      );
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     say(`FAIL  harness: ${message}`);
     results.push({ name: "harness", status: "fail", detail: message });
   } finally {
-    for (const socket of sockets) {
-      socket.close();
-    }
+    await Promise.allSettled(connections.map((connection) => connection.close()));
     await stopChild(hub);
     await stopChild(signaling);
     await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => {});

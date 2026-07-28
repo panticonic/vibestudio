@@ -733,10 +733,6 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
     agentDebugStates,
     workerLogs,
   };
-  await fs.writeFile(
-    "/tmp/startup-approvals-diagnostics.json",
-    JSON.stringify(diagnostics, null, 2)
-  );
   console.log(
     "STARTUP_APPROVALS_DIAGNOSTICS",
     JSON.stringify(diagnostics, null, 2).slice(0, 80_000)
@@ -758,9 +754,37 @@ type StartupAgentCompletionState = {
     turnClosed: boolean;
     pendingWork: string[];
     failures: string[];
+    invocations: Array<Record<string, unknown>>;
   }>;
   errors: string[];
 };
+
+function boundedEventValue(value: unknown, maxLength = 600): string | undefined {
+  if (value === undefined) return undefined;
+  let rendered: string;
+  try {
+    rendered = typeof value === "string" ? value : JSON.stringify(value);
+  } catch {
+    rendered = String(value);
+  }
+  return rendered.length <= maxLength ? rendered : `${rendered.slice(0, maxLength)}…`;
+}
+
+function summarizeInvocationEvent(event: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries({
+      kind: event["kind"],
+      invocationId: event["invocationId"],
+      name: event["name"],
+      request: boundedEventValue(event["request"]),
+      terminalOutcome: event["terminalOutcome"],
+      outcome: event["outcome"],
+      reason: event["reason"],
+      error: boundedEventValue(event["error"]),
+      result: boundedEventValue(event["result"]),
+    }).filter((entry) => entry[1] !== undefined)
+  );
+}
 
 async function collectStartupAgentCompletion(
   testApp: TestApp,
@@ -814,6 +838,7 @@ async function collectStartupAgentCompletion(
         turnClosed: false,
         pendingWork: [],
         failures: ["Channel service target was not resolved"],
+        invocations: [],
       });
       continue;
     }
@@ -823,7 +848,22 @@ async function collectStartupAgentCompletion(
       firstPanelId,
       `(async () => {
         const { rpc } = await globalThis.__vibestudioRequireAsync__("@workspace/runtime");
-        const normalize = (event) => {
+        const hydrateStoredValue = async (value) => {
+          if (
+            !value ||
+            typeof value !== "object" ||
+            value.protocol !== "vibestudio.blob-ref.v1" ||
+            typeof value.digest !== "string"
+          ) {
+            return value;
+          }
+          const text = await rpc.call("main", "blobstore.getText", [value.digest]);
+          if (text === null) {
+            throw new Error("Missing trajectory blob " + value.digest);
+          }
+          return value.encoding === "json" ? JSON.parse(text) : text;
+        };
+        const normalize = async (event) => {
           const outer = event?.payload;
           const agentic = outer?.kind === "agentic.event" ? outer.payload : (outer?.payload?.kind ? outer.payload : outer);
           const body = agentic?.payload ?? agentic?.message ?? agentic ?? {};
@@ -852,8 +892,8 @@ async function collectStartupAgentCompletion(
             invocationId: agentic?.causality?.invocationId,
             role: body?.role ?? message?.role,
             name: body?.name,
-            request: body?.request,
-            result: body?.result,
+            request: await hydrateStoredValue(body?.request),
+            result: await hydrateStoredValue(body?.result),
             terminalOutcome: body?.terminalOutcome,
             content: typeof body?.content === "string"
               ? body.content
@@ -870,9 +910,9 @@ async function collectStartupAgentCompletion(
         return Promise.all([
           rpc.call(${JSON.stringify(targetId)}, "getParticipants", []),
           rpc.call(${JSON.stringify(targetId)}, "getReplayAfter", [{ after: 0 }]),
-        ]).then(([participants, replay]) => ({
+        ]).then(async ([participants, replay]) => ({
           participants,
-          events: (replay?.logEvents ?? []).map(normalize),
+          events: await Promise.all((replay?.logEvents ?? []).map(normalize)),
         }));
       })()`
     ).catch((error: unknown) => {
@@ -1024,6 +1064,12 @@ async function collectStartupAgentCompletion(
       turnClosed,
       pendingWork,
       failures,
+      invocations: events
+        .filter(
+          (event) =>
+            typeof event["kind"] === "string" && (event["kind"] as string).startsWith("invocation.")
+        )
+        .map(summarizeInvocationEvent),
     });
   }
 
@@ -1231,6 +1277,20 @@ test.describe("Desktop Startup Approvals", () => {
             if (failures.length > 0) {
               throw new Error(`Initial agent turn failed: ${failures.join("; ")}`);
             }
+            const closedWithoutOnboarding = state.channels.find(
+              (channel) =>
+                channel.assistantCompleted &&
+                channel.turnClosed &&
+                channel.pendingWork.length === 0 &&
+                !channel.onboardingSkillReadCompleted
+            );
+            if (closedWithoutOnboarding) {
+              throw new Error(
+                `Initial agent turn closed without a completed onboarding read: ${JSON.stringify(
+                  closedWithoutOnboarding.invocations
+                )}`
+              );
+            }
             return state.complete;
           },
           {
@@ -1313,7 +1373,7 @@ test.describe("Desktop Startup Approvals", () => {
         label: "Website",
         value: "https://example.com",
       },
-      allowedDecisions: ["once", "task", "deny"],
+      allowedDecisions: ["once", "session", "task", "deny"],
     });
 
     let rendered: Awaited<ReturnType<typeof capabilityApprovalUiSnapshot>> = null;
@@ -1327,7 +1387,12 @@ test.describe("Desktop Startup Approvals", () => {
       )
       .toContain("Connect to example.com");
     expect(rendered?.buttons).toEqual(
-      expect.arrayContaining(["Connect once", "Allow for this task", "Don't allow"])
+      expect.arrayContaining([
+        "Connect once",
+        "Allow this site",
+        "Allow for this task",
+        "Don't allow",
+      ])
     );
     expect(rendered?.buttons).not.toContain("Always for AI Chat");
     expect(rendered?.buttons).not.toContain("Don't allow and don't ask again");

@@ -4,7 +4,6 @@
 // the workspace app, and rendering a panel WebView.
 
 import fsp from "node:fs/promises";
-import dgram from "node:dgram";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +19,7 @@ import {
   parseSignalingEndpoint,
 } from "./lib/connect-grammar.generated.mjs";
 import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
+import { startLocalTurnRelay } from "./lib/local-turn.mjs";
 import { createRemoteServeArgs, waitForRootInvite } from "./lib/smoke-remote-server.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -417,105 +417,6 @@ function findFreePort() {
       srv.close(() => resolve(port));
     });
   });
-}
-
-// Resolve the IPv4 address selected by the host's default route. GitHub-hosted
-// runners commonly use 10/8 or 172.16/12 rather than a 192.168/16 LAN, and the
-// TURN relay must bind the interface that can actually route peer traffic.
-async function hostLanIp() {
-  const routedAddress = await new Promise((resolve) => {
-    const socket = dgram.createSocket("udp4");
-    let settled = false;
-    let bound = false;
-    const finish = (address, error = null) => {
-      if (settled) return;
-      settled = true;
-      if (bound) socket.close();
-      if (error) {
-        console.warn(
-          `[mobile-smoke] Default-route IPv4 probe failed; falling back to network interfaces: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      }
-      resolve(address);
-    };
-    socket.once("error", (error) => finish(null, error));
-    socket.bind(0, "0.0.0.0", () => {
-      bound = true;
-      // UDP connect performs only a route lookup; it sends no traffic.
-      socket.connect(53, "192.0.2.1", () => {
-        const address = socket.address();
-        finish(typeof address === "object" ? address.address : null);
-      });
-    });
-  });
-  if (
-    typeof routedAddress === "string" &&
-    routedAddress !== "0.0.0.0" &&
-    !routedAddress.startsWith("127.")
-  ) {
-    return routedAddress;
-  }
-
-  // Hosts without a default route can still run the local smoke over any
-  // non-loopback IPv4 interface.
-  for (const addrs of Object.values(os.networkInterfaces())) {
-    for (const address of addrs ?? []) {
-      if (address.family === "IPv4" && !address.internal) return address.address;
-    }
-  }
-  return null;
-}
-
-// Local coturn relay for testing against an Android EMULATOR: QEMU's user-mode NAT
-// cannot hold a direct WebRTC pipe (ICE consent-freshness goes stale ~30-60s in),
-// so we relay through coturn and force `VIBESTUDIO_WEBRTC_ICE=relay`. Physical
-// devices on the LAN and desktop loopback don't need this. coturn must be on PATH
-// (`turnserver`). Returns the iceServer creds the signaling worker advertises to
-// BOTH peers, plus the managed child (caller pushes it to `children` for cleanup).
-async function startLocalTurn() {
-  const lanIp = await hostLanIp();
-  if (!lanIp) throw new Error("No routable IPv4 address found for the local TURN relay");
-  const port = 47000;
-  const user = "vibestudio";
-  const pass = "vibestudiopass";
-  const confPath = path.join(os.tmpdir(), `vibestudio-coturn-${process.pid}.conf`);
-  // relay-ip MUST be the LAN IP, not 127.0.0.1 — coturn returns 403 Forbidden on
-  // CREATE_PERMISSION for a loopback relay address.
-  await fsp.writeFile(
-    confPath,
-    [
-      `listening-port=${port}`,
-      `listening-ip=127.0.0.1`,
-      `listening-ip=${lanIp}`,
-      `relay-ip=${lanIp}`,
-      `realm=vibestudio.local`,
-      `lt-cred-mech`,
-      `user=${user}:${pass}`,
-      `no-tls`,
-      `no-dtls`,
-      `allowed-peer-ip=${lanIp}`,
-      `min-port=48000`,
-      `max-port=48100`,
-      // Default pidfile is /var/run/turnserver.pid (needs root) — point it at a
-      // writable temp path so coturn doesn't log a permission warning.
-      `pidfile=${path.join(os.tmpdir(), `vibestudio-coturn-${process.pid}.pid`)}`,
-      "",
-    ].join("\n")
-  );
-  // NOTE: no `-n` flag — `-n` means "ignore the config file", which would make
-  // coturn fall back to its defaults (TLS on :3478, clashing with any system
-  // coturn). `-c` loads our config; coturn stays in the foreground by default
-  // (no `-o`/daemon) so spawnManaged can track + reap it.
-  const child = spawnManaged("turnserver", ["-c", confPath], { label: "coturn" });
-  await sleep(1_500); // coturn has no health endpoint; let it bind.
-  if (child.exitCode != null) {
-    throw new Error(
-      `coturn (turnserver) exited before ready (code ${child.exitCode}) — is it installed?`
-    );
-  }
-  return { child, host: lanIp, port: String(port), user, pass };
 }
 
 // Cloudflare's local runtime (Miniflare) hosting the real SignalingRoom DO, the
@@ -1522,6 +1423,7 @@ async function main() {
   let emulatorChild = null;
   let launchedEmulator = false;
   let readyInfo = null;
+  let turn = null;
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-mobile-smoke-"));
   const readyFilePath = path.join(tempRoot, "server-ready.json");
   const deadlineMs = Date.now() + options.timeoutMs;
@@ -1537,6 +1439,7 @@ async function main() {
     }
     await Promise.all(children.map((child) => waitForChildExit(child)));
     if (emulatorChild) await waitForChildExit(emulatorChild);
+    await turn?.cleanupArtifacts();
     try {
       await fsp.unlink(readyFilePath);
     } catch {}
@@ -1593,12 +1496,11 @@ async function main() {
     // coturn because that deterministic offline path cannot use hosted TURN.
     const isEmulator = launchedEmulator || (options.device ?? "").startsWith("emulator-");
     let signalPort = null;
-    let turn = null;
     let signalUrl = options.signalUrl ?? DEFAULT_SIGNAL_URL;
     if (options.localSignaling) {
       signalPort = await findFreePort();
       if (isEmulator || options.requireTurn) {
-        turn = await startLocalTurn();
+        turn = await startLocalTurnRelay({ spawnManaged, waitForSpawn });
         children.push(turn.child);
         console.log(`[mobile-smoke] Local TURN relay: turn:${turn.host}:${turn.port}`);
       }
@@ -1746,12 +1648,7 @@ async function main() {
     // budget). A stuck phase still fails within the configured timeout.
     const hostTargetLaunchDeadlineMs = Date.now() + options.pairingTimeoutMs;
     for (const phase of ["embedded-bundle-activate-start", "embedded-bundle-activate-complete"]) {
-      await waitForPhaseTappingApprovals(
-        options.device,
-        logcat,
-        phase,
-        hostTargetLaunchDeadlineMs
-      );
+      await waitForPhaseTappingApprovals(options.device, logcat, phase, hostTargetLaunchDeadlineMs);
     }
     const managedLaunchDeadlineMs = Date.now() + options.pairingTimeoutMs;
     await waitForPhaseTappingApprovals(
@@ -1787,13 +1684,7 @@ async function main() {
     if (!options.noTap) {
       const chatLoadedCount = logcat.phaseCount("workspace-panel-webview-loaded");
       await tapFirstEditableControl(options.device, managedLaunchDeadlineMs);
-      await adb(
-        options.device,
-        "shell",
-        "input",
-        "text",
-        "Help%sme%sget%sstarted"
-      );
+      await adb(options.device, "shell", "input", "text", "Help%sme%sget%sstarted");
       await tapButtonByText(options.device, "Chat", managedLaunchDeadlineMs);
       // about/new navigates its existing managed panel to panels/chat, so this
       // is a WebView route transition rather than a second panel activation.
