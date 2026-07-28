@@ -1099,8 +1099,10 @@ function focusedMutationResult(call: InvocationCardPayloadLike): Record<string, 
 }
 
 function focusedCommitResult(call: InvocationCardPayloadLike): Record<string, unknown> | null {
-  const details = focusedToolDetails(call, "commit");
+  if (call.name !== "vcs" || call.arguments?.["operation"] !== "commit") return null;
+  const details = focusedToolDetails(call, "vcs");
   if (!details) return null;
+  if (details["operation"] !== undefined && details["operation"] !== "commit") return null;
   return isRecord(details["result"])
     ? details["result"]
     : eventIdFromCommit(details)

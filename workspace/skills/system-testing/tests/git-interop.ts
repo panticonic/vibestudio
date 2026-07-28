@@ -345,7 +345,7 @@ function commitMappingChecked(result: Parameters<typeof noIncompleteInvocations>
       reason: "The exported mapping was not produced from a managed edit, commit, and publication",
     };
   }
-  const values = successfulEvalReturnValues(result);
+  const values = successfulEvalObservedValues(result);
   const published = records(values).find(
     (item) =>
       typeof item["repoPath"] === "string" &&
@@ -874,7 +874,7 @@ export const gitInteropTests: TestCase[] = [
         },
         {
           ruleId: "publish-git-config",
-          capability: "workspace-main-advance",
+          capability: { kind: "exact", key: "workspace-main-advance" },
           resource: {
             kind: "exact",
             key: "workspace-source-change:meta:main",
@@ -920,7 +920,7 @@ export const gitInteropTests: TestCase[] = [
         },
         {
           ruleId: "publish-git-config",
-          capability: "workspace-main-advance",
+          capability: { kind: "exact", key: "workspace-main-advance" },
           resource: {
             kind: "exact",
             key: "workspace-source-change:meta:main",

@@ -51,6 +51,10 @@ describe("HeadlessRunner", () => {
     mocks.rpc.call.mockReset();
     for (const method of Object.values(mocks.vcs)) method.mockReset();
     mocks.blobstore.putText.mockReset();
+    mocks.blobstore.putText.mockImplementation(async (text: string) => ({
+      digest: `sha256:${text.length}`,
+      size: text.length,
+    }));
     mocks.messageListeners.length = 0;
   });
 
@@ -356,7 +360,7 @@ describe("HeadlessRunner", () => {
       repoName,
       repositoryId: `repository:projects/${repoName}`,
       repoPath: `projects/${repoName}`,
-      seedFilePaths: [],
+      seedFilePaths: ["README.md"],
       importWorkUnitId: "work:import",
       importChangeIds: ["change:repository-create"],
     });
@@ -368,7 +372,18 @@ describe("HeadlessRunner", () => {
     expect(mocks.vcs.importSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({
         contextId: "ctx-fixture",
-        repositories: [expect.objectContaining({ repoPath: `projects/${repoName}`, files: [] })],
+        repositories: [
+          expect.objectContaining({
+            repoPath: `projects/${repoName}`,
+            files: [
+              expect.objectContaining({
+                path: "README.md",
+                contentHash: expect.any(String),
+                mode: 0o644,
+              }),
+            ],
+          }),
+        ],
       })
     );
     expect(mocks.vcs.revert).not.toHaveBeenCalled();
