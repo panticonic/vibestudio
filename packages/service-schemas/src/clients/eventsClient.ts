@@ -10,6 +10,7 @@ import type { RpcCaller, RpcClient } from "@vibestudio/rpc";
 import type { EventName, EventPayloads } from "@vibestudio/shared/events";
 import { readEventWatchRecords } from "@vibestudio/service-schemas/events";
 import type { RecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
+import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 
 type Listener<E extends EventName> = (payload: EventPayloads[E]) => void;
 type EventsRpc = Pick<RpcCaller, "stream"> & Partial<Pick<RpcClient, "streamReadable">>;
@@ -47,7 +48,7 @@ export class EventsClient {
   private readonly watchId = createWatchId();
   private serverEpoch: string | null = null;
   private readonly lastSequenceByEvent = new Map<EventName, number>();
-  private refreshQueue: Promise<void> = Promise.resolve();
+  private readonly refreshQueue = new Map<string, Promise<unknown>>();
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryDelayMs = 250;
 
@@ -120,9 +121,7 @@ export class EventsClient {
   }
 
   private queueRefresh(): Promise<void> {
-    const refresh = this.refreshQueue.then(() => this.refresh());
-    this.refreshQueue = refresh.catch(() => {});
-    return refresh;
+    return serializeByKey(this.refreshQueue, "events-watch", () => this.refresh());
   }
 
   private async refresh(): Promise<void> {

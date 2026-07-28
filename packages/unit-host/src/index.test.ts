@@ -568,6 +568,24 @@ describe("UnitHost", () => {
     expect(prompted).toEqual([[{ name: node.name, ref: "main" }]]);
   });
 
+  it("retains a top-level reconciliation failure after staged waiters are released", async () => {
+    const { host } = makeHarness({
+      active: true,
+      applyTrusted: async () => {
+        throw new Error("reconcile failed");
+      },
+    });
+
+    await expect(
+      host.reconcileDeclared([{ source: "extensions/a", ref: "main" }], {
+        waitFor: "applied",
+      })
+    ).rejects.toThrow("reconcile failed");
+
+    await host.whenReconciled();
+    expect(host.reconciliationError()).toBe("reconcile failed");
+  });
+
   it("applies preapproved declarations without prompting again", async () => {
     const { host, applied, prompted, node } = makeHarness();
     const approval = host.approvalForDeclarations([{ source: "extensions/a", ref: "main" }]);

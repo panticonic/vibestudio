@@ -16,6 +16,10 @@ import {
 
 export type UnitKind = "extension" | "app";
 
+function unitErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** Read the explicit manifest reviewed for a unit version and produce the same
  * exact + human-oriented change packet consumed by desktop and mobile. */
 export function readUnitAuthorityReview(
@@ -496,6 +500,7 @@ export class UnitHost<
   private readonly declarationsStagedPromise = new Promise<void>((resolve) => {
     this.declarationsStaged = resolve;
   });
+  private lastReconciliationError: string | null = null;
   private preapprovedTrust = new Set<string>();
   private pendingApprovalIdentityKeys = new Set<string>();
   private readonly trustResolver: UnitTrustResolver<Entry>;
@@ -530,6 +535,7 @@ export class UnitHost<
       this.declarationsStaged?.();
       resolveStaged();
     };
+    this.lastReconciliationError = null;
     const run = (this.reconciling ?? Promise.resolve()).then(() =>
       this.reconcileDeclaredOnce(declared, {
         trigger: opts.trigger ?? "startup",
@@ -542,7 +548,11 @@ export class UnitHost<
     );
     // A pass that throws before reaching its staging point must still release
     // whenDeclarationsStaged() waiters, or launch gates would hang forever.
-    this.reconciling = run.catch(() => {}).finally(markStaged);
+    this.reconciling = run
+      .catch((error) => {
+        this.lastReconciliationError = unitErrorMessage(error);
+      })
+      .finally(markStaged);
     if (opts.waitFor === "staged") {
       await Promise.race([staged, run]);
     } else {
@@ -557,6 +567,15 @@ export class UnitHost<
 
   async whenReconciled(): Promise<void> {
     await this.reconciling;
+  }
+
+  /**
+   * Last top-level reconciliation failure, retained for health/status surfaces.
+   * Unit-level activation failures remain represented by each registry entry's
+   * `lastError`; this covers failures that abort the pass before classification.
+   */
+  reconciliationError(): string | null {
+    return this.lastReconciliationError;
   }
 
   /**
