@@ -88,6 +88,24 @@
           "evidence": "intentional-broad"
         },
         {
+          "capability": "devices.pair",
+          "resource": {
+            "kind": "exact",
+            "key": "devices.pair"
+          },
+          "tier": "gated",
+          "evidence": "exact"
+        },
+        {
+          "capability": "devices.read",
+          "resource": {
+            "kind": "exact",
+            "key": "devices.read"
+          },
+          "tier": "gated",
+          "evidence": "exact"
+        },
+        {
           "capability": "git.project.import",
           "resource": {
             "kind": "prefix",
@@ -152,6 +170,15 @@
         },
         {
           "capability": "network.response.read",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "panel.inspect",
           "resource": {
             "kind": "prefix",
             "prefix": ""

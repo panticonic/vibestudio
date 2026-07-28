@@ -14,6 +14,7 @@ import {
   isSessionOpen,
   isSessionRpc,
   isSessionStreamOpen,
+  isAuthenticatedServerCaller,
   openResultFor,
   type SessionControlFrame,
 } from "./sessionNegotiation.js";
@@ -27,6 +28,13 @@ const ENVELOPE: RpcEnvelope = {
 };
 
 describe("session control frame codec", () => {
+  it("recognizes only the authenticated public and reverse-bridge server endpoints", () => {
+    expect(isAuthenticatedServerCaller({ callerId: "main", callerKind: "server" })).toBe(true);
+    expect(isAuthenticatedServerCaller({ callerId: "server", callerKind: "server" })).toBe(true);
+    expect(isAuthenticatedServerCaller({ callerId: "main", callerKind: "worker" })).toBe(false);
+    expect(isAuthenticatedServerCaller({ callerId: "other", callerKind: "server" })).toBe(false);
+  });
+
   it("round-trips an open frame", () => {
     const frame: SessionControlFrame = {
       t: SESSION_OPEN,

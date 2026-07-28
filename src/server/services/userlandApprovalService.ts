@@ -27,7 +27,12 @@ import {
   userlandApprovalRequestSchema,
   userlandApprovalSubjectIdSchema,
 } from "@vibestudio/shared/approvals";
-import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import {
+  ServiceError,
+  verifiedInitiator,
+  verifiedInitiatingUserId,
+  type ServiceContext,
+} from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { EntityRecord, RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
@@ -361,11 +366,12 @@ export function createUserlandApprovalService(deps: {
   ): Promise<SecretInputResult> {
     const issuer = extensionIssuer(ctx);
     const decoratedReq = decorateSecretInputForIssuer(req, issuer);
+    const requesterUserId = verifiedInitiatingUserId(ctx);
     return deps.approvalQueue.requestSecretInput({
       kind: "secret-input",
       callerId: principal.callerId,
       callerKind: principal.callerKind,
-      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
+      ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
       repoPath: principal.repoPath,
       effectiveVersion: principal.effectiveVersion,
       title: decoratedReq.title,
@@ -409,7 +415,7 @@ export function createUserlandApprovalService(deps: {
       );
     }
 
-    const policyCaller = ctx.authorizingCaller ?? ctx.caller;
+    const policyCaller = verifiedInitiator(ctx);
     const testDecision = testPolicyUserlandDecision(
       policyCaller,
       ctx.authorization,
@@ -451,10 +457,11 @@ export function createUserlandApprovalService(deps: {
       );
     }
 
+    const requesterUserId = verifiedInitiatingUserId(ctx);
     const result = await deps.approvalQueue.requestUserland({
       principal,
       issuer,
-      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
+      ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
       ...promptReq,
       ...(sealedDetails?.length ? { sealedDetails } : {}),
       promptOptions,
@@ -527,11 +534,12 @@ export function createUserlandApprovalService(deps: {
       controller.abort();
     }, EXTERNAL_APPROVAL_TIMEOUT_MS);
     try {
+      const requesterUserId = verifiedInitiatingUserId(ctx);
       const result = await deps.approvalQueue.requestExternalAgent({
         kind: "external-agent",
         callerId: principal.callerId,
         callerKind: principal.callerKind,
-        ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
+        ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
         repoPath: principal.repoPath,
         effectiveVersion: principal.effectiveVersion,
         ...(principal.requesterCategory ? { requesterCategory: principal.requesterCategory } : {}),

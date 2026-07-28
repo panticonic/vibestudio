@@ -171,7 +171,6 @@ describe("attached-host owner-bound protocol", () => {
         target: { kind: "caller" },
         source: { kind: "inline", code: "return 1" },
         authority: {
-          mode: "strict",
           effects: "read-only",
           approvals: "pregranted-only",
           requests: [],

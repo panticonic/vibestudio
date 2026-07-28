@@ -6350,6 +6350,49 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:getAgentSettings",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
+      "source": "packages/agentic-do",
+      "method": "getAgentSettings",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "user"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "capability": "rpc:getAgentSettings",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "anyOf(capability(host,rpc:getAgentSettings),allOf(capability(user,rpc:getAgentSettings),workspace-member),allOf(capability(code,rpc:getAgentSettings),workspace-member))",
+      "r3b": {
+        "review": "bounded-agent-settings-read",
+        "change": "Restores the reviewed open read used by child-agent launch verification and agent settings UI. It returns only effective model routing, effort, approval level, and response policy for the exact addressed agent; it exposes no credential, prompt content, transcript, or mutation path."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:getDebugState",
       "rpcPlane": "workspace-do",
       "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
@@ -18080,7 +18123,7 @@
         "user",
         "host"
       ],
-      "sensitivity": "write",
+      "sensitivity": "read",
       "authenticatedFacts": [
         "session",
         "acting-user",
@@ -18203,7 +18246,7 @@
         "user",
         "host"
       ],
-      "sensitivity": "write",
+      "sensitivity": "read",
       "authenticatedFacts": [
         "session",
         "acting-user",
@@ -19618,6 +19661,47 @@
         "change": null
       },
       "capability": "service:credentials.storeCredential",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:credentials.summarizeStoredCredentials",
+      "rpcPlane": "host-service",
+      "owner": "credentials",
+      "method": "summarizeStoredCredentials",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:credentials.summarizeStoredCredentials"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:credentials.summarizeStoredCredentials),allOf(capability(user,service:credentials.summarizeStoredCredentials),workspace-member),allOf(capability(code,service:credentials.summarizeStoredCredentials),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:credentials.summarizeStoredCredentials",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -21823,7 +21907,7 @@
       "authorityPrincipals": [
         "session"
       ],
-      "sensitivity": "write",
+      "sensitivity": "read",
       "authenticatedFacts": [
         "session",
         "acting-user",
@@ -21845,7 +21929,7 @@
       "r3aRequirement": "anyOf()",
       "r3b": {
         "review": "typed-internal-eval-execution-root-retention",
-        "change": "Adds a host-only typed internal write that retains the exact validated execution artifact for the originating eval run. It creates no executable admission and cannot widen or delete retention."
+        "change": "Adds host-only typed lifecycle bookkeeping that retains the exact validated execution artifact for the originating eval run. It creates no executable admission, changes no workspace or user state, and cannot widen or delete retention."
       },
       "capability": "service:evalExecutionRoots.retain",
       "parityAssertion": "generated-census:host-authority"
@@ -25460,6 +25544,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "code",
         "host"
       ],
       "sensitivity": "write",
@@ -25481,7 +25566,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:mission.createDraft),allOf(capability(user,service:mission.createDraft),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:mission.createDraft),allOf(capability(user,service:mission.createDraft),workspace-member),allOf(capability(code,service:mission.createDraft),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -25500,6 +25585,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "code",
         "host"
       ],
       "sensitivity": "write",
@@ -25521,7 +25607,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:mission.edit),allOf(capability(user,service:mission.edit),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:mission.edit),allOf(capability(user,service:mission.edit),workspace-member),allOf(capability(code,service:mission.edit),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -25579,6 +25665,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "code",
         "host"
       ],
       "sensitivity": "read",
@@ -25600,7 +25687,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:mission.get),allOf(capability(user,service:mission.get),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:mission.get),allOf(capability(user,service:mission.get),workspace-member),allOf(capability(code,service:mission.get),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -25619,6 +25706,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "code",
         "host"
       ],
       "sensitivity": "read",
@@ -25640,7 +25728,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:mission.list),allOf(capability(user,service:mission.list),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:mission.list),allOf(capability(user,service:mission.list),workspace-member),allOf(capability(code,service:mission.list),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -25659,6 +25747,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "code",
         "host"
       ],
       "sensitivity": "read",
@@ -25680,7 +25769,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:mission.listRuns),allOf(capability(user,service:mission.listRuns),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:mission.listRuns),allOf(capability(user,service:mission.listRuns),workspace-member),allOf(capability(code,service:mission.listRuns),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -25699,6 +25788,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "code",
         "host"
       ],
       "sensitivity": "write",
@@ -25720,7 +25810,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:mission.pause),allOf(capability(user,service:mission.pause),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:mission.pause),allOf(capability(user,service:mission.pause),workspace-member),allOf(capability(code,service:mission.pause),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -25739,6 +25829,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "code",
         "host"
       ],
       "sensitivity": "admin",
@@ -25760,7 +25851,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:mission.requestReview),allOf(capability(user,service:mission.requestReview),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:mission.requestReview),allOf(capability(user,service:mission.requestReview),workspace-member),allOf(capability(code,service:mission.requestReview),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -25779,6 +25870,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "code",
         "host"
       ],
       "sensitivity": "write",
@@ -25800,7 +25892,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:mission.resume),allOf(capability(user,service:mission.resume),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:mission.resume),allOf(capability(user,service:mission.resume),workspace-member),allOf(capability(code,service:mission.resume),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -25819,6 +25911,7 @@
       },
       "authorityPrincipals": [
         "user",
+        "code",
         "host"
       ],
       "sensitivity": "destructive",
@@ -25840,7 +25933,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:mission.retire),allOf(capability(user,service:mission.retire),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:mission.retire),allOf(capability(user,service:mission.retire),workspace-member),allOf(capability(code,service:mission.retire),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -28309,6 +28402,46 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:panelRuntime.reportView",
+      "rpcPlane": "host-service",
+      "owner": "panelRuntime",
+      "method": "reportView",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:panelRuntime.reportView"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:panelRuntime.reportView),allOf(capability(user,service:panelRuntime.reportView),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:panelRuntime.reportView",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:panelRuntime.takeOver",
       "rpcPlane": "host-service",
       "owner": "panelRuntime",
@@ -29158,6 +29291,47 @@
         "change": null
       },
       "capability": "service:panelTree.getStateArgs",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:panelTree.getSubtree",
+      "rpcPlane": "host-service",
+      "owner": "panelTree",
+      "method": "getSubtree",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:panelTree.getSubtree"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:panelTree.getSubtree),allOf(capability(user,service:panelTree.getSubtree),workspace-member),allOf(capability(code,service:panelTree.getSubtree),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:panelTree.getSubtree",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -30104,6 +30278,88 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:panelTree.setTitle",
+      "rpcPlane": "host-service",
+      "owner": "panelTree",
+      "method": "setTitle",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:panelTree.setTitle"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:panelTree.setTitle\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:panelTree.setTitle\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:panelTree.setTitle\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:panelTree.setTitle\"}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:panelTree.setTitle",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:panelTree.setTitle#capability:context.boundary",
+      "rpcPlane": "host-service",
+      "owner": "panelTree",
+      "method": "setTitle",
+      "capability": "context.boundary",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "panelTree.setTitle.contextBoundary"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:panelTree.snapshot",
       "rpcPlane": "host-service",
       "owner": "panelTree",
@@ -30677,86 +30933,6 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:phoneProvisioning.install",
-      "rpcPlane": "host-service",
-      "owner": "phoneProvisioning",
-      "method": "install",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:phoneProvisioning.install"
-      },
-      "authorityPrincipals": [
-        "code",
-        "user"
-      ],
-      "sensitivity": "admin",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:phoneProvisioning.install),workspace-member),allOf(capability(code,service:phoneProvisioning.install),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:phoneProvisioning.install",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:phoneProvisioning.openPairing",
-      "rpcPlane": "host-service",
-      "owner": "phoneProvisioning",
-      "method": "openPairing",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:phoneProvisioning.openPairing"
-      },
-      "authorityPrincipals": [
-        "code",
-        "user"
-      ],
-      "sensitivity": "admin",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:phoneProvisioning.openPairing),workspace-member),allOf(capability(code,service:phoneProvisioning.openPairing),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:phoneProvisioning.openPairing",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
       "id": "host:phoneProvisioning.providers",
       "rpcPlane": "host-service",
       "owner": "phoneProvisioning",
@@ -30794,6 +30970,46 @@
         "change": null
       },
       "capability": "service:phoneProvisioning.providers",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:phoneProvisioning.provision",
+      "rpcPlane": "host-service",
+      "owner": "phoneProvisioning",
+      "method": "provision",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:phoneProvisioning.provision"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user"
+      ],
+      "sensitivity": "admin",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:phoneProvisioning.provision),workspace-member),allOf(capability(code,service:phoneProvisioning.provision),workspace-member))",
+      "r3b": {
+        "review": "atomic-connected-desktop-phone-provisioning",
+        "change": "Combines compatible-app installation and same-account device pairing behind one gated transaction. The selected authenticated desktop owns the hub session, targets one attached ready phone, keeps the invite secret, delivers it through an adb-shell-only Android component, and returns only after a new paired device is observed."
+      },
+      "capability": "service:phoneProvisioning.provision",
       "parityAssertion": "generated-census:host-authority"
     },
     {

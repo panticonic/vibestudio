@@ -12,6 +12,7 @@ import type {
   AuditEntry,
   ClientConfigStatus,
   CredentialBinding,
+  CredentialStoreSummary,
   ForwardOAuthCallbackRequest,
   ManagedCredentialSummary,
   ProxyGitHttpResponse,
@@ -881,6 +882,8 @@ const CredentialOwnerSchema = z
   })
   .strict();
 
+const CredentialLifecycleStateSchema = z.enum(["active", "expired", "revoked"]);
+
 const StoredCredentialSummarySchema = z
   .object({
     id: z.string(),
@@ -893,7 +896,7 @@ const StoredCredentialSummarySchema = z
     scopes: z.array(z.string()),
     lifecycle: z
       .object({
-        state: z.enum(["active", "expired", "revoked"]),
+        state: CredentialLifecycleStateSchema,
         canRefresh: z.boolean(),
       })
       .strict(),
@@ -946,6 +949,20 @@ const CredentialAccessGrantSummarySchema = z
 const ManagedCredentialSummarySchema = StoredCredentialSummarySchema.extend({
   grants: z.array(CredentialAccessGrantSummarySchema),
 }).strict() satisfies z.ZodType<ManagedCredentialSummary>;
+
+const CredentialStoreSummarySchema = z
+  .object({
+    credentialCount: z.number().int().nonnegative(),
+    lifecycleStates: z.array(CredentialLifecycleStateSchema).max(3),
+    stateCounts: z
+      .object({
+        active: z.number().int().nonnegative().optional(),
+        expired: z.number().int().nonnegative().optional(),
+        revoked: z.number().int().nonnegative().optional(),
+      })
+      .strict(),
+  })
+  .strict() satisfies z.ZodType<CredentialStoreSummary>;
 
 const ClientConfigFieldStatusSchema = z
   .object({
@@ -1141,6 +1158,14 @@ export const credentialsMethods = defineServiceMethods({
       "List summaries of stored URL-bound credentials visible to the caller; secret material is never included.",
     args: z.tuple([]),
     returns: z.array(StoredCredentialSummarySchema),
+    access: READ_ACCESS,
+    examples: [{ args: [] }],
+  },
+  summarizeStoredCredentials: {
+    description:
+      "Return only the aggregate count and represented lifecycle states for stored credentials; no per-credential fields are included.",
+    args: z.tuple([]),
+    returns: CredentialStoreSummarySchema,
     access: READ_ACCESS,
     examples: [{ args: [] }],
   },

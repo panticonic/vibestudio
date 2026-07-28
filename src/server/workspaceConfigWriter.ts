@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import YAML from "yaml";
 import { rpcErrorDataOf } from "@vibestudio/rpc";
-import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { verifiedInitiator, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
@@ -362,7 +362,7 @@ export function createWorkspaceConfigMainWriter(deps: {
     // immediate transport caller, but it did not originate the protected
     // main advance. Preserve the verified authorizing principal just as the
     // VCS service does for other provider relays.
-    const publishingCaller = input.ctx.authorizingCaller ?? input.ctx.caller;
+    const publishingCaller = verifiedInitiator(input.ctx);
     if (input.ctx.signal) {
       await deps.vcs.semanticPublishCall<VcsPushResult>(
         pushInput,

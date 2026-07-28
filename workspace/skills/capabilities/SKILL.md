@@ -88,7 +88,9 @@ order after editing a provider:
    the `services` row and, when `transport.objectKey` is present, the matching
    `singletonObjects` row as one schema-validated semantic edit. Do not splice
    either YAML list with generic `edit`/`write`; a singleton is launchable
-   infrastructure, not a discoverable service by itself.
+   infrastructure, not a discoverable service by itself. Supply the required
+   `presentation` object from the tool schema so authority prompts can describe
+   the service consistently; a `sharing` domain also requires `substanceKind`.
 2. Call the agent tool `docs_search` for the new service name or protocol. If the
    row is absent, stop: the declaration is missing or invalid in the current
    context. Re-read the relevant YAML and repair it. Do not start eval and do not
@@ -352,6 +354,30 @@ An agent-owned eval is a conduit, not a separately trusted app. A durable choice
 installed-code update or version decision. Every eval still receives code review before
 it can run, and its effects intersect the binding, admitted task or approved mission,
 current grants, receiver policy, and context lineage.
+
+## Panel-tree relationship authority
+
+Panel coordination uses two distinct relationships:
+
+- The mutable panel tree is presentation and organization. Reparenting, sorting, or
+  nesting a panel does not transfer runtime capabilities.
+- Immutable runtime launch ancestry is control provenance. A panel, its bound agent,
+  and that agent's EvalDO can control panel runtimes they spawned because the host
+  verifies the descendant chain. This relationship check is terminal authorization
+  input, not a grant copied between principals.
+
+Consequently, a collection may freely create, move, rename, and coordinate its own
+spawned descendants without prompting at every operation. Moving an imported or
+unrelated panel under that collection does not make it creator-controlled. Runtime or
+CDP control of such a foreign-context target still selects the exact
+`context.boundary` decision for that requester and target context. A remembered gated
+decision can cover later operations within that same scope; privileged targets remain
+critical and require a fresh decision.
+
+Do not propagate capabilities upward to ancestors, downward to arbitrary visual
+descendants, or across a reparent operation. If a coordinator needs prompt-free
+control, have it spawn the resources it owns. If it adopts existing resources, retain
+their provenance and use the ordinary exact context-boundary approval.
 
 ## Review and activation lifecycle
 

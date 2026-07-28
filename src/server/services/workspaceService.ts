@@ -11,7 +11,11 @@ import path from "node:path";
 import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import {
+  ServiceError,
+  verifiedInitiatingUserId,
+  type ServiceContext,
+} from "@vibestudio/shared/serviceDispatcher";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { Workspace, WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import type { ApprovalDetailFormat, ApprovalPrincipal } from "@vibestudio/shared/approvals";
@@ -438,9 +442,10 @@ async function requireWorkspaceApproval(
       "EACCES"
     );
   }
+  const requesterUserId = verifiedInitiatingUserId(ctx);
   const result = await approvalQueue.requestUserland({
     principal,
-    ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
+    ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
     subject: {
       id: `workspace:${operation}:${safeSubjectSegment(approval.target)}:${randomUUID()}`,
       label: `workspace ${operation}`,

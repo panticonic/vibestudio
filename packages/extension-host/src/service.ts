@@ -7,6 +7,8 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
 import {
   ServiceError,
+  verifiedInitiator,
+  verifiedInitiatingUserId,
   type ServiceContext,
   type VerifiedCodeIdentity,
   type VerifiedCaller,
@@ -1101,7 +1103,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
     );
     this.activeInvocations.set(this.invocationKey(extensionName, invocation.requestId), {
       invocation,
-      authorizingCaller: ctx.authorizingCaller ?? ctx.caller,
+      authorizingCaller: verifiedInitiator(ctx),
       causalParent: ctx.causalParent ?? null,
     });
     return invocation;
@@ -2068,11 +2070,12 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
       repo: node.relativePath,
       ref: "main",
     };
+    const requesterUserId = verifiedInitiatingUserId(ctx);
     const decision = await this.deps.approvalQueue.request({
       kind: "unit-batch",
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
-      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
+      ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       dedupKey: `unit-management:extension:reload:${node.name}`,

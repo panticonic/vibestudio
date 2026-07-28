@@ -886,18 +886,18 @@ async function main() {
     credentialUseGrantStore,
     credentialLifecycle,
     authorizeInternalRequest: async (input) => {
-      if (await localModelLoopbackAuthority.authorize(input)) return true;
+      if (await localModelLoopbackAuthority.authorize(input)) return {};
       let gatewayOrigin: string;
       try {
         gatewayOrigin = new URL(getLocalGatewayUrl("CDP transport")).origin;
       } catch {
-        return false;
+        return null;
       }
       if (
         input.targetUrl.origin !== gatewayOrigin ||
         !input.targetUrl.pathname.startsWith("/cdp/")
       ) {
-        return false;
+        return null;
       }
       const rawHeader =
         input.headers instanceof Headers
@@ -906,9 +906,14 @@ async function main() {
               ([name]) => name.toLowerCase() === CDP_INTERNAL_GRANT_HEADER
             )?.[1];
       const token = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
-      if (typeof token !== "string" || token.length === 0) return false;
+      if (typeof token !== "string" || token.length === 0) return null;
       const targetId = decodeURIComponent(input.targetUrl.pathname.slice("/cdp/".length));
-      return cdpGrants.validatesTarget(token, targetId);
+      if (!cdpGrants.validatesTarget(token, targetId)) return null;
+      return {
+        trustedForwardHeaders: {
+          [CDP_INTERNAL_GRANT_HEADER]: token,
+        },
+      };
     },
     authorizePlatformRpcCallback: ({ targetUrl, authorization, runtimeId }) => {
       let gatewayOrigin: string;

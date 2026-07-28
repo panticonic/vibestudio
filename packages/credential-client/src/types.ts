@@ -60,7 +60,10 @@ export interface CookieSessionCookie {
   httpOnly?: boolean;
   sameSite?: "unspecified" | "no_restriction" | "lax" | "strict";
   expirationDate?: number;
-  partitionKey?: string;
+  partitionKey?: {
+    topLevelSite: string;
+    hasCrossSiteAncestor: boolean;
+  };
 }
 
 export interface CookieSessionMaterial {
@@ -576,6 +579,13 @@ export interface StoredCredentialLifecycle {
   state: "active" | "expired" | "revoked";
   /** Whether persisted secret material can renew an expired access token. */
   canRefresh: boolean;
+}
+
+/** Secret-free aggregate inventory for answering count/lifecycle questions. */
+export interface CredentialStoreSummary {
+  credentialCount: number;
+  lifecycleStates: StoredCredentialLifecycle["state"][];
+  stateCounts: Partial<Record<StoredCredentialLifecycle["state"], number>>;
 }
 
 export interface ManagedCredentialSummary extends StoredCredentialSummary {

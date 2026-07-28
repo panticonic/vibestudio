@@ -2769,7 +2769,7 @@ sealed code requests, caller/session authority, relationships, and denials.
 
 Every protected capability/resource must be covered by a declared run request.
 A missing request returns a structured `run-manifest-denied` authority failure.
-Approval cannot widen the strict manifest.
+Approval cannot widen an exact eval request allowlist.
 
 ### Read-only
 
@@ -3115,7 +3115,7 @@ is being cut.
 
 Update existing eval lifecycle coverage and add:
 
-- `eval-strict-authority`;
+- `eval-exact-authority`;
 - `eval-pregranted-only`;
 - `eval-preauthorization`;
 - `eval-events`;

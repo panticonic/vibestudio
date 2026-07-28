@@ -38,6 +38,7 @@ import {
   panel,
   panelTree,
   rpc,
+  FORM_FILL_TYPES,
   type CredentialAccessGrantSummary,
   type CredentialAccessSubjectSummary,
   type ManagedCredentialSummary,
@@ -53,31 +54,11 @@ type CredentialStatus = {
 type BrowserPasswordSummary = { id: number; origin: string; username: string };
 type FormFillSummary = {
   id: number;
-  type: string;
+  fieldName: string;
+  type: string | null;
   value: string;
   displayLabel: string | null;
 };
-
-const FORM_FILL_TYPES = [
-  "name",
-  "given-name",
-  "additional-name",
-  "family-name",
-  "honorific-prefix",
-  "honorific-suffix",
-  "email",
-  "tel",
-  "organization",
-  "street-address",
-  "address-line1",
-  "address-line2",
-  "address-line3",
-  "address-level1",
-  "address-level2",
-  "postal-code",
-  "country",
-  "country-name",
-] as const;
 
 function credentialStatus(credential: ManagedCredentialSummary): CredentialStatus {
   if (credential.revokedAt) return { label: "Revoked", color: "red", icon: "revoked" };
@@ -509,13 +490,13 @@ function CredentialsPage() {
         rpc.call<BrowserPasswordSummary[]>("main", "autofill.listSavedPasswords", []),
         rpc.call<string[]>("main", "autofill.listNeverSaveOrigins", []),
         Promise.all(
-          FORM_FILL_TYPES.map((type) =>
-            browserData.getFormFillSuggestions({ type, limit: 100 })
-          )
+          FORM_FILL_TYPES.map((type) => browserData.getFormFillSuggestions({ type, limit: 100 }))
         ).then((groups) => {
           const unique = new Map<number, FormFillSummary>();
           for (const row of groups.flat()) unique.set(row.id, row);
-          return [...unique.values()].sort((a, b) => a.type.localeCompare(b.type));
+          return [...unique.values()].sort((a, b) =>
+            (a.type ?? a.fieldName).localeCompare(b.type ?? b.fieldName)
+          );
         }),
       ]);
       if (savedPasswords.status === "fulfilled") setBrowserPasswords(savedPasswords.value);
@@ -638,7 +619,9 @@ function CredentialsPage() {
         current.map((item) => (item.id === entry.id ? { ...item, value: value.trim() } : item))
       );
     } catch (err) {
-      setError(`Couldn't edit form-fill value: ${err instanceof Error ? err.message : String(err)}`);
+      setError(
+        `Couldn't edit form-fill value: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   }, []);
 
@@ -806,7 +789,12 @@ function CredentialsPage() {
                 Personal values are suggested only after you focus a matching field.
               </Text>
               {formFillValues.length > 0 ? (
-                <Button size="1" color="red" variant="soft" onClick={() => void clearFormFillValues()}>
+                <Button
+                  size="1"
+                  color="red"
+                  variant="soft"
+                  onClick={() => void clearFormFillValues()}
+                >
                   Clear all
                 </Button>
               ) : null}
@@ -823,7 +811,8 @@ function CredentialsPage() {
                       {entry.value}
                     </Text>
                     <Text size="1" color="gray" as="div">
-                      {entry.displayLabel || entry.type.replaceAll("-", " ")}
+                      {entry.displayLabel ||
+                        (entry.type ?? entry.fieldName).replaceAll("-", " ").replaceAll("_", " ")}
                     </Text>
                   </Box>
                   <Flex gap="2">

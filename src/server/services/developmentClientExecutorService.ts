@@ -119,8 +119,8 @@ export class DevelopmentClientExecutorRegistry {
   definition(): ServiceDefinition {
     return {
       name: "developmentClientExecutor",
-      description: "Authenticated desktop executors for exact development-client launches",
-      authority: { principals: ["host"] },
+      description: "Owner-bound desktop executors for exact development-client launches",
+      authority: { principals: ["user"] },
       methods: developmentClientExecutorMethods,
       handler: defineServiceHandler("developmentClientExecutor", developmentClientExecutorMethods, {
         register: (ctx, [input]) => {

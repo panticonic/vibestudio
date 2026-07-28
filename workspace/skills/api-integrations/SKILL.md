@@ -1,6 +1,6 @@
 ---
 name: api-integrations
-description: Build API integrations with URL-bound credentials, approval-gated browser opens, and workflow UI for provider setup.
+description: Use, build, or diagnose external APIs and URL-bound credentials, including safe missing-credential outcomes, approval-gated browser opens, and provider setup workflows.
 ---
 
 # API Integrations Skill
@@ -18,6 +18,32 @@ secret. If the request does not identify the provider and target URL clearly
 enough to create a correct URL-bound credential, explain the trusted setup flow
 and ask for those non-secret details. Do not open a credential prompt with
 placeholder values.
+
+Credential IDs are opaque identifiers. Preserve the complete value exactly as
+provided—including prefixes such as `credential:`—when passing
+`{ credentialId }`; never trim, split, or normalize it.
+
+When a read-only diagnostic intentionally checks a known missing credential,
+keep the eval result bounded. Convert only the canonical
+`credential-unavailable` outcome to `{ missing: true }`, and rethrow every
+other error:
+
+```ts
+import { credentials } from "@workspace/runtime";
+
+try {
+  await credentials.fetch(url, undefined, { credentialId });
+  return { missing: false };
+} catch (error) {
+  if (!String(error).includes("credential-unavailable")) throw error;
+  return { missing: true };
+}
+```
+
+Do not return the raw error object, credential metadata, or request details.
+In eval, `credentials` is imported from `@workspace/runtime`; it is not an
+ambient global and there is no raw host-service equivalent to
+`credentials.fetch`.
 
 When the provider and audience are known, call the appropriate host-owned
 credential or OAuth setup API once. A denial or cancellation means setup did

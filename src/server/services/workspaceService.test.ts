@@ -632,6 +632,11 @@ describe("workspace service agent resources", () => {
         path.join(wsPath, "meta", "SKILL.md"),
         "---\nname: meta-skill\ndescription: Flat repo skill\n---\n"
       );
+      mkdirSync(path.join(wsPath, "about", "collection"), { recursive: true });
+      writeFileSync(
+        path.join(wsPath, "about", "collection", "SKILL.md"),
+        "---\nname: collection-conductor\ndescription: Co-located panel skill\n---\n"
+      );
       mkdirSync(path.join(wsPath, "skills", "alpha"), { recursive: true });
       writeFileSync(
         path.join(wsPath, "skills", "alpha", "SKILL.md"),
@@ -670,6 +675,12 @@ describe("workspace service agent resources", () => {
         skillPath: string;
       }>;
       expect(result).toEqual([
+        {
+          name: "collection-conductor",
+          description: "Co-located panel skill",
+          dirPath: "about/collection",
+          skillPath: "about/collection/SKILL.md",
+        },
         {
           name: "meta-skill",
           description: "Flat repo skill",

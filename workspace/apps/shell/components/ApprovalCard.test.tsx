@@ -400,7 +400,7 @@ describe("ApprovalCard", () => {
     expect(screen.getAllByText("octocat").length).toBeGreaterThan(0);
     expect(
       screen.getByText(
-        "Uses your GitHub account to access GitHub profile and repositories at api.github.com/user."
+        "Uses GitHub to access GitHub profile and repositories at api.github.com/user."
       )
     ).toBeTruthy();
     expect(screen.queryByText(/something in your workspace/iu)).toBeNull();

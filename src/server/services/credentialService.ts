@@ -7,7 +7,7 @@ import {
   type ClientConfigRecord,
 } from "@vibestudio/credential-client/clientConfigStore";
 import { CredentialStore } from "@vibestudio/credential-client/store";
-import { credentialLifecycle } from "@vibestudio/credential-client/credentialStatus";
+import { credentialLifecycle as summarizeCredentialLifecycle } from "@vibestudio/credential-client/credentialStatus";
 import type {
   AccountIdentity,
   AuditEntry,
@@ -16,6 +16,7 @@ import type {
   CredentialAuditEvent,
   CredentialBinding,
   CredentialBindingUse,
+  CredentialStoreSummary,
   CredentialGrantAction,
   CredentialAccessGrantSummary,
   CredentialAccessSubjectSummary,
@@ -38,7 +39,10 @@ import {
   normalizeCredentialInjection,
   normalizeUrlAudiences,
 } from "@vibestudio/credential-client/urlAudience";
-import type { ServiceContext } from "../../../packages/shared/src/serviceDispatcher.js";
+import {
+  verifiedInitiatingUserId,
+  type ServiceContext,
+} from "../../../packages/shared/src/serviceDispatcher.js";
 import type { AppCapability } from "../../../packages/shared/src/unitManifest.js";
 import type { ServiceDefinition } from "../../../packages/shared/src/serviceDefinition.js";
 import { defineServiceHandler } from "../../../packages/shared/src/serviceHandlers.js";
@@ -338,11 +342,12 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       { url: tokenUrl, match: "exact" },
     ]);
     const identity = resolveApprovalIdentity(ctx);
+    const requesterUserId = verifiedInitiatingUserId(ctx);
     const result = await approvalQueue.requestClientConfig({
       kind: "client-config",
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
-      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
+      ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       configId: request.configId,
@@ -498,11 +503,12 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       ctx.caller.runtime.id
     );
     const identity = resolveApprovalIdentity(ctx);
+    const requesterUserId = verifiedInitiatingUserId(ctx);
     const result = await approvalQueue.requestCredentialInput({
       kind: "credential-input",
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
-      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
+      ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       title: request.title,
@@ -551,6 +557,20 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   async function listStoredCredentials(): Promise<StoredCredentialSummary[]> {
     const credentials = await credentialStore.listUrlBound();
     return credentials.map(summarizeUrlBoundCredential);
+  }
+
+  async function summarizeStoredCredentials(): Promise<CredentialStoreSummary> {
+    const credentials = await credentialStore.listUrlBound();
+    const stateCounts: CredentialStoreSummary["stateCounts"] = {};
+    for (const credential of credentials) {
+      const state = summarizeCredentialLifecycle(credential).state;
+      stateCounts[state] = (stateCounts[state] ?? 0) + 1;
+    }
+    return {
+      credentialCount: credentials.length,
+      lifecycleStates: Object.keys(stateCounts).sort() as CredentialStoreSummary["lifecycleStates"],
+      stateCounts,
+    };
   }
 
   async function inspectStoredCredentials(): Promise<ManagedCredentialSummary[]> {
@@ -980,11 +1000,12 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       throw new Error("Credential injection is required");
     }
     const approvalIdentity = resolveApprovalIdentity(ctx);
+    const requesterUserId = verifiedInitiatingUserId(ctx);
     const decision = await approvalQueue.request({
       ...(params.signal ? { signal: params.signal } : {}),
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
-      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
+      ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
       repoPath: params.identity.repoPath,
       effectiveVersion: params.identity.effectiveVersion,
       allowedDecisions: credentialApprovalDecisions(approvalIdentity),
@@ -1171,13 +1192,14 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     }
     const credentialId = credential.id;
     const identity = resolveApprovalIdentity(ctx);
+    const requesterUserId = verifiedInitiatingUserId(ctx);
     const decision = await approvalQueue.request({
       // When the caller deferred, this signal is aborted on TTL expiry so the
       // pending approval is cancelled cleanly instead of leaking a waiter.
       ...(signal ? { signal } : {}),
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
-      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
+      ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       allowedDecisions: credentialApprovalDecisions(identity, {
@@ -1383,6 +1405,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         connectionCoordinator.forwardOAuthCallback(ctx, input),
       cancelOAuth: (ctx, [input]) => connectionCoordinator.cancelOAuth(ctx, input),
       listStoredCredentials: () => listStoredCredentials(),
+      summarizeStoredCredentials: () => summarizeStoredCredentials(),
       inspectStoredCredentials: () => inspectStoredCredentials(),
       revokeCredential: (ctx, [input]) => revokeCredential(ctx, input),
       resolveCredential: (ctx, [input]) => resolveCredential(ctx, input),
@@ -1429,7 +1452,7 @@ function summarizeUrlBoundCredential(credential: Credential): StoredCredentialSu
     bindings,
     owner: credential.owner,
     scopes: credential.scopes,
-    lifecycle: credentialLifecycle(credential),
+    lifecycle: summarizeCredentialLifecycle(credential),
     expiresAt: credential.expiresAt,
     revokedAt: credential.revokedAt,
     metadata: credential.metadata,

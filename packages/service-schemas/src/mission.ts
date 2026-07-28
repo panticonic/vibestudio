@@ -109,7 +109,11 @@ export const missionRunRecordSchema = z
   })
   .strict();
 
-const USER_HOST: ServiceAuthorityPolicy = { principals: ["user", "host"] };
+// Workspace UI is code-origin. The method tier table marks these methods
+// `codeOnly`, which admits trusted workspace panels while excluding eval/agent
+// execution sessions. Gated mission mutations still require their mapped
+// semantic capability.
+const USER_CODE_HOST: ServiceAuthorityPolicy = { principals: ["user", "code", "host"] };
 const HOST: ServiceAuthorityPolicy = { principals: ["host"] };
 
 export const missionMethods = defineServiceMethods({
@@ -117,21 +121,21 @@ export const missionMethods = defineServiceMethods({
     description: "List durable automation charters and their approval state.",
     args: z.tuple([]),
     returns: z.array(missionRecordSchema),
-    authority: USER_HOST,
+    authority: USER_CODE_HOST,
     access: { sensitivity: "read" },
   },
   get: {
     description: "Read one durable automation charter.",
     args: z.tuple([z.string()]),
     returns: missionRecordSchema.nullable(),
-    authority: USER_HOST,
+    authority: USER_CODE_HOST,
     access: { sensitivity: "read" },
   },
   listRuns: {
     description: "List the durable run timeline for one visible mission.",
     args: z.tuple([z.string()]),
     returns: z.array(missionRunRecordSchema),
-    authority: USER_HOST,
+    authority: USER_CODE_HOST,
     access: { sensitivity: "read" },
   },
   createDraft: {
@@ -147,7 +151,7 @@ export const missionMethods = defineServiceMethods({
         .strict(),
     ]),
     returns: missionRecordSchema,
-    authority: USER_HOST,
+    authority: USER_CODE_HOST,
     access: { sensitivity: "write" },
   },
   edit: {
@@ -164,35 +168,35 @@ export const missionMethods = defineServiceMethods({
         .strict(),
     ]),
     returns: missionRecordSchema,
-    authority: USER_HOST,
+    authority: USER_CODE_HOST,
     access: { sensitivity: "write" },
   },
   requestReview: {
     description: "Open the canonical approval-queue review for an inert mission closure.",
     args: z.tuple([z.string()]),
     returns: missionRecordSchema,
-    authority: USER_HOST,
+    authority: USER_CODE_HOST,
     access: { sensitivity: "admin" },
   },
   pause: {
     description: "Pause an active mission without changing its charter.",
     args: z.tuple([z.string()]),
     returns: missionRecordSchema,
-    authority: USER_HOST,
+    authority: USER_CODE_HOST,
     access: { sensitivity: "write" },
   },
   resume: {
     description: "Resume a paused mission only if its approved closure still matches.",
     args: z.tuple([z.string()]),
     returns: missionRecordSchema,
-    authority: USER_HOST,
+    authority: USER_CODE_HOST,
     access: { sensitivity: "write" },
   },
   retire: {
     description: "Retire a mission permanently and revoke its standing allows.",
     args: z.tuple([z.string()]),
     returns: missionRecordSchema,
-    authority: USER_HOST,
+    authority: USER_CODE_HOST,
     access: { sensitivity: "destructive" },
   },
   startSession: {

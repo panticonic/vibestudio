@@ -634,6 +634,12 @@ export const METHOD_TIERS = {
     rationale:
       "Secret-free lifecycle projection used by the open model-availability catalog; credential inspection and use remain gated",
   },
+  "credentials.summarizeStoredCredentials": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Bounded count/state aggregate contains no per-credential fields; detailed inspection and credential use remain gated",
+  },
   "credentials.proxyFetch": {
     tier: "open",
     session: "family",
@@ -1793,6 +1799,12 @@ export const METHOD_TIERS = {
     session: "family",
     rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
   },
+  "panelRuntime.reportView": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "P-panels: a lease-owning host reports the current panel boot state; ownership is verified server-side and no authority is widened.",
+  },
   "panelRuntime.release": {
     tier: "open",
     session: "family",
@@ -1886,6 +1898,12 @@ export const METHOD_TIERS = {
     rationale:
       "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
   },
+  "panelTree.getSubtree": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "P-panels: a bounded recursive panel projection stays within the mutually inspectable workspace panel family",
+  },
   "panelTree.getTreeSnapshot": {
     tier: "open",
     session: "family",
@@ -1963,6 +1981,12 @@ export const METHOD_TIERS = {
     session: "family",
     rationale:
       "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+  },
+  "panelTree.setTitle": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "P-panels: semantic panel organization stays within the mutually inspectable workspace panel family",
   },
   "panelTree.snapshot": {
     tier: "open",

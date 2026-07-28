@@ -7,6 +7,7 @@ import {
   type CredentialClient,
   type CredentialAccessGrantSummary,
   type CredentialAccessSubjectSummary,
+  type CredentialStoreSummary,
   type DeleteClientConfigRequest,
   type GetClientConfigStatusRequest,
   type GitHttpClient,
@@ -33,42 +34,42 @@ export function initPanelCredentials(rpc: RpcCaller): void {
   }
 }
 
-export async function store(input: StoreUrlBoundCredentialRequest): Promise<StoredCredentialSummary> {
+export async function store(
+  input: StoreUrlBoundCredentialRequest
+): Promise<StoredCredentialSummary> {
   return requireClient().store(input);
 }
 
-export async function connect(
-  input: ConnectCredentialRequest,
-): Promise<StoredCredentialSummary> {
+export async function connect(input: ConnectCredentialRequest): Promise<StoredCredentialSummary> {
   return requireClient().connect(input);
 }
 
-export async function configureClient(
-  input: ConfigureClientRequest,
-): Promise<ClientConfigStatus> {
+export async function configureClient(input: ConfigureClientRequest): Promise<ClientConfigStatus> {
   return requireClient().configureClient(input);
 }
 
 export async function requestCredentialInput(
-  input: RequestCredentialInputRequest,
+  input: RequestCredentialInputRequest
 ): Promise<StoredCredentialSummary> {
   return requireClient().requestCredentialInput(input);
 }
 
 export async function getClientConfigStatus(
-  input: GetClientConfigStatusRequest,
+  input: GetClientConfigStatusRequest
 ): Promise<ClientConfigStatus> {
   return requireClient().getClientConfigStatus(input);
 }
 
-export async function deleteClientConfig(
-  input: DeleteClientConfigRequest | string,
-): Promise<void> {
+export async function deleteClientConfig(input: DeleteClientConfigRequest | string): Promise<void> {
   return requireClient().deleteClientConfig(input);
 }
 
 export async function listStoredCredentials(): Promise<StoredCredentialSummary[]> {
   return requireClient().listStoredCredentials();
+}
+
+export async function summarizeStoredCredentials(): Promise<CredentialStoreSummary> {
+  return requireClient().summarizeStoredCredentials();
 }
 
 export async function inspectStoredCredentials(): Promise<ManagedCredentialSummary[]> {
@@ -80,7 +81,7 @@ export async function revokeCredential(credentialId: string): Promise<void> {
 }
 
 export async function resolveCredential(
-  input: ResolveUrlBoundCredentialRequest,
+  input: ResolveUrlBoundCredentialRequest
 ): Promise<StoredCredentialSummary | null> {
   return requireClient().resolveCredential(input);
 }
@@ -88,14 +89,14 @@ export async function resolveCredential(
 export async function fetch(
   url: string | URL,
   init?: RequestInit,
-  opts?: { credentialId?: string },
+  opts?: { credentialId?: string }
 ): Promise<Response> {
   return requireClient().fetch(url, init, opts);
 }
 
 export function hookForUrl(
   url: string | URL,
-  opts?: { credentialId?: string },
+  opts?: { credentialId?: string }
 ): (init?: RequestInit) => Promise<Response> {
   return requireClient().hookForUrl(url, opts);
 }
@@ -110,6 +111,7 @@ export type {
   ConnectCredentialRequest,
   CredentialAccessGrantSummary,
   CredentialAccessSubjectSummary,
+  CredentialStoreSummary,
   CredentialClient,
   DeleteClientConfigRequest,
   GetClientConfigStatusRequest,

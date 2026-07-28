@@ -50,7 +50,6 @@ describe("StreamingRelay HTTP response ownership", () => {
       }),
       verifiedCaller: () => caller,
       authorizeRelay: () => ({ ok: true }),
-      createHttpContext: (_authenticated, extras) => ({ caller, ...extras }),
       createWsContext: () => {
         throw new Error("WebSocket context was not expected");
       },
@@ -103,5 +102,86 @@ describe("StreamingRelay HTTP response ownership", () => {
         ),
       ])
     ).resolves.toBeUndefined();
+  });
+
+  it("keeps the per-request evaluated caller through HTTP stream authority and egress", async () => {
+    const resident = createVerifiedCaller("do:vibestudio/internal:EvalDO:owner", "do");
+    const evaluated = {
+      ...resident,
+      executionSession: {
+        nonce: "exact-live-eval-session",
+      } as import("@vibestudio/rpc").AgentExecutionSessionFact,
+    };
+    const assertAuthority = vi.fn(async () => undefined);
+    const forwardProxyFetchStream = vi.fn(
+      async (
+        _params: { caller: unknown },
+        sink: (frame: { kind: string; status?: number; bytesIn?: number }) => Promise<void>
+      ) => {
+        await sink({ kind: "head", status: 200 });
+        await sink({ kind: "end", bytesIn: 0 });
+        return { status: 200, bytesIn: 0 };
+      }
+    );
+    const relay = new StreamingRelay({
+      dispatcher: { assertAuthority } as unknown as ServiceDispatcher,
+      egressProxy: { forwardProxyFetchStream },
+      authenticateHttp: () => ({
+        ok: true,
+        caller: {
+          callerId: "do:vibestudio/internal:EvalDO:owner",
+          callerKind: "do",
+        },
+      }),
+      verifiedCaller: () => evaluated,
+      authorizeRelay: () => ({ ok: true }),
+      createWsContext: () => {
+        throw new Error("WebSocket context was not expected");
+      },
+      resolveCausalParent: async () => undefined,
+      relayTargetStream: async () => {
+        throw new Error("Target relay was not expected");
+      },
+      sendWs: () => undefined,
+    });
+
+    const server = http.createServer((req, res) => {
+      void relay.handleHttpRequest(req, res);
+    });
+    servers.add(server);
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected an IPv4 test server");
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/rpc/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        target: "main",
+        delivery: {},
+        message: {
+          type: "stream-request",
+          requestId: "evaluated-proxy-fetch",
+          fromId: resident.runtime.id,
+          method: "credentials.proxyFetch",
+          args: [{ url: "https://example.com", method: "GET" }],
+        },
+      }),
+    });
+    expect(response.status).toBe(200);
+    await response.arrayBuffer();
+
+    expect(assertAuthority).toHaveBeenCalledWith(
+      expect.objectContaining({ caller: evaluated }),
+      "credentials",
+      "proxyFetch",
+      [{ url: "https://example.com", method: "GET" }]
+    );
+    expect(forwardProxyFetchStream).toHaveBeenCalledWith(
+      expect.objectContaining({ caller: evaluated }),
+      expect.any(Function),
+      expect.any(AbortSignal)
+    );
   });
 });

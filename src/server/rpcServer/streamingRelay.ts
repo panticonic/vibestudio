@@ -20,6 +20,8 @@ import {
   type ServiceDispatcher,
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
+import type { UserSubject } from "@vibestudio/identity/types";
+import type { RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import type { StreamFrame } from "../services/egressProxy.js";
@@ -51,20 +53,23 @@ export interface StreamingRelayDeps {
   dispatcher: ServiceDispatcher;
   egressProxy?: EgressStreamProxy;
   authenticateHttp(req: IncomingMessage): HttpRpcAdmission;
-  verifiedCaller(caller: AuthenticatedHttpRpcCaller, request: RpcStreamRequest): VerifiedCaller;
+  verifiedCaller(
+    caller: Omit<AuthenticatedHttpRpcCaller, "agentBinding"> & {
+      agentBinding?: AuthenticatedHttpRpcCaller["agentBinding"] | RuntimeAgentBinding;
+    },
+    request: RpcStreamRequest,
+    subject?: UserSubject
+  ): VerifiedCaller;
   authorizeRelay(
     callerId: string,
     callerKind: CallerKind,
     targetId: string,
     method: string
   ): RelayAuthorization;
-  createHttpContext(
-    caller: AuthenticatedHttpRpcCaller,
-    extras: Omit<ServiceContext, "caller">
-  ): ServiceContext;
   createWsContext(
     client: WsClientState,
     request: RpcStreamRequest,
+    caller: VerifiedCaller,
     extras: StreamContextExtras
   ): ServiceContext;
   resolveCausalParent(
@@ -215,7 +220,7 @@ export class StreamingRelay {
       await this.handleHttpServiceResponse(
         req,
         res,
-        admission.caller,
+        verifiedCaller,
         request,
         args,
         idempotencyKey,
@@ -230,13 +235,13 @@ export class StreamingRelay {
       writeJson(res, validation.status, { error: validation.error });
       return;
     }
-
     const abortController = new AbortController();
     req.on("aborted", () => abortController.abort());
     res.on("close", () => abortController.abort());
     const emitFrame = await this.httpFrameWriter(res);
 
-    const context = this.deps.createHttpContext(admission.caller, {
+    const context: ServiceContext = {
+      caller: verifiedCaller,
       ...(request.requestId ? { requestId: request.requestId } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
       ...(readOnly ? { readOnly: true } : {}),
@@ -248,7 +253,7 @@ export class StreamingRelay {
       // decision settles. This flag is server-owned; no wire field can enable
       // it for an unverified caller.
       authorityAcquisition: "wait",
-    });
+    };
     try {
       await this.deps.dispatcher.assertAuthority(context, "credentials", "proxyFetch", args);
     } catch (error) {
@@ -290,11 +295,30 @@ export class StreamingRelay {
     envelope: RpcEnvelope
   ): Promise<void> {
     const emitFrame = this.wsFrameWriter(client, request, envelope);
-    // Admission is bound to one sealed executable incarnation. The outer RPC
-    // server revalidates that incarnation before every frame; retaining the
-    // admitted caller here keeps unary and streaming calls on the same identity
-    // and prevents a long-lived socket from silently upgrading to new code.
-    const invocationCaller = client.caller;
+    // The socket authenticates the resident runtime. Evaluated execution is a
+    // narrower, per-run admission carried by the individual request, so resolve
+    // the invocation caller for every stream just as the unary path does.
+    let invocationCaller: VerifiedCaller;
+    try {
+      invocationCaller = this.deps.verifiedCaller(
+        {
+          callerId: client.caller.runtime.id,
+          callerKind: client.caller.runtime.kind,
+          ...(client.caller.agentBinding ? { agentBinding: client.caller.agentBinding } : {}),
+        },
+        request,
+        client.caller.subject
+      );
+    } catch (error) {
+      await emitFrame({
+        kind: "error",
+        status: 403,
+        message: error instanceof Error ? error.message : String(error),
+        code: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
+        errorKind: "access",
+      });
+      return;
+    }
     let causalParent: RpcCausalParent | undefined;
     try {
       causalParent = await this.deps.resolveCausalParent(invocationCaller, request);
@@ -365,7 +389,7 @@ export class StreamingRelay {
     if (parsed && request.method !== "credentials.proxyFetch") {
       const abortController = this.register(client, request.requestId);
       try {
-        const context = this.deps.createWsContext(client, request, {
+        const context = this.deps.createWsContext(client, request, invocationCaller, {
           ...(request.requestId ? { requestId: request.requestId } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
           ...(readOnly ? { readOnly: true } : {}),
@@ -432,7 +456,7 @@ export class StreamingRelay {
       return;
     }
 
-    const context = this.deps.createWsContext(client, request, {
+    const context = this.deps.createWsContext(client, request, invocationCaller, {
       ...(request.requestId ? { requestId: request.requestId } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
       ...(readOnly ? { readOnly: true } : {}),
@@ -528,7 +552,7 @@ export class StreamingRelay {
   private async handleHttpServiceResponse(
     req: IncomingMessage,
     res: ServerResponse,
-    caller: AuthenticatedHttpRpcCaller,
+    caller: VerifiedCaller,
     request: RpcStreamRequest,
     args: unknown[],
     idempotencyKey: string | undefined,
@@ -545,13 +569,14 @@ export class StreamingRelay {
     res.once("close", () => abortController.abort());
     let response: Response;
     try {
-      const context = this.deps.createHttpContext(caller, {
+      const context: ServiceContext = {
+        caller,
         ...(request.requestId ? { requestId: request.requestId } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(readOnly ? { readOnly: true } : {}),
         ...(causalParent ? { causalParent } : {}),
         authorityAcquisition: "wait",
-      });
+      };
       const result = await this.deps.dispatcher.dispatch(
         context,
         parsed.service,

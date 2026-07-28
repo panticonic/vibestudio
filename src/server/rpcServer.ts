@@ -726,12 +726,12 @@ export class RpcServer {
       dispatcher: deps.dispatcher,
       egressProxy: deps.egressProxy,
       authenticateHttp: (req) => this.authenticateHttpRequest(req),
-      verifiedCaller: (caller, request) =>
+      verifiedCaller: (caller, request, subject) =>
         this.verifiedCallerFor(
           caller.callerId,
           caller.callerKind,
           caller.agentBinding,
-          undefined,
+          subject,
           this.testPolicyFromAuthorityParent(
             caller.callerId,
             (request as InternalRpcRequest | InternalRpcStreamRequest).authorityParentNonce
@@ -740,11 +740,9 @@ export class RpcServer {
         ),
       authorizeRelay: (callerId, callerKind, targetId, method) =>
         this.checkRelayAuth(callerId, callerKind, targetId, method),
-      createHttpContext: (caller, extras) =>
-        this.serviceContextFor(caller.callerId, caller.callerKind, extras, caller.agentBinding),
       resolveCausalParent: (caller, request) => this.resolveCausalParent(caller, request),
-      createWsContext: (client, request, extras) =>
-        this.serviceContextForRpcMessage(client, request, extras),
+      createWsContext: (client, request, caller, extras) =>
+        this.serviceContextForRpcMessage(client, request, extras, caller),
       relayTargetStream: (caller, envelope, request, causalParent, signal) =>
         this.relayTargetStream(caller, envelope, request, causalParent, signal),
       sendWs: (client, message) => this.sendToWs(client.ws, message),
@@ -797,7 +795,9 @@ export class RpcServer {
   private verifiedCallerFor(
     callerId: string,
     callerKind: CallerKind,
-    agentBinding?: import("@vibestudio/identity/types").AgentBinding,
+    agentBinding?:
+      | import("@vibestudio/identity/types").AgentBinding
+      | import("@vibestudio/shared/runtime/entitySpec").RuntimeAgentBinding,
     subject?: UserSubject,
     inheritedTestPolicy?: AgentExecutionTestPolicy | null,
     executionSessionNonce?: string
@@ -815,7 +815,13 @@ export class RpcServer {
           : null;
     // An explicitly-passed subject (device/agent credential, §5.1/§5.3) wins;
     // otherwise resolve it from the caller id (§5.2/§5.4).
-    const resolvedSubject = subject ?? this.resolveSubject(callerId, callerKind, agentBinding);
+    const resolvedSubject =
+      subject ??
+      this.resolveSubject(
+        callerId,
+        callerKind,
+        agentBinding && "agentId" in agentBinding ? agentBinding : undefined
+      );
     if (
       executionSessionNonce !== undefined &&
       (executionSessionNonce.length < 16 || executionSessionNonce.length > 256)
@@ -1021,10 +1027,11 @@ export class RpcServer {
       parentRequestId?: string;
       causalParent?: import("@vibestudio/rpc").RpcCausalParent;
     },
-    extras: Omit<ServiceContext, "caller" | "connectionId" | "wsClient" | "chainCaller"> = {}
+    extras: Omit<ServiceContext, "caller" | "connectionId" | "wsClient" | "chainCaller"> = {},
+    invocationCaller: VerifiedCaller = client.caller
   ): ServiceContext {
     const ctx: ServiceContext = {
-      caller: client.caller,
+      caller: invocationCaller,
       connectionId: client.connectionId,
       wsClient: client,
       ...extras,

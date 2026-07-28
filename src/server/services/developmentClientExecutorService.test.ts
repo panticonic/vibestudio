@@ -47,6 +47,16 @@ async function register(
 }
 
 describe("DevelopmentClientExecutorRegistry", () => {
+  it("admits the authenticated user device without lending it the product-host principal", () => {
+    const service = fixture().registry.definition();
+    expect(service.authority).toEqual({ principals: ["user"] });
+    expect(
+      Object.values(service.methods).every(
+        (method) => JSON.stringify(method.authority) === JSON.stringify({ principals: ["user"] })
+      )
+    ).toBe(true);
+  });
+
   it("selects only the initiating authenticated desktop runtime", async () => {
     const f = fixture();
     await register(f, "shell:other");

@@ -161,6 +161,7 @@ Authority principals: `code`, `host`, `user`
 | `credentials.forwardOAuthCallback` | Deliver an inbound OAuth provider callback (code/state, or a full callback URL) to its pending connection transaction, validating the caller against the transaction's redirect strategy. |
 | `credentials.cancelOAuth` | Cancel a pending interactive OAuth connection transaction. |
 | `credentials.listStoredCredentials` | List summaries of stored URL-bound credentials visible to the caller; secret material is never included. |
+| `credentials.summarizeStoredCredentials` | Return only the aggregate count and represented lifecycle states for stored credentials; no per-credential fields are included. |
 | `credentials.inspectStoredCredentials` | List administrator-facing credential summaries with runtime usage metadata; secret material is never included. |
 | `credentials.revokeCredential` | Revoke a stored credential by id (marks it revoked and best-effort revokes the upstream provider token); requires critical account-disconnection authority bound to the exact credential id. |
 | `credentials.resolveCredential` | Locate a stored credential by url/provider/id and authorize its use for the caller, returning a summary or null when nothing matches. |
@@ -475,6 +476,7 @@ Authority principals: `code`, `host`, `user`
 | `panelTree.list` | List the children of a panel (or the root panels when the parent id is null/omitted). |
 | `panelTree.roots` | List all root-level panels in the tree. |
 | `panelTree.getTreeSnapshot` | Return a full snapshot of the panel tree (revision plus root panels). |
+| `panelTree.getSubtree` | Return one revisioned recursive panel subtree rooted at the requested stable slot id, or null when that slot is not active. |
 | `panelTree.attachInitialPanels` | Authenticated-owner attach boundary: reconcile that owner's configured initial panels once and return the authoritative tree snapshot. |
 | `panelTree.getFocusedPanelId` | Return the id of the currently focused panel, or null if none is focused. |
 | `panelTree.create` | Internal structural primitive: durably create an explicitly declared code or external-document panel and return its initial observation while boot continues. Application callers use openPanel, which waits for boot readiness. |
@@ -483,6 +485,7 @@ Authority principals: `code`, `host`, `user`
 | `panelTree.diagnose` | Return one bounded diagnostic packet with the canonical observation, host lifecycle/console history, and a document capture when ready. |
 | `panelTree.getStateArgs` | Return the validated state-args currently bound to a panel. |
 | `panelTree.setStateArgs` | Merge a patch into a panel's ordinary application state (null removes a key); returns the full resulting validated state. contextId is reserved for the panel's host-bound workspace branch and must be changed through explicit panel navigation, never state args. |
+| `panelTree.setTitle` | Set a panel slot's semantic display title without loading its runtime. Explicit titles are preserved across inferred page-title updates. |
 | `panelTree.reload` | Reload a panel's view and return only after that exact attempt is boot-ready; throws the canonical structured failure otherwise. |
 | `panelTree.close` | Close a panel, removing it (and its subtree) from the tree. |
 | `panelTree.archive` | Archive a panel, removing it from the active tree while preserving its history. |

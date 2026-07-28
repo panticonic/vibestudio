@@ -30,7 +30,11 @@ import {
   normalizeCredentialInjection,
   normalizeUrlAudiences,
 } from "@vibestudio/credential-client/urlAudience";
-import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import {
+  verifiedInitiatingUserId,
+  type CallerKind,
+  type ServiceContext,
+} from "@vibestudio/shared/serviceDispatcher";
 import {
   ConnectCredentialParamsSchema,
   type ConnectCredentialParams,
@@ -1045,6 +1049,7 @@ export function createCredentialConnectionCoordinator(
       ctx.caller.runtime.id
     );
     const identity = resolveApprovalIdentity(ctx);
+    const requesterUserId = verifiedInitiatingUserId(ctx);
     validateApiKeyMaterialTemplate(
       request.flow.materialTemplate.valueTemplate,
       request.flow.fields.map((field) => field.name)
@@ -1053,7 +1058,7 @@ export function createCredentialConnectionCoordinator(
       kind: "credential-input",
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
-      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
+      ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       title: request.flow.title ?? request.credential.label,
@@ -1126,6 +1131,7 @@ export function createCredentialConnectionCoordinator(
       ctx.caller.runtime.id
     );
     const identity = resolveApprovalIdentity(ctx);
+    const requesterUserId = verifiedInitiatingUserId(ctx);
     const fields = [
       { name: "accessKeyId", label: "Access key ID", type: "secret" as const, required: true },
       {
@@ -1140,7 +1146,7 @@ export function createCredentialConnectionCoordinator(
       kind: "credential-input",
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
-      ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
+      ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       title: request.flow.title ?? request.credential.label,
@@ -1248,11 +1254,12 @@ export function createCredentialConnectionCoordinator(
       if (!approvalQueue || !isUserlandRuntimeCaller(ctx)) {
         throw new Error("Credential input approval is unavailable");
       }
+      const requesterUserId = verifiedInitiatingUserId(ctx);
       const result = await approvalQueue.requestCredentialInput({
         kind: "credential-input",
         callerId: ctx.caller.runtime.id,
         callerKind: ctx.caller.runtime.kind,
-        ...(ctx.caller.subject ? { requestedByUserId: ctx.caller.subject.userId } : {}),
+        ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
         repoPath: identity.repoPath,
         effectiveVersion: identity.effectiveVersion,
         title: request.flow.title ?? request.credential.label,

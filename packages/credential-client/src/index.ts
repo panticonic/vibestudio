@@ -9,6 +9,7 @@ import type {
   CredentialBindingUse,
   CredentialGrantResourceHint,
   CredentialInjection,
+  CredentialStoreSummary,
   DeleteClientConfigRequest,
   GetClientConfigStatusRequest,
   GrantUrlBoundCredentialRequest,
@@ -33,6 +34,7 @@ export type {
   CredentialBindingUse,
   CredentialGrantResourceHint,
   CredentialInjection,
+  CredentialStoreSummary,
   DeleteClientConfigRequest,
   GetClientConfigStatusRequest,
   GrantUrlBoundCredentialRequest,
@@ -61,6 +63,7 @@ export interface CredentialClient {
   getClientConfigStatus(input: GetClientConfigStatusRequest): Promise<ClientConfigStatus>;
   deleteClientConfig(input: DeleteClientConfigRequest | string): Promise<void>;
   listStoredCredentials(): Promise<StoredCredentialSummary[]>;
+  summarizeStoredCredentials(): Promise<CredentialStoreSummary>;
   inspectStoredCredentials(): Promise<ManagedCredentialSummary[]>;
   revokeCredential(credentialId: string): Promise<void>;
   resolveCredential(
@@ -138,6 +141,9 @@ export function createCredentialClient(rpc: RpcCaller): CredentialClient {
     },
     listStoredCredentials() {
       return rpc.call<StoredCredentialSummary[]>("main", "credentials.listStoredCredentials", []);
+    },
+    summarizeStoredCredentials() {
+      return rpc.call<CredentialStoreSummary>("main", "credentials.summarizeStoredCredentials", []);
     },
     inspectStoredCredentials() {
       return rpc.call<ManagedCredentialSummary[]>(

@@ -23,6 +23,7 @@ import type {
   AuditEntry,
   Credential,
   CredentialAuditEvent,
+  CredentialStoreSummary,
   ManagedCredentialSummary,
   CredentialUseGrant,
   StoredCredentialSummary,
@@ -391,6 +392,17 @@ describe("credentialService", () => {
     )) as StoredCredentialSummary[];
     expect(listedByOtherCaller).toHaveLength(1);
     expect(JSON.stringify(listedByOtherCaller)).not.toContain("secret-token");
+
+    const summary = (await service.handler(
+      { caller: verifiedTestCaller("worker:other", "worker") },
+      "summarizeStoredCredentials",
+      []
+    )) as CredentialStoreSummary;
+    expect(summary).toEqual({
+      credentialCount: 1,
+      lifecycleStates: ["active"],
+      stateCounts: { active: 1 },
+    });
 
     approvalQueue.request.mockClear();
     await service.handler(

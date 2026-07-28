@@ -1625,13 +1625,10 @@ export class ServiceDispatcher {
               },
             };
           }
-          throw new ServiceAccessError(
-            service,
-            method,
-            authorityFailure.reason,
-            "EROUTECEILING",
-            { denied: true, authorityFailure }
-          );
+          throw new ServiceAccessError(service, method, authorityFailure.reason, "EROUTECEILING", {
+            denied: true,
+            authorityFailure,
+          });
         }
       }
       const runManifest = resolved.context.executionSession?.eval.authorityManifest;
@@ -1654,7 +1651,7 @@ export class ServiceDispatcher {
         });
         const authorityFailure = {
           reasonCode: "run-manifest-denied" as const,
-          reason: `The strict eval run manifest does not cover ${capability} for ${resourceKey}`,
+          reason: `The eval run request allowlist does not cover ${capability} for ${resourceKey}`,
           capability,
           resourceKey,
           remediation: {

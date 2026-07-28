@@ -4,7 +4,7 @@ import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority
 
 const nonEmpty = z.string().min(1);
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/u);
-const authority: ServiceAuthorityPolicy = { principals: ["host"] };
+const authority: ServiceAuthorityPolicy = { principals: ["user"] };
 const open = { sensitivity: "read" as const };
 
 export const developmentClientExecutorMethods = defineServiceMethods({

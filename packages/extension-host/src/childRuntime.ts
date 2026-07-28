@@ -26,6 +26,7 @@ import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
+import { isAuthenticatedServerCaller } from "@vibestudio/rpc/protocol/sessionNegotiation";
 import {
   requestRpcWebSocketAdmission,
   rpcWebSocketAdmissionUrl,
@@ -781,11 +782,7 @@ function assertHostControlCaller(
   request: { caller: { callerId: string; callerKind: string } },
   method: string
 ): void {
-  const { callerId, callerKind } = request.caller;
-  // Direct server envelopes use `main`; the server's connected-target RPC
-  // bridge uses its internal `server` endpoint. Both identities are minted by
-  // the host and cannot be claimed by authenticated userland callers.
-  if (callerKind === "server" && (callerId === "main" || callerId === "server")) return;
+  if (isAuthenticatedServerCaller(request.caller)) return;
   const error = new Error(
     `Extension control method ${method} accepts only the trusted host principal`
   ) as NodeJS.ErrnoException;

@@ -7,7 +7,7 @@ import {
 } from "./credentials.js";
 
 function makeRpc(
-  resolve: (input: { url: string; credentialId?: string }) => StoredCredentialSummary | null,
+  resolve: (input: { url: string; credentialId?: string }) => StoredCredentialSummary | null
 ): { rpc: RpcCaller; resolveCalls: Array<{ url: string; credentialId?: string }> } {
   const resolveCalls: Array<{ url: string; credentialId?: string }> = [];
   const rpc: RpcCaller = {
@@ -88,7 +88,7 @@ describe("CredentialClient.forAudience", () => {
       client.forAudience({
         audiences: [{ url: "https://api.example.com/", match: "origin" }],
         label: "Example API",
-      }),
+      })
     ).rejects.toThrow(/No URL-bound credential found for Example API/);
   });
 
@@ -99,14 +99,14 @@ describe("CredentialClient.forAudience", () => {
     await expect(
       client.forAudience({
         audiences: [{ url: "https://api.example.com/", match: "origin" }],
-      }),
+      })
     ).rejects.toThrow(/https:\/\/api\.example\.com\//);
   });
 
   it("forwards an explicit credentialId pin on each resolve call", async () => {
     const cred = summary("specific-id", "https://api.example.com/");
     const { rpc, resolveCalls } = makeRpc((input) =>
-      input.credentialId === "specific-id" ? cred : null,
+      input.credentialId === "specific-id" ? cred : null
     );
     const client: CredentialClient = createCredentialClient(rpc);
 
@@ -123,7 +123,11 @@ describe("CredentialClient.forAudience", () => {
     const cred = summary("cred-x", "https://api.example.com/");
     const proxyCalls: unknown[] = [];
     const rpc: RpcCaller = {
-      call: (async <T = unknown>(_targetId: string, method: string, _args: unknown[]): Promise<T> => {
+      call: (async <T = unknown>(
+        _targetId: string,
+        method: string,
+        _args: unknown[]
+      ): Promise<T> => {
         if (method === "credentials.resolveCredential") return cred as unknown as T;
         throw new Error(`unexpected method: ${method}`);
       }) as RpcCaller["call"],
@@ -142,5 +146,43 @@ describe("CredentialClient.forAudience", () => {
     const fetchArgs = call.args[0] as { url: string; credentialId?: string };
     expect(fetchArgs.url).toBe("https://api.example.com/things");
     expect(fetchArgs.credentialId).toBe("cred-x");
+  });
+});
+
+describe("CredentialClient.summarizeStoredCredentials", () => {
+  it("returns only aggregate count and lifecycle-state evidence", async () => {
+    const records = [
+      {
+        ...summary("active-1", "https://one.example/"),
+        lifecycle: { state: "active", canRefresh: false },
+      },
+      {
+        ...summary("active-2", "https://two.example/"),
+        lifecycle: { state: "active", canRefresh: true },
+      },
+      {
+        ...summary("expired-1", "https://three.example/"),
+        lifecycle: { state: "expired", canRefresh: false },
+      },
+    ] satisfies StoredCredentialSummary[];
+    const rpc: RpcCaller = {
+      call: (async <T = unknown>(_targetId: string, method: string): Promise<T> => {
+        if (method === "credentials.summarizeStoredCredentials") {
+          return {
+            credentialCount: records.length,
+            lifecycleStates: ["active", "expired"],
+            stateCounts: { active: 2, expired: 1 },
+          } as unknown as T;
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }) as RpcCaller["call"],
+      stream: async () => new Response(),
+    };
+
+    await expect(createCredentialClient(rpc).summarizeStoredCredentials()).resolves.toEqual({
+      credentialCount: 3,
+      lifecycleStates: ["active", "expired"],
+      stateCounts: { active: 2, expired: 1 },
+    });
   });
 });

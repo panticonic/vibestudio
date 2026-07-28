@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:58af7e43bd6374397366a138498401b91e208b2247eb9671998e309d05df9b98",
+  "censusDigest": "sha256:b93a046bbd66eafec3ff943b33eeebb69e3c7e0b82fa19d54b40c3a57f8262f9",
   "decisions": {
     "direct:src/server/internalDOs/evalDO.ts:appendAuthorityEvent": {
       "review": "host-only-eval-authority-event-ingress",
@@ -88,7 +88,7 @@
     },
     "host:evalExecutionRoots.retain": {
       "review": "typed-internal-eval-execution-root-retention",
-      "change": "Adds a host-only typed internal write that retains the exact validated execution artifact for the originating eval run. It creates no executable admission and cannot widen or delete retention."
+      "change": "Adds host-only typed lifecycle bookkeeping that retains the exact validated execution artifact for the originating eval run. It creates no executable admission, changes no workspace or user state, and cannot widen or delete retention."
     },
     "host:runtime.faultAbortAgentVessel": {
       "review": "sealed-exact-vessel-system-test-abort",
@@ -273,6 +273,10 @@
     "direct:workspace/packages/agentic-do/src/agent-vessel.ts:interruptAllChannels": {
       "review": "host-only-agent-transport-barrier",
       "change": "Adds a host-only lifecycle operation that enumerates the exact agent vessel's subscribed channels and interrupts their active transports while flushing deferred work; no user, code, or entity principal can invoke it directly."
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:getAgentSettings": {
+      "review": "bounded-agent-settings-read",
+      "change": "Restores the reviewed open read used by child-agent launch verification and agent settings UI. It returns only effective model routing, effort, approval level, and response policy for the exact addressed agent; it exposes no credential, prompt content, transcript, or mutation path."
     },
     "direct:workspace/packages/semantic-control-plane/src/index.ts:diagnoseInvocation": {
       "review": "bounded-read-only-causal-diagnostics",

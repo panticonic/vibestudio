@@ -664,6 +664,65 @@ describe("EgressProxy", () => {
     }
   });
 
+  it("forwards only host-reconstructed headers from an internal WebSocket authorization", async () => {
+    const upstreamServer = createServer();
+    const wss = new WebSocketServer({ noServer: true });
+    const upstreamPort = await new Promise<number>((resolve) => {
+      upstreamServer.listen(0, "127.0.0.1", () => {
+        resolve((upstreamServer.address() as AddressInfo).port);
+      });
+    });
+    const authorizeInternalRequest = vi.fn(async (input) => {
+      const token =
+        input.headers instanceof Headers
+          ? input.headers.get("x-vibestudio-cdp-grant")
+          : input.headers["x-vibestudio-cdp-grant"];
+      return token === "single-use-cdp-grant"
+        ? {
+            trustedForwardHeaders: {
+              "x-vibestudio-cdp-grant": "single-use-cdp-grant",
+            },
+          }
+        : null;
+    });
+    const proxy = createProxy(createCredential({ bindings: [] }), new MemoryAuditLog(), {
+      authorizeInternalRequest,
+    });
+    proxy.setCallerResolver((callerId) =>
+      callerId === "worker:test" ? workerCaller(callerId) : null
+    );
+    const proxyPort = await proxy.startShared("secret");
+    let observedGrant: string | undefined;
+
+    upstreamServer.on("upgrade", (req, socket, head) => {
+      observedGrant = req.headers["x-vibestudio-cdp-grant"] as string | undefined;
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        ws.close(1000, "done");
+      });
+    });
+
+    try {
+      const response = await requestWebSocketUpgradeThroughProxy({
+        proxyPort,
+        targetUrl: `ws://127.0.0.1:${upstreamPort}/cdp/panel-1?__vibestudio_ws_headers=${encodeURIComponent(
+          encodeWebSocketMetadata([["x-vibestudio-cdp-grant", "single-use-cdp-grant"]])
+        )}`,
+        headers: {
+          "X-Vibestudio-Egress-Caller": "worker:test",
+          "X-Vibestudio-Egress-Secret": "secret",
+        },
+      });
+
+      expect(response.status).toBe(101);
+      expect(authorizeInternalRequest).toHaveBeenCalledOnce();
+      expect(observedGrant).toBe("single-use-cdp-grant");
+    } finally {
+      await proxy.stop();
+      wss.close();
+      await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
+    }
+  });
+
   it("refreshes a stale credential before committing a WebSocket 401", async () => {
     const auditLog = new MemoryAuditLog();
     const upstreamServer = createServer();
@@ -1259,7 +1318,7 @@ describe("EgressProxy", () => {
 
   it("does not duplicate approval for an exactly attested internal request", async () => {
     const approvalQueue = createApprovalQueueMock("deny");
-    const authorizeInternalRequest = vi.fn(async () => true);
+    const authorizeInternalRequest = vi.fn(async () => ({}));
     const proxy = createProxy(createCredential({ bindings: [] }), new MemoryAuditLog(), {
       approvalQueue,
       authorizeInternalRequest,
@@ -2077,7 +2136,7 @@ describe("EgressProxy", () => {
         },
       ],
     });
-    const authorizeInternalRequest = vi.fn(async () => true);
+    const authorizeInternalRequest = vi.fn(async () => ({}));
     const proxy = createProxy(credential, new MemoryAuditLog(), {
       authorizeInternalRequest,
     });

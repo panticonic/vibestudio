@@ -22,6 +22,9 @@ function createDeps() {
   const requestExternalAgent = vi.fn<ApprovalQueue["requestExternalAgent"]>(async () => ({
     behavior: "allow",
   }));
+  const requestSecretInput = vi.fn<ApprovalQueue["requestSecretInput"]>(async () => ({
+    decision: "deny",
+  }));
   const settleExternalAgent = vi.fn<ApprovalQueue["settleExternalAgent"]>(() => 1);
   type GrantStore = Parameters<typeof createUserlandApprovalService>[0]["grantStore"];
   const lookup = vi.fn<GrantStore["lookupUserland"]>(() => null);
@@ -48,6 +51,7 @@ function createDeps() {
     approvalQueue: {
       requestUserland: queued,
       requestExternalAgent,
+      requestSecretInput,
       settleExternalAgent,
     } as Partial<ApprovalQueue> as ApprovalQueue,
     grantStore: {
@@ -62,6 +66,7 @@ function createDeps() {
     service,
     queued,
     requestExternalAgent,
+    requestSecretInput,
     settleExternalAgent,
     lookup,
     record,
@@ -672,6 +677,36 @@ describe("userlandApprovalService", () => {
     expect(list).toHaveBeenCalledWith(extensionCtx.chainCaller, issuer);
   });
 
+  it("attributes extension-mediated prompts to the verified initiating user", async () => {
+    const { service, queued, requestSecretInput } = createDeps();
+    const ctx: ServiceContext = {
+      ...extensionCtx,
+      caller: createVerifiedCaller("@workspace-extensions/shell", "extension", null, null, {
+        userId: "system",
+        handle: "system",
+      }),
+      authorizingCaller: createVerifiedCaller("panel:alpha", "panel", null, null, {
+        userId: "usr_alice",
+        handle: "alice",
+      }),
+    };
+
+    await service.handler(ctx, "request", [validRequest]);
+    await service.handler(ctx, "requestSecretInput", [
+      {
+        title: "Enter a token",
+        fields: [{ name: "token", label: "Token", type: "secret", required: true }],
+      },
+    ]);
+
+    expect(queued).toHaveBeenCalledWith(
+      expect.objectContaining({ requestedByUserId: "usr_alice" })
+    );
+    expect(requestSecretInput).toHaveBeenCalledWith(
+      expect.objectContaining({ requestedByUserId: "usr_alice" })
+    );
+  });
+
   it("requestAs lets attributed extension callbacks request for a captured principal", async () => {
     const { service, queued } = createDeps();
     queued.mockResolvedValueOnce({ kind: "choice", choice: "once" });
@@ -754,6 +789,26 @@ describe("userlandApprovalService", () => {
         resolveToken: "resolve-token-123",
         signal: expect.any(AbortSignal),
       })
+    );
+  });
+
+  it("attributes deputy-mediated external-agent prompts to the verified initiating user", async () => {
+    const { service, requestExternalAgent } = createDeps();
+    const ctx: ServiceContext = {
+      caller: {
+        ...doCtx.caller,
+        subject: { userId: "system", handle: "system" },
+      },
+      authorizingCaller: createVerifiedCaller("panel:agent-owner", "panel", null, null, {
+        userId: "usr_alice",
+        handle: "alice",
+      }),
+    };
+
+    await service.handler(ctx, "requestExternal", [externalRequest]);
+
+    expect(requestExternalAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ requestedByUserId: "usr_alice" })
     );
   });
 

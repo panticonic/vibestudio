@@ -115,6 +115,15 @@ export interface CredentialStore {
   saveUrlBound?(credential: Credential & { id: string }): Promise<void> | void;
 }
 
+export interface InternalRequestAuthorization {
+  /**
+   * Headers reconstructed by the host after it verifies an internal request.
+   * Worker-supplied internal headers are always stripped; only this receipt can
+   * carry a transport grant across the egress boundary.
+   */
+  trustedForwardHeaders?: Record<string, string>;
+}
+
 export interface EgressProxyDeps {
   credentialStore: CredentialStore;
   auditLog: Pick<AuditLog, "append">;
@@ -137,7 +146,7 @@ export interface EgressProxyDeps {
     targetUrl: URL;
     method: string;
     headers: IncomingHttpHeaders | Headers | Record<string, string | string[] | undefined>;
-  }) => boolean | Promise<boolean>;
+  }) => InternalRequestAuthorization | null | Promise<InternalRequestAuthorization | null>;
   authorizePlatformRpcCallback?: (input: {
     targetUrl: URL;
     method: string;
@@ -158,6 +167,7 @@ interface Authorization {
   binding: CredentialBinding | null;
   connectionId: string | null;
   scopes: string[];
+  trustedForwardHeaders: Record<string, string>;
 }
 
 interface ForwardResult {
@@ -970,6 +980,9 @@ export class EgressProxy {
           authorization.binding,
           params.method
         );
+        for (const [name, value] of Object.entries(authorization.trustedForwardHeaders)) {
+          prepared.headers[name.toLowerCase()] = value;
+        }
         targetUrl = prepared.targetUrl;
         if (params.caller) {
           manualRedirects =
@@ -1100,15 +1113,23 @@ export class EgressProxy {
             )
           : null;
       if (caller && attribution && !credential) {
-        const internallyAuthorized = await this.deps.authorizeInternalRequest?.({
+        const internalAuthorization = await this.deps.authorizeInternalRequest?.({
           caller,
           targetUrl: params.targetUrl,
           method: params.method,
           headers: params.inputHeaders,
         });
-        if (!internallyAuthorized) {
+        if (!internalAuthorization) {
           await this.authorizeRawEgress(caller, attribution, params.targetUrl, params.method);
         }
+        return {
+          attribution,
+          credential: null,
+          binding: null,
+          connectionId: null,
+          scopes: [],
+          trustedForwardHeaders: internalAuthorization?.trustedForwardHeaders ?? {},
+        };
       }
       return {
         attribution,
@@ -1118,6 +1139,7 @@ export class EgressProxy {
           : null,
         connectionId: credential?.id ?? null,
         scopes: credential?.scopes ?? [],
+        trustedForwardHeaders: {},
       };
     }
 
@@ -1172,6 +1194,7 @@ export class EgressProxy {
       binding,
       connectionId: credential.id ?? credential.connectionId,
       scopes: credential.scopes,
+      trustedForwardHeaders: {},
     };
   }
 

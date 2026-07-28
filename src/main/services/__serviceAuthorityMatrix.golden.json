@@ -1,7 +1,11 @@
 {
   "adblock": {
     "service": {
-      "principals": ["user", "host", "code"]
+      "principals": [
+        "user",
+        "host",
+        "code"
+      ]
     },
     "methods": {
       "addCustomList": {
@@ -14,7 +18,10 @@
       },
       "addToWhitelist": {
         "authority": {
-          "principals": ["user", "code"]
+          "principals": [
+            "user",
+            "code"
+          ]
         },
         "access": {
           "sensitivity": "write"
@@ -30,7 +37,10 @@
       },
       "getPanelUrl": {
         "authority": {
-          "principals": ["user", "code"]
+          "principals": [
+            "user",
+            "code"
+          ]
         },
         "access": {
           "sensitivity": "read"
@@ -38,7 +48,10 @@
       },
       "getStats": {
         "authority": {
-          "principals": ["user", "code"]
+          "principals": [
+            "user",
+            "code"
+          ]
         },
         "access": {
           "sensitivity": "read"
@@ -46,7 +59,10 @@
       },
       "getStatsForPanel": {
         "authority": {
-          "principals": ["user", "code"]
+          "principals": [
+            "user",
+            "code"
+          ]
         },
         "access": {
           "sensitivity": "read"
@@ -54,7 +70,10 @@
       },
       "isActive": {
         "authority": {
-          "principals": ["user", "code"]
+          "principals": [
+            "user",
+            "code"
+          ]
         },
         "access": {
           "sensitivity": "read"
@@ -62,7 +81,10 @@
       },
       "isEnabledForPanel": {
         "authority": {
-          "principals": ["user", "code"]
+          "principals": [
+            "user",
+            "code"
+          ]
         },
         "access": {
           "sensitivity": "read"
@@ -86,7 +108,10 @@
       },
       "removeFromWhitelist": {
         "authority": {
-          "principals": ["user", "code"]
+          "principals": [
+            "user",
+            "code"
+          ]
         },
         "access": {
           "sensitivity": "destructive"
@@ -102,7 +127,10 @@
       },
       "resetStatsForPanel": {
         "authority": {
-          "principals": ["user", "code"]
+          "principals": [
+            "user",
+            "code"
+          ]
         },
         "access": {
           "sensitivity": "write"
@@ -118,7 +146,10 @@
       },
       "setEnabledForPanel": {
         "authority": {
-          "principals": ["user", "code"]
+          "principals": [
+            "user",
+            "code"
+          ]
         },
         "access": {
           "sensitivity": "write"
@@ -136,7 +167,11 @@
   },
   "app": {
     "service": {
-      "principals": ["user", "host", "code"]
+      "principals": [
+        "user",
+        "host",
+        "code"
+      ]
     },
     "methods": {
       "applyUpdate": {
@@ -231,7 +266,11 @@
   },
   "autofill": {
     "service": {
-      "principals": ["user", "host", "code"]
+      "principals": [
+        "user",
+        "host",
+        "code"
+      ]
     },
     "methods": {
       "confirmFormFill": {
@@ -286,7 +325,10 @@
   },
   "browserEnvironment": {
     "service": {
-      "principals": ["host", "code"]
+      "principals": [
+        "host",
+        "code"
+      ]
     },
     "methods": {
       "cancelDownload": {
@@ -340,7 +382,9 @@
                 "capability": "service:browserEnvironment.cancelDownload",
                 "requirement": {
                   "kind": "selected",
-                  "principals": ["code"]
+                  "principals": [
+                    "code"
+                  ]
                 },
                 "tier": "gated"
               }
@@ -402,7 +446,9 @@
                 "capability": "service:browserEnvironment.cancelImportRead",
                 "requirement": {
                   "kind": "selected",
-                  "principals": ["code"]
+                  "principals": [
+                    "code"
+                  ]
                 },
                 "tier": "gated"
               }
@@ -464,7 +510,9 @@
                 "capability": "service:browserEnvironment.flushCookieProjection",
                 "requirement": {
                   "kind": "selected",
-                  "principals": ["code"]
+                  "principals": [
+                    "code"
+                  ]
                 },
                 "tier": "gated"
               }
@@ -526,7 +574,9 @@
                 "capability": "service:browserEnvironment.getCookieProjectionDiagnostics",
                 "requirement": {
                   "kind": "selected",
-                  "principals": ["code"]
+                  "principals": [
+                    "code"
+                  ]
                 },
                 "tier": "gated"
               }
@@ -588,7 +638,9 @@
                 "capability": "service:browserEnvironment.getImportHost",
                 "requirement": {
                   "kind": "selected",
-                  "principals": ["code"]
+                  "principals": [
+                    "code"
+                  ]
                 },
                 "tier": "gated"
               }
@@ -650,7 +702,9 @@
                 "capability": "service:browserEnvironment.listDownloads",
                 "requirement": {
                   "kind": "selected",
-                  "principals": ["code"]
+                  "principals": [
+                    "code"
+                  ]
                 },
                 "tier": "gated"
               }
@@ -712,7 +766,9 @@
                 "capability": "service:browserEnvironment.listImportOpenTabs",
                 "requirement": {
                   "kind": "selected",
-                  "principals": ["code"]
+                  "principals": [
+                    "code"
+                  ]
                 },
                 "tier": "gated"
               }
@@ -774,7 +830,9 @@
                 "capability": "service:browserEnvironment.listImportSources",
                 "requirement": {
                   "kind": "selected",
-                  "principals": ["code"]
+                  "principals": [
+                    "code"
+                  ]
                 },
                 "tier": "gated"
               }
@@ -836,7 +894,9 @@
                 "capability": "service:browserEnvironment.nextImportFrame",
                 "requirement": {
                   "kind": "selected",
-                  "principals": ["code"]
+                  "principals": [
+                    "code"
+                  ]
                 },
                 "tier": "gated"
               }
@@ -898,7 +958,9 @@
                 "capability": "service:browserEnvironment.openDownload",
                 "requirement": {
                   "kind": "selected",
-                  "principals": ["code"]
+                  "principals": [
+                    "code"
+                  ]
                 },
                 "tier": "gated"
               }
@@ -960,7 +1022,9 @@
                 "capability": "service:browserEnvironment.pauseDownload",
                 "requirement": {
                   "kind": "selected",
-                  "principals": ["code"]
+                  "principals": [
+                    "code"
+                  ]
                 },
                 "tier": "gated"
               }
@@ -1022,7 +1086,9 @@
                 "capability": "service:browserEnvironment.previewImportSource",
                 "requirement": {
                   "kind": "selected",
-                  "principals": ["code"]
+                  "principals": [
+                    "code"
+                  ]
                 },
                 "tier": "gated"
               }
@@ -1084,7 +1150,9 @@
                 "capability": "service:browserEnvironment.resumeDownload",
                 "requirement": {
                   "kind": "selected",
-                  "principals": ["code"]
+                  "principals": [
+                    "code"
+                  ]
                 },
                 "tier": "gated"
               }
@@ -1146,7 +1214,9 @@
                 "capability": "service:browserEnvironment.revealDownload",
                 "requirement": {
                   "kind": "selected",
-                  "principals": ["code"]
+                  "principals": [
+                    "code"
+                  ]
                 },
                 "tier": "gated"
               }
@@ -1208,7 +1278,9 @@
                 "capability": "service:browserEnvironment.startImportRead",
                 "requirement": {
                   "kind": "selected",
-                  "principals": ["code"]
+                  "principals": [
+                    "code"
+                  ]
                 },
                 "tier": "gated"
               }
@@ -1223,7 +1295,11 @@
   },
   "desktopEvents": {
     "service": {
-      "principals": ["user", "code", "host"]
+      "principals": [
+        "user",
+        "code",
+        "host"
+      ]
     },
     "methods": {
       "watch": {
@@ -1238,7 +1314,11 @@
   },
   "hubControl": {
     "service": {
-      "principals": ["user", "host", "code"]
+      "principals": [
+        "user",
+        "host",
+        "code"
+      ]
     },
     "methods": {
       "addWorkspaceMember": {
@@ -1381,7 +1461,10 @@
   },
   "menu": {
     "service": {
-      "principals": ["user", "code"]
+      "principals": [
+        "user",
+        "code"
+      ]
     },
     "methods": {
       "showContext": {
@@ -1431,7 +1514,10 @@
   },
   "palette": {
     "service": {
-      "principals": ["user", "code"]
+      "principals": [
+        "user",
+        "code"
+      ]
     },
     "methods": {
       "list": {
@@ -1470,7 +1556,10 @@
   },
   "panel": {
     "service": {
-      "principals": ["user", "code"]
+      "principals": [
+        "user",
+        "code"
+      ]
     },
     "methods": {
       "clearBrowserSiteData": {
@@ -1555,7 +1644,10 @@
       },
       "getThemeConfig": {
         "authority": {
-          "principals": ["user", "code"]
+          "principals": [
+            "user",
+            "code"
+          ]
         },
         "access": {
           "sensitivity": "read"
@@ -1693,7 +1785,10 @@
   },
   "remoteCred": {
     "service": {
-      "principals": ["user", "code"]
+      "principals": [
+        "user",
+        "code"
+      ]
     },
     "methods": {
       "clear": {
@@ -1740,7 +1835,10 @@
   },
   "view": {
     "service": {
-      "principals": ["user", "code"]
+      "principals": [
+        "user",
+        "code"
+      ]
     },
     "methods": {
       "bindNativePanelSlot": {
