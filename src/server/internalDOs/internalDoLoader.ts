@@ -135,6 +135,26 @@ export function internalDOExecutionArtifacts(
 }
 
 function loadBundle(): InternalDOBundle {
+  // A supervising hub snapshots the exact product runtime once per hub boot
+  // and gives every workspace child (including crash replacements) this path.
+  // Source-mode build artifacts are shared by developer instances and may be
+  // rebuilt concurrently; rereading the mutable dist file on child recovery
+  // would silently change the execution identity mid-boot.
+  const snapshotPath = process.env["VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH"];
+  if (snapshotPath) {
+    if (!path.isAbsolute(snapshotPath)) {
+      throw new Error("VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH must be absolute");
+    }
+    const bundle = fs.readFileSync(snapshotPath, "utf8");
+    if (bundle.length === 0) {
+      throw new Error(`Internal Durable Object bundle snapshot is empty: ${snapshotPath}`);
+    }
+    return {
+      bundle,
+      buildKey: createHash("sha256").update(bundle).digest("hex"),
+    };
+  }
+
   // Production path: the build inlines the internal-DO bundle as a string
   // constant via esbuild `define`, eliminating any runtime file lookup. See
   // `build.mjs` (the `internalDoBundleDefine` block).

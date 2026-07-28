@@ -27,6 +27,7 @@ import type {
   LifecyclePrepareResult,
   LifecycleResumeInput,
 } from "@vibestudio/shared/doDispatcher";
+import { AmbiguousDoDispatchError } from "@vibestudio/shared/doDispatcher";
 import { assertPresent } from "../lintHelpers";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
 import { describeWorkerdFetchFailure, getWorkerdConnectionDispatcher } from "./workerdRpcRelay.js";
@@ -161,11 +162,10 @@ export async function postToDOWithToken(
     if (signal?.aborted) {
       throw signal.reason instanceof Error ? signal.reason : new Error("DO dispatch aborted");
     }
-    const wrapped = new Error(
-      `DO dispatch fetch to ${url} failed: ${describeWorkerdFetchFailure(error)}`
-    ) as Error & { cause?: unknown };
-    wrapped.cause = error;
-    throw wrapped;
+    throw new AmbiguousDoDispatchError(
+      `DO dispatch fetch to ${url} failed: ${describeWorkerdFetchFailure(error)}`,
+      error
+    );
   }
 
   if (!res.ok) {
@@ -212,7 +212,14 @@ export async function postToDOWithToken(
       console.error("[DODispatch] ignored invalid durable-work receipt", error);
     }
   }
-  return res.json();
+  try {
+    return await res.json();
+  } catch (error) {
+    throw new AmbiguousDoDispatchError(
+      `DO dispatch to ${url} returned an unreadable success acknowledgement`,
+      error
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

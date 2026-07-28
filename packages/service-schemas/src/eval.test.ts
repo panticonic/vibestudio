@@ -45,7 +45,7 @@ describe("eval lifecycle contract", () => {
     ).toBe(false);
   });
 
-  it("defaults run authority and rejects combinations that could widen or prompt unexpectedly", () => {
+  it("uses request presence as the exact-allowlist boundary and rejects combinations that could prompt unexpectedly", () => {
     expect(evalAuthorityInputSchema.parse({})).toEqual({});
     expect(
       evalStartInputSchema.parse({
@@ -59,9 +59,15 @@ describe("eval lifecycle contract", () => {
         runId: "run:1",
         source: { kind: "inline", code: "return 1" },
         authority: {
-          mode: "adaptive",
           requests: [{ capability: "fs.read", resource: { kind: "exact", key: "a" } }],
         },
+      }).success
+    ).toBe(true);
+    expect(
+      evalStartInputSchema.safeParse({
+        runId: "run:1",
+        source: { kind: "inline", code: "return 1" },
+        authority: { mode: "strict" },
       }).success
     ).toBe(false);
     expect(

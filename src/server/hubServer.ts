@@ -79,6 +79,7 @@ import {
   workspaceReachPaths,
 } from "./hostCore/routedRoomStore.js";
 import { writeFileAtomicSync } from "../atomicFile.js";
+import { getInternalDOBundle } from "./internalDOs/internalDoLoader.js";
 import { ServiceDispatcher, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { EventService } from "@vibestudio/shared/eventsService";
 import { authorizeVerifiedCaller } from "./services/authorityRuntime.js";
@@ -91,6 +92,23 @@ declare const __filename: string;
 const HUB_PROCESS_LEASE_TTL_MS = 30_000;
 const HUB_PROCESS_LEASE_HEARTBEAT_MS = 5_000;
 const WORKSPACE_STARTUP_STDERR_LIMIT_BYTES = 32 * 1024;
+const INTERNAL_DO_BUNDLE_SNAPSHOT_ENV = "VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH";
+
+/**
+ * Freeze the product-baked internal runtime for this hub boot.
+ *
+ * Developer instances share `dist/`, so another instance may legitimately
+ * rebuild it while this hub is serving. Workspace crash recovery must still
+ * restore the exact runtime identities sealed earlier in this boot.
+ */
+export function snapshotInternalDOBundleForHub(
+  configDir: string,
+  bundle = getInternalDOBundle().bundle
+): string {
+  const snapshotPath = path.join(configDir, "server-auth", "internal-do.bundle.snapshot.mjs");
+  writeFileAtomicSync(snapshotPath, bundle, { mode: 0o600 });
+  return snapshotPath;
+}
 
 export function isHubControlHttpPath(pathname: string): boolean {
   return pathname === "/rpc" || pathname === RPC_WEBSOCKET_ADMISSION_PATH;
@@ -2737,6 +2755,8 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     process.env["VIBESTUDIO_IDENTITY_DB_PATH"] ??
     path.join(getCentralDataPath(), "server-auth", "identity.db");
   const serverBootId = `boot_${randomBytes(18).toString("base64url")}`;
+  process.env[INTERNAL_DO_BUNDLE_SNAPSHOT_ENV] =
+    snapshotInternalDOBundleForHub(getCentralDataPath());
   const { centralData, identityDb } = openHubDataStores(identityDbPath);
   try {
     centralData.claimHubProcessLease({

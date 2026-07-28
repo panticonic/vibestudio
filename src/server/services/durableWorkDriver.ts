@@ -345,12 +345,24 @@ export class DurableWorkDriver {
     if (!this.accepting || this.pumping || this.runners.size >= this.concurrency) return;
     const pumping = this.pump();
     this.pumping = pumping;
-    void pumping.finally(() => {
-      if (this.pumping === pumping) this.pumping = null;
-      if (this.accepting && this.pending.size > 0 && this.runners.size < this.concurrency) {
-        this.kick();
+    void pumping.then(
+      () => this.finishPump(pumping),
+      (error) => {
+        // A queue owner can disappear while a disposable hint is in flight
+        // (for example when a system-test member is cleaned up). Queue
+        // failures must remain local diagnostics, never unhandled rejections
+        // that terminate the workspace runtime.
+        log.warn("durable-work pump failed", error);
+        this.finishPump(pumping);
       }
-    });
+    );
+  }
+
+  private finishPump(pumping: Promise<void>): void {
+    if (this.pumping === pumping) this.pumping = null;
+    if (this.accepting && this.pending.size > 0 && this.runners.size < this.concurrency) {
+      this.kick();
+    }
   }
 
   private async pump(): Promise<void> {
@@ -396,12 +408,21 @@ export class DurableWorkDriver {
       for (const claim of claims) {
         const lane = `${queue}\u0000${handler.laneKey(hint.owner, claim)}`;
         if (this.activeLanes.has(lane)) {
-          await handler.fail(hint.owner, {
-            workerId: this.workerId,
-            itemId: claim.itemId,
-            generation: claim.generation,
-            error: new Error(`Queue ${queue} granted two simultaneous claims for lane ${lane}`),
-          });
+          try {
+            await handler.fail(hint.owner, {
+              workerId: this.workerId,
+              itemId: claim.itemId,
+              generation: claim.generation,
+              error: new Error(`Queue ${queue} granted two simultaneous claims for lane ${lane}`),
+            });
+          } catch (error) {
+            log.warn(
+              `duplicate-lane failure settlement failed for ${queue}:${this.ownerKey(
+                hint.owner
+              )}:${claim.itemId}`,
+              error
+            );
+          }
           continue;
         }
         this.startRunner(hint.owner, queue, claim, lane, trigger);

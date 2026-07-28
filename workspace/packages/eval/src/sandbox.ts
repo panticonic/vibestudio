@@ -140,6 +140,9 @@ class SandboxInfrastructureError extends Error {
 }
 
 const CORRECTABLE_IMPORT_FAILURE_CODES = new Set([
+  "invalid_package_specifier",
+  "invalid_package_version",
+  "unsupported_package",
   "package_not_found",
   "package_manifest_missing",
   "package_export_not_found",

@@ -27,6 +27,7 @@ describe("buildOwnerBindings", () => {
       };
       chat: {
         send: (c: string) => Promise<unknown>;
+        getParticipants: () => Promise<unknown>;
         replayEnvelope: (id: string) => Promise<unknown>;
         contextId: string;
         channelId: string;
@@ -52,6 +53,8 @@ describe("buildOwnerBindings", () => {
 
     await b.chat.send("hi");
     expect(call).toHaveBeenCalledWith("do:a:Agent:k", "chatOp", ["chan-1", "send", ["hi"]]);
+    await b.chat.getParticipants();
+    expect(call).toHaveBeenCalledWith("do:a:Agent:k", "chatOp", ["chan-1", "getParticipants", []]);
     await b.chat.replayEnvelope("event-1");
     expect(call).toHaveBeenCalledWith("do:a:Agent:k", "chatOp", [
       "chan-1",

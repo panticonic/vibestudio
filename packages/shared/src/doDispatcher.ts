@@ -10,6 +10,25 @@ export interface DORef {
   objectKey: string;
 }
 
+/**
+ * The request crossed the local dispatch boundary, but the host did not receive
+ * a trustworthy acknowledgement. Callers may retry only operations whose
+ * identity makes replay safe.
+ */
+export class AmbiguousDoDispatchError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    if (cause !== undefined) {
+      Object.defineProperty(this, "cause", {
+        value: cause,
+        writable: true,
+        configurable: true,
+      });
+    }
+    this.name = "AmbiguousDoDispatchError";
+  }
+}
+
 /** Lifecycle release delivered by the host before an activation disappears. */
 export interface LifecyclePrepareInput {
   epoch: string;

@@ -45,6 +45,18 @@ export interface ChatBinding {
   getMessageTypes: () => Promise<unknown[]>;
   /** Look up one durable channel envelope by id; returns null if absent. */
   replayEnvelope: (envelopeId: string) => Promise<unknown | null>;
+  getParticipants: () => Promise<
+    Array<{
+      id: string;
+      ref: unknown;
+      type: "user" | "panel" | "headless" | "agent";
+      name: string;
+      isPerson: boolean;
+      isAgent: boolean;
+      handle?: string;
+      methods?: unknown[];
+    }>
+  >;
   callMethod: (
     participantId: string,
     method: string,
@@ -102,6 +114,7 @@ export function buildOwnerBindings(args: OwnerBindingArgs, call: CallFn): Record
     clearMessageType: op("clearMessageType") as ChatBinding["clearMessageType"],
     getMessageType: op("getMessageType") as ChatBinding["getMessageType"],
     getMessageTypes: op("getMessageTypes") as ChatBinding["getMessageTypes"],
+    getParticipants: op("getParticipants") as ChatBinding["getParticipants"],
     replayEnvelope: op("replayEnvelope") as ChatBinding["replayEnvelope"],
     callMethod: op("callMethod") as ChatBinding["callMethod"],
     callMethodResult: op("callMethodResult") as ChatBinding["callMethodResult"],

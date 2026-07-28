@@ -1447,25 +1447,50 @@ describe("internal storage DOs under workerd", () => {
     await harness.callDurableObject(
       ref,
       "addFormFillBatch",
-      [{ type: "email", value: "me@example.com", useCount: 3, updatedAt: 100 }],
+      [
+        {
+          fieldName: "email_address",
+          type: "email",
+          value: "me@example.com",
+          useCount: 3,
+          updatedAt: 100,
+        },
+      ],
       meta
     );
     await harness.callDurableObject(
       ref,
       "addFormFillBatch",
-      [{ type: "email", value: "me@example.com", useCount: 3, updatedAt: 100 }],
+      [
+        {
+          fieldName: "email",
+          type: "email",
+          value: "me@example.com",
+          useCount: 3,
+          updatedAt: 100,
+        },
+      ],
       meta
     );
     await harness.callDurableObject(
       ref,
       "addFormFillBatch",
-      [{ type: "email", value: "me@example.com", useCount: 5, updatedAt: 200 }],
+      [
+        {
+          fieldName: "contact-email",
+          type: "email",
+          value: "me@example.com",
+          useCount: 5,
+          updatedAt: 200,
+        },
+      ],
       meta
     );
     await expect(
       harness.callDurableObject(ref, "getFormFillSuggestions", { type: "email" })
     ).resolves.toMatchObject([
       {
+        fieldName: "email_address",
         type: "email",
         value: "me@example.com",
         useCount: 5,

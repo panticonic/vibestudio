@@ -17,6 +17,7 @@ import {
   buildHubReadyPayload,
   buildWorkspaceChildArgs,
   buildWorkspaceChildEnv,
+  snapshotInternalDOBundleForHub,
   handleWorkspaceChildExit,
   HubCompletePairingBodySchema,
   HubDeviceCredentialBodySchema,
@@ -41,6 +42,21 @@ describe("hub control HTTP routing", () => {
     expect(isHubControlHttpPath("/rpc")).toBe(true);
     expect(isHubControlHttpPath("/rpc/ws-admission")).toBe(true);
     expect(isHubControlHttpPath("/rpc/other")).toBe(false);
+  });
+});
+
+describe("hub internal runtime snapshot", () => {
+  it("publishes immutable bundle bytes for every workspace child in the hub boot", () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-hub-bundle-"));
+    try {
+      const snapshotPath = snapshotInternalDOBundleForHub(configDir, "exact-bundle-bytes");
+
+      expect(path.isAbsolute(snapshotPath)).toBe(true);
+      expect(fs.readFileSync(snapshotPath, "utf8")).toBe("exact-bundle-bytes");
+      expect(fs.statSync(snapshotPath).mode & 0o777).toBe(0o600);
+    } finally {
+      fs.rmSync(configDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -486,6 +502,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
       VIBESTUDIO_GATEWAY_PORT: "3030",
       VIBESTUDIO_WORKSPACE_DIR: "/somewhere",
       VIBESTUDIO_ADMIN_TOKEN: "hub-operator-token",
+      VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH: "/hub/runtime/internal-do.bundle.mjs",
     } as NodeJS.ProcessEnv,
     appRoot: "/app",
     advertisedWorkspaceName: "base",
@@ -544,6 +561,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     expect(env["VIBESTUDIO_WORKSPACE_EPHEMERAL"]).toBe("1");
     expect(env["VIBESTUDIO_GATEWAY_PORT"]).toBeUndefined();
     expect(env["VIBESTUDIO_WORKSPACE_DIR"]).toBeUndefined();
+    expect(env["VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH"]).toBe("/hub/runtime/internal-do.bundle.mjs");
     expect(env["PATH"]).toBe("/usr/bin");
   });
 

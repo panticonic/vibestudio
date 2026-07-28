@@ -78,7 +78,6 @@ export const evalPreauthorizationIntentSchema = z
   .strict();
 
 const evalAuthorityIntentShape = {
-  mode: z.enum(["adaptive", "strict"]).default("adaptive"),
   effects: z.enum(["read-only", "mutable"]).default("mutable"),
   approvals: z.enum(["prompt", "pregranted-only"]).default("prompt"),
   requests: z.array(CapabilityScopeSchema).max(256).optional(),
@@ -87,27 +86,18 @@ const evalAuthorityIntentShape = {
 
 function refineEvalAuthorityIntent(
   value: {
-    mode?: "adaptive" | "strict";
     approvals?: "prompt" | "pregranted-only";
-    requests?: unknown;
     preauthorize?: unknown;
   },
   ctx: z.RefinementCtx
 ): void {
-    if (value.requests !== undefined && value.mode !== "strict") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "requests are valid only when authority.mode is strict",
-        path: ["requests"],
-      });
-    }
-    if (value.preauthorize !== undefined && value.approvals !== "prompt") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "preauthorize is valid only when authority.approvals is prompt",
-        path: ["preauthorize"],
-      });
-    }
+  if (value.preauthorize !== undefined && value.approvals !== "prompt") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "preauthorize is valid only when authority.approvals is prompt",
+      path: ["preauthorize"],
+    });
+  }
 }
 
 export const evalAuthorityIntentSchema = z
@@ -158,6 +148,8 @@ export const evalStartInputSchema = z
     /**
      * Per-run attenuation. This can only narrow the authority already admitted
      * by receiver declarations, sealed code, live grants, and relationships.
+     * Omit `requests` to adapt to that admitted authority; provide it (including
+     * an empty list) to enforce an exact per-run allowlist.
      */
     authority: evalAuthorityInputSchema.optional(),
   })
@@ -437,8 +429,7 @@ export function createEvalRunObserver(call: EvalCall, route: EvalRunRoute) {
   return {
     route: canonicalRoute,
     get: () => call<z.infer<typeof evalRunStatusSchema>>("eval.get", [canonicalRoute]),
-    cancel: () =>
-      call<z.infer<typeof evalMethods.cancel.returns>>("eval.cancel", [canonicalRoute]),
+    cancel: () => call<z.infer<typeof evalMethods.cancel.returns>>("eval.cancel", [canonicalRoute]),
   };
 }
 

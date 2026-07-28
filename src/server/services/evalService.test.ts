@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
+import { AmbiguousDoDispatchError } from "@vibestudio/shared/doDispatcher";
 import {
   createVerifiedCaller,
   type ServiceContext,
@@ -15,6 +16,7 @@ import {
 } from "../internalDOs/internalDoLoader.js";
 import { createEvalService } from "./evalService.js";
 import { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
+import { createActivityRegistry } from "./activityRegistry.js";
 import { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
@@ -81,6 +83,7 @@ function createHarness(
   contexts: Record<string, string | null>,
   options: {
     rejectFirstStartRun?: boolean;
+    rejectStartRun?: Error;
     retryStartGate?: Promise<void>;
     rejectFirstGetRun?: boolean;
     retryGetRunGate?: Promise<void>;
@@ -160,9 +163,10 @@ function createHarness(
         return { ok: true };
       }
       if (method === "startRun") {
+        if (options.rejectStartRun) throw options.rejectStartRun;
         if (options.rejectFirstStartRun && !rejectedStartRun) {
           rejectedStartRun = true;
-          throw new Error("simulated lost startRun acknowledgement");
+          throw new AmbiguousDoDispatchError("simulated lost startRun acknowledgement");
         }
         if (rejectedStartRun && options.retryStartGate) await options.retryStartGate;
         return {
@@ -266,6 +270,7 @@ function createHarness(
   } as unknown as EntityCache;
   const entityStore = new WorkspaceEntityStore({ doDispatch, workspaceId: "ws_1", entityCache });
   const executionSessions = new AgentExecutionSessionRegistry();
+  const activity = createActivityRegistry();
   const eventSinkTerminal = new Map<string, () => void>();
   const eventSinks = {
     register(route: { nonce: string; onTerminal?: () => void }) {
@@ -286,6 +291,7 @@ function createHarness(
     workspaceId: "ws_1",
     executionSessions,
     eventSinks,
+    activity,
     ...(options.systemTestHarness ? { isSystemTestHarness: () => true } : {}),
     kernelLeases: {
       touch: vi.fn(async () => {
@@ -303,6 +309,7 @@ function createHarness(
     service,
     calls,
     executionSessions,
+    activity,
     retireEntity,
     settleLiveEvent() {
       const callbacks = [...eventSinkTerminal.values()];
@@ -689,9 +696,32 @@ describe("createEvalService", () => {
     expect(executionSessions.resolve(runtimeId)).toBeNull();
   });
 
+  it("releases admission immediately after a definitive start rejection", async () => {
+    const ownerId = "do:workers/agent-worker:AiChatWorker:rejected";
+    const { service, calls, executionSessions, activity } = createHarness(
+      { [ownerId]: "ctx_agent" },
+      { rejectStartRun: new Error("invalid eval request") }
+    );
+    const runId = "effect:eval:rejected";
+
+    await expect(
+      service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
+        inlineEvalStart({ scopeKey: "chan_1", code: "return 1;", runId }),
+      ])
+    ).rejects.toThrow("invalid eval request");
+
+    const objectKey = (
+      calls.find((call) => call.method === "startRun")?.ref as { objectKey: string }
+    ).objectKey;
+    const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`;
+    expect(calls.filter((call) => call.method === "startRun")).toHaveLength(1);
+    expect(executionSessions.resolve(runtimeId)).toBeNull();
+    expect(activity.getActivity().activeRuns).toBe(0);
+  });
+
   it("does not poll after acceptance and closes admission once from the trusted terminal sink", async () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:live-terminal";
-    const { service, calls, executionSessions, settleLiveEvent } = createHarness({
+    const { service, calls, executionSessions, activity, settleLiveEvent } = createHarness({
       [ownerId]: "ctx_agent",
     });
     const runId = "effect:eval:live-terminal";
@@ -711,10 +741,12 @@ describe("createEvalService", () => {
     const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`;
     expect(calls.filter((call) => call.method === "getRun")).toHaveLength(0);
     expect(executionSessions.resolve(runtimeId)?.eval.runId).toBe(runId);
+    expect(activity.getActivity().activeRuns).toBe(1);
 
     settleLiveEvent();
     settleLiveEvent();
     expect(executionSessions.resolve(runtimeId)).toBeNull();
+    expect(activity.getActivity().activeRuns).toBe(0);
     expect(calls.filter((call) => call.method === "getRun")).toHaveLength(0);
   });
 
@@ -792,7 +824,9 @@ describe("createEvalService", () => {
 
   it("closes admission immediately for a start that returns its terminal snapshot", async () => {
     const ownerId = "session:default";
-    const { service, calls, executionSessions } = createHarness({ [ownerId]: "ctx:held" });
+    const { service, calls, executionSessions, activity } = createHarness({
+      [ownerId]: "ctx:held",
+    });
 
     const run = await service.handler(
       activeInvocationContext(authenticatedCaller(ownerId, "shell")),
@@ -809,6 +843,7 @@ describe("createEvalService", () => {
       snapshot: { status: "done", result: { success: true } },
     });
     expect(executionSessions.resolve(runtimeId)).toBeNull();
+    expect(activity.getActivity().activeRuns).toBe(0);
   });
 
   it("start requires a caller-owned runId", async () => {

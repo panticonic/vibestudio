@@ -120,6 +120,46 @@ describe("DurableWorkDriver", () => {
     await driver.quiesce();
   });
 
+  it("keeps the workspace alive when a removed owner rejects duplicate-lane settlement", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const pending = [claim("first"), claim("second")];
+    const suite = handlers({
+      claim: vi.fn(async () => {
+        const next = pending.shift();
+        return next ? [next] : [];
+      }),
+      laneKey: () => "same-channel",
+      execute: vi.fn(async (_owner, item) => {
+        if (item.itemId === "first") await held;
+        return { ok: true };
+      }),
+      fail: vi.fn(async () => {
+        throw Object.assign(new Error("Not a member of this workspace"), { code: "EACCES" });
+      }),
+    });
+    const driver = new DurableWorkDriver({
+      handlers: suite.record,
+      scanReadyOwners: async () => [],
+      workerId: "driver-1",
+      concurrency: 2,
+    });
+    driver.start();
+    driver.notify({ owner: owner("removed"), queues: ["agent-effect"] });
+    await vi.advanceTimersByTimeAsync(0);
+    driver.notify({ owner: owner("removed"), queues: ["agent-effect"] });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(suite.handler.fail).toHaveBeenCalledOnce();
+    expect(driver.inspect()).toMatchObject({ accepting: true, active: 1 });
+
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    await driver.quiesce();
+  });
+
   it("recovers all work when every immediate hint is dropped", async () => {
     const pending = [claim("recovered")];
     const suite = handlers({

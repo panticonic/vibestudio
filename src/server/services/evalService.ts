@@ -11,7 +11,7 @@ import {
   internalDOExecutionIdentity,
   INTERNAL_DO_SOURCE,
 } from "../internalDOs/internalDoLoader.js";
-import type { HeldDoDispatcher } from "@vibestudio/shared/doDispatcher";
+import { AmbiguousDoDispatchError, type HeldDoDispatcher } from "@vibestudio/shared/doDispatcher";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import { resolveOwningPanelSlot } from "@vibestudio/shared/panel/owningPanelSlot";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
@@ -113,7 +113,7 @@ function normalizeAuthorityManifest(
     }
   }
   const normalized = {
-    mode: intent.mode,
+    mode: intent.requests === undefined ? ("adaptive" as const) : ("strict" as const),
     effects: intent.effects,
     approvals: intent.approvals,
     requests,
@@ -167,8 +167,9 @@ export function createEvalService(deps: {
   ) => import("@vibestudio/rpc").SessionMissionFact | null;
   isSystemTestHarness?: (caller: ServiceContext["caller"], runId: string) => boolean;
   /**
-   * Host-wide background-work registry (idle-exit monitor). Synchronous calls and explicit
-   * host watchdogs report begin/end; ordinary asynchronous runs live inside the EvalDO.
+   * Host-wide background-work registry (idle-exit monitor). Every admitted run
+   * holds a lease until its trusted terminal event; explicit timeout watchdogs
+   * hold a second lease while host recovery is still in flight.
    */
   activity?: import("./activityRegistry.js").ActivityRegistry;
   /** Host-process safety boundary for synchronous sandbox CPU starvation. */
@@ -464,6 +465,7 @@ export function createEvalService(deps: {
     runDigest: string;
     authorityManifestDigest: string;
     eventSinkNonce: string;
+    activityId: string | undefined;
   }> {
     const owner = await resolveOwnerForCaller(ctx, runArgs);
     const ownerId = owner.ownerId;
@@ -609,6 +611,8 @@ export function createEvalService(deps: {
       deps.executionSessions.close(evalRuntimeId, runId);
       throw new Error("Evaluated execution admission has no live event sink");
     }
+    const activityId =
+      deps.activity && deps.eventSinks ? `eval:${evalRuntimeId}:${runId}` : undefined;
     deps.eventSinks?.register({
       nonce: executionSession.eval.eventSinkNonce,
       runtimeId: evalRuntimeId,
@@ -619,8 +623,10 @@ export function createEvalService(deps: {
       subKey: runArgs.scope?.key ?? "default",
       onTerminal: () => {
         deps.executionSessions.close(evalRuntimeId, runId);
+        if (activityId) deps.activity?.end(activityId);
       },
     });
+    if (activityId) deps.activity?.begin(activityId);
     const authorityManifestDigest = executionSession.eval.authorityManifest.digest;
     const runDigest = sha256Canonical({
       runId,
@@ -753,6 +759,7 @@ export function createEvalService(deps: {
       runDigest,
       authorityManifestDigest,
       eventSinkNonce: executionSession.eval.eventSinkNonce,
+      activityId,
     };
   }
 
@@ -767,103 +774,113 @@ export function createEvalService(deps: {
         // is known before transport, so an ambiguous response or process loss
         // never makes the accepted run unaddressable.
         const runId = runArgs.runId;
-        const { evalDoRef, assembledArgs, authorityManifestDigest, eventSinkNonce } =
+        const { evalDoRef, assembledArgs, authorityManifestDigest, eventSinkNonce, activityId } =
           await prepareRun(ctx, runArgs, runId);
         const startArgs = {
           ...assembledArgs,
           runId,
         };
         const evalRuntimeId = evalDoEntityId(evalDoRef.objectKey);
+        const closeAdmission = () => {
+          deps.executionSessions.close(evalRuntimeId, runId);
+          deps.eventSinks?.close(eventSinkNonce);
+          if (activityId) deps.activity?.end(activityId);
+        };
+        let accepted: {
+          status: string;
+          existing?: boolean;
+          runDigest: string;
+        };
         try {
-          const accepted = (await deps.doDispatch.dispatch(evalDoRef, "startRun", startArgs)) as {
+          accepted = (await deps.doDispatch.dispatch(evalDoRef, "startRun", startArgs)) as {
             status: string;
             existing?: boolean;
             runDigest: string;
           };
-          const acceptedRunDigest = accepted.runDigest;
-          const timeoutMs = assembledArgs["timeoutMs"];
-          if (typeof timeoutMs === "number" && deps.recoverUnresponsiveSandbox) {
-            const activityId = `eval-watchdog:${runId}`;
-            deps.activity?.begin(activityId);
-            void watchTimedRun(
-              deps.doDispatch,
-              evalDoRef,
-              runId,
-              timeoutMs,
-              deps.recoverUnresponsiveSandbox,
-              deps.watchdogGraceMs ?? DEFAULT_EVAL_WATCHDOG_GRACE_MS
-            )
-              .catch((error) => {
-                console.warn(
-                  `[eval] timed run watchdog ${runId} completed through recovery:`,
-                  error instanceof Error ? error.message : error
-                );
-              })
-              .finally(() => {
-                deps.activity?.end(activityId);
-              });
+        } catch (error) {
+          if (!(error instanceof AmbiguousDoDispatchError)) {
+            closeAdmission();
+            throw error;
           }
-          if (
-            accepted.status === "done" ||
-            accepted.status === "cancelled" ||
-            accepted.status === "approval-route-lost"
-          ) {
-            const snapshot = await deps.doDispatch.dispatch(evalDoRef, "getRun", runId);
-            deps.executionSessions.close(evalRuntimeId, runId);
-            deps.eventSinks?.close(eventSinkNonce);
+          // startRun is idempotent on runId. Only an explicitly ambiguous
+          // acknowledgement keeps admission alive: the EvalDO may already have
+          // durably accepted the run. Structured remote rejections are
+          // definitive and were unwound above.
+          void reconcileAmbiguousStart(deps.doDispatch, evalDoRef, runId, startArgs).catch(
+            (reconcileError) => {
+              closeAdmission();
+              console.warn(
+                `[eval] admission reconciliation ${runId} stopped:`,
+                reconcileError instanceof Error ? reconcileError.message : reconcileError
+              );
+            }
+          );
+          throw error;
+        }
+        const acceptedRunDigest = accepted.runDigest;
+        const timeoutMs = assembledArgs["timeoutMs"];
+        if (typeof timeoutMs === "number" && deps.recoverUnresponsiveSandbox) {
+          const watchdogActivityId = `eval-watchdog:${runId}`;
+          deps.activity?.begin(watchdogActivityId);
+          void watchTimedRun(
+            deps.doDispatch,
+            evalDoRef,
+            runId,
+            timeoutMs,
+            deps.recoverUnresponsiveSandbox,
+            deps.watchdogGraceMs ?? DEFAULT_EVAL_WATCHDOG_GRACE_MS
+          )
+            .catch((error) => {
+              console.warn(
+                `[eval] timed run watchdog ${runId} completed through recovery:`,
+                error instanceof Error ? error.message : error
+              );
+            })
+            .finally(() => {
+              deps.activity?.end(watchdogActivityId);
+            });
+        }
+        if (
+          accepted.status === "done" ||
+          accepted.status === "cancelled" ||
+          accepted.status === "approval-route-lost"
+        ) {
+          const snapshot = await deps.doDispatch.dispatch(evalDoRef, "getRun", runId);
+          closeAdmission();
+          return {
+            runId,
+            runDigest: acceptedRunDigest,
+            authorityManifestDigest,
+            status: "terminal" as const,
+            snapshot,
+          };
+        }
+        // Preserve the one-round-trip fast path without reintroducing a
+        // second public execution method. Non-agent callers give the same
+        // accepted run a short completion window; agent DOs return
+        // immediately so their existing terminal push remains primary.
+        if (!assembledArgs["resultReceiverRef"]) {
+          const quick = await terminalWithin(
+            deps.doDispatch.dispatchHeld(evalDoRef, "executeRun", runId),
+            25
+          );
+          if (quick) {
+            closeAdmission();
             return {
               runId,
               runDigest: acceptedRunDigest,
               authorityManifestDigest,
               status: "terminal" as const,
-              snapshot,
+              snapshot: { status: "done" as const, result: quick },
             };
           }
-          // Preserve the one-round-trip fast path without reintroducing a
-          // second public execution method. Non-agent callers give the same
-          // accepted run a short completion window; agent DOs return
-          // immediately so their existing terminal push remains primary.
-          if (!assembledArgs["resultReceiverRef"]) {
-            const quick = await terminalWithin(
-              deps.doDispatch.dispatchHeld(evalDoRef, "executeRun", runId),
-              25
-            );
-            if (quick) {
-              deps.executionSessions.close(evalRuntimeId, runId);
-              deps.eventSinks?.close(eventSinkNonce);
-              return {
-                runId,
-                runDigest: acceptedRunDigest,
-                authorityManifestDigest,
-                status: "terminal" as const,
-                snapshot: { status: "done" as const, result: quick },
-              };
-            }
-          }
-          return {
-            runId,
-            runDigest: acceptedRunDigest,
-            authorityManifestDigest,
-            status: accepted.existing ? ("already-running" as const) : ("accepted" as const),
-          };
-        } catch (error) {
-          // startRun is idempotent on runId. A transport rejection is
-          // ambiguous: the EvalDO may already have durably accepted the run.
-          // Keep its admission live and retry the same start until the durable
-          // owner acknowledges it, then monitor the canonical terminal.
-          void reconcileAmbiguousStart(deps.doDispatch, evalDoRef, runId, startArgs)
-            .catch((reconcileError) => {
-              console.warn(
-                `[eval] admission reconciliation ${runId} stopped:`,
-                reconcileError instanceof Error ? reconcileError.message : reconcileError
-              );
-            })
-            .finally(() => {
-              // Once the durable owner acknowledges the run, its producer-side
-              // terminal event closes admission through the trusted sink.
-            });
-          throw error;
         }
+        return {
+          runId,
+          runDigest: acceptedRunDigest,
+          authorityManifestDigest,
+          status: accepted.existing ? ("already-running" as const) : ("accepted" as const),
+        };
       },
       get: async (ctx, [getArgs]) =>
         deps.doDispatch.dispatch(await evalDoRefFor(ctx, getArgs), "getRun", getArgs.runId),
@@ -936,7 +953,8 @@ async function reconcileAmbiguousStart(
     try {
       await dispatch.dispatch(ref, "startRun", startArgs);
       return;
-    } catch {
+    } catch (error) {
+      if (!(error instanceof AmbiguousDoDispatchError)) throw error;
       await admissionRetryDelay();
     }
   }

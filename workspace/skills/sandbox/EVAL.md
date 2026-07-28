@@ -124,27 +124,29 @@ multi-file work, prefer a real entry file.
 
 ## Parameters
 
-| Param        | Type                                             | Default | Description                                                                                     |
-| ------------ | ------------------------------------------------ | ------- | ----------------------------------------------------------------------------------------------- |
-| `code`       | string                                           | —       | TypeScript/JavaScript code to execute                                                           |
-| `path`       | string                                           | —       | Code file to execute, text/data file to load, or a source-base hint when `code` is also present |
-| `sourcePath` | string                                           | —       | Virtual context-relative filename for inline code and relative imports                          |
-| `syntax`     | `"javascript" \| "typescript" \| "jsx" \| "tsx"` | `"tsx"` | Source syntax                                                                                   |
-| `imports`    | `Record<string, string>`                         | —       | Packages to build on-demand (workspace or npm)                                                  |
-| `timeoutMs`  | positive integer                                 | —       | Optional wall-clock deadline in milliseconds; omitted means no deadline                         |
-| `authority`  | per-run authority intent                         | adaptive mutable prompt | Attenuate this run with strict semantic requests, read-only effects, pregranted-only execution, or exact prospective preauthorization |
+| Param        | Type                                             | Default                 | Description                                                                                                                                |
+| ------------ | ------------------------------------------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `code`       | string                                           | —                       | TypeScript/JavaScript code to execute                                                                                                      |
+| `path`       | string                                           | —                       | Code file to execute, text/data file to load, or a source-base hint when `code` is also present                                            |
+| `sourcePath` | string                                           | —                       | Virtual context-relative filename for inline code and relative imports                                                                     |
+| `syntax`     | `"javascript" \| "typescript" \| "jsx" \| "tsx"` | `"tsx"`                 | Source syntax                                                                                                                              |
+| `imports`    | `Record<string, string>`                         | —                       | Packages to build on-demand (workspace or npm)                                                                                             |
+| `timeoutMs`  | positive integer                                 | —                       | Optional wall-clock deadline in milliseconds; omitted means no deadline                                                                    |
+| `authority`  | per-run authority intent                         | adaptive mutable prompt | Attenuate this run with an exact `requests` allowlist, read-only effects, pregranted-only execution, or exact prospective preauthorization |
 
 The table above is the ergonomic agent tool. Code that calls the server service
 directly uses the single typed lifecycle shape:
 
 ```ts
-await rpc.call("main", "eval.start", [{
-  runId,
-  source: { kind: "inline", code, pathHint: "src/probe.ts", syntax: "typescript" },
-  scope: { key: channelId, lifecycle: "persistent" },
-  resultReceiver: { kind: "caller" }, // optional terminal push to the authenticated caller
-  authority,
-}]);
+await rpc.call("main", "eval.start", [
+  {
+    runId,
+    source: { kind: "inline", code, pathHint: "src/probe.ts", syntax: "typescript" },
+    scope: { key: channelId, lifecycle: "persistent" },
+    resultReceiver: { kind: "caller" }, // optional terminal push to the authenticated caller
+    authority,
+  },
+]);
 ```
 
 For a file entry use `source: {kind:"context-file", path, syntax?}`. Recovery
@@ -163,7 +165,6 @@ denials, and locks:
 eval({
   code: `return await fs.readFile("README.md", "utf8")`,
   authority: {
-    mode: "strict",
     effects: "read-only",
     approvals: "pregranted-only",
     requests: [
@@ -176,8 +177,15 @@ eval({
 });
 ```
 
-`strict` returns a structured `run-manifest-denied` failure for an uncovered
-protected capability/resource even when a broader user grant exists.
+Omit `requests` to adapt to the authority already admitted for the caller.
+Supply `requests` to make it the exact per-run allowlist; `requests: []`
+therefore denies every protected operation. An uncovered
+capability/resource returns a structured `run-manifest-denied` failure even
+when a broader user grant exists.
+Never invent a wildcard request such as `workspace:*`. If you do not know an
+exact capability/resource pair and do not specifically need attenuation, omit
+`requests`; use `help()` or the capabilities skill before constructing an exact
+allowlist.
 `pregranted-only` never opens an approval card. `read-only` is enforced at the
 same dispatcher used by every host call; it is not a separate eval method
 allowlist. `preauthorize` accepts exact `{service, method, args}` operations and
@@ -207,7 +215,7 @@ same live binding rather than shadowing it.
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `rpc.call(targetId, method, args)` | Portable RPC client, same shape as panels/workers. Raw server services target `"main"`: `await rpc.call("main", "vcs.status", [{ contextId: ctx.contextId }])`                                                                                                                                                                                                                                                                                                                                                                                               |
 | `services`                         | Convenience namespace for server services. If the service name is also a rich runtime binding (`workers`, `vcs`, `fs`, `credentials`, `blobstore`, …), `services.<name>` is that ergonomic runtime client, not the raw service catalog. Raw catalog methods are always reachable with `rpc.call("main", "<svc>.<method>", [...])`; non-colliding services are also reachable as `services.<svc>.<method>(...)`. Access is still gated server-side by each method's policy. Use `help()` to list services and `help("workers")` to inspect a runtime binding. |
-| `hosts`                            | Owner-scoped attached-host clients. `const child = await hosts.attach(attachedHostSessionId)` returns `child.services`; call ordinary child methods such as `child.services.eval.start(...)` and `child.services.eval.get(...)`. The child validates its normal schema and authority policy; there is no development-specific eval bridge. |
+| `hosts`                            | Owner-scoped attached-host clients. `const child = await hosts.attach(attachedHostSessionId)` returns `child.services`; call ordinary child methods such as `child.services.eval.start(...)` and `child.services.eval.get(...)`. The child validates its normal schema and authority policy; there is no development-specific eval bridge.                                                                                                                                                                                                                   |
 | `fs`                               | Context-scoped filesystem — the EvalDO resolves your context, so you do NOT pass a contextId: `await fs.readdir("/")`, `await fs.readFile("src/index.ts", "utf-8")`                                                                                                                                                                                                                                                                                                                                                                                          |
 | `ctx`                              | `{ contextId, objectKey }` for the current eval session                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `scope`                            | Live notebook scope (see below); `scope.x = …` retains object identity across cells while the current kernel activation remains resident                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -288,6 +296,11 @@ await agent.setRespondPolicy("mentioned-or-followup");
 await agent.setRespondFrom(["@alice"]);   // handles resolve per-channel
 await agent.configure({ model: "…", thinkingLevel: "medium" });  // batch
 ```
+
+The executing agent's own advertised participant methods are deliberately not
+model tools: synchronously calling the active turn back through its channel
+would wait on itself. Use `agent.describe()` for self-inspection. Use
+`chat.callMethod(...)` only for a different participant.
 
 To make a spawned/headless agent inherit your model, read it here and pass it
 into the new agent's **creation** config (its `stateArgs.agentConfig.model`),
@@ -522,6 +535,12 @@ The import-map key is the package name; prefer version-only values such as
 `"npm:left-pad@1.3.0"` are accepted only when the package name matches the key.
 
 Packages are installed with `--ignore-scripts` for security (no postinstall hooks). Specifiers are validated against npm naming rules — only standard package names are accepted (no URLs, file paths, or git refs). Native addon packages (those requiring `.node` binary files) are not supported.
+
+Invalid package names, invalid versions, unsupported toolchain packages, missing
+packages, and missing package versions are caller-correctable eval failures with
+stable structured codes. They do not terminate the agent turn; correct the
+`imports` map or continue with other sandbox work. Network, cache, package
+acquisition, and linker failures remain infrastructure failures.
 
 Installed packages and their bundles are both cached, so subsequent imports of the same package/version are fast. The first install of a new package may take 10-30 seconds (npm download + esbuild bundle); eval waits for that work to complete.
 
