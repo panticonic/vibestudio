@@ -246,6 +246,8 @@ export interface RuntimeServiceDeps {
     /** A new case policy requested by the system-test orchestrator. */
     casePolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicySpec;
   }) => void | Promise<void>;
+  /** Remove host-only policy state after a disposable context is discarded. */
+  onContextRemoved?: (input: { contextId: string }) => void | Promise<void>;
   /**
    * Server-controlled display-title registry. Workers (and DOs / panels)
    * call `runtime.setTitle(title)` to populate the title that approval UIs

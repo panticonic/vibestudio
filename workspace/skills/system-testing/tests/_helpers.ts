@@ -22,6 +22,10 @@ export interface InvocationCardPayloadLike {
     isError?: boolean;
     description?: string;
   };
+  subagent?: {
+    agentKind?: string;
+    launchConfig?: Record<string, unknown> | null;
+  };
 }
 
 /**

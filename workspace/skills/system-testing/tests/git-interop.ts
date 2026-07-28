@@ -860,14 +860,14 @@ export const gitInteropTests: TestCase[] = [
       authority: [
         {
           ruleId: "git-remotes",
-          capability: "git.remotes.manage",
+          capability: { kind: "exact", key: "git.remotes.manage" },
           resource: { kind: "exact", key: "git.remotes.manage" },
           tier: "gated",
           decision: "once",
         },
         {
           ruleId: "git-publish",
-          capability: "git.publish",
+          capability: { kind: "exact", key: "git.publish" },
           resource: { kind: "exact", key: "git.publish" },
           tier: "gated",
           decision: "once",
@@ -899,21 +899,21 @@ export const gitInteropTests: TestCase[] = [
       authority: [
         {
           ruleId: "git-remotes",
-          capability: "git.remotes.manage",
+          capability: { kind: "exact", key: "git.remotes.manage" },
           resource: { kind: "exact", key: "git.remotes.manage" },
           tier: "gated",
           decision: "once",
         },
         {
           ruleId: "git-import",
-          capability: "git.project.import",
+          capability: { kind: "exact", key: "git.project.import" },
           resource: { kind: "exact", key: "git.project.import" },
           tier: "gated",
           decision: "once",
         },
         {
           ruleId: "git-publish",
-          capability: "git.publish",
+          capability: { kind: "exact", key: "git.publish" },
           resource: { kind: "exact", key: "git.publish" },
           tier: "gated",
           decision: "once",
@@ -945,7 +945,7 @@ export const gitInteropTests: TestCase[] = [
       authority: [
         {
           ruleId: "git-publish",
-          capability: "git.publish",
+          capability: { kind: "exact", key: "git.publish" },
           resource: { kind: "exact", key: "git.publish" },
           tier: "gated",
           decision: "once",

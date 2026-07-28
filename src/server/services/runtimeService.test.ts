@@ -273,6 +273,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     },
     contextFolders,
     onContextCreated: opts.onContextCreated,
+    onContextRemoved: opts.onContextRemoved,
     setEntityTitle: opts.setEntityTitle,
     faultAbortAgentVessel: opts.faultAbortAgentVessel,
     semanticContexts,

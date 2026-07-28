@@ -2937,6 +2937,9 @@ async function main() {
               agentExecutionSessions.attachCasePolicy(contextId, ownerContextId, casePolicy);
             }
           },
+          onContextRemoved: ({ contextId }) => {
+            agentExecutionSessions.removeTestContext(contextId);
+          },
           // GAD-owned semantic context lifecycle for runtime entities.
           semanticContexts: {
             ensureContext: async (contextId) => {

@@ -50,6 +50,8 @@ describe("AgentExecutionSessionRegistry test policy", () => {
     registry.markTestContext("ctx:parent", policy);
     registry.inheritTestContext("ctx:child", "ctx:parent");
     expect(registry.testPolicyForContext("ctx:child")).toBe(policy);
+    registry.removeTestContext("ctx:child");
+    expect(registry.testPolicyForContext("ctx:child")).toBeNull();
   });
 
   it("rejects policy crossover and releases every adopted context when the run ends", () => {

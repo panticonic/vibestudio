@@ -1,3 +1,8 @@
+---
+name: development
+description: Build Vibestudio from the exact semantic working state through the development panel, including source adoption, semantic and native tool sessions, checkpointing, and diagnostics.
+---
+
 # Development panel
 
 Open `panels/development` when a user or agent wants to build Vibestudio from

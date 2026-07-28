@@ -120,6 +120,10 @@ export class AgentExecutionSessionRegistry {
     if (policy) this.testPoliciesByContext.set(childContextId, policy);
   }
 
+  removeTestContext(contextId: string): void {
+    this.testPoliciesByContext.delete(contextId);
+  }
+
   testPolicyForContext(
     contextId: string
   ): NonNullable<AgentExecutionSessionFact["testPolicy"]> | null {
