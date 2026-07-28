@@ -160,7 +160,13 @@ function refreshPanelDisplay(): void {
 
 function copyPanelDisplayDiagnostics(): void {
   if (!_menuViewManager) return;
-  void assertPresent(_menuViewManager).copyPanelDisplayDiagnosticsToClipboard();
+  void assertPresent(_menuViewManager)
+    .copyPanelDisplayDiagnosticsToClipboard()
+    .catch((error) => console.error("[Menu] Failed to copy panel diagnostics:", error));
+}
+
+function reportMenuActionError(action: string, error: unknown): void {
+  console.error(`[Menu] ${action} failed:`, error);
 }
 
 /**
@@ -224,7 +230,10 @@ export function buildHamburgerMenuTemplate(
     {
       label: "Close Panel",
       accelerator: PANEL_KEYBOARD_ACCELERATORS.closePanel,
-      click: () => void archiveFocusedPanel(null),
+      click: () =>
+        void archiveFocusedPanel(null).catch((error) =>
+          reportMenuActionError("Close panel", error)
+        ),
     }
   );
 
@@ -300,7 +309,11 @@ export function buildHamburgerMenuTemplate(
       click: () => toggleAppDevTools(shellContents),
     },
     { type: "separator" },
-    { label: "Clear Build Cache", click: () => void clearBuildCache() },
+    {
+      label: "Clear Build Cache",
+      click: () =>
+        void clearBuildCache().catch((error) => reportMenuActionError("Clear build cache", error)),
+    },
   ];
 
   const help: MenuItemConstructorOptions[] = [
@@ -520,7 +533,9 @@ export function setupMenu(
           label: "Copy Panel Display Diagnostics",
           click: () => {
             if (_menuViewManager) {
-              void assertPresent(_menuViewManager).copyPanelDisplayDiagnosticsToClipboard();
+              void assertPresent(_menuViewManager)
+                .copyPanelDisplayDiagnosticsToClipboard()
+                .catch((error) => reportMenuActionError("Copy panel diagnostics", error));
             }
           },
         },

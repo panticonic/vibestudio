@@ -97,7 +97,7 @@ export function usePanelLayout(
       .then((active) => {
         workspaceIdRef.current = typeof active === "string" ? active : "";
       })
-      .catch(() => {});
+      .catch((error) => console.warn("[usePanelLayout] Failed to load active workspace:", error));
   }, []);
 
   const schedulePersist = useCallback(() => {
@@ -213,7 +213,9 @@ export function usePanelLayout(
   }, [layout]);
   useEffect(() => {
     if (!restored || !focusedPanelId) return;
-    void panelService.setFocusedPanelId(focusedPanelId).catch(() => {});
+    void panelService
+      .setFocusedPanelId(focusedPanelId)
+      .catch((error) => console.warn("[usePanelLayout] Failed to persist focused panel:", error));
   }, [restored, focusedPanelId]);
 
   const visiblePanelIds = useMemo(

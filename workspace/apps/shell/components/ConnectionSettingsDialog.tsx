@@ -44,7 +44,9 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
           isRemote: (info.connectionMode ?? "local") === "remote",
         })
       )
-      .catch(() => {});
+      .catch((error) => {
+        setError(error instanceof Error ? error.message : String(error));
+      });
   }, [open]);
 
   useShellEvent(
@@ -74,9 +76,12 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
       setPairLink(createConnectDeepLink(pairing));
       onOpenChange(true);
     };
-    void incomingPairLink.getPending().then((pairing) => {
-      if (pairing) apply(pairing);
-    });
+    void incomingPairLink
+      .getPending()
+      .then((pairing) => {
+        if (pairing) apply(pairing);
+      })
+      .catch((error) => setError(error instanceof Error ? error.message : String(error)));
     return incomingPairLink.onLink(apply);
   }, [onOpenChange]);
 

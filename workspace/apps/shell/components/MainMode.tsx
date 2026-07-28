@@ -39,7 +39,9 @@ export default function MainMode() {
 
   // Sync overlay state to main process
   useEffect(() => {
-    void view.setShellOverlay(shellOverlayActive);
+    void view
+      .setShellOverlay(shellOverlayActive)
+      .catch((error: unknown) => console.warn("[MainMode] Shell overlay sync failed:", error));
   }, [shellOverlayActive]);
 
   useEffect(() => {

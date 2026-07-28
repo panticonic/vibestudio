@@ -453,7 +453,7 @@ export function TerminalApp() {
     void workspace.units
       .list()
       .then(pickShellUnit)
-      .catch(() => {});
+      .catch((error) => console.warn("[TerminalApp] Failed to load shell unit status:", error));
     (async () => {
       try {
         for await (const units of workspace.units.watch()) {
@@ -499,7 +499,9 @@ export function TerminalApp() {
       if (!approved || approvedOpenUrlIdsRef.current.has(approved.id)) continue;
       approvedOpenUrlIdsRef.current.add(approved.id);
       void openUrl(approved.url);
-      void actions.deleteMeta(session.sessionId, "snugOpenUrl").catch(() => {});
+      void actions
+        .deleteMeta(session.sessionId, "snugOpenUrl")
+        .catch((error) => console.warn("[TerminalApp] Failed to clear consumed open URL:", error));
       setState((prev) => ({
         ...prev,
         notifications: [

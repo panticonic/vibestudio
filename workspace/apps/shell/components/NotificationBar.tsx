@@ -137,7 +137,9 @@ export function NotificationBar() {
     }
     // Report dismissal to server so waitForAction() resolves immediately
     // instead of hanging for the full timeout
-    void notification.reportAction(id, "dismiss");
+    void notification.reportAction(id, "dismiss").catch((error) => {
+      console.warn("[NotificationBar] Failed to report dismissal:", error);
+    });
   }, []);
 
   const handleDismissRequest = useCallback(
@@ -153,88 +155,67 @@ export function NotificationBar() {
   const handleAction = useCallback(
     async (notificationId: string, action: NonNullable<NotificationPayload["actions"]>[number]) => {
       const actionId = action.id;
+      const showActionError = async (title: string, error: unknown): Promise<void> => {
+        try {
+          await notification.show({
+            type: "error",
+            title,
+            message: error instanceof Error ? error.message : String(error),
+            ttl: 0,
+          });
+        } catch (notificationError) {
+          console.warn("[NotificationBar] Failed to show action error:", notificationError);
+        }
+      };
       // Main-side actions can fail (updater unavailable, OAuth cancel while
       // disconnected). Keep the original notification visible in that case.
       try {
         await notification.reportAction(notificationId, actionId);
       } catch (err) {
-        void notification.show({
-          type: "error",
-          title: "Action failed",
-          message: err instanceof Error ? err.message : String(err),
-          ttl: 0,
-        });
+        await showActionError("Action failed", err);
         return;
       }
-      if (action.command?.type === "app.applyUpdate") {
-        const appId = action.command.appId;
-        void app
-          .applyUpdate(appId)
-          .then((result) => {
-            if (!result.applied) {
-              void notification.show({
-                type: "warning",
-                title: "No pending update",
-                message: `${appId} does not have a pending desktop update.`,
-              });
-            }
-          })
-          .catch((err) => {
-            void notification.show({
-              type: "error",
-              title: "Update failed",
-              message: err instanceof Error ? err.message : String(err),
-              ttl: 0,
+      try {
+        if (action.command?.type === "app.applyUpdate") {
+          const appId = action.command.appId;
+          const result = await app.applyUpdate(appId);
+          if (!result.applied) {
+            await notification.show({
+              type: "warning",
+              title: "No pending update",
+              message: `${appId} does not have a pending desktop update.`,
             });
+          }
+        } else if (action.command?.type === "app.rollback") {
+          await workspaceUnits.rollback(action.command.appId, {
+            buildKey: action.command.buildKey,
           });
-      } else if (action.command?.type === "app.rollback") {
-        void workspaceUnits
-          .rollback(action.command.appId, { buildKey: action.command.buildKey })
-          .catch((err) => {
-            void notification.show({
-              type: "error",
-              title: "Rollback failed",
-              message: err instanceof Error ? err.message : String(err),
-              ttl: 0,
+        } else if (action.command?.type === "workspace.restartUnit") {
+          await workspaceUnits.restart(action.command.name);
+        }
+        if (action.invoke?.kind === "extension") {
+          const result = await extensions.invoke(
+            action.invoke.extension,
+            action.invoke.method,
+            action.invoke.args ?? []
+          );
+          const open = panelOpenInstruction(result);
+          if (open) {
+            await panel.createPanel(open.source, {
+              name: open.name,
+              stateArgs: open.stateArgs,
             });
-          });
-      } else if (action.command?.type === "workspace.restartUnit") {
-        void workspaceUnits.restart(action.command.name).catch((err) => {
-          void notification.show({
-            type: "error",
-            title: "Restart failed",
-            message: err instanceof Error ? err.message : String(err),
-            ttl: 0,
-          });
-        });
-      }
-      if (action.invoke?.kind === "extension") {
-        void extensions
-          .invoke(action.invoke.extension, action.invoke.method, action.invoke.args ?? [])
-          .then((result) => {
-            const open = panelOpenInstruction(result);
-            if (open) {
-              return panel.createPanel(open.source, {
-                name: open.name,
-                stateArgs: open.stateArgs,
-              });
-            }
-            return undefined;
-          })
-          .catch((err) => {
-            void notification.show({
-              type: "error",
-              title: "Action failed",
-              message: err instanceof Error ? err.message : String(err),
-              ttl: 0,
-            });
-          });
-      } else if (action.command?.type === "browser.downloadOpen") {
-        void browserEnvironment.openDownload(action.command.downloadId);
-      } else if (action.command?.type === "browser.downloadReveal") {
-        void browserEnvironment.revealDownload(action.command.downloadId);
-      } else if (action.command?.type === "panel.focus") {
-        void panel.focus(action.command.panelId);
+          }
+        } else if (action.command?.type === "browser.downloadOpen") {
+          await browserEnvironment.openDownload(action.command.downloadId);
+        } else if (action.command?.type === "browser.downloadReveal") {
+          await browserEnvironment.revealDownload(action.command.downloadId);
+        } else if (action.command?.type === "panel.focus") {
+          await panel.focus(action.command.panelId);
+        }
+      } catch (error) {
+        await showActionError("Action failed", error);
+        return;
       }
       dismissNotification(notificationId);
     },

@@ -39,7 +39,9 @@ export function ConnectionStatusBadge({ onOpenSettings }: { onOpenSettings: () =
         });
         if ((info.connectionStatus ?? "connected") === "connected") setHasConnected(true);
       })
-      .catch(() => {});
+      .catch((error) => {
+        console.warn("[ConnectionStatusBadge] Failed to load connection status:", error);
+      });
   }, []);
 
   useShellEvent(

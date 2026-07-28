@@ -68,7 +68,9 @@ function AppContent() {
   // panels whenever it changes.
   useEffect(() => {
     if (!shellClient) return;
-    void shellClient.panels.updateTheme(effectiveScheme === "light" ? "light" : "dark");
+    void shellClient.panels
+      .updateTheme(effectiveScheme === "light" ? "light" : "dark")
+      .catch((error) => console.warn("[mobile] Failed to sync panel theme:", error));
   }, [effectiveScheme, shellClient]);
 
   // Set up OAuth deep link handler when the shell client is available

@@ -30,7 +30,9 @@ export const themePreferenceAtom = atom(
   (get) => get(themePreferenceBaseAtom),
   (_get, set, next: ThemePreference) => {
     set(themePreferenceBaseAtom, next);
-    void getNativeAppStorage().setItem(THEME_PREFERENCE_KEY, next).catch(() => {});
+    void getNativeAppStorage()
+      .setItem(THEME_PREFERENCE_KEY, next)
+      .catch((error) => console.warn("[theme] Failed to persist theme preference:", error));
   }
 );
 

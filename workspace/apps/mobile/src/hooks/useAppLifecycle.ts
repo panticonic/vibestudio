@@ -52,7 +52,11 @@ export function useAppLifecycle(shellClient: ShellClient | null): void {
           transport.reconnect();
         }
         // Resume periodic sync
-        void shellClient.panels.refresh().catch(() => {});
+        void shellClient.panels
+          .refresh()
+          .catch((error) =>
+            console.warn("[mobile] Failed to refresh panels on foreground:", error)
+          );
       }
 
       // Transition to background or inactive.

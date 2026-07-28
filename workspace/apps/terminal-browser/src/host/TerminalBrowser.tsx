@@ -70,7 +70,7 @@ export function TerminalBrowser(props: TerminalBrowserProps): React.ReactElement
     void approvals
       .list()
       .then(setPending)
-      .catch(() => {});
+      .catch((error) => console.warn("[terminal-browser] Approval list refresh failed:", error));
   }, [approvals]);
   React.useEffect(() => {
     refreshPending();
@@ -145,7 +145,9 @@ export function TerminalBrowser(props: TerminalBrowserProps): React.ReactElement
             void approvals
               .resolve(target.approvalId, decision)
               .then(refreshPending)
-              .catch(() => {});
+              .catch((error) =>
+                console.warn("[terminal-browser] Approval decision failed:", error)
+              );
           }
         }
         return;

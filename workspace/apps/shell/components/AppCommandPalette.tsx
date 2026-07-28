@@ -4,7 +4,7 @@ import { Kbd, Flex, Text } from "@radix-ui/themes";
 import { CommandPalette, type CommandItem } from "@workspace/ui";
 import { setThemeModeAtom, setThemeConfigAtom } from "../state/themeAtoms";
 import { workspaceChooserDialogOpenAtom } from "../state/appModeAtoms";
-import { panel, palette } from "../shell/client";
+import { notification, panel, palette } from "../shell/client";
 import { useShellEvent } from "../shell/useShellEvent";
 import { useShellOverlay } from "../shell/useShellOverlay";
 
@@ -187,8 +187,22 @@ export function AppCommandPalette() {
 
   const onSelect = useCallback((item: CommandItem<PaletteAction>) => {
     const action = item.value;
-    if (action?.kind === "global") void action.run();
-    else if (action?.kind === "panel") void palette.run(action.panelId, action.commandId);
+    const operation =
+      action?.kind === "global"
+        ? action.run()
+        : action?.kind === "panel"
+          ? palette.run(action.panelId, action.commandId)
+          : undefined;
+    if (operation) {
+      void operation.catch((error: unknown) => {
+        void notification.show({
+          type: "error",
+          title: "Command failed",
+          message: error instanceof Error ? error.message : String(error),
+          ttl: 0,
+        });
+      });
+    }
     setOpen(false);
     setQuery("");
   }, []);

@@ -33,6 +33,9 @@ export default [
       "@typescript-eslint/no-dynamic-delete": "warn",
       // Allow non-null assertions as warnings (prototype code, will be fixed incrementally)
       "@typescript-eslint/no-non-null-assertion": "warn",
+      // Empty catches hide whether an operation is optional, cleanup-only, or
+      // genuinely broken. Require an explanatory comment for every exception.
+      "no-empty": ["error", { allowEmptyCatch: false }],
     },
   },
   // Test files - more permissive rules
