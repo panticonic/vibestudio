@@ -66,7 +66,12 @@ export function ThreadRow({
         }}
       />
       <Box style={{ minWidth: 0, flex: "1 1 auto" }}>
-        <Text size="2" weight={item.unread ? "bold" : "medium"} truncate style={{ display: "block" }}>
+        <Text
+          size="2"
+          weight={item.unread ? "bold" : "medium"}
+          truncate
+          style={{ display: "block" }}
+        >
           {item.from || "(unknown sender)"}
         </Text>
         <Text size="1" truncate style={{ display: "block" }}>

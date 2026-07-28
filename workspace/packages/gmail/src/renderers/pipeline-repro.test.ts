@@ -9,13 +9,10 @@
 import { describe, expect, it } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import {
-  assertMessageTypesHealthy,
-  installDoctorHostModules,
-} from "@workspace/agentic-core";
-import { GMAIL_MESSAGE_TYPES } from "../../../workers/gmail-agent/cards/cards.js";
+import { assertMessageTypesHealthy, installDoctorHostModules } from "@workspace/agentic-core";
+import { GMAIL_MESSAGE_TYPES } from "../../../../workers/gmail-agent/cards/cards.js";
 
-const REPO_ROOT = path.resolve(__dirname, "../../..");
+const REPO_ROOT = path.resolve(__dirname, "../../../..");
 
 const GMAIL_UI_IMPORTS = {
   react: "latest",
@@ -45,8 +42,7 @@ describe("gmail card render pipeline", () => {
           ...(spec.updateSchema ? { updateSchema: spec.updateSchema } : {}),
         })),
         {
-          loadSourceFile: (filePath: string) =>
-            fs.readFile(path.join(REPO_ROOT, filePath), "utf8"),
+          loadSourceFile: (filePath: string) => fs.readFile(path.join(REPO_ROOT, filePath), "utf8"),
         }
       )
     ).resolves.toBeUndefined();

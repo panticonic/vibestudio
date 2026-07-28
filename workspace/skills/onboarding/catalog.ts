@@ -266,7 +266,7 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
     role: "contextual-setup",
     scope: "channel",
     tier: "direct",
-    ownerSkillPath: "skills/gmail/SKILL.md",
+    ownerSkillPath: "workers/gmail-agent/SKILL.md",
     visibility: "contextual",
   },
   {
@@ -277,7 +277,7 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
     role: "contextual-setup",
     scope: "channel",
     tier: "direct",
-    ownerSkillPath: "skills/news/SKILL.md",
+    ownerSkillPath: "panels/news/SKILL.md",
     visibility: "contextual",
   },
   {

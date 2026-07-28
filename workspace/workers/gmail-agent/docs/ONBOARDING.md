@@ -3,7 +3,7 @@
 ## Detect State
 
 ```typescript
-import { getGmailAgentSetupStatus } from "@workspace-skills/gmail";
+import { getGmailAgentSetupStatus } from "@workspace/gmail/agent";
 
 const status = await getGmailAgentSetupStatus();
 return status;
@@ -22,7 +22,7 @@ Stages:
 After Google Workspace reports verified, run Gmail setup directly:
 
 ```typescript
-import { setupGmailAgent } from "@workspace-skills/gmail";
+import { setupGmailAgent } from "@workspace/gmail/agent";
 
 await setupGmailAgent({ channelId: chat.channelId });
 ```
@@ -41,7 +41,7 @@ text — and only after onboarding completes.
 To set preferences programmatically (user-facing callers only):
 
 ```typescript
-import { callGmailAgent } from "@workspace-skills/gmail";
+import { callGmailAgent } from "@workspace/gmail/agent";
 
 await callGmailAgent(chat.channelId, "setAttentionPrefs", {
   preferences: "Invoices, scheduling changes, and anything from customer.example.",

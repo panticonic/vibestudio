@@ -6,6 +6,7 @@ description: Agentic news aggregation in three tiers — deterministic feed poll
 # News
 
 Agentic news aggregation in three tiers:
+
 - **Tier 1 — poll** (deterministic, zero tokens): the `workers/news-agent`
   Durable Object polls RSS/Atom/JSON feeds, dedupes, and stores items.
 - **Tier 1.5 — triage** (agent, light): `runTriage` batches un-triaged items

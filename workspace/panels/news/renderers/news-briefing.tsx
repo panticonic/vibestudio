@@ -1,4 +1,14 @@
-import { Badge, Button, Code, Flex, Heading, IconButton, Link, Spinner, Text } from "@radix-ui/themes";
+import {
+  Badge,
+  Button,
+  Code,
+  Flex,
+  Heading,
+  IconButton,
+  Link,
+  Spinner,
+  Text,
+} from "@radix-ui/themes";
 import {
   EyeNoneIcon,
   GlobeIcon,
@@ -26,10 +36,26 @@ const MD_COMPONENTS: Components = {
       {children}
     </Text>
   ),
-  h1: ({ children }) => <Heading size="4" style={{ margin: 0 }}>{children}</Heading>,
-  h2: ({ children }) => <Heading size="3" style={{ margin: 0 }}>{children}</Heading>,
-  h3: ({ children }) => <Heading size="2" style={{ margin: 0 }}>{children}</Heading>,
-  h4: ({ children }) => <Heading size="2" style={{ margin: 0 }}>{children}</Heading>,
+  h1: ({ children }) => (
+    <Heading size="4" style={{ margin: 0 }}>
+      {children}
+    </Heading>
+  ),
+  h2: ({ children }) => (
+    <Heading size="3" style={{ margin: 0 }}>
+      {children}
+    </Heading>
+  ),
+  h3: ({ children }) => (
+    <Heading size="2" style={{ margin: 0 }}>
+      {children}
+    </Heading>
+  ),
+  h4: ({ children }) => (
+    <Heading size="2" style={{ margin: 0 }}>
+      {children}
+    </Heading>
+  ),
   ul: ({ children }) => (
     <ul
       style={{
@@ -94,7 +120,11 @@ export function Pill({ state }: { state: BriefingState }) {
       <Text size="1" weight="medium" truncate style={{ minWidth: 0 }}>
         {state.status === "ready" ? "News briefing" : "Briefing in progress…"}
       </Text>
-      {count > 0 ? <Badge size="1" color="blue">{count}</Badge> : null}
+      {count > 0 ? (
+        <Badge size="1" color="blue">
+          {count}
+        </Badge>
+      ) : null}
     </Flex>
   );
 }
@@ -270,11 +300,7 @@ export default function NewsBriefing({
           News briefing
         </Text>
         {state.createdAt ? (
-          <Text
-            size="1"
-            color="gray"
-            title={new Date(state.createdAt).toLocaleString()}
-          >
+          <Text size="1" color="gray" title={new Date(state.createdAt).toLocaleString()}>
             {agoLabel(state.createdAt)}
             {sourcesNote}
           </Text>
@@ -282,15 +308,27 @@ export default function NewsBriefing({
         {state.status === "summarizing" || state.status === "collecting" ? (
           <Flex align="center" gap="1">
             <Spinner size="1" />
-            <Text size="1" color="gray">summarizing…</Text>
+            <Text size="1" color="gray">
+              summarizing…
+            </Text>
           </Flex>
         ) : null}
         {state.status === "error" ? (
-          <Badge size="1" color="red">failed</Badge>
+          <Badge size="1" color="red">
+            failed
+          </Badge>
         ) : null}
       </Flex>
-      {state.lastError ? <Text size="1" color="red">{state.lastError}</Text> : null}
-      {error ? <Text size="1" color="red">{error}</Text> : null}
+      {state.lastError ? (
+        <Text size="1" color="red">
+          {state.lastError}
+        </Text>
+      ) : null}
+      {error ? (
+        <Text size="1" color="red">
+          {error}
+        </Text>
+      ) : null}
       {state.tldr ? <Markdown>{state.tldr}</Markdown> : null}
       <Flex direction="column" gap="3">
         {stories.map((story) => (
@@ -306,7 +344,8 @@ export default function NewsBriefing({
           />
         ))}
       </Flex>
-      {typeof state.articleCountScanned === "number" && state.articleCountScanned > stories.length ? (
+      {typeof state.articleCountScanned === "number" &&
+      state.articleCountScanned > stories.length ? (
         <Text size="1" color="gray">
           {state.articleCountScanned - stories.length} more scanned and filtered out
         </Text>

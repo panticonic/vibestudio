@@ -25,13 +25,13 @@ export const NEWS_MESSAGE_TYPES: MessageTypeSpec[] = [
   {
     typeId: "news.setup",
     displayMode: "inline",
-    path: "skills/news/renderers/news-setup.tsx",
+    path: "panels/news/renderers/news-setup.tsx",
     stateSchema: NEWS_SETUP_STATE_SCHEMA,
   },
   {
     typeId: "news.briefing",
     displayMode: "inline",
-    path: "skills/news/renderers/news-briefing.tsx",
+    path: "panels/news/renderers/news-briefing.tsx",
     stateSchema: NEWS_BRIEFING_STATE_SCHEMA,
   },
 ];

@@ -47,7 +47,7 @@ Then call `getAttentionPrefs` first to verify the target before writing with
 
 ## Pills Do Not Render
 
-Renderer sources under `skills/gmail/renderers/` must be committed and
+Renderer sources under `packages/gmail/src/renderers/` must be committed and
 available to the channel build loader. Custom message type paths are
 workspace-root-relative and should not include a `workspace/` prefix. The Gmail
 worker registers these renderers when it subscribes to the channel; resubscribe

@@ -100,15 +100,15 @@ class TestNewsAgentWorker extends NewsAgentWorker {
     }
     if (method === "fs.readFile") {
       const filePath = String(args?.[0] ?? "");
-      if (filePath === "skills/news/renderers/news-setup.tsx") {
+      if (filePath === "panels/news/renderers/news-setup.tsx") {
         return readFileSync(
-          new URL("../../skills/news/renderers/news-setup.tsx", import.meta.url),
+          new URL("../../panels/news/renderers/news-setup.tsx", import.meta.url),
           "utf8"
         );
       }
-      if (filePath === "skills/news/renderers/news-briefing.tsx") {
+      if (filePath === "panels/news/renderers/news-briefing.tsx") {
         return readFileSync(
-          new URL("../../skills/news/renderers/news-briefing.tsx", import.meta.url),
+          new URL("../../panels/news/renderers/news-briefing.tsx", import.meta.url),
           "utf8"
         );
       }

@@ -94,7 +94,6 @@
       "@workspace-skills/agents": ["workspace/skills/agents/index.ts"],
       "@workspace-skills/workspace-dev": ["workspace/skills/workspace-dev/index.ts"],
       "@workspace-skills/google-workspace": ["workspace/skills/google-workspace/index.ts"],
-      "@workspace-skills/gmail": ["workspace/skills/gmail/index.ts"],
       "@workspace-skills/github": ["workspace/skills/github/index.ts"],
       "@workspace-skills/onboarding": ["workspace/skills/onboarding/index.ts"],
       "@workspace-skills/web-research": ["workspace/skills/web-research/index.ts"],
@@ -134,6 +133,7 @@
       "@workspace/feeds": ["workspace/packages/feeds/src/index.ts"],
       "@workspace/feeds/card-types": ["workspace/packages/feeds/src/card-types.ts"],
       "@workspace/gmail": ["workspace/packages/gmail/src/index.ts"],
+      "@workspace/gmail/agent": ["workspace/packages/gmail/src/agent.ts"],
       "@workspace/gmail/test-utils": ["workspace/packages/gmail/src/test-utils.ts"],
       "@workspace/gmail/renderers/gmail-thread.reducer": [
         "workspace/packages/gmail/src/renderers/gmail-thread.reducer.ts"

@@ -771,7 +771,7 @@ describe("GmailAgentWorker", () => {
     });
     expect(worker.published[6]?.event.payload).toMatchObject({
       uiType: "action_bar",
-      source: { type: "file", path: "skills/gmail/action-bar.tsx" },
+      source: { type: "file", path: "packages/gmail/src/action-bar.tsx" },
       maxHeight: 64,
     });
     expect(worker.agentInitiatedTurns).toEqual([

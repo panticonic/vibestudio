@@ -20,7 +20,11 @@ export function Pill({ state }: { state: DigestState }) {
       <Text size="1" weight="medium" truncate style={{ minWidth: 0 }}>
         {state.headline}
       </Text>
-      {count > 0 ? <Badge size="1" color="blue">{count}</Badge> : null}
+      {count > 0 ? (
+        <Badge size="1" color="blue">
+          {count}
+        </Badge>
+      ) : null}
     </Flex>
   );
 }
@@ -106,7 +110,11 @@ export default function GmailDigest({
           {state.headline}
         </Text>
       </Flex>
-      {error ? <Text size="1" color="red">{error}</Text> : null}
+      {error ? (
+        <Text size="1" color="red">
+          {error}
+        </Text>
+      ) : null}
       <Flex direction="column" gap="1">
         {items.map((item) => (
           <ThreadRow

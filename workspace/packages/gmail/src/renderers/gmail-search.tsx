@@ -27,7 +27,9 @@ export function Pill({ state }: { state: SearchState }) {
       {state.status === "searching" ? (
         <Spinner size="1" />
       ) : (
-        <Badge size="1" color="gray">{state.results?.length ?? 0}</Badge>
+        <Badge size="1" color="gray">
+          {state.results?.length ?? 0}
+        </Badge>
       )}
     </Flex>
   );
@@ -88,11 +90,19 @@ export default function GmailSearch({
         )}
       </Flex>
       {state.status === "error" ? (
-        <Text size="1" color="red">{state.error ?? "Search failed."}</Text>
+        <Text size="1" color="red">
+          {state.error ?? "Search failed."}
+        </Text>
       ) : null}
-      {error ? <Text size="1" color="red">{error}</Text> : null}
+      {error ? (
+        <Text size="1" color="red">
+          {error}
+        </Text>
+      ) : null}
       {state.status === "done" && results.length === 0 ? (
-        <Text size="2" color="gray">No matches. Try asking me to refine the search.</Text>
+        <Text size="2" color="gray">
+          No matches. Try asking me to refine the search.
+        </Text>
       ) : null}
       <Flex direction="column" gap="1">
         {results.map((item: ThreadRowItem) => (

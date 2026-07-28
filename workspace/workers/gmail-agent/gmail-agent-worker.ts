@@ -57,7 +57,7 @@ import {
 import { GMAIL_SETUP_ONBOARDING_PROMPT, GMAIL_SYSTEM_PROMPT } from "./agent/prompts.js";
 import { generateDraftReplyBody as generateDraftReplyBodyLlm } from "./agent/draft-writer.js";
 
-const GMAIL_ACTION_BAR_FILE = "skills/gmail/action-bar.tsx";
+const GMAIL_ACTION_BAR_FILE = "packages/gmail/src/action-bar.tsx";
 const GMAIL_ACTION_BAR_MAX_HEIGHT = 64;
 const GMAIL_UI_INSTALL_VERSION = 5;
 const GMAIL_UI_IMPORTS = {

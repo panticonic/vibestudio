@@ -22,7 +22,7 @@ import type { CardManager } from "./custom-cards.js";
 export interface MessageTypeSpec {
   typeId: string;
   displayMode: CustomMessageDisplayMode;
-  /** Workspace-relative renderer path, e.g. "skills/news/renderers/news-briefing.tsx". */
+  /** Workspace-relative renderer path, e.g. "panels/news/renderers/news-briefing.tsx". */
   path: string;
   stateSchema: Record<string, unknown>;
   updateSchema?: Record<string, unknown>;

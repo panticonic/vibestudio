@@ -39,7 +39,7 @@ import {
   getGmailAgentSetupStatus,
   resolveGmailAgentWorker,
   setupGmailAgent,
-} from "@workspace-skills/gmail";
+} from "@workspace/gmail/agent";
 ```
 
 Recommended flow:
@@ -94,7 +94,7 @@ Preferences live on the Gmail Durable Object as plain text:
 | `setAttentionPrefs(channelId, { preferences, knownSenderShortcut?, markConfigured? })` | Save preferences (user-facing callers only; DO callers may read but not write) |
 
 ```typescript
-import { callGmailAgent } from "@workspace-skills/gmail";
+import { callGmailAgent } from "@workspace/gmail/agent";
 
 await callGmailAgent(chat.channelId, "setAttentionPrefs", {
   preferences: "Wake me for invoices and anything from acme.example.",
@@ -156,20 +156,20 @@ targets, single column, ≤2 visible actions, whole-row taps):
 
 | Type            | Renderer                                             | Display | Notes                                                                 |
 | --------------- | ---------------------------------------------------- | ------- | --------------------------------------------------------------------- |
-| `gmail.setup`   | `../../skills/gmail/renderers/gmail-setup.tsx`       | inline  | Connection status, preference text, Edit hands off to chat            |
-| `gmail.digest`  | `../../skills/gmail/renderers/gmail-digest.tsx`      | row     | Immutable per-wake digest; scrolls away with chat                     |
-| `gmail.search`  | `../../skills/gmail/renderers/gmail-search.tsx`      | row     | Ephemeral; `searching → done` patched in place; new search = new card |
-| `gmail.thread`  | `../../skills/gmail/renderers/gmail-thread.tsx`      | inline  | Auto-loads on expand; AI draft + Send, rest behind "More"             |
-| `gmail.compose` | `../../skills/gmail/renderers/gmail-compose.tsx`     | row     | Review-before-send, contact autocomplete, `toCandidates` one-click    |
+| `gmail.setup`   | `../../packages/gmail/src/renderers/gmail-setup.tsx`   | inline  | Connection status, preference text, Edit hands off to chat            |
+| `gmail.digest`  | `../../packages/gmail/src/renderers/gmail-digest.tsx`  | row     | Immutable per-wake digest; scrolls away with chat                     |
+| `gmail.search`  | `../../packages/gmail/src/renderers/gmail-search.tsx`  | row     | Ephemeral; `searching → done` patched in place; new search = new card |
+| `gmail.thread`  | `../../packages/gmail/src/renderers/gmail-thread.tsx`  | inline  | Auto-loads on expand; AI draft + Send, rest behind "More"             |
+| `gmail.compose` | `../../packages/gmail/src/renderers/gmail-compose.tsx` | row     | Review-before-send, contact autocomplete, `toCandidates` one-click    |
 
 `gmail.digest` and `gmail.search` share
-`../../skills/gmail/renderers/thread-row.tsx`. The old
+`../../packages/gmail/src/renderers/thread-row.tsx`. The old
 `gmail.inbox` desk card is retired and tombstoned via `messageType.cleared` on
 UI install.
 
 ## Action Bar
 
-`../../skills/gmail/action-bar.tsx` is a single 44px row: Compose plus an
+`../../packages/gmail/src/action-bar.tsx` is a single 44px row: Compose plus an
 expanding search field. Everything else (check now, bulk triage, preference
 edits) happens in chat.
 
@@ -179,6 +179,6 @@ edits) happens in chat.
 | ---------------------------------------------------------------- | --------------------------------------- |
 | [docs/ONBOARDING.md](docs/ONBOARDING.md)                         | Setup flow for agents                   |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)               | Common Gmail setup and sync failures    |
-| [../../skills/gmail/action-bar.tsx](../../skills/gmail/action-bar.tsx) | Pinned Gmail launcher                   |
+| [../../packages/gmail/src/action-bar.tsx](../../packages/gmail/src/action-bar.tsx) | Pinned Gmail launcher                   |
 | [docs/system-prompt.md](docs/system-prompt.md)                   | Gmail agent prompt (documentation copy) |
-| [../../skills/gmail/index.ts](../../skills/gmail/index.ts)       | Importable onboarding helpers           |
+| [../../packages/gmail/src/agent.ts](../../packages/gmail/src/agent.ts) | Importable onboarding helpers           |
