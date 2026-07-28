@@ -297,6 +297,39 @@ describe("semantic system-test validators", () => {
     expect(test.validate(execution("The collection contained 100,000 items."))).toMatchObject({
       passed: false,
     });
+    expect(
+      test.validate(
+        execution("The generated collection contained 200,000 items.", [
+          {
+            ...invocation,
+            execution: {
+              status: "complete",
+              isError: false,
+              result: { details: { returnValue: { totalItems: 200000 } } },
+            },
+          },
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+  });
+
+  it("accepts the scalar identity returned by workspace.getActive", () => {
+    const test = rpcTests.find((candidate) => candidate.name === "cross-service-call")!;
+    expect(
+      test.validate(
+        execution("The active workspace ID is dev.", [
+          {
+            name: "eval",
+            arguments: { code: "return workspace.getActive();" },
+            execution: {
+              status: "complete",
+              isError: false,
+              result: { details: { returnValue: "dev" } },
+            },
+          },
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
   });
 
   it("rejects natural-language channel claims without an executed bounded inspection", () => {
@@ -397,6 +430,117 @@ describe("semantic system-test validators", () => {
         ])
       )
     ).toEqual({ passed: true, reason: undefined });
+  });
+
+  it("accepts the canonical direct VCS tool as runtime VCS evidence", () => {
+    const test = agenticRuntimeTests.find(
+      (candidate) => candidate.name === "runtime-vcs-client-helper"
+    )!;
+    expect(
+      test.validate(
+        execution("The VCS client is available and usable.", [
+          {
+            name: "vcs",
+            arguments: { operation: "status" },
+            execution: { status: "complete", isError: false, result: { clean: true } },
+          },
+        ])
+      )
+    ).toEqual({ passed: true });
+  });
+
+  it("accepts gad.query with positional bindings", () => {
+    const test = agenticRuntimeTests.find(
+      (candidate) => candidate.name === "gad-query-positional-bindings"
+    )!;
+    expect(
+      test.validate(
+        execution("The query returned one result row.", [
+          {
+            name: "eval",
+            arguments: {
+              code: 'return await gad.query("SELECT type FROM nodes WHERE type = ? LIMIT ?", ["table", 1]);',
+            },
+            execution: {
+              status: "complete",
+              isError: false,
+              result: { rows: [{ type: "table" }] },
+            },
+          },
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+  });
+
+  it("accepts a human-formatted two-thousand result", () => {
+    const test = agenticRuntimeTests.find(
+      (candidate) => candidate.name === "large-eval-result-terminal"
+    )!;
+    expect(
+      test.validate(
+        execution("Created a concise summary for 2,000 items.", [
+          {
+            name: "eval",
+            arguments: { code: "return Array.from({ length: 2000 }, (_, i) => i).length;" },
+            execution: { status: "complete", isError: false, result: 2000 },
+          },
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+  });
+
+  it("accepts the structured scoped test-runner request and passing result", () => {
+    const test = agenticRuntimeTests.find(
+      (candidate) => candidate.name === "workspace-test-runner-extension"
+    )!;
+    expect(
+      test.validate(
+        execution("Passed 12 tests, failed 0, in context ctx-1.", [
+          {
+            name: "eval",
+            arguments: {
+              code: [
+                'import { extensions } from "@workspace/runtime";',
+                'return extensions.invoke("@workspace-extensions/test-runner", "run", [{',
+                '  target: "extensions/test-runner",',
+                '  fileFilter: "index.test.ts",',
+                "}]);",
+              ].join("\n"),
+            },
+            execution: {
+              status: "complete",
+              isError: false,
+              result: { passed: 12, failed: 0, total: 12, contextId: "ctx-1" },
+            },
+          },
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+  });
+
+  it("pregrants only the workspace-test subject for the test-runner scenario", () => {
+    const test = agenticRuntimeTests.find(
+      (candidate) => candidate.name === "workspace-test-runner-extension"
+    )!;
+    expect(test.authorityPolicy).toEqual({
+      authority: [
+        {
+          ruleId: "workspace-test-runner-approval",
+          capability: { kind: "exact", key: "user-approval.request" },
+          resource: { kind: "exact", key: "user-approval.request" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [
+        {
+          ruleId: "workspace-test-runner-subject",
+          subject: { kind: "prefix", prefix: "workspace-test:" },
+          decision: "allow",
+          remember: false,
+        },
+      ],
+    });
   });
 
   it("requires a real completed tool before accepting a natural no-stall response", () => {

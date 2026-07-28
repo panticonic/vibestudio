@@ -89,6 +89,55 @@ describe("worker test validators", () => {
     });
   });
 
+  it("derives service authority from the randomized worker fixture and its dynamic object keys", () => {
+    const authorityPolicy = test("dynamic-workspace-service").authorityPolicy;
+    expect(authorityPolicy).toBeTypeOf("function");
+    if (typeof authorityPolicy !== "function") throw new Error("expected authority policy factory");
+    expect(
+      authorityPolicy({
+        testName: "dynamic-workspace-service",
+        workspaceRepoFixture: {
+          kind: "buildable-worker",
+          section: "workers",
+          repoName: "system-test-dynamic-workspace-service-abcd1234",
+        },
+      })
+    ).toEqual({
+      authority: [
+        {
+          ruleId: "consume-authored-fixture-service",
+          capability: { kind: "prefix", prefix: "workspace-service:" },
+          resource: {
+            kind: "prefix",
+            prefix:
+              "do:workers/system-test-dynamic-workspace-service-abcd1234:FixtureWorkerDO:",
+          },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [],
+    });
+  });
+
+  it("pre-approves the exact small installed service used by the consumer fixture", () => {
+    expect(test("installed-workspace-service-consumer").authorityPolicy).toEqual({
+      authority: [
+        {
+          ruleId: "consume-installed-testkit-service",
+          capability: { kind: "exact", key: "workspace-service:testkit-driver" },
+          resource: {
+            kind: "exact",
+            key: "do:workers/testkit-driver:TestkitDriverDO:workspace-testkit-driver",
+          },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [],
+    });
+  });
+
   it("requires returned rows for source and live-instance discovery", () => {
     expect(
       test("list-sources").validate(

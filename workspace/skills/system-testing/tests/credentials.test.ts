@@ -63,7 +63,7 @@ describe("credential store system test validator", () => {
   it("rejects prose-only inspection claims", () => {
     expect(test().validate(execution("return { count: 2, states: ['active'] };"))).toMatchObject({
       passed: false,
-      reason: "Expected exactly one successful eval inspecting the managed credential store",
+      reason: "Expected a successful eval inspecting the managed credential store",
     });
   });
 
@@ -93,8 +93,7 @@ describe("credential store system test validator", () => {
       )
     ).toMatchObject({
       passed: false,
-      reason:
-        "Credential inspection eval must return exactly { count: nonnegative integer, states: distinct lifecycle state names[] }",
+      reason: "Credential inspection eval returned no bounded count/lifecycle-state evidence",
     });
   });
 
@@ -114,8 +113,65 @@ describe("credential store system test validator", () => {
       )
     ).toMatchObject({
       passed: false,
-      reason:
-        "Credential inspection eval must return exactly { count: nonnegative integer, states: distinct lifecycle state names[] }",
+      reason: "Credential inspection returned sensitive credential fields",
     });
+  });
+
+  it("accepts the public listing API when it returns bounded lifecycle evidence", () => {
+    expect(
+      test().validate(
+        execution(
+          "const records = await credentials.listStoredCredentials(); return { credentialCount: records.length, lifecycleStateValues: ['active'] };",
+          { credentialCount: 2, lifecycleStateValues: ["active"] }
+        )
+      )
+    ).toEqual({ passed: true });
+  });
+
+  it("accepts the dedicated bounded credential-store summary", () => {
+    expect(
+      test().validate(
+        execution("return credentials.summarizeStoredCredentials();", {
+          credentialCount: 2,
+          lifecycleStates: ["active"],
+          stateCounts: { active: 2 },
+        })
+      )
+    ).toEqual({ passed: true });
+  });
+
+  it("accepts a bounded aggregate computed through the documented raw RPC spelling", () => {
+    expect(
+      test().validate(
+        execution(
+          `const records = await rpc.call("main", "credentials.listStoredCredentials", []);
+           return {
+             total: records.length,
+             lifecycleStates: [...new Set(records.map((record) => record.lifecycle.state))],
+             countsByState: { active: records.length },
+           };`,
+          {
+            total: 2,
+            lifecycleStates: ["active"],
+            countsByState: { active: 2 },
+          }
+        )
+      )
+    ).toEqual({ passed: true });
+  });
+
+  it("accepts the dedicated summary through the documented raw RPC spelling", () => {
+    expect(
+      test().validate(
+        execution(
+          `return rpc.call("main", "credentials.summarizeStoredCredentials", []);`,
+          {
+            credentialCount: 2,
+            lifecycleStates: ["active"],
+            stateCounts: { active: 2 },
+          }
+        )
+      )
+    ).toEqual({ passed: true });
   });
 });

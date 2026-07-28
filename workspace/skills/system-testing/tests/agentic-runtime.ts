@@ -67,6 +67,33 @@ function channelInspectionIsBounded(result: Parameters<typeof findLastAgentMessa
   return noIncompleteInvocations(result);
 }
 
+function runtimeVcsIsUsable(result: Parameters<typeof findLastAgentMessage>[0]) {
+  const directVcsCall = getToolCalls(result).some(
+    (call) =>
+      call.name === "vcs" &&
+      call.execution?.status === "complete" &&
+      call.execution.isError !== true
+  );
+  if (!directVcsCall) {
+    return semanticEval(
+      result,
+      [/\bvcs\b/iu],
+      [/version.control|\bvcs\b/iu, /available|usable|present|exposed/iu]
+    );
+  }
+  const final = findLastAgentMessage(result);
+  if (
+    !/version.control|\bvcs\b/iu.test(final) ||
+    !/available|usable|present|exposed/iu.test(final)
+  ) {
+    return {
+      passed: false,
+      reason: "Final response did not semantically report the observed VCS capability",
+    };
+  }
+  return noIncompleteInvocations(result);
+}
+
 export const agenticRuntimeTests: TestCase[] = [
   {
     name: "state-args-immediate-snapshot",
@@ -87,25 +114,16 @@ export const agenticRuntimeTests: TestCase[] = [
     category: "agentic-runtime",
     prompt:
       "Is the workspace version-control client available in this runtime context? Check and report what you observe.",
-    validate: (result) =>
-      semanticEval(
-        result,
-        [/\bvcs\b/iu],
-        [/version.control|\bvcs\b/iu, /available|usable|present|exposed/iu]
-      ),
+    validate: runtimeVcsIsUsable,
   },
   {
-    name: "gad-rawsql-positional-bindings",
-    description: "GAD can run a small query",
+    name: "gad-query-positional-bindings",
+    description: "GAD query supports positional bindings",
     category: "agentic-runtime",
     prompt:
       "Run a tiny read-only parameterized query against the graph-and-data store and summarize the result.",
     validate: (result) =>
-      semanticEval(
-        result,
-        [/gad\.rawSql/iu, /\bparams?\b|\[[^\]]*\]/u],
-        [/query/iu, /result|row|returned/iu]
-      ),
+      semanticEval(result, [/gad\.query/iu, /\[[^\]]*\]/u], [/query/iu, /result|row|returned/iu]),
   },
   {
     name: "channel-envelope-inspection-bounded",
@@ -126,7 +144,7 @@ export const agenticRuntimeTests: TestCase[] = [
       semanticEval(
         result,
         [/2000|2_000/u],
-        [/2000|two thousand/iu, /summar|items?|entries|values/iu]
+        [/(?:2000|2[,\s]000|two thousand)/iu, /summar|items?|entries|values/iu]
       ),
   },
   {
@@ -167,14 +185,42 @@ export const agenticRuntimeTests: TestCase[] = [
     name: "workspace-test-runner-extension",
     description: "Agent runs workspace unit tests through the scoped test-runner extension",
     category: "agentic-runtime",
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "workspace-test-runner-approval",
+          capability: { kind: "exact", key: "user-approval.request" },
+          resource: { kind: "exact", key: "user-approval.request" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [
+        {
+          ruleId: "workspace-test-runner-subject",
+          subject: { kind: "prefix", prefix: "workspace-test:" },
+          decision: "allow",
+          remember: false,
+        },
+      ],
+    },
     prompt:
       "Run extensions/test-runner/index.test.ts using the workspace's supported scoped test-running capability, without shelling out. Summarize how many tests passed and failed and identify the execution context.",
     validate: (result) =>
       semanticEval(
         result,
-        [/test-runner|testRunner/iu, /extensions\/test-runner\/index\.test\.ts/u],
+        [
+          /@workspace-extensions\/test-runner/u,
+          /\btarget\s*:\s*["']extensions\/test-runner["']/u,
+          /\bfileFilter\s*:\s*["']index\.test\.ts["']/u,
+        ],
         [/pass/iu, /fail/iu, /context/iu],
-        [/pass/iu, /fail/iu, /context/iu]
+        [
+          /"passed"\s*:\s*[1-9]\d*/u,
+          /"failed"\s*:\s*0/u,
+          /"total"\s*:\s*[1-9]\d*/u,
+          /"contextId"\s*:\s*"[^"]+"/u,
+        ]
       ),
   },
 ];

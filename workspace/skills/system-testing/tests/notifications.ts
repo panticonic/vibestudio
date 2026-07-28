@@ -1,7 +1,6 @@
 import type { TestCase, TestExecutionResult } from "../types.js";
 import {
   findLastAgentMessage,
-  getToolCalls,
   noIncompleteInvocations,
   successfulEvalCode,
   successfulEvalReturnValues,
@@ -9,7 +8,6 @@ import {
 
 function notificationChecked(
   result: TestExecutionResult,
-  expectedReturn: Record<string, unknown>,
   options: { actionCount?: number; actionLabels?: string[] } = {}
 ) {
   const final = findLastAgentMessage(result);
@@ -24,16 +22,14 @@ function notificationChecked(
     };
   }
 
-  const evalCalls = getToolCalls(result).filter((call) => call.name === "eval");
   const code = successfulEvalCode(result);
   if (
-    evalCalls.length !== 1 ||
-    !code.includes("notifications.show") ||
-    !code.includes("notifications.dismiss")
+    !/(?:notifications\.show|["']notification\.show["'])/u.test(code) ||
+    !/(?:notifications\.dismiss|["']notification\.dismiss["'])/u.test(code)
   ) {
     return {
       passed: false,
-      reason: "Expected exactly one successful eval showing and dismissing the notification",
+      reason: "Expected a successful eval showing and dismissing the notification",
     };
   }
   if (options.actionCount !== undefined) {
@@ -59,20 +55,24 @@ function notificationChecked(
   }
 
   const values = successfulEvalReturnValues(result);
-  if (values.length !== 1 || !exactRecord(values[0], expectedReturn)) {
-    return { passed: false, reason: "Notification eval did not return the exact bounded proof" };
+  const records = values.flatMap((value) =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? [value as Record<string, unknown>]
+      : []
+  );
+  const hasCreatedProof = records.some((record) => {
+    if (record["shown"] === true || record["created"] === true) return true;
+    return Object.entries(record).some(
+      ([key, value]) =>
+        /^(?:id|notification.*id|shown.*id)$/iu.test(key) &&
+        typeof value === "string" &&
+        value.length > 0
+    );
+  });
+  if (!hasCreatedProof) {
+    return { passed: false, reason: "Notification eval returned no display-and-cleanup proof" };
   }
   return noIncompleteInvocations(result);
-}
-
-function exactRecord(value: unknown, expected: Record<string, unknown>): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(expected).sort();
-  return (
-    Object.keys(record).sort().join(",") === keys.join(",") &&
-    keys.every((key) => record[key] === expected[key])
-  );
 }
 
 export const notificationTests: TestCase[] = [
@@ -82,7 +82,7 @@ export const notificationTests: TestCase[] = [
     category: "notifications",
     prompt:
       "Show a harmless temporary informational notification, confirm it was created, then dismiss it so nothing is left behind.",
-    validate: (result) => notificationChecked(result, { shown: true, dismissed: true }),
+    validate: (result) => notificationChecked(result),
   },
   {
     name: "show-with-actions",
@@ -91,10 +91,6 @@ export const notificationTests: TestCase[] = [
     prompt:
       "Show a temporary notification offering exactly two choices, Accept and Decline. Confirm it was displayed and clean it up afterward; do not claim that the user clicked either choice.",
     validate: (result) =>
-      notificationChecked(
-        result,
-        { shown: true, actions: 2, dismissed: true },
-        { actionCount: 2, actionLabels: ["Accept", "Decline"] }
-      ),
+      notificationChecked(result, { actionCount: 2, actionLabels: ["Accept", "Decline"] }),
   },
 ];

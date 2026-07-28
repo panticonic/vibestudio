@@ -149,6 +149,19 @@ describe("agent capability semantic validators", () => {
     expect(
       test.validate(execution([evalCall("return { answer: 42 };", { answer: 42 })])).passed
     ).toBe(false);
+    expect(
+      test.validate(
+        execution([
+          evalCall("scope.saved = 'marker-1'; return { set: scope.saved };", {
+            set: "marker-1",
+          }),
+          evalCall("return { persistedValue: scope.saved, keys: Object.keys(scope) };", {
+            persistedValue: "marker-1",
+            keys: ["saved"],
+          }),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
   });
 
   it("requires an observed failure before successful recovery", () => {
@@ -203,6 +216,17 @@ describe("agent capability semantic validators", () => {
             second: 2,
             third: 3,
           }),
+        ])
+      ).passed
+    ).toBe(true);
+    expect(
+      scenario(agentCapabilityTests, "concurrent-scope").validate(
+        execution([
+          evalCall("scope.first = 1; scope.second = 2; scope.third = 3; return true;", true),
+          evalCall(
+            "return { first: scope.first, second: scope.second, third: scope.third, allPresent: true };",
+            { first: 1, second: 2, third: 3, allPresent: true }
+          ),
         ])
       ).passed
     ).toBe(true);
@@ -690,6 +714,86 @@ describe("edge and harness semantic validators", () => {
     }
   });
 
+  it("accepts a caught missing-file observation with recovery evidence in the same eval", () => {
+    const test = scenario(edgeCaseTests, "fs-not-found");
+    expect(
+      test.validate(
+        execution([
+          evalCall(
+            [
+              "let missingError;",
+              "try { await fs.readFile('missing.txt'); } catch (error) { missingError = String(error); }",
+              "const following = await fs.readFile('skills/sandbox/SKILL.md');",
+              "return { missingReadFailed: Boolean(missingError), missingError, followingReadLength: following.length };",
+            ].join("\n"),
+            {
+              missingReadFailed: true,
+              missingError: "ENOENT: no such file or directory",
+              followingReadLength: 100,
+            }
+          ),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+  });
+
+  it("accepts a syntax-rejected eval request followed by a corrected eval", () => {
+    const test = scenario(edgeCaseTests, "eval-extra-argument");
+    expect(
+      test.validate(
+        execution([
+          {
+            name: "eval",
+            arguments: { code: "const value = ;" },
+            status: "error",
+            result: "Unexpected token (1:14)",
+          },
+          recovery,
+        ])
+      ).passed
+    ).toBe(true);
+  });
+
+  it("accepts a direct unresolved dynamic import followed by a corrected eval", () => {
+    const test = scenario(edgeCaseTests, "invalid-import");
+    expect(
+      test.validate(
+        execution([
+          {
+            name: "eval",
+            arguments: { code: 'return import("__definitely_not_real__");' },
+            status: "error",
+            result: 'Module "__definitely_not_real__" not available',
+          },
+          recovery,
+        ])
+      ).passed
+    ).toBe(true);
+  });
+
+  it("accepts a caught unresolved import with recovery evidence in the same eval", () => {
+    const test = scenario(edgeCaseTests, "invalid-import");
+    expect(
+      test.validate(
+        execution([
+          evalCall(
+            [
+              "let missingImportError;",
+              "try { await import('definitely-missing'); } catch (error) { missingImportError = String(error); }",
+              "const entries = await fs.readdir('.');",
+              "return { missingImportError, sandboxStillWorks: entries.length > 0 };",
+            ].join("\n"),
+            {
+              missingImportError:
+                'Module "definitely-missing" not available in EvalDO; use the imports parameter.',
+              sandboxStillWorks: true,
+            }
+          ),
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+  });
+
   it("proves a huge return and an explicit timeout from canonical eval results", () => {
     expect(
       scenario(harnessResilienceTests, "eval-huge-return-bounded-terminal").validate(
@@ -956,9 +1060,11 @@ describe("project lifecycle semantic validators", () => {
         },
       },
       {
-        name: "commit",
+        name: "vcs",
+        arguments: { operation: "commit", message: "Commit existing project" },
         result: {
           details: {
+            operation: "commit",
             result: {
               committedApplicationIds: [applicationId],
               event: { kind: "event", eventId: "event:package-edit" },

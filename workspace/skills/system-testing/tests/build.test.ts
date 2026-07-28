@@ -7,6 +7,21 @@ import { buildTests } from "./build.js";
 const npmTest = buildTests.find((test) => test.name === "build-npm-package")!;
 
 describe("build npm package validation", () => {
+  it("pregrants the expected npm dependency inspection prompt", () => {
+    expect(npmTest.authorityPolicy).toEqual({
+      authority: [
+        {
+          ruleId: "inspect-npm-dependency",
+          capability: { kind: "exact", key: "workspace.dependencies.inspect" },
+          resource: { kind: "exact", key: "workspace.dependencies.inspect" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [],
+    });
+  });
+
   it("rejects confident prose when the npm eval failed", () => {
     const result = execution([
       evalInvocation("error", true),

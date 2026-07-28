@@ -374,7 +374,7 @@ export const approvalPermissionTests: TestCase[] = [
       authority: [
         {
           ruleId: "list-permissions",
-          capability: "permissions.read",
+          capability: { kind: "exact", key: "permissions.read" },
           resource: { kind: "exact", key: "permissions.read" },
           tier: "gated",
           decision: "once",
@@ -393,7 +393,7 @@ export const approvalPermissionTests: TestCase[] = [
       authority: [
         {
           ruleId: "list-userland-decisions",
-          capability: "approvals.read",
+          capability: { kind: "exact", key: "approvals.read" },
           resource: { kind: "exact", key: "approvals.read" },
           tier: "gated",
           decision: "once",
@@ -413,21 +413,21 @@ export const approvalPermissionTests: TestCase[] = [
       authority: [
         {
           ruleId: "list-userland-decisions",
-          capability: "approvals.read",
+          capability: { kind: "exact", key: "approvals.read" },
           resource: { kind: "exact", key: "approvals.read" },
           tier: "gated",
           decision: "once",
         },
         {
           ruleId: "request-harmless-userland-decision",
-          capability: "user-approval.request",
+          capability: { kind: "exact", key: "user-approval.request" },
           resource: { kind: "exact", key: "user-approval.request" },
           tier: "gated",
           decision: "once",
         },
         {
           ruleId: "revoke-harmless-userland-decision",
-          capability: "user-approval.revoke",
+          capability: { kind: "exact", key: "user-approval.revoke" },
           resource: { kind: "exact", key: "user-approval.revoke" },
           tier: "critical",
           decision: "once",

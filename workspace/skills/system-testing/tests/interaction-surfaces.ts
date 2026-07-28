@@ -215,6 +215,66 @@ Onboarding choices arrive as readable text plus a structured interaction object.
   return execution;
 }
 
+async function runOnboardingMobileProvisioningRoute(
+  context: TestOrchestrationContext
+): Promise<TestExecutionResult> {
+  const start = Date.now();
+  const session = await context.runner.spawn({
+    additionalSystemPrompt: `
+
+Exercise the shipped mobile onboarding handoff. Resolve onboarding-capability interactions through client_eval by statically importing executeOnboardingSelection from "@workspace-skills/onboarding" and passing the complete structured interaction. When it returns an owner skill, read that exact skill and follow only its first diagnostic step: call phoneProvisioning.providers through ordinary server-side eval. Do not install or pair a device. Finish with ONBOARDING_MOBILE_ROUTE_OK and report the provider count.`,
+    methods: {
+      client_eval: {
+        description:
+          "Execute TypeScript in the synthetic panel which initiated this turn. Static workspace imports resolve in that client context.",
+        parameters: z
+          .object({
+            code: z.string(),
+            syntax: z.enum(["javascript", "typescript", "jsx", "tsx"]).optional(),
+          })
+          .strict(),
+        execute: async () => ({
+          handled: false,
+          target: { via: "owner-skill" },
+          ownerSkillPath: "skills/phone-setup/SKILL.md",
+        }),
+      },
+    },
+  });
+  let sendError: unknown;
+  try {
+    const remainingTimeMs = context.remainingTimeMs();
+    const wait = session.waitForIdle(
+      remainingTimeMs === undefined ? undefined : { timeoutMs: remainingTimeMs }
+    );
+    await session.send("Install Vibestudio on my mobile device.", {
+      metadata: {
+        interaction: {
+          source: "onboarding-setup-hub",
+          kind: "onboarding-capability",
+          action: "install",
+          targetId: "connection.device",
+        },
+      },
+    });
+    await wait;
+  } catch (error) {
+    sendError = error;
+  }
+  const execution: TestExecutionResult = {
+    messages: [...session.messages],
+    duration: Date.now() - start,
+    snapshot: session.snapshot(),
+    ...(sendError ? { error: formatError(sendError) } : {}),
+  };
+  try {
+    await session.close();
+  } catch (error) {
+    execution.cleanupErrors = [...(execution.cleanupErrors ?? []), `close: ${formatError(error)}`];
+  }
+  return execution;
+}
+
 export const interactionSurfaceTests: TestCase[] = [
   {
     name: "onboarding-opening-overview",
@@ -306,6 +366,65 @@ export const interactionSurfaceTests: TestCase[] = [
         };
       }
       return finalMessageHasAll(result, ["ONBOARDING_ROUTE_OK"]);
+    },
+  },
+  {
+    name: "onboarding-mobile-provisioning-route",
+    description:
+      "Route mobile onboarding to the phone owner skill and perform gated provider discovery",
+    category: "interaction-surfaces",
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "onboarding-mobile-provider-discovery",
+          capability: { kind: "exact", key: "mobile.devices.read" },
+          resource: { kind: "exact", key: "mobile.devices.read" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [],
+    },
+    prompt:
+      "Install Vibestudio on my mobile device using the selected onboarding action, then finish with ONBOARDING_MOBILE_ROUTE_OK.",
+    orchestrate: runOnboardingMobileProvisioningRoute,
+    validate: (result) => {
+      const tools = requireCompletedTools(result, ["client_eval", "read", "eval"]);
+      if (!tools.passed) return tools;
+
+      const routeCode = completedNamedToolCalls(result, "client_eval")[0]?.arguments?.["code"];
+      if (
+        typeof routeCode !== "string" ||
+        !routeCode.includes("@workspace-skills/onboarding") ||
+        !routeCode.includes("executeOnboardingSelection") ||
+        !routeCode.includes("connection.device") ||
+        !routeCode.includes("install")
+      ) {
+        return {
+          passed: false,
+          reason: "Mobile onboarding did not resolve the structured device install interaction",
+        };
+      }
+
+      const readPhoneSkill = completedNamedToolCalls(result, "read").some(
+        (call) => call.arguments?.["path"] === "skills/phone-setup/SKILL.md"
+      );
+      const providerDiscovery = completedNamedToolCalls(result, "eval").some((call) => {
+        const code = call.arguments?.["code"];
+        return (
+          typeof code === "string" &&
+          code.includes("phoneProvisioning") &&
+          code.includes("providers")
+        );
+      });
+      if (!readPhoneSkill || !providerDiscovery) {
+        return {
+          passed: false,
+          reason:
+            "Mobile onboarding did not read the phone owner skill and call provider discovery",
+        };
+      }
+      return finalMessageHasAll(result, ["ONBOARDING_MOBILE_ROUTE_OK", "provider"]);
     },
   },
   {

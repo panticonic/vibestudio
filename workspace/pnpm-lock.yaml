@@ -2249,6 +2249,9 @@ importers:
       '@workspace/agentic-core':
         specifier: workspace:*
         version: link:../../packages/agentic-core
+      '@workspace/agentic-protocol':
+        specifier: workspace:*
+        version: link:../../packages/agentic-protocol
       '@workspace/agentic-session':
         specifier: workspace:*
         version: link:../../packages/agentic-session

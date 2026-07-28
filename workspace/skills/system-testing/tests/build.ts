@@ -7,28 +7,26 @@ import {
 } from "./_scenario-evidence.js";
 
 function buildResult(values: readonly unknown[]): boolean {
-  return walkRecords(values).some(
-    (record) => {
-      const artifactBuild =
-        typeof record["dir"] === "string" &&
-        Array.isArray(record["artifacts"]) &&
-        record["artifacts"].length > 0 &&
-        record["metadata"] !== null &&
-        typeof record["metadata"] === "object";
-      const successfulReport =
-        record["success"] === true ||
-        record["status"] === "ok" ||
-        (Array.isArray(record["builds"]) &&
-          record["builds"].length > 0 &&
-          record["builds"].every(
-            (build) =>
-              build !== null &&
-              typeof build === "object" &&
-              (build as Record<string, unknown>)["status"] === "ok"
-          ));
-      return artifactBuild || successfulReport;
-    }
-  );
+  return walkRecords(values).some((record) => {
+    const artifactBuild =
+      typeof record["dir"] === "string" &&
+      Array.isArray(record["artifacts"]) &&
+      record["artifacts"].length > 0 &&
+      record["metadata"] !== null &&
+      typeof record["metadata"] === "object";
+    const successfulReport =
+      record["success"] === true ||
+      record["status"] === "ok" ||
+      (Array.isArray(record["builds"]) &&
+        record["builds"].length > 0 &&
+        record["builds"].every(
+          (build) =>
+            build !== null &&
+            typeof build === "object" &&
+            (build as Record<string, unknown>)["status"] === "ok"
+        ));
+    return artifactBuild || successfulReport;
+  });
 }
 
 function validateWorkspaceBuild(result: TestExecutionResult) {
@@ -106,6 +104,18 @@ export const buildTests: TestCase[] = [
     name: "build-npm-package",
     description: "Build an npm package and get a bundle",
     category: "build",
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "inspect-npm-dependency",
+          capability: { kind: "exact", key: "workspace.dependencies.inspect" },
+          resource: { kind: "exact", key: "workspace.dependencies.inspect" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [],
+    },
     prompt:
       "Load a small pure-JavaScript dependency from npm in the sandbox and demonstrate that it works.",
     validate: validateNpmImport,

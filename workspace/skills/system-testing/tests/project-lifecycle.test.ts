@@ -102,14 +102,14 @@ describe("project lifecycle prompts", () => {
       authority: [
         {
           ruleId: "inspect-created-panel",
-          capability: "panel.inspect",
+          capability: { kind: "exact", key: "panel.inspect" },
           resource: { kind: "exact", key: "panel.inspect" },
           tier: "gated",
           decision: "once",
         },
         {
           ruleId: "inspect-screenshot-analysis-dependency",
-          capability: "workspace.dependencies.inspect",
+          capability: { kind: "exact", key: "workspace.dependencies.inspect" },
           resource: { kind: "exact", key: "workspace.dependencies.inspect" },
           tier: "gated",
           decision: "once",
@@ -232,9 +232,10 @@ describe("project lifecycle prompts", () => {
       ),
       invocation(
         "commit",
-        "commit",
-        { message: "Polish To-Do UX" },
+        "vcs",
+        { operation: "commit", message: "Polish To-Do UX" },
         {
+          operation: "commit",
           result: {
             committedApplicationIds: [uxApplicationId],
             event: { kind: "event", eventId: "event:ux" },

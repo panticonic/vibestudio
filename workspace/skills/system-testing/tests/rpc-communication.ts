@@ -27,13 +27,16 @@ export const rpcTests: TestCase[] = [
     prompt: "Ask the workspace service for the active workspace and summarize its response.",
     validate: (result) =>
       semanticRpc(result, [["workspace.getActive"], ["workspace.getConfig"]], (values, final) => {
+        const scalarWorkspace = values.find(
+          (value): value is string => typeof value === "string" && value.length > 0
+        );
         const workspace = walkRecords(values).find(
           (value) =>
             typeof value["name"] === "string" ||
             typeof value["workspace"] === "string" ||
             typeof value["workspaceId"] === "string"
         );
-        if (!workspace) {
+        if (!scalarWorkspace && !workspace) {
           return { passed: false, reason: "The completed service call returned no workspace identity" };
         }
         return /workspace/iu.test(final) && /(active|current|name|id|config)/iu.test(final)

@@ -5,6 +5,21 @@ import { panelTests } from "./panels.js";
 const createPanelTest = panelTests.find((test) => test.name === "create-panel")!;
 
 describe("create-panel validation", () => {
+  it("preauthorizes inspection of the panel that the unattended test creates", () => {
+    expect(createPanelTest.authorityPolicy).toEqual({
+      authority: [
+        {
+          ruleId: "inspect-created-panel",
+          capability: { kind: "exact", key: "panel.inspect" },
+          resource: { kind: "exact", key: "panel.inspect" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [],
+    });
+  });
+
   it("rejects a success marker when the documented panel operations did not complete", () => {
     expect(
       createPanelTest.validate(
@@ -33,6 +48,20 @@ describe("create-panel validation", () => {
         "const page = await handle.cdp.page();",
         'await handle.cdp.screenshot({ format: "png" });',
         "await handle.cdp.consoleHistory();",
+      ].join("\n"),
+      "complete"
+    );
+    expect(createPanelTest.validate(result)).toEqual({ passed: true });
+  });
+
+  it("accepts diagnose as the canonical bounded host-console packet", () => {
+    const result = execution(
+      [
+        'const handle = await openPanel("panels/spectrolite");',
+        "const page = await handle.cdp.page();",
+        'await page.screenshot({ format: "png" });',
+        "const diagnostics = await handle.diagnose();",
+        "return diagnostics.consoleHistory;",
       ].join("\n"),
       "complete"
     );

@@ -73,6 +73,17 @@ export interface ExpectedToolFailure {
   errorIncludes?: string;
 }
 
+export interface TestAuthorityPolicyContext {
+  testName: string;
+  workspaceRepoFixture: (WorkspaceRepoFixtureSpec & { repoName: string | null }) | null;
+}
+
+export type TestAuthorityPolicy =
+  | Omit<AgentExecutionTestPolicySpec, "testId" | "agent" | "unexpectedPrompts">
+  | ((
+      context: TestAuthorityPolicyContext
+    ) => Omit<AgentExecutionTestPolicySpec, "testId" | "agent" | "unexpectedPrompts">);
+
 export interface TestCase {
   name: string;
   description: string;
@@ -83,7 +94,7 @@ export interface TestCase {
    * Scenario-specific prompt decisions. The runner adds only its exact model
    * credential baseline; every other promptable request must be listed here.
    */
-  authorityPolicy?: Omit<AgentExecutionTestPolicySpec, "testId" | "unexpectedPrompts">;
+  authorityPolicy?: TestAuthorityPolicy;
   /** Tool errors deliberately induced by this test, not infrastructure defects. */
   expectedToolFailures?: ExpectedToolFailure[];
   /**

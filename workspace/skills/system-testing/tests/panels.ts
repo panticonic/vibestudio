@@ -53,9 +53,11 @@ function requireCreatePanelEvidence(result: Parameters<typeof finalMessageHasAll
   const required: Array<[label: string, pattern: RegExp]> = [
     ["openPanel", /\bopenPanel\s*\(/u],
     [".cdp.page()", /\.cdp\.page\s*\(/u],
-    ["consoleHistory", /\.consoleHistory\s*\(/u],
   ];
   const missing = required.filter(([, pattern]) => !pattern.test(code)).map(([label]) => label);
+  if (!/(?:\.cdp\.consoleHistory|\.diagnose)\s*\(/u.test(code)) {
+    missing.push("host console history via .diagnose() or .cdp.consoleHistory()");
+  }
   if (missing.length > 0) {
     return {
       passed: false,
@@ -73,6 +75,18 @@ export const panelTests: TestCase[] = [
     name: "create-panel",
     description: "Open a new panel",
     category: "panels",
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "inspect-created-panel",
+          capability: { kind: "exact", key: "panel.inspect" },
+          resource: { kind: "exact", key: "panel.inspect" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [],
+    },
     prompt:
       "Exercise opening a spectrolite panel as a child panel using the documented @workspace/runtime panel APIs only. Do not inspect guessed internal source paths. Get a screenshot, retrieve host-captured console logs from the running panel, and run JavaScript in the child panel through handle.cdp.page(). Finish with PANEL_OPEN_OK and handle=<panel-id>.",
     validate: (result) => {

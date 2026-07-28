@@ -18,6 +18,7 @@
     "@vibestudio/content-addressing": "workspace:*",
     "@workspace/agentic-session": "workspace:*",
     "@workspace/agentic-core": "workspace:*",
+    "@workspace/agentic-protocol": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/testkit": "workspace:*",
     "@workspace-skills/vibestudio-vcs": "workspace:*"

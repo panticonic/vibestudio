@@ -18,11 +18,11 @@ function workspaceEvidence(
 
 export const workspaceTests: TestCase[] = [
   {
-    name: "list-workspaces",
-    description: "Inspect the current workspace catalog",
+    name: "list-workspace-units",
+    description: "Inspect the current workspace source or unit catalog",
     category: "workspace",
     prompt:
-      "Inspect the workspace catalog available from this runtime and summarize what is visible.",
+      "Use the live runtime workspace API to inspect this workspace's source or registered unit catalog, then summarize what is visible.",
     validate: (result) => {
       const base = workspaceEvidence(result, [["workspace.sourceTree"], ["workspace.units.list"]]);
       if (!base.passed) return base;
@@ -39,7 +39,8 @@ export const workspaceTests: TestCase[] = [
     name: "get-active",
     description: "Get the current workspace info",
     category: "workspace",
-    prompt: "Tell me which workspace is active in this runtime context.",
+    prompt:
+      "Use the live runtime workspace API to tell me which workspace is active in this runtime context.",
     validate: (result) => {
       const base = workspaceEvidence(result, [["workspace.getActive"]]);
       if (!base.passed) return base;
@@ -52,7 +53,8 @@ export const workspaceTests: TestCase[] = [
     name: "get-config",
     description: "Get workspace configuration",
     category: "workspace",
-    prompt: "Inspect the active workspace configuration and summarize a couple of concrete facts.",
+    prompt:
+      "Use the live runtime workspace API to inspect the active workspace configuration and summarize a couple of concrete facts.",
     validate: (result) => {
       const base = workspaceEvidence(result, [["workspace.getConfig"]]);
       if (!base.passed) return base;

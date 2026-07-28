@@ -5,7 +5,11 @@ import { HeadlessRunner } from "./runner.js";
 import { allTests } from "./stages.js";
 import { TestRunner } from "./test-runner.js";
 import type { TestCase, TestSuiteResult, TestSuiteResultEntry } from "./types.js";
-import { SYSTEM_TEST_AGENT_MODEL, systemTestModelRoute } from "./config.js";
+import {
+  DEFAULT_SYSTEM_TEST_TIMEOUT_MS,
+  SYSTEM_TEST_AGENT_MODEL,
+  systemTestModelRoute,
+} from "./config.js";
 
 export const SYSTEM_TEST_RUN_SCHEMA_VERSION = 1 as const;
 
@@ -123,6 +127,7 @@ const REQUIRED_SYSTEM_TEST_EXTENSIONS = [
   "@workspace-extensions/file-tools",
   "@workspace-extensions/git-bridge",
   "@workspace-extensions/image-service",
+  "@workspace-extensions/mobile-debug",
   "@workspace-extensions/shell",
   "@workspace-extensions/test-runner",
   "@workspace-extensions/typecheck-service",
@@ -143,7 +148,7 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
   const concurrency = normalizePositiveInt(options.concurrency, DEFAULT_CONCURRENCY);
   const testTimeoutMs =
     options.testTimeoutMs === undefined
-      ? undefined
+      ? DEFAULT_SYSTEM_TEST_TIMEOUT_MS
       : normalizePositiveInt(options.testTimeoutMs, options.testTimeoutMs);
   const provenance: SystemTestRunRecord["provenance"] = {};
   const queued = new Set(selected.map((test) => test.name));
@@ -201,7 +206,7 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
   const model = options.model ?? SYSTEM_TEST_AGENT_MODEL;
   const runner = new HeadlessRunner(options.contextId, { model });
   const tester = new TestRunner(runner, {
-    ...(testTimeoutMs !== undefined ? { testTimeoutMs } : {}),
+    testTimeoutMs,
     onTestStart: (test) => {
       const now = new Date().toISOString();
       queued.delete(test.name);
@@ -614,7 +619,7 @@ function runConfig(
     model,
     modelPolicy: runner.modelPolicySnapshot(),
     concurrency,
-    ...(testTimeoutMs !== undefined ? { testTimeoutMs } : {}),
+    testTimeoutMs,
   };
 }
 

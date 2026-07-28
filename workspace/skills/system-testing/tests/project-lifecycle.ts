@@ -247,7 +247,7 @@ function mutationResult(call: InvocationCardPayloadLike): Record<string, unknown
 }
 
 function commitResult(call: InvocationCardPayloadLike): Record<string, unknown> | null {
-  if (call.name !== "commit") return null;
+  if (call.name !== "vcs" || call.arguments?.["operation"] !== "commit") return null;
   const value = details(call);
   return value && isRecord(value["result"]) ? value["result"] : value;
 }
@@ -757,14 +757,14 @@ export const projectLifecycleTests: TestCase[] = [
       authority: [
         {
           ruleId: "inspect-created-panel",
-          capability: "panel.inspect",
+          capability: { kind: "exact", key: "panel.inspect" },
           resource: { kind: "exact", key: "panel.inspect" },
           tier: "gated",
           decision: "once",
         },
         {
           ruleId: "inspect-screenshot-analysis-dependency",
-          capability: "workspace.dependencies.inspect",
+          capability: { kind: "exact", key: "workspace.dependencies.inspect" },
           resource: { kind: "exact", key: "workspace.dependencies.inspect" },
           tier: "gated",
           decision: "once",

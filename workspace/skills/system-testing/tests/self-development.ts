@@ -862,7 +862,7 @@ const DEVELOPMENT_AUTHORITY = {
   authority: [
     {
       ruleId: "self-development-native-execution",
-      capability: "development.native.execute",
+      capability: { kind: "exact" as const, key: "development.native.execute" },
       resource: { kind: "exact" as const, key: "development.native.execute" },
       tier: "gated" as const,
       decision: "once" as const,
@@ -945,7 +945,7 @@ export const selfDevelopmentTests: TestCase[] = [
         ...DEVELOPMENT_AUTHORITY.authority,
         {
           ruleId: "self-development-child-permissions-read",
-          capability: "permissions.read",
+          capability: { kind: "exact" as const, key: "permissions.read" },
           resource: { kind: "exact" as const, key: "permissions.read" },
           tier: "gated" as const,
           decision: "once" as const,

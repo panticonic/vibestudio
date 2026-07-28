@@ -170,12 +170,16 @@ export const filesystemTests: TestCase[] = [
     validate: (result) =>
       checkedFs(
         result,
-        [["fs.mkdir", "fs.readdir"]],
+        [
+          ["fs.mkdir", "fs.readdir"],
+          ["fs.writeFile", "fs.readdir"],
+        ],
         (values) =>
           walkArrays(values).some(
             (value) => value.length === 2 && value.every((entry) => typeof entry === "string")
           ),
-        "The completed directory listing did not contain exactly two entries"
+        "The completed directory listing did not contain exactly two entries",
+        { allowFocusedTools: true }
       ),
   },
   {
@@ -258,6 +262,9 @@ export const filesystemTests: TestCase[] = [
               record["symlinkCreated"] === true ||
               record["isSym"] === true ||
               record["isSymbolicLink"] === true ||
+              (typeof record["linkPath"] === "string" &&
+                typeof record["readlink"] === "string" &&
+                typeof record["realpath"] === "string") ||
               (record["supported"] === false && typeof record["reason"] === "string")
           ),
         "The completed symlink probe exposed neither verified support nor a concrete limitation"

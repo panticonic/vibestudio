@@ -1,6 +1,98 @@
 import { describe, expect, it } from "vitest";
 import ts from "typescript";
-import { systemTestJsonPageExpression, systemTestRunCode } from "./systemTestCommands.js";
+import {
+  settleSystemTestDoctor,
+  settleStartupUnitBatches,
+  systemTestJsonPageExpression,
+  systemTestRunCode,
+} from "./systemTestCommands.js";
+
+describe("system-test startup preparation", () => {
+  it("approves only version-bound startup unit batches", async () => {
+    const pending = [
+      {
+        kind: "unit-batch" as const,
+        trigger: "startup" as const,
+        approvalId: "approval:startup",
+        units: [{ unitName: "extensions/shell" }],
+      },
+    ];
+    const resolved: Array<[string, string]> = [];
+    const result = await settleStartupUnitBatches(
+      {
+        listPending: async () => pending.splice(0) as never,
+        resolve: async (approvalId, decision) => {
+          resolved.push([approvalId, decision]);
+        },
+      },
+      { quietMs: 0, deadlineMs: 1_000 }
+    );
+
+    expect(result).toEqual({
+      approvedBatchIds: ["approval:startup"],
+      approvedUnitCount: 1,
+    });
+    expect(resolved).toEqual([["approval:startup", "version"]]);
+  });
+
+  it("refuses to fold unrelated consent into unattended test setup", async () => {
+    await expect(
+      settleStartupUnitBatches(
+        {
+          listPending: async () =>
+            [{ kind: "credential", approvalId: "approval:credential" }] as never,
+          resolve: async () => undefined,
+        },
+        { quietMs: 0, deadlineMs: 1_000 }
+      )
+    ).rejects.toThrow(/unrelated pending approval.*credential:approval:credential/i);
+  });
+
+  it("waits for approved extension builds to become ready", async () => {
+    const results = [
+      {
+        ok: false,
+        checks: [
+          {
+            name: "required-extensions",
+            ok: false,
+            detail: "required extensions: file-tools=building, test-runner=pending-approval",
+          },
+        ],
+      },
+      {
+        ok: true,
+        checks: [{ name: "required-extensions", ok: true, detail: "ready" }],
+      },
+    ];
+
+    await expect(
+      settleSystemTestDoctor(async () => results.shift() ?? results[0]!, {
+        deadlineMs: 1_000,
+        pollMs: 0,
+      })
+    ).resolves.toMatchObject({ ok: true });
+  });
+
+  it("returns terminal doctor failures without masking them as startup settling", async () => {
+    const result = {
+      ok: false,
+      checks: [{ name: "model", ok: false, detail: "required Spark model is unavailable" }],
+    };
+    let reads = 0;
+
+    await expect(
+      settleSystemTestDoctor(
+        async () => {
+          reads += 1;
+          return result;
+        },
+        { deadlineMs: 1_000, pollMs: 0 }
+      )
+    ).resolves.toBe(result);
+    expect(reads).toBe(1);
+  });
+});
 
 describe("system-test durable driver lifecycle", () => {
   it("uses short start/status/result RPCs and keeps the driver alive through cancellation cleanup", () => {
@@ -14,6 +106,10 @@ describe("system-test durable driver lifecycle", () => {
     expect(code).toContain('"getSystemTestRunSnapshot"');
     expect(code).toContain('"getSystemTestRunResult"');
     expect(code).not.toContain('"runSystemTests"');
+    expect(code).toContain(
+      'execution: {\n          surface: "code",\n          source: "workers/system-test-runner"'
+    );
+    expect(code).not.toContain('kind: "do",\n        source: "workers/system-test-runner"');
     expect(code).toContain("let cancellationCleanup = null");
     expect(code).toContain("cancellationCleanup = cleanup");
     expect(code).toContain("if (cancellationCleanup)");

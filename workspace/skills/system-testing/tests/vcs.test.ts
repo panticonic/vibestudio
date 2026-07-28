@@ -55,6 +55,7 @@ function mutation(applicationId: string, changeId: string) {
 
 function commit(eventId: string, applicationIds: string[], sourceEventId: string | null = null) {
   return {
+    operation: "commit",
     result: {
       contextId: "context:test",
       event: { kind: "event", eventId },
@@ -116,8 +117,8 @@ describe("joined VCS scenario validators", () => {
       ),
       invocation(
         "commit",
-        "commit",
-        { message: "Two steps" },
+        "vcs",
+        { operation: "commit", message: "Two steps" },
         commit(eventId, ["application:1", "application:2"])
       ),
       invocation("status", "vcs", { operation: "status" }, status(eventId)),
@@ -153,8 +154,8 @@ describe("joined VCS scenario validators", () => {
     const fabricated = [...calls];
     fabricated[2] = invocation(
       "commit",
-      "commit",
-      { message: "Two steps" },
+      "vcs",
+      { operation: "commit", message: "Two steps" },
       commit(eventId, ["application:1", "application:unrelated"])
     );
     expect(test.validate(execution(final, fabricated)).passed).toBe(false);
@@ -170,7 +171,12 @@ describe("joined VCS scenario validators", () => {
         { path: "projects/demo/a.ts" },
         mutation("application:push", "change:push")
       ),
-      invocation("commit", "commit", { message: "Publish" }, commit(eventId, ["application:push"])),
+      invocation(
+        "commit",
+        "vcs",
+        { operation: "commit", message: "Publish" },
+        commit(eventId, ["application:push"])
+      ),
       invocation(
         "push",
         "vcs",
@@ -207,8 +213,8 @@ describe("joined VCS scenario validators", () => {
     const calls = [
       invocation(
         "local-commit",
-        "commit",
-        { message: "Compatible local milestone" },
+        "vcs",
+        { operation: "commit", message: "Compatible local milestone" },
         commit("event:local", ["application:local"])
       ),
       invocation(
@@ -279,8 +285,8 @@ describe("joined VCS scenario validators", () => {
       ),
       invocation(
         "commit",
-        "commit",
-        { message: "Integrate", integratesEventIds: [sourceEventId] },
+        "vcs",
+        { operation: "commit", message: "Integrate", integratesEventIds: [sourceEventId] },
         commit(integratedEventId, [applicationId], sourceEventId)
       ),
       invocation("status", "vcs", { operation: "status" }, status(integratedEventId)),

@@ -12,6 +12,8 @@ import type { ChatMessage } from "@workspace/agentic-core";
 import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-session";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import { systemTestFailure } from "./structured-error.js";
+import { materializeValidationEvidence } from "./validation-evidence.js";
+import { DEFAULT_SYSTEM_TEST_TIMEOUT_MS } from "./config.js";
 
 const NON_INTERACTIVE_TERMINAL_WAIT_REASONS = [
   "model_credential_required",
@@ -209,8 +211,8 @@ export class TestRunner {
 
   async runOne(test: TestCase): Promise<{ result: TestResult; execution: TestExecutionResult }> {
     const startTime = Date.now();
-    const testTimeoutMs = this.opts?.testTimeoutMs;
-    const testDeadline = testTimeoutMs === undefined ? undefined : startTime + testTimeoutMs;
+    const testTimeoutMs = this.opts?.testTimeoutMs ?? DEFAULT_SYSTEM_TEST_TIMEOUT_MS;
+    const testDeadline = startTime + testTimeoutMs;
     const testRunner =
       typeof this.runner.forTest === "function"
         ? this.runner.forTest(test.name, {
@@ -234,8 +236,7 @@ export class TestRunner {
         workspaceRepoFixtureState = await testRunner.prepareWorkspaceRepoFixture();
       }
       enterPhase(test.orchestrate ? "orchestration" : "session-setup");
-      const remainingTimeMs = (): number | undefined =>
-        testDeadline === undefined ? undefined : Math.max(0, testDeadline - Date.now());
+      const remainingTimeMs = (): number => Math.max(0, testDeadline - Date.now());
       const sendAndCapture = async (
         targetSession: HeadlessSession,
         prompt: string,
@@ -252,16 +253,12 @@ export class TestRunner {
             throw this.cancellationError ?? new Error("System-test wait aborted");
           }
           const remaining = remainingTimeMs();
-          if (remaining !== undefined && remaining <= 0) throw new Error(timeoutMessage);
+          if (remaining <= 0) throw new Error(timeoutMessage);
           const wait = targetSession.sendAndWait(prompt, {
             signal: controller.signal,
             terminalWaitingReasons: NON_INTERACTIVE_TERMINAL_WAIT_REASONS,
           });
-          if (remaining === undefined) {
-            await wait;
-          } else {
-            await this.withTimeout(wait, remaining, timeoutMessage, controller);
-          }
+          await this.withTimeout(wait, remaining, timeoutMessage, controller);
         } catch (error) {
           const terminalError = this.cancellationError ?? error;
           try {
@@ -310,12 +307,19 @@ export class TestRunner {
           })();
       execution.duration ||= Date.now() - startTime;
       execution.modelExecutionEvidence ??= execution.snapshot?.modelExecutionEvidence;
-      execution.toolFailures = classifyExpectedToolFailures(
-        collectToolFailures(execution),
+      const validationExecution = await materializeValidationEvidence(
+        execution,
+        testRunner.validationEvidenceReader
+      );
+      validationExecution.toolFailures = classifyExpectedToolFailures(
+        collectToolFailures(validationExecution),
         test.expectedToolFailures
       );
+      // Persist only the bounded summaries. The canonical request/result bodies
+      // remain content-addressed in the durable execution record.
+      execution.toolFailures = validationExecution.toolFailures;
       enterPhase("validation");
-      const result = test.validate(execution);
+      const result = test.validate(validationExecution);
       outcome = { result, execution };
     } catch (err) {
       const duration = Date.now() - startTime;

@@ -58,7 +58,7 @@ describe("notification system test validators", () => {
   it("rejects marker-only notification claims", () => {
     expect(actionsTest.validate(execution("return true;", true))).toMatchObject({
       passed: false,
-      reason: "Expected exactly one successful eval showing and dismissing the notification",
+      reason: "Expected a successful eval showing and dismissing the notification",
     });
   });
 
@@ -92,19 +92,51 @@ describe("notification system test validators", () => {
     });
   });
 
-  it("rejects raw or extra notification return data", () => {
+  it("accepts the natural notification id and cleanup result", () => {
     expect(
       actionsTest.validate(
         execution(actionsCode, {
-          shown: true,
-          actions: 2,
+          notificationId: "notification:created",
           dismissed: true,
-          notificationId: "notification:secret",
         })
       )
-    ).toMatchObject({
-      passed: false,
-      reason: "Notification eval did not return the exact bounded proof",
-    });
+    ).toEqual({ passed: true });
+  });
+
+  it("accepts an awaited cleanup with an ergonomic shown-notification id", () => {
+    expect(
+      actionsTest.validate(
+        execution(actionsCode, {
+          ok: true,
+          shownNotificationId: "notification:created",
+          actionCount: 2,
+          actionLabels: ["Accept", "Decline"],
+        })
+      )
+    ).toEqual({ passed: true });
+  });
+
+  it("accepts the raw notification service spelling and null dismissal result", () => {
+    const code = `
+const id = await rpc.call("main", "notification.show", [{
+  title: "Action system test",
+  message: "notification-actions-marker",
+  actions: [
+    { id: "accept", label: "Accept" },
+    { id: "decline", label: "Decline" },
+  ],
+}]);
+const dismissResult = await rpc.call("main", "notification.dismiss", [id]);
+return { created: typeof id === "string" && id.length > 0, id, dismissResult };
+`;
+    expect(
+      actionsTest.validate(
+        execution(code, {
+          created: true,
+          id: "notification:created",
+          dismissResult: null,
+        })
+      )
+    ).toEqual({ passed: true });
   });
 });

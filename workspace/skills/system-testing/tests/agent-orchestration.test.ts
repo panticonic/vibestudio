@@ -48,7 +48,12 @@ function completedTool(
   id: string,
   name: string,
   args: Record<string, unknown>,
-  details: Record<string, unknown> = {}
+  details: Record<string, unknown> = {},
+  subagent?: {
+    runId?: string;
+    agentKind?: string;
+    launchConfig?: Record<string, unknown> | null;
+  }
 ): TestExecutionResult["messages"][number] {
   return {
     kind: "message",
@@ -65,6 +70,7 @@ function completedTool(
         isError: false,
         result: { details },
       },
+      ...(subagent ? { subagent } : {}),
     },
   } as TestExecutionResult["messages"][number];
 }
@@ -141,7 +147,11 @@ describe("agent orchestration validators", () => {
         completedTool(`spawn-${runId}`, "spawn_subagent", {
           agentKind: "pi",
           config: fixtureLaunchConfig,
-        }, { launchConfig: fixtureLaunchConfig }),
+        }, {}, {
+          runId,
+          agentKind: "pi",
+          launchConfig: fixtureLaunchConfig,
+        }),
         completedTool(`inspect-${runId}`, "inspect_subagent", { runId }),
         completedTool(
           `integrate-${runId}`,
@@ -157,7 +167,8 @@ describe("agent orchestration validators", () => {
     }
     messages.push(
       completedTool("eval", "eval", {}, { returnValue: { ok: true } }),
-      completedTool("commit", "commit", {}, {
+      completedTool("commit", "vcs", { operation: "commit" }, {
+        operation: "commit",
         result: {
           integrationSourceEventIds: [
             "workspace-event:fixture-a",
@@ -197,7 +208,11 @@ describe("agent orchestration validators", () => {
         completedTool(`spawn-${runId}`, "spawn_subagent", {
           agentKind: "pi",
           config: fixtureLaunchConfig,
-        }, { launchConfig: fixtureLaunchConfig }),
+        }, {}, {
+          runId,
+          agentKind: "pi",
+          launchConfig: fixtureLaunchConfig,
+        }),
         completedTool(`inspect-${runId}`, "inspect_subagent", { runId })
       );
       if (index === 0) {
@@ -234,7 +249,8 @@ describe("agent orchestration validators", () => {
           unicodeChecks: { allParsed: true, allSerialized: true },
         },
       }),
-      completedTool("commit", "commit", {}, {
+      completedTool("commit", "vcs", { operation: "commit" }, {
+        operation: "commit",
         result: { integrationSourceEventIds: sourceEventIds },
       }),
       completedTool("provenance", "provenance", {}),
@@ -276,7 +292,7 @@ describe("agent orchestration validators", () => {
       authority: [
         {
           ruleId: "fixture-verification-userland-approval",
-          capability: "user-approval.request",
+          capability: { kind: "exact", key: "user-approval.request" },
           resource: { kind: "exact", key: "user-approval.request" },
           tier: "gated",
           decision: "once",

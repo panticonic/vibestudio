@@ -92,7 +92,7 @@ durable state remain distinct facts.
 
 ## Current-channel convenience
 
-A live participant can still expose the same standard reads through
+A different live participant can still read the agent through
 `chat.callMethod(...)`:
 
 ```ts
@@ -100,9 +100,11 @@ const debug = await chat.callMethod(agentParticipantId, "getDebugState", {});
 ```
 
 That form is an ordinary channel-scoped participant invocation and therefore
-requires the target to be joined. Prefer the channel's `inspectAgent` facade
-for out-of-band diagnosis, especially when the live method path is itself in
-question.
+requires the target to be joined. An agent must not call its own participant
+method during its active turn because that is a synchronous self-call; agent
+eval uses `await agent.describe()` instead. Prefer the channel's `inspectAgent`
+facade for out-of-band diagnosis, especially when the live method path is
+itself in question.
 
 ## Failure interpretation
 

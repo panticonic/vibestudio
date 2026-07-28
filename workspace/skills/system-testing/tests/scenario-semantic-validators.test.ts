@@ -4,6 +4,8 @@ import { buildTests } from "./build.js";
 import { evalLifecycleTests } from "./eval-lifecycle.js";
 import { extensionSurfaceTests } from "./extensions-surface.js";
 import { filesystemTests } from "./filesystem.js";
+import { multiUserTests } from "./multi-user.js";
+import { mobileTests } from "./mobile.js";
 import { workerTests } from "./workers.js";
 import { workspaceTests } from "./workspace.js";
 import { completedScenarioEvidence } from "./_scenario-evidence.js";
@@ -147,15 +149,14 @@ describe("eval authority lifecycle validators", () => {
     resource: { kind: "exact", key: "permissions.read" },
   };
 
-  it("requires the exact strict manifest and structured result", () => {
-    const validator = scenario(evalLifecycleTests, "eval-strict-authority");
+  it("requires the exact request allowlist and structured result", () => {
+    const validator = scenario(evalLifecycleTests, "eval-exact-authority");
     expect(
       validator.validate(
         execution("Read permissions.", [
           {
             code: "return await services.permissions.list();",
             authority: {
-              mode: "strict",
               effects: "read-only",
               approvals: "pregranted-only",
               requests: [permissionsRead],
@@ -170,7 +171,7 @@ describe("eval authority lifecycle validators", () => {
         execution("Read permissions.", [
           {
             code: "return await services.permissions.list();",
-            authority: { mode: "strict", effects: "read-only", approvals: "pregranted-only" },
+            authority: { effects: "read-only", approvals: "pregranted-only" },
             returnValue: [],
           },
         ])
@@ -185,7 +186,7 @@ describe("eval authority lifecycle validators", () => {
         execution("The operation was denied without requesting approval.", [
           {
             code: "try { await services.permissions.list(); } catch (error) { return { denied: true, message: String(error) }; }",
-            authority: { mode: "strict", approvals: "pregranted-only" },
+            authority: { requests: [], approvals: "pregranted-only" },
             returnValue: { denied: true, message: "authority denied" },
           },
         ])
@@ -196,7 +197,7 @@ describe("eval authority lifecycle validators", () => {
         execution("The operation was denied.", [
           {
             code: "return { denied: true, message: 'authority denied' };",
-            authority: { mode: "strict", approvals: "pregranted-only", requests: [permissionsRead] },
+            authority: { approvals: "pregranted-only", requests: [permissionsRead] },
             returnValue: { denied: true, message: "authority denied" },
           },
         ])
@@ -346,6 +347,34 @@ describe("filesystem semantic validators", () => {
     ).toBe(true);
   });
 
+  it("accepts focused nested writes and a structured listing as directory evidence", () => {
+    const validator = scenario(filesystemTests, "directory-ops");
+    expect(
+      validator.validate(
+        directExecution("The nested directory contains exactly the two files I wrote.", [
+          {
+            name: "write",
+            arguments: { path: ".tmp/example/one.txt", content: "one" },
+            result: { details: { bytesWritten: 3, storage: "scratch" } },
+          },
+          {
+            name: "write",
+            arguments: { path: ".tmp/example/two.txt", content: "two" },
+            result: { details: { bytesWritten: 3, storage: "scratch" } },
+          },
+          {
+            name: "ls",
+            arguments: { path: ".tmp/example" },
+            result: {
+              protocolContent: [{ type: "text", text: "one.txt\ntwo.txt" }],
+              details: { path: ".tmp/example", entries: ["one.txt", "two.txt"] },
+            },
+          },
+        ])
+      ).passed
+    ).toBe(true);
+  });
+
   it("accepts focused scratch copy/read evidence without pretending it exercised eval", () => {
     const validator = scenario(filesystemTests, "rename-copy");
     expect(
@@ -440,6 +469,30 @@ describe("filesystem semantic validators", () => {
             code: "await fs.symlink(target, link); return { isSym: (await fs.lstat(link)).isSymbolicLink() };",
             result: {
               protocolContent: [{ type: "text", text: '{"isSym": true}' }],
+            },
+          },
+        ])
+      ).passed
+    ).toBe(true);
+  });
+
+  it("accepts concrete readlink and realpath observations nested in a probe report", () => {
+    const validator = scenario(filesystemTests, "symlinks");
+    expect(
+      validator.validate(
+        execution("Scratch symbolic links are supported and resolve inside the context.", [
+          {
+            code: "await fs.symlink(target, link); await fs.readlink(link); return report;",
+            returnValue: {
+              steps: [
+                {
+                  result: {
+                    linkPath: "/.tmp/example/link.txt",
+                    readlink: "target.txt",
+                    realpath: "/.tmp/example/target.txt",
+                  },
+                },
+              ],
             },
           },
         ])
@@ -551,7 +604,7 @@ describe("build semantic validators", () => {
 describe("workspace semantic validators", () => {
   it("derives catalog, active identity, and configuration facts from completed results", () => {
     expect(
-      scenario(workspaceTests, "list-workspaces").validate(
+      scenario(workspaceTests, "list-workspace-units").validate(
         execution("The catalog contains the current panel and worker units.", [
           { code: "return workspace.units.list();", returnValue: [{ id: "panel-1" }] },
         ])
@@ -581,6 +634,79 @@ describe("workspace semantic validators", () => {
       scenario(workspaceTests, "get-config").validate(
         execution("It has a rich and valid configuration.", [
           { code: "return workspace.getConfig();", returnValue: {} },
+        ])
+      ).passed
+    ).toBe(false);
+  });
+});
+
+describe("multi-user semantic validators", () => {
+  it("accepts a live account profile whose durable identity is a handle", () => {
+    const validator = scenario(multiUserTests, "account-whoami");
+    expect(
+      validator.validate(
+        execution("This session is acting as root.", [
+          {
+            code: "return await services.account.getProfile();",
+            returnValue: { handle: "root" },
+          },
+        ])
+      ).passed
+    ).toBe(true);
+  });
+
+  it("accepts the observed channel types without requiring a fictional human", () => {
+    const validator = scenario(multiUserTests, "channel-roster-identity");
+    expect(
+      validator.validate(
+        execution("There are 2 participants: one agent and one headless participant.", [
+          {
+            code: "return await services.gad.inspectChannelRoster();",
+            returnValue: [
+              { participantId: "agent-1", type: "agent" },
+              { participantId: "runner-1", type: "headless" },
+            ],
+          },
+        ])
+      ).passed
+    ).toBe(true);
+  });
+
+  it("rejects a roster summary that omits a returned participant type", () => {
+    const validator = scenario(multiUserTests, "channel-roster-identity");
+    expect(
+      validator.validate(
+        execution("There are 2 agent participants.", [
+          {
+            code: "return await chat.getParticipants();",
+            returnValue: [
+              { participantId: "agent-1", type: "agent" },
+              { participantId: "runner-1", type: "headless" },
+            ],
+          },
+        ])
+      ).passed
+    ).toBe(false);
+  });
+
+  it("rejects treating a headless client as an agent", () => {
+    const validator = scenario(multiUserTests, "channel-roster-identity");
+    expect(
+      validator.validate(
+        execution("The agent and headless participants mean all participants are agents.", [
+          {
+            code: "return await chat.getParticipants();",
+            returnValue: [
+              { id: "agent-1", name: "AI Chat", type: "agent", isAgent: true, isPerson: false },
+              {
+                id: "runner-1",
+                name: "Headless Client",
+                type: "headless",
+                isAgent: false,
+                isPerson: false,
+              },
+            ],
+          },
         ])
       ).passed
     ).toBe(false);
@@ -805,6 +931,52 @@ describe("extension semantic validators", () => {
   });
 });
 
+describe("mobile semantic validators", () => {
+  const validator = scenario(mobileTests, "mobile-extension-install-android");
+  const code =
+    'return services.extensions.invoke("@workspace-extensions/mobile-debug", "installAndroid", [{ reset: true, launch: true }]).then(async (installation) => ({ installation, verification: await services.extensions.invoke("@workspace-extensions/mobile-debug", "verify", [{ platform: "android" }]) }));';
+
+  it("requires extension-backed installation and rendering evidence", () => {
+    expect(
+      validator.validate(
+        execution(
+          "Installed app.vibestudio.mobile.internal on Android emulator-5554; installation succeeded and the process is rendering.",
+          [
+            {
+              code,
+              returnValue: {
+                installation: { packageName: "app.vibestudio.mobile.internal" },
+                verification: { installed: true, rendering: true, issues: [] },
+              },
+            },
+          ]
+        )
+      ).passed
+    ).toBe(true);
+
+    expect(
+      validator.validate(
+        execution(
+          "Installed app.vibestudio.mobile.internal on Android emulator-5554, but it did not render.",
+          [
+            {
+              code,
+              returnValue: {
+                installation: { packageName: "app.vibestudio.mobile.internal" },
+                verification: {
+                  installed: true,
+                  rendering: false,
+                  issues: ["process not rendering"],
+                },
+              },
+            },
+          ]
+        )
+      ).passed
+    ).toBe(false);
+  });
+});
+
 describe("scenario prompts", () => {
   it("use vague user goals without marker protocols or answer templates", () => {
     const tests = [
@@ -813,6 +985,7 @@ describe("scenario prompts", () => {
       ...workspaceTests,
       ...evalLifecycleTests,
       ...extensionSurfaceTests,
+      ...mobileTests,
       ...workerTests,
     ];
     for (const test of tests) {

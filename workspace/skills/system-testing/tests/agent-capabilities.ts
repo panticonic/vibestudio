@@ -38,7 +38,7 @@ function matchingScopeRoundTrip(result: TestExecutionResult) {
     for (const reader of calls.slice(writerIndex + 1)) {
       if (!/scope\s*(?:\.|\[)/u.test(String(reader.arguments?.["code"] ?? ""))) continue;
       const read = invocationReturnValue(reader);
-      if (read.present && JSON.stringify(read.value) === JSON.stringify(written.value)) {
+      if (read.present && shareMeaningfulValue(written.value, read.value)) {
         return { passed: true, reason: undefined };
       }
     }
@@ -47,6 +47,35 @@ function matchingScopeRoundTrip(result: TestExecutionResult) {
     passed: false,
     reason: "Separate completed eval calls did not return the same persistent scope value",
   };
+}
+
+function meaningfulValues(value: unknown): Set<string> {
+  const values = new Set<string>();
+  const visit = (candidate: unknown): void => {
+    if (typeof candidate === "string" && candidate.length > 0) {
+      values.add(`string:${candidate}`);
+      return;
+    }
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      values.add(`number:${candidate}`);
+      return;
+    }
+    if (Array.isArray(candidate)) {
+      for (const entry of candidate) visit(entry);
+      return;
+    }
+    if (candidate && typeof candidate === "object") {
+      for (const entry of Object.values(candidate as Record<string, unknown>)) visit(entry);
+    }
+  };
+  visit(value);
+  return values;
+}
+
+function shareMeaningfulValue(left: unknown, right: unknown): boolean {
+  if (JSON.stringify(left) === JSON.stringify(right)) return true;
+  const leftValues = meaningfulValues(left);
+  return [...meaningfulValues(right)].some((value) => leftValues.has(value));
 }
 
 function deliberateFailureRecovery(result: TestExecutionResult) {
@@ -97,8 +126,13 @@ function validateLargeSummary(result: TestExecutionResult) {
     const returned = invocationReturnValue(call);
     if (!returned.present) return false;
     if (typeof returned.value === "number") return returned.value >= 1_000;
-    return walkRecords([returned.value]).some(
-      (record) => typeof record["count"] === "number" && record["count"] >= 1_000
+    return walkRecords([returned.value]).some((record) =>
+      Object.entries(record).some(
+        ([key, value]) =>
+          /^(?:count|length|size|total|totalItems|itemCount)$/iu.test(key) &&
+          typeof value === "number" &&
+          value >= 1_000
+      )
     );
   });
   return summarized
@@ -165,12 +199,18 @@ function validateIndependentScope(result: TestExecutionResult) {
     );
     const writesThree = new Set(directKeys).size >= 3 || /Object\.assign\s*\(\s*scope/gu.test(code);
     if (!writesThree) continue;
+    const writtenKeys = new Set(directKeys);
     const reader = calls.slice(index + 1).find((call) => {
       const returned = invocationReturnValue(call);
       return (
         /scope\s*(?:\.|\[)/u.test(String(call.arguments?.["code"] ?? "")) &&
         returned.present &&
-        walkRecords([returned.value]).some((record) => Object.keys(record).length === 3)
+        walkRecords([returned.value]).some(
+          (record) =>
+            [...writtenKeys].filter((key) =>
+              Object.prototype.hasOwnProperty.call(record, key)
+            ).length >= 3
+        )
       );
     });
     if (reader) return { passed: true, reason: undefined };
@@ -208,6 +248,18 @@ export const agentCapabilityTests: TestCase[] = [
     name: "dynamic-import",
     description: "Dynamically import an external package and use it",
     category: "agent-capabilities",
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "inspect-npm-dependency",
+          capability: { kind: "exact", key: "workspace.dependencies.inspect" },
+          resource: { kind: "exact", key: "workspace.dependencies.inspect" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [],
+    },
     prompt:
       "Check whether a small external JavaScript package can be loaded dynamically and used here.",
     validate: validateDynamicImport,

@@ -387,17 +387,22 @@ describe("HeadlessRunner", () => {
       {
         testPolicy: {
           testId: "docs-workspace-loop",
+          agent: {
+            model: "openai-codex:gpt-5.3-codex-spark",
+            approvalLevel: 2,
+            fallback: "disabled",
+          },
           authority: [
             {
               ruleId: "model-credential",
-              capability: "credential.use",
+              capability: { kind: "exact", key: "credential.use" },
               resource: { kind: "exact", key: "credential.use" },
               tier: "gated",
               decision: "once",
             },
             {
               ruleId: "headless-channel",
-              capability: "workspace-service:channel",
+              capability: { kind: "exact", key: "workspace-service:channel" },
               resource: {
                 kind: "prefix",
                 prefix: "do:workers/pubsub-channel:PubSubChannel:headless-",
@@ -407,7 +412,7 @@ describe("HeadlessRunner", () => {
             },
             {
               ruleId: "semantic-workspace",
-              capability: "workspace-service:gad.workspace",
+              capability: { kind: "exact", key: "workspace-service:gad.workspace" },
               resource: {
                 kind: "exact",
                 key: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
@@ -417,7 +422,7 @@ describe("HeadlessRunner", () => {
             },
             {
               ruleId: "model-settings",
-              capability: "workspace-service:models",
+              capability: { kind: "exact", key: "workspace-service:models" },
               resource: {
                 kind: "exact",
                 key: "do:workers/model-settings:ModelSettingsDO:workspace-model-settings",
@@ -427,7 +432,7 @@ describe("HeadlessRunner", () => {
             },
             {
               ruleId: "fixture-publication",
-              capability: "workspace-main-advance",
+              capability: { kind: "exact", key: "workspace-main-advance" },
               resource: {
                 kind: "exact",
                 key: `workspace-source-change:projects/${repoName}:main`,
@@ -500,7 +505,7 @@ describe("HeadlessRunner", () => {
           authority: expect.arrayContaining([
             {
               ruleId: "fixture-publication",
-              capability: "workspace-main-advance",
+              capability: { kind: "exact", key: "workspace-main-advance" },
               resource: {
                 kind: "prefix",
                 prefix: "workspace-source-change:panels/",

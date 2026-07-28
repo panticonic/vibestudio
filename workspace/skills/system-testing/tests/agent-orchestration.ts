@@ -18,8 +18,15 @@ function requireCompletedTools(
 ) {
   const calls = getToolCalls(result);
   const missing = Object.entries(requirements).filter(
-    ([name, count]) =>
-      calls.filter((call) => call.name === name && isSuccessful(call)).length < count
+    ([toolKey, count]) =>
+      calls.filter((call) => {
+        if (!isSuccessful(call)) return false;
+        const [name, operation] = toolKey.split(".", 2);
+        return (
+          call.name === name &&
+          (operation === undefined || call.arguments?.["operation"] === operation)
+        );
+      }).length < count
   );
   if (missing.length > 0) {
     return {
@@ -92,11 +99,7 @@ function validateCheapFixtureFanout(result: TestExecutionResult) {
   }
   const misconfigured = spawns.filter((call) => {
     const config = call.arguments?.["config"];
-    const details = (call.execution?.result as { details?: unknown } | undefined)?.details;
-    const launchConfig =
-      details && typeof details === "object"
-        ? (details as Record<string, unknown>)["launchConfig"]
-        : undefined;
+    const launchConfig = call.subagent?.launchConfig;
     return (
       !config ||
       typeof config !== "object" ||
@@ -106,7 +109,8 @@ function validateCheapFixtureFanout(result: TestExecutionResult) {
       typeof launchConfig !== "object" ||
       (launchConfig as Record<string, unknown>)["model"] !== FIXTURE_GENERATOR_MODEL ||
       (launchConfig as Record<string, unknown>)["thinkingLevel"] !== "minimal" ||
-      (call.arguments?.["agentKind"] !== undefined && call.arguments?.["agentKind"] !== "pi")
+      call.arguments?.["agentKind"] !== "pi" ||
+      call.subagent?.agentKind !== "pi"
     );
   });
   if (misconfigured.length > 0) {
@@ -123,7 +127,7 @@ function validateCheapFixtureFanout(result: TestExecutionResult) {
     close_subagent: 3,
     provenance: 1,
     eval: 1,
-    commit: 1,
+    "vcs.commit": 1,
   });
   if (!orchestration.passed) return orchestration;
 
@@ -168,7 +172,13 @@ function validateCheapFixtureFanout(result: TestExecutionResult) {
 
   const committedIntegrationSources = new Set<string>();
   for (const call of calls) {
-    if (call.name !== "commit" || !isSuccessful(call)) continue;
+    if (
+      call.name !== "vcs" ||
+      call.arguments?.["operation"] !== "commit" ||
+      !isSuccessful(call)
+    ) {
+      continue;
+    }
     const details = (call.execution?.result as { details?: unknown } | undefined)?.details;
     const commitResult =
       details && typeof details === "object"
@@ -358,7 +368,7 @@ export const agentOrchestrationTests: TestCase[] = [
       authority: [
         {
           ruleId: "fixture-verification-userland-approval",
-          capability: "user-approval.request",
+          capability: { kind: "exact", key: "user-approval.request" },
           resource: { kind: "exact", key: "user-approval.request" },
           tier: "gated",
           decision: "once",
@@ -404,7 +414,7 @@ export const agentOrchestrationTests: TestCase[] = [
       authority: [
         {
           ruleId: "terminal-userland-approval",
-          capability: "user-approval.request",
+          capability: { kind: "exact", key: "user-approval.request" },
           resource: { kind: "exact", key: "user-approval.request" },
           tier: "gated",
           decision: "once",

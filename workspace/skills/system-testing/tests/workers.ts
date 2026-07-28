@@ -577,6 +577,27 @@ export const workerTests: TestCase[] = [
     description: "Author and consume a service that exists only in the task context",
     category: "workers",
     workspaceRepoFixture: BUILDABLE_WORKER_WORKSPACE_REPO_FIXTURE,
+    authorityPolicy: ({ workspaceRepoFixture }) => {
+      const repoName = workspaceRepoFixture?.repoName;
+      if (!repoName) {
+        throw new Error("dynamic-workspace-service requires a named worker fixture");
+      }
+      return {
+        authority: [
+          {
+            ruleId: "consume-authored-fixture-service",
+            capability: { kind: "prefix", prefix: "workspace-service:" },
+            resource: {
+              kind: "prefix",
+              prefix: `do:workers/${repoName}:FixtureWorkerDO:`,
+            },
+            tier: "gated",
+            decision: "once",
+          },
+        ],
+        userland: [],
+      };
+    },
     prompt:
       "Give the disposable worker in this task a small context-local service that reports a value, discover it the same way another workspace unit would, call it, and tell me what answered. Do not publish anything.",
     validate: requireDynamicWorkspaceServiceEvidence,
@@ -586,6 +607,21 @@ export const workerTests: TestCase[] = [
     description: "Installed workspace code consumes a context-local userland service",
     category: "workers",
     workspaceRepoFixture: BUILDABLE_REGULAR_WORKER_WORKSPACE_REPO_FIXTURE,
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "consume-installed-testkit-service",
+          capability: { kind: "exact", key: "workspace-service:testkit-driver" },
+          resource: {
+            kind: "exact",
+            key: "do:workers/testkit-driver:TestkitDriverDO:workspace-testkit-driver",
+          },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [],
+    },
     prompt:
       "Have the disposable worker in this task consume one of the small workspace services already visible in its context through the normal installed-unit path, prove the result, and keep everything local.",
     validate: requireInstalledWorkspaceServiceConsumerEvidence,

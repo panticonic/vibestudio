@@ -34,6 +34,7 @@ export { extensionSurfaceTests } from "./tests/extensions-surface.js";
 export { harnessToolTests } from "./tests/harness-tools.js";
 export { credentialTests } from "./tests/credentials.js";
 export { agentOrchestrationTests } from "./tests/agent-orchestration.js";
+export { mobileTests } from "./tests/mobile.js";
 
 import { smokeTests as _smoke } from "./tests/smoke.js";
 import { filesystemTests as _fs } from "./tests/filesystem.js";
@@ -69,6 +70,7 @@ import { extensionSurfaceTests as _extensionSurface } from "./tests/extensions-s
 import { harnessToolTests as _harnessTools } from "./tests/harness-tools.js";
 import { credentialTests as _credentials } from "./tests/credentials.js";
 import { agentOrchestrationTests as _agentOrchestration } from "./tests/agent-orchestration.js";
+import { mobileTests as _mobile } from "./tests/mobile.js";
 import { deterministicTestCases as _deterministic } from "./deterministic.js";
 
 export type TestStage = {
@@ -118,6 +120,7 @@ export function allTests(): TestCase[] {
     ..._edge,
     ..._agenticRuntime,
     ..._agentOrchestration,
+    ..._mobile,
     ..._evalLifecycle,
     ..._selfDevelopment,
     ..._blobstore,

@@ -3,6 +3,7 @@ import {
   isEvalGuestCodeFailure,
   isPreExecutionArgumentRejection,
   isSafeEvalDomainRejection,
+  isSafeProvenanceDomainRejection,
   isSafeSubagentDomainRejection,
   isSafeVcsDomainRejection,
 } from "./tool-failure-classification.js";
@@ -12,12 +13,32 @@ describe("tool failure classification", () => {
     expect(isPreExecutionArgumentRejection("Invalid arguments for tool vcs: bad operation")).toBe(
       true
     );
+    expect(
+      isPreExecutionArgumentRejection(
+        '[tool.vcs:execute] unknown_tool_failure: Invalid arguments for tool vcs: /path: Expected string'
+      )
+    ).toBe(true);
+    expect(
+      isPreExecutionArgumentRejection(
+        '{"details":{"failure":{"message":"[tool.vcs:execute] unknown_tool_failure: Invalid arguments for tool vcs: bad root"}}}'
+      )
+    ).toBe(true);
+    expect(
+      isPreExecutionArgumentRejection("The user wrote: Invalid arguments for tool vcs")
+    ).toBe(false);
     expect(isPreExecutionArgumentRejection("[vcs.push] publication failed")).toBe(false);
+  });
+
+  it("keeps an exact-root provenance miss diagnostic-only", () => {
+    expect(isSafeProvenanceDomainRejection("provenance", "InvalidReference")).toBe(true);
+    expect(isSafeProvenanceDomainRejection("provenance", "Unauthorized")).toBe(false);
+    expect(isSafeProvenanceDomainRejection("vcs", "InvalidReference")).toBe(false);
   });
 
   it("keeps safe typed VCS refusals diagnostic-only", () => {
     expect(isSafeVcsDomainRejection("vcs", "WorkingChangesPresent")).toBe(true);
-    expect(isSafeVcsDomainRejection("commit", "RevisionChanged")).toBe(true);
+    expect(isSafeVcsDomainRejection("vcs", "RevisionChanged")).toBe(true);
+    expect(isSafeVcsDomainRejection("commit", "RevisionChanged")).toBe(false);
     expect(isSafeVcsDomainRejection("vcs", "InvalidReference")).toBe(true);
   });
 

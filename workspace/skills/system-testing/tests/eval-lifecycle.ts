@@ -223,8 +223,7 @@ function validateAgentReplay(result: TestExecutionResult) {
   const returned = invocationReturnValue(call);
   const records = returned.present ? walkRecords([returned.value]) : [];
   return records.some(
-    (value) =>
-      value["marker"] === "EVAL_AGENT_REPLAY_OK" && value["completionCount"] === 1
+    (value) => value["marker"] === "EVAL_AGENT_REPLAY_OK" && value["completionCount"] === 1
   )
     ? { passed: true, reason: undefined }
     : {
@@ -237,7 +236,9 @@ function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function authorityFrom(call: ReturnType<typeof getToolCalls>[number]): Record<string, unknown> | null {
+function authorityFrom(
+  call: ReturnType<typeof getToolCalls>[number]
+): Record<string, unknown> | null {
   const authority = call.arguments?.["authority"];
   return authority && typeof authority === "object" && !Array.isArray(authority)
     ? (authority as Record<string, unknown>)
@@ -247,16 +248,20 @@ function authorityFrom(call: ReturnType<typeof getToolCalls>[number]): Record<st
 function exactPermissionsListIntent(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const intent = value as Record<string, unknown>;
-  return intent["service"] === "permissions" && intent["method"] === "list" &&
-    Array.isArray(intent["args"]) && intent["args"].length === 0;
+  return (
+    intent["service"] === "permissions" &&
+    intent["method"] === "list" &&
+    Array.isArray(intent["args"]) &&
+    intent["args"].length === 0
+  );
 }
 
-function validateStrictAuthority(result: TestExecutionResult) {
+function validateExactAuthority(result: TestExecutionResult) {
   const base = completedScenarioEvidence(result);
   if (!base.passed) return base;
   const call = successfulEvalCalls(result).find((candidate) => {
     const authority = authorityFrom(candidate);
-    return authority?.["mode"] === "strict";
+    return Array.isArray(authority?.["requests"]);
   });
   const authority = call && authorityFrom(call);
   const requests = authority?.["requests"];
@@ -267,14 +272,20 @@ function validateStrictAuthority(result: TestExecutionResult) {
     !Array.isArray(requests) ||
     requests.length !== 1 ||
     JSON.stringify(requests[0]) !==
-      JSON.stringify({ capability: "permissions.read", resource: { kind: "exact", key: "permissions.read" } })
+      JSON.stringify({
+        capability: "permissions.read",
+        resource: { kind: "exact", key: "permissions.read" },
+      })
   ) {
-    return { passed: false, reason: "Eval did not submit the exact strict read-only authority input" };
+    return { passed: false, reason: "Eval did not submit the exact read-only request allowlist" };
   }
   const returned = invocationReturnValue(call);
   return returned.present && Array.isArray(returned.value)
     ? { passed: true, reason: undefined }
-    : { passed: false, reason: "Strict eval did not return the structured permissions result" };
+    : {
+        passed: false,
+        reason: "Exact-authority eval did not return the structured permissions result",
+      };
 }
 
 function validatePregrantedOnly(result: TestExecutionResult) {
@@ -284,10 +295,14 @@ function validatePregrantedOnly(result: TestExecutionResult) {
     (candidate) => authorityFrom(candidate)?.["approvals"] === "pregranted-only"
   );
   const authority = call && authorityFrom(call);
-  if (!call || authority?.["mode"] !== "strict" || authority?.["requests"] !== undefined) {
+  if (
+    !call ||
+    !Array.isArray(authority?.["requests"]) ||
+    authority["requests"].length !== 0
+  ) {
     return {
       passed: false,
-      reason: "The denied operation was not run under an empty strict pregranted-only manifest",
+      reason: "The denied operation was not run under an empty pregranted-only request allowlist",
     };
   }
   const returned = invocationReturnValue(call);
@@ -321,12 +336,18 @@ function validatePreauthorization(result: TestExecutionResult) {
     preauthorize.length !== 1 ||
     !exactPermissionsListIntent(preauthorize[0])
   ) {
-    return { passed: false, reason: "Eval did not preauthorize the exact permissions.list invocation" };
+    return {
+      passed: false,
+      reason: "Eval did not preauthorize the exact permissions.list invocation",
+    };
   }
   const returned = invocationReturnValue(call);
   return returned.present && Array.isArray(returned.value)
     ? { passed: true, reason: undefined }
-    : { passed: false, reason: "Preauthorized eval did not return the structured permissions result" };
+    : {
+        passed: false,
+        reason: "Preauthorized eval did not return the structured permissions result",
+      };
 }
 
 function validateEventPages(result: TestExecutionResult) {
@@ -347,8 +368,15 @@ function validateEventPages(result: TestExecutionResult) {
   if (JSON.stringify(value.firstPage) !== JSON.stringify(value.repeatedFirstPage)) {
     return { passed: false, reason: "The same durable event cursor returned different pages" };
   }
-  if (!Array.isArray(value.pages) || value.pages.length < 2 || value.pages.at(-1)?.hasMore !== false) {
-    return { passed: false, reason: "The event probe did not exhaust bounded durable cursor pages" };
+  if (
+    !Array.isArray(value.pages) ||
+    value.pages.length < 2 ||
+    value.pages.at(-1)?.hasMore !== false
+  ) {
+    return {
+      passed: false,
+      reason: "The event probe did not exhaust bounded durable cursor pages",
+    };
   }
   const sequences = value.pages
     .flatMap((page) => page.events ?? [])
@@ -359,16 +387,25 @@ function validateEventPages(result: TestExecutionResult) {
     value.pages.flatMap((page) => page.events ?? []).length !== sequences.length ||
     sequences.some((sequence, index) => index > 0 && sequence <= sequences[index - 1]!)
   ) {
-    return { passed: false, reason: "Durable eval event pages were not strictly ordered by cursor sequence" };
+    return {
+      passed: false,
+      reason: "Durable eval event pages were not strictly ordered by cursor sequence",
+    };
   }
   return { passed: true, reason: undefined };
 }
 
-async function orchestrateEventPages(context: TestOrchestrationContext): Promise<TestExecutionResult> {
+async function orchestrateEventPages(
+  context: TestOrchestrationContext
+): Promise<TestExecutionResult> {
   const startedAt = Date.now();
   try {
     const probe = await context.runner.probeEvalEventPages();
-    return { messages: [], duration: Date.now() - startedAt, diagnostics: { evalEventPages: probe } };
+    return {
+      messages: [],
+      duration: Date.now() - startedAt,
+      diagnostics: { evalEventPages: probe },
+    };
   } catch (cause) {
     return { messages: [], duration: Date.now() - startedAt, error: formatError(cause) };
   }
@@ -423,9 +460,7 @@ async function orchestrateAgentReplay(
       );
 
     const liveDeadline = Date.now() + 20_000;
-    let live:
-      | { id: string; status: "pending" | "running" }
-      | undefined;
+    let live: { id: string; status: "pending" | "running" } | undefined;
     while (Date.now() < liveDeadline) {
       const invocation = session
         .snapshot()
@@ -566,14 +601,14 @@ function validateLiveKernelContinuity(result: TestExecutionResult) {
 
 export const evalLifecycleTests: TestCase[] = [
   {
-    name: "eval-strict-authority",
-    description: "A strict eval manifest admits only its exact read-only permission request",
+    name: "eval-exact-authority",
+    description: "An eval request allowlist admits only its exact read-only permission request",
     category: "eval-lifecycle",
     authorityPolicy: {
       authority: [
         {
           ruleId: "eval-permissions-read",
-          capability: "permissions.read",
+          capability: { kind: "exact", key: "permissions.read" },
           resource: { kind: "exact", key: "permissions.read" },
           tier: "gated",
           decision: "once",
@@ -582,18 +617,19 @@ export const evalLifecycleTests: TestCase[] = [
       userland: [],
     },
     prompt:
-      "Using exactly one eval call, invoke services.permissions.list() and return its structured result. Set authority exactly to strict read-only pregranted-only with exactly one request: capability permissions.read and exact resource permissions.read. Do not make any other tool call.",
-    validate: validateStrictAuthority,
+      "Using exactly one eval call, invoke services.permissions.list() and return its structured result. Set authority to read-only and pregranted-only with exactly one request: capability permissions.read and exact resource permissions.read. A supplied requests list is the exact allowlist. Do not make any other tool call.",
+    validate: validateExactAuthority,
   },
   {
     name: "eval-pregranted-only",
-    description: "An ungranted strict eval operation is denied without opening an approval prompt",
+    description:
+      "An operation outside an empty eval allowlist is denied without an approval prompt",
     category: "eval-lifecycle",
     authorityPolicy: {
       authority: [
         {
           ruleId: "eval-permissions-read",
-          capability: "permissions.read",
+          capability: { kind: "exact", key: "permissions.read" },
           resource: { kind: "exact", key: "permissions.read" },
           tier: "gated",
           decision: "once",
@@ -602,7 +638,7 @@ export const evalLifecycleTests: TestCase[] = [
       userland: [],
     },
     prompt:
-      "Using exactly one eval call, attempt services.permissions.list() under authority { mode: 'strict', approvals: 'pregranted-only' } with no requests. Catch the operation error inside eval and return exactly { denied: true, message: String(error) }; do not ask for approval and do not make any other tool call.",
+      "Using exactly one eval call, attempt services.permissions.list() under authority { requests: [], approvals: 'pregranted-only' }. The empty requests list denies every protected operation. Catch the operation error inside eval and return exactly { denied: true, message: String(error) }; do not ask for approval and do not make any other tool call.",
     validate: validatePregrantedOnly,
   },
   {
@@ -613,7 +649,7 @@ export const evalLifecycleTests: TestCase[] = [
       authority: [
         {
           ruleId: "eval-permissions-read",
-          capability: "permissions.read",
+          capability: { kind: "exact", key: "permissions.read" },
           resource: { kind: "exact", key: "permissions.read" },
           tier: "gated",
           decision: "once",

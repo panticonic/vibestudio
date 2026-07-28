@@ -29,6 +29,9 @@ function codeLoadsRuntimeModule(code: string): boolean {
 function pathAsReportedFromSearchRoot(workspacePath: string, searchRoot: string): string {
   const normalizedRoot = searchRoot.replace(/^\.\/+/u, "").replace(/\/+$/u, "");
   if (normalizedRoot.length === 0 || normalizedRoot === ".") return workspacePath;
+  if (workspacePath === normalizedRoot) {
+    return workspacePath.slice(workspacePath.lastIndexOf("/") + 1);
+  }
   return workspacePath.startsWith(`${normalizedRoot}/`)
     ? workspacePath.slice(normalizedRoot.length + 1)
     : workspacePath;

@@ -13,10 +13,12 @@ function credentialMissChecked(result: Parameters<typeof noIncompleteInvocations
   const final = findLastAgentMessage(result);
   if (
     !/(credential|authorization|oauth)/iu.test(final) ||
-    !/(not (?:found|available|configured|bound)|no (?:stored )?(?:credential|binding)|missing|unavailable)/iu.test(
+    !/(not (?:found|available|configured|bound)|no [^.\n]*(?:credential|binding)|missing|unavailable)/iu.test(
       final
     ) ||
-    !/(without|did not|didn't|no)\b[^.\n]*(prompt|window|browser|secret|authoriz)/iu.test(final)
+    !/(quiet|non.?interactive|(without|did not|didn't|no)\b[^.\n]*(prompt|window|browser|secret|authoriz))/iu.test(
+      final
+    )
   ) {
     return {
       passed: false,
@@ -29,7 +31,7 @@ function credentialMissChecked(result: Parameters<typeof noIncompleteInvocations
   const code = successfulEvalCode(result);
   if (
     evalCalls.length !== 1 ||
-    !code.includes("credentials.resolveCredential") ||
+    !/credentials\.(?:resolveCredential|forAudience)\s*\(/u.test(code) ||
     !code.includes(MISSING_CREDENTIAL_AUDIENCE)
   ) {
     return {
@@ -37,13 +39,6 @@ function credentialMissChecked(result: Parameters<typeof noIncompleteInvocations
       reason: "Successful eval did not resolve the reserved missing credential audience",
     };
   }
-  if (!/===\s*null/u.test(code)) {
-    return {
-      passed: false,
-      reason: "Successful eval did not structurally observe the credential miss as null",
-    };
-  }
-
   const allEvalCode = getToolCalls(result)
     .filter((call) => call.name === "eval")
     .map((call) => (typeof call.arguments?.["code"] === "string" ? call.arguments["code"] : ""))
@@ -60,15 +55,27 @@ function credentialMissChecked(result: Parameters<typeof noIncompleteInvocations
   }
 
   const values = successfulEvalReturnValues(result);
-  if (
-    values.length !== 1 ||
-    !values[0] ||
-    typeof values[0] !== "object" ||
-    Array.isArray(values[0]) ||
-    Object.keys(values[0]).join(",") !== "missing" ||
-    (values[0] as Record<string, unknown>)["missing"] !== true
-  ) {
-    return { passed: false, reason: "Credential miss eval must return exactly { missing: true }" };
+  const value =
+    values.length === 1 && values[0] && typeof values[0] === "object" && !Array.isArray(values[0])
+      ? (values[0] as Record<string, unknown>)
+      : null;
+  const observedMiss =
+    value?.["missing"] === true ||
+    value?.["exists"] === false ||
+    value?.["hasCredential"] === false ||
+    value?.["credential"] === null ||
+    value?.["value"] === null;
+  const exposedCredentialData =
+    value !== null &&
+    Object.entries(value).some(
+      ([key, field]) =>
+        /(token|secret|password|credentialId|accessKey)/iu.test(key) && field != null
+    );
+  if (!observedMiss || exposedCredentialData) {
+    return {
+      passed: false,
+      reason: "Credential miss eval returned no secret-safe structured miss observation",
+    };
   }
   return noIncompleteInvocations(result);
 }

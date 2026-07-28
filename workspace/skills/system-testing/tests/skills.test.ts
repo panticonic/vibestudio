@@ -49,9 +49,55 @@ function execution(
 
 const apiTest = skillTests.find((test) => test.name === "load-api-integrations")!;
 
+function choiceExecution(
+  finalMessage: string,
+  path?: string
+): TestExecutionResult {
+  return {
+    duration: 0,
+    messages: [
+      { id: "prompt", kind: "message", senderId: "user", complete: true, content: "prompt" },
+      ...(path
+        ? [
+            {
+              id: "read",
+              kind: "message" as const,
+              senderId: "agent",
+              complete: true,
+              contentType: "invocation" as const,
+              content: "",
+              invocation: {
+                id: "read-call",
+                name: "read",
+                status: "complete",
+                terminalOutcome: "success",
+                isError: false,
+                arguments: { path },
+                result: { details: { path } },
+              },
+            } as unknown as TestExecutionResult["messages"][number],
+          ]
+        : []),
+      { id: "final", kind: "message", senderId: "agent", complete: true, content: finalMessage },
+    ],
+  } as TestExecutionResult;
+}
+
 describe("API integrations skill system-test validator", () => {
   it("accepts one bounded host-mediated missing-credential observation", () => {
     expect(apiTest.validate(execution(code))).toEqual({ passed: true });
+  });
+
+  it("accepts a safe outcome described as unexposed credential material", () => {
+    expect(
+      apiTest.validate(
+        execution(
+          code,
+          { missing: true },
+          "The credential is unavailable. I did not inspect, modify, request, or expose credential material."
+        )
+      )
+    ).toEqual({ passed: true });
   });
 
   it("rejects marker-only missing-credential claims", () => {
@@ -70,12 +116,56 @@ describe("API integrations skill system-test validator", () => {
     });
   });
 
-  it("rejects raw or extra credential observations", () => {
+  it("accepts a bounded normalized credential-unavailable outcome", () => {
     expect(
-      apiTest.validate(execution(code, { missing: true, error: "credential-unavailable" }))
+      apiTest.validate(
+        execution(code, {
+          attempted: "https://system-test-missing.invalid/resource",
+          ok: false,
+          error: {
+            name: "RemoteRpcError",
+            message: "credential-unavailable",
+            code: "credential-unavailable",
+          },
+        })
+      )
+    ).toEqual({ passed: true });
+  });
+
+  it("rejects credential identifiers or other sensitive extras", () => {
+    expect(
+      apiTest.validate(
+        execution(code, {
+          missing: true,
+          credentialId: "credential:system-test-missing",
+        })
+      )
     ).toMatchObject({
       passed: false,
-      reason: "Missing-credential API eval must return exactly { missing: true }",
+      reason: "Missing-credential API eval must return one bounded, non-sensitive missing outcome",
     });
+  });
+});
+
+describe("skill routing system-test validators", () => {
+  it("accepts the canonical workspace-relative skill path", () => {
+    const test = skillTests.find((candidate) => candidate.name === "load-workspace-dev")!;
+    expect(
+      test.validate(
+        choiceExecution(
+          "Use the workspace panel development workflow for this change.",
+          "skills/workspace-dev/SKILL.md"
+        )
+      )
+    ).toEqual({ passed: true });
+  });
+
+  it("does not require a redundant skill read when embedded guidance answers sandbox routing", () => {
+    const test = skillTests.find((candidate) => candidate.name === "load-sandbox")!;
+    expect(
+      test.validate(
+        choiceExecution("Use the read-only eval sandbox execution surface for this inspection.")
+      )
+    ).toEqual({ passed: true });
   });
 });

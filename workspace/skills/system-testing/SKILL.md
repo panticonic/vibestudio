@@ -32,10 +32,20 @@ For CLI-driven verification, diagnosis, or repair, follow this order:
 1. Check infrastructure first:
 
    ```bash
-   pnpm cli --instance INSTANCE system-test doctor
+   pnpm cli --instance INSTANCE system-test doctor --approve-startup \
+     --model openai-codex:gpt-5.3-codex-spark
    ```
 
    Repair failed infrastructure checks before interpreting scenario behavior.
+   On a fresh disposable instance, `--approve-startup` resolves only exact,
+   version-bound startup unit batches and refuses if any unrelated consent is
+   pending. It does not approve credentials, userland requests, publication,
+   or standing grants. Test turns themselves use the runner's host-attested
+   authority policy and `approvalLevel: 2`; this pair is the supported
+   unattended auto-approve workflow. The policy is resident on the test
+   context. Trusted panel and worker infrastructure preserves it, and every
+   downstream agent is forced onto the same exact model with full-auto and no
+   fallback; userland cannot inject or widen that policy.
    Model readiness is lifecycle-aware: an expired URL-bound credential counts
    as ready only when it has both durable refresh material and an exact refresh
    recipe. Reconnect a nonrenewable credential; do not retry around it or import
@@ -55,14 +65,15 @@ For CLI-driven verification, diagnosis, or repair, follow this order:
 3. Run the smallest relevant exact test:
 
    ```bash
-   pnpm cli --instance INSTANCE system-test run TEST_NAME
+   pnpm cli --instance INSTANCE system-test run TEST_NAME \
+     --model openai-codex:gpt-5.3-codex-spark
    ```
 
-   CLI runs have no per-test deadline by default. Use `--test-timeout-ms N`
-   only when an investigation needs an explicit finite budget. When supplied,
-   multi-phase orchestrations share that budget and every phase receives only
-   the time remaining from the original deadline. A timeout is a terminal
-   errored result to inspect, not a reason to add sleeps or retries.
+   Every case has a 10-minute deadline by default so one wedged turn cannot
+   hold an unattended run forever. Use `--test-timeout-ms N` to override that
+   case budget. Multi-phase orchestrations share one budget and every phase
+   receives only the time remaining from the original deadline. A timeout is a
+   terminal errored result to inspect, not a reason to add sleeps or retries.
 
    Cancellation is terminal only after the active test has followed its normal
    cleanup path: the agent turn is interrupted, the headless session/context is
@@ -131,7 +142,8 @@ seed one another's next bootstrap:
 
 ```bash
 pnpm server:live --ephemeral --instance system-tests-a
-pnpm cli --instance system-tests-a system-test doctor
+pnpm cli --instance system-tests-a system-test doctor --approve-startup \
+  --model openai-codex:gpt-5.3-codex-spark
 ```
 
 6. Implement the root fix and run focused conventional tests/type checks.
@@ -243,10 +255,14 @@ There is no default per-test harness deadline. An explicit deadline is an
 operator cancellation boundary, never a workaround for effect, transport, or
 Durable Object liveness bugs.
 
-The default model is pinned to `openai-codex:gpt-5.3-codex-spark`. It has no implicit
-usage-limit fallback: doctor and every spawned test agent name the same single
-model, so a provider failure remains visible instead of silently changing the
-experiment. An explicit model override is only for model-specific diagnosis.
+The execution model is pinned to `openai-codex:gpt-5.3-codex-spark`. It has no
+implicit usage-limit fallback: doctor and every spawned test agent name the
+same single model, so a provider failure remains visible instead of silently
+changing the experiment. Context-created auxiliary agents are covered too:
+host mediation carries the resident case policy and runtime creation replaces
+their requested model/approval/fallback fields with Spark, full-auto, and no
+fallback. Keep that explicit `--model` value in automation; an override is
+only for a deliberately model-specific diagnosis.
 
 One named agent session owns one EvalDO notebook: its live heap is retained for
 while its kernel activation remains resident and its exact durable scope is cold-recovered, so eval work is
@@ -355,7 +371,20 @@ not sufficient evidence of protocol correctness.
 
 ## Full remote/mobile smoke
 
-For real desktop remote access and mobile pairing, run:
+First verify that sandboxed workspace code can install and launch the Android
+client through the real mobile-debug extension and its scoped approval:
+
+```bash
+pnpm cli --instance INSTANCE system-test run mobile-extension-install-android \
+  --model openai-codex:gpt-5.3-codex-spark
+```
+
+The test requires exactly one ready Android device or emulator. It must not
+shell out from the agent or replace the extension approval with a harness
+bypass.
+
+Then run the composition smoke for real desktop remote access and mobile
+pairing:
 
 ```bash
 pnpm smoke:full

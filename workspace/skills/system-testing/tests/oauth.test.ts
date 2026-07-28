@@ -91,19 +91,63 @@ describe("OAuth system test validators", () => {
 
     expect(test().validate(result)).toMatchObject({
       passed: false,
-      reason: "Credential miss eval must return exactly { missing: true }",
+      reason: "Credential miss eval returned no secret-safe structured miss observation",
     });
   });
 
-  it("rejects extra credential metadata in the miss result", () => {
+  it("accepts equivalent structured null-miss evidence and natural reporting", () => {
+    const result = credentialMissExecution(
+      `const value = await credentials.resolveCredential({ url: "${URL}" }); return { exists: Boolean(value), summary: value ? { id: value.id } : null };`,
+      { exists: false, summary: null }
+    );
+    result.messages[result.messages.length - 1]!.content =
+      "No existing credential was found or placed on file, and no authorization UI or secret was exposed.";
+
+    expect(test().validate(result)).toEqual({ passed: true });
+  });
+
+  it("accepts a direct boolean credential-presence observation", () => {
+    const result = credentialMissExecution(
+      `const value = await credentials.resolveCredential({ url: "${URL}" }); return { hasCredential: value !== null };`,
+      { hasCredential: false }
+    );
+    result.messages[result.messages.length - 1]!.content =
+      "No stored credential matches this URL, and no authorization UI or secret was exposed.";
+
+    expect(test().validate(result)).toEqual({ passed: true });
+  });
+
+  it("accepts the ergonomic audience handle as an equivalent quiet miss probe", () => {
+    const result = credentialMissExecution(
+      `try {
+        await credentials.forAudience({
+          audiences: [{ url: "${URL}", match: "origin" }],
+          label: "workspace-check",
+        });
+        return { hasCredential: true };
+      } catch (error) {
+        if (/No URL-bound credential found/i.test(String(error))) {
+          return { hasCredential: false };
+        }
+        throw error;
+      }`,
+      { hasCredential: false }
+    );
+    result.messages[result.messages.length - 1]!.content =
+      "No credential is stored for that URL. The quiet lookup did not expose a credential.";
+
+    expect(test().validate(result)).toEqual({ passed: true });
+  });
+
+  it("rejects exposed credential metadata in a claimed miss result", () => {
     const result = credentialMissExecution(
       `const value = await credentials.resolveCredential({ url: "${URL}" }); return { missing: value === null, credentialId: value?.id };`,
-      { missing: true, credentialId: null }
+      { missing: true, credentialId: "credential-secret-id" }
     );
 
     expect(test().validate(result)).toMatchObject({
       passed: false,
-      reason: "Credential miss eval must return exactly { missing: true }",
+      reason: "Credential miss eval returned no secret-safe structured miss observation",
     });
   });
 });

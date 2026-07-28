@@ -27,6 +27,13 @@ A strong validator checks:
   published work without disturbing sibling work;
 - final prose accurately reports the observed state.
 
+The runner gives validators a canonical, fully materialized evidence view:
+content-addressed invocation requests/results are hydrated at validation time.
+Validators therefore inspect the typed result directly and never branch on a
+`vibestudio.blob-ref.v1` carrier. The durable run record remains bounded and
+keeps those payloads by reference; missing referenced evidence is a harness
+error, not a semantic validation failure.
+
 Do not make validators lenient merely because an agent found a workaround. If
 the workaround violates the intended abstraction, classify and repair the
 platform or docs.
@@ -65,11 +72,18 @@ state directly.
 
 `TestCase.authorityPolicy` is a host-attested fixture for the ordinary
 production authority path. List each gated/critical capability and each
-userland subject the scenario expects. Userland rules use `ResourceScope`:
+userland subject the scenario expects. Capability names use an explicit
+`{ kind: "exact", key }` scope by default. Use
+`{ kind: "prefix", prefix }` only when the capability suffix itself is
+production-authored at runtime; pair it with a resource scope that independently
+confines the exact fixture source/class or other stable production boundary.
+Resource and userland rules use `ResourceScope`:
 prefer `{ kind: "exact", key }`; use `{ kind: "prefix", prefix }` only when the
 production subject is intentionally dynamic, such as the digest-bearing
-`user.exec.*` namespace. Keep the prefix at the narrowest stable semantic
-boundary.
+`user.exec.*` namespace or an agent-chosen Durable Object key beneath one exact
+randomized fixture source and class. Keep the prefix at the narrowest stable
+semantic boundary; dynamic identity below that boundary is production
+behavior, not a reason to guess a preferred key in the prompt.
 
 The receiver still constructs the real approval request and resolves it
 through the normal approval service. The policy supplies the unattended user's
@@ -77,6 +91,13 @@ answer; it is not an alternate API or a blanket auto-approve switch. An
 unmatched request must remain `EUNEXPECTEDTESTPROMPT`. Never compute a
 test-only subject, patch the extension to skip approval, or weaken the
 production gate for harness convenience.
+
+The runner, not individual scenarios, owns the execution policy: the chosen
+model, `approvalLevel: 2`, and disabled fallback are mandatory case facts.
+They follow the host-attested context through trusted infrastructure and apply
+to every downstream agent created there. `TestCase.authorityPolicy` only
+describes expected capability/userland decisions and cannot override the
+execution model.
 
 The canonical workspace test runner uses the digest-bearing
 `workspace-test:<digest>` subject. A scenario that intentionally runs focused

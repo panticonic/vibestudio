@@ -101,9 +101,13 @@ describe("Git interop agentic validators", () => {
       kind: "buildable-package",
       section: "packages",
     });
-    expect(test.authorityPolicy?.authority).toContainEqual({
+    const authorityPolicy = test.authorityPolicy;
+    if (!authorityPolicy || typeof authorityPolicy === "function") {
+      throw new Error("expected a static Git publication authority policy");
+    }
+    expect(authorityPolicy.authority).toContainEqual({
       ruleId: "publish-git-config",
-      capability: "workspace-main-advance",
+      capability: { kind: "exact", key: "workspace-main-advance" },
       resource: {
         kind: "exact",
         key: "workspace-source-change:meta:main",
@@ -151,11 +155,11 @@ describe("Git interop agentic validators", () => {
     );
     const managedCalls = [
       invocation("edit-1", "edit", { path: "packages/example/src/index.ts" }, {}),
-      invocation("commit-1", "commit", { message: "first" }, {}),
+      invocation("commit-1", "vcs", { operation: "commit", message: "first" }, {}),
       invocation("gad-push-1", "vcs", { operation: "push" }, {}),
       firstGit,
       invocation("edit-2", "edit", { path: "packages/example/src/index.ts" }, {}),
-      invocation("commit-2", "commit", { message: "second" }, {}),
+      invocation("commit-2", "vcs", { operation: "commit", message: "second" }, {}),
       invocation("gad-push-2", "vcs", { operation: "push" }, {}),
       secondGit,
     ];
@@ -210,7 +214,7 @@ describe("Git interop agentic validators", () => {
     );
     const managed = [
       invocation("edit", "edit", { path: "packages/example/src/index.ts" }, {}),
-      invocation("commit", "commit", { message: "mapping milestone" }, {}),
+      invocation("commit", "vcs", { operation: "commit", message: "mapping milestone" }, {}),
       invocation("gad-push", "vcs", { operation: "push" }, {}),
       publish,
       mapping,
@@ -247,10 +251,40 @@ describe("Git interop agentic validators", () => {
     );
     expect(
       test.validate(
-        execution(
-          "There is 1 mapping: workspace event event:one maps to Git commit abc123.",
-          [...managed.slice(0, 3), projected]
-        )
+        execution("There is 1 mapping: workspace event event:one maps to Git commit abc123.", [
+          ...managed.slice(0, 3),
+          projected,
+        ])
+      )
+    ).toEqual({ passed: true });
+
+    const consoleObserved = invocation(
+      "console-mapping",
+      "eval",
+      {
+        code: [
+          "const published = await git.publishToDisposableRemote('packages/example');",
+          "const mapping = await git.commitMapping('packages/example');",
+          'console.log("PUBLISH_OK", JSON.stringify(published));',
+          'console.log("MAPPING_JSON", JSON.stringify(mapping));',
+        ].join(" "),
+      },
+      {
+        details: {
+          success: true,
+          console: [
+            `PUBLISH_OK ${JSON.stringify(published)}`,
+            `MAPPING_JSON ${JSON.stringify(rows)}`,
+          ].join("\n"),
+        },
+      }
+    );
+    expect(
+      test.validate(
+        execution("There is 1 mapping: workspace event event:one maps to Git commit abc123.", [
+          ...managed.slice(0, 3),
+          consoleObserved,
+        ])
       )
     ).toEqual({ passed: true });
     const naturallyProjected = invocation(

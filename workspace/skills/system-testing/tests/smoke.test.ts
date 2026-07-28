@@ -8,7 +8,10 @@ function execution(
   searchRoot = ".",
   writtenContent = "agentic-file-tools-smoke"
 ): TestExecutionResult {
-  const reportedPath = searchRoot === "notes" ? "marker.txt" : "notes/marker.txt";
+  const reportedPath =
+    searchRoot === "notes" || searchRoot === "notes/marker.txt"
+      ? "marker.txt"
+      : "notes/marker.txt";
   const invocations = [
     {
       id: "write",
@@ -73,6 +76,10 @@ describe("smoke validators", () => {
 
   it("accepts search paths reported relative to a scoped search root", () => {
     expect(test.validate(execution("notes/marker.txt", "notes")).passed).toBe(true);
+  });
+
+  it("accepts basename output when grep searches one exact file", () => {
+    expect(test.validate(execution("notes/marker.txt", "notes/marker.txt")).passed).toBe(true);
   });
 
   it("accepts an exact write joined to exact grep evidence without a redundant read", () => {

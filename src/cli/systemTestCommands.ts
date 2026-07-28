@@ -6,7 +6,10 @@ import {
   evalMethods,
 } from "@vibestudio/service-schemas/eval";
 import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
+import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
+import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "./commandTable.js";
+import { loadCliCredentials } from "./credentialStore.js";
 import {
   CliError,
   ConnectionError,
@@ -58,6 +61,14 @@ const EVAL_RETURN_PAGE_CHARS = Math.floor(
 // reads bypass the EvalDO run-result envelope. A 128 Ki-code-unit page becomes
 // ~342 KiB as UTF-16LE base64, comfortably bounded while reducing round trips.
 const DIRECT_SCOPE_PAGE_CHARS = 128 * 1024;
+const STARTUP_APPROVAL_QUIET_MS = 5_000;
+const STARTUP_APPROVAL_DEADLINE_MS = 60_000;
+const STARTUP_READINESS_DEADLINE_MS = 60_000;
+
+type SystemTestDoctorResult = {
+  ok?: boolean;
+  checks?: Array<{ name: string; ok: boolean; detail: string; data?: unknown }>;
+};
 
 function evalClientFor(scope: SessionScope) {
   return typedClient("eval", evalMethods, scope.client);
@@ -208,7 +219,10 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
     try {
       driver = await services.runtime.createEntity({
         kind: "do",
-        source: "workers/system-test-runner",
+        execution: {
+          surface: "code",
+          source: "workers/system-test-runner",
+        },
         className: "SystemTestRunnerDO",
         key: progressKey,
         contextId: ctx.contextId,
@@ -1033,15 +1047,18 @@ async function cancel(inv: ParsedInvocation): Promise<number> {
 async function doctor(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const scope = await resolveSystemTestScope(inv);
-    const runner = await systemTestRunnerFor(scope);
-    const value = (await scope.client.callTarget(runner.targetId, "doctor", [
-      typeof inv.flags["model"] === "string" ? inv.flags["model"] : undefined,
-    ])) as {
-      ok?: boolean;
-      checks?: Array<{ name: string; ok: boolean; detail: string; data?: unknown }>;
+    const startupApprovals =
+      inv.flags["approve-startup"] === true ? await approveStartupUnitBatches() : undefined;
+    const readDoctor = async (): Promise<SystemTestDoctorResult> => {
+      const scope = await resolveSystemTestScope(inv);
+      const runner = await systemTestRunnerFor(scope);
+      return scope.client.callTarget(runner.targetId, "doctor", [
+        typeof inv.flags["model"] === "string" ? inv.flags["model"] : undefined,
+      ]);
     };
-    printResult(value, {
+    const value = startupApprovals ? await settleSystemTestDoctor(readDoctor) : await readDoctor();
+    const result = startupApprovals ? { ...value, startupApprovals } : value;
+    printResult(result, {
       json,
       human: () => {
         for (const check of value.checks ?? []) {
@@ -1053,6 +1070,94 @@ async function doctor(inv: ParsedInvocation): Promise<number> {
   } catch (error) {
     return printError(error, { json });
   }
+}
+
+export async function settleSystemTestDoctor(
+  readDoctor: () => Promise<SystemTestDoctorResult>,
+  options: { deadlineMs?: number; pollMs?: number } = {}
+): Promise<SystemTestDoctorResult> {
+  const deadline = Date.now() + (options.deadlineMs ?? STARTUP_READINESS_DEADLINE_MS);
+  const pollMs = options.pollMs ?? 250;
+
+  while (true) {
+    const result = await readDoctor();
+    if (result.ok || !doctorIsWaitingForApprovedBuilds(result) || Date.now() >= deadline) {
+      return result;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+}
+
+function doctorIsWaitingForApprovedBuilds(result: SystemTestDoctorResult): boolean {
+  const failures = (result.checks ?? []).filter((check) => !check.ok);
+  return (
+    failures.length === 1 &&
+    failures[0]?.name === "required-extensions" &&
+    /\b(?:pending-approval|building)\b/.test(failures[0].detail)
+  );
+}
+
+export async function settleStartupUnitBatches(
+  approvals: {
+    listPending(): Promise<PendingApproval[]>;
+    resolve(approvalId: string, decision: "version"): Promise<void>;
+  },
+  options: { quietMs?: number; deadlineMs?: number; pollMs?: number } = {}
+): Promise<{ approvedBatchIds: string[]; approvedUnitCount: number }> {
+  const quietMs = options.quietMs ?? STARTUP_APPROVAL_QUIET_MS;
+  const deadline = Date.now() + (options.deadlineMs ?? STARTUP_APPROVAL_DEADLINE_MS);
+  const pollMs = options.pollMs ?? 250;
+  const approvedBatchIds: string[] = [];
+  let approvedUnitCount = 0;
+  let quietSince: number | null = null;
+
+  while (Date.now() <= deadline) {
+    const pending = await approvals.listPending();
+    const unrelated = pending.filter(
+      (approval) => approval.kind !== "unit-batch" || approval.trigger !== "startup"
+    );
+    if (unrelated.length > 0) {
+      throw new CliError(
+        `system-test startup preparation found unrelated pending approval(s): ${unrelated
+          .map((approval) => `${approval.kind}:${approval.approvalId}`)
+          .join(", ")}`
+      );
+    }
+    const batches = pending.filter(
+      (approval): approval is Extract<PendingApproval, { kind: "unit-batch" }> =>
+        approval.kind === "unit-batch" && approval.trigger === "startup"
+    );
+    if (batches.length > 0) {
+      quietSince = null;
+      for (const batch of batches) {
+        await approvals.resolve(batch.approvalId, "version");
+        approvedBatchIds.push(batch.approvalId);
+        approvedUnitCount += batch.units.length;
+      }
+      continue;
+    }
+    quietSince ??= Date.now();
+    if (Date.now() - quietSince >= quietMs) {
+      return { approvedBatchIds, approvedUnitCount };
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  throw new CliError("timed out waiting for startup unit approvals to settle");
+}
+
+async function approveStartupUnitBatches(): Promise<{
+  approvedBatchIds: string[];
+  approvedUnitCount: number;
+}> {
+  const credentials = loadCliCredentials();
+  if (!credentials?.workspaceName) {
+    throw new CliError("system-test startup preparation requires a selected workspace");
+  }
+  const client = typedClient("shellApproval", shellApprovalMethods, new RpcClient(credentials));
+  return settleStartupUnitBatches({
+    listPending: () => client.listPending(),
+    resolve: (approvalId, decision) => client.resolve(approvalId, decision),
+  });
 }
 
 function outDir(inv: ParsedInvocation): string | undefined {
@@ -1109,9 +1214,15 @@ export const systemTestCommands: CliCommand[] = [
     group: "system-test",
     name: "doctor",
     summary: "Check catalog, build, agent worker, and model readiness",
-    usage: "vibestudio system-test doctor [--session NAME]",
+    usage: "vibestudio system-test doctor [--session NAME] [--model REF] [--approve-startup]",
     flags: [
       { name: "model", takesValue: true, description: "Require this model ref to be usable" },
+      {
+        name: "approve-startup",
+        takesValue: false,
+        description:
+          "Approve only exact version-bound startup unit batches before checking readiness",
+      },
       ...SCOPE_FLAGS,
       JSON_FLAG,
     ],

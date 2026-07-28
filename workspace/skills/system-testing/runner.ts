@@ -14,11 +14,10 @@ import {
   type WorkspaceRepoFixtureState,
 } from "./workspace-repo-fixture.js";
 import type { AgentExecutionTestPolicySpec } from "@vibestudio/shared/authority/testPolicy";
-import {
-  vcsStateNodeRefSchema,
-  type VcsStateNodeRef,
-} from "@vibestudio/service-schemas/vcs";
+import { vcsStateNodeRefSchema, type VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
 import type { AttachedHostApprovalAuditEvent } from "@vibestudio/service-schemas/attachedHosts";
+import type { TestAuthorityPolicy } from "./types.js";
+import type { BlobReader } from "@workspace/agentic-protocol";
 
 // This runner is eval'd server-side (in the orchestrating agent's EvalDO), so it
 // uses the portable client surface — NOT panel-only `getStateArgs`/`slotId`.
@@ -73,8 +72,16 @@ export interface EvalCancellationProbe {
 export interface EvalEventPagesProbe {
   runId: string;
   firstPage: { events: Array<{ sequence: number; kind: string }>; next: number; hasMore: boolean };
-  repeatedFirstPage: { events: Array<{ sequence: number; kind: string }>; next: number; hasMore: boolean };
-  pages: Array<{ events: Array<{ sequence: number; kind: string }>; next: number; hasMore: boolean }>;
+  repeatedFirstPage: {
+    events: Array<{ sequence: number; kind: string }>;
+    next: number;
+    hasMore: boolean;
+  };
+  pages: Array<{
+    events: Array<{ sequence: number; kind: string }>;
+    next: number;
+    hasMore: boolean;
+  }>;
   terminal: { status: string; result?: unknown };
 }
 
@@ -107,7 +114,7 @@ function fixturePublicationAuthority(
   return [
     {
       ruleId: "fixture-publication",
-      capability: "workspace-main-advance",
+      capability: { kind: "exact", key: "workspace-main-advance" },
       resource,
       tier: "gated",
       decision: "once",
@@ -127,7 +134,7 @@ function fixtureContextAuthority(
       ...policy.authority,
       ...repoPaths.map((repoPath, index) => ({
         ruleId: `fixture-counteraction-delete-${index + 1}`,
-        capability: "workspace-repo-delete",
+        capability: { kind: "exact" as const, key: "workspace-repo-delete" },
         resource: {
           kind: "exact" as const,
           key: `workspace-repo-delete:${repoPath}`,
@@ -140,6 +147,8 @@ function fixtureContextAuthority(
 }
 
 export class HeadlessRunner {
+  readonly validationEvidenceReader: BlobReader = blobstore;
+
   private contextId: string;
   private readonly shared: {
     sessions: Set<HeadlessSession>;
@@ -236,7 +245,7 @@ export class HeadlessRunner {
     testName: string,
     opts?: {
       workspaceRepoFixture?: WorkspaceRepoFixtureSpec;
-      authorityPolicy?: Omit<AgentExecutionTestPolicySpec, "testId" | "unexpectedPrompts">;
+      authorityPolicy?: TestAuthorityPolicy;
     }
   ): HeadlessRunner {
     const repoNameStem = `system-test-${slugifyTestName(testName)}-`;
@@ -249,6 +258,10 @@ export class HeadlessRunner {
           ...opts.workspaceRepoFixture,
         }
       : null;
+    const authorityPolicy =
+      typeof opts?.authorityPolicy === "function"
+        ? opts.authorityPolicy({ testName, workspaceRepoFixture })
+        : opts?.authorityPolicy;
     return new HeadlessRunner(
       this.contextId,
       { model: this.shared.modelPolicy.primaryModel },
@@ -257,17 +270,22 @@ export class HeadlessRunner {
       workspaceRepoFixture,
       {
         testId: testName,
+        agent: {
+          model: this.shared.modelPolicy.primaryModel,
+          approvalLevel: 2,
+          fallback: "disabled",
+        },
         authority: [
           {
             ruleId: "model-credential",
-            capability: "credential.use",
+            capability: { kind: "exact", key: "credential.use" },
             resource: { kind: "exact", key: "credential.use" },
             tier: "gated",
             decision: "once",
           },
           {
             ruleId: "headless-channel",
-            capability: "workspace-service:channel",
+            capability: { kind: "exact", key: "workspace-service:channel" },
             resource: {
               kind: "prefix",
               prefix: "do:workers/pubsub-channel:PubSubChannel:headless-",
@@ -277,7 +295,7 @@ export class HeadlessRunner {
           },
           {
             ruleId: "semantic-workspace",
-            capability: "workspace-service:gad.workspace",
+            capability: { kind: "exact", key: "workspace-service:gad.workspace" },
             resource: {
               kind: "exact",
               key: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
@@ -287,7 +305,7 @@ export class HeadlessRunner {
           },
           {
             ruleId: "model-settings",
-            capability: "workspace-service:models",
+            capability: { kind: "exact", key: "workspace-service:models" },
             resource: {
               kind: "exact",
               key: "do:workers/model-settings:ModelSettingsDO:workspace-model-settings",
@@ -296,9 +314,9 @@ export class HeadlessRunner {
             decision: "once",
           },
           ...fixturePublicationAuthority(workspaceRepoFixture),
-          ...(opts?.authorityPolicy?.authority ?? []),
+          ...(authorityPolicy?.authority ?? []),
         ],
-        userland: [...(opts?.authorityPolicy?.userland ?? [])],
+        userland: [...(authorityPolicy?.userland ?? [])],
         unexpectedPrompts: "fail",
       }
     );
@@ -586,11 +604,9 @@ export class HeadlessRunner {
    * instance loss without disrupting unrelated agents.
    */
   async faultAbortAgentVesselForReplayProbe(targetId: string): Promise<AgentVesselFaultProbe> {
-    const result = await rpc.call<{ aborted: true }>(
-      "main",
-      "runtime.faultAbortAgentVessel",
-      [{ targetId }]
-    );
+    const result = await rpc.call<{ aborted: true }>("main", "runtime.faultAbortAgentVessel", [
+      { targetId },
+    ]);
     return { targetId, aborted: result.aborted };
   }
 
@@ -682,9 +698,7 @@ export class HeadlessRunner {
     events: AttachedHostApprovalAuditEvent[];
     nextCursor: string | null;
   }> {
-    return rpc.call("main", "attachedHosts.listApprovalAudit", [
-      { sessionId, ...input },
-    ]);
+    return rpc.call("main", "attachedHosts.listApprovalAudit", [{ sessionId, ...input }]);
   }
 
   /** Author one disposable semantic marker used to prove dirty-state capture. */

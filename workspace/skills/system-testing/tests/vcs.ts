@@ -81,7 +81,7 @@ function requireCanonicalStatus(result: TestExecutionResult) {
     (call) =>
       call.execution?.status === "complete" &&
       call.execution.isError !== true &&
-      (["edit", "write", "move_file", "copy_file", "commit"].includes(call.name) ||
+      (["edit", "write", "move_file", "copy_file"].includes(call.name) ||
         (call.name === "vcs" &&
           ["edit", "move", "copy", "integrate", "revert", "commit", "discard", "push"].includes(
             String(call.arguments?.["operation"])
@@ -90,6 +90,35 @@ function requireCanonicalStatus(result: TestExecutionResult) {
   return mutations.length === 0
     ? { passed: true }
     : { passed: false, reason: "Status orientation unexpectedly mutated the workspace" };
+}
+
+function requirePhaseEvidence(
+  session: HeadlessSession,
+  startMessageIndex: number,
+  phase: string,
+  evidence: string[],
+  options: { forbidPush?: boolean } = {}
+): void {
+  const result: TestExecutionResult = {
+    messages: [...session.messages].slice(startMessageIndex) as ChatMessage[],
+    duration: 0,
+  };
+  const check = requireVcsEvidence(result, evidence);
+  if (!check.passed) {
+    throw new Error(`${phase} did not establish its required postcondition: ${check.reason}`);
+  }
+  if (
+    options.forbidPush &&
+    getToolCalls(result).some(
+      (call) =>
+        call.name === "vcs" &&
+        call.arguments?.["operation"] === "push" &&
+        call.execution?.status === "complete" &&
+        call.execution.isError !== true
+    )
+  ) {
+    throw new Error(`${phase} published the milestone that must remain local`);
+  }
 }
 
 /** Two real contexts advance independently; integration happens as local steps in A. */
@@ -108,20 +137,45 @@ async function orchestrateIncrementalIntegration(
   try {
     const agentA = await context.runner.spawn({ context: "task" });
     sessions.push({ role: "agent-a", session: agentA });
+    let phaseStart = agentA.messages.length;
     await context.sendAndWait(
       agentA,
-      `Work in ${repoPath}. Publish a small shared baseline, then make and commit one additional compatible change but leave that second milestone local. Use the workspace guidance and report when the repository is ready for a collaborator.`,
-      "agent A publishes the base and keeps one local commit"
+      `Work in ${repoPath}. Create a small shared baseline, commit it, and publish it. Use the workspace guidance and report the published milestone.`,
+      "agent A publishes the shared baseline"
+    );
+    requirePhaseEvidence(agentA, phaseStart, "agent A baseline publication", [
+      "vcs.edit",
+      "vcs.commit",
+      "vcs.push",
+    ]);
+    phaseStart = agentA.messages.length;
+    await context.sendAndWait(
+      agentA,
+      `Now make one additional compatible change in ${repoPath} and commit it as a local milestone. Do not publish this second milestone; report when it is ready to integrate with a collaborator.`,
+      "agent A keeps one additional commit local"
+    );
+    requirePhaseEvidence(
+      agentA,
+      phaseStart,
+      "agent A local milestone",
+      ["vcs.edit", "vcs.commit"],
+      { forbidPush: true }
     );
     firstPhase = [...agentA.messages] as ChatMessage[];
 
     const agentB = await context.runner.spawn({ context: "isolated" });
     sessions.push({ role: "agent-b", session: agentB });
+    phaseStart = agentB.messages.length;
     await context.sendAndWait(
       agentB,
       `A collaborator has published ${repoPath}. Make a distinct compatible change there, commit it, and publish it. Follow the workspace guidance and report what happened.`,
       "agent B advances main independently"
     );
+    requirePhaseEvidence(agentB, phaseStart, "agent B publication", [
+      "vcs.edit",
+      "vcs.commit",
+      "vcs.push",
+    ]);
 
     await context.sendAndWait(
       agentA,

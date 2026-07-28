@@ -26,7 +26,8 @@ standalone server from `src/server/index.ts`.
 ```sh
 pnpm server:live --help
 pnpm server:live --ephemeral --instance test-a
-pnpm cli --instance test-a system-test doctor
+pnpm cli --instance test-a system-test doctor --approve-startup \
+  --model openai-codex:gpt-5.3-codex-spark
 ```
 
 `pnpm dev` and `pnpm server:live` use the same instance supervisor. A developer
@@ -111,13 +112,26 @@ explicit per-test authority policy and full-auto agent configuration:
 
 ```sh
 pnpm server:live --ephemeral --instance system-test
-pnpm cli --instance system-test system-test doctor
+pnpm cli --instance system-test system-test doctor --approve-startup \
+  --model openai-codex:gpt-5.3-codex-spark
 pnpm cli --instance system-test system-test list --json
-pnpm cli --instance system-test system-test run TEST_NAME
+pnpm cli --instance system-test system-test run TEST_NAME \
+  --model openai-codex:gpt-5.3-codex-spark
 ```
 
-The runner’s policy is intentionally separate from remote pairing. Do not use
-an undocumented `remote serve --auto-approve` flag; it is not a supported CLI
+This workflow has two explicit approval layers. `doctor --approve-startup`
+accepts only the fresh workspace’s exact, version-bound `startup` unit batches
+and refuses to consume any credential, userland, publication, or other pending
+consent. Each spawned test agent then runs with `approvalLevel: 2` plus the
+host-attested per-test authority policy. That is the supported auto-approve
+system for unattended tests; the server remains faithful to normal product
+boundaries, while the disposable runner carries the test authority. The
+policy is resident on the test context, so agents created downstream by panel
+or worker infrastructure are pinned to the same exact model, full-auto
+approval level, and disabled fallback. Trusted host deputies preserve this
+attestation; no RPC request can supply or widen it. The
+runner’s policy is intentionally separate from remote pairing. Do not use an
+undocumented `remote serve --auto-approve` flag; it is not a supported CLI
 option.
 
 Pair this terminal, choose a workspace, start the terminal app, and mint
@@ -263,11 +277,15 @@ session. Runs execute asynchronously in the session's durable EvalDO, so a
 detached run can be polled or cancelled from a later CLI invocation:
 
 ```sh
-vibestudio system-test doctor
+vibestudio system-test doctor --approve-startup \
+  --model openai-codex:gpt-5.3-codex-spark
 vibestudio system-test list --json
-vibestudio system-test run eval-return-value
-vibestudio system-test run --category smoke
-vibestudio system-test run --all --detach
+vibestudio system-test run eval-return-value \
+  --model openai-codex:gpt-5.3-codex-spark
+vibestudio system-test run --category smoke \
+  --model openai-codex:gpt-5.3-codex-spark
+vibestudio system-test run --all --detach \
+  --model openai-codex:gpt-5.3-codex-spark
 vibestudio system-test runs
 vibestudio system-test status <run-id> --wait
 vibestudio system-test wait <run-id>
@@ -298,13 +316,19 @@ instances isolate workspace state; separate named agent sessions provide truly
 parallel eval scopes within an instance.
 Exact test names are used to avoid accidental substring expansion.
 
-The default system-test model is `openai-codex:gpt-5.3-codex-spark` with no implicit
-usage-limit fallback. `doctor` checks that exact model, and run metadata records
-the same route.
-Tests have no implicit wall-clock deadline. Pass `--test-timeout-ms N` only to
-set an explicit operator-owned boundary; multi-phase tests share that one
-budget. A timeout produces a terminal errored result with captured diagnostics
-and cleanup evidence.
+The system-test execution model is pinned to
+`openai-codex:gpt-5.3-codex-spark` with no implicit usage-limit fallback.
+`doctor` checks that exact model, every spawned workspace agent receives it,
+and run metadata records the same route. This includes auxiliary agents created
+inside panel and worker contexts: the host rewrites their model configuration
+to the case policy, forces `approvalLevel: 2`, and removes fallback routes.
+Keep the explicit `--model` spelling in automation so logs and operator intent
+are self-describing; another model is only for a deliberately model-specific
+diagnostic experiment.
+Each system-test case has a 10-minute wall-clock deadline. Pass
+`--test-timeout-ms N` to override that budget; multi-phase tests share one
+deadline. A timeout produces a terminal errored result with captured
+diagnostics and cleanup evidence.
 
 ## Mobile
 

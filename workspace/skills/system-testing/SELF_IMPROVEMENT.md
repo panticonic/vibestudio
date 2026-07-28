@@ -642,6 +642,12 @@ special-case panel loading or weaken the readiness validator. Panel tree slot
 creation is allowed to settle before renderer readiness, while `openPanel`
 remains the boot-ready public boundary.
 
+The headless host is a renderer, not an interactive workspace attach. It reads
+the existing authoritative tree without reconciling `initPanels`; otherwise
+starting inspection would silently create a chat panel and run an unrelated
+workspace-default agent outside the active test's pinned model policy.
+Interactive shells use the explicit initial-panel attach boundary.
+
 Desktop and headless inspecting hosts must also implement the same canonical
 `panelObservation` host command. Both use the shared bounded browser probe and
 parser for URL, document readiness, and the exact bootstrap identity. A

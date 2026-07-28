@@ -6,6 +6,9 @@
  */
 export const SYSTEM_TEST_AGENT_MODEL = "openai-codex:gpt-5.3-codex-spark";
 
+/** Finite case budget so one wedged turn cannot hold an unattended suite forever. */
+export const DEFAULT_SYSTEM_TEST_TIMEOUT_MS = 10 * 60_000;
+
 /**
  * The complete model route for one system-test run.
  *
@@ -13,9 +16,7 @@ export const SYSTEM_TEST_AGENT_MODEL = "openai-codex:gpt-5.3-codex-spark";
  * runner and doctor so readiness checks cannot drift from the model a run will
  * actually invoke.
  */
-export function systemTestModelRoute(
-  primaryModel = SYSTEM_TEST_AGENT_MODEL
-): {
+export function systemTestModelRoute(primaryModel = SYSTEM_TEST_AGENT_MODEL): {
   primaryModel: string;
   fallbackModel: null;
   fallbackThinkingLevel: null;

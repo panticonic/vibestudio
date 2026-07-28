@@ -1,4 +1,5 @@
-const ARGUMENT_REJECTION = /^Invalid arguments for tool\s+/i;
+const ARGUMENT_REJECTION =
+  /(?:^|unknown_tool_failure:\s*)Invalid arguments for tool\s+/i;
 const SAFE_VCS_REJECTIONS = new Set([
   "ConflictPresent",
   "DependencyBlocked",
@@ -32,10 +33,22 @@ export function isSafeVcsDomainRejection(
   terminalReasonCode: string | undefined
 ): boolean {
   return (
-    (toolName === "vcs" || toolName === "commit") &&
+    toolName === "vcs" &&
     terminalReasonCode !== undefined &&
     SAFE_VCS_REJECTIONS.has(terminalReasonCode)
   );
+}
+
+/**
+ * Provenance is a read-only typed-root lookup. An exact root that is stale,
+ * malformed, or unreachable is refused before any effect; the agent should
+ * copy a freshly observed root unchanged and retry.
+ */
+export function isSafeProvenanceDomainRejection(
+  toolName: string,
+  terminalReasonCode: string | undefined
+): boolean {
+  return toolName === "provenance" && terminalReasonCode === "InvalidReference";
 }
 
 /**
@@ -120,6 +133,7 @@ export function classifyBuiltInExpectedToolFailure(input: {
   }
   if (
     isSafeVcsDomainRejection(input.name, input.terminalReasonCode) ||
+    isSafeProvenanceDomainRejection(input.name, input.terminalReasonCode) ||
     isSafeEvalDomainRejection(input.name, input.terminalReasonCode) ||
     isSafeSubagentDomainRejection(input.name, input.terminalReasonCode)
   ) {
