@@ -27,6 +27,7 @@ import {
 } from "./tool-vcs.js";
 import {
   detectLineEnding,
+  differingTextEdits,
   fuzzyFindText,
   generateDiffString,
   normalizeForFuzzyMatch,
@@ -192,11 +193,11 @@ export function createEditTool(
         };
       }
 
-      // On the common LF / no-BOM path the normalized content is byte-identical
-      // to what the semantic control plane stores, so emit a surgical replacement hunk (offsets valid
-      // against the base) which merges cleanly with concurrent edits elsewhere.
-      // Otherwise fall back to a whole-file write that preserves BOM/endings.
-      const surgical = !matchResult.usedFuzzyMatch && bom === "" && originalEnding === "\n";
+      const storedNewContent = bom + restoreLineEndings(newContent, originalEnding);
+      // oldText/newText may include unchanged context solely to identify one
+      // match. Derive edits from the exact before/after bytes so those anchors
+      // retain their existing provenance instead of becoming newly authored.
+      const semanticEdits = differingTextEdits(sourceContent, storedNewContent);
 
       // Tie this edit to the authoring tool-call (the edge into the agentic
       // trajectory: file → edit → invocation → turn → session, queryable + kept
@@ -213,20 +214,12 @@ export function createEditTool(
               kind: "text-edit",
               repositoryId: exactFile.repositoryId,
               fileId: exactFile.fileId,
-              edits: surgical
-                ? [{ start, end, text: normalizedNewText }]
-                : [
-                    {
-                      start: 0,
-                      end: sourceContent.length,
-                      text: bom + restoreLineEndings(newContent, originalEnding),
-                    },
-                  ],
+              edits: semanticEdits,
             },
           ],
         });
       } else if (fs) {
-        await fs.writeFile(relPath, bom + restoreLineEndings(newContent, originalEnding));
+        await fs.writeFile(relPath, storedNewContent);
       }
       if (signal?.aborted) throw new Error("Operation aborted");
 

@@ -47,6 +47,7 @@ export type SemanticVcsErrorCode =
   | "InvalidReference"
   | "RevisionChanged"
   | "NoEffect"
+  | "DestinationOccupied"
   | "ConflictPresent"
   | "DependencyBlocked"
   | "IntegrationIncomplete"

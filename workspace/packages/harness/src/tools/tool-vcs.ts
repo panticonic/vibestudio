@@ -68,9 +68,31 @@ export async function resolveToolRepository(
   state: VcsStateNodeRef,
   repoPath: string
 ): Promise<PresentToolRepository> {
+  if (repoPath.length === 0) {
+    const message =
+      "The workspace root is not a repository. Use vcs listDirectory at the root, then pass one exact repository path to listFiles.";
+    throw Object.assign(new Error(message), {
+      code: "InvalidReference",
+      errorData: {
+        code: "InvalidReference",
+        message,
+        referenceKind: "repository-path",
+        reference: repoPath,
+      },
+    });
+  }
   const repository = await vcs.resolveRepository({ state, repoPath });
   if (repository) return repository;
-  throw new Error(`Repository ${repoPath} is not present at ${stateNodeLabel(state)}`);
+  const message = `Repository ${repoPath} is not present at ${stateNodeLabel(state)}. Re-list the containing directory and use the exact repository path it returns.`;
+  throw Object.assign(new Error(message), {
+    code: "InvalidReference",
+    errorData: {
+      code: "InvalidReference",
+      message,
+      referenceKind: "repository-path",
+      reference: repoPath,
+    },
+  });
 }
 
 export interface ToolFileResolution {

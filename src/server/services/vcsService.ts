@@ -11,6 +11,7 @@
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import {
   ServiceError,
+  verifiedInitiator,
   type ServiceContext,
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
@@ -107,7 +108,7 @@ function callerContextAuthorities(ctx: ServiceContext, deps: VcsServiceDeps): st
 }
 
 function privileged(ctx: ServiceContext, deps: VcsServiceDeps): boolean {
-  return isAuthorizedChrome(ctx.authorizingCaller ?? ctx.caller, {
+  return isAuthorizedChrome(verifiedInitiator(ctx), {
     hasAppCapability: deps.hasAppCapability,
   });
 }
@@ -340,11 +341,14 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     if (guardedRoots.length > 0 && !privileged(ctx, deps)) {
       const contextIds = await reachableContextAuthorities(ctx, deps);
       if (!(await deps.workspaceVcs.referencesReachable(contextIds, guardedRoots))) {
-        const message = "An exact semantic root is outside the caller's reachable context graph";
-        throw new ServiceError("vcs", method, message, "EACCES", undefined, "access", {
-          code: "Unauthorized",
+        const reference = guardedRoots[0]!;
+        const message =
+          "The exact semantic reference is unavailable from the caller's reachable context graph; re-observe it and copy the complete typed reference unchanged";
+        throw new ServiceError("vcs", method, message, "EINVAL", undefined, "application", {
+          code: "InvalidReference",
           message,
-          operation: "semantic-root-read",
+          referenceKind: reference.kind,
+          reference: reference.value,
         });
       }
     }

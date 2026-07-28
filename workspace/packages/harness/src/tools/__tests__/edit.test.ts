@@ -19,7 +19,7 @@ describe("canonical edit tool", () => {
     expect(vcs.read("meta/a.ts")).toBe("const x = 42;\n");
     expect(vcs.lastEditInput).toMatchObject({
       contextId: "context:test",
-      expectedWorkingHead: { kind: "event", eventId: "event:genesis" },
+      expectedWorkingHead: { kind: "event", eventId: "event:committed" },
       commandId: "command:edit",
       changes: [
         {
@@ -44,6 +44,29 @@ describe("canonical edit tool", () => {
     });
     expect(result.details).toMatchObject({ diagnostic: "ambiguous", matchCount: 2 });
     expect(vcs.lastEditInput).toBeUndefined();
+  });
+
+  it("uses unchanged replacement context only for matching, not authorship", async () => {
+    const vcs = new StubVcs({
+      files: {
+        "meta/a.ts":
+          'export const value = "baseline";\nexport const neighbor = "untouched";\n',
+      },
+    });
+    const tool = createEditTool(CWD, vcs, authority);
+    await tool.execute("invocation:context", {
+      path: "meta/a.ts",
+      oldText: 'export const value = "baseline";\nexport const neighbor = "untouched";',
+      newText: 'export const value = "edited";\nexport const neighbor = "untouched";',
+    });
+
+    expect(vcs.read("meta/a.ts")).toBe(
+      'export const value = "edited";\nexport const neighbor = "untouched";\n'
+    );
+    expect(vcs.lastEditInput?.changes[0]).toMatchObject({
+      kind: "text-edit",
+      edits: [{ start: 22, end: 30, text: "edited" }],
+    });
   });
 
   it("keeps non-repository scratch edits on the scoped filesystem", async () => {

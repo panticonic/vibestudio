@@ -1660,10 +1660,12 @@ export class SemanticWorkspace {
     const touched = new Set<string>();
     input.changes.forEach((change, operation) => {
       if (change.kind === "repository-create") {
-        if (this.deps.store.facts.repositoryAtPath(root, change.repoPath)) {
+        const occupied = this.deps.store.facts.repositoryAtPath(root, change.repoPath);
+        if (occupied) {
           throw new SemanticVcsError(
             "DestinationOccupied",
-            `Repository destination ${change.repoPath} is occupied`
+            `Repository destination ${change.repoPath} is occupied`,
+            { repositoryId: occupied.repositoryId, path: change.repoPath }
           );
         }
         const repositoryId = compactId("repository", {
@@ -1740,7 +1742,8 @@ export class SemanticWorkspace {
         if (this.deps.store.facts.fileAtPath(root, change.repositoryId, change.path)) {
           throw new SemanticVcsError(
             "DestinationOccupied",
-            `Destination ${change.path} is occupied`
+            `Destination ${change.path} is occupied`,
+            { repositoryId: change.repositoryId, path: change.path }
           );
         }
         const bytes = contentBytes(change.content);
@@ -1914,7 +1917,11 @@ export class SemanticWorkspace {
           ) {
             throw new SemanticVcsError(
               "DestinationOccupied",
-              `Destination ${move.destinationPath} is occupied`
+              `Destination ${move.destinationPath} is occupied`,
+              {
+                repositoryId: move.destinationRepositoryId,
+                path: move.destinationPath,
+              }
             );
           }
           const { fileStateId: _priorFileStateId, ...prior } = point.state;
@@ -1940,10 +1947,12 @@ export class SemanticWorkspace {
           });
         } else {
           const repository = this.presentRepository(root, move.repositoryId);
-          if (this.deps.store.facts.repositoryAtPath(root, move.destinationPath)) {
+          const occupied = this.deps.store.facts.repositoryAtPath(root, move.destinationPath);
+          if (occupied) {
             throw new SemanticVcsError(
               "DestinationOccupied",
-              `Repository path ${move.destinationPath} is occupied`
+              `Repository path ${move.destinationPath} is occupied`,
+              { repositoryId: occupied.repositoryId, path: move.destinationPath }
             );
           }
           changes.push({
@@ -2023,7 +2032,11 @@ export class SemanticWorkspace {
         ) {
           throw new SemanticVcsError(
             "DestinationOccupied",
-            `Destination ${copy.destination.path} is occupied`
+            `Destination ${copy.destination.path} is occupied`,
+            {
+              repositoryId: copy.destination.repositoryId,
+              path: copy.destination.path,
+            }
           );
         }
         const fileId = compactId("file", {

@@ -26,6 +26,10 @@ describe("createLsTool", () => {
     expect(lines[0]).toBe("a.ts");
     expect(lines[1]).toBe("b.ts");
     expect(lines[2]).toBe("sub/");
+    expect(result.details).toEqual({
+      path: CWD,
+      entries: ["a.ts", "b.ts", "sub/"],
+    });
   });
 
   it("returns '(empty directory)' for empty dir", async () => {
@@ -34,6 +38,7 @@ describe("createLsTool", () => {
     const tool = createLsTool(CWD, fs);
     const result = await tool.execute("call-1", { path: "empty" });
     expect((result.content[0] as { text: string }).text).toBe("(empty directory)");
+    expect(result.details).toEqual({ path: `${CWD}/empty`, entries: [] });
   });
 
   it("returns a recoverable diagnostic when path doesn't exist", async () => {

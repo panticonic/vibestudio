@@ -5,12 +5,13 @@
 Run `vcs.status` and verify the current working counts and head. Run the
 relevant tests before committing.
 
-Call `vcs.commit` from the current agent tool invocation with the exact working
-head, one globally unique command ID, and an optional message. The operation
-commits every local application in order and returns one immutable event. It
-does not accept a subset. An authorized direct CLI or lifecycle caller may
-commit without pretending to be an agent; its causal walk ends honestly at the
-semantic command.
+Inside an agent, call `vcs({ operation: "commit", message })`. The compact tool
+derives the exact working head and globally unique command ID from the current
+invocation. The operation commits every local application in order and returns
+one immutable event; it does not accept a subset. Authorized direct runtime,
+CLI, or lifecycle clients call the canonical `vcs.commit` service with those
+exact fields. A direct caller does not pretend to be an agent; its causal walk
+ends honestly at the semantic command.
 
 When finishing an integration, commit derives the source from decisions in the
 local application chain. The chain may contain decisions for multiple source
@@ -39,9 +40,11 @@ work survives.
 
 ## Publish an already committed event
 
-Call `status` immediately before publication. Refuse to push while the context
-is dirty. Supply the exact committed event, observed main event, and a fresh
-command ID to `vcs.push`.
+Inside an agent, call `vcs({ operation: "status" })` immediately before
+publication and refuse to push while the context is dirty. Then call
+`vcs({ operation: "push" })`; the adapter supplies the exact committed event,
+observed main event, and invocation-bound command ID. Direct clients call
+`vcs.push` with those exact fields.
 
 Push validates event ancestry and integration completeness, obtains protected
 publication approval, and atomically advances protected refs through one

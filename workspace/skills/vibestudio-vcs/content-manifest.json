@@ -4,7 +4,7 @@
   "files": [
     {
       "path": "SKILL.md",
-      "sha256": "2a75c593f2148a00927c91229a731291d4fec50199942185c4724623aa54e6a5"
+      "sha256": "e1e9c6048d199daaf805688eb36dd17b064304f47f178cc1443c612b5a876a06"
     },
     {
       "path": "agents/openai.yaml",
@@ -20,7 +20,7 @@
     },
     {
       "path": "references/authoring-basics.md",
-      "sha256": "d8da340643cd69cd1dcc0084cbcbd62ea05063a7e606a6042fe30f64de74a4fc"
+      "sha256": "6edda9294379c43e7c6f83222abbc48f77a860d1bcb6e48d7462474f0351f4b0"
     },
     {
       "path": "references/checks-and-publication.md",
@@ -32,7 +32,7 @@
     },
     {
       "path": "references/contexts-and-state.md",
-      "sha256": "b3ee3948ad2dc214d23bc2066325445f80ab67bb22cf745f6d0aba56fd8c70ab"
+      "sha256": "dd628180cf317472b72aa47a7ed558fd6d770b2df283132d4a0d155739ca2fb1"
     },
     {
       "path": "references/external-snapshot-import.md",
@@ -40,7 +40,7 @@
     },
     {
       "path": "references/file-move-copy.md",
-      "sha256": "391c4c7e66b362a8ef2cbd7f00fb0895c7b575451c0e8b799108edbeb88db0f2"
+      "sha256": "0187c93297ceb479e7cda048936a2ed9b65b09a131103bab9af9e5ab2ecb84e9"
     },
     {
       "path": "references/provenance-and-blame.md",
@@ -48,7 +48,7 @@
     },
     {
       "path": "references/public-contract.json",
-      "sha256": "5291ff8c3c746509d59fd440d3305f2e7eae5340c2a7341fa2e2138375aa9042"
+      "sha256": "4687b26a0988b2916d0f16bfe8f53988f79451871c3ce642aaf520ac11e4aef3"
     },
     {
       "path": "references/public-contract.md",
@@ -64,12 +64,12 @@
     },
     {
       "path": "references/semantic-commit.md",
-      "sha256": "8150aac4f02f8743d87a265204132e68dcb5b3c86e58acaf513b5cd7e3c0262a"
+      "sha256": "98b424a78de8bc918f3a7365bb2770b27c963b0c3f3a11c5c4ad793b5ce39c0c"
     },
     {
       "path": "references/typed-recovery.md",
-      "sha256": "6233c96b7827b26543230a204e9b2c0342fb888186b76a60e717e3f688e1fc33"
+      "sha256": "414cd3f07ceb5036890df9a739990433d404b98ef75f847ea997263a52dc08b9"
     }
   ],
-  "packageDigest": "7daf488b41632f606d4a74800f5ac591f183c002f5a7982579353d8197792471"
+  "packageDigest": "d0495b62967545736b8064528bbec7346fb2f5da2bcf76b7b8a7b65940feb7f9"
 }

@@ -1,7 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
-import { createProvenanceTool, type ProvenanceToolDeps } from "../provenance.js";
+import {
+  createProvenanceTool,
+  type ProvenanceToolDeps,
+  type ProvenanceToolDetails,
+  type ProvenanceToolDiagnostic,
+} from "../provenance.js";
 
 const working = { kind: "event" as const, eventId: "event:working" };
+
+function detailsOf(result: {
+  details: ProvenanceToolDetails | ProvenanceToolDiagnostic;
+}): ProvenanceToolDetails {
+  if ("diagnostic" in result.details) {
+    throw new Error(`Expected provenance details, received ${result.details.diagnostic}`);
+  }
+  return result.details;
+}
 
 function fixture() {
   const status = vi.fn(async () => ({
@@ -560,6 +574,7 @@ describe("createProvenanceTool", () => {
     const f = fixture();
     const tool = createProvenanceTool("/", f.value);
     const result = await tool.execute("call:work", { target: "work-unit:1" });
+    const details = detailsOf(result);
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
     expect(text).toContain(
@@ -569,7 +584,7 @@ describe("createProvenanceTool", () => {
       '{"kind":"work-unit","workUnitId":"work-unit:1"} —authored-change→ {"kind":"change","changeId":"change:1"}'
     );
     expect(text.indexOf("node ·")).toBeLessThan(text.indexOf("—authored-change→"));
-    expect(result.details.adjacency).toEqual([
+    expect(details.adjacency).toEqual([
       {
         kind: "authored-change",
         from: { kind: "work-unit", workUnitId: "work-unit:1" },
@@ -612,11 +627,12 @@ describe("createProvenanceTool", () => {
     const f = fixture();
     const tool = createProvenanceTool("/", f.value);
     const result = await tool.execute("call:direct", { target: "command:direct" });
+    const details = detailsOf(result);
     const rendered = result.content[0]?.type === "text" ? result.content[0].text : "";
 
     expect(rendered).toContain("node · command · vcs.edit · complete · context context:1");
-    expect(result.details.root).toEqual({ kind: "command", commandId: "command:direct" });
-    expect(result.details.adjacency).toEqual([]);
+    expect(details.root).toEqual({ kind: "command", commandId: "command:direct" });
+    expect(details.adjacency).toEqual([]);
     expect(rendered).not.toContain("trajectory-invocation");
   });
 
@@ -639,6 +655,7 @@ describe("createProvenanceTool", () => {
         messageId: "message:prompt",
       },
     });
+    const turnDetails = detailsOf(turn);
     const turnText = turn.content[0]?.type === "text" ? turn.content[0].text : "";
     const messageText = message.content[0]?.type === "text" ? message.content[0].text : "";
 
@@ -648,15 +665,15 @@ describe("createProvenanceTool", () => {
     expect(messageText).toContain(
       'node · trajectory-message · role user · status completed · turn turn:1 · source channel-message:prompt · sender user:user:alice participant user:alice · text "Move the parser"'
     );
-    expect(turn.details.root).toEqual({
+    expect(turnDetails.root).toEqual({
       kind: "trajectory-turn",
       logId: "log:1",
       head: "head:1",
       turnId: "turn:1",
     });
-    expect(turn.details.adjacency).toContainEqual({
+    expect(turnDetails.adjacency).toContainEqual({
       kind: "triggered-by",
-      from: turn.details.root,
+      from: turnDetails.root,
       to: {
         kind: "trajectory-message",
         logId: "log:1",
@@ -666,19 +683,36 @@ describe("createProvenanceTool", () => {
     });
   });
 
-  it("rejects removed semantic vocabularies", async () => {
+  it("returns a corrective diagnostic for non-target vocabulary", async () => {
     const f = fixture();
     const tool = createProvenanceTool("/", f.value);
-    await expect(tool.execute("call:5", { target: "outcome:42" })).rejects.toThrow(
-      "event/application/applied-change/work-unit/change/decision/command"
-    );
+    await expect(tool.execute("call:5", { target: "outcome:42" })).resolves.toMatchObject({
+      details: {
+        diagnostic: "invalid-target",
+        target: "outcome:42",
+      },
+    });
+    await expect(tool.execute("call:service", { target: "vcs" })).resolves.toMatchObject({
+      details: {
+        diagnostic: "invalid-target",
+        target: "vcs",
+      },
+    });
   });
 
-  it("directs trajectory labels to the exact typed-target contract", async () => {
+  it("guides ambiguous trajectory labels toward exact typed roots", async () => {
     const f = fixture();
     const tool = createProvenanceTool("/", f.value);
-    await expect(
-      tool.execute("call:trajectory-label", { target: "trajectory-message:message:prompt" })
-    ).rejects.toThrow("Trajectory nodes require the exact typed target with kind, logId, head");
+    const result = await tool.execute("call:trajectory-label", {
+      target: "trajectory-message:message:prompt",
+    });
+    expect(result).toMatchObject({
+      details: {
+        diagnostic: "invalid-target",
+        target: "trajectory-message:message:prompt",
+      },
+    });
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("Trajectory nodes require the exact typed target");
   });
 });

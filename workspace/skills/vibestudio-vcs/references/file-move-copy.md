@@ -31,7 +31,9 @@ use `vcs.move` or `vcs.copy` for an atomic batch, but its provenance stops at th
 command; do not wrap it in a synthetic agent.
 
 Each request creates one local application. Keep the returned working head for
-the next step.
+the next step. Focused transfer results include complete `source.root` and
+`destination.root` values plus full workspace paths; copy those roots unchanged
+into compact `inspect`/`neighbors` instead of rebuilding a file coordinate.
 
 ## Verify provenance
 

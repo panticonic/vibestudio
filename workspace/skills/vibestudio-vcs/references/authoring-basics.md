@@ -1,5 +1,27 @@
 # Managed authoring
 
+## Use the runtime client
+
+In eval and runtime code, import the goal-shaped client instead of assembling
+raw RPC transport calls:
+
+```ts
+import { contextId, vcs } from "@workspace/runtime";
+
+const status = await vcs.status({ contextId });
+const repository = await vcs.resolveRepository({
+  state: status.workingHead,
+  repoPath: "projects/example",
+});
+```
+
+Every `vcs` method accepts its documented request object directly. Do not wrap
+that object in an argument array or use `rpc.call("main", "vcs.*", ...)` when
+the runtime client is available; that lower-level transport adds no capability
+and makes argument mistakes harder to diagnose. In an ordinary chat turn,
+prefer the compact `vcs` tool (including its commit operation) plus the focused
+`write`, `edit`, `move_file`, and `copy_file` tools described by the parent skill.
+
 ## Discover identities before changing them
 
 Call `vcs.status` and retain its exact `workingHead`. Resolve a known workspace
@@ -9,6 +31,12 @@ stable `repositoryId`. Do not scan all state neighbors merely to turn one known
 path into its identity. A file listing supplies stable `repositoryId`, `fileId`,
 path, content digest, authoring change/work-unit IDs, persisted `contentClass`
 and `externalKeys`, mode, `contentKind`, `byteLength`, and `coordinateExtent`.
+Inside an agent, the path-friendly equivalent is
+`vcs({ operation: "listFiles", path: "projects/example" })`; the compact tool
+resolves the repository identity at the live working state and returns each
+full workspace path plus a complete typed file root. Copy that root unchanged
+into compact `inspect`/`neighbors`; use the full workspace path for compact
+`blame`.
 
 Read a managed file with `vcs.readFile` at the same state. Prefer a stable file
 ID after discovery; use a path only to resolve the initial identity. A `null`
@@ -44,6 +72,9 @@ historical reads at an explicitly selected state still use `vcs.readFile`.
 Use focused `write` and `edit` tools for ordinary text work. They compile to
 the same semantic edit operation. Use `vcs.edit` when batching exact text,
 binary, repository creation, file creation, delete, or mode changes matters.
+The focused `edit` tool treats unchanged oldText/newText surroundings as match
+anchors: only actual differing UTF-16 ranges become authored edits, so a
+neighboring unchanged line retains its existing provenance.
 
 The in-agent authoring tools supply the exact current tool invocation as causal
 ingress. A linked agent credential without that parent may perform the
@@ -78,10 +109,11 @@ the unit from the exact state and validates every range against its extent.
 
 ## Keep semantics explicit
 
-- Create a repository with one `repository-create` change containing its
-  complete initial file set. The repository identity and files are authored in
-  one lifecycle work unit; do not `mkdir` a managed path or loop over writes to
-  synthesize the lifecycle.
+- Create a new repository at a verified vacant workspace path with one
+  `repository-create` change containing its complete initial file set. The
+  repository identity and files are authored in one lifecycle work unit; do
+  not use `repository-create` for an existing project, `mkdir` a managed path,
+  or loop over writes to synthesize the lifecycle.
 - Create a file with a destination repository and vacant path.
 - Delete or change mode by stable file identity.
 - Use `vcs.move` for a location change and `vcs.copy` for a new identity with

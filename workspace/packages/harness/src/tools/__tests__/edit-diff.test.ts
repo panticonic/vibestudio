@@ -6,6 +6,7 @@ import {
   normalizeForFuzzyMatch,
   fuzzyFindText,
   stripBom,
+  differingTextEdits,
   generateDiffString,
 } from "../edit-diff.js";
 
@@ -81,6 +82,24 @@ describe("edit-diff", () => {
       expect(diff.diff).toContain("-");
       expect(diff.diff).toContain("+");
       expect(diff.firstChangedLine).toBe(2);
+    });
+  });
+
+  describe("differingTextEdits", () => {
+    it("keeps unchanged selection context out of authored edit ranges", () => {
+      expect(
+        differingTextEdits(
+          'export const value = "baseline";\nexport const neighbor = "untouched";\n',
+          'export const value = "edited";\nexport const neighbor = "untouched";\n'
+        )
+      ).toEqual([{ start: 22, end: 30, text: "edited" }]);
+    });
+
+    it("emits separate edits when unchanged content separates changes", () => {
+      expect(differingTextEdits("alpha\nmiddle\nomega\n", "ALPHA\nmiddle\nOMEGA\n")).toEqual([
+        { start: 0, end: 5, text: "ALPHA" },
+        { start: 13, end: 18, text: "OMEGA" },
+      ]);
     });
   });
 });

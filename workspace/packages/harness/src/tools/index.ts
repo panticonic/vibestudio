@@ -29,9 +29,6 @@ export type { WriteToolInput, WriteToolDetails } from "./write.js";
 export { createMoveFileTool, createCopyFileTool } from "./file-transfer.js";
 export type { FileTransferToolInput, FileTransferToolDetails } from "./file-transfer.js";
 
-export { createCommitTool } from "./commit.js";
-export type { CommitToolInput, CommitToolDetails } from "./commit.js";
-
 export { createWorkspaceVcsTool } from "./workspace-vcs.js";
 export type {
   WorkspaceVcsToolInput,

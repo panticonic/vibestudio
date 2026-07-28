@@ -12,6 +12,8 @@ Call `vcs.status` before a mutation or comparison. It returns:
 
 Retain the returned state object exactly. A state node is either an event or an
 application; it is not a content digest, filesystem marker, or permission.
+Its `workspace-event:…` or `application:…` identity is one opaque string:
+never strip, split, hash, or reconstruct its prefix.
 
 ## Advance one local step at a time
 

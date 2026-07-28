@@ -104,6 +104,68 @@ export interface DiffResult {
   firstChangedLine: number | undefined;
 }
 
+export interface TextEdit {
+  start: number;
+  end: number;
+  text: string;
+}
+
+/**
+ * Express the actual differing UTF-16 ranges between two texts.
+ *
+ * An agent may include unchanged surrounding lines in oldText/newText to make
+ * a match unique. Those anchors are selection context, not authored content.
+ * Emitting only changed character runs keeps their existing provenance.
+ */
+export function differingTextEdits(oldContent: string, newContent: string): TextEdit[] {
+  const edits: TextEdit[] = [];
+  let oldOffset = 0;
+  let pending: { start: number; oldText: string; newText: string } | null = null;
+  const flush = () => {
+    if (!pending) return;
+    let prefix = 0;
+    while (
+      prefix < pending.oldText.length &&
+      prefix < pending.newText.length &&
+      pending.oldText[prefix] === pending.newText[prefix]
+    ) {
+      prefix += 1;
+    }
+    let suffix = 0;
+    while (
+      suffix < pending.oldText.length - prefix &&
+      suffix < pending.newText.length - prefix &&
+      pending.oldText[pending.oldText.length - 1 - suffix] ===
+        pending.newText[pending.newText.length - 1 - suffix]
+    ) {
+      suffix += 1;
+    }
+    edits.push({
+      start: pending.start + prefix,
+      end: pending.start + pending.oldText.length - suffix,
+      text: pending.newText.slice(prefix, pending.newText.length - suffix),
+    });
+    pending = null;
+  };
+
+  for (const part of Diff.diffLines(oldContent, newContent)) {
+    if (!part.added && !part.removed) {
+      flush();
+      oldOffset += part.value.length;
+      continue;
+    }
+    pending ??= { start: oldOffset, oldText: "", newText: "" };
+    if (part.removed) {
+      pending.oldText += part.value;
+      oldOffset += part.value.length;
+    } else {
+      pending.newText += part.value;
+    }
+  }
+  flush();
+  return edits;
+}
+
 /**
  * Build a unified-style diff with right-padded line numbers and a small
  * amount of context around each change. Returns the diff and the new-file

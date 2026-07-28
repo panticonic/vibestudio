@@ -2,7 +2,7 @@
 
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
-import type { VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
+import type { VcsSemanticNodeRef, VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
 import {
   canonicalizeWorkspaceFilePath,
   splitRepoPath,
@@ -43,7 +43,9 @@ interface FileDetails {
   fileId: string;
   repoPath: string;
   path: string;
+  workspacePath: string;
   state: VcsStateNodeRef;
+  root: Extract<VcsSemanticNodeRef, { kind: "file" }>;
 }
 
 export interface FileTransferToolDetails {
@@ -66,13 +68,43 @@ function missingSource(operation: "move_file" | "copy_file", path: string): Node
   return error;
 }
 
+function transferIntegrityFailure(
+  operation: "move_file" | "copy_file",
+  source: ToolFileResolution,
+  destination: ToolFileResolution
+): Error {
+  const message =
+    operation === "move_file"
+      ? `Move changed file identity from ${source.fileId} to ${destination.fileId}`
+      : `Copy reused source file identity ${source.fileId}`;
+  return Object.assign(new Error(message), {
+    code: "IntegrityFailure",
+    errorData: {
+      code: "IntegrityFailure",
+      message,
+      stage: "file-transfer-identity",
+      operation,
+      sourceFileId: source.fileId,
+      destinationFileId: destination.fileId,
+    },
+  });
+}
+
 function details(file: ToolFileResolution): FileDetails {
+  const root = {
+    kind: "file" as const,
+    state: file.state,
+    repositoryId: file.repositoryId,
+    fileId: file.fileId,
+  };
   return {
     repositoryId: file.repositoryId,
     fileId: file.fileId,
     repoPath: file.repoPath,
     path: file.path,
+    workspacePath: `${file.repoPath}/${file.path}`,
     state: file.state,
+    root,
   };
 }
 
@@ -198,8 +230,16 @@ function createFileTransferTool(
 
       const produced = await resolveToolFile(vcs, result.workingHead, destinationPath);
       if (!produced) throw new Error(`${operation} did not produce ${destinationPath}`);
+      if (
+        (kind === "move" && produced.fileId !== source.fileId) ||
+        (kind === "copy" && produced.fileId === source.fileId)
+      ) {
+        throw transferIntegrityFailure(operation, source, produced);
+      }
       const changeId = result.changeIds[0];
       if (!changeId) throw new Error(`${operation} returned no semantic change`);
+      const sourceDetails = details(source);
+      const destinationDetails = details(produced);
 
       return {
         content: [
@@ -208,14 +248,15 @@ function createFileTransferTool(
             text:
               `${kind === "move" ? "Moved" : "Copied"} ${sourcePath} to ${destinationPath}. ` +
               `${kind === "move" ? "Preserved" : "Minted"} file identity ${produced.fileId}; ` +
-              `semantic change ${changeId}.`,
+              `semantic change ${changeId}. Inspect the exact destination with ` +
+              `vcs({ operation: "inspect", root: ${JSON.stringify(destinationDetails.root)} }).`,
           },
         ],
         details: {
           operation: kind === "move" ? "moved" : "copied",
           storage: "vcs",
-          source: details(source),
-          destination: details(produced),
+          source: sourceDetails,
+          destination: destinationDetails,
           commandId,
           workUnitId: result.workUnitId,
           applicationId: result.applicationId,

@@ -17,10 +17,17 @@ const evalCommonSchema = {
   authority: Type.Optional(
     Type.Object(
       {
-        mode: Type.Optional(Type.Union([Type.Literal("adaptive"), Type.Literal("strict")])),
-        effects: Type.Optional(Type.Union([Type.Literal("mutable"), Type.Literal("read-only")])),
+        effects: Type.Optional(
+          Type.Union([Type.Literal("mutable"), Type.Literal("read-only")], {
+            description:
+              'Use "read-only" to block every mutation in this run; omit for ordinary mutable work.',
+          })
+        ),
         approvals: Type.Optional(
-          Type.Union([Type.Literal("prompt"), Type.Literal("pregranted-only")])
+          Type.Union([Type.Literal("prompt"), Type.Literal("pregranted-only")], {
+            description:
+              'Use "pregranted-only" when this run must never open an approval card; omit to allow normal approval routing.',
+          })
         ),
         requests: Type.Optional(
           Type.Array(
@@ -33,7 +40,11 @@ const evalCommonSchema = {
                 Type.Object({ kind: Type.Literal("domain"), domain: Type.String() }),
                 Type.Object({ kind: Type.Literal("network"), value: Type.Literal("*") }),
               ]),
-            })
+            }),
+            {
+              description:
+                "Exact per-run capability allowlist. Omit to adapt to the authority already admitted for the caller; provide a list (including []) to enforce only that list.",
+            }
           )
         ),
         preauthorize: Type.Optional(
@@ -49,7 +60,7 @@ const evalCommonSchema = {
       {
         additionalProperties: false,
         description:
-          "Optional per-run authority attenuation. Strict requests only narrow authority; pregranted-only never opens an approval card; read-only is enforced at the canonical dispatcher.",
+          "Optional per-run authority attenuation. Omitted requests adapt to admitted authority; supplied requests are the exact allowlist. pregranted-only never opens an approval card; read-only is enforced at the canonical dispatcher.",
       }
     )
   ),

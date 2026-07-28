@@ -2,10 +2,7 @@ import { z } from "zod";
 
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods, type MethodSchema } from "@vibestudio/shared/typedServiceClient";
-import {
-  normalizeWorkspaceRepoPath,
-  splitRepoPath,
-} from "@vibestudio/shared/runtime/entitySpec";
+import { normalizeWorkspaceRepoPath, splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import {
   SEMANTIC_VCS_MAX_PATH_UTF8_BYTES,
   semanticVcsPathAdmission,
@@ -83,7 +80,10 @@ const canonicalRepoPath = z
         return false;
       }
     },
-    { message: "Expected a canonical workspace repository path" }
+    {
+      message:
+        "Expected a repository root shaped exactly as <section>/<name>; repositories cannot be nested inside another repository",
+    }
   )
   .refine((value) => semanticVcsPathAdmission(value).admissible, {
     message:
@@ -132,11 +132,20 @@ const validateContentDescriptor = (
 // ---------------------------------------------------------------------------
 
 export const vcsStateNodeRefSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("event"), eventId: id("Committed workspace event.") }).strict(),
+  z
+    .object({
+      kind: z.literal("event"),
+      eventId: id(
+        "Opaque committed workspace-event:… identity. Copy the complete returned value unchanged."
+      ),
+    })
+    .strict(),
   z
     .object({
       kind: z.literal("application"),
-      applicationId: id("Local work application."),
+      applicationId: id(
+        "Opaque local application:… identity. Copy the complete returned value unchanged."
+      ),
     })
     .strict(),
 ]);
@@ -529,7 +538,9 @@ export const vcsEditChangeSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("repository-create"),
-      repoPath: canonicalRepoPath,
+      repoPath: canonicalRepoPath.describe(
+        "New, currently unoccupied repository root shaped exactly as <section>/<name>. Repositories cannot be nested inside an existing project. To change an existing project, resolve its repository and file identities and use a file edit/create operation."
+      ),
       files: z
         .array(
           z
@@ -1469,8 +1480,7 @@ const vcsReadMemoryWorkspacePathSchema = z
       return Boolean(split?.repoRelPath) && semanticVcsPathAdmission(value).admissible;
     },
     {
-      message:
-        "Expected an admissible canonical workspace file path inside a managed repository",
+      message: "Expected an admissible canonical workspace file path inside a managed repository",
     }
   );
 

@@ -20,7 +20,7 @@ const stateRootSchema = Type.Union([
   Type.Object({ kind: Type.Literal("application"), applicationId: Type.String() }),
 ]);
 
-const semanticRootSchema = Type.Union(
+export const semanticRootSchema = Type.Union(
   [
     Type.Object({ kind: Type.Literal("event"), eventId: Type.String() }),
     Type.Object({ kind: Type.Literal("application"), applicationId: Type.String() }),
@@ -76,7 +76,7 @@ const provenanceSchema = Type.Object({
       [
         Type.String({
           description:
-            'Existing managed file path (not an intermediate directory), exact repository root, "session", or semantic shorthand such as "workspace-event:...", "applied-change:...", "change:...", or "decision:...".',
+            'Existing managed file path (not an intermediate directory), exact repository root, "session", or semantic shorthand such as "workspace-event:...", "applied-change:...", "change:...", or "decision:...". A service, tool, package name, or general topic is not a target.',
         }),
         semanticRootSchema,
       ],
@@ -104,6 +104,17 @@ export interface ProvenanceToolDetails {
   historyNextCursor?: string;
   edges: number;
   nextCursor?: string;
+}
+
+export interface ProvenanceToolDiagnostic {
+  diagnostic: "invalid-target";
+  target: string;
+  acceptedTargets: readonly [
+    "session",
+    "managed repository or file path",
+    "event/application/applied-change/work-unit/change/decision/command identity",
+    "exact typed root"
+  ];
 }
 
 export interface WorkspacePathProvenanceDeps {
@@ -149,6 +160,28 @@ function semanticRootForTarget(
   throw new Error(
     `Provenance target must be a workspace path, session, or event/application/applied-change/work-unit/change/decision/command identity; received ${target}`
   );
+}
+
+function invalidTargetResult(target: string, message: string) {
+  const acceptedTargets = [
+    "session",
+    "managed repository or file path",
+    "event/application/applied-change/work-unit/change/decision/command identity",
+    "exact typed root",
+  ] as const;
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `${message}\nUse "session", an existing managed repository/file path, a returned semantic identity, or an exact typed root. Service and tool names are not provenance targets.`,
+      },
+    ],
+    details: {
+      diagnostic: "invalid-target" as const,
+      target,
+      acceptedTargets,
+    },
+  };
 }
 
 function parseRoot(input: unknown): VcsSemanticNodeRef {
@@ -281,13 +314,13 @@ function toolResult(
 export function createProvenanceTool(
   cwd: string,
   deps: ProvenanceToolDeps
-): AgentTool<typeof provenanceSchema, ProvenanceToolDetails> {
+): AgentTool<typeof provenanceSchema, ProvenanceToolDetails | ProvenanceToolDiagnostic> {
   return {
     name: "provenance",
     label: "provenance",
     executionMode: "parallel",
     description:
-      "Inspect a semantic node or managed repository/file path and walk one bounded adjacency page; managed files also include a small exact change-history preview.",
+      'Inspect "session", an exact semantic identity/root, or an existing managed repository/file path and walk one bounded adjacency page. Service/tool/package names are not targets. Managed files also include a small exact change-history preview.',
     parameters: provenanceSchema,
     execute: async (_toolCallId, input) => {
       const cursor = typeof input.after === "string" && input.after ? input.after : undefined;
@@ -329,7 +362,15 @@ export function createProvenanceTool(
           includeCursor: true,
         });
       }
-      const root = semanticRootForTarget(target, deps.session);
+      let root: VcsSemanticNodeRef;
+      try {
+        root = semanticRootForTarget(target, deps.session);
+      } catch (error) {
+        return invalidTargetResult(
+          target,
+          error instanceof Error ? error.message : `Invalid provenance target: ${target}`
+        );
+      }
       const [inspection, neighbors] = await Promise.all([
         deps.vcs.inspect({ node: root, edgeLimit: 1 }),
         deps.vcs.neighbors({

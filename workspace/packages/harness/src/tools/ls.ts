@@ -9,7 +9,6 @@
 
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool } from "@workspace/pi-core";
-import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import type { RuntimeFs, Dirent } from "./runtime-fs.js";
 import { AgentToolFailureError, agentToolFailureFromUnknown } from "@workspace/agentic-protocol";
 import { resolveToCwd } from "./path-utils.js";
@@ -27,10 +26,11 @@ const lsSchema = Type.Object({
 export type LsToolInput = Static<typeof lsSchema>;
 
 export interface LsToolDetails {
+  path: string;
+  entries?: string[];
   truncation?: TruncationResult;
   entryLimitReached?: number;
   diagnostic?: "not-found" | "not-directory";
-  path?: string;
 }
 
 const DEFAULT_LIMIT = 500;
@@ -122,14 +122,14 @@ export function createLsTool(
       if (results.length === 0) {
         return {
           content: [{ type: "text", text: "(empty directory)" }],
-          details: undefined,
-        } as { content: (TextContent | ImageContent)[]; details: undefined };
+          details: { path: dirPath, entries: [] },
+        };
       }
 
       const rawOutput = results.join("\n");
       const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
       let output = truncation.content;
-      const details: LsToolDetails = {};
+      const details: LsToolDetails = { path: dirPath, entries: results };
       const notices: string[] = [];
 
       if (entryLimitReached) {
@@ -148,7 +148,7 @@ export function createLsTool(
 
       return {
         content: [{ type: "text", text: output }],
-        details: Object.keys(details).length > 0 ? details : undefined,
+        details,
       };
     },
   };

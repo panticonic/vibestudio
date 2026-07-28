@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { Value } from "@sinclair/typebox/value";
 import { createWorkspaceVcsTool, type ToolWorkflowVcs } from "../workspace-vcs.js";
 
 function fixture() {
@@ -37,18 +36,43 @@ function fixture() {
     ],
     nextCursor: null,
   }));
-  const commit = vi.fn(async (input: Parameters<ToolWorkflowVcs["commit"]>[0]) => ({
-    contextId: input.contextId,
-    event: { kind: "event" as const, eventId: "event:new-commit" },
-    committedApplicationIds: ["application:working"],
-  }));
-  const history = vi.fn(async (input: Parameters<ToolWorkflowVcs["history"]>[0]) => ({
-    root: input.root,
+  const listDirectory = vi.fn(async (input: Parameters<ToolWorkflowVcs["listDirectory"]>[0]) => ({
+    state: input.state,
+    path: input.path,
     entries: [
       {
-        node: { kind: "change" as const, changeId: "change:history" },
-        createdAt: "2026-07-27T00:00:00.000Z",
-        summary: "Changed the fixture",
+        name: "demo",
+        path: "packages/demo",
+        kind: "directory" as const,
+        identity: "directory:demo",
+        repositoryId: "repository:packages/demo",
+        repositoryRoot: true,
+        fileId: null,
+        lineage: {
+          authoredChangeId: null,
+          authoredByWorkUnitId: "work:fixture",
+          contentClass: "external" as const,
+          externalKeys: ["fixture:test"],
+        },
+      },
+    ],
+    nextCursor: null,
+  }));
+  const listFiles = vi.fn(async (input: Parameters<ToolWorkflowVcs["listFiles"]>[0]) => ({
+    state: input.state,
+    repositoryId: input.repositoryId,
+    files: [
+      {
+        fileId: "file:demo",
+        path: "src/index.ts",
+        contentHash: "blob:demo",
+        authoredChangeId: "change:demo",
+        authoredByWorkUnitId: "work:demo",
+        contentClass: "internal" as const,
+        externalKeys: [],
+        mode: 0o644,
+        contentKind: "text" as const,
+        size: 12,
       },
     ],
     nextCursor: null,
@@ -105,9 +129,9 @@ function fixture() {
   }));
   const vcs = {
     status,
-    history,
+    listDirectory,
+    listFiles,
     compare,
-    commit,
     integrate,
     revert,
     discard,
@@ -154,7 +178,18 @@ function fixture() {
       content: { kind: "text" as const, text: "hello" },
     })),
   } as unknown as ToolWorkflowVcs;
-  return { vcs, status, history, compare, commit, integrate, discard, blame, push, working };
+  return {
+    vcs,
+    status,
+    listDirectory,
+    listFiles,
+    compare,
+    integrate,
+    discard,
+    blame,
+    push,
+    working,
+  };
 }
 
 describe("workspace VCS agent tool", () => {
@@ -167,18 +202,6 @@ describe("workspace VCS agent tool", () => {
 
     const status = await tool.execute("call:status", { operation: "status" });
     expect(status.content[0]).toMatchObject({
-      type: "text",
-      text: expect.stringContaining("dirty"),
-    });
-    expect(Value.Check(tool.parameters, {})).toBe(true);
-    const defaultStatus = await tool.execute("call:default-status", {});
-    expect(defaultStatus.content[0]).toMatchObject({
-      type: "text",
-      text: expect.stringContaining("dirty"),
-    });
-    expect(Value.Check(tool.parameters, { path: "" })).toBe(true);
-    const rootStatus = await tool.execute("call:root-status", { path: "" });
-    expect(rootStatus.content[0]).toMatchObject({
       type: "text",
       text: expect.stringContaining("dirty"),
     });
@@ -196,85 +219,146 @@ describe("workspace VCS agent tool", () => {
     });
   });
 
-  it("lists friendly file history from the current exact working state", async () => {
+  it("lists a directory at the exact current working state", async () => {
     const f = fixture();
     const tool = createWorkspaceVcsTool("/", f.vcs, {
       contextId: "context:test",
-      commandId: "command:history",
+      commandId: "command:list",
     });
 
-    const result = await tool.execute("call:history", {
-      operation: "history",
-      path: "packages/demo/a.ts",
+    const listed = await tool.execute("call:list", {
+      operation: "listDirectory",
+      path: "packages",
     });
 
-    expect(
-      Value.Check(tool.parameters, {
-        operation: "history",
-        path: "packages/demo/a.ts",
-      })
-    ).toBe(true);
-    expect(f.history).toHaveBeenCalledWith({
-      root: {
-        kind: "file",
-        state: f.working,
-        repositoryId: "repository:packages/demo",
-        fileId: "file:demo",
-      },
-      direction: "past",
+    expect(f.listDirectory).toHaveBeenCalledWith({
+      state: f.working,
+      path: "packages",
       limit: 100,
     });
-    expect(result.content[0]).toMatchObject({
+    expect(listed.content[0]).toMatchObject({
       type: "text",
-      text: expect.stringContaining("change:history"),
+      text: expect.stringContaining("directory packages/demo"),
     });
   });
 
-  it("commits through the intuitive multiplexed VCS surface", async () => {
+  it("lists a repository manifest from a path at the exact current working state", async () => {
     const f = fixture();
     const tool = createWorkspaceVcsTool("/", f.vcs, {
       contextId: "context:test",
-      commandId: "command:commit",
+      commandId: "command:list-files",
     });
 
-    expect(
-      Value.Check(tool.parameters, {
-        operation: "commit",
-        message: "Capture the semantic milestone",
-      })
-    ).toBe(true);
-    const result = await tool.execute("call:commit", {
-      operation: "commit",
-      message: "Capture the semantic milestone",
+    const listed = await tool.execute("call:list-files", {
+      operation: "listFiles",
+      path: "packages/demo",
+      prefix: "src",
     });
 
-    expect(f.commit).toHaveBeenCalledWith({
-      contextId: "context:test",
-      expectedWorkingHead: f.working,
-      commandId: "command:commit",
-      message: "Capture the semantic milestone",
+    expect(f.listFiles).toHaveBeenCalledWith({
+      state: f.working,
+      repositoryId: "repository:packages/demo",
+      prefix: "src",
+      limit: 100,
     });
-    expect(result.content[0]).toMatchObject({
+    expect(listed.content[0]).toMatchObject({
       type: "text",
-      text: expect.stringContaining("event:new-commit"),
+      text: expect.stringContaining(
+        'packages/demo/src/index.ts · root {"kind":"file","state":{"kind":"application","applicationId":"application:working"},"repositoryId":"repository:packages/demo","fileId":"file:demo"} · blob:demo'
+      ),
+    });
+    expect(listed.details).toMatchObject({
+      roots: [
+        {
+          kind: "file",
+          state: f.working,
+          repositoryId: "repository:packages/demo",
+          fileId: "file:demo",
+        },
+      ],
+    });
+  });
+
+  it("rejects the workspace root as a repository with a typed corrective reference", async () => {
+    const f = fixture();
+    const tool = createWorkspaceVcsTool("/", f.vcs, {
+      contextId: "context:test",
+      commandId: "command:list-root-files",
     });
 
-    expect(
-      Value.Check(tool.parameters, {
-        message: "Capture the shorthand semantic milestone",
-        integratesEventIds: ["event:source"],
+    await expect(
+      tool.execute("call:list-root-files", {
+        operation: "listFiles",
+        path: ".",
       })
-    ).toBe(true);
-    await tool.execute("call:inferred-commit", {
-      message: "Capture the shorthand semantic milestone",
-      integratesEventIds: ["event:source"],
+    ).rejects.toMatchObject({
+      code: "InvalidReference",
+      errorData: {
+        code: "InvalidReference",
+        referenceKind: "repository-path",
+        reference: "",
+      },
     });
-    expect(f.commit).toHaveBeenLastCalledWith({
+    expect(f.vcs.resolveRepository).not.toHaveBeenCalled();
+  });
+
+  it("returns a typed invalid reference when a repository path is absent", async () => {
+    const f = fixture();
+    vi.mocked(f.vcs.resolveRepository).mockResolvedValueOnce(null);
+    const tool = createWorkspaceVcsTool("/", f.vcs, {
       contextId: "context:test",
-      expectedWorkingHead: f.working,
-      commandId: "command:commit",
-      message: "Capture the shorthand semantic milestone",
-      integratesEventIds: ["event:source"],
+      commandId: "command:list-missing-files",
+    });
+
+    await expect(
+      tool.execute("call:list-missing-files", {
+        operation: "listFiles",
+        path: "packages/missing",
+      })
+    ).rejects.toMatchObject({
+      code: "InvalidReference",
+      errorData: {
+        code: "InvalidReference",
+        referenceKind: "repository-path",
+        reference: "packages/missing",
+      },
+    });
+  });
+
+  it("inspects and pages exact typed semantic roots without lower-level service fields", async () => {
+    const f = fixture();
+    const tool = createWorkspaceVcsTool("/", f.vcs, {
+      contextId: "context:test",
+      commandId: "command:walk",
+    });
+    const root = {
+      kind: "repository" as const,
+      state: f.working,
+      repositoryId: "repository:packages/demo",
+    };
+
+    const inspected = await tool.execute("call:inspect", {
+      operation: "inspect",
+      root,
+      limit: 7,
+    });
+    expect(f.vcs.inspect).toHaveBeenCalledWith({ node: root, edgeLimit: 7 });
+    expect(inspected.details).toMatchObject({ operation: "inspect", result: { root } });
+
+    const neighbors = await tool.execute("call:neighbors", {
+      operation: "neighbors",
+      root,
+      after: "cursor:next",
+      limit: 9,
+    });
+    expect(f.vcs.neighbors).toHaveBeenCalledWith({
+      root,
+      cursor: "cursor:next",
+      limit: 9,
+    });
+    expect(neighbors.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("contains-repository"),
     });
   });
 
@@ -479,23 +563,6 @@ describe("workspace VCS agent tool", () => {
     });
     await tool.execute("call:push", { operation: "push" });
     expect(f.push).toHaveBeenCalledWith({
-      commandId: "command:push",
-      contextId: "context:test",
-      expectedCommittedEventId: "event:committed",
-      expectedMainEventId: "event:main",
-    });
-
-    expect(
-      Value.Check(tool.parameters, {
-        operation: "push",
-        message: "Publish the verified milestone",
-      })
-    ).toBe(true);
-    await tool.execute("call:push-with-rationale", {
-      operation: "push",
-      message: "Publish the verified milestone",
-    });
-    expect(f.push).toHaveBeenLastCalledWith({
       commandId: "command:push",
       contextId: "context:test",
       expectedCommittedEventId: "event:committed",

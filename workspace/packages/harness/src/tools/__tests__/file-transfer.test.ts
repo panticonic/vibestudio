@@ -5,7 +5,9 @@ import type { ToolFileTransferVcs } from "../tool-vcs.js";
 const working = { kind: "event" as const, eventId: "event:working" };
 const next = { kind: "application" as const, applicationId: "application:next" };
 
-function fixture(options: { missing?: boolean; failure?: Error } = {}) {
+function fixture(
+  options: { missing?: boolean; failure?: Error; producedFileId?: string } = {}
+) {
   const status = vi.fn(async () => ({
     contextId: "context:1",
     committed: working,
@@ -27,9 +29,13 @@ function fixture(options: { missing?: boolean; failure?: Error } = {}) {
     if (input.file.kind !== "path") return null;
     if (options.missing && input.file.path === "src/a.ts") return null;
     const repoPath = input.repositoryId.slice("repository:".length);
+    const destinationDefault = input.file.path.endsWith("moved.ts") ? "file:stable" : "file:copy";
     return {
       repositoryId: input.repositoryId,
-      fileId: input.file.path === "src/a.ts" ? "file:stable" : "file:copy",
+      fileId:
+        input.file.path === "src/a.ts"
+          ? "file:stable"
+          : (options.producedFileId ?? destinationDefault),
       repoPath,
       path: input.file.path,
       contentHash: "blob:1",
@@ -90,7 +96,23 @@ describe("stable-identity file transfer tools", () => {
         },
       ],
     });
-    expect(result.details).toMatchObject({ operation: "moved", changeId: "change:1" });
+    expect(result.details).toMatchObject({
+      operation: "moved",
+      changeId: "change:1",
+      destination: {
+        workspacePath: "panels/target/src/moved.ts",
+        root: {
+          kind: "file",
+          state: { kind: "application", applicationId: "application:next" },
+          repositoryId: "repository:panels/target",
+          fileId: "file:stable",
+        },
+      },
+    });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining('vcs({ operation: "inspect", root: {"kind":"file"'),
+    });
   });
 
   it("copies from an exact source state", async () => {
@@ -124,6 +146,14 @@ describe("stable-identity file transfer tools", () => {
     );
     expect(result.details.operation).toBe("copied");
     expect(result.details.storage).toBe("vcs");
+    expect(result.details.destination).toMatchObject({
+      workspacePath: "panels/target/src/copied.ts",
+      root: {
+        kind: "file",
+        repositoryId: "repository:panels/target",
+        fileId: "file:copy",
+      },
+    });
   });
 
   it("uses the same direct storage contract for scratch copies and moves", async () => {
@@ -198,6 +228,30 @@ describe("stable-identity file transfer tools", () => {
       })
     ).rejects.toMatchObject({ code: "ENOENT", syscall: "move_file" });
     expect(move).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a transfer violates its identity contract", async () => {
+    const { vcs } = fixture({ producedFileId: "file:changed" });
+    const tool = createMoveFileTool("/", vcs, {
+      contextId: "context:1",
+      commandId: "command:identity-violation",
+    });
+
+    await expect(
+      tool.execute("call:identity-violation", {
+        source: "packages/source/src/a.ts",
+        destination: "panels/target/src/moved.ts",
+      })
+    ).rejects.toMatchObject({
+      code: "IntegrityFailure",
+      errorData: {
+        code: "IntegrityFailure",
+        stage: "file-transfer-identity",
+        operation: "move_file",
+        sourceFileId: "file:stable",
+        destinationFileId: "file:changed",
+      },
+    });
   });
 
   it("propagates graph/read failures", async () => {

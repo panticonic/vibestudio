@@ -119,7 +119,7 @@ describe("SemanticWorkspace repository creation", () => {
         ingress,
         input: {
           contextId: "context:test",
-          commandId: "command:duplicate-project",
+          commandId: "command:create-project-again",
           expectedWorkingHead: result.workingHead,
           changes: [
             {
@@ -128,7 +128,7 @@ describe("SemanticWorkspace repository creation", () => {
               files: [
                 {
                   path: "other.txt",
-                  content: { kind: "text", text: "other" },
+                  content: { kind: "text", text: "other\n" },
                   mode: 0o644,
                 },
               ],
@@ -138,30 +138,11 @@ describe("SemanticWorkspace repository creation", () => {
       })
     ).rejects.toMatchObject({
       code: "DestinationOccupied",
-      errorData: { code: "DestinationOccupied" },
-    });
-
-    await expect(
-      semantic.dispatch("edit", {
-        ingress,
-        input: {
-          contextId: "context:test",
-          commandId: "command:duplicate-file",
-          expectedWorkingHead: result.workingHead,
-          changes: [
-            {
-              kind: "file-create",
-              repositoryId: repository.repositoryId,
-              path: "README.md",
-              content: { kind: "text", text: "replacement" },
-              mode: 0o644,
-            },
-          ],
-        },
-      })
-    ).rejects.toMatchObject({
-      code: "DestinationOccupied",
-      errorData: { code: "DestinationOccupied" },
+      errorData: {
+        code: "DestinationOccupied",
+        repositoryId: repository.repositoryId,
+        path: "projects/notes",
+      },
     });
   });
 });

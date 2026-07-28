@@ -17,7 +17,7 @@ describe("canonical write tool", () => {
     expect(vcs.read("meta/out.txt")).toBe("hello");
     expect(vcs.lastEditInput).toMatchObject({
       commandId: "command:write",
-      expectedWorkingHead: { kind: "event", eventId: "event:genesis" },
+      expectedWorkingHead: { kind: "event", eventId: "event:committed" },
       changes: [
         {
           kind: "file-create",
@@ -34,7 +34,7 @@ describe("canonical write tool", () => {
     const tool = createWriteTool(CWD, vcs, authority);
     await tool.execute("invocation:2", { path: "meta/out.txt", content: "new" });
     expect(vcs.lastEditInput).toMatchObject({
-      expectedWorkingHead: { kind: "event", eventId: "event:genesis" },
+      expectedWorkingHead: { kind: "event", eventId: "event:committed" },
       changes: [
         {
           kind: "text-edit",

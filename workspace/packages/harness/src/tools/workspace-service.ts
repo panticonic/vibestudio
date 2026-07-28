@@ -42,6 +42,39 @@ const workspaceServiceSchema = Type.Union(
           description: 'User-facing verb phrase completing "Allow … to …".',
         }),
         description: Type.String({ description: "Plain-language purpose of the service." }),
+        presentation: Type.Object(
+          {
+            domain: Type.Union(
+              [
+                Type.Literal("files"),
+                Type.Literal("sharing"),
+                Type.Literal("accounts"),
+                Type.Literal("web"),
+                Type.Literal("automation"),
+                Type.Literal("people"),
+                Type.Literal("computer"),
+              ]
+            ),
+            verb: Type.Union([
+              Type.Literal("see"),
+              Type.Literal("act"),
+              Type.Literal("manage"),
+            ]),
+            substanceKind: Type.Optional(
+              Type.Union([
+                Type.Literal("change-set"),
+                Type.Literal("send"),
+                Type.Literal("deletion"),
+                Type.Literal("custom"),
+              ])
+            ),
+          },
+          {
+            additionalProperties: false,
+            description:
+              "How authority prompts describe the service. Sharing requires substanceKind.",
+          }
+        ),
         protocols: Type.Array(Type.String(), {
           minItems: 1,
           uniqueItems: true,
@@ -109,6 +142,11 @@ export type WorkspaceServiceToolInput =
       title: string;
       action: string;
       description: string;
+      presentation: {
+        domain: "files" | "sharing" | "accounts" | "web" | "automation" | "people" | "computer";
+        verb: "see" | "act" | "manage";
+        substanceKind?: "change-set" | "send" | "deletion" | "custom";
+      };
       protocols: string[];
       principals: Array<"host" | "user" | "code" | "session" | "mission">;
       transport:
@@ -127,6 +165,11 @@ interface ServiceDeclaration {
   title?: string;
   action?: string;
   description?: string;
+  presentation: {
+    domain: "files" | "sharing" | "accounts" | "web" | "automation" | "people" | "computer";
+    verb: "see" | "act" | "manage";
+    substanceKind?: "change-set" | "send" | "deletion" | "custom";
+  };
   protocols?: string[];
   authority: { principals: Array<"host" | "user" | "code" | "session" | "mission"> };
   durableObject?: { className: string };
@@ -240,6 +283,7 @@ export function createWorkspaceServiceTool(
           title: command.title,
           action: command.action,
           description: command.description,
+          presentation: { ...command.presentation },
           protocols: [...command.protocols],
           authority: { principals: [...command.principals] },
           ...transportDeclaration,

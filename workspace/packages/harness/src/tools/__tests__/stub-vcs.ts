@@ -19,6 +19,7 @@ export class StubVcs implements ToolEditingVcs {
   lastEditInput?: VcsEditInput;
   lastCommitInput?: VcsCommitInput;
   private version = 0;
+  private committedEventId = "event:committed";
 
   constructor(init?: StubVcsInit) {
     for (const [path, text] of Object.entries(init?.files ?? {})) {
@@ -28,7 +29,7 @@ export class StubVcs implements ToolEditingVcs {
 
   private workingHead(): VcsStateNodeRef {
     return this.version === 0
-      ? { kind: "event", eventId: "event:genesis" }
+      ? { kind: "event", eventId: this.committedEventId }
       : { kind: "application", applicationId: `application:${this.version}` };
   }
 
@@ -54,7 +55,7 @@ export class StubVcs implements ToolEditingVcs {
   async status(input: Parameters<ToolEditingVcs["status"]>[0]) {
     return {
       contextId: input.contextId,
-      committed: { kind: "event" as const, eventId: "event:committed" },
+      committed: { kind: "event" as const, eventId: this.committedEventId },
       workingHead: this.workingHead(),
       clean: this.version === 0,
       mainEventId: "event:main",
@@ -155,9 +156,11 @@ export class StubVcs implements ToolEditingVcs {
   async commit(input: VcsCommitInput) {
     this.lastCommitInput = input;
     const applications = this.version === 0 ? [] : [`application:${this.version}`];
+    this.committedEventId = `event:${this.version + 1}`;
+    this.version = 0;
     return {
       contextId: input.contextId,
-      event: { kind: "event" as const, eventId: `event:${this.version + 1}` },
+      event: { kind: "event" as const, eventId: this.committedEventId },
       committedApplicationIds: applications,
       integrationSourceEventIds: input.integratesEventIds ?? [],
     };

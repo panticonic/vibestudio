@@ -403,7 +403,7 @@ describe("canonical vcsService", () => {
     expect(semanticCall).not.toHaveBeenCalled();
   });
 
-  it("rejects exact state roots outside every caller-authorized context", async () => {
+  it("returns a corrective invalid reference for state roots outside every caller-authorized context", async () => {
     const { definition, semanticCall } = service({
       context: "context:own",
       referencesReachable: false,
@@ -418,8 +418,12 @@ describe("canonical vcsService", () => {
         },
       ])
     ).rejects.toMatchObject({
-      code: "EACCES",
-      errorData: { code: "Unauthorized", operation: "semantic-root-read" },
+      code: "EINVAL",
+      errorData: {
+        code: "InvalidReference",
+        referenceKind: "state-node",
+        reference: EVENT,
+      },
     });
     expect(semanticCall).not.toHaveBeenCalled();
   });
@@ -458,7 +462,7 @@ describe("canonical vcsService", () => {
       definition.handler(ctx, "inspect", [
         { node: { kind: "trajectory", logId: foreign.logId, head: foreign.head } },
       ])
-    ).rejects.toThrow(/outside the caller's reachable context graph/);
+    ).rejects.toThrow(/unavailable from the caller's reachable context graph/);
     expect(semanticCall).not.toHaveBeenCalled();
   });
 
@@ -563,14 +567,22 @@ describe("canonical vcsService", () => {
     await expect(
       definition.handler(caller, "inspect", [{ node: siblingInvocation, edgeLimit: 20 }])
     ).rejects.toMatchObject({
-      code: "EACCES",
-      errorData: { code: "Unauthorized", operation: "semantic-root-read" },
+      code: "EINVAL",
+      errorData: {
+        code: "InvalidReference",
+        referenceKind: "node",
+        reference: siblingInvocation,
+      },
     });
     await expect(
       definition.handler(caller, "neighbors", [{ root: siblingInvocation, limit: 20 }])
     ).rejects.toMatchObject({
-      code: "EACCES",
-      errorData: { code: "Unauthorized", operation: "semantic-root-read" },
+      code: "EINVAL",
+      errorData: {
+        code: "InvalidReference",
+        referenceKind: "node",
+        reference: siblingInvocation,
+      },
     });
     expect(semanticCall).toHaveBeenCalledTimes(chain.length * 2);
   });
