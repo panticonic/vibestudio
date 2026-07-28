@@ -123,7 +123,7 @@ describe("storage and discovery semantic validators", () => {
     )!;
     const read = invocation(
       "read",
-      { path: "workspace/skills/sandbox/RUNTIME_API.md" },
+      { path: "skills/sandbox/RUNTIME_API.md" },
       { text: "Browser panels use the semantic workspace VCS runtime surface for source changes." }
     );
     const final =
