@@ -90,6 +90,45 @@ describe("DevInstanceSupervisor", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "drains descendants when the process-group leader exits first",
+    async () => {
+      const root = temporaryRoot();
+      const readyFile = path.join(root, "ready.json");
+      let grandchildPid = 0;
+      const supervisor = new DevInstanceSupervisor({
+        sourceRoot: root,
+        command: process.execPath,
+        args: [
+          "-e",
+          [
+            "const {spawn}=require('node:child_process');",
+            "const fs=require('node:fs');",
+            "const child=spawn(process.execPath,['-e',",
+            "  'process.on(\"SIGTERM\",()=>{});setInterval(()=>{},1000)'",
+            "],{stdio:'ignore'});",
+            "fs.writeFileSync(process.argv[1],JSON.stringify({pid:child.pid}));",
+            "setTimeout(()=>process.exit(0),20);",
+          ].join(""),
+          readyFile,
+        ],
+        env: process.env,
+        stdio: "ignore",
+        stopTimeoutMs: 50,
+        readiness: {
+          file: readyFile,
+          async onReady(value) {
+            grandchildPid = (value as { pid: number }).pid;
+          },
+        },
+      });
+
+      await supervisor.start();
+      await supervisor.wait();
+      await expectProcessToDisappear(grandchildPid);
+    }
+  );
+
+  it.runIf(process.platform !== "win32")(
     "terminates the complete exact process group and escalates after the grace period",
     async () => {
       const root = temporaryRoot();

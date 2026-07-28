@@ -85,6 +85,26 @@ function signalOwnedProcess(child: ChildProcess, signal: NodeJS.Signals): void {
   }
 }
 
+function signalProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void {
+  if (process.platform === "win32" || pid === undefined) return;
+  try {
+    process.kill(-pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+}
+
+function processGroupExists(pid: number | undefined): boolean {
+  if (process.platform === "win32" || pid === undefined) return false;
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
 function forwardSignals(child: ChildProcess): () => void {
   const handlers = new Map<NodeJS.Signals, () => void>();
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
@@ -182,9 +202,23 @@ export class DevInstanceSupervisor {
 
   wait(): Promise<number> {
     if (!this.exit) throw new Error("DevInstanceSupervisor has not started");
-    return this.exit.finally(() => {
+    return this.exit.finally(async () => {
       this.stopForwarding?.();
       this.stopForwarding = null;
+      // The leader may exit without taking its descendants with it (for
+      // example, after an uncaught exception or an external SIGKILL). Since
+      // this supervisor created a detached process group, it remains the
+      // owner of that group and must drain it before the instance root is
+      // removed. The PID is captured before spawn and the cleanup happens
+      // immediately on leader exit, before it can be reused in practice.
+      if (this.child?.pid !== undefined && processGroupExists(this.child.pid)) {
+        signalProcessGroup(this.child.pid, "SIGTERM");
+        const deadline = Date.now() + (this.options.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
+        while (processGroupExists(this.child.pid) && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        if (processGroupExists(this.child.pid)) signalProcessGroup(this.child.pid, "SIGKILL");
+      }
     });
   }
 

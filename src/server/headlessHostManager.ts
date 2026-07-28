@@ -275,6 +275,12 @@ export class HeadlessHostManager {
         this.spawnedClientSessionId = null;
       }
       log.info(`headless host exited (code ${code})`);
+      // Chromium is a descendant of the detached host process group. The
+      // host can exit without taking Chromium with it (for example after a
+      // crash), so drain the exact group here before any keep-alive respawn.
+      // Explicit stop() already performs this operation; this covers the
+      // unexpected-leader-exit path that otherwise leaves Chrome orphaned.
+      if (typeof child.pid === "number") this.signalChildTree(child, "SIGTERM");
       // Keep-alive: a host we intend to always run just died — bring it back
       // (unless the manager is stopping). Backoff-respecting via scheduleEnsure.
       if (this.keepAlive && !this.stopped) this.scheduleEnsure(250);
