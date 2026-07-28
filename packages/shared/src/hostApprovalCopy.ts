@@ -525,7 +525,7 @@ export const HOST_APPROVAL_COPY = {
     },
     git: (action: "read" | "write", remote: string, label: string, credential: string) => ({
       title: action === "write" ? `Push to ${remote}` : `Fetch from ${remote}`,
-      summary: `Uses your ${credential} account to ${label} on ${remote}.`,
+      summary: `Uses ${credential} to ${label} on ${remote}.`,
     }),
     oauthConnect: (credential: string, audience: string, replacementCredential?: string) => ({
       title: `Connect ${credential}`,
@@ -535,7 +535,7 @@ export const HOST_APPROVAL_COPY = {
     }),
     credentialUse: (binding: string, credential: string, target: string) => ({
       title: `Use ${binding}`,
-      summary: `Uses your ${credential} account to access ${target}.`,
+      summary: `Uses ${credential} to access ${target}.`,
     }),
   },
 } as const;

@@ -3,12 +3,16 @@ import type {
   ApprovalOperationDescriptor,
   ApprovalRequesterCategory,
   PendingApproval,
+  PendingBrowserPermissionApproval,
   PendingCapabilityApproval,
   PendingCredentialApproval,
   PendingCredentialInputApproval,
   PendingDeviceCodeApproval,
+  PendingExternalAgentApproval,
+  PendingMissionReviewApproval,
   PendingSecretInputApproval,
   PendingUnitBatchApproval,
+  PendingUserlandApproval,
 } from "./approvals.js";
 import { HOST_APPROVAL_COPY } from "./hostApprovalCopy.js";
 
@@ -20,6 +24,10 @@ function isGitCredentialUse(use: unknown): boolean {
 function truncateId(id: string, head = 8, tail = 4): string {
   if (id.length <= head + tail + 1) return id;
   return `${id.slice(0, head)}…${id.slice(-tail)}`;
+}
+
+function isOpaqueId(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(value) || /^[0-9a-f]{24,}$/i.test(value);
 }
 
 /** Drop common id prefixes for a friendlier fallback label when no title exists. */
@@ -138,14 +146,7 @@ export function getApprovalCallerPresentation(
       ? basename(approval.repoPath)
       : "") ||
     prettifyApprovalId(approval.callerId);
-  const kindLabel = {
-    panel: "Panel",
-    app: "App",
-    worker: "Background task",
-    do: "Service",
-    extension: "Extension",
-    system: "Workspace",
-  }[approval.callerKind];
+  const kindLabel = callerKindToLabel(approval.callerKind);
   return {
     label,
     kindLabel,
@@ -370,75 +371,73 @@ function buildStandardActionCopy(
     };
   }
   if (approval.kind === "credential") {
-    if (isOAuthCredentialConnectionApproval(approval)) {
+    return buildCredentialActionCopy(approval);
+  }
+  return buildCapabilityActionCopy(approval);
+}
+
+function buildCredentialActionCopy(approval: PendingCredentialApproval): ApprovalActionCopy {
+  if (isOAuthCredentialConnectionApproval(approval)) {
+    return {
+      once: HOST_APPROVAL_COPY.actions.oauthConnect.once,
+      session: HOST_APPROVAL_COPY.actions.oauthConnect.session,
+      version: {
+        label: trustVersionLabel(approval),
+        description: `Save and allow ${exactTrustSubject(approval)} to use it.`,
+      },
+      denyDescription: HOST_APPROVAL_COPY.actions.oauthConnect.deny,
+    };
+  }
+  if (isGitCredentialUse(approval.credentialUse)) {
+    const isWrite = approval.gitOperation?.action === "write";
+    if (approval.gitOperation?.force) {
       return {
-        once: HOST_APPROVAL_COPY.actions.oauthConnect.once,
-        session: HOST_APPROVAL_COPY.actions.oauthConnect.session,
-        version: {
-          label: trustVersionLabel(approval),
-          description: `Save and allow ${exactTrustSubject(approval)} to use it.`,
-        },
-        denyDescription: HOST_APPROVAL_COPY.actions.oauthConnect.deny,
-      };
-    }
-    if (isGitCredentialUse(approval.credentialUse)) {
-      const isWrite = approval.gitOperation?.action === "write";
-      if (approval.gitOperation?.force) {
-        // Force pushes are once-only by design: no durable grant may cover
-        // overwriting remote history.
-        return {
-          once: HOST_APPROVAL_COPY.actions.forcePush.once,
-          session: null,
-          version: null,
-          denyDescription: HOST_APPROVAL_COPY.actions.forcePush.deny,
-        };
-      }
-      return {
-        once: isWrite
-          ? HOST_APPROVAL_COPY.actions.gitWrite.once
-          : HOST_APPROVAL_COPY.actions.gitRead.once,
-        session: isWrite
-          ? HOST_APPROVAL_COPY.actions.gitWrite.session
-          : HOST_APPROVAL_COPY.actions.gitRead.session,
-        version: {
-          label: trustVersionLabel(approval),
-          description: isWrite
-            ? `Allow ${exactTrustSubject(approval)} to push to this remote.`
-            : `Allow ${exactTrustSubject(approval)} to read from this remote.`,
-        },
-        denyDescription: isWrite
-          ? HOST_APPROVAL_COPY.actions.gitWrite.deny
-          : HOST_APPROVAL_COPY.actions.gitRead.deny,
+        once: HOST_APPROVAL_COPY.actions.forcePush.once,
+        session: null,
+        version: null,
+        denyDescription: HOST_APPROVAL_COPY.actions.forcePush.deny,
       };
     }
     return {
-      once: {
-        label: HOST_APPROVAL_COPY.actions.credentialUse.onceLabel,
-        description: `Use ${formatCredentialUseTarget(approval)} for this request only.`,
-      },
-      session: {
-        label: HOST_APPROVAL_COPY.actions.credentialUse.sessionLabel,
-        description: `Keep using ${formatCredentialUseTarget(approval)} until you restart.`,
-      },
+      once: isWrite
+        ? HOST_APPROVAL_COPY.actions.gitWrite.once
+        : HOST_APPROVAL_COPY.actions.gitRead.once,
+      session: isWrite
+        ? HOST_APPROVAL_COPY.actions.gitWrite.session
+        : HOST_APPROVAL_COPY.actions.gitRead.session,
       version: {
         label: trustVersionLabel(approval),
-        description: `Allow ${exactTrustSubject(approval)} to use ${formatCredentialUseTarget(approval)}.`,
+        description: isWrite
+          ? `Allow ${exactTrustSubject(approval)} to push to this remote.`
+          : `Allow ${exactTrustSubject(approval)} to read from this remote.`,
       },
-      denyDescription: HOST_APPROVAL_COPY.actions.credentialUse.deny,
+      denyDescription: isWrite
+        ? HOST_APPROVAL_COPY.actions.gitWrite.deny
+        : HOST_APPROVAL_COPY.actions.gitRead.deny,
     };
   }
-  if (isOAuthExternalApproval(approval)) {
-    return {
-      once: HOST_APPROVAL_COPY.actions.browserSignIn.once,
-      session: HOST_APPROVAL_COPY.actions.browserSignIn.session,
-      version: {
-        label: trustVersionLabel(approval),
-        description: `Allow this sign-in origin for ${exactTrustSubject(approval)}.`,
-      },
-      denyDescription: HOST_APPROVAL_COPY.actions.browserSignIn.deny,
-    };
-  }
-  if (approval.capability === "workspace-main-advance") {
+  return {
+    once: {
+      label: HOST_APPROVAL_COPY.actions.credentialUse.onceLabel,
+      description: `Use ${formatCredentialUseTarget(approval)} for this request only.`,
+    },
+    session: {
+      label: HOST_APPROVAL_COPY.actions.credentialUse.sessionLabel,
+      description: `Keep using ${formatCredentialUseTarget(approval)} until you restart.`,
+    },
+    version: {
+      label: trustVersionLabel(approval),
+      description: `Allow ${exactTrustSubject(approval)} to use ${formatCredentialUseTarget(approval)}.`,
+    },
+    denyDescription: HOST_APPROVAL_COPY.actions.credentialUse.deny,
+  };
+}
+
+const CAPABILITY_ACTION_HANDLERS: Record<
+  string,
+  (approval: PendingCapabilityApproval) => ApprovalActionCopy | null
+> = {
+  "workspace-main-advance"(approval) {
     const isWorkspaceSourceChange = approval.grantResourceKey?.startsWith(
       "workspace-source-change:"
     );
@@ -475,8 +474,8 @@ function buildStandardActionCopy(
         ? HOST_APPROVAL_COPY.actions.workspaceConfig.deny
         : HOST_APPROVAL_COPY.actions.workspaceWrite.deny,
     };
-  }
-  if (approval.capability === "workspace-shared-git-remote") {
+  },
+  "workspace-shared-git-remote"(approval) {
     return {
       once: HOST_APPROVAL_COPY.actions.sharedRemote.once,
       session: HOST_APPROVAL_COPY.actions.sharedRemote.session,
@@ -486,8 +485,8 @@ function buildStandardActionCopy(
       },
       denyDescription: HOST_APPROVAL_COPY.actions.sharedRemote.deny,
     };
-  }
-  if (approval.capability === "workspace-project-import") {
+  },
+  "workspace-project-import"(approval) {
     return {
       once: HOST_APPROVAL_COPY.actions.projectImport.once,
       session: HOST_APPROVAL_COPY.actions.projectImport.session,
@@ -497,8 +496,8 @@ function buildStandardActionCopy(
       },
       denyDescription: HOST_APPROVAL_COPY.actions.projectImport.deny,
     };
-  }
-  if (approval.capability === "network.response.read") {
+  },
+  "network.response.read"(approval) {
     const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
     return {
       once: HOST_APPROVAL_COPY.actions.network.once,
@@ -512,8 +511,8 @@ function buildStandardActionCopy(
       },
       denyDescription: `Do not connect to ${destination}.`,
     };
-  }
-  if (approval.capability === "cors-response-read") {
+  },
+  "cors-response-read"(approval) {
     const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
     return {
       once: HOST_APPROVAL_COPY.actions.cors.once,
@@ -527,6 +526,25 @@ function buildStandardActionCopy(
       },
       denyDescription: `Do not read responses from ${destination}.`,
     };
+  },
+};
+
+function buildCapabilityActionCopy(approval: PendingCapabilityApproval): ApprovalActionCopy {
+  if (isOAuthExternalApproval(approval)) {
+    return {
+      once: HOST_APPROVAL_COPY.actions.browserSignIn.once,
+      session: HOST_APPROVAL_COPY.actions.browserSignIn.session,
+      version: {
+        label: trustVersionLabel(approval),
+        description: `Allow this sign-in origin for ${exactTrustSubject(approval)}.`,
+      },
+      denyDescription: HOST_APPROVAL_COPY.actions.browserSignIn.deny,
+    };
+  }
+  const handler = CAPABILITY_ACTION_HANDLERS[approval.capability];
+  if (handler) {
+    const result = handler(approval);
+    if (result) return result;
   }
   if (isBrowserOpenApproval(approval)) {
     return {
@@ -680,12 +698,12 @@ export function getApprovalAttribution(approval: PendingApproval): ApprovalAttri
     }
     if (isOAuthCredentialConnectionApproval(approval)) {
       const account = formatAccount(approval);
-      return account && account !== approval.credentialId
+      return account && account !== approval.credentialId && !isOpaqueId(account)
         ? { relation: "as", target: account }
         : {};
     }
     const account = formatAccount(approval);
-    return account && account !== approval.credentialId
+    return account && account !== approval.credentialId && !isOpaqueId(account)
       ? { relation: "as", target: account }
       : { relation: "using", target: approval.credentialLabel };
   }
@@ -708,172 +726,199 @@ export function getApprovalCopy(approval: PendingApproval): {
   summary: string;
   warning?: string;
 } {
-  if (approval.kind === "mission-review") {
-    return {
-      title:
-        approval.reviewKind === "out-of-charter"
-          ? `${approval.title} needs a new permission`
-          : `Review ${approval.title}`,
-      summary:
-        approval.reviewKind === "out-of-charter"
-          ? `${approval.title} stopped before doing something outside its approved toolkit.`
-          : `${approval.title} is ready for your review.`,
-    };
-  }
-  if (approval.kind === "browser-permission") {
-    const capabilities = approval.capabilities.join(" and ");
-    return {
-      title: `Allow ${capabilities} on ${approval.origin}?`,
-      summary: `${approval.origin} wants to use ${capabilities} on ${approval.deviceLabel}.`,
-    };
-  }
-  if (approval.kind === "unit-batch") {
-    const count = approval.units.length;
-    const unitLabel = unitBatchLabel(approval);
-    const composition = unitBatchComposition(approval);
-    const fallbackTitle = HOST_APPROVAL_COPY.unitReview.title(
-      approval.trigger,
-      count,
-      unitLabel.singular,
-      composition
-    );
-    const fallbackSummary = HOST_APPROVAL_COPY.unitReview.summary(
-      approval.trigger,
-      count,
-      unitLabel.singular,
-      unitLabel.nativeCode,
-      composition
-    );
-    return {
-      title: concreteBatchCopy(approval.title, fallbackTitle),
-      summary: concreteBatchCopy(approval.description, fallbackSummary),
-      ...(count > 0 ? { warning: unitBatchWarning(approval) } : {}),
-    };
-  }
-  if (approval.kind === "capability") {
-    if (approval.capability === "workspace-main-advance") {
-      const destination = approval.resource?.value ?? "this repository";
-      if (approval.grantResourceKey?.startsWith("workspace-source-change:")) {
-        return HOST_APPROVAL_COPY.headlines.workspaceSourceUpdate(destination);
-      }
-      if (destination === "meta") {
-        return HOST_APPROVAL_COPY.headlines.workspaceConfigEdit;
-      }
-      return HOST_APPROVAL_COPY.headlines.repositoryWrite(destination);
-    }
-    if (approval.capability === "workspace-shared-git-remote") {
-      const destination = approval.resource?.value ?? "this repository";
-      const operation =
-        approval.details?.find((detail) => detail.label === "Operation")?.value ??
-        "change a shared remote";
-      const fallback = HOST_APPROVAL_COPY.headlines.sharedRemote(destination, operation);
-      return { ...fallback, title: approval.title || fallback.title };
-    }
-    if (approval.capability === "workspace-project-import") {
-      const destination = approval.resource?.value ?? "this project";
-      const fallback = HOST_APPROVAL_COPY.headlines.projectImport(destination);
-      return { ...fallback, title: approval.title || fallback.title };
-    }
-    if (approval.capability === "network.response.read") {
-      const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
-      const fallback = HOST_APPROVAL_COPY.headlines.networkConnect(destination);
-      return { title: fallback.title, summary: approval.description ?? fallback.summary };
-    }
-    if (approval.capability === "cors-response-read") {
-      const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
-      const fallback = HOST_APPROVAL_COPY.headlines.corsRead(destination);
-      return { title: fallback.title, summary: approval.description ?? fallback.summary };
-    }
-    if (approval.capability === "workerd.inspector") {
-      const target = approval.resource?.value ?? approval.operation?.object?.value ?? "workerd";
-      const fallback = HOST_APPROVAL_COPY.headlines.inspectRuntime(target);
-      return {
-        title: targetAwareGenericTitle(approval.title, fallback.title),
-        summary: approval.description ?? fallback.summary,
-      };
-    }
-    if (approval.capability === "context.boundary") {
-      const owner = approval.details?.find((d) => d.label === "Owner")?.value;
-      const target =
-        approval.resource?.value ?? approval.operation?.object?.value ?? "another context";
-      const subject = owner
-        ? `the workspace branch owned by ${owner}`
-        : `workspace branch ${target}`;
-      const fallbackTitle = contextBoundaryFallbackTitle(
-        approval.operation?.verb ?? approval.title,
-        subject
+  switch (approval.kind) {
+    case "mission-review":
+      return getMissionReviewCopy(approval);
+    case "browser-permission":
+      return getBrowserPermissionCopy(approval);
+    case "unit-batch":
+      return getUnitBatchCopy(approval);
+    case "capability":
+      return getCapabilityCopy(approval);
+    case "client-config":
+      return HOST_APPROVAL_COPY.headlines.setupService(formatServiceName(approval.configId));
+    case "credential-input":
+      return HOST_APPROVAL_COPY.headlines.credentialInput(
+        approval.credentialLabel,
+        formatCredentialInputAudienceSummary(approval)
       );
+    case "secret-input":
       return {
-        title: targetAwareGenericTitle(approval.title, fallbackTitle),
-        summary:
-          approval.description ?? HOST_APPROVAL_COPY.headlines.contextBoundarySummary(subject),
-        warning: HOST_APPROVAL_COPY.headlines.contextBoundaryWarning,
+        title: approval.title,
+        summary: approval.description ?? HOST_APPROVAL_COPY.headlines.secretInputFallback,
+        warning: approval.warning,
       };
+    case "userland":
+      return getUserlandCopy(approval);
+    case "external-agent":
+      return getExternalAgentCopy(approval);
+    case "device-code":
+      return HOST_APPROVAL_COPY.headlines.deviceSignIn(
+        approval.credentialLabel,
+        approval.userCode,
+        originForUrl(approval.verificationUri)
+      );
+    case "credential":
+      return getCredentialCopy(approval);
+  }
+}
+
+function getMissionReviewCopy(approval: PendingMissionReviewApproval) {
+  return {
+    title:
+      approval.reviewKind === "out-of-charter"
+        ? `${approval.title} needs a new permission`
+        : `Review ${approval.title}`,
+    summary:
+      approval.reviewKind === "out-of-charter"
+        ? `${approval.title} stopped before doing something outside its approved toolkit.`
+        : `${approval.title} is ready for your review.`,
+  };
+}
+
+function getBrowserPermissionCopy(approval: PendingBrowserPermissionApproval) {
+  const capabilities = approval.capabilities.join(" and ");
+  return {
+    title: `Allow ${capabilities} on ${approval.origin}?`,
+    summary: `${approval.origin} wants to use ${capabilities} on ${approval.deviceLabel}.`,
+  };
+}
+
+function getUnitBatchCopy(approval: PendingUnitBatchApproval) {
+  const count = approval.units.length;
+  const unitLabel = unitBatchLabel(approval);
+  const composition = unitBatchComposition(approval);
+  const fallbackTitle = HOST_APPROVAL_COPY.unitReview.title(
+    approval.trigger,
+    count,
+    unitLabel.singular,
+    composition
+  );
+  const fallbackSummary = HOST_APPROVAL_COPY.unitReview.summary(
+    approval.trigger,
+    count,
+    unitLabel.singular,
+    unitLabel.nativeCode,
+    composition
+  );
+  return {
+    title: concreteBatchCopy(approval.title, fallbackTitle),
+    summary: concreteBatchCopy(approval.description, fallbackSummary),
+    ...(count > 0 ? { warning: unitBatchWarning(approval) } : {}),
+  };
+}
+
+function getUserlandCopy(approval: PendingUserlandApproval) {
+  const subjectName = approval.subject.label ?? approval.subject.id;
+  return {
+    title: approval.title,
+    summary: approval.summary ?? `Decision about ${subjectName}.`,
+    warning: approval.warning,
+  };
+}
+
+function getExternalAgentCopy(approval: PendingExternalAgentApproval) {
+  const fallback = HOST_APPROVAL_COPY.headlines.externalAgent(approval.operationName);
+  return { title: fallback.title, summary: approval.description ?? fallback.summary };
+}
+
+type ApprovalCopyResult = { title: string; summary: string; warning?: string };
+
+const CAPABILITY_COPY_HANDLERS: Record<
+  string,
+  (approval: PendingCapabilityApproval) => ApprovalCopyResult | null
+> = {
+  "workspace-main-advance"(approval) {
+    const destination = approval.resource?.value ?? "this repository";
+    if (approval.grantResourceKey?.startsWith("workspace-source-change:")) {
+      return HOST_APPROVAL_COPY.headlines.workspaceSourceUpdate(destination);
     }
-    if (approval.capability === "client-config-delete") {
-      const target = approval.resource?.value ?? "this service configuration";
-      const fallback = HOST_APPROVAL_COPY.headlines.disableService(formatServiceName(target));
-      return {
-        title: targetAwareGenericTitle(approval.title, fallback.title),
-        summary: approval.description ?? fallback.summary,
-      };
+    if (destination === "meta") {
+      return HOST_APPROVAL_COPY.headlines.workspaceConfigEdit;
     }
-    if (isBrowserOpenApproval(approval)) {
-      const isOAuth = isOAuthExternalApproval(approval);
-      const destination = formatCapabilityDestination(approval, isOAuth);
-      if (isOAuth) {
-        return HOST_APPROVAL_COPY.headlines.browserSignIn(destination);
-      }
-      return HOST_APPROVAL_COPY.headlines.browserOpen(destination);
-    }
-    const target = genericCapabilityTarget(approval);
-    const fallback = HOST_APPROVAL_COPY.headlines.genericCapability(target);
+    return HOST_APPROVAL_COPY.headlines.repositoryWrite(destination);
+  },
+  "workspace-shared-git-remote"(approval) {
+    const destination = approval.resource?.value ?? "this repository";
+    const operation =
+      approval.details?.find((detail) => detail.label === "Operation")?.value ??
+      "change a shared remote";
+    const fallback = HOST_APPROVAL_COPY.headlines.sharedRemote(destination, operation);
+    return { ...fallback, title: approval.title || fallback.title };
+  },
+  "workspace-project-import"(approval) {
+    const destination = approval.resource?.value ?? "this project";
+    const fallback = HOST_APPROVAL_COPY.headlines.projectImport(destination);
+    return { ...fallback, title: approval.title || fallback.title };
+  },
+  "network.response.read"(approval) {
+    const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
+    const fallback = HOST_APPROVAL_COPY.headlines.networkConnect(destination);
+    return { title: fallback.title, summary: approval.description ?? fallback.summary };
+  },
+  "cors-response-read"(approval) {
+    const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
+    const fallback = HOST_APPROVAL_COPY.headlines.corsRead(destination);
+    return { title: fallback.title, summary: approval.description ?? fallback.summary };
+  },
+  "workerd.inspector"(approval) {
+    const target = approval.resource?.value ?? approval.operation?.object?.value ?? "workerd";
+    const fallback = HOST_APPROVAL_COPY.headlines.inspectRuntime(target);
     return {
       title: targetAwareGenericTitle(approval.title, fallback.title),
       summary: approval.description ?? fallback.summary,
     };
-  }
-  if (approval.kind === "client-config") {
-    return HOST_APPROVAL_COPY.headlines.setupService(formatServiceName(approval.configId));
-  }
-  if (approval.kind === "credential-input") {
-    const audience = formatCredentialInputAudienceSummary(approval);
-    return HOST_APPROVAL_COPY.headlines.credentialInput(approval.credentialLabel, audience);
-  }
-  if (approval.kind === "secret-input") {
-    return {
-      title: approval.title,
-      summary: approval.description ?? HOST_APPROVAL_COPY.headlines.secretInputFallback,
-      warning: approval.warning,
-    };
-  }
-  if (approval.kind === "userland") {
-    // The provider-supplied title IS the headline: it's the decision the user
-    // actually needs to scan. The fact that a userland process is asking is
-    // demoted to trusted chrome around it (the requester chip) so provider text
-    // can describe the request without impersonating the verified-issuer chrome.
-    const subjectName = approval.subject.label ?? approval.subject.id;
-    return {
-      title: approval.title,
-      summary: approval.summary ?? `Decision about ${subjectName}.`,
-      warning: approval.warning,
-    };
-  }
-  if (approval.kind === "external-agent") {
-    // The headline names the operation the linked agent wants to run; the
-    // description (from the agent) is retained for push/summary surfaces. The
-    // preview renders as a monospace block on the card itself.
-    const fallback = HOST_APPROVAL_COPY.headlines.externalAgent(approval.operationName);
-    return { title: fallback.title, summary: approval.description ?? fallback.summary };
-  }
-  if (approval.kind === "device-code") {
-    return HOST_APPROVAL_COPY.headlines.deviceSignIn(
-      approval.credentialLabel,
-      approval.userCode,
-      originForUrl(approval.verificationUri)
+  },
+  "context.boundary"(approval) {
+    const owner = approval.details?.find((d) => d.label === "Owner")?.value;
+    const target =
+      approval.resource?.value ?? approval.operation?.object?.value ?? "another context";
+    const subject = owner
+      ? `the workspace branch owned by ${owner}`
+      : `workspace branch ${target}`;
+    const fallbackTitle = contextBoundaryFallbackTitle(
+      approval.operation?.verb ?? approval.title,
+      subject
     );
-  }
+    return {
+      title: targetAwareGenericTitle(approval.title, fallbackTitle),
+      summary:
+        approval.description ?? HOST_APPROVAL_COPY.headlines.contextBoundarySummary(subject),
+      warning: HOST_APPROVAL_COPY.headlines.contextBoundaryWarning,
+    };
+  },
+  "client-config-delete"(approval) {
+    const target = approval.resource?.value ?? "this service configuration";
+    const fallback = HOST_APPROVAL_COPY.headlines.disableService(formatServiceName(target));
+    return {
+      title: targetAwareGenericTitle(approval.title, fallback.title),
+      summary: approval.description ?? fallback.summary,
+    };
+  },
+};
 
+function getCapabilityCopy(approval: PendingCapabilityApproval): ApprovalCopyResult {
+  const handler = CAPABILITY_COPY_HANDLERS[approval.capability];
+  if (handler) {
+    const result = handler(approval);
+    if (result) return result;
+  }
+  if (isBrowserOpenApproval(approval)) {
+    const isOAuth = isOAuthExternalApproval(approval);
+    const destination = formatCapabilityDestination(approval, isOAuth);
+    return isOAuth
+      ? HOST_APPROVAL_COPY.headlines.browserSignIn(destination)
+      : HOST_APPROVAL_COPY.headlines.browserOpen(destination);
+  }
+  const target = genericCapabilityTarget(approval);
+  const fallback = HOST_APPROVAL_COPY.headlines.genericCapability(target);
+  return {
+    title: targetAwareGenericTitle(approval.title, fallback.title),
+    summary: approval.description ?? fallback.summary,
+  };
+}
+
+function getCredentialCopy(approval: PendingCredentialApproval): ApprovalCopyResult {
   const audience = formatAudienceSummary(approval);
   if (isGitCredentialUse(approval.credentialUse)) {
     const operation = approval.gitOperation;
@@ -925,20 +970,25 @@ function concreteBatchCopy(value: string | undefined, fallback: string): string 
 function userlandCallerKindLabel(
   kind: "panel" | "app" | "worker" | "do" | "extension" | "system"
 ): string {
-  switch (kind) {
-    case "panel":
-      return "Panel";
-    case "app":
-      return "App";
-    case "worker":
-      return "Background task";
-    case "do":
-      return "Service";
-    case "extension":
-      return "Extension";
-    case "system":
-      return "Workspace";
-  }
+  return callerKindToLabel(kind);
+}
+
+const CALLER_KIND_TO_CATEGORY: Record<string, keyof typeof HOST_APPROVAL_COPY.requesterCategories> = {
+  panel: "panel",
+  app: "workspace-app",
+  worker: "worker",
+  do: "durable-object",
+  extension: "extension",
+  system: "system",
+};
+
+function callerKindToLabel(kind: string): string {
+  const categoryKey = CALLER_KIND_TO_CATEGORY[kind] ?? kind;
+  return (
+    HOST_APPROVAL_COPY.requesterCategories[
+      categoryKey as keyof typeof HOST_APPROVAL_COPY.requesterCategories
+    ] ?? "Requester"
+  );
 }
 
 export function getCapabilityPrimaryDestination(approval: PendingCapabilityApproval): string {

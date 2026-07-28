@@ -202,6 +202,24 @@ Authority principals: `code`, `host`, `user`
 | `development.writeNativeTerminal` | Write interactive input to the native session's owned terminal. |
 | `development.resizeNativeTerminal` | Resize the native session's owned terminal. |
 
+## `developmentClientExecutor`
+
+Owner-bound desktop executors for exact development-client launches
+
+Authority principals: `user`
+
+| Method | Description |
+|--------|-------------|
+| `developmentClientExecutor.register` | Register or refresh this authenticated desktop as a reviewed Electron development executor. |
+| `developmentClientExecutor.claim` | Claim an exact pending development-client launch addressed to this desktop. |
+| `developmentClientExecutor.readArtifact` | Read one bounded chunk of an exact pending artifact into the selected executor's owned root. |
+| `developmentClientExecutor.launched` | Record the selected trusted executor's owned-process launch receipt. |
+| `developmentClientExecutor.attest` | Attest readiness from the newly paired child session; identity and user are derived from the verified caller. |
+| `developmentClientExecutor.bindIsolatedManager` | Bind the exact isolated generation's already-paired management device before any client invite is issued. |
+| `developmentClientExecutor.consumeAttestation` | Consume one nonce-bound paired-child attestation through the exact isolated management device. |
+| `developmentClientExecutor.fail` | Report a bounded launch failure from the exact selected desktop executor. |
+| `developmentClientExecutor.exited` | Report exact owned-process exit and cleanup; the host derives whether it was an intentional stop. |
+
 ## `docs`
 
 Agent-facing capability catalog: discover services and runtime APIs with typed schemas, access rules, and examples (results filtered to what the caller may invoke).
@@ -444,6 +462,7 @@ Authority principals: `host`, `user`
 | `panelRuntime.acquire` | Acquire the runtime lease for a panel entity. Succeeds for the current holder or an unleased entity; otherwise returns acquired:false with the existing lease. |
 | `panelRuntime.takeOver` | Forcibly take over a panel entity's runtime lease, revoking and closing any conflicting holder's connection. |
 | `panelRuntime.release` | Release the lease for a panel entity held by the given connection id. No-op unless the connection matches the current holder. |
+| `panelRuntime.reportView` | Report the current page and boot observation for a leased panel from a host without an inspection transport. |
 
 ## `panelTree`
 
@@ -456,6 +475,7 @@ Authority principals: `code`, `host`, `user`
 | `panelTree.list` | List the children of a panel (or the root panels when the parent id is null/omitted). |
 | `panelTree.roots` | List all root-level panels in the tree. |
 | `panelTree.getTreeSnapshot` | Return a full snapshot of the panel tree (revision plus root panels). |
+| `panelTree.attachInitialPanels` | Authenticated-owner attach boundary: reconcile that owner's configured initial panels once and return the authoritative tree snapshot. |
 | `panelTree.getFocusedPanelId` | Return the id of the currently focused panel, or null if none is focused. |
 | `panelTree.create` | Internal structural primitive: durably create an explicitly declared code or external-document panel and return its initial observation while boot continues. Application callers use openPanel, which waits for boot readiness. |
 | `panelTree.focus` | Focus a panel and return only after its current attempt is boot-ready; throws the canonical structured failure otherwise. |

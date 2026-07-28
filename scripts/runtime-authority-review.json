@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:2c89d5217063245bcee1b967c8f3192b072a920e3ede502d872a1001db5a7904",
+  "censusDigest": "sha256:58af7e43bd6374397366a138498401b91e208b2247eb9671998e309d05df9b98",
   "decisions": {
     "direct:src/server/internalDOs/evalDO.ts:appendAuthorityEvent": {
       "review": "host-only-eval-authority-event-ingress",

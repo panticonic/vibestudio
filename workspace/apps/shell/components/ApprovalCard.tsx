@@ -348,10 +348,6 @@ export function ApprovalCard({
               ) : null}
             </Flex>
 
-            {approval.kind === "credential" && approval.grantResource ? (
-              <ApprovalGrantSummary approval={approval} />
-            ) : null}
-
             {copy.warning ? (
               <Flex align="start" gap="1" style={{ color: "var(--red-11)" }}>
                 <Box style={{ flexShrink: 0, paddingTop: 2 }}>
@@ -747,28 +743,6 @@ export function ApprovalKindIcon({
   if (approval.kind === "client-config" || approval.kind === "credential-input")
     return <GearIcon width={size} height={size} />;
   return <LockClosedIcon width={size} height={size} />;
-}
-
-function ApprovalGrantSummary({ approval }: { approval: PendingCredentialApproval }) {
-  if (!approval.grantResource) return null;
-  return (
-    <Flex align="center" gap="2" wrap="wrap" style={{ minWidth: 0 }}>
-      <Badge color="sky" variant="soft">
-        {approval.bindingLabel ?? approval.grantResource.bindingId}
-      </Badge>
-      <Text size="1" color="gray" style={{ flexShrink: 0 }}>
-        {approval.grantResource.action}
-      </Text>
-      <Code
-        size="1"
-        variant="soft"
-        color="gray"
-        style={{ maxWidth: "100%", overflowWrap: "anywhere" }}
-      >
-        {approval.grantResource.resource}
-      </Code>
-    </Flex>
-  );
 }
 
 function QueueNavigator({
@@ -1524,6 +1498,7 @@ function ApprovalDetails({
 }) {
   const detailsProps = defaultOpen ? { open: true } : {};
   return (
+    <>
     <details className="approval-details" {...detailsProps}>
       <summary>
         <ChevronDownIcon className="approval-details-chevron" width={13} height={13} />
@@ -1534,21 +1509,9 @@ function ApprovalDetails({
           icon={<PersonIcon />}
           label="Requester"
           value={
-            <Flex align="center" gap="2" wrap="wrap">
-              <InlineCode>
-                {caller.kindLabel} · {caller.label}
-              </InlineCode>
-              <Tooltip content={`Full id — click to select: ${approval.callerId}`}>
-                <Code
-                  size="1"
-                  variant="soft"
-                  color="gray"
-                  style={{ cursor: "text", userSelect: "all" }}
-                >
-                  {caller.shortId}
-                </Code>
-              </Tooltip>
-            </Flex>
+            <InlineCode>
+              {caller.kindLabel} · {caller.label}
+            </InlineCode>
           }
         />
         {approval.requester?.breadcrumbs && approval.requester.breadcrumbs.length > 1 ? (
@@ -1556,6 +1519,58 @@ function ApprovalDetails({
             icon={<GearIcon />}
             label="Chain"
             value={<RequesterBreadcrumbs approval={approval} />}
+          />
+        ) : null}
+        {approval.kind === "credential" ? (
+          <CredentialDetails approval={approval} />
+        ) : approval.kind === "client-config" ? (
+          <ClientConfigDetails approval={approval} />
+        ) : approval.kind === "credential-input" ? (
+          <CredentialInputDetails approval={approval} />
+        ) : approval.kind === "userland" ? (
+          <UserlandDetails approval={approval} />
+        ) : approval.kind === "external-agent" ? (
+          <ExternalAgentDetails approval={approval} />
+        ) : approval.kind === "device-code" ? (
+          <DeviceCodeDetails approval={approval} />
+        ) : approval.kind === "unit-batch" ? (
+          <UnitBatchDetails approval={approval} />
+        ) : approval.kind === "secret-input" ? (
+          <SecretInputDetails approval={approval} />
+        ) : approval.kind === "browser-permission" ? (
+          <BrowserPermissionDetails approval={approval} />
+        ) : approval.kind === "mission-review" ? null : (
+          <CapabilityDetails approval={approval} />
+        )}
+      </Flex>
+    </details>
+    <details className="approval-details">
+      <summary>
+        <ChevronDownIcon className="approval-details-chevron" width={13} height={13} />
+        Developer details
+      </summary>
+      <Flex direction="column" gap="2" pt="2">
+        <Detail
+          icon={<PersonIcon />}
+          label="Caller ID"
+          value={
+            <Tooltip content="Click to select">
+              <Code
+                size="1"
+                variant="soft"
+                color="gray"
+                style={{ cursor: "text", userSelect: "all", maxWidth: "100%", overflowWrap: "anywhere" }}
+              >
+                {approval.callerId}
+              </Code>
+            </Tooltip>
+          }
+        />
+        {approval.requester ? (
+          <Detail
+            icon={<LockClosedIcon />}
+            label="Trust key"
+            value={<IdCode value={approval.requester.stableIdentityKey} />}
           />
         ) : null}
         {approval.requester?.eval ? (
@@ -1575,13 +1590,6 @@ function ApprovalDetails({
                 ) : null}
               </Flex>
             }
-          />
-        ) : null}
-        {approval.requester ? (
-          <Detail
-            icon={<LockClosedIcon />}
-            label="Trust key"
-            value={<IdCode value={approval.requester.stableIdentityKey} />}
           />
         ) : null}
         {approval.operation ? (
@@ -1611,29 +1619,9 @@ function ApprovalDetails({
           label="Requester version"
           value={<IdCode value={approval.effectiveVersion} />}
         />
-        {approval.kind === "credential" ? (
-          <CredentialDetails approval={approval} />
-        ) : approval.kind === "client-config" ? (
-          <ClientConfigDetails approval={approval} />
-        ) : approval.kind === "credential-input" ? (
-          <CredentialInputDetails approval={approval} />
-        ) : approval.kind === "userland" ? (
-          <UserlandDetails approval={approval} />
-        ) : approval.kind === "external-agent" ? (
-          <ExternalAgentDetails approval={approval} />
-        ) : approval.kind === "device-code" ? (
-          <DeviceCodeDetails approval={approval} />
-        ) : approval.kind === "unit-batch" ? (
-          <UnitBatchDetails approval={approval} />
-        ) : approval.kind === "secret-input" ? (
-          <SecretInputDetails approval={approval} />
-        ) : approval.kind === "browser-permission" ? (
-          <BrowserPermissionDetails approval={approval} />
-        ) : approval.kind === "mission-review" ? null : (
-          <CapabilityDetails approval={approval} />
-        )}
       </Flex>
     </details>
+    </>
   );
 }
 

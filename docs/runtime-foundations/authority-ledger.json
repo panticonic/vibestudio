@@ -20816,7 +20816,7 @@
         "key": "service:developmentClientExecutor.attest"
       },
       "authorityPrincipals": [
-        "host"
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -20837,7 +20837,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:developmentClientExecutor.attest)",
+      "r3aRequirement": "allOf(capability(user,service:developmentClientExecutor.attest),workspace-member)",
       "r3b": {
         "review": "paired-child-launch-attestation",
         "change": "Accepts only the opaque request nonce from a newly paired shell. User, runtime, provider separation, and expected execution identity are all derived from verified caller and live pending state, never from attestation arguments."
@@ -20855,7 +20855,7 @@
         "key": "service:developmentClientExecutor.bindIsolatedManager"
       },
       "authorityPrincipals": [
-        "host"
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -20876,7 +20876,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:developmentClientExecutor.bindIsolatedManager)",
+      "r3aRequirement": "allOf(capability(user,service:developmentClientExecutor.bindIsolatedManager),workspace-member)",
       "r3b": {
         "review": "exact-isolated-management-device-binding",
         "change": "Binds the already ordinarily paired management shell to the process-provided exact isolated instance and generation before any client invite is issued. A different device cannot replace it."
@@ -20894,7 +20894,7 @@
         "key": "service:developmentClientExecutor.claim"
       },
       "authorityPrincipals": [
-        "host"
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -20915,7 +20915,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:developmentClientExecutor.claim)",
+      "r3aRequirement": "allOf(capability(user,service:developmentClientExecutor.claim),workspace-member)",
       "r3b": {
         "review": "exact-addressed-client-launch-claim",
         "change": "Lets only the selected initiating desktop claim one opaque request containing an integrity manifest and ordinary pairing invite. Native server paths, credentials, and foreign-user launches are not exposed."
@@ -20933,7 +20933,7 @@
         "key": "service:developmentClientExecutor.consumeAttestation"
       },
       "authorityPrincipals": [
-        "host"
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -20954,7 +20954,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:developmentClientExecutor.consumeAttestation)",
+      "r3aRequirement": "allOf(capability(user,service:developmentClientExecutor.consumeAttestation),workspace-member)",
       "r3b": {
         "review": "single-use-isolated-child-attestation-read",
         "change": "Lets only the exact bound isolated management shell consume one nonce-bound child runtime receipt. The inbox is short-lived and bounded, and no device credential, artifact path, or self-reported execution digest is returned."
@@ -20972,7 +20972,7 @@
         "key": "service:developmentClientExecutor.exited"
       },
       "authorityPrincipals": [
-        "host"
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -20993,7 +20993,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:developmentClientExecutor.exited)",
+      "r3aRequirement": "allOf(capability(user,service:developmentClientExecutor.exited),workspace-member)",
       "r3b": {
         "review": "exact-client-exit-and-cleanup-receipt",
         "change": "Lets only the original selected desktop report exit of the exact launched PID plus private-root cleanup outcome. The receiver derives whether exit was intentional from host-owned stop state and records unexpected exit durably."
@@ -21011,7 +21011,7 @@
         "key": "service:developmentClientExecutor.fail"
       },
       "authorityPrincipals": [
-        "host"
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -21032,7 +21032,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:developmentClientExecutor.fail)",
+      "r3aRequirement": "allOf(capability(user,service:developmentClientExecutor.fail),workspace-member)",
       "r3b": {
         "review": "bounded-selected-provider-launch-failure",
         "change": "Lets only the exact selected desktop terminate its pending request with a bounded diagnostic. It creates no process or authority and resolves a concurrent stop as effect reduction."
@@ -21050,7 +21050,7 @@
         "key": "service:developmentClientExecutor.launched"
       },
       "authorityPrincipals": [
-        "host"
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -21071,7 +21071,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:developmentClientExecutor.launched)",
+      "r3aRequirement": "allOf(capability(user,service:developmentClientExecutor.launched),workspace-member)",
       "r3b": {
         "review": "selected-provider-process-receipt",
         "change": "Records the exact selected desktop's owned PID and ownership digest but cannot make a run ready without a distinct ordinarily paired child shell attesting the opaque request nonce."
@@ -21089,7 +21089,7 @@
         "key": "service:developmentClientExecutor.readArtifact"
       },
       "authorityPrincipals": [
-        "host"
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -21110,7 +21110,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:developmentClientExecutor.readArtifact)",
+      "r3aRequirement": "allOf(capability(user,service:developmentClientExecutor.readArtifact),workspace-member)",
       "r3b": {
         "review": "bounded-integrity-client-artifact-transport",
         "change": "Lets only the exact selected desktop read a bounded chunk from its pending immutable artifact manifest. Coordinates are canonical and payload integrity is verified again on the client-owned root."
@@ -21128,7 +21128,7 @@
         "key": "service:developmentClientExecutor.register"
       },
       "authorityPrincipals": [
-        "host"
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -21149,7 +21149,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:developmentClientExecutor.register)",
+      "r3aRequirement": "allOf(capability(user,service:developmentClientExecutor.register),workspace-member)",
       "r3b": {
         "review": "authenticated-current-device-executor-lease",
         "change": "Registers only the verified shell runtime and user as a short-lived current-device Electron executor. The lease is in-memory, machine-bound, and grants no launch authority by itself."
@@ -28507,6 +28507,46 @@
         "change": null
       },
       "capability": "service:panelTree.archiveOwnedRoots",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:panelTree.attachInitialPanels",
+      "rpcPlane": "host-service",
+      "owner": "panelTree",
+      "method": "attachInitialPanels",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:panelTree.attachInitialPanels"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:panelTree.attachInitialPanels),allOf(capability(user,service:panelTree.attachInitialPanels),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:panelTree.attachInitialPanels",
       "parityAssertion": "generated-census:host-authority"
     },
     {
