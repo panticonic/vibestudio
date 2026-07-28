@@ -27,6 +27,13 @@ class TestableAiChatWorker extends AiChatWorker {
     deliverEffectOutcome: vi.fn(async () => undefined),
     scheduleResumeAtReset: vi.fn(async () => ({ scheduled: true })),
     getDebugState: vi.fn(async () => ({})),
+    loop: vi.fn(async () => ({
+      state: {
+        logId: "log:agent-test",
+        head: "event:agent-test",
+        lastSeq: 0,
+      },
+    })),
     foldCache: { delete: vi.fn() },
   };
   subscribeEnvelope: ChannelReplayEnvelope = {
@@ -76,6 +83,19 @@ class TestableAiChatWorker extends AiChatWorker {
     return {
       call: this.rpcCall,
     } as never;
+  }
+
+  protected override async callGad<T>(method: string, ...args: unknown[]): Promise<T> {
+    if (method === "appendLogEvent") {
+      const input = (args[0] ?? {}) as { events?: Array<{ envelopeId: string }> };
+      return {
+        envelopes: (input.events ?? []).map((event, index) => ({
+          envelopeId: event.envelopeId,
+          seq: index + 1,
+        })),
+      } as T;
+    }
+    return super.callGad<T>(method, ...args);
   }
 
   protected override get driver(): never {

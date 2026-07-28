@@ -53,6 +53,19 @@ class TestNewsAgentWorker extends NewsAgentWorker {
     return this.getLoopTools(channelId).map((tool) => tool.name);
   }
 
+  seedUserRoster(channelId = "ch-1") {
+    this.setStateValue(
+      `agent:roster:${channelId}`,
+      JSON.stringify([
+        {
+          participantId: "user:alice",
+          ref: { kind: "user", id: "user:alice", participantId: "user:alice" },
+          methods: [],
+        },
+      ])
+    );
+  }
+
   /** The exact loop tool object the model loop would dispatch for `name`. */
   loopTool(name: string, channelId = "ch-1") {
     return this.getLoopTools(channelId).find((tool) => tool.name === name);
@@ -237,6 +250,7 @@ describe("NewsAgentWorker", () => {
 
   it("exposes the web research tools its briefing prompt requires", async () => {
     const worker = await makeWorker();
+    worker.seedUserRoster();
     expect(worker.loopTools()).toEqual(
       expect.arrayContaining([
         "suspend_turn",

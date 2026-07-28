@@ -1,11 +1,28 @@
 import type { ChannelConfig } from "@workspace/pubsub";
 import { Theme } from "@radix-ui/themes";
+import { forwardRef, useImperativeHandle } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ChatLayout } from "./ChatLayout";
 import { ChatPaletteCommands } from "./ChatPaletteCommands";
 import { ChatProvider } from "../context/ChatProvider";
 import { useAgenticChat } from "../hooks/useAgenticChat";
-import type { ChatParticipantMetadata, ConnectionConfig, AgenticChatActions, ToolProvider, SandboxConfig, ForkNavHandlers } from "../types";
+import type {
+  ChatParticipantMetadata,
+  ConnectionConfig,
+  AgenticChatActions,
+  ToolProvider,
+  SandboxConfig,
+  ForkNavHandlers,
+  ChatSandboxValue,
+} from "../types";
+
+export interface AgenticChatHandle {
+  /**
+   * Publish through the chat component's existing channel participant. The
+   * promise waits for that participant to be connected first.
+   */
+  send(content: string, options?: Parameters<ChatSandboxValue["send"]>[1]): Promise<unknown>;
+}
 
 export interface AgenticChatProps {
   /** Connection configuration (server URL, token, client ID) */
@@ -42,7 +59,11 @@ export interface AgenticChatProps {
   /** Preferred max height for initialActionBarFile */
   initialActionBarMaxHeight?: number;
   /** Persist action-bar file changes into the hosting panel state, if supported */
-  onActionBarFileChange?: (value: { path: string | null; props?: Record<string, unknown>; maxHeight?: number }) => void | Promise<void>;
+  onActionBarFileChange?: (value: {
+    path: string | null;
+    props?: Record<string, unknown>;
+    maxHeight?: number;
+  }) => void | Promise<void>;
 }
 
 /**
@@ -52,25 +73,28 @@ export interface AgenticChatProps {
  *
  * For custom layouts, use useAgenticChat() + ChatProvider + individual components directly.
  */
-export function AgenticChat({
-  config,
-  channelName,
-  channelConfig,
-  contextId,
-  metadata,
-  tools,
-  actions,
-  theme,
-  installedAgents: installedAgentInfos,
-  initialPrompt,
-  forceInitialPrompt,
-  forkNav,
-  sandbox,
-  initialActionBarFile,
-  initialActionBarProps,
-  initialActionBarMaxHeight,
-  onActionBarFileChange,
-}: AgenticChatProps) {
+export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(function AgenticChat(
+  {
+    config,
+    channelName,
+    channelConfig,
+    contextId,
+    metadata,
+    tools,
+    actions,
+    theme,
+    installedAgents: installedAgentInfos,
+    initialPrompt,
+    forceInitialPrompt,
+    forkNav,
+    sandbox,
+    initialActionBarFile,
+    initialActionBarProps,
+    initialActionBarMaxHeight,
+    onActionBarFileChange,
+  },
+  ref
+) {
   const { contextValue, inputContextValue } = useAgenticChat({
     config,
     channelName,
@@ -90,6 +114,18 @@ export function AgenticChat({
     initialActionBarMaxHeight,
     onActionBarFileChange,
   });
+  useImperativeHandle(
+    ref,
+    () => ({
+      async send(content, options) {
+        const client = contextValue.clientRef.current;
+        if (!client) throw new Error("Agentic chat is not connected");
+        await client.ready();
+        return contextValue.chat.send(content, options);
+      },
+    }),
+    [contextValue.chat, contextValue.clientRef]
+  );
 
   return (
     <ErrorBoundary surfaceName="chat panel">
@@ -101,10 +137,7 @@ export function AgenticChat({
           Appearance flows from the explicitly-passed `theme` prop OR, when
           absent, the system / centralized appearance (resolved in useChatCore
           via resolveSystemTheme) — NEVER a hardcoded "dark" literal. */}
-      <Theme
-        appearance={contextValue.theme}
-        style={{ minWidth: 0, width: "100%", height: "100%" }}
-      >
+      <Theme appearance={contextValue.theme} style={{ minWidth: 0, width: "100%", height: "100%" }}>
         <ChatProvider value={contextValue} inputValue={inputContextValue}>
           <ChatPaletteCommands />
           <ChatLayout />
@@ -112,4 +145,4 @@ export function AgenticChat({
       </Theme>
     </ErrorBoundary>
   );
-}
+});

@@ -18,7 +18,7 @@ import type { ScopesApi } from "@workspace/eval";
  */
 export function wrapChatForErrorReporting(
   chat: ChatSandboxValue,
-  onError: (err: Error) => void,
+  onError: (err: Error) => void
 ): ChatSandboxValue {
   return {
     ...chat,
@@ -30,6 +30,8 @@ export function wrapChatForErrorReporting(
       trackPromise(chat.publishCustomMessage(...args), onError),
     updateCustomMessage: (...args: Parameters<ChatSandboxValue["updateCustomMessage"]>) =>
       trackPromise(chat.updateCustomMessage(...args), onError),
+    getParticipants: (...args: Parameters<ChatSandboxValue["getParticipants"]>) =>
+      trackPromise(chat.getParticipants(...args), onError),
     replayEnvelope: (...args: Parameters<ChatSandboxValue["replayEnvelope"]>) =>
       trackPromise(chat.replayEnvelope(...args), onError),
     participantByHandle: (...args: Parameters<ChatSandboxValue["participantByHandle"]>) =>
@@ -53,7 +55,7 @@ export function wrapChatForErrorReporting(
 
 export function wrapScopesForErrorReporting(
   scopes: ScopesApi,
-  onError: (err: Error) => void,
+  onError: (err: Error) => void
 ): ScopesApi {
   return {
     get currentId() {

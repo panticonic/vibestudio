@@ -27,6 +27,10 @@ panel.
 | [PATTERNS.md](PATTERNS.md)                         | Common patterns and recipes                                                                                                                 |
 | [INTERACTION_PATTERNS.md](INTERACTION_PATTERNS.md) | When to use inline UI for side-effect actions with choices/complexity                                                                       |
 
+These links are workspace files. Open one with the `read` tool, for example
+`read({ path: "skills/sandbox/RUNTIME_API.md" })`. `docs_search` searches the
+live API catalog and accepts `{ query: "..." }`; it never opens a file path.
+
 For workspace server host logs, use the separate
 [server-logs](../server-logs/SKILL.md) skill. It covers the read-only
 `serverLog` service, bounded queries, and live following through
@@ -43,12 +47,12 @@ context-relative `path` where noted; file-loaded sources support static relative
 imports and infer bare package imports from the nearest `package.json` when
 possible. The execution modes differ in presentation:
 
-| Tool              | Where it runs          | Rendering                          | Lifecycle                                      | Response                             |
-| ----------------- | ---------------------- | ---------------------------------- | ---------------------------------------------- | ------------------------------------ |
+| Tool              | Where it runs          | Rendering                          | Lifecycle                                           | Response                             |
+| ----------------- | ---------------------- | ---------------------------------- | --------------------------------------------------- | ------------------------------------ |
 | `eval`            | server-side (`EvalDO`) | imperative (run + return)          | activation-resident heap + durable exact scope/`db` | immediate (result to agent)          |
-| `inline_ui`       | panel                  | component (render React)           | persistent (in chat history)                   | none (fire-and-forget)               |
-| `load_action_bar` | panel                  | component from file (render React) | persistent (top of current panel)              | immediate tool result                |
-| `feedback_custom` | panel                  | component (render React)           | transient                                      | deferred (blocks until user submits) |
+| `inline_ui`       | panel                  | component (render React)           | persistent (in chat history)                        | none (fire-and-forget)               |
+| `load_action_bar` | panel                  | component from file (render React) | persistent (top of current panel)                   | immediate tool result                |
+| `feedback_custom` | panel                  | component (render React)           | transient                                           | deferred (blocks until user submits) |
 
 Perspective matters. In agent eval, `panelTree.self()` is the EvalDO runtime,
 not the visible chat panel. Use `parent`/`getParent()` and
@@ -84,6 +88,79 @@ and components render in the panel:
 For panel identity inside components, use `panel.slotId` for panel-tree
 operations and PubSub/channel clients. `rpc.selfId` is the current live runtime
 entity and can change after a panel navigation or reopen.
+
+## People, Presence, and Runtime Identity
+
+Do not infer the user account from `agent.describe()` or another runtime
+identity. An agent/runtime identity describes the executing participant;
+`services.account.getProfile()` returns the verified user subject for the
+current authenticated call by default.
+
+These APIs answer different questions:
+
+- `services.account.getProfile()` — the current durable user identity.
+- `services.account.listWorkspaceMembers()` — durable workspace membership and
+  roles, including members who are offline.
+- `services.workspacePresence.list()` — live human connections across the
+  current workspace; an empty array is valid.
+- `chat.getParticipants()` — participants in the current conversation channel,
+  including agents and headless participants, with top-level `type`, `name`,
+  `isPerson`, `isAgent`, and optional `handle`. `headless`/`panel` clients are
+  neither people nor agents. It is available only in channel-bound agent eval.
+- `services.gad.inspectChannelRoster(...)` — durable channel diagnostic
+  evidence; it is not workspace-wide presence.
+
+```ts
+eval({
+  code: `
+    const [profile, members, present, channelParticipants] = await Promise.all([
+      services.account.getProfile(),
+      services.account.listWorkspaceMembers(),
+      services.workspacePresence.list(),
+      chat.getParticipants(),
+    ]);
+    return { profile, members, present, channelParticipants };
+  `,
+});
+```
+
+Server-wide multi-workspace catalog operations belong to the shell or CLI's
+stable hub session and are intentionally unavailable from workspace eval.
+Current-workspace APIs remain available. Do not guess a hub session id or retry
+an unavailable `hubControl` service from agent eval.
+
+## Credential Lookups
+
+Use the operation that answers the user's question directly. To call an
+external API, import `credentials` from `@workspace/runtime` and call
+`credentials.fetch(...)` once. Do not preflight it with
+`resolveCredential(...)`: the fetch already returns the canonical
+missing-credential outcome without exposing credential material.
+
+Use `resolveCredential(...)` only when the task is explicitly to diagnose
+credential routing without making a network request. A quiet URL lookup is one
+read-only call and returns a secret-free summary or `null`:
+
+```ts
+import { credentials } from "@workspace/runtime";
+
+const credential = await credentials.resolveCredential({ url });
+return { hasCredential: credential !== null };
+```
+
+Do not list every credential before resolving one URL. For a bounded lifecycle
+inventory, use the aggregate API directly:
+
+```ts
+return credentials.summarizeStoredCredentials();
+```
+
+Use `credentials.inspectStoredCredentials()` only when an administrator
+actually needs per-credential runtime/grant details; it may require
+`credentials.audit.read` authority. In general, omit `authority.requests` to
+use the caller's admitted authority; when an exact
+allowlist is genuinely required, discover its exact capability/resource first.
+Never invent a wildcard such as `workspace:*`.
 
 ## Path Conventions
 

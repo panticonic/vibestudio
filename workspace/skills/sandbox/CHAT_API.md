@@ -55,6 +55,20 @@ interface ChatSandboxValue {
   /** Look up one durable channel envelope by its stable id; null when absent. */
   replayEnvelope(envelopeId: string): Promise<unknown | null>;
 
+  /** List participants in the current conversation channel. */
+  getParticipants(): Promise<
+    Array<{
+      id: string;
+      ref: unknown;
+      type: "user" | "panel" | "headless" | "agent";
+      name: string;
+      isPerson: boolean;
+      isAgent: boolean;
+      handle?: string;
+      methods?: Array<unknown>;
+    }>
+  >;
+
   /** Call a method on a channel participant */
   callMethod(
     participantId: string,
@@ -111,6 +125,34 @@ interface ChatSandboxValue {
   rpc: { call: (target: string, method: string, args: unknown[]) => Promise<unknown> };
 }
 ```
+
+## chat.getParticipants
+
+Read the current conversation's live participant roster:
+
+```typescript
+const participants = await chat.getParticipants();
+return participants.map(({ id, ref, type, name, isPerson, isAgent, handle }) => ({
+  id,
+  ref,
+  type,
+  name,
+  isPerson,
+  isAgent,
+  handle,
+}));
+```
+
+This is channel scope and can include people, agents, and headless participants.
+Identity and classification fields are top-level. `type: "user"` is a person
+and `type: "agent"` is an agent; `panel` and `headless` are client transports,
+not agents. Use `isPerson`/`isAgent` directly rather than inferring a role from
+the participant id or reference.
+It is not workspace-wide human presence. For that, use
+`services.workspacePresence.list()`; for durable membership and roles, use
+`services.account.listWorkspaceMembers()`. When diagnosing durable channel
+history, `services.gad.inspectChannelRoster(...)` may provide the corresponding
+channel evidence.
 
 ## chat.send
 

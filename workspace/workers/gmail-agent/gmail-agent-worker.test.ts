@@ -375,6 +375,19 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     return this.getLoopTools(channelId).map((tool) => tool.name);
   }
 
+  seedUserRoster(channelId = "ch-1") {
+    this.setStateValue(
+      `agent:roster:${channelId}`,
+      JSON.stringify([
+        {
+          participantId: "user:alice",
+          ref: { kind: "user", id: "user:alice", participantId: "user:alice" },
+          methods: [],
+        },
+      ])
+    );
+  }
+
   runnerTool(name: string, channelId = "ch-1") {
     return this.getLoopTools(channelId).find((tool) => tool.name === name);
   }
@@ -529,6 +542,7 @@ describe("GmailAgentWorker", () => {
   it("exposes the consolidated composable tool surface", async () => {
     const { instance } = await createTestDO(TestGmailAgentWorker);
     const worker = instance as TestGmailAgentWorker;
+    worker.seedUserRoster();
 
     expect(worker.runnerTools()).not.toContain("gmail_upsertAttentionRule");
     expect(worker.runnerTools()).toEqual([

@@ -80,7 +80,7 @@ export type { MessageTypeRegistryState } from "./hooks/features/useMessageTypeRe
 
 // --- High-level components ---
 export { AgenticChat } from "./components/AgenticChat";
-export type { AgenticChatProps } from "./components/AgenticChat";
+export type { AgenticChatHandle, AgenticChatProps } from "./components/AgenticChat";
 
 // --- Layout components (composable) ---
 export { ChatLayout } from "./components/ChatLayout";

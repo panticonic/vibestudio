@@ -433,6 +433,18 @@ export function useAgenticChat({
       getMessageTypes: () => {
         return core.clientRef.current!.getMessageTypes();
       },
+      getParticipants: async () => {
+        return Object.values(core.clientRef.current?.roster ?? {}).map(({ id, ref, metadata }) => ({
+          id,
+          ref,
+          type: metadata.type,
+          name: metadata.name,
+          isPerson: metadata.type === "user",
+          isAgent: metadata.type === "agent",
+          ...(metadata.handle ? { handle: metadata.handle } : {}),
+          ...(metadata.methods ? { methods: metadata.methods } : {}),
+        }));
+      },
       replayEnvelope: (envelopeId: string) => {
         return core.clientRef.current!.getEnvelope(envelopeId);
       },

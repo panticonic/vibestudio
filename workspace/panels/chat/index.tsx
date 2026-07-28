@@ -648,16 +648,21 @@ export default function ChatPanel() {
       handle: string,
       config: AgentSubscriptionConfig | undefined,
       defaultAgentConfig: DefaultAgentConfig
-    ) =>
-      buildAgentSubscriptionConfig({
+    ) => {
+      // Launch configuration must be one coherent read. Reactive state is for
+      // rendering, while this callback can outlive the render that created it
+      // as model discovery and provisional activation race with bootstrap.
+      const currentState = panel.stateArgs.get<ChatStateArgs>();
+      return buildAgentSubscriptionConfig({
         handle,
         workspaceDefaultAgentConfig: defaultAgentConfig,
-        globalConfig: panel.stateArgs.get<ChatStateArgs>().agentConfig,
+        globalConfig: currentState.agentConfig,
         perAgentConfig: config,
-        systemPrompt: stateArgs.systemPrompt,
-        systemPromptMode: stateArgs.systemPromptMode,
-      }),
-    [stateArgs.systemPrompt, stateArgs.systemPromptMode]
+        systemPrompt: currentState.systemPrompt,
+        systemPromptMode: currentState.systemPromptMode,
+      });
+    },
+    []
   );
 
   const resolveProvisionalAgentIntent = useCallback(
