@@ -57,6 +57,7 @@ export class AgentExecutionSessionRegistry {
       orchestratorPolicyId: orchestrator.policyId,
       case: Object.freeze({
         testId: spec.testId,
+        agent: Object.freeze({ ...spec.agent }),
         authority: Object.freeze(
           spec.authority.map((rule) =>
             Object.freeze({ ...rule, resource: Object.freeze({ ...rule.resource }) })

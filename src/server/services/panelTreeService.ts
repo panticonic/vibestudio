@@ -3,8 +3,13 @@ import type {
   ServiceDefinition,
 } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import {
+  verifiedInitiator,
+  type CallerKind,
+  type ServiceContext,
+} from "@vibestudio/shared/serviceDispatcher";
 import type { UserSubject } from "@vibestudio/identity/types";
+import type { AgentExecutionTestPolicy } from "@vibestudio/rpc";
 import type { PanelAccessOperation } from "@vibestudio/shared/panelAccessPolicy";
 import {
   panelTreeMethods,
@@ -16,10 +21,16 @@ import type {
   PanelAccessPermissionTarget,
 } from "./panelAccessPermission.js";
 import { preparePanelAccessAuthority } from "./panelAccessPermission.js";
+import { refineExecutionTestPolicy } from "./liveExecutionCaller.js";
 
-interface PanelTreeBridgeCaller {
+export interface PanelTreeBridgeCaller {
   callerId: string;
   callerKind: CallerKind;
+  /**
+   * Host-attested execution constraint carried through this trusted internal
+   * bridge. It is derived from ServiceContext and is never read from RPC args.
+   */
+  testPolicy?: AgentExecutionTestPolicy;
   /**
    * Host-verified acting user. Threaded intact so entity creation preserves
    * both the human owner and the original runtime lineage. Attribution only;
@@ -112,13 +123,29 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
     method: M,
     args: PanelTreeBridgeMethodArgs<M>
   ): Promise<unknown> {
+    // Extension RPC runs under the extension's code identity, but the server
+    // retains the exact caller that invoked it. The authoritative panel bridge
+    // uses its caller for runtime lineage and durable ownership, so forwarding
+    // the extension transport here would create a system-owned panel parented
+    // to a non-entity extension principal. Such a panel cannot recover the
+    // invoking workspace member when it authenticates. Authority has already
+    // been enforced against ctx.caller; this hand-off preserves the verified
+    // initiator for the mutation itself.
+    const actingCaller = verifiedInitiator(ctx);
+    const testPolicy = refineExecutionTestPolicy(ctx.caller.testPolicy, actingCaller.testPolicy);
+    if (ctx.caller.testPolicy && actingCaller.testPolicy && !testPolicy) {
+      throw new Error(
+        "Panel-tree invocation combines incompatible host-attested system-test policies"
+      );
+    }
     return deps.bridge({
-      callerId: ctx.caller.runtime.id,
-      callerKind: ctx.caller.runtime.kind,
+      callerId: actingCaller.runtime.id,
+      callerKind: actingCaller.runtime.kind,
       method,
       args,
+      ...(testPolicy ? { testPolicy } : {}),
       // Stamp the acting user as owner on create/move (WP3). Attribution only.
-      ...(ctx.caller.subject ? { subject: ctx.caller.subject } : {}),
+      ...(actingCaller.subject ? { subject: actingCaller.subject } : {}),
     } as PanelTreeBridgeRequest);
   }
 

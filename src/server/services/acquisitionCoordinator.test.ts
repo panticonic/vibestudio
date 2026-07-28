@@ -331,10 +331,15 @@ describe("AcquisitionCoordinator", () => {
         orchestratorPolicyId: "test:run-123",
         case: {
           testId: "approval",
+          agent: {
+            model: "openai-codex:gpt-5.3-codex-spark",
+            approvalLevel: 2 as const,
+            fallback: "disabled" as const,
+          },
           authority: [
             {
               ruleId: "revoke",
-              capability: snap.capability,
+              capability: { kind: "exact" as const, key: snap.capability },
               resource: { kind: "exact" as const, key: snap.resourceKey },
               tier: "critical" as const,
               decision: "once" as const,

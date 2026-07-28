@@ -1632,7 +1632,10 @@ export async function createServerPanelTreeBridge(
     // runtime operations, so it must carry genuine host attestation rather
     // than relying on the cosmetic "server" caller kind. Preserve the acting
     // user separately for durable ownership attribution.
-    const mediatedCaller = createHostCaller(request.callerId, "server", request.subject);
+    const hostCaller = createHostCaller(request.callerId, "server", request.subject);
+    const mediatedCaller: VerifiedCaller = request.testPolicy
+      ? { ...hostCaller, testPolicy: request.testPolicy }
+      : hostCaller;
     return scheduleOperation("user", async () => {
       log.verbose(`Handling ${request.method} for ${request.callerId}`);
       const validatedRequest = validatePanelTreeBridgeRequest(request);

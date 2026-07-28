@@ -2690,6 +2690,11 @@ describe("RpcServer relay behavior", () => {
       orchestratorPolicyId: orchestrator.policyId,
       case: {
         testId: "approval",
+        agent: {
+          model: "openai-codex:gpt-5.3-codex-spark",
+          approvalLevel: 2,
+          fallback: "disabled",
+        },
         authority: [],
         userland: [],
         unexpectedPrompts: "fail",
@@ -2737,6 +2742,11 @@ describe("RpcServer relay behavior", () => {
       orchestratorPolicyId: orchestrator.policyId,
       case: {
         testId,
+        agent: {
+          model: "openai-codex:gpt-5.3-codex-spark",
+          approvalLevel: 2,
+          fallback: "disabled",
+        },
         authority: [],
         userland: [],
         unexpectedPrompts: "fail",

@@ -12,6 +12,7 @@ import {
   directAuthorityCapability,
   isBlessedSystemTestConduit,
   isAttestedSystemTestHarness,
+  testPolicyAuthorityDecision,
   testPolicyUserlandDecision,
 } from "./authorityRuntime.js";
 import {
@@ -96,6 +97,11 @@ describe("authority runtime", () => {
       orchestratorPolicyId: "test:orchestrator",
       case: {
         testId: "terminal-roundtrip",
+        agent: {
+          model: "openai-codex:gpt-5.3-codex-spark",
+          approvalLevel: 2,
+          fallback: "disabled",
+        },
         authority: [],
         userland: [
           {
@@ -120,6 +126,58 @@ describe("authority runtime", () => {
     });
     expect(testPolicyUserlandDecision(caller, undefined, "user.execution.fake")).toBeNull();
     expect(testPolicyUserlandDecision(caller, undefined, "user.open.fake")).toBeNull();
+  });
+
+  it("matches dynamic capability names only inside both declared namespaces", () => {
+    const caller = createVerifiedCaller("agent:test", "agent", null, null, null, null, {
+      policyId: "test:dynamic-service",
+      kind: "case",
+      orchestratorPolicyId: "test:orchestrator",
+      case: {
+        testId: "dynamic-service",
+        agent: {
+          model: "openai-codex:gpt-5.3-codex-spark",
+          approvalLevel: 2,
+          fallback: "disabled",
+        },
+        authority: [
+          {
+            ruleId: "fixture-service",
+            capability: { kind: "prefix", prefix: "workspace-service:" },
+            resource: {
+              kind: "prefix",
+              prefix: "do:workers/system-test-fixture:FixtureWorkerDO:",
+            },
+            tier: "gated",
+            decision: "once",
+          },
+        ],
+        userland: [],
+        unexpectedPrompts: "fail",
+      },
+    });
+
+    expect(
+      testPolicyAuthorityDecision(caller, undefined, {
+        capability: "workspace-service:agent-authored-name",
+        resourceKey: "do:workers/system-test-fixture:FixtureWorkerDO:agent-authored-key",
+        tier: "gated",
+      })
+    ).toEqual({ ruleId: "fixture-service", decision: "once" });
+    expect(
+      testPolicyAuthorityDecision(caller, undefined, {
+        capability: "credential.use",
+        resourceKey: "do:workers/system-test-fixture:FixtureWorkerDO:agent-authored-key",
+        tier: "gated",
+      })
+    ).toBeNull();
+    expect(
+      testPolicyAuthorityDecision(caller, undefined, {
+        capability: "workspace-service:agent-authored-name",
+        resourceKey: "do:workers/other:FixtureWorkerDO:agent-authored-key",
+        tier: "gated",
+      })
+    ).toBeNull();
   });
 
   it("joins mission harnesses to the exact canonical sealed code identity", () => {

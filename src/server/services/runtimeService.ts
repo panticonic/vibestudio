@@ -22,7 +22,11 @@ import {
   type CloneContextResult,
 } from "@vibestudio/service-schemas/runtime";
 import type { ContextEdge, ContextEdgeKind } from "@vibestudio/shared/runtime/contextEdges";
-import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  verifiedInitiator,
+  type ServiceContext,
+  type VerifiedCaller,
+} from "@vibestudio/shared/serviceDispatcher";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type {
   LifecyclePrepareInput,
@@ -181,6 +185,13 @@ export interface RuntimeServiceResult {
   internal: RuntimeServiceInternal;
 }
 
+interface RuntimeCreationActors {
+  /** Authenticated principal that owns and controls the new runtime lifecycle. */
+  lifecycleCaller: VerifiedCaller;
+  /** Host-verified root initiator whose human subject owns the new runtime. */
+  initiatingCaller: VerifiedCaller;
+}
+
 export interface PreparedRuntimeExecution {
   effectiveVersion: string;
   buildKey?: string;
@@ -225,7 +236,15 @@ export interface RuntimeServiceDeps {
   onContextCreated?: (input: {
     contextId: string;
     ownerContextId: string | null;
-    testPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicySpec;
+    /**
+     * A resident host-attested policy carried by the verified creator. This is
+     * required when a trusted deputy creates a context for a runtime id that
+     * has no entity row of its own (for example an EvalDO opening a root
+     * panel), so semantic ownership alone cannot recover the creator context.
+     */
+    inheritedTestPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicy;
+    /** A new case policy requested by the system-test orchestrator. */
+    casePolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicySpec;
   }) => void | Promise<void>;
   /**
    * Server-controlled display-title registry. Workers (and DOs / panels)
@@ -300,6 +319,35 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     return spec.kind === "do" || spec.kind === "worker" || spec.kind === "session"
       ? spec.agentChannelId
       : undefined;
+  }
+
+  function applyTestAgentPolicy(
+    caller: VerifiedCaller,
+    spec: RuntimeEntityCreateSpec
+  ): RuntimeEntityCreateSpec {
+    const agentPolicy =
+      caller.testPolicy?.kind === "case" ? caller.testPolicy.case.agent : undefined;
+    if (!agentPolicy || !selfAgentChannelFromSpec(spec) || spec.kind === "session") return spec;
+
+    const stateArgs =
+      spec.stateArgs && typeof spec.stateArgs === "object" && !Array.isArray(spec.stateArgs)
+        ? { ...(spec.stateArgs as Record<string, unknown>) }
+        : {};
+    const currentConfig =
+      stateArgs["agentConfig"] &&
+      typeof stateArgs["agentConfig"] === "object" &&
+      !Array.isArray(stateArgs["agentConfig"])
+        ? { ...(stateArgs["agentConfig"] as Record<string, unknown>) }
+        : {};
+    delete currentConfig["fallbackModel"];
+    delete currentConfig["fallbackThinkingLevel"];
+    delete currentConfig["fallbackOn"];
+    stateArgs["agentConfig"] = {
+      ...currentConfig,
+      model: agentPolicy.model,
+      approvalLevel: agentPolicy.approvalLevel,
+    };
+    return { ...spec, stateArgs };
   }
 
   function isExtensionOrchestratedCreate(
@@ -433,10 +481,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   }
 
   async function createEntity(
-    caller: VerifiedCaller,
+    actors: RuntimeCreationActors,
     rawSpec: RuntimeEntityCreateSpec
   ): Promise<RuntimeEntityHandle> {
-    const spec = rawSpec;
+    const caller = actors.lifecycleCaller;
+    const spec = applyTestAgentPolicy(caller, rawSpec);
     assertCreateEntityAllowed(caller, spec);
     const canonicalId = spec.key
       ? canonicalEntityId({
@@ -456,7 +505,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         bindingFromSpec(spec)
       );
       const contextId = await resolveTargetContext(caller, spec.contextId, agentBinding);
-      return activateEntity(caller, spec, contextId, agentBinding, selfAgentChannelFromSpec(spec));
+      return activateEntity(actors, spec, contextId, agentBinding, selfAgentChannelFromSpec(spec));
     };
     return canonicalId ? serializeByKey(creationChains, canonicalId, create) : create();
   }
@@ -535,6 +584,20 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           }
         : {}),
     });
+    // An implicit reservation is the semantic creation boundary for its
+    // derived lifecycle context. Register it immediately, before activation
+    // can boot panel code that creates descendants. Deferring this until the
+    // executable incarnation is active leaves a race where child agents lose
+    // their host-resident system-test policy and fall back to workspace model
+    // defaults. The hook is intentionally idempotent: retrying the same stable
+    // reservation must reassert the same parentage.
+    if (!hasExplicitContext) {
+      await deps.onContextCreated?.({
+        contextId,
+        ownerContextId: ownerContextId ?? null,
+        ...(caller.testPolicy ? { inheritedTestPolicy: caller.testPolicy } : {}),
+      });
+    }
     return entityHandle(record);
   }
 
@@ -623,12 +686,13 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
    * caller, so a cloneContext caller owns (and may freely destroy) the clones.
    */
   async function activateEntity(
-    caller: VerifiedCaller,
+    actors: RuntimeCreationActors,
     spec: RuntimeEntityCreateSpec,
     initialContextId: string,
     externalAgentBinding?: RuntimeAgentBinding,
     selfAgentChannelId?: string
   ): Promise<RuntimeEntityHandle> {
+    const caller = actors.lifecycleCaller;
     let contextId = initialContextId;
     const key = spec.key ?? randomUUID();
     const source = runtimeEntitySource(spec);
@@ -745,7 +809,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       // For an agent/worker spawning a child, the caller's subject already
       // carries the inherited userId, so lineage propagates. Undefined for a
       // bootstrap caller with no subject.
-      ownerUserId: caller.subject?.userId,
+      ownerUserId: actors.initiatingCaller.subject?.userId,
     };
     const record = await store.activate(activateInput);
     if (record.kind === "do") {
@@ -811,7 +875,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     await deps.onContextCreated?.({
       contextId,
       ownerContextId: ownerContextId ?? null,
-      ...(args.testPolicy ? { testPolicy: args.testPolicy } : {}),
+      ...(caller.testPolicy ? { inheritedTestPolicy: caller.testPolicy } : {}),
+      ...(args.testPolicy ? { casePolicy: args.testPolicy } : {}),
     });
     return context;
   }
@@ -1031,7 +1096,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
             clonedStorage.push({ source: src.source.repoPath, className, key: newKey });
           }
           const handle = await activateEntity(
-            caller,
+            { lifecycleCaller: caller, initiatingCaller: caller },
             buildCloneSpec(src, targetCtx, newKey),
             targetCtx
           );
@@ -1370,8 +1435,15 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         ) {
           return { selections: [], payload: null };
         }
+        // Extensions execute delegated user work. Attribute the context
+        // boundary to the host-verified upstream initiator so an extension can
+        // launch a runtime inside that initiator's lifecycle-owned child
+        // context without a synthetic cross-context prompt. A genuinely
+        // foreign context still produces the ordinary exact-context challenge.
+        const boundaryCaller =
+          ctx.caller.runtime.kind === "extension" ? verifiedInitiator(ctx) : ctx.caller;
         return {
-          selections: await prepareContextBoundary(ctx.caller, spec.contextId, {
+          selections: await prepareContextBoundary(boundaryCaller, spec.contextId, {
             kind: "runtime",
             verb: `Create ${spec.kind}`,
             targetLabel: runtimeEntitySource(spec),
@@ -1487,7 +1559,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       },
     },
     handler: defineServiceHandler("runtime", runtimeMethods, {
-      createEntity: (ctx, [spec]) => createEntity(ctx.caller, spec),
+      createEntity: (ctx, [spec]) =>
+        createEntity(
+          {
+            lifecycleCaller: ctx.caller,
+            initiatingCaller: verifiedInitiator(ctx),
+          },
+          spec
+        ),
       reserveEntity: (ctx, [spec]) =>
         reserveEntity(ctx.caller, spec as RuntimeCodeEntityCreateSpec),
       activateReservedEntity: (ctx, [spec]) =>
@@ -1532,7 +1611,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   return {
     definition,
     internal: {
-      createEntity,
+      createEntity: (caller, spec) =>
+        createEntity({ lifecycleCaller: caller, initiatingCaller: caller }, spec),
       retireEntity: (id) => retireEntity(id),
       createContext,
       resolveContext,

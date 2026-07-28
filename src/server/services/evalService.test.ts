@@ -740,6 +740,11 @@ describe("createEvalService", () => {
     executionSessions.inheritTestContext("ctx:case", "ctx:orchestrator");
     executionSessions.attachCasePolicy("ctx:case", "ctx:orchestrator", {
       testId: "cancel-lifecycle-case",
+      agent: {
+        model: "openai-codex:gpt-5.3-codex-spark",
+        approvalLevel: 2,
+        fallback: "disabled",
+      },
       authority: [],
       userland: [],
       unexpectedPrompts: "fail",

@@ -287,6 +287,11 @@ describe("canonical vcsService", () => {
       orchestratorPolicyId: orchestrator.policyId,
       case: {
         testId: "panel",
+        agent: {
+          model: "openai-codex:gpt-5.3-codex-spark",
+          approvalLevel: 2 as const,
+          fallback: "disabled" as const,
+        },
         authority: [],
         userland: [],
         unexpectedPrompts: "fail" as const,
@@ -346,6 +351,11 @@ describe("canonical vcsService", () => {
         orchestratorPolicyId: "test:run",
         case: {
           testId: "panel",
+          agent: {
+            model: "openai-codex:gpt-5.3-codex-spark",
+            approvalLevel: 2,
+            fallback: "disabled",
+          },
           authority: [],
           userland: [],
           unexpectedPrompts: "fail",

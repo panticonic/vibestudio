@@ -462,6 +462,24 @@ export type ServiceContext = {
   body?: ReadableStream<Uint8Array>;
 };
 
+/**
+ * Return the host-verified root initiator for attribution, presentation, and
+ * user-owned durable state. The authenticated transport caller remains
+ * `ctx.caller` and must still be used for authorization and domain ownership.
+ */
+export function verifiedInitiator(
+  ctx: Pick<ServiceContext, "caller" | "authorizingCaller">
+): VerifiedCaller {
+  return ctx.authorizingCaller ?? ctx.caller;
+}
+
+/** Host-verified account attribution for a deputy-mediated operation. */
+export function verifiedInitiatingUserId(
+  ctx: Pick<ServiceContext, "caller" | "authorizingCaller">
+): string | undefined {
+  return verifiedInitiator(ctx).subject?.userId;
+}
+
 /** Review contract produced alongside a host-derived canonical authority leaf.
  * The dispatcher still derives and checks the capability, requirement,
  * resource, and authenticated principal; this contract supplies human review

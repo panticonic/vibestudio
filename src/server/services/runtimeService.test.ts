@@ -15,6 +15,7 @@ import {
   canonicalEntityId,
   type EntityRecord,
   type RuntimeEntityCreateSpec,
+  type RuntimeEntityHandle,
 } from "@vibestudio/shared/runtime/entitySpec";
 import {
   createVerifiedCaller,
@@ -380,6 +381,21 @@ const shellCaller = createVerifiedCaller("shell", "shell");
 const serverCaller = createVerifiedCaller("server", "server");
 const extensionCaller = (id = "extension:agent-launcher") => createVerifiedCaller(id, "extension");
 
+const systemTestCasePolicy = (
+  model = "openai-codex:gpt-5.3-codex-spark"
+): import("@vibestudio/rpc").AgentExecutionTestPolicy => ({
+  policyId: "test:runtime-service:case:model-policy",
+  kind: "case",
+  orchestratorPolicyId: "test:runtime-service",
+  case: {
+    testId: "model-policy",
+    agent: { model, approvalLevel: 2, fallback: "disabled" },
+    authority: [],
+    userland: [],
+    unexpectedPrompts: "fail",
+  },
+});
+
 const doCreateSpec = (
   overrides: Partial<Omit<Extract<RuntimeEntityCreateSpec, { kind: "do" }>, "execution">> & {
     source?: string;
@@ -396,6 +412,59 @@ const doCreateSpec = (
     ...rest,
   };
 };
+
+describe("runtimeService system-test agent execution policy", () => {
+  it("pins every context-created agent to the case model with full-auto and no fallback", async () => {
+    const prepareDurableObject = vi.fn(async () => ({
+      targetId: "target:agent",
+      effectiveVersion: "ev-agent",
+      ...sealedExecution,
+    }));
+    const { internal } = await buildDeps({ prepareDurableObject });
+    const caller = createVerifiedCaller(
+      "server:test-runner",
+      "server",
+      null,
+      null,
+      null,
+      null,
+      systemTestCasePolicy()
+    );
+
+    await internal.createEntity(
+      caller,
+      doCreateSpec({
+        key: "downstream-agent",
+        contextId: "ctx-system-test",
+        agentChannelId: "chat-downstream",
+        stateArgs: {
+          panelOwned: true,
+          agentConfig: {
+            model: "openai-codex:gpt-5.6-sol",
+            approvalLevel: 0,
+            fallbackModel: "local:other",
+            fallbackThinkingLevel: "low",
+            fallbackOn: ["usage_limit_terminal"],
+            respondPolicy: "all",
+          },
+        },
+      })
+    );
+
+    expect(prepareDurableObject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stateArgs: {
+          panelOwned: true,
+          agentConfig: {
+            model: "openai-codex:gpt-5.3-codex-spark",
+            approvalLevel: 2,
+            respondPolicy: "all",
+          },
+        },
+      })
+    );
+  });
+});
 
 describe("runtimeService.forkDevelopmentSessionContext", () => {
   it("forks semantic state only and records a deterministic lifecycle edge for an empty context", async () => {
@@ -519,7 +588,8 @@ describe("runtimeService deferred panel activation", () => {
   });
 
   it("atomically makes an implicit panel context a lifecycle child of its verified creator", async () => {
-    const { service, instance } = await buildDeps();
+    const onContextCreated = vi.fn(async () => {});
+    const { service, instance } = await buildDeps({ onContextCreated });
     const creator = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "panel",
@@ -550,6 +620,39 @@ describe("runtimeService deferred panel activation", () => {
         ownerEntityId: creator.id,
       },
     ]);
+    expect(onContextCreated).toHaveBeenCalledWith({
+      contextId: reserved.contextId,
+      ownerContextId: "ctx-creator",
+    });
+  });
+
+  it("carries a resident test policy into an implicit panel context even without an entity-backed owner context", async () => {
+    const onContextCreated = vi.fn(async () => {});
+    const { service } = await buildDeps({ onContextCreated });
+    const policy = systemTestCasePolicy();
+    const mediatedCreator = createVerifiedCaller(
+      "do:vibestudio/internal:EvalDO:transient",
+      "server",
+      null,
+      null,
+      null,
+      null,
+      policy
+    );
+
+    const reserved = (await service.handler({ caller: mediatedCreator }, "reserveEntity", [
+      {
+        kind: "panel",
+        execution: { surface: "code", source: "panels/chat" },
+        key: "test-policy-root",
+      },
+    ])) as RuntimeEntityHandle;
+
+    expect(onContextCreated).toHaveBeenCalledWith({
+      contextId: reserved.contextId,
+      ownerContextId: null,
+      inheritedTestPolicy: policy,
+    });
   });
 
   it("reuses the exact implicit panel context when a stable reservation is retried", async () => {
@@ -785,6 +888,83 @@ describe("runtimeService.createEntity (do kind)", () => {
       contextId: "ctx-bound",
       channelId: "chan-1",
     });
+  });
+
+  it("keeps extension lifecycle ownership while attributing created runtimes to the verified initiator", async () => {
+    const { service, instance } = await buildDeps();
+    const extension = createVerifiedCaller("extension:agent-launcher", "extension", null, null, {
+      userId: "system",
+      handle: "system",
+    });
+    const initiator = createVerifiedCaller("panel:agent-launcher", "panel", null, null, {
+      userId: "usr_alice",
+      handle: "alice",
+    });
+    const ctx = { caller: extension, authorizingCaller: initiator };
+
+    const session = (await service.handler(ctx, "createEntity", [
+      {
+        kind: "session",
+        execution: { surface: "inert" },
+        source: "agent-launcher",
+        key: "attributed-session",
+        contextId: "ctx-attributed",
+      } satisfies RuntimeEntityCreateSpec,
+    ])) as { id: string };
+    const agent = (await service.handler(ctx, "createEntity", [
+      doCreateSpec({
+        source: "workers/agent",
+        className: "AgentDO",
+        key: "attributed-agent",
+        contextId: "ctx-attributed",
+        agentBinding: { entityId: session.id, channelId: "chan-attributed" },
+      }),
+    ])) as { id: string };
+
+    expect(instance.entityResolve(session.id)).toMatchObject({
+      parentId: extension.runtime.id,
+      ownerUserId: "usr_alice",
+    });
+    expect(instance.entityResolve(agent.id)).toMatchObject({
+      parentId: extension.runtime.id,
+      ownerUserId: "usr_alice",
+      agentBinding: {
+        entityId: session.id,
+        contextId: "ctx-attributed",
+        channelId: "chan-attributed",
+      },
+    });
+  });
+
+  it("attributes an extension's self-agent launch to the verified initiator's owned context", async () => {
+    const { service } = await buildDeps();
+    const parent = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "panel",
+        execution: { surface: "code", source: "about/collection" },
+        key: "import-collection-owner",
+        contextId: "ctx-import-owner",
+      },
+    ])) as { id: string };
+    const initiator = createVerifiedCaller(parent.id, "panel");
+    const childContext = (await service.handler({ caller: initiator }, "createContext", [{}])) as {
+      contextId: string;
+    };
+    const extension = extensionCaller("extension:browser-data");
+    const prepare = service.authorityPreparation?.["runtime.createEntity.contextBoundary"];
+    if (!prepare) throw new Error("runtime.createEntity authority preparation is unavailable");
+
+    const prepared = await prepare({ caller: extension, authorizingCaller: initiator }, [
+      doCreateSpec({
+        source: "workers/agent-worker",
+        className: "AiChatWorker",
+        key: "collection-conductor",
+        contextId: childContext.contextId,
+        agentChannelId: "collection-channel",
+      }),
+    ]);
+
+    expect(prepared.selections).toEqual([]);
   });
 
   it("rejects agent bindings for a different context or a session the extension does not own", async () => {

@@ -157,6 +157,11 @@ describe("userlandApprovalService", () => {
           orchestratorPolicyId: "test:run",
           case: {
             testId: "approval",
+            agent: {
+              model: "openai-codex:gpt-5.3-codex-spark",
+              approvalLevel: 2,
+              fallback: "disabled",
+            },
             authority: [],
             userland: [
               {
@@ -241,6 +246,11 @@ describe("userlandApprovalService", () => {
         orchestratorPolicyId: "test:run",
         case: {
           testId: "terminal",
+          agent: {
+            model: "openai-codex:gpt-5.3-codex-spark",
+            approvalLevel: 2,
+            fallback: "disabled",
+          },
           authority: [],
           userland: [
             {

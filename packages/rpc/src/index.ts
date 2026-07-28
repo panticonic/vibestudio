@@ -73,6 +73,8 @@ export type {
   SessionMissionFact,
   AgentExecutionMode,
   AgentExecutionTestAuthorityRule,
+  AgentExecutionTestCapabilityScope,
+  AgentExecutionTestAgentPolicy,
   AgentExecutionTestCasePolicy,
   AgentExecutionTestPolicy,
   AgentExecutionTestPolicySpec,

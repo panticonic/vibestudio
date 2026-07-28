@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { ServiceDispatcher } from "./serviceDispatcher.js";
+import {
+  createVerifiedCaller,
+  ServiceDispatcher,
+  verifiedInitiatingUserId,
+  verifiedInitiator,
+} from "./serviceDispatcher.js";
 
 describe("ServiceDispatcher ownership", () => {
   it("reports only explicitly registered local endpoints", () => {
@@ -12,5 +17,23 @@ describe("ServiceDispatcher ownership", () => {
     });
     expect(dispatcher.hasService("local")).toBe(true);
     expect(dispatcher.hasService("not-registered")).toBe(false);
+  });
+
+  it("separates the authenticated deputy from the verified initiating user", () => {
+    const deputy = createVerifiedCaller("extension:shell", "extension", null, null, {
+      userId: "system",
+      handle: "system",
+    });
+    const initiator = createVerifiedCaller("panel:terminal", "panel", null, null, {
+      userId: "usr_alice",
+      handle: "alice",
+    });
+
+    expect(verifiedInitiator({ caller: deputy })).toBe(deputy);
+    expect(verifiedInitiatingUserId({ caller: deputy })).toBe("system");
+    expect(verifiedInitiator({ caller: deputy, authorizingCaller: initiator })).toBe(initiator);
+    expect(verifiedInitiatingUserId({ caller: deputy, authorizingCaller: initiator })).toBe(
+      "usr_alice"
+    );
   });
 });

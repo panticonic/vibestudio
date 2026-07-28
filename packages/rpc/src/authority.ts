@@ -88,9 +88,18 @@ export interface SessionMissionFact {
 
 export type AgentExecutionMode = "interactive" | "mission" | "test";
 
+/**
+ * A capability-name matcher for unattended test decisions. Exact is the
+ * default; prefix is reserved for a production capability namespace whose
+ * concrete suffix is intentionally authored at runtime.
+ */
+export type AgentExecutionTestCapabilityScope =
+  | { kind: "exact"; key: string }
+  | { kind: "prefix"; prefix: string };
+
 export interface AgentExecutionTestAuthorityRule {
   ruleId: string;
-  capability: string;
+  capability: AgentExecutionTestCapabilityScope;
   resource: ResourceScope;
   tier: "gated" | "critical";
   decision: "once" | "deny";
@@ -104,8 +113,18 @@ export interface AgentExecutionTestUserlandRule {
   remember: boolean;
 }
 
+export interface AgentExecutionTestAgentPolicy {
+  /** The only model that agents created inside this test context may execute. */
+  model: string;
+  /** System tests are unattended, so downstream agents inherit full-auto. */
+  approvalLevel: 2;
+  /** A test model is an exact route, never the first leg of a fallback chain. */
+  fallback: "disabled";
+}
+
 export interface AgentExecutionTestCasePolicy {
   testId: string;
+  agent: AgentExecutionTestAgentPolicy;
   authority: readonly AgentExecutionTestAuthorityRule[];
   userland: readonly AgentExecutionTestUserlandRule[];
   unexpectedPrompts: "fail";
@@ -125,6 +144,7 @@ export type AgentExecutionTestPolicy =
 
 export interface AgentExecutionTestPolicySpec {
   testId: string;
+  agent: AgentExecutionTestAgentPolicy;
   authority: readonly AgentExecutionTestAuthorityRule[];
   userland: readonly AgentExecutionTestUserlandRule[];
   unexpectedPrompts: "fail";

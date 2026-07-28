@@ -108,7 +108,7 @@ export function testPolicyAuthorityDecision(
   }
   const rule = policy.case.authority.find(
     (candidate) =>
-      candidate.capability === input.capability &&
+      scopeCovers(candidate.capability, input.capability) &&
       candidate.tier === input.tier &&
       scopeCovers(candidate.resource, input.resourceKey)
   );

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { RuntimeEntityHandleSchema, runtimeMethods } from "./runtime.js";
+import {
+  AgentExecutionTestPolicySpecSchema,
+  RuntimeEntityHandleSchema,
+  runtimeMethods,
+} from "./runtime.js";
 
 describe("RuntimeEntityHandleSchema", () => {
   it("preserves the execution authority selected by runtime.createEntity", () => {
@@ -25,6 +29,36 @@ describe("RuntimeEntityHandleSchema", () => {
 });
 
 describe("runtime context-boundary authority", () => {
+  it("requires explicit exact or prefix capability-name scopes in test policies", () => {
+    const spec = {
+      testId: "dynamic-service",
+      agent: {
+        model: "openai-codex:gpt-5.3-codex-spark",
+        approvalLevel: 2,
+        fallback: "disabled",
+      },
+      authority: [
+        {
+          ruleId: "fixture-service",
+          capability: { kind: "prefix", prefix: "workspace-service:" },
+          resource: { kind: "prefix", prefix: "do:workers/fixture:FixtureDO:" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+      userland: [],
+      unexpectedPrompts: "fail",
+    };
+
+    expect(AgentExecutionTestPolicySpecSchema.parse(spec)).toEqual(spec);
+    expect(() =>
+      AgentExecutionTestPolicySpecSchema.parse({
+        ...spec,
+        authority: [{ ...spec.authority[0], capability: "workspace-service:*" }],
+      })
+    ).toThrow();
+  });
+
   it("uses reviewed semantic capabilities as the primary authority leaves", () => {
     const capabilityFor = (method: keyof typeof runtimeMethods) => {
       const authority = runtimeMethods[method].authority;

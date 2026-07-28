@@ -91,10 +91,15 @@ describe("AgentExecutionSessionRegistry test policy", () => {
     registry.inheritTestContext("ctx:case", "ctx:orchestrator");
     registry.attachCasePolicy("ctx:case", "ctx:orchestrator", {
       testId: "approval-roundtrip",
+      agent: {
+        model: "openai-codex:gpt-5.3-codex-spark",
+        approvalLevel: 2,
+        fallback: "disabled",
+      },
       authority: [
         {
           ruleId: "read",
-          capability: "approvals.read",
+          capability: { kind: "exact", key: "approvals.read" },
           resource: { kind: "exact", key: "approvals.read" },
           tier: "gated",
           decision: "once",
@@ -123,10 +128,15 @@ describe("AgentExecutionSessionRegistry test policy", () => {
     expect(() =>
       registry.attachCasePolicy("ctx:case", "ctx:orchestrator", {
         testId: "approval-roundtrip",
+        agent: {
+          model: "openai-codex:gpt-5.3-codex-spark",
+          approvalLevel: 2,
+          fallback: "disabled",
+        },
         authority: [
           {
             ruleId: "read",
-            capability: "approvals.read",
+            capability: { kind: "exact", key: "approvals.read" },
             resource: { kind: "exact", key: "approvals.read" },
             tier: "gated",
             decision: "once",
@@ -146,6 +156,11 @@ describe("AgentExecutionSessionRegistry test policy", () => {
     expect(() =>
       registry.attachCasePolicy("ctx:unowned", null, {
         testId: "bad",
+        agent: {
+          model: "openai-codex:gpt-5.3-codex-spark",
+          approvalLevel: 2,
+          fallback: "disabled",
+        },
         authority: [],
         userland: [],
         unexpectedPrompts: "fail",
@@ -165,6 +180,11 @@ describe("AgentExecutionSessionRegistry test policy", () => {
     registry.inheritTestContext("ctx:case", "ctx:orchestrator");
     registry.attachCasePolicy("ctx:case", "ctx:orchestrator", {
       testId: "approval-roundtrip",
+      agent: {
+        model: "openai-codex:gpt-5.3-codex-spark",
+        approvalLevel: 2,
+        fallback: "disabled",
+      },
       authority: [],
       userland: [],
       unexpectedPrompts: "fail",

@@ -14,12 +14,22 @@ import { contextBoundaryAuthority } from "./authority/contextBoundary.js";
 export const AgentExecutionTestPolicySpecSchema = z
   .object({
     testId: z.string().min(1),
+    agent: z
+      .object({
+        model: z.string().min(1),
+        approvalLevel: z.literal(2),
+        fallback: z.literal("disabled"),
+      })
+      .strict(),
     authority: z
       .array(
         z
           .object({
             ruleId: z.string().min(1),
-            capability: z.string().min(1),
+            capability: z.union([
+              z.object({ kind: z.literal("exact"), key: z.string().min(1) }).strict(),
+              z.object({ kind: z.literal("prefix"), prefix: z.string().min(1) }).strict(),
+            ]),
             resource: AuthorityResourceScopeSchema,
             tier: z.enum(["gated", "critical"]),
             decision: z.enum(["once", "deny"]),
@@ -434,9 +444,7 @@ export const runtimeMethods = defineServiceMethods({
   faultAbortAgentVessel: {
     description:
       "System-test-only fault injection: abort one exact agent Durable Object facet while preserving its durable state and runtime image.",
-    args: z.tuple([
-      z.object({ targetId: z.string().min(1).max(512) }).strict(),
-    ]),
+    args: z.tuple([z.object({ targetId: z.string().min(1).max(512) }).strict()]),
     returns: z.object({ aborted: z.literal(true) }).strict(),
     authority: { principals: ["code"] },
     tier: {

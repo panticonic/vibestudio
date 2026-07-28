@@ -911,10 +911,15 @@ describe("credentialService", () => {
             orchestratorPolicyId: "test:credential-orchestrator",
             case: {
               testId: "credential-run",
+              agent: {
+                model: "openai-codex:gpt-5.3-codex-spark",
+                approvalLevel: 2,
+                fallback: "disabled",
+              },
               authority: [
                 {
                   ruleId: "resolve-example-credential",
-                  capability: "credential.use",
+                  capability: { kind: "exact", key: "credential.use" },
                   resource: { kind: "exact", key: "credential.use" },
                   tier: "gated",
                   decision: "once",

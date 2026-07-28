@@ -18,6 +18,11 @@ const casePolicy: AgentExecutionTestPolicy = {
   orchestratorPolicyId: orchestratorPolicy.policyId,
   case: {
     testId: "approval",
+    agent: {
+      model: "openai-codex:gpt-5.3-codex-spark",
+      approvalLevel: 2,
+      fallback: "disabled",
+    },
     authority: [],
     userland: [],
     unexpectedPrompts: "fail",

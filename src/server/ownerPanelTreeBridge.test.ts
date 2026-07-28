@@ -30,6 +30,7 @@ function readyBoot(
 }
 import type { PanelTreeBridgeRequest } from "./services/panelTreeService.js";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { AgentExecutionTestPolicy } from "@vibestudio/rpc";
 
 function panelTreeSnapshot(
   slots: readonly unknown[],
@@ -304,6 +305,47 @@ async function createSinglePanelBridge(options?: {
 }
 
 describe("createServerPanelTreeBridge ergonomic panel lifecycle", () => {
+  it("preserves host-attested test policy through trusted panel mediation", async () => {
+    const policy: AgentExecutionTestPolicy = {
+      policyId: "test:panel-bridge:case",
+      kind: "case",
+      orchestratorPolicyId: "test:panel-bridge",
+      case: {
+        testId: "panel-bridge",
+        agent: {
+          model: "openai-codex:gpt-5.3-codex-spark",
+          approvalLevel: 2,
+          fallback: "disabled",
+        },
+        authority: [],
+        userland: [],
+        unexpectedPrompts: "fail",
+      },
+    };
+    const { bridge, dispatch } = await createSinglePanelBridge();
+
+    await bridge({
+      callerId: "server",
+      callerKind: "server",
+      testPolicy: policy,
+      method: "getTreeSnapshot",
+      args: [],
+    });
+
+    expect(dispatch).toHaveBeenCalledWith(
+      {
+        caller: expect.objectContaining({
+          runtime: { id: "server", kind: "server" },
+          hostOriginated: true,
+          testPolicy: policy,
+        }),
+      },
+      "workspace-state",
+      "panelTree.snapshot",
+      []
+    );
+  });
+
   it("validates raw internal bridge arguments before dispatching them", async () => {
     const { bridge, dispatch } = await createSinglePanelBridge();
 

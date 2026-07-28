@@ -2922,10 +2922,14 @@ async function main() {
         runtimeResult = createRuntimeService({
           entityStore: ensureEntityStore(doDispatch),
           contextFolders: contextFolderManager,
-          onContextCreated: ({ contextId, ownerContextId, testPolicy }) => {
-            agentExecutionSessions.inheritTestContext(contextId, ownerContextId);
-            if (testPolicy) {
-              agentExecutionSessions.attachCasePolicy(contextId, ownerContextId, testPolicy);
+          onContextCreated: ({ contextId, ownerContextId, inheritedTestPolicy, casePolicy }) => {
+            if (inheritedTestPolicy) {
+              agentExecutionSessions.markTestContext(contextId, inheritedTestPolicy);
+            } else {
+              agentExecutionSessions.inheritTestContext(contextId, ownerContextId);
+            }
+            if (casePolicy) {
+              agentExecutionSessions.attachCasePolicy(contextId, ownerContextId, casePolicy);
             }
           },
           // GAD-owned semantic context lifecycle for runtime entities.
