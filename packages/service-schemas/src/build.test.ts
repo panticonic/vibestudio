@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { executionArtifactRefSchema } from "./build.js";
+import { buildMethods, executionArtifactRefSchema } from "./build.js";
 
 const digest = "0".repeat(64);
 const semanticState = { kind: "event" as const, eventId: "event:test" };
@@ -54,5 +54,13 @@ describe("execution artifact ref wire schema", () => {
         })
       ).success
     ).toBe(false);
+  });
+});
+
+describe("build method effects", () => {
+  it("treats workspace compilation as read-only and external acquisition as write", () => {
+    expect(buildMethods.getBuild.access).toEqual({ sensitivity: "read" });
+    expect(buildMethods.getBuildReport.access).toEqual({ sensitivity: "read" });
+    expect(buildMethods.getBuildNpm.access).toEqual({ sensitivity: "write" });
   });
 });

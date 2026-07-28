@@ -2,6 +2,8 @@ import type { RuntimeSurface } from "@vibestudio/shared/runtimeSurface";
 import { namespaceEntry, valueEntry } from "@vibestudio/shared/runtimeSurface";
 import {
   coreRuntimeSurface,
+  OPEN_PANEL_SIGNATURE,
+  PANEL_HANDLE_AUTOMATION_GUIDE,
   PANEL_TREE_MEMBERS,
   WORKSPACE_MEMBERS,
 } from "./runtimeSurface.core.js";
@@ -21,7 +23,9 @@ export const workerRuntimeSurface: RuntimeSurface = {
       "workspace"
     ),
     openPanel: valueEntry(
-      'Create a panel and return its handle after the exact attempt is application boot-ready. It defaults under the caller and focused; use parentId:null for a root or focus:false for background creation. The slot commits before readiness, so on PanelOperationError inspect failure.provenance.panelId instead of blindly retrying. options.placement accepts "side" (default), "replace", or "split-below".'
+      'Create a panel and return its handle after the exact attempt is application boot-ready. It defaults under the caller and focused; use parentId:null for a root or focus:false for background creation. The slot commits before readiness, so on PanelOperationError inspect failure.provenance.panelId instead of blindly retrying. options.placement accepts "side" (default), "replace", or "split-below". ' +
+        PANEL_HANDLE_AUTOMATION_GUIDE,
+      OPEN_PANEL_SIGNATURE
     ),
     listPanels: valueEntry("Alias for runtime.panelTree.list()."),
     getPanelHandle: valueEntry("Alias for runtime.panelTree.get(id, kind?)."),

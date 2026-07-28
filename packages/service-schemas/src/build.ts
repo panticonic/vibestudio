@@ -45,7 +45,7 @@ export const UnitAuthorityManifestSchema = z
 const READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };
-const BUILD_ACCESS: MethodAccessDescriptor = {
+const EXTERNAL_ACQUISITION_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
 const RECOMPUTE_ACCESS: MethodAccessDescriptor = {
@@ -393,7 +393,10 @@ export const buildMethods = defineServiceMethods({
         .optional(),
     ]),
     returns: z.union([buildResultSchema, buildBundleResultSchema]),
-    access: BUILD_ACCESS,
+    // Compilation only populates a content-addressed cache. It does not alter
+    // workspace source, publish an artifact, install a dependency, or advance
+    // semantic state, so read-only evals must be able to load workspace code.
+    access: READ_ACCESS,
   },
   getBuildNpm: {
     description:
@@ -408,7 +411,7 @@ export const buildMethods = defineServiceMethods({
       z.array(z.string()).optional().describe("Module specifiers to leave external (not bundled)."),
     ]),
     returns: buildBundleResultSchema,
-    access: BUILD_ACCESS,
+    access: EXTERNAL_ACQUISITION_ACCESS,
   },
   getBuildMetadata: {
     description:
@@ -468,7 +471,9 @@ export const buildMethods = defineServiceMethods({
         },
       },
     ],
-    access: BUILD_ACCESS,
+    // Like getBuild, this is an advisory projection over a content-addressed
+    // compilation. Diagnostics are useful precisely in read-only inspection.
+    access: READ_ACCESS,
   },
   getEffectiveVersion: {
     description:

@@ -345,4 +345,36 @@ describe("resolveEntryPoint", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("resolves an exact package subpath without requiring a default export", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-entry-"));
+    try {
+      fs.mkdirSync(path.join(root, "src"), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, "package.json"),
+        JSON.stringify({
+          name: "@workspace/subpath-only",
+          type: "module",
+          exports: { "./catalog": "./src/catalog.ts" },
+        })
+      );
+      fs.writeFileSync(path.join(root, "src", "catalog.ts"), "export const ok = true;");
+
+      const entry = resolveEntryPoint(
+        { name: "@workspace/subpath-only", manifest: {}, path: root } as never,
+        root,
+        { subpath: "./catalog" }
+      );
+
+      expect(entry).toBe(path.join(root, "src", "catalog.ts"));
+      expect(() =>
+        resolveEntryPoint(
+          { name: "@workspace/subpath-only", manifest: {}, path: root } as never,
+          root
+        )
+      ).toThrow("No export . found");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

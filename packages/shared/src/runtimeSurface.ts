@@ -19,6 +19,8 @@ interface RuntimeSurfaceEntryBase {
 /** An opaque runtime value whose contract is owned by the runtime package. */
 export interface RuntimeSurfaceValueEntry extends RuntimeSurfaceEntryBase {
   kind: "value";
+  /** Source-level signature for runtime-owned functions without an RPC schema. */
+  signature?: string;
   schemaRef?: never;
   schemaMethod?: never;
   members?: never;
@@ -61,10 +63,14 @@ export interface RuntimeSurface {
   exports: Record<string, RuntimeSurfaceEntry>;
 }
 
-export function valueEntry(description?: string): RuntimeSurfaceValueEntry {
+export function valueEntry(
+  description?: string,
+  signature?: string
+): RuntimeSurfaceValueEntry {
   return {
     kind: "value",
     ...(description ? { description } : {}),
+    ...(signature ? { signature } : {}),
   };
 }
 

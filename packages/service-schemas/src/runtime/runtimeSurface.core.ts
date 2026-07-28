@@ -29,6 +29,8 @@ export {
   APPROVALS_MEMBERS,
   NOTIFICATIONS_MEMBERS,
   PANEL_TREE_MEMBERS,
+  OPEN_PANEL_SIGNATURE,
+  PANEL_HANDLE_AUTOMATION_GUIDE,
 } from "./runtimeSurface.portable.js";
 
 const perTarget = new Set<string>(PER_TARGET_DESCRIPTION_KEYS);

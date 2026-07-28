@@ -679,6 +679,12 @@ describe("@workspace-extensions/shell", () => {
     const created = await api.createContext({ title: "New terminal context" });
     expect(created.contextId).toBe("ctx-new");
     expect(created.contextAttachToken).toEqual(expect.any(String));
+    expect(rpcCall).toHaveBeenCalledWith("main", "runtime.createEntity", {
+      kind: "session",
+      execution: { surface: "inert" },
+      source: "terminal",
+      title: "New terminal context",
+    });
 
     const { sessionId } = await api.open({
       command: "node",

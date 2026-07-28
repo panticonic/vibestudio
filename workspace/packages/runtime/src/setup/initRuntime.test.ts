@@ -465,7 +465,7 @@ describe("initRuntime", () => {
     // launch parent from the verified caller.
     await runtime.callMain("runtime.createEntity", {
       kind: "worker",
-      source: "workers/agent",
+      execution: { surface: "code", source: "workers/agent" },
       key: "agent",
       contextId: "ctx-1",
     });
@@ -477,7 +477,7 @@ describe("initRuntime", () => {
         args: [
           {
             kind: "worker",
-            source: "workers/agent",
+            execution: { surface: "code", source: "workers/agent" },
             key: "agent",
             contextId: "ctx-1",
           },

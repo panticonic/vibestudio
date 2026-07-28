@@ -29,6 +29,15 @@ import { gitInteropMethods } from "../gitInterop.js";
 import { vcsMethods } from "../vcs.js";
 import { workspaceMethods } from "../workspace.js";
 
+export const OPEN_PANEL_SIGNATURE =
+  "openPanel(source: string, options?: OpenPanelOptions): Promise<PanelHandle>";
+
+export const PANEL_HANDLE_AUTOMATION_GUIDE =
+  "The returned PanelHandle is the complete lifecycle and inspection API. " +
+  "Use `const page = await handle.cdp.page()` before `await page.evaluate(...)` or `await page.screenshot(...)`; page() returns a Promise, not a page proxy. " +
+  'For a one-call host image use `await handle.cdp.screenshot({ format: "png" })`. ' +
+  "For host-captured logs since panel creation use `await handle.cdp.consoleHistory()` (live page console events are separate).";
+
 // --- shared namespace member arrays (single source of truth) ---
 export const WORKERS_MEMBERS = [
   "listSources",
@@ -190,6 +199,7 @@ export const CREDENTIALS_MEMBERS = [
   "getClientConfigStatus",
   "deleteClientConfig",
   "listStoredCredentials",
+  "summarizeStoredCredentials",
   "inspectStoredCredentials",
   "revokeCredential",
   "resolveCredential",
@@ -338,7 +348,9 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
     "Call `await openExternal(url, options?)` from `@workspace/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides."
   ),
   openPanel: valueEntry(
-    "Create a workspace or browser panel and return its handle after application boot-ready. The slot commits before readiness; on PanelOperationError, inspect failure.provenance.panelId instead of blindly repeating creation."
+    "Create a workspace or browser panel and return its handle after application boot-ready. The slot commits before readiness; on PanelOperationError, inspect failure.provenance.panelId instead of blindly repeating creation. " +
+      PANEL_HANDLE_AUTOMATION_GUIDE,
+    OPEN_PANEL_SIGNATURE
   ),
   listPanels: valueEntry("List open panels."),
   getPanelHandle: valueEntry("Get a handle to a panel by id."),

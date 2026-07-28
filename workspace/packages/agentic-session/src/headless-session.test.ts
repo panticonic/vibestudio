@@ -545,7 +545,10 @@ describe("HeadlessSession", () => {
     const rpcCall = vi.fn(async (target: string, method: string, args: unknown[]) => {
       order.push(`rpc:${target}:${method}`);
       if (target === "main" && method === "runtime.createEntity") {
-        if ((args[0] as { source?: string }).source === "workers/pubsub-channel") {
+        if (
+          (args[0] as { execution?: { source?: string } }).execution?.source ===
+          "workers/pubsub-channel"
+        ) {
           return {
             id: "channel-entity",
             targetId: "channel-target",
@@ -719,10 +722,16 @@ describe("HeadlessSession", () => {
       }
       if (target === "main" && method === "runtime.createEntity") {
         expect(args[0]).toHaveProperty("contextId", "ctx-isolated");
-        if ((args[0] as { source?: string }).source === "workers/pubsub-channel") {
+        if (
+          (args[0] as { execution?: { source?: string } }).execution?.source ===
+          "workers/pubsub-channel"
+        ) {
           expect(args[0]).toMatchObject({
             kind: "do",
-            source: "workers/pubsub-channel",
+            execution: {
+              surface: "code",
+              source: "workers/pubsub-channel",
+            },
             className: "PubSubChannel",
             key: "headless-1",
           });

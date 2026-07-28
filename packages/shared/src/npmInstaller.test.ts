@@ -88,6 +88,56 @@ describe("runNpmInstall", () => {
     expect(readAttempts(fixture.installDir)).toHaveLength(1);
   });
 
+  it("classifies registry package misses as dependency resolution failures", async () => {
+    const fixture = createFakeNpmFixture();
+    const restoreEnv = replaceEnv({
+      VIBESTUDIO_APP_ROOT: fixture.appRoot,
+      VIBESTUDIO_NPM_INSTALLER_TEST_ERROR:
+        "npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/missing\nnpm error 404 'missing@1.0.0' is not in this registry.",
+    });
+
+    try {
+      await expect(
+        runNpmInstall(fixture.installDir, {
+          timeout: 5_000,
+          cacheDir: path.join(fixture.root, "primary-cache"),
+        })
+      ).rejects.toMatchObject({
+        name: "NpmResolutionError",
+        reason: "package-not-found",
+      });
+    } finally {
+      restoreEnv();
+    }
+
+    expect(readAttempts(fixture.installDir)).toHaveLength(1);
+  });
+
+  it("classifies missing versions separately from registry outages", async () => {
+    const fixture = createFakeNpmFixture();
+    const restoreEnv = replaceEnv({
+      VIBESTUDIO_APP_ROOT: fixture.appRoot,
+      VIBESTUDIO_NPM_INSTALLER_TEST_ERROR:
+        "npm error code EETARGET\nnpm error notarget No matching version found for example@99.0.0.",
+    });
+
+    try {
+      await expect(
+        runNpmInstall(fixture.installDir, {
+          timeout: 5_000,
+          cacheDir: path.join(fixture.root, "primary-cache"),
+        })
+      ).rejects.toMatchObject({
+        name: "NpmResolutionError",
+        reason: "version-not-found",
+      });
+    } finally {
+      restoreEnv();
+    }
+
+    expect(readAttempts(fixture.installDir)).toHaveLength(1);
+  });
+
   it("retries transient network failures", async () => {
     const fixture = createFakeNpmFixture();
     getCentralDataPath.mockReturnValue(path.join(fixture.root, "vibestudio-data"));

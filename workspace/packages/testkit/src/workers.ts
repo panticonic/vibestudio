@@ -83,7 +83,7 @@ export async function ensureWorker(
     await rpc.call("main", "runtime.createEntity", [
       {
         kind: "worker",
-        source,
+        execution: { surface: "code", source },
         key: name,
         contextId,
         env: opts?.env,

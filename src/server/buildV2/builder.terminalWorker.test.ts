@@ -196,5 +196,19 @@ describe("buildUnit terminal worker builds", () => {
     const bundle = result.artifacts.find((a) => a.role === "primary")?.content ?? "";
     expect(bundle).toContain("fresh-source-export");
     expect(bundle).not.toContain("stale-dist-export");
+
+    const laterState = `state:${"d".repeat(64)}`;
+    const reused = await buildUnit(
+      graph.get("@workspace-workers/stale-dist-worker"),
+      "b".repeat(64),
+      graph,
+      workspaceRoot,
+      laterState
+    );
+    expect(reused.sourceStateHash).toBe(SOURCE_STATE_HASH);
+    expect(reused.metadata.sourceStateHash).toBe(SOURCE_STATE_HASH);
+    expect(reused.metadata.execution?.sourceState.contentRoots[0]?.stateHash).toBe(
+      SOURCE_STATE_HASH
+    );
   });
 });

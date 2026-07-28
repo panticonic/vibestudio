@@ -418,6 +418,7 @@ export async function activate(ctx: ExtensionContext) {
         "runtime.createEntity",
         {
           kind: "session",
+          execution: { surface: "inert" },
           source: "terminal",
           title: parsed?.title ?? "Terminal context",
         }

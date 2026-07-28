@@ -1620,12 +1620,12 @@ export async function buildUnit(
     if (node.kind === "extension") {
       await refreshCachedExtensionRuntimeDeps(cached);
     }
-    return withRequestedSourceState(cached, stateRef);
+    return cached;
   }
 
   // Check for in-flight build (coalescing)
   const inFlight = inFlightBuilds.get(buildKey);
-  if (inFlight) return withRequestedSourceState(await inFlight, stateRef);
+  if (inFlight) return inFlight;
 
   const buildPromise = doBuild(
     node,
@@ -1640,14 +1640,10 @@ export async function buildUnit(
   inFlightBuilds.set(buildKey, buildPromise);
 
   try {
-    return withRequestedSourceState(await buildPromise, stateRef);
+    return await buildPromise;
   } finally {
     inFlightBuilds.delete(buildKey);
   }
-}
-
-function withRequestedSourceState(build: BuildResult, sourceStateHash: string): BuildResult {
-  return build.sourceStateHash === sourceStateHash ? build : { ...build, sourceStateHash };
 }
 
 const EMPTY_UNIT_AUTHORITY: UnitAuthorityManifest = Object.freeze({
@@ -1785,7 +1781,6 @@ async function doBuild(
 interface BuildEnv {
   outdir: string;
   sourcePath: string;
-  entryFile: string;
   nodePaths: string[];
   nodeModulesDir: string | null;
   externalDeps: Record<string, string>;
@@ -1796,24 +1791,21 @@ interface BuildEnv {
 
 /**
  * Prepare the common build environment shared by panel and worker builds.
- * Creates temp output dir, resolves entry point, collects external deps, and
- * assembles nodePaths. Returns a cleanup function for the temp dir.
+ * Creates the temp output dir, collects external deps, and assembles nodePaths.
+ * Entry resolution belongs to the concrete build operation: library builds may
+ * target a package subpath, and preparing their environment must not require an
+ * unrelated default export.
  */
 async function prepareBuildEnv(
   node: GraphNode,
   buildKey: string,
   graph: PackageGraph,
   workspaceRoot: string,
-  sourceRoot: string,
-  // Resolution conditions for the unit's OWN entry point. MUST match the
-  // conditions the build's workspace-resolve plugin uses for deps, or the entry
-  // and its dependencies disagree about a package's panel-vs-worker fork.
-  conditions: readonly string[] = PANEL_CONDITIONS
+  sourceRoot: string
 ): Promise<BuildEnv> {
   const outdir = createBuildScratchDir(`build-${buildKey}`);
 
   const sourcePath = sourcePathForNode(node, sourceRoot);
-  const entryFile = resolveEntryPoint(node, sourcePath, conditions);
 
   const externalDeps = collectTransitiveExternalDeps(node, graph, workspaceRoot, _appNodeModules);
   const dependencyOverrides = collectTransitiveDependencyOverrides(
@@ -1836,7 +1828,6 @@ async function prepareBuildEnv(
   return {
     outdir,
     sourcePath,
-    entryFile,
     nodePaths,
     nodeModulesDir,
     externalDeps,
@@ -1912,7 +1903,10 @@ async function buildPanel(
   authority: UnitAuthorityManifest
 ): Promise<BuildResult> {
   const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
-  const { outdir, entryFile, nodePaths } = env;
+  const { outdir, nodePaths } = env;
+  const entryFile = resolveEntryPoint(node, env.sourcePath, {
+    conditions: PANEL_CONDITIONS,
+  });
 
   // Read extracted manifest for ref-correct build decisions
   const panelSourcePath = path.join(sourceRoot, node.relativePath);
@@ -2609,15 +2603,11 @@ async function buildWorker(
   sourceStateHash: string,
   authority: UnitAuthorityManifest
 ): Promise<BuildResult> {
-  const env = await prepareBuildEnv(
-    node,
-    buildKey,
-    graph,
-    workspaceRoot,
-    sourceRoot,
-    WORKER_CONDITIONS
-  );
-  const { outdir, entryFile, nodePaths, resolveDir } = env;
+  const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
+  const { outdir, nodePaths, resolveDir } = env;
+  const entryFile = resolveEntryPoint(node, env.sourcePath, {
+    conditions: WORKER_CONDITIONS,
+  });
 
   // Workers run as a single inline esModule in workerd — no module filesystem
   // or package resolution at runtime. All dependencies must be bundled inline.
@@ -3031,15 +3021,11 @@ async function buildExtension(
   sourceStateHash: string,
   authority: UnitAuthorityManifest
 ): Promise<BuildResult> {
-  const env = await prepareBuildEnv(
-    node,
-    buildKey,
-    graph,
-    workspaceRoot,
-    sourceRoot,
-    EXTENSION_CONDITIONS
-  );
-  const { outdir, entryFile, nodePaths, resolveDir } = env;
+  const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
+  const { outdir, nodePaths, resolveDir } = env;
+  const entryFile = resolveEntryPoint(node, env.sourcePath, {
+    conditions: EXTENSION_CONDITIONS,
+  });
 
   const extensionSourcePath = path.join(sourceRoot, node.relativePath);
   const extractedPkgPath = path.join(extensionSourcePath, "package.json");
@@ -3428,18 +3414,15 @@ async function buildLibraryBundle(
   conditions: readonly string[],
   authority: UnitAuthorityManifest
 ): Promise<BuildResult> {
-  // prepareBuildEnv resolves the `.` entry with the target conditions, so an
-  // imported package's worker/panel entry is picked for the right host (its deps
-  // resolve via the same conditions in the plugin below).
-  const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot, conditions);
+  const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
 
   try {
     const moduleUrl = `vibestudio-module://build/${buildKey}/${encodeURIComponent(node.name)}`;
     const outfile = path.join(env.outdir, "bundle.mjs");
-    const entryFile =
-      entrySubpath === "."
-        ? env.entryFile
-        : resolvePackageExportEntryPoint(node, env.sourcePath, entrySubpath, conditions);
+    const entryFile = resolveEntryPoint(node, env.sourcePath, {
+      conditions,
+      subpath: entrySubpath,
+    });
     await esbuild.build({
       entryPoints: [entryFile],
       bundle: true,
@@ -3520,7 +3503,11 @@ function validateNpmSpecifier(specifier: string): void {
   // npm package names: optional @scope/name, alphanumeric + hyphens + dots
   const NPM_NAME_RE = /^(@[a-z0-9\-~][a-z0-9\-._~]*\/)?[a-z0-9\-~][a-z0-9\-._~]*$/;
   if (!NPM_NAME_RE.test(specifier)) {
-    throw new Error(`Invalid npm package specifier: ${specifier}`);
+    throw new BuildRequestError(
+      "invalid_package_specifier",
+      `Invalid npm package specifier: ${specifier}`,
+      { specifier }
+    );
   }
 }
 
@@ -3532,9 +3519,11 @@ function validateSandboxNpmLibrarySpecifier(specifier: string): void {
     specifier === "esbuild" ||
     specifier.startsWith("@vitest/")
   ) {
-    throw new Error(
+    throw new BuildRequestError(
+      "unsupported_package",
       `Unsupported npm package for panel eval: ${specifier}. ` +
-        "Test/build toolchains must run through a server-side test runner or extension, not the browser sandbox package loader."
+        "Test/build toolchains must run through a server-side test runner or extension, not the browser sandbox package loader.",
+      { specifier }
     );
   }
 }
@@ -3562,13 +3551,17 @@ function validateSandboxNpmLibrarySpecifier(specifier: string): void {
 const SEMVER_RE = /^(\^|~|>=|<=|=|>|<)?(?:\d+|\d+\.\d+|\d+\.\d+\.\d+(-[\w.+-]+)?(\+[\w.+-]+)?)$/;
 function validateNpmVersion(version: string): void {
   if (typeof version !== "string" || version.length === 0 || version.length > 64) {
-    throw new Error(`Invalid npm version: ${version}`);
+    throw new BuildRequestError("invalid_package_version", `Invalid npm version: ${version}`, {
+      version,
+    });
   }
   if (version === "latest" || version === "*") return;
   if (SEMVER_RE.test(version)) return;
-  throw new Error(
+  throw new BuildRequestError(
+    "invalid_package_version",
     `Invalid npm version "${version}". Only registry semver/range values, "latest", or "*" are allowed; ` +
-      `file:, git+, http(s)://, github:, npm:, and local-path specifiers are rejected.`
+      `file:, git+, http(s)://, github:, npm:, and local-path specifiers are rejected.`,
+    { version }
   );
 }
 
@@ -3818,8 +3811,17 @@ async function doPlatformBuild(
 export function resolveEntryPoint(
   node: GraphNode,
   sourcePath: string,
-  conditions: readonly string[] = PANEL_CONDITIONS
+  options: {
+    conditions?: readonly string[];
+    subpath?: string;
+  } = {}
 ): string {
+  const conditions = options.conditions ?? PANEL_CONDITIONS;
+  const subpath = options.subpath ?? ".";
+  if (subpath !== ".") {
+    return resolvePackageExportEntryPoint(node, sourcePath, subpath, conditions);
+  }
+
   const explicit = node.manifest.entry;
   if (explicit) {
     const full = path.join(sourcePath, explicit);
@@ -3835,6 +3837,13 @@ export function resolveEntryPoint(
     let target: string | null = null;
     if (pkgJson.exports) {
       target = resolveExportSubpath(pkgJson.exports, ".", conditions);
+      if (!target) {
+        throw new BuildRequestError(
+          "package_export_not_found",
+          `No export . found for ${node.name}`,
+          { packageName: node.name, subpath: ".", conditions: [...conditions] }
+        );
+      }
     }
     if (!target && pkgJson.main) {
       target = pkgJson.main;

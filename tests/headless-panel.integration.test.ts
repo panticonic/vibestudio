@@ -140,7 +140,7 @@ maybeDescribe("headless browser panel integration", () => {
     const worker = await rpc<RuntimeEntityHandle>(ready, shell.shellToken, "runtime.createEntity", [
       {
         kind: "worker",
-        source: "workers/agent-worker",
+        execution: { surface: "code", source: "workers/agent-worker" },
         key: `headless-panel-integration-${Date.now().toString(36)}`,
       },
     ]);

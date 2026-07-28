@@ -146,6 +146,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
         qualifiedName: name,
         title: name,
         ...(description ? { description } : {}),
+        ...(entry.kind === "value" && entry.signature ? { signature: entry.signature } : {}),
         // Advertise only members that docs_open can actually describe. A
         // runtime namespace may expose extra ergonomic values, but presenting
         // those names as catalog children while get(id) returns null makes the

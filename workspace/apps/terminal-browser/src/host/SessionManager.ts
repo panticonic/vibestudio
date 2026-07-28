@@ -112,7 +112,14 @@ export class SessionManager {
       const entity = await this.opts.rpc.call<{ targetId: string; contextId?: string }>(
         "main",
         "runtime.createEntity",
-        [{ kind: "do", source: spec.source, className: spec.className, key: sessionId }],
+        [
+          {
+            kind: "do",
+            execution: { surface: "code", source: spec.source },
+            className: spec.className,
+            key: sessionId,
+          },
+        ]
       );
       record.targetId = entity.targetId;
       this.byTarget.set(entity.targetId, sessionId);
@@ -162,10 +169,12 @@ export class SessionManager {
         record.vt.resize(size);
         if (record.status === "running") {
           await this.opts.rpc
-            .call(record.targetId, SESSION_METHODS.onResize, [{ sessionId: record.sessionId, size }])
-            .catch(() => {});
+            .call(record.targetId, SESSION_METHODS.onResize, [
+              { sessionId: record.sessionId, size },
+            ])
+            .catch(() => this.markErrored(record.sessionId, "resize delivery failed"));
         }
-      }),
+      })
     );
     this.emitChange();
   }
@@ -176,7 +185,9 @@ export class SessionManager {
     if (prev) {
       prev.focused = false;
       if (prev.status === "running") {
-        void this.opts.rpc.call(prev.targetId, SESSION_METHODS.onBlur, [{ sessionId: prev.sessionId }]).catch(() => {});
+        void this.opts.rpc
+          .call(prev.targetId, SESSION_METHODS.onBlur, [{ sessionId: prev.sessionId }])
+          .catch((error) => console.warn("[terminal-browser] Session blur failed:", error));
       }
     }
     const next = this.sessions.get(sessionId);
@@ -184,9 +195,13 @@ export class SessionManager {
     next.focused = true;
     this.focusedId = sessionId;
     if (next.status === "running") {
-      void this.opts.rpc.call(next.targetId, SESSION_METHODS.onFocus, [{ sessionId }]).catch(() => {});
+      void this.opts.rpc
+        .call(next.targetId, SESSION_METHODS.onFocus, [{ sessionId }])
+        .catch((error) => console.warn("[terminal-browser] Session focus failed:", error));
       // Ask the worker to repaint so the freshly-focused viewport is complete.
-      void this.opts.rpc.call(next.targetId, SESSION_METHODS.repaint, [{ sessionId }]).catch(() => {});
+      void this.opts.rpc
+        .call(next.targetId, SESSION_METHODS.repaint, [{ sessionId }])
+        .catch((error) => console.warn("[terminal-browser] Session repaint failed:", error));
     }
     this.emitChange();
   }
@@ -204,7 +219,9 @@ export class SessionManager {
     const record = this.sessions.get(sessionId);
     if (!record) return;
     if (record.status === "running") {
-      await this.opts.rpc.call(record.targetId, SESSION_METHODS.onClose, [{ sessionId, reason }]).catch(() => {});
+      await this.opts.rpc
+        .call(record.targetId, SESSION_METHODS.onClose, [{ sessionId, reason }])
+        .catch((error) => console.warn("[terminal-browser] Session close delivery failed:", error));
     }
     record.vt.dispose();
     this.sessions.delete(sessionId);

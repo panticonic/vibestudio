@@ -71,7 +71,10 @@ export async function addAgentToChannel(
   const entity = await rpc.call<{ id: string; targetId: string }>("main", "runtime.createEntity", [
     {
       kind: "do",
-      source: args.source,
+      execution: {
+        surface: "code",
+        source: args.source,
+      },
       className: args.className,
       key,
       contextId,

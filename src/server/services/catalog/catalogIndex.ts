@@ -71,6 +71,7 @@ function runtimeSurfaceSourceKey(surface: RuntimeSurface): string {
         sourceId(entry),
         entry.kind,
         entry.description ?? "",
+        entry.kind === "value" ? (entry.signature ?? "") : "",
         entry.schemaRef ?? "",
         (entry.members ?? []).join(","),
         JSON.stringify(entry.methodCatalog ?? null),

@@ -93,6 +93,11 @@ describe("SessionManager", () => {
     const record = await sm.open({ source: "workers/terminal-chat", className: "TerminalChatWorker", title: "Chat" });
     expect(record.status).toBe("running");
     expect(calls[0]?.method).toBe("runtime.createEntity");
+    expect(calls[0]?.args[0]).toMatchObject({
+      kind: "do",
+      execution: { surface: "code", source: "workers/terminal-chat" },
+      className: "TerminalChatWorker",
+    });
     expect(calls[1]?.method).toBe(SESSION_METHODS.start);
     expect((calls[1]?.args[0] as { hostPrincipalId: string }).hostPrincipalId).toBe("app:host");
     expect(sm.focused()?.sessionId).toBe(record.sessionId);

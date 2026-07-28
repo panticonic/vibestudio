@@ -8,6 +8,30 @@ import { getCentralDataPath } from "@vibestudio/env-paths";
 
 const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 10 * 60_000;
 
+export type NpmResolutionFailure = "package-not-found" | "version-not-found";
+
+/**
+ * A registry resolution refusal caused by the requested dependency itself.
+ *
+ * This is deliberately distinct from process, network, cache, and filesystem
+ * failures: callers can turn it into a correctable domain error without
+ * parsing npm's presentation text at every boundary.
+ */
+export class NpmResolutionError extends Error {
+  readonly reason: NpmResolutionFailure;
+
+  constructor(reason: NpmResolutionFailure, cause: unknown) {
+    super(
+      reason === "version-not-found"
+        ? "npm could not find a matching package version"
+        : "npm could not find a requested package",
+      { cause }
+    );
+    this.name = "NpmResolutionError";
+    this.reason = reason;
+  }
+}
+
 function createRequireFromRoot(root: string): NodeRequire {
   const packageJson = path.join(root, "package.json");
   const requireBase = fs.existsSync(packageJson) ? packageJson : `${root}${path.sep}`;
@@ -34,8 +58,13 @@ export function resolveBundledNpmCliPath(appRoot = process.env["VIBESTUDIO_APP_R
 
 export async function runNpmInstall(
   cwd: string,
-  options: number | { timeout?: number; ignoreScripts?: boolean; cacheDir?: string } =
-    DEFAULT_NPM_INSTALL_TIMEOUT_MS
+  options:
+    | number
+    | {
+        timeout?: number;
+        ignoreScripts?: boolean;
+        cacheDir?: string;
+      } = DEFAULT_NPM_INSTALL_TIMEOUT_MS
 ): Promise<void> {
   const timeout =
     typeof options === "number" ? options : (options.timeout ?? DEFAULT_NPM_INSTALL_TIMEOUT_MS);
@@ -114,7 +143,11 @@ export async function runNpmInstall(
           console.warn(
             "[npmInstaller] npm cache corruption detected; retrying once with a clean cache"
           );
-          await installWithCache(recoveryCacheDir);
+          try {
+            await installWithCache(recoveryCacheDir);
+          } catch (recoveryError) {
+            throw classifyNpmInstallError(recoveryError);
+          }
           return;
         } finally {
           try {
@@ -127,13 +160,29 @@ export async function runNpmInstall(
         }
       }
 
-      if (attempt === 3 || !isTransientNpmInstallError(error)) throw error;
+      if (attempt === 3 || !isTransientNpmInstallError(error)) {
+        throw classifyNpmInstallError(error);
+      }
       console.warn(
         `[npmInstaller] transient npm install failure; retrying (${attempt}/3): ${npmErrorOutput(error).split("\n")[0]}`
       );
       await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
     }
   }
+}
+
+function classifyNpmInstallError(error: unknown): unknown {
+  const output = npmErrorOutput(error);
+  if (/\bEETARGET\b|No matching version found for\b/i.test(output)) {
+    return new NpmResolutionError("version-not-found", error);
+  }
+  if (
+    /\bE404\b/i.test(output) &&
+    /(?:Not Found\s*-\s*GET|is not in this registry|package not found)/i.test(output)
+  ) {
+    return new NpmResolutionError("package-not-found", error);
+  }
+  return error;
 }
 
 function isTransientNpmInstallError(error: unknown): boolean {

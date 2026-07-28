@@ -15,7 +15,8 @@ vi.mock("@vibestudio/env-paths", () => ({
   getCentralDataPath: vi.fn().mockReturnValue(testExtDepsRoot),
 }));
 
-vi.mock("@vibestudio/shared/npmInstaller", () => ({
+vi.mock("@vibestudio/shared/npmInstaller", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@vibestudio/shared/npmInstaller")>()),
   runNpmInstall: vi.fn(async (cwd: string) => {
     fs.mkdirSync(path.join(cwd, "node_modules"), { recursive: true });
   }),
@@ -27,7 +28,7 @@ import {
   collectTransitiveExternalDeps,
   ensureExternalDeps,
 } from "./externalDeps.js";
-import { runNpmInstall } from "@vibestudio/shared/npmInstaller";
+import { NpmResolutionError, runNpmInstall } from "@vibestudio/shared/npmInstaller";
 
 /** Helper: create a minimal GraphNode. */
 function makeNode(
@@ -313,6 +314,22 @@ describe("collectTransitiveExternalDeps", () => {
 });
 
 describe("ensureExternalDeps", () => {
+  it("exposes npm registry misses as caller-correctable package resolution errors", async () => {
+    vi.mocked(runNpmInstall).mockRejectedValueOnce(
+      new NpmResolutionError("package-not-found", new Error("npm E404"))
+    );
+    fs.rmSync(testExtDepsRoot, { recursive: true, force: true });
+
+    await expect(ensureExternalDeps({ "missing-package": "1.0.0" })).rejects.toMatchObject({
+      code: "package_not_found",
+      errorData: {
+        code: "package_not_found",
+        reason: "package-not-found",
+        packages: [{ specifier: "missing-package", version: "1.0.0" }],
+      },
+    });
+  });
+
   it("writes npm overrides into generated external-deps package.json", async () => {
     vi.mocked(runNpmInstall).mockClear();
     fs.rmSync(testExtDepsRoot, { recursive: true, force: true });

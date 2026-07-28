@@ -14,9 +14,10 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import { getCentralDataPath } from "@vibestudio/env-paths";
-import { runNpmInstall } from "@vibestudio/shared/npmInstaller";
+import { NpmResolutionError, runNpmInstall } from "@vibestudio/shared/npmInstaller";
 import type { PackageGraph, GraphNode } from "./packageGraph.js";
 import { assertPresent } from "../../lintHelpers";
+import { BuildRequestError } from "./diagnostics.js";
 
 // ---------------------------------------------------------------------------
 // Transitive collection
@@ -575,6 +576,22 @@ async function ensureDepsInstalledOnce(
       fs.rmSync(tmpDir, { recursive: true, force: true });
     } catch (cleanupError) {
       warnCleanupFailure(tmpDir, cleanupError);
+    }
+    if (error instanceof NpmResolutionError) {
+      const packages = Object.entries(installPlan.dependencies).map(([specifier, version]) => ({
+        specifier,
+        version,
+      }));
+      const requested = packages
+        .map(({ specifier, version }) => `${specifier}@${version}`)
+        .join(", ");
+      throw new BuildRequestError(
+        "package_not_found",
+        error.reason === "version-not-found"
+          ? `No matching npm package version was found for: ${requested}`
+          : `npm package not found: ${requested}`,
+        { reason: error.reason, packages }
+      );
     }
     throw new Error(
       `Failed to install external dependencies: ${error instanceof Error ? error.message : String(error)}`

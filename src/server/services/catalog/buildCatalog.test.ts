@@ -254,6 +254,24 @@ describe("buildCatalog", () => {
     });
   });
 
+  it("publishes runtime-owned value signatures and panel-handle automation guidance", () => {
+    const projected = buildCatalog({
+      definitions: [],
+      runtimeSurfaces: {
+        workerRuntime: {
+          target: "workerRuntime",
+          description: "worker runtime",
+          exports: { openPanel: workerRuntimeSurface.exports["openPanel"]! },
+        },
+      },
+    });
+
+    expect(byId(projected, "runtime:workerRuntime.openPanel")).toMatchObject({
+      signature: "openPanel(source: string, options?: OpenPanelOptions): Promise<PanelHandle>",
+      description: expect.stringContaining("const page = await handle.cdp.page()"),
+    });
+  });
+
   it("projects generated runtime method schemas without importing userland code", () => {
     const projected = buildCatalog({
       definitions: [],

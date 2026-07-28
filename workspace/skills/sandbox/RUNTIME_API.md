@@ -34,7 +34,7 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `gatewayFetch` | value |  | Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer. |
 | `openExternal` | callable |  | Call `await openExternal(url, options?)` from `@workspace/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides. |
 | `workers` | namespace | `listSources`, `create`, `list`, `destroy`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService` | Worker discovery, lifecycle, and manifest-declared service resolution. Use create/list/destroy for regular worker instances; listSources() returns every launchable source with its real manifest entry point and Durable Object classes. |
-| `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `inspectStoredCredentials`, `revokeCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` | Typed credential lifecycle and credentialed network access. Use store(input) to persist a URL-bound credential, fetch(url, init?, { credentialId? }?) for credentialed HTTP and a standard Response, hookForUrl(url, { credentialId? }?) for a bound fetch function, gitHttp({ credentialId?, gitIntent? }) for smart-HTTP, and forAudience(descriptor) for a credential-bound handle. The underlying RPC transport is internal. |
+| `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `summarizeStoredCredentials`, `inspectStoredCredentials`, `revokeCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` | Typed credential lifecycle and credentialed network access. Use store(input) to persist a URL-bound credential, fetch(url, init?, { credentialId? }?) for credentialed HTTP and a standard Response, hookForUrl(url, { credentialId? }?) for a bound fetch function, gitHttp({ credentialId?, gitIntent? }) for smart-HTTP, and forAudience(descriptor) for a credential-bound handle. The underlying RPC transport is internal. |
 | `browserData` | namespace | `getBrowserEnvironment`, `listImportHosts`, `listImportSources`, `previewImport`, `startImport`, `cancelImport`, `getImportJob`, `listImportJobs`, `listOpenTabs`, `openTabsAsPanels`, `getSitePreferences`, `setSiteZoom`, `getBookmarks`, `addBookmark`, `updateBookmark`, `deleteBookmark`, `moveBookmark`, `searchBookmarks`, `getHistory`, `deleteHistoryEntry`, `deleteHistoryRange`, `clearAllHistory`, `searchHistory`, `searchHistoryForAutocomplete`, `recordHistoryVisit`, `updateHistoryTitle`, `getPasswords`, `getPasswordForSite`, `addPassword`, `updatePassword`, `deletePassword`, `updatePasswordLastUsed`, `addNeverSavePassword`, `isNeverSavePassword`, `getNeverSavePasswordOrigins`, `removeNeverSavePassword`, `getFormFillSuggestions`, `addFormFillValue`, `updateFormFillValue`, `markFormFillValueUsed`, `deleteFormFillValue`, `clearFormFillValues`, `getSearchEngines`, `setDefaultEngine`, `applyCookieMutations`, `getCookieSnapshot`, `getCookiesForOrigin`, `clearCookiesForOrigin`, `clearAllCookies`, `endBrowserSession`, `getCookieSiteSummary`, `flushCookieProjection`, `getCookieProjectionDiagnostics`, `listDownloads`, `listDownloadRecords`, `upsertDownloadRecord`, `pauseDownload`, `resumeDownload`, `cancelDownload`, `openDownload`, `revealDownload`, `putPageFavicon`, `getPageFavicon`, `exportBookmarks`, `exportPasswords`, `exportCookies` | Typed access to the manifest-declared browser-data provider: detection, import, secret-free summaries, approved sensitive reads, mutation, and export. |
 | `git` | namespace | `setSharedRemote`, `removeSharedRemote`, `setUpstream`, `removeUpstream`, `detachUpstream`, `setAutoPush`, `upstreamStatus`, `pushUpstream`, `pullUpstream`, `publishRepo`, `createDisposableRemote`, `publishToDisposableRemote`, `pushDisposableRemote`, `inspectDisposableRemote`, `removeDisposableRemote`, `commitMapping`, `importProject`, `completeWorkspaceDependencies` | Typed external Git operations routed through the workspace's configured gitInterop provider. Managed content crosses the boundary only as semantic import candidates or protected-main exports. Credential selection is exact: omit credentialId for URL-bound resolution, pass a string to pin one credential, or pass null to require anonymous Git HTTP. Pull dry-runs use disposable state and do not mutate the managed checkout or semantic workspace. |
 | `vcs` | namespace | `edit`, `move`, `copy`, `integrate`, `revert`, `commit`, `discard`, `importSnapshot`, `push`, `status`, `compare`, `inspect`, `neighbors`, `history`, `blame`, `readMemory`, `resolveRepository`, `readFile`, `listDirectory`, `listFiles` | Simple semantic version control: exact event/application state, expressive edit/move/copy records, incremental local integration, whole-chain commit/discard, directly walkable provenance, and atomic external-snapshot acknowledgements containing the committed event/application/work-unit/repository/snapshot tuple. |
@@ -45,7 +45,7 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `approvals` | namespace | `request`, `revoke`, `list` |  |
 | `notifications` | namespace | `show`, `dismiss` |  |
 | `workspace` | namespace | `getInfo`, `getActive`, `getConfig`, `validateConfig`, `setInitPanels`, `setConfigField`, `getAgentsMd`, `listSkills`, `readSkill`, `sourceTree`, `ensureContextFolder`, `findUnitForPath`, `units`, `recurring`, `heartbeats`, `hostTargets`, `projects` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; import top-level panelTree for panel-tree handles. |
-| `openPanel` | value |  | Create a panel and return its handle after the exact attempt is application boot-ready. It defaults under the caller and focused; use parentId:null for a root or focus:false for background creation. The slot commits before readiness, so on PanelOperationError inspect failure.provenance.panelId instead of blindly retrying. options.placement accepts "side" (default), "replace", or "split-below". |
+| `openPanel` | value |  | Create a panel and return its handle after the exact attempt is application boot-ready. It defaults under the caller and focused; use parentId:null for a root or focus:false for background creation. The slot commits before readiness, so on PanelOperationError inspect failure.provenance.panelId instead of blindly retrying. options.placement accepts "side" (default), "replace", or "split-below". The returned PanelHandle is the complete lifecycle and inspection API. Use `const page = await handle.cdp.page()` before `await page.evaluate(...)` or `await page.screenshot(...)`; page() returns a Promise, not a page proxy. For a one-call host image use `await handle.cdp.screenshot({ format: "png" })`. For host-captured logs since panel creation use `await handle.cdp.consoleHistory()` (live page console events are separate). |
 | `listPanels` | value |  |  |
 | `getPanelHandle` | value |  |  |
 | `panelTree` | namespace | `self`, `get`, `list`, `roots`, `children`, `parent`, `navigate` | Top-level export, not workspace.panelTree. self/get are synchronous handle factories. navigate/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. Use list/roots/children/get for existing panels and openPanel to create. |
@@ -62,6 +62,7 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `getFileName` | value |  |  |
 | `resolvePath` | value |  |  |
 | `createGatewayFetch` | value |  | Create a gateway-authenticated fetch helper from an explicit config. |
+| `FORM_FILL_TYPES` | value |  | Canonical HTML autocomplete field vocabulary recognized by browser form fill. |
 | `panel` | namespace | `entityId`, `slotId`, `parentId`, `env`, `setTitle`, `getInfo`, `focusPanel`, `getTheme`, `onThemeChange`, `onFocus`, `onConnectionError`, `onChildCreated`, `reopen`, `stateArgs` | Panel-only affordances: identity (entityId/slotId/parentId/env), semantic display title (setTitle(title, { explicit? })), introspection (getInfo/getTheme/onThemeChange/onFocus/onConnectionError), lifecycle (focusPanel/onChildCreated/reopen), and stateArgs (get/set/setForPanel). |
 | `journal` | namespace | `Journal`, `with`, `current` | Panel operation journaling: journal.Journal (class), journal.with(journal, fn), journal.current(). |
 | `agentApi` | value |  |  |
@@ -119,8 +120,9 @@ console.log(
 
 `workspace.getActive()` returns the current workspace id. Use
 `workspace.units.*` for source unit inspection, diagnostics, logs, versions,
-restart, and rollback. Workspace catalog operations belong to the human
-shell's stable hub session and are intentionally absent from runtime eval.
+restart, and rollback. Server-wide multi-workspace catalog operations belong to
+the human shell or CLI's stable hub session and are intentionally absent from
+runtime eval; the current-workspace APIs above remain available.
 
 Workspace host logs are exposed through the service catalog, not as an
 `@workspace/runtime` namespace. Use `services.serverLog.tail/query/stats` in
@@ -132,6 +134,37 @@ normally through `EventsClient`; cancelling that response is the only
 unsubscribe operation. Humans can open the `about/server-logs` viewer. See
 [`server-logs`](../server-logs/SKILL.md) for the full contract and exact cleanup
 pattern.
+
+## People, Membership, and Presence
+
+Use the service that matches the scope of the question:
+
+```ts
+const profile = await services.account.getProfile();
+const members = await services.account.listWorkspaceMembers();
+const present = await services.workspacePresence.list();
+const channelParticipants = await chat.getParticipants(); // type/name/isPerson/isAgent
+
+return { profile, members, present, channelParticipants };
+```
+
+- `account.getProfile()` returns the verified user subject for the current
+  authenticated call. It is distinct from the executing agent/runtime identity.
+- `account.listWorkspaceMembers()` returns durable workspace membership and
+  roles, whether or not each member is online.
+- `workspacePresence.list()` returns live human presence across the current
+  workspace. An empty list is a valid observation.
+- `chat.getParticipants()` returns the current conversation's roster, including
+  agents and headless participants. Each row exposes `id`, `ref`, `type`,
+  `name`, `isPerson`, `isAgent`, and optional `handle`/`methods` directly.
+  `headless` and `panel` rows are client transports, not agents. `chat` exists
+  only in channel-bound agent eval.
+- `gad.inspectChannelRoster` is the durable diagnostic equivalent for a channel
+  roster, not a workspace-presence query.
+
+See [CHAT_API.md](CHAT_API.md) for the channel interface. The workspace runtime
+does not expose the shell's stable hub session, so `hubControl` is not a route
+for discovering other workspaces from eval.
 
 ## Notifications
 
@@ -328,16 +361,26 @@ const parent = panelTree.self().parent();
 const parentObservation = parent ? await parent.observe() : null;
 const roots = await panelTree.roots();
 
+// One authoritative recursive scope. Re-read after structural mutations and
+// compare revision rather than maintaining a parallel tree.
+const scope = await panelTree.subtree(created.id);
+const browserLeaves = scope.leaves.filter((node) => node.handle.kind === "browser");
+
 const all = await panelTree.list();
 const existing = all.find((handle) => handle.source === "panels/spectrolite");
 const byKnownSlot = panelTree.get("panel-slot-id");
 const before = await byKnownSlot.observe(); // exact attempt and provenance
+await byKnownSlot.setTitle("Semantic panel title", { explicit: true });
 await byKnownSlot.navigate("panels/spectrolite", { contextId: "ctx-vault" }); // state/files only; code remains the default/current build
 await byKnownSlot.navigate("panels/spectrolite", {
   contextId: "ctx-vault",
   ref: "ctx:ctx-vault",
 }); // only when intentionally building code from that context branch
 ```
+
+For recursive collection supervision, semantic grouping, shared orchestration
+contexts, notes, and bounded child-panel automation, read the co-located
+[collection conductor skill](../../about/collection/SKILL.md).
 
 ### Eval And Visible Panel Perspective
 

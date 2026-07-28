@@ -131,7 +131,10 @@ export async function createHeadlessChannel(opts: {
   const value = await opts.rpcCall("main", "runtime.createEntity", [
     {
       kind: "do",
-      source: CHANNEL_SOURCE,
+      execution: {
+        surface: "code",
+        source: CHANNEL_SOURCE,
+      },
       className: CHANNEL_CLASS,
       key: opts.channelId,
       contextId: opts.contextId,
