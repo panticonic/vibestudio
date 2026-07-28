@@ -429,6 +429,59 @@ describe("HostTargetLaunchCoordinator", () => {
     }
   });
 
+  it("reruns a session refresh when target state changes during an active refresh", async () => {
+    const { coordinator, emit, launchHostTarget } = makeCoordinator({});
+    let resolveFirstLaunch!: (value: HostTargetLaunchResult) => void;
+    launchHostTarget
+      .mockImplementationOnce(
+        async () =>
+          await new Promise<HostTargetLaunchResult>((resolve) => {
+            resolveFirstLaunch = resolve;
+          })
+      )
+      .mockResolvedValueOnce({
+        status: "ready",
+        launched: true,
+        target: "electron",
+        source: "apps/shell",
+        appId: "@workspace-apps/shell",
+        buildKey: "build-shell",
+        ...SEALED_EXECUTION_AUTHORITY,
+      });
+    vi.useFakeTimers();
+    try {
+      const session = await coordinator.beginLaunch("electron");
+      await vi.runAllTimersAsync();
+      expect(launchHostTarget).toHaveBeenCalledOnce();
+
+      coordinator.notifyTargetChanged("electron", "app-status");
+      resolveFirstLaunch({
+        status: "preparing",
+        launched: false,
+        target: "electron",
+        reason: "Electron app is building",
+        details: ["apps/shell status: building"],
+      });
+      await vi.runAllTimersAsync();
+
+      expect(launchHostTarget).toHaveBeenCalledTimes(2);
+      expect(await coordinator.getLaunchSession(session.sessionId)).toMatchObject({
+        status: "ready",
+        settled: true,
+        launch: expect.objectContaining({ appId: "@workspace-apps/shell" }),
+      });
+      expect(emit).toHaveBeenCalledWith(
+        "host-target-launch:session-changed",
+        expect.objectContaining({
+          sessionId: session.sessionId,
+          status: "ready",
+        })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("emits explicit target change notifications for underlying state changes", () => {
     const { coordinator, emit } = makeCoordinator({});
 

@@ -5,6 +5,7 @@ import {
   type RpcEnvelope,
 } from "@vibestudio/rpc";
 import type { PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
+import { AsyncStateConvergenceLoop } from "@vibestudio/shared/asyncStateConvergenceLoop";
 import {
   approvalIds,
   formatCapabilities,
@@ -124,8 +125,6 @@ const hostTarget = "electron";
 const launchEventNames = [HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT] as const;
 let pending: PendingUnitBatchApproval[] = [];
 let rendering = false;
-let refreshInFlight = false;
-let refreshScheduled = false;
 let launchSession: HostTargetLaunchSessionSnapshot | null = null;
 /** Header copy for the current launch state; the initial value covers the frame
  * rendered before the host answers with a session. */
@@ -137,12 +136,7 @@ let startupWaitBeganAt = 0;
 const STARTUP_POLL_TIMEOUT_MS = 135_000;
 
 function scheduleRefresh(): void {
-  if (refreshScheduled || refreshInFlight) return;
-  refreshScheduled = true;
-  window.setTimeout(() => {
-    refreshScheduled = false;
-    void refresh();
-  }, 0);
+  launchRefreshLoop.request();
 }
 
 function setPending(next: PendingUnitBatchApproval[]): boolean {
@@ -194,8 +188,8 @@ async function decide(
       sessionId,
       decision
     );
-    setLaunchSession(session);
-    await refresh();
+    if (setLaunchSession(session)) render();
+    scheduleRefresh();
   } catch (err) {
     decisionError = `Approval failed: ${err instanceof Error ? err.message : String(err)}`;
   } finally {
@@ -468,7 +462,7 @@ function appendDeniedRecovery(parent: HTMLElement): void {
   review.textContent = "Review again";
   review.onclick = () => {
     launchSession = null;
-    void refresh();
+    scheduleRefresh();
   };
   const choose = document.createElement("button");
   choose.textContent = "Choose another workspace";
@@ -488,24 +482,30 @@ function renderLaunchError(title: string, detail: string): void {
   appendLaunchTimeline(approvalsContainer, startupTimeline(null, "failed"));
 }
 
-async function refresh(): Promise<void> {
-  if (refreshInFlight) return;
-  refreshInFlight = true;
+type LaunchRefreshResult = HostTargetLaunchSessionSnapshot["status"] | "error";
+
+async function refresh(): Promise<LaunchRefreshResult> {
   try {
     const session =
       (launchSession
         ? await getWorkspaceClient().hostTargets.getLaunchSession(launchSession.sessionId)
         : null) ?? (await getWorkspaceClient().hostTargets.beginLaunch(hostTarget));
     if (setLaunchSession(session)) render();
+    return session.status;
   } catch (err) {
     renderLaunchError(
       "Launch gate could not reach the host",
       err instanceof Error ? err.message : String(err)
     );
-  } finally {
-    refreshInFlight = false;
+    return "error";
   }
 }
+
+const launchRefreshLoop = new AsyncStateConvergenceLoop(
+  refresh,
+  (status) => status === "starting" || status === "preparing",
+  1_000
+);
 
 async function subscribeToLaunchEvents(): Promise<void> {
   const eventClient = getEventsClient();
@@ -513,6 +513,7 @@ async function subscribeToLaunchEvents(): Promise<void> {
     eventClient.on(eventName, (payload) => {
       if (launchSession && isLaunchSessionEventFor(launchSession.sessionId, eventName, payload)) {
         if (setLaunchSession(payload)) render();
+        if (payload.status === "starting" || payload.status === "preparing") scheduleRefresh();
         return;
       }
       if (isLaunchSessionEventForTarget(hostTarget, eventName, payload)) scheduleRefresh();
@@ -659,20 +660,24 @@ async function runConnectionAction(actionId: string, action: () => Promise<void>
   startupWaitBeganAt = Date.now();
   connectionHandoff = connectionHandoffFor(actionId);
   connectionError = null;
+  startupWaitDone = false;
+  launchGateStarted = false;
   if (connectionHandoff) {
     renderConnectionHandoff();
   } else if (connectionState) {
     renderConnectionChooser(connectionState);
   }
+  // Connection actions may remain pending until the workspace app is approved
+  // and ready. Observe host state concurrently so that approval can be shown
+  // while that action is still in flight; awaiting it first creates a circular
+  // wait between startup and its own consent UI.
+  waitForConnectedBootstrapState();
   try {
     await action();
-    // No relaunch: the host resolves the choice and connects in THIS process and
-    // window. Show the starting state and watch the bootstrap state (host push
-    // + fallback poll) until the launch gate is ready.
-    startupWaitDone = false;
-    renderStartingWorkspace();
-    waitForConnectedBootstrapState();
   } catch (err) {
+    startupWaitDone = true;
+    stopBootstrapConnectionStateWatch();
+    launchGateStarted = false;
     connectionError = err instanceof Error ? err.message : String(err);
     connectionBusyAction = null;
     connectionHandoff = null;
@@ -1012,6 +1017,14 @@ function renderStartupFailure(state: BootstrapConnectionState): void {
 
 let launchGateStarted = false;
 let startupWaitDone = false;
+type BootstrapConnectionPollResult = "waiting" | "terminal";
+let bootstrapConnectionStateLoop: AsyncStateConvergenceLoop<BootstrapConnectionPollResult> | null =
+  null;
+
+function stopBootstrapConnectionStateWatch(): void {
+  bootstrapConnectionStateLoop?.stop();
+  bootstrapConnectionStateLoop = null;
+}
 
 /**
  * Apply a bootstrap connection state from either transport (host push or the
@@ -1024,11 +1037,13 @@ async function applyBootstrapState(
   connectionState = state;
   if (state.mode === "failed") {
     startupWaitDone = true;
+    stopBootstrapConnectionStateWatch();
     renderStartupFailure(state);
     return "terminal";
   }
   if (state.mode === "connected") {
     startupWaitDone = true;
+    stopBootstrapConnectionStateWatch();
     // Both the push handler and an in-flight poll can observe "connected";
     // the gate must open exactly once.
     if (!launchGateStarted) {
@@ -1039,6 +1054,7 @@ async function applyBootstrapState(
   }
   if (state.mode === "choose-connection") {
     startupWaitDone = true;
+    stopBootstrapConnectionStateWatch();
     renderConnectionChooser(state);
     return "terminal";
   }
@@ -1047,47 +1063,61 @@ async function applyBootstrapState(
 }
 
 function waitForConnectedBootstrapState(): void {
-  window.setTimeout(async () => {
-    if (startupWaitDone) return;
-    const state = await getBootstrapStateWithTimeout();
-    if (startupWaitDone) return;
-    if (!isBootstrapConnectionState(state)) {
-      if (Date.now() - startupWaitBeganAt >= STARTUP_POLL_TIMEOUT_MS) {
-        renderStartupFailure({
-          mode: "failed",
-          connectionKind: connectionState?.connectionKind ?? null,
-          localWorkspaces: [],
-          lastLocalWorkspaceName: null,
-          startupError: {
-            message: "Workspace startup stopped responding.",
-            detail:
-              "The host did not report progress. Retry startup or choose another server or workspace.",
-          },
-          serverLogPath: connectionState?.serverLogPath,
-        });
-        return;
-      }
-      waitForConnectedBootstrapState();
-      return;
-    }
-    if ((await applyBootstrapState(state)) === "terminal") return;
-    if (Date.now() - startupWaitBeganAt >= STARTUP_POLL_TIMEOUT_MS) {
-      renderStartupFailure({
-        ...state,
-        mode: "failed",
-        startupError: {
-          message: "Workspace startup is taking longer than expected.",
-          detail: "Retry startup, inspect the server log, or choose another workspace.",
-          ...(state.startupError?.logPath ? { logPath: state.startupError.logPath } : {}),
-          ...(state.serverLogPath ? { logPath: state.serverLogPath } : {}),
-        },
-      });
-      return;
-    }
-    waitForConnectedBootstrapState();
-    // Pushed state drives the UI; this poll is only a liveness fallback, so it
-    // can be slow.
-  }, 2_000);
+  stopBootstrapConnectionStateWatch();
+  const loop: AsyncStateConvergenceLoop<BootstrapConnectionPollResult> =
+    new AsyncStateConvergenceLoop<BootstrapConnectionPollResult>(
+      () => pollConnectedBootstrapState(() => bootstrapConnectionStateLoop === loop),
+      (result) => result === "waiting",
+      2_000
+    );
+  bootstrapConnectionStateLoop = loop;
+  // Give the initiating IPC action one turn to publish "starting". Later polls
+  // remain level checks; host-pushed transitions still update immediately.
+  loop.request(2_000);
+}
+
+async function pollConnectedBootstrapState(
+  isCurrent: () => boolean
+): Promise<BootstrapConnectionPollResult> {
+  if (!isCurrent() || startupWaitDone) return "terminal";
+  const state = await getBootstrapStateWithTimeout();
+  // A replaced attempt may complete its old IPC read after the new attempt has
+  // begun. It must not render or schedule from that stale result.
+  if (!isCurrent() || startupWaitDone) return "terminal";
+  if (!isBootstrapConnectionState(state)) {
+    if (Date.now() - startupWaitBeganAt < STARTUP_POLL_TIMEOUT_MS) return "waiting";
+    startupWaitDone = true;
+    stopBootstrapConnectionStateWatch();
+    renderStartupFailure({
+      mode: "failed",
+      connectionKind: connectionState?.connectionKind ?? null,
+      localWorkspaces: [],
+      lastLocalWorkspaceName: null,
+      startupError: {
+        message: "Workspace startup stopped responding.",
+        detail:
+          "The host did not report progress. Retry startup or choose another server or workspace.",
+      },
+      serverLogPath: connectionState?.serverLogPath,
+    });
+    return "terminal";
+  }
+  if ((await applyBootstrapState(state)) === "terminal") return "terminal";
+  if (!isCurrent() || startupWaitDone) return "terminal";
+  if (Date.now() - startupWaitBeganAt < STARTUP_POLL_TIMEOUT_MS) return "waiting";
+  startupWaitDone = true;
+  stopBootstrapConnectionStateWatch();
+  renderStartupFailure({
+    ...state,
+    mode: "failed",
+    startupError: {
+      message: "Workspace startup is taking longer than expected.",
+      detail: "Retry startup, inspect the server log, or choose another workspace.",
+      ...(state.startupError?.logPath ? { logPath: state.startupError.logPath } : {}),
+      ...(state.serverLogPath ? { logPath: state.serverLogPath } : {}),
+    },
+  });
+  return "terminal";
 }
 
 /** Host-pushed state transitions land immediately (no poll latency). */
@@ -1119,7 +1149,7 @@ async function startLaunchGate(): Promise<void> {
       err instanceof Error ? err.message : String(err)
     );
   });
-  await refresh();
+  launchRefreshLoop.start();
 }
 
 async function init(): Promise<void> {

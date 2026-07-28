@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AsyncStateConvergenceLoop } from "./asyncStateConvergenceLoop.js";
+import { AsyncStateConvergenceLoop } from "@vibestudio/shared/asyncStateConvergenceLoop";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

@@ -338,10 +338,13 @@ export class HostTargetLaunchCoordinator {
   }
 
   private scheduleSessionRefresh(sessionId: string): void {
-    if (
-      this.scheduledSessionRefreshes.has(sessionId) ||
-      this.activeSessionRefreshes.has(sessionId)
-    ) {
+    if (this.scheduledSessionRefreshes.has(sessionId)) return;
+    // An underlying unit/app change can land while resolveLaunch is awaiting a
+    // build. Remember that invalidation so the completed refresh cannot publish
+    // an already-stale "preparing" snapshot and then wait forever for another
+    // change that has already happened.
+    if (this.activeSessionRefreshes.has(sessionId)) {
+      this.scheduledSessionRefreshes.add(sessionId);
       return;
     }
     this.scheduledSessionRefreshes.add(sessionId);
@@ -359,6 +362,9 @@ export class HostTargetLaunchCoordinator {
           this.activeSessionRefreshes.delete(sessionId);
           const refreshed = this.sessions.get(sessionId);
           if (refreshed?.settled) this.reportLaunchActivity(refreshed.target, "settled");
+          if (this.scheduledSessionRefreshes.delete(sessionId)) {
+            this.scheduleSessionRefresh(sessionId);
+          }
         });
     });
   }

@@ -215,7 +215,7 @@ import { callerHasPlatformCapability, viewHasAppCapability } from "./services/ap
 import { createAutofillService } from "./services/autofillService.js";
 import { assertPresent } from "../lintHelpers";
 import { ApplicationWindowController } from "./applicationWindowController.js";
-import { AsyncStateConvergenceLoop } from "./asyncStateConvergenceLoop.js";
+import { AsyncStateConvergenceLoop } from "@vibestudio/shared/asyncStateConvergenceLoop";
 import { recordMainProcessError } from "./mainProcessErrorLedger.js";
 import {
   clearPanelInitializationFailure,
