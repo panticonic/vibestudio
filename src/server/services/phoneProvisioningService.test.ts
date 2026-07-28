@@ -18,8 +18,7 @@ describe("phoneProvisioning proxy", () => {
 
     expect(definition.methods["providers"]?.capability).toBe("mobile.devices.read");
     expect(definition.methods["devices"]?.capability).toBe("mobile.devices.read");
-    expect(definition.methods["install"]?.capability).toBe("mobile.install");
-    expect(definition.methods["openPairing"]?.capability).toBe("mobile.pair");
+    expect(definition.methods["provision"]?.capability).toBe("mobile.provision");
   });
 
   it("only exposes desktops belonging to the authenticated account", async () => {
@@ -62,7 +61,28 @@ describe("phoneProvisioning proxy", () => {
       getClientBridge: () => ({ call: vi.fn() }),
     });
     await expect(
-      definition.handler(context("alice"), "install", [{ platform: "android" }])
+      definition.handler(context("alice"), "provision", [{ platform: "android" }])
     ).rejects.toThrow("choose a phone provider");
+  });
+
+  it("surfaces total reverse-bridge failure instead of reporting no providers", async () => {
+    const definition = createPhoneProvisioningProxyService({
+      getUserConnections: (userId) => [
+        {
+          userId,
+          caller: { runtime: { id: `shell:${userId}`, kind: "shell" } },
+          clientPlatform: "desktop",
+        },
+      ],
+      getClientBridge: () => ({
+        call: vi.fn(async () => {
+          throw new Error('Method "desktopPhoneProvider.providers" is not exposed');
+        }),
+      }),
+    });
+
+    await expect(definition.handler(context("alice"), "providers", [])).rejects.toThrow(
+      "Connected desktop provider failed"
+    );
   });
 });

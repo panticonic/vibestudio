@@ -382,3 +382,19 @@ export const SESSION_SERVER_RESPONDER: AuthenticatedCaller = {
   callerId: "main",
   callerKind: "server",
 };
+
+/**
+ * Whether a caller is one of the RPC server's authenticated endpoints.
+ *
+ * `main` is the public/session responder identity. The per-client reverse RPC
+ * bridge uses the internal `server` endpoint. Transports mint both identities;
+ * authenticated userland principals cannot select `callerKind: "server"`.
+ */
+export function isAuthenticatedServerCaller(
+  caller: { callerId: string; callerKind: string }
+): boolean {
+  return (
+    caller.callerKind === "server" &&
+    (caller.callerId === SESSION_SERVER_RESPONDER.callerId || caller.callerId === "server")
+  );
+}

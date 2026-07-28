@@ -44,6 +44,7 @@ const actionLabels: Record<SetupAction, string> = {
   change: "Change",
   grants: "Agent access",
   resume: "Resume",
+  install: "Install on mobile",
   refresh: "Refresh",
   explore: "Explore",
 };
@@ -161,6 +162,16 @@ function SetupRow({
               {pending === `${definition.id}:${snapshot.nextAction}`
                 ? "Sending…"
                 : actionLabels[snapshot.nextAction]}
+            </Button>
+          ) : null}
+          {definition.actions?.install ? (
+            <Button
+              size="1"
+              variant="soft"
+              disabled={pending !== null}
+              onClick={() => onAction(definition, "install")}
+            >
+              {pending === `${definition.id}:install` ? "Sending…" : actionLabels.install}
             </Button>
           ) : null}
         </Flex>

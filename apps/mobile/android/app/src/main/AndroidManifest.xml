@@ -95,5 +95,18 @@
                     android:path="/panel" />
             </intent-filter>
         </activity>
+
+        <!--
+            Exact-device USB provisioning. `adb shell` holds DUMP; ordinary
+            Android apps do not, so only the already-authorized desktop path
+            can request immediate pairing without the in-app confirmation.
+        -->
+        <activity
+            android:name=".ProvisioningActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:permission="android.permission.DUMP"
+            android:theme="@style/AppTheme" />
     </application>
 </manifest>

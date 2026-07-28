@@ -383,6 +383,19 @@ The test requires exactly one ready Android device or emulator. It must not
 shell out from the agent or replace the extension approval with a harness
 bypass.
 
+Then exercise end-user onboarding through a connected Electron desktop:
+
+```bash
+pnpm cli --instance INSTANCE system-test run onboarding-desktop-mobile-install-android \
+  --model openai-codex:gpt-5.3-codex-spark
+```
+
+This test must prove the atomic `phoneProvisioning.provision` outcome and then
+use `mobile-debug.verifyWorkspaceReady` for the same device. Keep its documented
+three-minute cold-build deadline: a fresh mobile workspace can take longer than
+one minute to prepare. Installed-package or paired-credential evidence without
+`workspace-panels-initialized` and `workspace-connected` is incomplete.
+
 Then run the composition smoke for real desktop remote access and mobile
 pairing:
 

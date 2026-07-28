@@ -55,10 +55,18 @@ export type PhoneDeviceDiscovery = z.infer<typeof PhoneDeviceDiscoverySchema>;
 export const PhoneProvisioningResultSchema = z.object({
   providerId: z.string().min(1),
   platform: PhonePlatformSchema,
-  deviceId: z.string().min(1).optional(),
-  status: z.enum(["installed", "already-compatible", "launched", "manual-action"]),
-  packageId: z.string().min(1).optional(),
-  message: z.string().min(1).optional(),
+  attachedDeviceId: z.string().min(1),
+  installStatus: z.enum(["installed", "already-compatible"]),
+  compatibleAppInstalled: z.literal(true),
+  pairingStatus: z.literal("paired"),
+  pairedDevice: z
+    .object({
+      deviceId: z.string().min(1),
+      label: z.string().min(1),
+      platform: z.string().min(1).optional(),
+      createdAt: z.number(),
+    })
+    .strict(),
 });
 export type PhoneProvisioningResult = z.infer<typeof PhoneProvisioningResultSchema>;
 
@@ -70,7 +78,7 @@ export const PhoneDeviceQuerySchema = z
   .strict()
   .optional();
 
-export const PhoneInstallArgsSchema = z
+export const PhoneProvisionArgsSchema = z
   .object({
     providerId: z.string().min(1).optional(),
     platform: PhonePlatformSchema,
@@ -78,19 +86,7 @@ export const PhoneInstallArgsSchema = z
     mode: z.enum(["auto", "release", "source"]).optional(),
   })
   .strict();
-export type PhoneInstallArgs = z.infer<typeof PhoneInstallArgsSchema>;
-
-export const PhoneOpenPairingArgsSchema = z
-  .object({
-    providerId: z.string().min(1).optional(),
-    platform: PhonePlatformSchema,
-    deviceId: z.string().min(1).optional(),
-    pairUrl: z.string().min(1),
-    packageId: z.string().min(1).optional(),
-    bundleId: z.string().min(1).optional(),
-  })
-  .strict();
-export type PhoneOpenPairingArgs = z.infer<typeof PhoneOpenPairingArgsSchema>;
+export type PhoneProvisionArgs = z.infer<typeof PhoneProvisionArgsSchema>;
 
 export const phoneProvisioningMethods = defineServiceMethods({
   providers: {
@@ -119,30 +115,18 @@ export const phoneProvisioningMethods = defineServiceMethods({
       rationale: "Attached device inventory and installed-app state are private.",
     },
   },
-  install: {
+  provision: {
     description:
-      "Install a compatible mobile app through the selected desktop, resolving release tooling lazily when possible.",
-    args: z.tuple([PhoneInstallArgsSchema]),
+      "Install when needed, immediately pair through the selected desktop, and wait for the new device to join the current account.",
+    args: z.tuple([PhoneProvisionArgsSchema]),
     returns: PhoneProvisioningResultSchema,
     access: adminAccess,
-    capability: "mobile.install",
+    capability: "mobile.provision",
     tier: {
       tier: "gated",
       session: "family",
-      rationale: "Installs software through an attached desktop device.",
-    },
-  },
-  openPairing: {
-    description:
-      "Open a one-time pairing link on a phone through the selected desktop without returning or logging the link.",
-    args: z.tuple([PhoneOpenPairingArgsSchema]),
-    returns: PhoneProvisioningResultSchema,
-    access: adminAccess,
-    capability: "mobile.pair",
-    tier: {
-      tier: "gated",
-      session: "family",
-      rationale: "Opens a one-time pairing link on an external device.",
+      rationale:
+        "Installs software and adds the attached phone to the current account through a connected desktop.",
     },
   },
 });

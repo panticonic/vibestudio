@@ -49,6 +49,35 @@ class VibestudioMobileHostModule(
     }
 
     @ReactMethod
+    fun consumeUsbProvisioningApproval(pairUrl: String, promise: Promise) {
+        try {
+            val preferences = reactApplicationContext.getSharedPreferences(
+                ProvisioningActivity.PREFERENCES,
+                android.content.Context.MODE_PRIVATE,
+            )
+            val expected = preferences.getString(ProvisioningActivity.PAIR_URL_DIGEST, null)
+            val approvedAt = preferences.getLong(ProvisioningActivity.APPROVED_AT, 0L)
+            preferences.edit().clear().apply()
+            val actual = Base64.encodeToString(
+                MessageDigest.getInstance("SHA-256")
+                    .digest(pairUrl.toByteArray(Charsets.UTF_8)),
+                Base64.NO_WRAP,
+            )
+            val ageMs = System.currentTimeMillis() - approvedAt
+            promise.resolve(
+                expected != null &&
+                    MessageDigest.isEqual(
+                        expected.toByteArray(Charsets.UTF_8),
+                        actual.toByteArray(Charsets.UTF_8),
+                    ) &&
+                    ageMs in 0..USB_PROVISIONING_TTL_MS
+            )
+        } catch (error: Exception) {
+            promise.reject("usb_provisioning_approval_failed", error.message, error)
+        }
+    }
+
+    @ReactMethod
     fun appendBundleChunk(
         bytesBase64: String,
         buildKey: String,
@@ -180,5 +209,6 @@ class VibestudioMobileHostModule(
 
     private companion object {
         const val TAG = "VibestudioMobileHost"
+        const val USB_PROVISIONING_TTL_MS = 2 * 60 * 1000L
     }
 }

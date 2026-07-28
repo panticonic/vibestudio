@@ -429,6 +429,10 @@
     "host:developmentClientExecutor.consumeAttestation": {
       "review": "single-use-isolated-child-attestation-read",
       "change": "Lets only the exact bound isolated management shell consume one nonce-bound child runtime receipt. The inbox is short-lived and bounded, and no device credential, artifact path, or self-reported execution digest is returned."
+    },
+    "host:phoneProvisioning.provision": {
+      "review": "atomic-connected-desktop-phone-provisioning",
+      "change": "Combines compatible-app installation and same-account device pairing behind one gated transaction. The selected authenticated desktop owns the hub session, targets one attached ready phone, keeps the invite secret, delivers it through an adb-shell-only Android component, and returns only after a new paired device is observed."
     }
   }
 }

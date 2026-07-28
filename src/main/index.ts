@@ -2655,13 +2655,13 @@ app.on("ready", async () => {
     const { createPhoneProvisioningService } =
       await import("./services/phoneProvisioningService.js");
     const { getAppUnpackedRoot, getPhysicalAppPath } = await import("./paths.js");
-    electronContainer.registerRpc(
-      createPhoneProvisioningService({
-        appRoot: getAppUnpackedRoot(),
-        appVersion: app.getVersion(),
-        resolveScriptPath: (name) => getPhysicalAppPath(path.join("scripts", "cli", name)),
-      })
-    );
+    const desktopPhoneProvider = createPhoneProvisioningService({
+      appRoot: getAppUnpackedRoot(),
+      appVersion: app.getVersion(),
+      resolveScriptPath: (name) => getPhysicalAppPath(path.join("scripts", "cli", name)),
+      hubControlClient: conn.hubControlClient,
+    });
+    electronContainer.registerRpc(desktopPhoneProvider);
     electronContainer.registerRpc(createAdblockService({ adBlockManager }));
     // Browser-data persistence lives on the server; Electron keeps only the
     // host-bound autofill adapter.
@@ -2855,6 +2855,8 @@ app.on("ready", async () => {
     await electronContainer.startAll();
 
     dispatcher.markInitialized();
+    const { publishHostService } = await import("./hostServicePublisher.js");
+    publishHostService(sc, dispatcher, desktopPhoneProvider);
 
     // =========================================================================
     // Register ipcMain.handle handlers for __vibestudioShell (panel preload)

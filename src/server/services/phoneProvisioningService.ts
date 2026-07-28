@@ -5,9 +5,8 @@ import {
   PhoneProviderSchema,
   PhoneProvisioningResultSchema,
   phoneProvisioningMethods,
-  type PhoneInstallArgs,
-  type PhoneOpenPairingArgs,
   type PhoneProvider,
+  type PhoneProvisionArgs,
 } from "@vibestudio/service-schemas/phoneProvisioning";
 
 interface DesktopConnection {
@@ -62,7 +61,9 @@ export function createPhoneProvisioningProxyService(
 
   async function providers(userId: string): Promise<PhoneProvider[]> {
     const available: PhoneProvider[] = [];
-    for (const connection of connections(userId)) {
+    const connected = connections(userId);
+    const failures: string[] = [];
+    for (const connection of connected) {
       try {
         const local = PhoneProviderSchema.array().parse(
           await callDesktop(connection, "providers", [])
@@ -74,9 +75,12 @@ export function createPhoneProvisioningProxyService(
             label: connection.clientLabel?.trim() || provider.label,
           });
         }
-      } catch {
-        // A stale desktop must not prevent another live provider from serving the user.
+      } catch (error) {
+        failures.push(error instanceof Error ? error.message : String(error));
       }
+    }
+    if (connected.length > 0 && available.length === 0 && failures.length === connected.length) {
+      throw new Error(`Connected desktop provider failed: ${failures.join("; ")}`);
     }
     return available;
   }
@@ -145,17 +149,8 @@ export function createPhoneProvisioningProxyService(
         }
         return { devices, issues };
       }
-      if (method === "install") {
-        const input = args[0] as PhoneInstallArgs;
-        const target = await select(userId, input.providerId);
-        const result = await callDesktop(target, method, [{ ...input, providerId: undefined }]);
-        return PhoneProvisioningResultSchema.parse({
-          ...(result as object),
-          providerId: target.caller.runtime.id,
-        });
-      }
-      if (method === "openPairing") {
-        const input = args[0] as PhoneOpenPairingArgs;
+      if (method === "provision") {
+        const input = args[0] as PhoneProvisionArgs;
         const target = await select(userId, input.providerId);
         const result = await callDesktop(target, method, [{ ...input, providerId: undefined }]);
         return PhoneProvisioningResultSchema.parse({

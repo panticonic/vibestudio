@@ -1,6 +1,12 @@
+import groovy.json.JsonSlurper
+
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+
+def vibestudioVersion = new JsonSlurper()
+    .parse(rootProject.file("../../../package.json"))
+    .version
 
 def hermesOsBin = {
     def os = org.gradle.internal.os.OperatingSystem.current()
@@ -48,7 +54,11 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
-        versionName "0.1.0"
+        // The desktop compares the installed app version with the product
+        // version before deciding whether installation is necessary. Keep one
+        // source of truth so a source build is immediately recognized as the
+        // compatible artifact it just installed.
+        versionName vibestudioVersion
         buildConfigField "boolean", "VIBESTUDIO_HAS_FIREBASE", hasFirebaseConfig ? "true" : "false"
     }
 

@@ -37,6 +37,7 @@ export const setupActions = [
   "change",
   "grants",
   "resume",
+  "install",
   "refresh",
   "explore",
 ] as const;
@@ -201,19 +202,22 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
   {
     id: "connection.device",
     title: "Devices",
-    summary: "Pair another trusted client with this account.",
+    summary: "Install Vibestudio on a phone and pair it to this workspace.",
     category: "access",
     role: "connection",
     scope: "device",
     tier: "host-topology",
+    ownerSkillPath: "skills/phone-setup/SKILL.md",
     actions: {
       setup: { via: "shell-navigation", target: "connection-settings" },
       change: { via: "shell-navigation", target: "connection-settings" },
+      install: { via: "owner-skill" },
     },
     visibility: "secondary",
     setup: {
       statusAdapter: "host-devices",
-      successDescription: "The hub reports a durable device identity for the account.",
+      successDescription:
+        "The mobile app is installed and the hub reports its durable device identity.",
     },
   },
   {

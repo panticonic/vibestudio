@@ -10,11 +10,17 @@ import {
   type RpcCallOptions,
   type RpcConnectionStatus,
   type RpcEnvelope,
+  type RpcRequestContext,
   type RpcStreamRequest,
   type RpcStreamOptions,
 } from "@vibestudio/rpc";
 import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
-import type { DeviceCredential, PairingContext } from "@vibestudio/rpc/protocol/wsProtocol";
+import type {
+  ClientPlatform,
+  DeviceCredential,
+  PairingContext,
+} from "@vibestudio/rpc/protocol/wsProtocol";
+import { isAuthenticatedServerCaller } from "@vibestudio/rpc/protocol/sessionNegotiation";
 import { NodeWsLike } from "@vibestudio/shell-core/transport/nodeWsLike";
 import { authMethods } from "@vibestudio/service-schemas/auth";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
@@ -30,6 +36,22 @@ export interface ScopedServerCaller {
 }
 
 export type ServerMessageListener = (envelope: RpcEnvelope) => void;
+export type HostServiceHandler = (
+  request: Pick<RpcRequestContext, "args" | "signal">
+) => unknown | Promise<unknown>;
+
+export function exposeServerOriginatedHostMethod(
+  rpc: RpcClient,
+  method: string,
+  handler: HostServiceHandler
+): void {
+  rpc.expose(method, (request) => {
+    if (!isAuthenticatedServerCaller(request.caller)) {
+      throw new Error(`Host method "${method}" accepts calls only from the authenticated server`);
+    }
+    return handler({ args: request.args, signal: request.signal });
+  });
+}
 
 /**
  * A dedicated logical session for a single desktop panel principal. The host
@@ -65,6 +87,12 @@ export interface PanelSession {
 }
 
 export interface ServerClient {
+  /**
+   * Publish one Electron-owned host method to the authenticated server.
+   * Direct routed calls from workspace principals are rejected at this client
+   * boundary; only the canonical `main` server may enter the host dispatcher.
+   */
+  exposeHostMethod(method: string, handler: HostServiceHandler): void;
   /** Call a backend service via the server */
   call(
     service: string,
@@ -141,6 +169,9 @@ export interface ServerClient {
 }
 
 export interface ServerClientOptions {
+  /** Host metadata bound into both WebSocket admission and session auth. */
+  clientLabel?: string;
+  clientPlatform?: ClientPlatform;
   /**
    * Dynamic WebSocket URL provider, consulted before each connect/reconnect.
    * Used by local mode to follow the child server's port across restarts; when
@@ -182,6 +213,10 @@ export async function createServerClient(
     getWsUrl,
     reconnect: shouldReconnect,
     logPrefix: "ServerClient",
+    getAuthMessageFields: () => ({
+      ...(options?.clientLabel ? { clientLabel: options.clientLabel } : {}),
+      ...(options?.clientPlatform ? { clientPlatform: options.clientPlatform } : {}),
+    }),
     onRecovery: options?.onRecovery,
     onAuthResult: (msg) => {
       if (msg.deviceCredential) options?.onPaired?.(msg.deviceCredential, msg.pairingContext);
@@ -283,6 +318,9 @@ export async function createServerClient(
   };
 
   return {
+    exposeHostMethod(method, handler): void {
+      exposeServerOriginatedHostMethod(rpc, method, handler);
+    },
     call(
       service: string,
       method: string,

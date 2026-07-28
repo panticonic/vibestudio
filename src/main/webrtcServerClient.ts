@@ -46,11 +46,13 @@ import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient"
 import type { ConnectPairing } from "@vibestudio/shared/connect";
 import type {
   ConnectionStatus,
+  HostServiceHandler,
   PanelSession,
   ScopedServerCaller,
   ServerClient,
   ServerMessageListener,
 } from "./serverClient.js";
+import { exposeServerOriginatedHostMethod } from "./serverClient.js";
 
 export interface WebRtcServerClientArgs {
   /** The parsed pairing link (room/fp/sig/ice). */
@@ -271,6 +273,9 @@ export async function createWebRtcServerClient(
   };
 
   return {
+    exposeHostMethod(method: string, handler: HostServiceHandler): void {
+      exposeServerOriginatedHostMethod(rpc, method, handler);
+    },
     call(service, method, callArgs, options?: RpcCallOptions): Promise<unknown> {
       return rpc.call("main", `${service}.${method}`, callArgs, options);
     },

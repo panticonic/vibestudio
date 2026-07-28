@@ -38,7 +38,7 @@ const AGENT_SCOPE_OFFERABLE = new Set<HostSemanticCapability>([
   "git.project.import",
   "git.publish",
   "git.pull",
-  "mobile.install",
+  "mobile.provision",
   "panel.inspect",
   "push.send",
   "context.clone",

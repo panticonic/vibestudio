@@ -45,4 +45,16 @@ describe("onboarding selection routing", () => {
       })
     );
   });
+
+  it("routes mobile installation through the phone setup owner workflow", () => {
+    expect(
+      resolveOnboardingSelection(onboardingInteraction("connection.device", "install"))
+    ).toEqual(
+      expect.objectContaining({
+        action: "install",
+        ownerSkillPath: "skills/phone-setup/SKILL.md",
+        target: { via: "owner-skill" },
+      })
+    );
+  });
 });

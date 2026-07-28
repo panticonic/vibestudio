@@ -12,6 +12,7 @@ afterEach(async () => {
 
 async function startRpcHarness() {
   const admissionCredentials = new Map<string, string>();
+  const admissionPlatforms: Array<string | undefined> = [];
   let admissionSequence = 0;
   const server = createServer((req, res) => {
     if (req.method !== "POST" || req.url !== "/rpc/ws-admission") {
@@ -24,6 +25,11 @@ async function startRpcHarness() {
       typeof authorization === "string" && authorization.startsWith("Bearer ")
         ? authorization.slice("Bearer ".length)
         : "";
+    admissionPlatforms.push(
+      typeof req.headers["x-vibestudio-rpc-client-platform"] === "string"
+        ? req.headers["x-vibestudio-rpc-client-platform"]
+        : undefined
+    );
     const grant = `admission-${++admissionSequence}`;
     admissionCredentials.set(grant, credential);
     res.writeHead(201, { "Content-Type": "application/json" });
@@ -32,6 +38,12 @@ async function startRpcHarness() {
   const wss = new WebSocketServer({ noServer: true });
   const grantRequests: unknown[][] = [];
   const scopedRequests: Array<{ callerId: string; callerKind: string; method: string }> = [];
+  let shellSocket: import("ws").WebSocket | undefined;
+  let reverseSequence = 0;
+  const reverseCalls = new Map<
+    string,
+    { resolve: (value: unknown) => void; reject: (error: Error) => void }
+  >();
 
   server.on("upgrade", (req, socket, head) => {
     if (req.url !== "/rpc") {
@@ -73,6 +85,7 @@ async function startRpcHarness() {
                   ? "shell:device-1"
                   : "";
           callerKind = shell || pairing ? "shell" : app ? "app" : panel ? "panel" : "";
+          if (shell) shellSocket = ws;
           const success = shell || app || panel || pairing;
           ws.send(
             JSON.stringify({
@@ -118,7 +131,16 @@ async function startRpcHarness() {
         }
         const envelope = msg.envelope as RpcEnvelope | undefined;
         const message = envelope?.message;
-        if (msg.type !== "ws:rpc" || message?.type !== "request" || !envelope) return;
+        if (msg.type !== "ws:rpc" || !message || !envelope) return;
+        if (message.type === "response") {
+          const pending = reverseCalls.get(message.requestId);
+          if (!pending) return;
+          reverseCalls.delete(message.requestId);
+          if ("error" in message) pending.reject(new Error(message.error));
+          else pending.resolve(message.result);
+          return;
+        }
+        if (message.type !== "request") return;
         const { requestId, method, args = [] } = message;
         const sendResponse = (response: RpcResponse) => {
           ws.send(
@@ -172,10 +194,54 @@ async function startRpcHarness() {
     wss.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
-  return { port, grantRequests, scopedRequests };
+  const callShell = async (method: string, args: unknown[]): Promise<unknown> => {
+    const ws = shellSocket;
+    if (!ws) throw new Error("Shell is not connected");
+    const requestId = `reverse-${++reverseSequence}`;
+    const result = new Promise<unknown>((resolve, reject) => {
+      reverseCalls.set(requestId, { resolve, reject });
+    });
+    ws.send(
+      JSON.stringify({
+        type: "ws:rpc",
+        envelope: {
+          from: "server",
+          target: "electron-main",
+          delivery: { caller: { callerId: "server", callerKind: "server" } },
+          provenance: [{ callerId: "server", callerKind: "server" }],
+          message: { type: "request", requestId, fromId: "server", method, args },
+        },
+      })
+    );
+    return await result;
+  };
+  return { port, grantRequests, scopedRequests, admissionPlatforms, callShell };
 }
 
 describe("ServerClient scoped runtime callers", () => {
+  it("binds desktop host metadata into local WebSocket admission", async () => {
+    const harness = await startRpcHarness();
+    const client = await createServerClient(harness.port, "shell-token", {
+      clientPlatform: "desktop",
+    });
+    cleanup.push(() => client.close());
+
+    expect(harness.admissionPlatforms).toEqual(["desktop"]);
+  });
+
+  it("accepts reverse host-method calls from the authenticated WebSocket server bridge", async () => {
+    const harness = await startRpcHarness();
+    const client = await createServerClient(harness.port, "shell-token");
+    cleanup.push(() => client.close());
+    client.exposeHostMethod("desktopProbe.inspect", ({ args }) => ({
+      value: args[0],
+    }));
+
+    await expect(harness.callShell("desktopProbe.inspect", ["ready"])).resolves.toEqual({
+      value: "ready",
+    });
+  });
+
   it("creates an app-scoped WS client through a shell-issued connection grant", async () => {
     const harness = await startRpcHarness();
     const client = await createServerClient(harness.port, "shell-token");

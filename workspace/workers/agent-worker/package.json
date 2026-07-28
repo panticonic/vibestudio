@@ -133,6 +133,24 @@
           "evidence": "exact"
         },
         {
+          "capability": "mobile.devices.read",
+          "resource": {
+            "kind": "exact",
+            "key": "mobile.devices.read"
+          },
+          "tier": "gated",
+          "evidence": "exact"
+        },
+        {
+          "capability": "mobile.provision",
+          "resource": {
+            "kind": "exact",
+            "key": "mobile.provision"
+          },
+          "tier": "gated",
+          "evidence": "exact"
+        },
+        {
           "capability": "network.response.read",
           "resource": {
             "kind": "prefix",

@@ -526,8 +526,7 @@ Authority principals: `code`, `user`
 |--------|-------------|
 | `phoneProvisioning.providers` | List account-scoped desktop capability providers that can access phones attached to them. |
 | `phoneProvisioning.devices` | Discover Android and iOS devices through the selected desktop, including readiness and compatible app state. |
-| `phoneProvisioning.install` | Install a compatible mobile app through the selected desktop, resolving release tooling lazily when possible. |
-| `phoneProvisioning.openPairing` | Open a one-time pairing link on a phone through the selected desktop without returning or logging the link. |
+| `phoneProvisioning.provision` | Install when needed, immediately pair through the selected desktop, and wait for the new device to join the current account. |
 
 ## `presence`
 

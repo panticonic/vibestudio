@@ -52,6 +52,16 @@ describe("SetupHub", () => {
     expect(view.getByText(/not unfinished setup/i)).toBeTruthy();
   });
 
+  it("offers mobile installation from the devices row", () => {
+    const view = render(
+      <Theme>
+        <SetupHub props={{ snapshot: snapshots }} chat={{ send: vi.fn() }} />
+      </Theme>
+    );
+
+    expect(view.getByRole("button", { name: "Install on mobile" })).toBeTruthy();
+  });
+
   it("sends a stable structured interaction and does not mutate the observation", async () => {
     const send = vi.fn(async () => undefined);
     const view = render(

@@ -631,7 +631,22 @@ async function main() {
     }
   }
 
-  await run(adbPath, adbArgs(options.device, ["install", "-r", "-d", apkPath]));
+  try {
+    await runCapture(adbPath, adbArgs(options.device, ["install", "-r", "-d", apkPath]));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const replaceInternalDevelopmentApp =
+      options.fromSource &&
+      options.packageName === internalPackage &&
+      detail.includes("INSTALL_FAILED_UPDATE_INCOMPATIBLE");
+    if (!replaceInternalDevelopmentApp) throw error;
+
+    console.log(
+      "[mobile-install] Replacing the incompatible internal development package; its app data will be cleared."
+    );
+    await run(adbPath, adbArgs(options.device, ["uninstall", internalPackage]));
+    await run(adbPath, adbArgs(options.device, ["install", "-r", "-d", apkPath]));
+  }
 
   if (options.launch) {
     await run(

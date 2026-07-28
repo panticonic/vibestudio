@@ -10006,32 +10006,6 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:phoneProvisioning.install",
-    rpcPlane: "host-service",
-    capability: "service:phoneProvisioning.install",
-    authorityPrincipals: ["code", "user"],
-    owner: "phoneProvisioning",
-    method: "install",
-    sensitivity: "admin",
-    resourceDerivation: {
-      kind: "literal",
-      key: "service:phoneProvisioning.install",
-    },
-  },
-  {
-    id: "host:phoneProvisioning.openPairing",
-    rpcPlane: "host-service",
-    capability: "service:phoneProvisioning.openPairing",
-    authorityPrincipals: ["code", "user"],
-    owner: "phoneProvisioning",
-    method: "openPairing",
-    sensitivity: "admin",
-    resourceDerivation: {
-      kind: "literal",
-      key: "service:phoneProvisioning.openPairing",
-    },
-  },
-  {
     id: "host:phoneProvisioning.providers",
     rpcPlane: "host-service",
     capability: "service:phoneProvisioning.providers",
@@ -10042,6 +10016,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:phoneProvisioning.providers",
+    },
+  },
+  {
+    id: "host:phoneProvisioning.provision",
+    rpcPlane: "host-service",
+    capability: "service:phoneProvisioning.provision",
+    authorityPrincipals: ["code", "user"],
+    owner: "phoneProvisioning",
+    method: "provision",
+    sensitivity: "admin",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:phoneProvisioning.provision",
     },
   },
   {
@@ -13387,15 +13374,11 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "phoneProvisioning",
-    method: "install",
-  },
-  {
-    service: "phoneProvisioning",
-    method: "openPairing",
-  },
-  {
-    service: "phoneProvisioning",
     method: "providers",
+  },
+  {
+    service: "phoneProvisioning",
+    method: "provision",
   },
   {
     service: "presence",
@@ -14686,9 +14669,8 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:permissions.setWorkspaceAuthorityLock",
   "service:permissions.updateAgentProfile",
   "service:phoneProvisioning.devices",
-  "service:phoneProvisioning.install",
-  "service:phoneProvisioning.openPairing",
   "service:phoneProvisioning.providers",
+  "service:phoneProvisioning.provision",
   "service:presence.getPanelActiveOwner",
   "service:push.register",
   "service:push.unregister",

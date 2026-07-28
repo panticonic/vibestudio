@@ -8,10 +8,10 @@ import {
   PhoneProvisioningResultSchema,
   phoneProvisioningMethods,
   type PhoneDeviceDiscovery,
-  type PhoneInstallArgs,
-  type PhoneOpenPairingArgs,
   type PhonePlatform,
+  type PhoneProvisionArgs,
 } from "@vibestudio/service-schemas/phoneProvisioning";
+import { HubDeviceSchema } from "@vibestudio/service-schemas/hubControl";
 import { z } from "zod";
 
 interface ScriptResult {
@@ -35,6 +35,12 @@ export interface PhoneProvisioningServiceDeps {
     args: string[],
     options?: { sensitive?: boolean }
   ) => Promise<ScriptResult>;
+  hubControlClient: {
+    call(service: string, method: string, args: unknown[]): Promise<unknown>;
+  };
+  now?: () => number;
+  sleep?: (milliseconds: number) => Promise<void>;
+  pairingTimeoutMs?: number;
 }
 
 function defaultRunner(deps: PhoneProvisioningServiceDeps) {
@@ -93,6 +99,11 @@ export function createPhoneProvisioningService(
     fs.existsSync(path.join(deps.appRoot, "apps", "mobile", platform))
   );
   const localProviderId = "desktop-local";
+  const now = deps.now ?? Date.now;
+  const sleep =
+    deps.sleep ??
+    ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+  const pairingTimeoutMs = deps.pairingTimeoutMs ?? 45_000;
 
   async function discover(platform?: PhonePlatform): Promise<PhoneDeviceDiscovery> {
     const selected = platform ? [platform] : platforms;
@@ -121,6 +132,104 @@ export function createPhoneProvisioningService(
     return { devices, issues };
   }
 
+  async function provision(input: PhoneProvisionArgs) {
+    const before = await discover(input.platform);
+    const ready = before.devices.filter(
+      (device) => device.ready && (!input.deviceId || device.deviceId === input.deviceId)
+    );
+    if (ready.length === 0) {
+      throw new Error("The selected phone is not connected, ready, and authorized");
+    }
+    if (!input.deviceId && ready.length > 1) {
+      throw new Error("More than one phone is ready; select one before provisioning");
+    }
+    const selected = ready[0];
+    if (!selected) throw new Error("No ready phone was selected");
+
+    let installStatus: "installed" | "already-compatible" = "already-compatible";
+    if (!selected.compatibleAppInstalled) {
+      const mode = input.mode ?? "auto";
+      if (mode === "source" && !sourcePlatforms.includes(input.platform)) {
+        throw new Error(`A ${input.platform} source checkout is not available on this desktop`);
+      }
+      if (input.platform === "ios" && !sourcePlatforms.includes("ios")) {
+        throw new Error(
+          "iOS installation requires a source checkout, Xcode, and an Apple development team"
+        );
+      }
+      const useSource =
+        input.platform === "ios" ||
+        mode === "source" ||
+        (mode === "auto" && sourcePlatforms.includes(input.platform));
+      const installArgs = ["--platform", input.platform, "--launch", "--device", selected.deviceId];
+      if (useSource) installArgs.push("--from-source");
+      await runScript("mobile-install.mjs", installArgs);
+      installStatus = "installed";
+
+      if (input.platform === "android") {
+        const afterInstall = await discover("android");
+        const installed = afterInstall.devices.find(
+          (device) => device.deviceId === selected.deviceId
+        );
+        if (!installed?.compatibleAppInstalled) {
+          throw new Error(
+            "The Android app installed successfully but its version is not compatible with this desktop"
+          );
+        }
+      }
+    }
+
+    const beforePairing = z
+      .object({ devices: z.array(HubDeviceSchema) })
+      .parse(await deps.hubControlClient.call("hubControl", "listDevices", []));
+    const knownDeviceIds = new Set(beforePairing.devices.map((device) => device.deviceId));
+    const invite = z
+      .object({ pairing: z.object({ deepLink: z.string().min(1) }) })
+      .parse(await deps.hubControlClient.call("hubControl", "pairDevice", [{}]));
+
+    const connectArgs = [
+      "connect",
+      "--platform",
+      input.platform,
+      "--pair",
+      invite.pairing.deepLink,
+      "--device",
+      selected.deviceId,
+      "--json",
+    ];
+    await runScript("mobile-device.mjs", connectArgs, { sensitive: true });
+
+    const deadline = now() + pairingTimeoutMs;
+    while (now() < deadline) {
+      const current = z
+        .object({ devices: z.array(HubDeviceSchema) })
+        .parse(await deps.hubControlClient.call("hubControl", "listDevices", []));
+      const pairedDevice = current.devices.find(
+        (device) => !device.revokedAt && !knownDeviceIds.has(device.deviceId)
+      );
+      if (pairedDevice) {
+        return PhoneProvisioningResultSchema.parse({
+          providerId: localProviderId,
+          platform: input.platform,
+          attachedDeviceId: selected.deviceId,
+          installStatus,
+          compatibleAppInstalled: true,
+          pairingStatus: "paired",
+          pairedDevice: {
+            deviceId: pairedDevice.deviceId,
+            label: pairedDevice.label,
+            ...(pairedDevice.platform ? { platform: pairedDevice.platform } : {}),
+            createdAt: pairedDevice.createdAt,
+          },
+        });
+      }
+      await sleep(500);
+    }
+    throw new Error(
+      "The phone did not join the current account before the pairing invite timed out"
+    );
+  }
+
   return {
     name: "desktopPhoneProvider",
     description: "Desktop-bound phone discovery, installation, and pairing launch",
@@ -143,69 +252,8 @@ export function createPhoneProvisioningService(
           const query = args[0] as { platform?: PhonePlatform } | undefined;
           return await discover(query?.platform);
         }
-        case "install": {
-          const input = args[0] as PhoneInstallArgs;
-          const before = await discover(input.platform);
-          const ready = before.devices.filter(
-            (device) => device.ready && (!input.deviceId || device.deviceId === input.deviceId)
-          );
-          const compatibleDevice = ready.find((device) => device.compatibleAppInstalled);
-          if (compatibleDevice) {
-            return PhoneProvisioningResultSchema.parse({
-              providerId: localProviderId,
-              platform: input.platform,
-              deviceId: compatibleDevice.deviceId,
-              status: "already-compatible",
-              message: "A compatible Vibestudio app is already installed.",
-            });
-          }
-          const mode = input.mode ?? "auto";
-          if (input.platform === "ios" && !sourcePlatforms.includes("ios")) {
-            return {
-              providerId: localProviderId,
-              platform: "ios",
-              ...(input.deviceId ? { deviceId: input.deviceId } : {}),
-              status: "manual-action",
-              message:
-                "iOS installation requires a source checkout, Xcode, and an Apple development team.",
-            };
-          }
-          if (mode === "source" && !sourcePlatforms.includes(input.platform)) {
-            throw new Error(`A ${input.platform} source checkout is not available on this desktop`);
-          }
-          const installArgs = ["--platform", input.platform, "--launch"];
-          if (input.deviceId) installArgs.push("--device", input.deviceId);
-          if (mode === "source" || input.platform === "ios") installArgs.push("--from-source");
-          await runScript("mobile-install.mjs", installArgs);
-          return {
-            providerId: localProviderId,
-            platform: input.platform,
-            ...(input.deviceId ? { deviceId: input.deviceId } : {}),
-            status: "installed",
-            message: "Vibestudio was installed and launched.",
-          };
-        }
-        case "openPairing": {
-          const input = args[0] as PhoneOpenPairingArgs;
-          const commandArgs = [
-            "connect",
-            "--platform",
-            input.platform,
-            "--pair",
-            input.pairUrl,
-            "--json",
-          ];
-          if (input.deviceId) commandArgs.push("--device", input.deviceId);
-          if (input.packageId) commandArgs.push("--package", input.packageId);
-          if (input.bundleId) commandArgs.push("--bundle-id", input.bundleId);
-          const result = jsonLine(
-            (await runScript("mobile-device.mjs", commandArgs, { sensitive: true })).stdout
-          );
-          return PhoneProvisioningResultSchema.parse({
-            ...(result as object),
-            providerId: localProviderId,
-          });
-        }
+        case "provision":
+          return await provision(args[0] as PhoneProvisionArgs);
         default:
           throw new Error(`Unknown phoneProvisioning method: ${method}`);
       }

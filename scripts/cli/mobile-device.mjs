@@ -23,6 +23,7 @@ const expectedVersion =
       return "unknown";
     }
   })();
+const ANDROID_PROVISIONING_ACTIVITY = "app.vibestudio.mobile.ProvisioningActivity";
 
 function parseArgs(argv) {
   const [action, ...rest] = argv;
@@ -130,7 +131,8 @@ async function resolveAdb() {
   const executable = process.platform === "win32" ? "adb.exe" : "adb";
   const candidates = [
     process.env.ADB,
-    process.env.ANDROID_SDK_ROOT && path.join(process.env.ANDROID_SDK_ROOT, "platform-tools", executable),
+    process.env.ANDROID_SDK_ROOT &&
+      path.join(process.env.ANDROID_SDK_ROOT, "platform-tools", executable),
     process.env.ANDROID_HOME && path.join(process.env.ANDROID_HOME, "platform-tools", executable),
     findCachedAdb(path.join(os.homedir(), ".cache", "vibestudio")),
     executable,
@@ -162,7 +164,8 @@ async function androidDevices() {
   const result = await run(adb, ["devices", "-l"]);
   const devices = [];
   for (const raw of parseAdbDevices(result.stdout)) {
-    const installedApps = raw.state === "device" ? await installedAndroidApps(adb, raw.deviceId) : [];
+    const installedApps =
+      raw.state === "device" ? await installedAndroidApps(adb, raw.deviceId) : [];
     devices.push({
       platform: "android",
       deviceId: raw.deviceId,
@@ -183,7 +186,9 @@ async function iosDevices() {
   if (process.platform !== "darwin") {
     throw new Error("iOS devices require a macOS desktop with Xcode installed.");
   }
-  const simulators = JSON.parse((await run("xcrun", ["simctl", "list", "devices", "--json"])).stdout);
+  const simulators = JSON.parse(
+    (await run("xcrun", ["simctl", "list", "devices", "--json"])).stdout
+  );
   const devices = Object.values(simulators.devices ?? {})
     .flat()
     .filter((device) => device?.isAvailable !== false)
@@ -220,7 +225,10 @@ async function iosDevices() {
 
 async function discover(options) {
   try {
-    return { devices: options.platform === "android" ? await androidDevices() : await iosDevices(), issues: [] };
+    return {
+      devices: options.platform === "android" ? await androidDevices() : await iosDevices(),
+      issues: [],
+    };
   } catch (error) {
     return {
       devices: [],
@@ -261,33 +269,30 @@ async function connectAndroid(options) {
     device.installedApps.find((app) => app.packageId === RELEASE_ANDROID_PACKAGE)?.packageId ??
     device.installedApps.find((app) => app.packageId === INTERNAL_ANDROID_PACKAGE)?.packageId;
   if (!packageId) throw new Error("Vibestudio is not installed on the selected Android device.");
-  const intentArgs = [
-    "am",
-    "start",
-    "-W",
-    "-a",
-    "android.intent.action.VIEW",
-    "-d",
-    options.pairUrl,
-  ];
-  try {
-    await run(
-      adb,
-      ["-s", device.deviceId, "shell", androidShellCommand([...intentArgs, "-p", packageId])],
-      { sensitive: true }
-    );
-  } catch {
-    await run(
-      adb,
-      [
-        "-s",
-        device.deviceId,
-        "shell",
-        androidShellCommand([...intentArgs, "-n", `${packageId}/.MainActivity`]),
-      ],
-      { sensitive: true }
-    );
-  }
+  // Provision through a component protected by android.permission.DUMP.
+  // adb's shell principal holds that permission; arbitrary apps and browser
+  // pages do not. The mobile bootstrap consumes the resulting one-use approval
+  // and pairs immediately, while ordinary QR/deep-link entry still confirms.
+  await run(
+    adb,
+    [
+      "-s",
+      device.deviceId,
+      "shell",
+      androidShellCommand([
+        "am",
+        "start",
+        "-W",
+        "-a",
+        "android.intent.action.VIEW",
+        "-d",
+        options.pairUrl,
+        "-n",
+        `${packageId}/${ANDROID_PROVISIONING_ACTIVITY}`,
+      ]),
+    ],
+    { sensitive: true }
+  );
   return { platform: "android", deviceId: device.deviceId, packageId };
 }
 
@@ -307,7 +312,9 @@ async function connectIos(options) {
     );
   }
   if (device.kind === "simulator") {
-    await run("xcrun", ["simctl", "openurl", device.deviceId, options.pairUrl], { sensitive: true });
+    await run("xcrun", ["simctl", "openurl", device.deviceId, options.pairUrl], {
+      sensitive: true,
+    });
   } else {
     await run(
       "xcrun",
@@ -341,7 +348,8 @@ async function main() {
   }
   if (options.action !== "connect") throw new Error("Expected devices or connect");
   if (!options.pairUrl) throw new Error("connect requires --pair");
-  const result = options.platform === "android" ? await connectAndroid(options) : await connectIos(options);
+  const result =
+    options.platform === "android" ? await connectAndroid(options) : await connectIos(options);
   console.log(JSON.stringify({ ...result, status: "launched" }));
 }
 

@@ -16,7 +16,8 @@ class MainActivity : ReactActivity() {
 
     override fun onNewIntent(intent: Intent) {
         setIntent(intent)
-        if (clearActiveBundleForConnectIntent(intent)) {
+        if (isVibestudioPairingIntent(intent)) {
+            clearActiveBundleForConnectIntent(intent)
             restartWithIntent(intent)
             return
         }

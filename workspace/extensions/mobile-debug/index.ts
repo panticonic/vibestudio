@@ -106,11 +106,7 @@ export async function activate(ctx: ExtensionContext) {
       };
     },
 
-    async installAndroid(raw?: {
-      device?: string;
-      resetApp?: boolean;
-      launch?: boolean;
-    }) {
+    async installAndroid(raw?: { device?: string; resetApp?: boolean; launch?: boolean }) {
       const repoRoot = requireRepoRoot(workspace.path);
       const args = [
         "--from-source",
@@ -182,12 +178,17 @@ export async function activate(ctx: ExtensionContext) {
 
     async launchIos(raw?: { device?: string; bundleId?: string }) {
       requireMac("launch iOS apps");
-      const bundleId = raw?.bundleId ?? process.env["VIBESTUDIO_IOS_BUNDLE_ID"] ?? "app.vibestudio.mobile";
+      const bundleId =
+        raw?.bundleId ?? process.env["VIBESTUDIO_IOS_BUNDLE_ID"] ?? "app.vibestudio.mobile";
       if (raw?.device) {
-        await run("xcrun", ["devicectl", "device", "process", "launch", "--device", raw.device, bundleId], {
-          cwd: process.cwd(),
-          errorCode: "EIOS",
-        });
+        await run(
+          "xcrun",
+          ["devicectl", "device", "process", "launch", "--device", raw.device, bundleId],
+          {
+            cwd: process.cwd(),
+            errorCode: "EIOS",
+          }
+        );
       } else {
         await run("xcrun", ["simctl", "launch", "booted", bundleId], {
           cwd: process.cwd(),
@@ -265,10 +266,58 @@ export async function activate(ctx: ExtensionContext) {
         installed: packageInstalled,
         bundleActive: rendering,
         rendering,
-        screenshotPng: screenshot
-          ? Buffer.from(screenshot.stdout, "binary").toString("base64")
-          : undefined,
+        screenshotCaptured: screenshot !== null,
+        screenshotBytes: screenshot ? Buffer.byteLength(screenshot.stdout, "binary") : 0,
         issues,
+      };
+    },
+
+    async verifyWorkspaceReady(raw?: {
+      device?: string;
+      packageName?: string;
+      sinceMs?: number;
+      timeoutMs?: number;
+    }) {
+      const devices = await listAdbDevices();
+      const device = pickDevice(devices, raw?.device);
+      const packageName = raw?.packageName ?? defaultPackage;
+      const sinceMs = raw?.sinceMs ?? Date.now() - 300_000;
+      const timeoutMs = Math.min(Math.max(raw?.timeoutMs ?? 180_000, 1_000), 300_000);
+      const deadline = Date.now() + timeoutMs;
+      let last = workspaceReadinessFromLog("", sinceMs);
+
+      while (Date.now() < deadline) {
+        const pid = await adbCapture(device.serial, ["shell", "pidof", packageName])
+          .then((result) => result.stdout.trim().split(/\s+/u)[0])
+          .catch(() => undefined);
+        if (!pid) {
+          last = {
+            ...last,
+            issues: [`${packageName} is not rendering`],
+          };
+        } else {
+          const logs = await adbCapture(device.serial, [
+            "logcat",
+            "-d",
+            `--pid=${pid}`,
+            "-v",
+            "epoch",
+            "ReactNativeJS:V",
+            "chromium:V",
+            "*:S",
+          ]);
+          last = workspaceReadinessFromLog(logs.stdout, sinceMs);
+          if (last.issues.length > 0 || last.ready) return last;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+
+      return {
+        ...last,
+        issues:
+          last.issues.length > 0
+            ? last.issues
+            : ["The mobile workspace did not become ready before the verification timeout"],
       };
     },
 
@@ -315,6 +364,29 @@ export async function activate(ctx: ExtensionContext) {
       });
       return streamProcess("adb", adbArgs(raw.device, ["shell", raw.command, ...(raw.args ?? [])]));
     },
+  };
+}
+
+export function workspaceReadinessFromLog(log: string, sinceMs = 0) {
+  const relevant = log
+    .split(/\r?\n/u)
+    .filter((line) => {
+      const timestamp = /^(\d+(?:\.\d+)?)\s/u.exec(line)?.[1];
+      return !timestamp || Number(timestamp) * 1000 >= sinceMs;
+    })
+    .join("\n");
+  const panelHostReady = relevant.includes("phase=workspace-panels-initialized");
+  const workspaceConnected = relevant.includes("phase=workspace-connected");
+  const panelWebViewLoaded = relevant.includes("phase=workspace-panel-webview-loaded");
+  const failure = relevant.match(
+    /invalid distance code|phase=workspace-(?:login-error|panel-webview-error|panel-webview-http-error|panel-activate-failed)[^\r\n]*/iu
+  )?.[0];
+  return {
+    ready: panelHostReady && workspaceConnected && !failure,
+    workspaceConnected,
+    panelHostReady,
+    panelWebViewLoaded,
+    issues: failure ? [failure] : [],
   };
 }
 
@@ -581,7 +653,9 @@ function streamAdbAfterPidProbe(
         });
         child = streamChild;
         streamChild.stdout?.on("data", (chunk) => controller.enqueue(Buffer.from(chunk)));
-        streamChild.stderr?.on("data", (chunk) => controller.enqueue(encoder.encode(String(chunk))));
+        streamChild.stderr?.on("data", (chunk) =>
+          controller.enqueue(encoder.encode(String(chunk)))
+        );
         streamChild.on("error", (err) => controller.error(err));
         streamChild.on("exit", () => controller.close());
       });

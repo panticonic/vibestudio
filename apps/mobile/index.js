@@ -486,6 +486,32 @@ function VibestudioMobileHostBootstrap() {
     }
   }, []);
 
+  const connectFromInvite = useCallback(
+    async (connect) => {
+      setBusy(true);
+      setStatus("Pairing over a secure WebRTC pipe...");
+      let connection = null;
+      try {
+        connection = await pairViaWebRtc(connect.pairing);
+        smokePhase("embedded-workspace-selected");
+        if (connect.rawUrl) {
+          await markConnectLinkConsumed(connect.rawUrl).catch(() => {});
+        }
+        setPendingConnect(null);
+        await runLaunchGate(connection);
+      } catch (error) {
+        const failure = await closeBootstrapConnectionAfterFailure(connection, error);
+        setLaunchGrant(null);
+        setLaunchSession(null);
+        setApprovals([]);
+        setStatus(failure instanceof Error ? failure.message : String(failure));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [runLaunchGate]
+  );
+
   const codeScanner = useCodeScanner({
     codeTypes: ["qr"],
     onCodeScanned: (codes) => {
@@ -511,6 +537,20 @@ function VibestudioMobileHostBootstrap() {
       if (isConnectLink(initialUrl)) {
         const replay = await consumeConnectLinkReplay(initialUrl);
         if (!replay) {
+          const pairing = parseConnectDeepLink(initialUrl);
+          let usbApproved = false;
+          if (pairing) {
+            try {
+              usbApproved = Boolean(await nativeHost?.consumeUsbProvisioningApproval?.(initialUrl));
+            } catch {
+              // Fail closed into the ordinary in-app confirmation.
+            }
+          }
+          if (usbApproved) {
+            smokePhase("embedded-usb-provisioning-approved");
+            await connectFromInvite({ pairing, rawUrl: initialUrl });
+            return;
+          }
           presentConnectLink(initialUrl);
           return;
         }
@@ -551,34 +591,12 @@ function VibestudioMobileHostBootstrap() {
     } finally {
       setBusy(false);
     }
-  }, [presentConnectLink, runLaunchGate]);
+  }, [connectFromInvite, presentConnectLink, runLaunchGate]);
 
   const confirmPendingConnect = useCallback(async () => {
     if (!pendingConnect) return;
-    setBusy(true);
-    setStatus("Pairing over a secure WebRTC pipe...");
-    let connection = null;
-    try {
-      // Pair + connect over WebRTC: pin the server's DTLS fingerprint, redeem the
-      // one-time code, persist the issued device credential. The signaling room
-      // targets one workspace server, so we proceed straight to the launch gate.
-      connection = await pairViaWebRtc(pendingConnect.pairing);
-      smokePhase("embedded-workspace-selected");
-      if (pendingConnect.rawUrl) {
-        await markConnectLinkConsumed(pendingConnect.rawUrl).catch(() => {});
-      }
-      setPendingConnect(null);
-      await runLaunchGate(connection);
-    } catch (error) {
-      const failure = await closeBootstrapConnectionAfterFailure(connection, error);
-      setLaunchGrant(null);
-      setLaunchSession(null);
-      setApprovals([]);
-      setStatus(failure instanceof Error ? failure.message : String(failure));
-    } finally {
-      setBusy(false);
-    }
-  }, [pendingConnect, runLaunchGate]);
+    await connectFromInvite(pendingConnect);
+  }, [connectFromInvite, pendingConnect]);
 
   const cancelPendingConnect = useCallback(() => {
     setPendingConnect(null);

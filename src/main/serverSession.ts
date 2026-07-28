@@ -295,6 +295,7 @@ export async function establishServerSession(args: {
   phase("connect-workspace");
   const serverClient = await createServerClient(target.gatewayPort, target.authToken, {
     reconnect: true,
+    clientPlatform: "desktop",
     getWsUrl: () => hubProcessManager.getCurrentWsUrl() ?? target.wsUrl,
     refreshAuthToken: async () => hubProcessManager.getAuthToken(),
     onConnectionStatusChanged: (status) => {
@@ -312,6 +313,7 @@ export async function establishServerSession(args: {
       await hubProcessManager.getHubAuthToken(),
       {
         reconnect: true,
+        clientPlatform: "desktop",
         getWsUrl: () => hubProcessManager.getHubWsUrl(),
         refreshAuthToken: () => hubProcessManager.getHubAuthToken(),
         onDisconnect: () => console.error("[App] Local hub control connection closed"),
