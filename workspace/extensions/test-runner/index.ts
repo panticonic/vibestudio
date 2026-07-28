@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface TestRunRequest {
   target: string;
@@ -166,8 +167,7 @@ async function requestApproval(ctx: ExtensionContextLike, req: TestRunRequest): 
     },
     title: "Run tests",
     summary: `Run the test files for ${target}.`,
-    warning:
-      "Tests run code on your computer. Only run tests from code you trust.",
+    warning: "Tests run code on your computer. Only run tests from code you trust.",
     details: [
       { label: "Target", value: req.target },
       ...(req.contextId ? [{ label: "Context", value: req.contextId }] : []),
@@ -183,16 +183,20 @@ async function requestApproval(ctx: ExtensionContextLike, req: TestRunRequest): 
   }
 }
 
-function formatTaskErrors(task: { name?: string; result?: { errors?: unknown[] } }): string[] {
-  return (task.result?.errors ?? []).map((error) => {
+function formatErrors(name: string | undefined, errors: readonly unknown[] | undefined): string[] {
+  return (errors ?? []).map((error) => {
     const message =
       error instanceof Error
         ? error.message
         : error && typeof error === "object" && "message" in error
           ? String((error as { message?: unknown }).message)
           : String(error);
-    return task.name ? `${task.name}: ${message}` : message;
+    return name ? `${name}: ${message}` : message;
   });
+}
+
+function modulePath(moduleId: string): string {
+  return moduleId.startsWith("file:") ? fileURLToPath(moduleId) : moduleId;
 }
 
 /** Public API surface of this extension — the awaited return of {@link activate}. */
@@ -229,8 +233,12 @@ export async function activate(ctx: ExtensionContextLike) {
       const pattern = testPatternFor(targetPath, request.fileFilter);
       const setupFiles = request.target.startsWith("panels/") ? [ensurePanelSetupFile()] : [];
       const { startVitest } = await import("vitest/node");
-      const vitest = await startVitest("run" as never, [pattern], {
-        root: info.path,
+      const vitest = await startVitest("test", [pattern], {
+        // The projection is the caller's exact semantic context. Rooting
+        // Vitest at the source checkout makes an absolute projected file look
+        // external, so Vitest silently discovers zero files and can resolve
+        // config from the wrong workspace state.
+        root,
         exclude: ["**/node_modules/**", "dist"],
         setupFiles,
         testNamePattern: request.testName,
@@ -252,37 +260,41 @@ export async function activate(ctx: ExtensionContextLike) {
       }
 
       try {
-        const files = vitest.state.getFiles();
+        const modules = vitest.state.getTestModules();
         let passed = 0;
         let failed = 0;
         const details: TestRunResult["details"] = [];
 
-        for (const file of files) {
-          const fileErrors: string[] = [];
-          for (const task of file.tasks ?? []) {
-            if (task.result?.state === "pass") passed++;
-            else if (task.result?.state === "fail") {
+        for (const module of modules) {
+          const moduleErrors = formatErrors(undefined, module.errors());
+          let moduleFailedTests = 0;
+          for (const test of module.children.allTests()) {
+            const result = test.result();
+            if (result.state === "passed") {
+              passed++;
+            } else if (result.state === "failed") {
               failed++;
-              fileErrors.push(...formatTaskErrors(task));
+              moduleFailedTests++;
+              moduleErrors.push(...formatErrors(test.fullName, result.errors));
             }
           }
+          const moduleState = module.state();
+          if (moduleState === "failed" && moduleFailedTests === 0) {
+            failed++;
+          }
           const fileStatus: "pass" | "fail" | "skip" =
-            file.result?.state === "fail"
-              ? "fail"
-              : file.result?.state === "pass"
-                ? "pass"
-                : "skip";
+            moduleState === "failed" ? "fail" : moduleState === "passed" ? "pass" : "skip";
           details.push({
-            file: path.relative(root, file.filepath),
+            file: path.relative(root, modulePath(module.moduleId)),
             status: fileStatus,
-            duration: file.result?.duration,
-            ...(fileErrors.length > 0 ? { errors: fileErrors } : {}),
+            duration: module.diagnostic().duration,
+            ...(moduleErrors.length > 0 ? { errors: moduleErrors } : {}),
           });
         }
 
         const total = passed + failed;
         const summary =
-          files.length === 0
+          modules.length === 0
             ? `No test files found matching: ${request.target}${request.fileFilter ? `/${request.fileFilter}` : ""}`
             : failed > 0
               ? `${failed} of ${total} test${total !== 1 ? "s" : ""} failed`

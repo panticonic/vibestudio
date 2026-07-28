@@ -100,6 +100,7 @@ function makeDispatcher(opts: {
   opts.configureDispatcher?.(dispatcher);
   dispatcher.markInitialized();
   const serverClient = {
+    exposeHostMethod: vi.fn(),
     call: opts.call ?? vi.fn(async () => ({ ok: "shell" })),
     callAs: opts.callAs ?? vi.fn(async () => ({ ok: "app" })),
     stream: opts.stream ?? vi.fn(async () => new Response()),

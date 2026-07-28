@@ -237,17 +237,46 @@ function schemaFailure(
   service: string,
   method: string,
   boundary: "arguments" | "return value",
-  error: unknown
+  error: unknown,
+  expectedCall?: string
 ): Error {
   const detail = error instanceof Error ? error.message : String(error);
   const failure = new Error(
-    `Service "${service}" method "${method}" ${boundary} failed schema validation: ${detail}`
+    `Service "${service}" method "${method}" ${boundary} failed schema validation${
+      expectedCall ? `. Expected call shape: ${expectedCall}` : ""
+    }: ${detail}`
   ) as Error & { cause?: unknown };
   // ErrorOptions is not declared by every consumer tsconfig even though all
   // supported runtimes allow custom Error properties. Preserve the original
   // validator error without requiring an ES2022 Error constructor signature.
   failure.cause = error;
   return failure;
+}
+
+function expectedCallShape(
+  service: string,
+  method: string,
+  definition: MethodSchema
+): string {
+  const tupleItems = (definition.args as unknown as {
+    _def?: { items?: readonly z.ZodTypeAny[] };
+  })._def?.items;
+  if (!tupleItems) return `${service}.${method}(...)`;
+  const args = tupleItems.map((schema, index) => {
+    const shape = (schema as unknown as { shape?: Record<string, unknown> }).shape;
+    if (!shape) return `arg${index + 1}`;
+    const fields = Object.entries(shape).map(([name, field]) => {
+      const optional =
+        typeof field === "object" &&
+        field !== null &&
+        "isOptional" in field &&
+        typeof field.isOptional === "function" &&
+        field.isOptional();
+      return `${name}${optional ? "?" : ""}`;
+    });
+    return `{ ${fields.join(", ")} }`;
+  });
+  return `${service}.${method}(${args.join(", ")})`;
 }
 
 /** Validate and dispatch one dynamically selected method from a schema table.
@@ -276,7 +305,13 @@ export async function callTypedServiceMethod<M extends ServiceMethodSchemas>(
       parsedArgs.pop();
     }
   } catch (error) {
-    throw schemaFailure(service, method, "arguments", error);
+    throw schemaFailure(
+      service,
+      method,
+      "arguments",
+      error,
+      expectedCallShape(service, method, definition)
+    );
   }
   const result = await call(service, method, parsedArgs);
   if (!definition.returns) return result;

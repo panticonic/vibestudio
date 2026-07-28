@@ -1007,7 +1007,8 @@ function relativeDirentName(listedDir: string, d: fsSync.Dirent): string {
 // ---------------------------------------------------------------------------
 
 /** Directories never descended into by grep/glob. */
-const SEARCH_SKIP_DIRS = new Set([".git", "node_modules"]);
+const SEARCH_SKIP_DIRS = new Set([".git", ".gad", "node_modules"]);
+const INTERNAL_PROJECTION_ENTRIES = new Set([".gad"]);
 
 const GREP_DEFAULT_MAX_MATCHES = 200;
 const GREP_HARD_MAX_MATCHES = 1000;
@@ -1896,7 +1897,9 @@ export class FsService {
         const scratchEntries =
           rel === ""
             ? (await fs.readdir(scope.root, { withFileTypes: true })).filter(
-                (entry) => !WORKSPACE_SOURCE_ROOTS.has(entry.name)
+                (entry) =>
+                  !WORKSPACE_SOURCE_ROOTS.has(entry.name) &&
+                  !INTERNAL_PROJECTION_ENTRIES.has(entry.name)
               )
             : [];
         const visibleNames = new Set(entries.map((entry) => entry.name));

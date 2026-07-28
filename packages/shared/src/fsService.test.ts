@@ -1209,16 +1209,18 @@ describe("FsService", () => {
   });
 
   describe("glob", () => {
-    it("returns matching files sorted by mtime desc, skipping node_modules", async () => {
+    it("returns matching files sorted by mtime desc, skipping internal and dependency trees", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-glob");
       const root = path.join(tmpRoot, "ctx-glob");
       mkdirSync(path.join(root, "src", "deep"), { recursive: true });
       mkdirSync(path.join(root, "node_modules"), { recursive: true });
+      mkdirSync(path.join(root, ".gad"), { recursive: true });
       writeFileSync(path.join(root, "src", "old.ts"), "");
       writeFileSync(path.join(root, "src", "deep", "newer.ts"), "");
       writeFileSync(path.join(root, "src", "skip.md"), "");
       writeFileSync(path.join(root, "node_modules", "dep.ts"), "");
+      writeFileSync(path.join(root, ".gad", "CHECKOUT.json"), "{}");
       const now = Date.now() / 1000;
       utimesSync(path.join(root, "src", "old.ts"), now - 100, now - 100);
       utimesSync(path.join(root, "src", "deep", "newer.ts"), now, now);

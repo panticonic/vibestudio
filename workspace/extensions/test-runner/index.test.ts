@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockStartVitest = vi.hoisted(() =>
   vi.fn().mockResolvedValue({
-    state: { getFiles: () => [] },
+    state: { getTestModules: () => [] },
     close: vi.fn(),
   })
 );
@@ -77,7 +77,7 @@ describe("@workspace-extensions/test-runner", () => {
   beforeEach(() => {
     mockStartVitest.mockReset();
     mockStartVitest.mockResolvedValue({
-      state: { getFiles: () => [] },
+      state: { getTestModules: () => [] },
       close: vi.fn(),
     });
   });
@@ -103,9 +103,11 @@ describe("@workspace-extensions/test-runner", () => {
     expect(approval).toHaveBeenCalledTimes(1);
     expect(ctx.fs.ensureMaterialized).toHaveBeenCalledWith("packages/tool");
     expect(mockStartVitest).toHaveBeenCalledWith(
-      "run",
+      "test",
       [path.join(target, "**/*.test.{ts,tsx}")],
-      expect.objectContaining({ root: workspace.source })
+      expect.objectContaining({
+        root: path.join(workspace.contextProjections, "ctx-1"),
+      })
     );
   });
 
@@ -125,9 +127,11 @@ describe("@workspace-extensions/test-runner", () => {
 
     expect(ensureMaterialized).toHaveBeenCalledWith("extensions/test-runner");
     expect(mockStartVitest).toHaveBeenCalledWith(
-      "run",
+      "test",
       [path.join(target, "index.test.ts")],
-      expect.objectContaining({ root: workspace.source })
+      expect.objectContaining({
+        root: path.join(workspace.contextProjections, "ctx-1"),
+      })
     );
   });
 
@@ -168,7 +172,7 @@ describe("@workspace-extensions/test-runner", () => {
     await api.run("panels/my-app");
 
     expect(mockStartVitest).toHaveBeenCalledWith(
-      "run",
+      "test",
       expect.any(Array),
       expect.objectContaining({
         setupFiles: [expect.stringContaining("panel-test-setup.mjs")],
@@ -236,9 +240,7 @@ describe("@workspace-extensions/test-runner", () => {
     await api.run("packages/tool");
 
     expect(approval).toHaveBeenCalledTimes(2);
-    expect(approval.mock.calls[0]?.[0].subject.id).toBe(
-      approval.mock.calls[1]?.[0].subject.id
-    );
+    expect(approval.mock.calls[0]?.[0].subject.id).toBe(approval.mock.calls[1]?.[0].subject.id);
     expect(approval.mock.calls[0]?.[0]).not.toHaveProperty("promptOptions");
   });
 
@@ -249,14 +251,24 @@ describe("@workspace-extensions/test-runner", () => {
     fs.mkdirSync(target, { recursive: true });
     mockStartVitest.mockResolvedValue({
       state: {
-        getFiles: () => [
+        getTestModules: () => [
           {
-            filepath: path.join(target, "index.test.ts"),
-            result: { state: "fail", duration: 10 },
-            tasks: [
-              { name: "passes", result: { state: "pass" } },
-              { name: "fails", result: { state: "fail", errors: [{ message: "nope" }] } },
-            ],
+            moduleId: path.join(target, "index.test.ts"),
+            state: () => "failed",
+            errors: () => [],
+            diagnostic: () => ({ duration: 10 }),
+            children: {
+              allTests: function* () {
+                yield {
+                  fullName: "passes",
+                  result: () => ({ state: "passed", errors: undefined }),
+                };
+                yield {
+                  fullName: "fails",
+                  result: () => ({ state: "failed", errors: [{ message: "nope" }] }),
+                };
+              },
+            },
           },
         ],
       },
@@ -274,6 +286,49 @@ describe("@workspace-extensions/test-runner", () => {
       file: "packages/tool/index.test.ts",
       status: "fail",
       errors: ["fails: nope"],
+    });
+  });
+
+  it("counts tests nested under Vitest suites", async () => {
+    const workspace = makeWorkspace();
+    cleanup.push(workspace.source, workspace.contextProjections);
+    const target = path.join(workspace.contextProjections, "ctx-1", "packages", "tool");
+    fs.mkdirSync(target, { recursive: true });
+    mockStartVitest.mockResolvedValue({
+      state: {
+        getTestModules: () => [
+          {
+            moduleId: path.join(target, "index.test.ts"),
+            state: () => "passed",
+            errors: () => [],
+            diagnostic: () => ({ duration: 10 }),
+            children: {
+              allTests: function* () {
+                yield {
+                  fullName: "suite > first",
+                  result: () => ({ state: "passed", errors: undefined }),
+                };
+                yield {
+                  fullName: "suite > second",
+                  result: () => ({ state: "passed", errors: undefined }),
+                };
+              },
+            },
+          },
+        ],
+      },
+      close: vi.fn(),
+    });
+    const { ctx } = makeCtx(workspace, { chainContextId: "ctx-1" });
+    const api = await activate(ctx);
+
+    const result = await api.run("packages/tool");
+
+    expect(result).toMatchObject({
+      summary: "2 tests passed",
+      passed: 2,
+      failed: 0,
+      total: 2,
     });
   });
 });

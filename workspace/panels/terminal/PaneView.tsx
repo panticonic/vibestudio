@@ -248,18 +248,27 @@ export function PaneView(props: {
 
   async function copySelection() {
     const selection = terminalRef.current?.getSelection?.() || window.getSelection()?.toString();
-    if (selection) await navigator.clipboard.writeText(selection);
+    if (!selection) return;
+    try {
+      await navigator.clipboard.writeText(selection);
+    } catch (err) {
+      showClipboardFailure("Copy failed", err);
+    }
   }
 
   async function pasteClipboard() {
-    const files = await readClipboardFiles();
-    if (files.length) {
-      props.onFocus();
-      await handleFiles(files);
-      return;
+    try {
+      const files = await readClipboardFiles();
+      if (files.length) {
+        props.onFocus();
+        await handleFiles(files);
+        return;
+      }
+      const text = await navigator.clipboard.readText();
+      if (text) await sessionShellRef.current.write(props.session.sessionId, text);
+    } catch (err) {
+      showClipboardFailure("Paste failed", err);
     }
-    const text = await navigator.clipboard.readText();
-    if (text) await sessionShellRef.current.write(props.session.sessionId, text);
   }
 
   useEffect(() => {
@@ -329,12 +338,16 @@ export function PaneView(props: {
   }
 
   async function copyAll() {
-    const scrollback = await sessionShellRef.current.getScrollback(
-      props.session.sessionId,
-      8 * 1024 * 1024
-    );
-    await navigator.clipboard.writeText(scrollback.text);
-    void notifications.show({ type: "success", title: "Terminal copied", ttl: 1000 });
+    try {
+      const scrollback = await sessionShellRef.current.getScrollback(
+        props.session.sessionId,
+        8 * 1024 * 1024
+      );
+      await navigator.clipboard.writeText(scrollback.text);
+      void notifications.show({ type: "success", title: "Terminal copied", ttl: 1000 });
+    } catch (err) {
+      showClipboardFailure("Copy failed", err);
+    }
   }
 
   async function renameSession() {
@@ -873,6 +886,15 @@ function clipboardHasText(data: DataTransfer): boolean {
   );
 }
 
+function showClipboardFailure(title: string, error: unknown): void {
+  void notifications.show({
+    type: "error",
+    title,
+    message: error instanceof Error ? error.message : String(error),
+    ttl: 3000,
+  });
+}
+
 function consumeImagePasteHint(): boolean {
   try {
     if (window.localStorage.getItem(IMAGE_PASTE_HINT_KEY)) return false;
@@ -886,8 +908,12 @@ function consumeImagePasteHint(): boolean {
 async function revealStashedPath(absolutePath: string): Promise<void> {
   try {
     await openExternal(absolutePath);
-  } catch {
-    await navigator.clipboard?.writeText(absolutePath).catch(() => {});
+  } catch (openError) {
+    try {
+      await navigator.clipboard?.writeText(absolutePath);
+    } catch (copyError) {
+      showClipboardFailure("Couldn't open or copy path", copyError ?? openError);
+    }
   }
 }
 

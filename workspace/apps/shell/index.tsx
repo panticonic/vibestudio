@@ -39,7 +39,12 @@ async function initializeApp(): Promise<void> {
     console.error("Renderer root not found");
     return;
   }
-  const root = createRoot(container);
+  const root = createRoot(container, {
+    onUncaughtError(error) {
+      console.error("Uncaught app render error:", error);
+      renderInitError(container, error);
+    },
+  });
   try {
     const overlaySurface = parseOverlaySurface();
     if (overlaySurface) {

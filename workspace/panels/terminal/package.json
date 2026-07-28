@@ -46,6 +46,15 @@
           "evidence": "intentional-broad"
         },
         {
+          "capability": "clipboard",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
           "capability": "external.open",
           "resource": {
             "kind": "prefix",

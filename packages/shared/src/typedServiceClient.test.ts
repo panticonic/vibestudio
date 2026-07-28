@@ -51,9 +51,28 @@ describe("createTypedServiceClient", () => {
     const client = createTypedServiceClient("demo", methods, call);
 
     await expect(client.echo(42 as never)).rejects.toThrow(
-      'method "echo" arguments failed schema validation'
+      'method "echo" arguments failed schema validation. Expected call shape: demo.echo(arg1, arg2)'
     );
     expect(call).not.toHaveBeenCalled();
+  });
+
+  it("renders object request fields in outbound schema errors", async () => {
+    const objectMethods = defineServiceMethods({
+      inspect: {
+        args: z.tuple([
+          z.object({
+            state: z.object({ eventId: z.string() }),
+            repoPath: z.string(),
+            limit: z.number().optional(),
+          }),
+        ]),
+      },
+    });
+    const client = createTypedServiceClient("vcs", objectMethods, async () => null);
+
+    await expect(client.inspect({ state: {} } as never)).rejects.toThrow(
+      "Expected call shape: vcs.inspect({ state, repoPath, limit? })"
+    );
   });
 
   it("rejects invalid inbound return values with the service and method name", async () => {

@@ -152,8 +152,8 @@ Keep these out of initial setup:
 
 Keep the two publication boundaries explicit:
 
-1. Commit a managed edit and publish it through the agent's `commit` and
-   `vcs({ operation: "push" })` tools.
+1. Commit a managed edit with `vcs({ operation: "commit", message })`, then
+   publish it with `vcs({ operation: "push" })`.
 2. Call `git.pushUpstream(repo)` to export that protected-main snapshot and
    push it to GitHub.
 3. When GitHub is ahead or diverged, preview with

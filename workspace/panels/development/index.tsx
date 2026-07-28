@@ -95,8 +95,14 @@ interface NativeToolAvailability {
   unavailableReason: string | null;
   interactiveTerminal: boolean;
 }
-interface SessionCursor { createdAt: number; sessionId: string }
-interface RunCursor { createdAt: number; runId: string }
+interface SessionCursor {
+  createdAt: number;
+  sessionId: string;
+}
+interface RunCursor {
+  createdAt: number;
+  runId: string;
+}
 const PAGE_LIMIT = 30;
 
 function targetForKey(key: string): DevelopmentTarget {
@@ -164,11 +170,11 @@ export default function DevelopmentPanel() {
   const selectedNativeTool = nativeTools.find((tool) => tool.toolId === nativeTool) ?? null;
   const confirmedSession =
     confirm?.kind === "force-retire-session"
-      ? sessions.find((session) => session.sessionId === confirm.id) ?? null
+      ? (sessions.find((session) => session.sessionId === confirm.id) ?? null)
       : null;
   const confirmedRun =
     confirm?.kind === "force-retire"
-      ? runs.find((run) => run.runId === confirm.id) ?? null
+      ? (runs.find((run) => run.runId === confirm.id) ?? null)
       : null;
 
   const resolveRepositoryIdentity = useCallback(async () => {
@@ -283,7 +289,9 @@ export default function DevelopmentPanel() {
             if (!run) return;
             setRuns((current) => current.map((item) => (item.runId === run.runId ? run : item)));
           })
-          .catch(() => {});
+          .catch((error) =>
+            console.warn(`[development] Failed to refresh run ${event.runId}:`, error)
+          );
       }
     });
     return () => dispose();
@@ -1115,13 +1123,16 @@ export default function DevelopmentPanel() {
                   )}
                   {selectedRun.attachedHost && (
                     <Card variant="surface" mt="2">
-                      <Text weight="bold">Attached host route: {selectedRun.attachedHost.state}</Text>
+                      <Text weight="bold">
+                        Attached host route: {selectedRun.attachedHost.state}
+                      </Text>
                       <Text as="div" size="2" color="gray">
                         Session <Code>{selectedRun.attachedHost.sessionId}</Code> · child generation{" "}
                         <Code>{selectedRun.attachedHost.childGenerationId}</Code>
                       </Text>
                       <Text as="div" size="2" color="gray">
-                        Authority ceiling <Code>{selectedRun.attachedHost.authorityCeilingDigest}</Code>
+                        Authority ceiling{" "}
+                        <Code>{selectedRun.attachedHost.authorityCeilingDigest}</Code>
                         {` · expires ${date(selectedRun.attachedHost.expiresAt)}`}
                       </Text>
                     </Card>
@@ -1155,9 +1166,7 @@ export default function DevelopmentPanel() {
                           </Text>
                         )}
                         {selectedRun.attachedHost && (
-                          <Text as="div">
-                            Attached route: {selectedRun.attachedHost.sessionId}
-                          </Text>
+                          <Text as="div">Attached route: {selectedRun.attachedHost.sessionId}</Text>
                         )}
                         {selectedRun.repair.cleanupErrors.map((diagnostic) => (
                           <Text as="div" key={`${diagnostic.code}:${diagnostic.at}`}>
@@ -1232,9 +1241,7 @@ export default function DevelopmentPanel() {
           </Dialog.Description>
           {confirmedSession?.native && (
             <Callout.Root
-              color={
-                confirmedSession.native.pendingChanges === "none" ? "blue" : "orange"
-              }
+              color={confirmedSession.native.pendingChanges === "none" ? "blue" : "orange"}
               mb="3"
             >
               <Callout.Text>
