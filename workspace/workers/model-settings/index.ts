@@ -33,9 +33,7 @@ import {
   providerIsConnectable,
 } from "@workspace/model-catalog/providerConnect";
 import { pickRecommendedModelId } from "@workspace/model-catalog/modelRecommendations";
-import {
-  findMatchingUrlAudience,
-} from "@vibestudio/credential-client/urlAudience";
+import { findMatchingUrlAudience } from "@vibestudio/credential-client/urlAudience";
 import {
   isStoredCredentialUsable,
   type StoredCredentialSummary,
@@ -262,9 +260,16 @@ function localAvailability(entry: LocalModelEntry): ModelAvailability {
 
 export function applyCloudAvailability(
   entry: ModelCatalogEntry,
-  credentials: readonly StoredCredentialSummary[]
+  credentials: readonly StoredCredentialSummary[],
+  executionMode: "provider-credentials" | "deterministic-test"
 ): ModelCatalogEntry {
   if (entry.auth !== "url-bound") return entry;
+  if (executionMode === "deterministic-test") {
+    return {
+      ...entry,
+      availability: { state: "ready", detail: "deterministic-test" },
+    };
+  }
   // The credential owner projects expiry and refresh capability into each
   // secret-free summary. A stored credential is not enough: it must be active
   // or carry persisted material that can renew it.
@@ -277,8 +282,7 @@ export function applyCloudAvailability(
   });
   const matchedUsable = matching.some(isStoredCredentialUsable);
   const matchedExpired = matching.some(
-    (credential) =>
-      credential.lifecycle.state === "expired" && !credential.lifecycle.canRefresh
+    (credential) => credential.lifecycle.state === "expired" && !credential.lifecycle.canRefresh
   );
   const availability: ModelAvailability = matchedUsable
     ? { state: "ready", detail: "credentialed" }
@@ -301,9 +305,7 @@ export function pickFallbackModel(catalog: ModelCatalog): {
   const preferred = byRef(DEFAULT_AGENT_MODEL_REF);
   const preferredRef = preferred?.ref;
   if (preferred && isModelUsable(preferred)) return { ref: preferred.ref };
-  const recommended = catalog.models.find(
-    (model) => model.recommended && isModelUsable(model)
-  );
+  const recommended = catalog.models.find((model) => model.recommended && isModelUsable(model));
   if (recommended) return { ref: recommended.ref };
   // Prefer the local floor once the user has explicitly installed it.
   const localFloor = byRef(LOCAL_FALLBACK_MODEL_REF);
@@ -318,12 +320,22 @@ export function pickFallbackModel(catalog: ModelCatalog): {
 export class ModelSettingsDO extends DurableObjectBase {
   protected createTables(): void {}
 
-  @rpc({ principals: ["host", "user", "code", "session", "mission"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code", "session", "mission"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async listCatalog(): Promise<ModelCatalog> {
     return this.assembleCatalog();
   }
 
-  @rpc({ principals: ["host", "user", "code", "session", "mission"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code", "session", "mission"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async getSettings(): Promise<ModelSettingsSnapshot> {
     const [catalog, config] = await Promise.all([
       this.assembleCatalog(),
@@ -332,12 +344,22 @@ export class ModelSettingsDO extends DurableObjectBase {
     return this.resolveSettings(catalog, config);
   }
 
-  @rpc({ principals: ["host", "user", "code", "session", "mission"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code", "session", "mission"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async getDefaultModel(): Promise<ModelSettingsSnapshot> {
     return this.getSettings();
   }
 
-  @rpc({ principals: ["host", "user", "code", "session", "mission"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "user", "code", "session", "mission"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async inspectModels(refs: string[]): Promise<{
     defaultModel: string;
     models: Array<{ ref: string; availability: ModelAvailability }>;
@@ -359,7 +381,12 @@ export class ModelSettingsDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ principals: ["host", "code"], effect: { kind: "workspace-service" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async setDefaultAgentConfig(input: DefaultAgentConfig): Promise<ModelSettingsSnapshot> {
     const requested = parseDefaultAgentConfig(input, true);
     const catalog = await this.assembleCatalog();
@@ -393,8 +420,12 @@ export class ModelSettingsDO extends DurableObjectBase {
       this.storedCredentials(),
       this.fetchLocalModels(),
     ]);
+    const executionMode =
+      this.env["VIBESTUDIO_TEST_MODE"] === "1"
+        ? ("deterministic-test" as const)
+        : ("provider-credentials" as const);
     const models = [
-      ...base.models.map((entry) => applyCloudAvailability(entry, credentials)),
+      ...base.models.map((entry) => applyCloudAvailability(entry, credentials, executionMode)),
       ...localEntries.map(localEntryToCatalogEntry),
     ];
     const providers: ModelCatalogProvider[] = localEntries.length

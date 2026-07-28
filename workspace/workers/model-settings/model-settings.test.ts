@@ -320,6 +320,24 @@ describe("ModelSettingsDO", () => {
     expect(JSON.stringify(local?.modelSpec)).not.toMatch(/authorization|api[-_]?key/iu);
   });
 
+  it("reports the deterministic inference runtime as usable without a fake credential", async () => {
+    OfflineModelSettingsDO.config = { ...BASE_CONFIG };
+    const { call } = await createTestDO(OfflineModelSettingsDO, {
+      VIBESTUDIO_TEST_MODE: "1",
+    });
+
+    const snapshot = await call("getSettings");
+    expect(snapshot).toMatchObject({
+      defaultModel: "openai:gpt-5",
+      defaultModelSource: "fallback",
+    });
+    const catalog = (snapshot as { catalog: ModelCatalog }).catalog;
+    expect(catalog.models.find((model) => model.ref === "openai:gpt-5")?.availability).toEqual({
+      state: "ready",
+      detail: "deterministic-test",
+    });
+  });
+
   it("does not report an expired credential without persisted refresh material as ready", async () => {
     ExpiredModelSettingsDO.config = { ...BASE_CONFIG };
     ExpiredModelSettingsDO.lifecycle = { state: "expired", canRefresh: false };

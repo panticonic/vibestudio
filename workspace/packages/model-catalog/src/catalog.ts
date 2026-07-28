@@ -76,10 +76,11 @@ export interface PiModelSpec {
 }
 
 /** Live usability of a model (design §7.1) — worker-computed, shared by all
- *  consumers. Cloud: an active credential or a renewable expired credential.
- *  Local: extension server state via models.changed events. */
+ *  consumers. Cloud: an active credential, a renewable expired credential, or
+ *  the deterministic inference runtime used by system tests. Local: extension
+ *  server state via models.changed events. */
 export type ModelAvailability =
-  | { state: "ready"; detail?: "running" | "credentialed" }
+  | { state: "ready"; detail?: "running" | "credentialed" | "deterministic-test" }
   | { state: "startable"; detail: "will-load-on-use" }
   | {
       state: "needs-setup";
