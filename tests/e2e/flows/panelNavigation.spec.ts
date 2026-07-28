@@ -8,6 +8,7 @@ import {
   createManagedTestWorkspace,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   ensureHostedShellReady,
+  getPanelDiagnostics,
   getPanelText,
   getPanelTree,
   hasElectronDisplay,
@@ -15,6 +16,7 @@ import {
   launchTestApp,
   approvePendingStartupUnits,
   removeManagedTestWorkspace,
+  startPanelDiagnostics,
   type TestApp,
 } from "../../setup/electronSetup";
 
@@ -78,21 +80,41 @@ async function navigatePanel(
 async function panelSurfaceState(
   app: ElectronApplication,
   panelId: string
-): Promise<{ text: string; alertCount: number }> {
+): Promise<{ text: string; alertCount: number; alertText: string }> {
   const text = await getPanelText(app, panelId);
-  const alertCount = await app.evaluate(async (_electron, id) => {
+  const alertState = await app.evaluate(async (_electron, id) => {
     const testApi = (
       globalThis as {
         __testApi?: { executePanelScript: <T>(panelId: string, script: string) => Promise<T> };
       }
     ).__testApi;
     if (!testApi) throw new Error("Test API not available");
-    return testApi.executePanelScript<number>(
+    return testApi.executePanelScript<{ count: number; text: string }>(
       id,
-      `document.querySelectorAll('[role="alert"]').length`
+      `(() => {
+        const alerts = Array.from(document.querySelectorAll('[role="alert"]'));
+        return {
+          count: alerts.length,
+          text: alerts.map((alert) => alert.textContent ?? "").join("\\n").trim(),
+        };
+      })()`
     );
   }, panelId);
-  return { text, alertCount };
+  return { text, alertCount: alertState.count, alertText: alertState.text };
+}
+
+async function severePanelDiagnostics(
+  app: ElectronApplication,
+  panelId: string
+): ReturnType<typeof getPanelDiagnostics> {
+  return (await getPanelDiagnostics(app, panelId)).filter((item) => {
+    if (item.type !== "console")
+      return item.type !== "did-fail-load" || !item.message.includes("(-3)");
+    const level = String(item.level ?? "").toLowerCase();
+    return (
+      level === "2" || level === "3" || level === "error" || /\buncaught\b/i.test(item.message)
+    );
+  });
 }
 
 test.describe("Panel navigation convergence", () => {
@@ -111,6 +133,7 @@ test.describe("Panel navigation convergence", () => {
         panelSource: "about/new",
       });
       const initialPanelId = initialReadiness.panelId;
+      await startPanelDiagnostics(testApp.app, initialPanelId);
       await expect
         .poll(() => getPanelText(testApp!.app, initialPanelId).catch(() => ""), {
           timeout: 30_000,
@@ -180,21 +203,54 @@ test.describe("Panel navigation convergence", () => {
                   panel.snapshot?.source !== surface.source ||
                   !(await isPanelReady(testApp!.app, initialPanelId))
                 ) {
-                  return false;
+                  return {
+                    source: panel?.snapshot?.source ?? null,
+                    ready: false,
+                    alertCount: -1,
+                    alertText: "",
+                    hasReadyText: false,
+                    hasPendingText: false,
+                    diagnostics: await severePanelDiagnostics(testApp!.app, initialPanelId),
+                  };
                 }
                 const state = await panelSurfaceState(testApp!.app, initialPanelId);
-                return (
-                  state.alertCount === 0 &&
-                  state.text.includes(surface.readyText) &&
-                  !state.text.includes(surface.pendingText)
-                );
-              } catch {
-                return false;
+                return {
+                  source: panel.snapshot.source,
+                  ready: true,
+                  alertCount: state.alertCount,
+                  alertText: state.alertText,
+                  hasReadyText: state.text.includes(surface.readyText),
+                  hasPendingText: state.text.includes(surface.pendingText),
+                  diagnostics: await severePanelDiagnostics(testApp!.app, initialPanelId),
+                };
+              } catch (error) {
+                return {
+                  source: null,
+                  ready: false,
+                  alertCount: -1,
+                  alertText: "",
+                  hasReadyText: false,
+                  hasPendingText: false,
+                  diagnostics: [
+                    {
+                      type: "probe-error",
+                      message: error instanceof Error ? error.message : String(error),
+                    },
+                  ],
+                };
               }
             },
-            { timeout: 180_000, intervals: [250, 500, 1_000, 2_000] }
+            { timeout: 60_000, intervals: [250, 500, 1_000, 2_000] }
           )
-          .toBe(true);
+          .toMatchObject({
+            source: surface.source,
+            ready: true,
+            alertCount: 0,
+            alertText: "",
+            hasReadyText: true,
+            hasPendingText: false,
+            diagnostics: expect.any(Array),
+          });
       }
 
       expect(await shellStatus(testApp.app)).toEqual({

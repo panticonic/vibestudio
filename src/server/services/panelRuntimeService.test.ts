@@ -136,6 +136,19 @@ describe("panelRuntimeService", () => {
     ).rejects.toMatchObject({
       code: "PANEL_RUNTIME_CLIENT_FORBIDDEN",
     });
+    await expect(
+      service.handler(headlessCtx, "reportView", [
+        "panel:nav-a",
+        "desktop-runtime",
+        {
+          url: "http://127.0.0.1/panels/chat/",
+          loading: false,
+          boot: { phase: "ready" },
+        },
+      ])
+    ).rejects.toMatchObject({
+      code: "PANEL_RUNTIME_CLIENT_FORBIDDEN",
+    });
 
     expect(coordinator.getLease("panel:nav-a")).toEqual(
       expect.objectContaining({

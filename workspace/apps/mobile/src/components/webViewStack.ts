@@ -7,18 +7,17 @@
  * functions pure.
  */
 
-import {
-  PANEL_UI_IDLE_UNLOAD_MS,
-  PANEL_UI_MAX_LOADED_MOBILE,
-} from "@vibestudio/shared/constants";
+import { PANEL_UI_IDLE_UNLOAD_MS, PANEL_UI_MAX_LOADED_MOBILE } from "@vibestudio/shared/constants";
 import {
   selectCapEvictionVictims,
   selectIdlePanelVictims,
   type LoadedPanelSnapshot,
 } from "@vibestudio/shared/panel/panelGc";
+import type { PanelEntityId } from "@vibestudio/shared/panel/ids";
 
 export interface WebViewEntry {
   panelId: string;
+  runtimeEntityId: PanelEntityId | null;
   url: string;
   managed: boolean;
   panelInit: unknown | null;
@@ -43,7 +42,7 @@ function toSnapshots(entries: WebViewEntry[]): LoadedPanelSnapshot[] {
 export function addWebViewEntry(
   entries: WebViewEntry[],
   nextEntry: WebViewEntry,
-  opts: { activePanelId: string | null; cap?: number } & StackPredicates,
+  opts: { activePanelId: string | null; cap?: number } & StackPredicates
 ): WebViewEntry[] {
   const cap = opts.cap ?? PANEL_UI_MAX_LOADED_MOBILE;
   const withoutExisting = entries.filter((entry) => entry.panelId !== nextEntry.panelId);
@@ -57,7 +56,7 @@ export function addWebViewEntry(
       protectedIds,
       isPinned: opts.isPinned,
       isKeepLoaded: opts.isKeepLoaded,
-    }),
+    })
   );
   if (victims.size === 0) return nextEntries;
   return nextEntries.filter((entry) => !victims.has(entry.panelId));
@@ -76,7 +75,7 @@ export function sweepIdleWebViews(
     activePanelId: string | null;
     foreground: boolean;
     unload: (id: string) => void;
-  } & StackPredicates,
+  } & StackPredicates
 ): WebViewEntry[] {
   if (!opts.foreground) return entries;
 

@@ -128,7 +128,7 @@ export class PanelRuntimeLeaseController {
       isKeepLoaded: (panelId) => Boolean(this.deps.registry.getRuntimeLease(panelId)?.keepLoaded),
       panelExists: (panelId) => Boolean(this.deps.registry.getPanel(panelId)),
       unload: async (panelId) => {
-        this.unloadPanelTree(panelId);
+        this.unloadPanel(panelId);
         this.deps.registry.notifyPanelTreeUpdate();
       },
       reportUnloadError: (panelId, reason, error) => {
@@ -385,9 +385,21 @@ export class PanelRuntimeLeaseController {
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        const current = this.connectionBySlot.get(slotId);
+        // An intentional unload or a newer lease can destroy the WebContents
+        // while Electron's original loadURL promise is still settling. That
+        // commonly rejects as ERR_FAILED; it belongs to the superseded
+        // lifecycle and must not poison the durable panel with a load error.
+        if (
+          !current ||
+          current.runtimeEntityId !== lease.runtimeEntityId ||
+          current.connectionId !== lease.connectionId
+        ) {
+          return;
+        }
         log.warn(`[handleRuntimeLeaseChanged] Failed to load assigned panel ${slotId}: ${message}`);
         this.releaseLocalPanelRuntime(slotId, "unload");
-        this.markPanelLoadError(slotId, message);
+        this.recordPanelViewFailure(slotId, message);
       }
     } else if (view?.hasView(slotId)) {
       this.connectionBySlot.set(slotId, {
@@ -409,14 +421,15 @@ export class PanelRuntimeLeaseController {
     );
   }
 
-  markPanelLoadError(panelId: string, message: string): void {
+  recordPanelViewFailure(panelId: string, message: string): void {
     const panel = this.deps.registry.getPanel(panelId);
     if (!panel) return;
     this.deps.registry.updateArtifacts(panelId, {
       ...panel.artifacts,
-      buildState: "error",
-      error: message,
-      buildProgress: message,
+      viewFailure: {
+        code: "navigation_failed",
+        message,
+      },
     });
     this.deps.registry.notifyPanelTreeUpdate();
   }
@@ -456,7 +469,11 @@ export class PanelRuntimeLeaseController {
           assertPresent(browserPartition)
         );
         this.recordViewMutation();
-        this.deps.registry.updateArtifacts(panelId, { buildState: "ready", htmlPath: url });
+        this.deps.registry.updateArtifacts(panelId, {
+          buildState: "ready",
+          htmlPath: url,
+          viewFailure: undefined,
+        });
         this.deps.registry.notifyPanelTreeUpdate();
         this.resources.track(panelId);
         await this.resources.enforceCap(panelId);
@@ -547,10 +564,9 @@ export class PanelRuntimeLeaseController {
     }
   }
 
-  unloadPanelTree(panelId: string, transition: "lease-transfer" | "unload" = "unload"): void {
+  unloadPanel(panelId: string, transition: "lease-transfer" | "unload" = "unload"): void {
     const panel = this.deps.registry.getPanel(panelId);
     if (!panel) return;
-    for (const child of panel.children) this.unloadPanelTree(child.id, transition);
     this.releaseLocalPanelRuntime(panelId, transition);
     const hasBuildArtifacts = Boolean(panel.artifacts?.htmlPath || panel.artifacts?.bundlePath);
     if (panel.artifacts?.buildState === "pending" && !hasBuildArtifacts) return;
@@ -562,7 +578,7 @@ export class PanelRuntimeLeaseController {
 
   private unloadPanelIfPresent(panelId: string, transition: "unload" | "lease-transfer"): void {
     if (!this.deps.registry.getPanel(panelId)) return;
-    this.unloadPanelTree(panelId, transition);
+    this.unloadPanel(panelId, transition);
     this.deps.registry.notifyPanelTreeUpdate();
   }
 
@@ -592,14 +608,18 @@ export class PanelRuntimeLeaseController {
         );
         this.recordViewMutation();
       }
-      this.deps.registry.updateArtifacts(panelId, { buildState: "ready", htmlPath: url });
+      this.deps.registry.updateArtifacts(panelId, {
+        buildState: "ready",
+        htmlPath: url,
+        viewFailure: undefined,
+      });
       this.deps.registry.notifyPanelTreeUpdate();
       return;
     }
     const panel = this.deps.registry.getPanel(panelId);
     if (!this.hasCompleteExecutionIdentity(panel)) {
       if (panel?.artifacts.buildState === "error") {
-        this.markPanelLoadError(
+        this.recordPanelViewFailure(
           panelId,
           panel.artifacts.error ?? "Panel unavailable: its runtime image could not be prepared."
         );
@@ -635,6 +655,7 @@ export class PanelRuntimeLeaseController {
       buildState: "building",
       buildProgress: "Preparing panel runtime...",
       error: undefined,
+      viewFailure: undefined,
     });
     this.deps.registry.notifyPanelTreeUpdate();
   }
@@ -661,6 +682,7 @@ export class PanelRuntimeLeaseController {
       buildRevision: this.getBuildRevision(snapshot.source, snapshot.options.ref),
       buildProgress: undefined,
       error: undefined,
+      viewFailure: undefined,
     });
     this.deps.registry.notifyPanelTreeUpdate();
   }

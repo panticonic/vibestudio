@@ -61,12 +61,18 @@ export type { WorkerEnv, ExecutionContext } from "./types.js";
 // buildPanelLink, createGatewayFetch) — identical on panel · worker · eval.
 export * from "../shared/portable.js";
 export type * from "../core/types.js";
-export type { OpenPanelOptions, PanelRuntimeTree } from "../shared/panelRuntime.js";
+export type {
+  OpenPanelOptions,
+  PanelRuntimeTree,
+  PanelSubtreeNode,
+  PanelSubtreeSnapshot,
+} from "../shared/panelRuntime.js";
 export type {
   ClientConfigStatus,
   CredentialClient,
   CredentialAccessGrantSummary,
   CredentialAccessSubjectSummary,
+  CredentialStoreSummary,
   ManagedCredentialSummary,
   StoredCredentialSummary,
   StoreUrlBoundCredentialRequest,

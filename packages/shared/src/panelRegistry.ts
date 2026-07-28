@@ -565,7 +565,13 @@ export class PanelRegistry implements PanelRelationshipProvider {
     this.notifyPanelTreeUpdate();
   }
 
-  applyRuntimeLeaseChanged(event: PanelRuntimeLeaseChangedEvent): void {
+  /**
+   * Apply a lease delta and report whether it changed the currently projected
+   * panel. Runtime replacement emits its lease delta before the canonical tree
+   * snapshot containing the replacement entity. In that interval the lease map
+   * may advance, but consumers must not re-render the stale entity.
+   */
+  applyRuntimeLeaseChanged(event: PanelRuntimeLeaseChangedEvent): boolean {
     if (event.next) {
       this.runtimeLeases.set(event.slotId, event.next);
     } else {
@@ -573,10 +579,11 @@ export class PanelRegistry implements PanelRelationshipProvider {
     }
     this.runtimeLeaseVersion = event.version;
     const panel = this.panels.get(event.slotId);
-    if (panel) {
-      panel.state = explicitStateFromArtifacts(panel.artifacts, this.getRuntimeLease(panel.id));
-    }
+    if (!panel || panel.runtimeEntityId !== event.runtimeEntityId) return false;
+
+    panel.state = explicitStateFromArtifacts(panel.artifacts, this.getRuntimeLease(panel.id));
     this.notifyPanelTreeUpdate();
+    return true;
   }
 
   /**

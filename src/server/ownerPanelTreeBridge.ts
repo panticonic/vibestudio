@@ -55,8 +55,17 @@ import type {
 import { stateLayout } from "./stateLayout.js";
 import { isCdpTargetLifecycleTransitionError, type CdpBridge } from "./cdpBridge.js";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
-import type { PanelTreeBridge, PanelTreeBridgeRequest } from "./services/panelTreeService.js";
+import type {
+  PanelTreeBridge,
+  PanelTreeBridgeCaller,
+  PanelTreeBridgeRequest,
+} from "./services/panelTreeService.js";
+import { BoundedTaskScheduler } from "./boundedTaskScheduler.js";
 import type { EventService } from "@vibestudio/shared/eventsService";
+import {
+  shouldMaterializePanelOnCreate,
+  type PanelInitialLoadPolicy,
+} from "@vibestudio/shared/panelInterfaces";
 import {
   panelAttemptId,
   panelFailure,
@@ -72,6 +81,7 @@ import {
 } from "@vibestudio/shared/panel/observation";
 
 const log = createDevLogger("OwnerPanelTreeBridge");
+const MAX_CONCURRENT_PANEL_READINESS_LIFECYCLES = 4;
 
 function operationFailure(
   error: unknown,
@@ -274,13 +284,13 @@ type InitPanelRoot = {
 export async function seedPanelTreeIfEmpty(
   bridge: PanelTreeBridge,
   initPanels: ReadonlyArray<{ source: string; stateArgs?: Record<string, unknown> }>,
-  ownerSubject: UserSubject
+  ownerSubject: UserSubject,
+  caller: PanelTreeBridgeCaller = { callerId: "server", callerKind: "server" }
 ): Promise<void> {
   if (initPanels.length === 0) return;
   const ownerUserId = ownerSubject.userId;
   const allRoots = (await bridge({
-    callerId: "server",
-    callerKind: "server",
+    ...caller,
     method: "roots",
     args: [],
   })) as InitPanelRoot[];
@@ -311,8 +321,7 @@ export async function seedPanelTreeIfEmpty(
             : null;
       if (!rootId) return;
       const stateArgs = (await bridge({
-        callerId: "server",
-        callerKind: "server",
+        ...caller,
         method: "getStateArgs",
         args: [rootId],
       })) as Record<string, unknown> | undefined;
@@ -331,8 +340,7 @@ export async function seedPanelTreeIfEmpty(
       continue;
     }
     await bridge({
-      callerId: "server",
-      callerKind: "server",
+      ...caller,
       method: "create",
       args: [
         { surface: "code", source: entry.source },
@@ -391,13 +399,16 @@ export function createOwnerSeedingPanelTreeBridge(
 ): PanelTreeBridge {
   const ownerSeedPromises = new Map<string, Promise<void>>();
 
-  const seedForOwner = (ownerSubject: UserSubject): Promise<void> => {
+  const seedForOwner = (
+    ownerSubject: UserSubject,
+    caller: PanelTreeBridgeCaller
+  ): Promise<void> => {
     const ownerUserId = ownerSubject.userId;
     let pending = ownerSeedPromises.get(ownerUserId);
     if (pending) return pending;
     pending = (async () => {
       if (seedStore && (await seedStore.isSeeded(ownerUserId))) return;
-      await seedPanelTreeIfEmpty(bridge, initPanels, ownerSubject);
+      await seedPanelTreeIfEmpty(bridge, initPanels, ownerSubject, caller);
       await seedStore?.markSeeded(ownerUserId);
     })().catch((error) => {
       ownerSeedPromises.delete(ownerUserId);
@@ -408,17 +419,33 @@ export function createOwnerSeedingPanelTreeBridge(
   };
 
   return async (request: PanelTreeBridgeRequest) => {
+    if (request.method !== "attachInitialPanels") return bridge(request);
     const ownerSubject = request.subject;
     if (ownerSubject && ownerSubject.userId !== "system") {
-      await seedForOwner(ownerSubject);
+      await seedForOwner(ownerSubject, {
+        callerId: request.callerId,
+        callerKind: request.callerKind,
+        ...(request.testPolicy ? { testPolicy: request.testPolicy } : {}),
+        subject: ownerSubject,
+      });
     }
-    return bridge(request);
+    return bridge({
+      ...request,
+      method: "getTreeSnapshot",
+      args: [],
+    });
   };
 }
 
 export async function createServerPanelTreeBridge(
   deps: OwnerPanelTreeBridgeDeps
 ): Promise<PanelTreeBridge> {
+  // Durable panel creation is cheap and may arrive in large batches (browser
+  // session import is the common case). Native renderer readiness is not:
+  // letting every create race at once overwhelms Electron and makes the
+  // resource cap evict panels whose create lifecycle is still waiting on them.
+  // Keep the complete host-assignment -> boot-ready interval bounded.
+  const readinessScheduler = new BoundedTaskScheduler(MAX_CONCURRENT_PANEL_READINESS_LIFECYCLES);
   const registry = new PanelRegistry({});
   const serverCtx: ServiceContext = { caller: createHostCaller("server") };
   const callerContext = new AsyncLocalStorage<VerifiedCaller>();
@@ -692,6 +719,22 @@ export async function createServerPanelTreeBridge(
     // user's own roots and consumers can group the forest.
     owner: panel.owner ?? null,
   });
+  const panelToSubtreeItem = async (
+    panel: import("@vibestudio/shared/types").Panel,
+    parentId: string | null
+  ): Promise<
+    Awaited<ReturnType<typeof withRuntimeEntity>> & {
+      children: unknown[];
+    }
+  > => {
+    const item = await withRuntimeEntity(panelToListItem(panel, parentId));
+    return {
+      ...item,
+      children: await Promise.all(
+        panel.children.map((child) => panelToSubtreeItem(child, panel.id))
+      ),
+    };
+  };
   const ensureDefaultLoaded = async (
     panelId: string,
     options: { replaceUnavailableLease?: boolean } = {}
@@ -726,7 +769,11 @@ export async function createServerPanelTreeBridge(
       }
     }
     const assignmentReason = assigned && !assigned.assigned ? assigned.reason : undefined;
-    const loadedByLease = Boolean(assigned?.assigned || assignmentReason === "already_held");
+    const loadedByLease = Boolean(
+      assigned?.assigned ||
+      assignmentReason === "already_held" ||
+      assignmentReason === "mobile_held"
+    );
     if (loadedByLease) {
       const holder = deps.panelRuntimeCoordinator?.resolveHostForSlot(panelId) ?? null;
       // A CDP host lease is only an assignment. Do not report a programmatic
@@ -882,6 +929,22 @@ export async function createServerPanelTreeBridge(
         }
       }
     }
+    if (!host && holder && !holder.supportsCdp) {
+      const reported = deps.panelRuntimeCoordinator?.reportedViewForSlot(panelId) ?? null;
+      if (reported) {
+        host = {
+          holderLabel: reported.lease.holderLabel,
+          platform: reported.lease.platform,
+          supportsInspection: false,
+          view: {
+            exists: true,
+            url: reported.observation.view.url,
+            loading: reported.observation.view.loading,
+          },
+          boot: reported.observation.boot,
+        };
+      }
+    }
     if (!failure && host?.failure) {
       failure = panelFailure({
         ...host.failure,
@@ -1029,6 +1092,16 @@ export async function createServerPanelTreeBridge(
         await sync({ force: true });
         return registry.getPanelTreeSnapshot();
       }
+      case "getSubtree": {
+        await sync();
+        const panelId = String(args[0]);
+        const root = registry.getPanel(panelId);
+        if (!root) return null;
+        return {
+          revision: registry.getPanelTreeSnapshot().revision,
+          root: await panelToSubtreeItem(root, registry.findParentId(panelId)),
+        };
+      }
       case "getFocusedPanelId": {
         await sync();
         return registry.getFocusedPanelId();
@@ -1115,11 +1188,13 @@ export async function createServerPanelTreeBridge(
           slug?: string;
           name?: string;
           focus?: boolean;
+          initialLoad?: PanelInitialLoadPolicy;
           contextId?: string;
           stateArgs?: Record<string, unknown>;
           placement?: import("@vibestudio/shared/types").PanelPlacementHint;
         };
         const shouldFocus = options.focus !== false;
+        const shouldLoad = shouldMaterializePanelOnCreate(options.initialLoad);
         // Resolve the owning panel TREE SLOT once, durably. Explicit null = root; an explicit id or
         // the implicit caller = walk the entity lineage to the nearest OPEN panel and return its slot
         // id (parity for panel/worker/agent/eval callers + removal-robustness, in one resolver). This
@@ -1222,9 +1297,20 @@ export async function createServerPanelTreeBridge(
               await created.preparation;
               emitTreeSnapshot();
             }
-            await loadAndWaitForPanelReady(created.panelId, "create");
+            if (shouldLoad) {
+              await readinessScheduler.run(() => {
+                // A focused shell create already has an explicit presenting
+                // host. The presentation event above tells that shell to
+                // acquire and render the new slot; assigning a default CDP
+                // host here races the UI host and can replace its live runtime.
+                // Non-presented creates still need server-side host selection.
+                return request.callerKind === "shell" && shouldFocus
+                  ? waitForPanelReady(created.panelId)
+                  : loadAndWaitForPanelReady(created.panelId, "create");
+              });
+            }
             lifecycleFailures.delete(created.panelId);
-            if (shouldFocus) {
+            if (shouldLoad && shouldFocus) {
               await panelManager.notifyFocused(asPanelSlotId(created.panelId));
             }
             emitTreeSnapshot();
@@ -1254,7 +1340,8 @@ export async function createServerPanelTreeBridge(
             emitTreeSnapshot();
             log.warn(
               `Panel ${created.panelId} asynchronous create lifecycle failed ` +
-                `[${failure.code}/${failure.stage}, diagnostic=${failure.diagnosticId}]: ${message}`
+                `[${failure.code}/${failure.stage}, diagnostic=${failure.diagnosticId}]: ${message}; ` +
+                `details=${JSON.stringify(failure.details ?? null)}`
             );
           } finally {
             publishCreationPresentation();
@@ -1332,6 +1419,19 @@ export async function createServerPanelTreeBridge(
         emitTreeSnapshot();
         return result;
       }
+      case "setTitle": {
+        const panelId = String(args[0]);
+        const title = String(args[1]).trim();
+        const explicit = Boolean((args[2] as { explicit?: boolean } | undefined)?.explicit);
+        await panelManager.updateTitle(asPanelSlotId(panelId), title);
+        deps.eventService?.emit("panel-title-updated", {
+          panelId,
+          title,
+          explicit,
+        });
+        emitTreeSnapshot();
+        return;
+      }
       case "close":
       case "archive": {
         const panelId = String(args[0]);
@@ -1392,6 +1492,7 @@ export async function createServerPanelTreeBridge(
         const panelId = String(args[0]);
         const source = String(args[1]);
         const options = normalizePanelTreeNavigateOptions(args[2]);
+        const presentingLease = deps.panelRuntimeCoordinator?.resolveRouteLease(panelId) ?? null;
         // Server is the sole writer: mutate WorkspaceDO here, then broadcast.
         // The hosting client reloads the panel's view reactively from the new
         // snapshot (no per-mutation host command).
@@ -1416,7 +1517,14 @@ export async function createServerPanelTreeBridge(
           );
         }
         emitTreeSnapshot();
-        const observation = await loadAndWaitForPanelReady(panelId, "navigate");
+        // Navigation preserves an existing presenting host. Its canonical tree
+        // update is the handoff: return after commit so a self-loading host can
+        // issue getPanelInit/acquire requests without queueing behind this RPC.
+        // An unpresented programmatic slot still needs synchronous default-host
+        // selection and readiness.
+        const observation = presentingLease
+          ? await observePanel(panelId)
+          : await loadAndWaitForPanelReady(panelId, "navigate");
         return {
           id: result.panelId,
           title: result.title,
@@ -1439,13 +1547,16 @@ export async function createServerPanelTreeBridge(
       case "navigateHistory": {
         const panelId = String(args[0]);
         const delta = (args[1] === 1 ? 1 : -1) as -1 | 1;
+        const presentingLease = deps.panelRuntimeCoordinator?.resolveRouteLease(panelId) ?? null;
         // Server is the sole writer; the hosting client rebuilds the view from
         // this response (source/contextId) after refreshing its entity cache.
         const panel = await panelManager.navigateHistory(asPanelSlotId(panelId), delta);
         emitTreeSnapshot();
         if (!panel) return null;
         const snap = getCurrentSnapshot(panel);
-        const observation = await loadAndWaitForPanelReady(panelId, "navigate");
+        const observation = presentingLease
+          ? await observePanel(panelId)
+          : await loadAndWaitForPanelReady(panelId, "navigate");
         return {
           id: panel.id,
           title: panel.title,

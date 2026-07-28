@@ -14,6 +14,8 @@ import { createHostedRuntime, type RuntimeHost } from "../shared/hostedRuntime.j
 // --- Portable authoring helpers (z, defineContract, Rpc, path/context helpers,
 // buildPanelLink, createGatewayFetch) — identical on panel · worker · eval. ---
 export * from "../shared/portable.js";
+export { FORM_FILL_TYPES } from "@vibestudio/browser-data";
+export type { FormFillType } from "@vibestudio/browser-data";
 
 // --- Type re-exports ---
 export type {
@@ -31,7 +33,12 @@ export type {
   WorkspaceServiceInfo,
   WorkerSourceInfo,
 } from "../shared/workerd.js";
-export type { OpenPanelOptions, PanelRuntimeTree } from "../shared/panelRuntime.js";
+export type {
+  OpenPanelOptions,
+  PanelRuntimeTree,
+  PanelSubtreeNode,
+  PanelSubtreeSnapshot,
+} from "../shared/panelRuntime.js";
 export type * from "../shared/gad.js";
 export type {
   UserlandApprovalChoice,
@@ -166,6 +173,7 @@ export type {
   CredentialClient,
   CredentialAccessGrantSummary,
   CredentialAccessSubjectSummary,
+  CredentialStoreSummary,
   ManagedCredentialSummary,
   StoredCredentialSummary,
   StoreUrlBoundCredentialRequest,

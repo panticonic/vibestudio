@@ -54,6 +54,18 @@ import { aboutPanelSource, isAboutSource } from "@vibestudio/workspace-contracts
 
 const log = createDevLogger("PanelManager");
 
+/** A panel lifecycle failure with every causal error, portable to mobile
+ * runtimes whose language baseline does not expose `AggregateError`. */
+export class PanelLifecycleAggregateError extends Error {
+  readonly errors: readonly unknown[];
+
+  constructor(errors: readonly unknown[], message: string) {
+    super(message);
+    this.name = "PanelLifecycleAggregateError";
+    this.errors = errors;
+  }
+}
+
 function browserNavigationSource(source: string): string | null {
   const url = browserUrlFromPanelSource(source) ?? source;
   if (!isOpenPanelBrowserUrl(url)) return null;
@@ -331,6 +343,7 @@ export class PanelManager {
       snapshot.forest.flatMap((group) => group.rootPanels),
       [...this.collapsedIds]
     );
+    this.syncEntityCachesFromRegistry();
     this.appliedForestRevision = snapshot.revision;
     return true;
   }
@@ -366,6 +379,7 @@ export class PanelManager {
         title: opts?.title,
         slug: opts?.slug,
         name: opts?.name,
+        contextId: opts?.contextId,
         addAsRoot: opts?.addAsRoot,
         ownerUserId: opts?.ownerUserId,
       });
@@ -462,7 +476,7 @@ export class PanelManager {
       try {
         await this.runtime.retireEntity(handle.id);
       } catch (cleanupError) {
-        throw new AggregateError(
+        throw new PanelLifecycleAggregateError(
           [error, cleanupError],
           `Panel creation failed and entity cleanup also failed for ${handle.id}`
         );
@@ -579,6 +593,7 @@ export class PanelManager {
       title?: string;
       slug?: string;
       name?: string;
+      contextId?: string;
       addAsRoot?: boolean;
       ownerUserId?: string;
     }
@@ -591,6 +606,7 @@ export class PanelManager {
         title: opts?.title,
         slug: opts?.slug,
         name: opts?.name,
+        contextId: opts?.contextId,
         addAsRoot: opts?.addAsRoot,
         ownerUserId: opts?.ownerUserId,
       }
@@ -607,6 +623,8 @@ export class PanelManager {
       slug?: string;
       /** @deprecated Alias for `title`. Ignored when `title` is set. */
       name?: string;
+      /** Existing semantic context to share; omitted mints an isolated context. */
+      contextId?: string;
       addAsRoot?: boolean;
       ownerUserId?: string;
     }
@@ -637,7 +655,7 @@ export class PanelManager {
         `Panel id already in use: ${slotId}. A slug must be unique among its parent's children.`
       );
     }
-    const contextId = generateContextId(slotId);
+    const contextId = opts?.contextId?.trim() || generateContextId(slotId);
     const historyEntryKey = mintHistoryEntryKey();
     const browserSource = `browser:${url}`;
     const positionId = this.rankForAppend(parentId);
@@ -670,7 +688,7 @@ export class PanelManager {
       try {
         await this.runtime.retireEntity(handle.id);
       } catch (cleanupError) {
-        throw new AggregateError(
+        throw new PanelLifecycleAggregateError(
           [error, cleanupError],
           `Panel creation failed and entity cleanup also failed for ${handle.id}`
         );
@@ -1193,7 +1211,10 @@ export class PanelManager {
       }
     }
     if (cleanupErrors.length > 0) {
-      throw new AggregateError(cleanupErrors, "Panel shutdown cleanup was incomplete");
+      throw new PanelLifecycleAggregateError(
+        cleanupErrors,
+        "Panel shutdown cleanup was incomplete"
+      );
     }
   }
 

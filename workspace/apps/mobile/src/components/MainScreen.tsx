@@ -21,6 +21,8 @@ import { VibestudioLogo } from "./VibestudioLogo";
 import { useAppLifecycle } from "../hooks/useAppLifecycle";
 import type { PanelWebViewHandle, PanelNavigationEvent } from "./PanelWebView";
 import type { WebViewNavigation } from "react-native-webview/lib/WebViewTypes";
+import type { PanelPageObservation } from "@vibestudio/shared/panel/observation";
+import type { PanelEntityId } from "@vibestudio/shared/panel/ids";
 import { panelForestAtom, shellClientAtom } from "../state/shellClientAtom";
 import { colorSchemeAtom, themeColorsAtom } from "../state/themeAtoms";
 import { approvalDeepLinkAtom } from "../state/approvalDeepLinkAtom";
@@ -36,7 +38,11 @@ import { addWebViewEntry, sweepIdleWebViews, type WebViewEntry } from "./webView
 import { loadPinnedPanelIds, savePinnedPanelIds } from "../shellCore/pinnedPanels";
 import { PANEL_UI_IDLE_SWEEP_MS } from "@vibestudio/shared/constants";
 import { parseHostConfig } from "../services/panelUrls";
-import { materializeMobilePanel } from "../services/panelMaterializer";
+import {
+  materializeLatestMobilePanel,
+  needsMobilePanelMaterialization,
+  PanelMaterializationRetryQueue,
+} from "../services/panelMaterializer";
 import { handleExternalOpen, type ExternalOpenPayload } from "../services/oauthLoopback";
 import {
   handleMobileAppLifecycleEvent,
@@ -167,6 +173,12 @@ export function MainScreen() {
   }, [activePanelId]);
   useAppLifecycle(shellClient);
   const [webViewStack, setWebViewStack] = useState<WebViewEntry[]>([]);
+  const webViewStackRef = useRef<WebViewEntry[]>([]);
+  const updateWebViewStack = useCallback((update: (current: WebViewEntry[]) => WebViewEntry[]) => {
+    const next = update(webViewStackRef.current);
+    webViewStackRef.current = next;
+    setWebViewStack(next);
+  }, []);
   const [loadingPanelId, setLoadingPanelId] = useState<string | null>(null);
   const [panelLoadErrors, setPanelLoadErrors] = useState<Record<string, string>>({});
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
@@ -184,19 +196,24 @@ export function MainScreen() {
   }>({ source: null, appId: null });
   const [webViewNavigation, setWebViewNavigation] = useState<Record<string, WebViewNavigation>>({});
   const webViewNavigationRef = useRef<Record<string, WebViewNavigation>>({});
-  const webViewStackRef = useRef<WebViewEntry[]>([]);
   const webViewRefsMap = useRef<Map<string, PanelWebViewHandle | null>>(new Map());
   const webViewThemeSignaturesRef = useRef<Map<string, string>>(new Map());
   const pendingPanelLoads = useRef<Set<string>>(new Set());
+  const [panelMaterializationRetryEpoch, setPanelMaterializationRetryEpoch] = useState(0);
+  const panelMaterializationRetryQueueRef = useRef<PanelMaterializationRetryQueue | null>(null);
+  if (!panelMaterializationRetryQueueRef.current) {
+    panelMaterializationRetryQueueRef.current = new PanelMaterializationRetryQueue(() =>
+      setPanelMaterializationRetryEpoch((epoch) => epoch + 1)
+    );
+  }
+  const panelMaterializationRetryQueue = panelMaterializationRetryQueueRef.current;
   const pendingHistoryIntentByUrl = useRef<Map<string, BrowserNavigationIntent>>(new Map());
   const pendingHistoryIntentByPanel = useRef<Map<string, BrowserNavigationIntent>>(new Map());
   const recentHistoryRecords = useRef<Map<string, number>>(new Map());
   useEffect(() => {
-    webViewStackRef.current = webViewStack;
-  }, [webViewStack]);
-  useEffect(() => {
     webViewNavigationRef.current = webViewNavigation;
   }, [webViewNavigation]);
+  useEffect(() => () => panelMaterializationRetryQueue.stop(), [panelMaterializationRetryQueue]);
   useEffect(() => {
     userNotificationRefreshSeq.current += 1;
     if (!shellClient) {
@@ -216,7 +233,10 @@ export function MainScreen() {
     });
     const unsubscribeEvent = shellClient.onDirectEvent(
       "user-notifications-changed",
-      () => void refresh().catch(() => {})
+      () =>
+        void refresh().catch((error: unknown) =>
+          console.warn("[MainScreen] Failed to refresh user notifications:", error)
+        )
     );
     const unsubscribeResubscribe = shellClient.recovery.registerResubscribeHandler(
       "mobile-user-notifications",
@@ -283,10 +303,16 @@ export function MainScreen() {
       webViewRefsMap.current.delete(panelId);
       webViewThemeSignaturesRef.current.delete(panelId);
       if (shellClient) {
-        void shellClient.panels.unload(panelId).catch(() => {});
+        void shellClient.panels.unload(panelId).catch((error: unknown) =>
+          pushToast({
+            title: "Could not unload panel",
+            message: error instanceof Error ? error.message : "Try again.",
+            tone: "danger",
+          })
+        );
       }
     },
-    [shellClient]
+    [pushToast, shellClient]
   );
   const handleWebViewRef = useCallback((panelId: string, handle: PanelWebViewHandle | null) => {
     if (!handle) {
@@ -429,7 +455,7 @@ export function MainScreen() {
   const refreshTree = useCallback(() => {
     if (!shellClient) return;
     setPanelForest(shellClient.panels.getTreeSnapshot());
-    setWebViewStack((prev) =>
+    updateWebViewStack((prev) =>
       prev.filter((entry) => shellClient.panels.registry.getPanel(entry.panelId) !== undefined)
     );
     // Prune pins for panels no longer in the tree; persist if anything dropped.
@@ -490,9 +516,15 @@ export function MainScreen() {
       if (!shellClient) throw new Error("Shell client not available");
       await shellClient.shellApproval.resolve(approvalId, decision);
       removeResolvedApproval(approvalId);
-      void refreshPendingApprovals().catch(() => {});
+      void refreshPendingApprovals().catch((error: unknown) =>
+        pushToast({
+          title: "Could not refresh approvals",
+          message: error instanceof Error ? error.message : "Try again.",
+          tone: "danger",
+        })
+      );
     },
-    [refreshPendingApprovals, removeResolvedApproval, shellClient]
+    [pushToast, refreshPendingApprovals, removeResolvedApproval, shellClient]
   );
   const submitClientConfig = useCallback(
     async (approvalId: string, values: Record<string, string>) => {
@@ -558,18 +590,23 @@ export function MainScreen() {
       const panel = shellClient.panels.registry.getPanel(panelId);
       if (!panel) return;
       setActivePanelId(panelId);
-      setWebViewStack((prev) =>
+      updateWebViewStack((prev) =>
         prev.map((entry) =>
           entry.panelId === panelId ? { ...entry, lastActive: Date.now() } : entry
         )
       );
-      if (
-        pendingPanelLoads.current.has(panelId) ||
-        webViewStackRef.current.some((entry) => entry.panelId === panelId)
-      ) {
+      if (webViewStackRef.current.some((entry) => entry.panelId === panelId)) return;
+      const lease = shellClient.panels.registry.getRuntimeLease(panelId);
+      if (lease && lease.clientSessionId !== shellClient.credentials.deviceId) {
+        smokePhase("workspace-panel-leased-elsewhere", { panelId });
         return;
       }
-      pendingPanelLoads.current.add(panelId);
+
+      // Activation creates only the presentation slot. One shared convergence
+      // path below owns every asynchronous runtime read, lease, and URL update,
+      // so initial activation cannot race navigation differently from a
+      // retained background WebView.
+      const snapshot = getCurrentSnapshot(panel);
       smokePhase("workspace-panel-activate-start", { panelId });
       setLoadingPanelId(panelId);
       setPanelLoadErrors((prev) => {
@@ -577,148 +614,146 @@ export function MainScreen() {
         const { [panelId]: _removed, ...rest } = prev;
         return rest;
       });
-      void (async () => {
-        const lease = shellClient.panels.registry.getRuntimeLease(panelId);
-        if (lease && lease.clientSessionId !== shellClient.credentials.deviceId) {
-          setWebViewStack((prev) => prev.filter((entry) => entry.panelId !== panelId));
-          smokePhase("workspace-panel-leased-elsewhere", { panelId });
-          return;
-        }
-        const materialized = await withTimeout(
-          materializeMobilePanel({
+      panelMaterializationRetryQueue.cancel(panelId, { resetAttempts: true });
+      updateWebViewStack((prev) =>
+        addWebViewEntry(
+          prev,
+          {
             panelId,
-            panel,
-            hostConfig,
-            getPanelInit: (id) => shellClient.panels.getPanelInit(id),
-            acquireLease: (id, entityId, opts) =>
-              shellClient.panels.acquireLease(id, entityId, opts),
-            takeOverLease: (id, entityId, opts) =>
-              shellClient.panels.takeOverLease(id, entityId, opts),
-            leaseMode: "acquire",
-          }),
-          PANEL_MATERIALIZE_TIMEOUT_MS,
-          `Timed out preparing panel ${panelId} for mobile.`
-        );
-        if (hostConfig.protocol === "http") {
-          console.log(`[MainScreen] Activating panel ${panelId}`, {
-            url: materialized.url,
-            managed: materialized.managed,
-          });
-        }
-        smokePhase("workspace-panel-materialized", {
-          panelId,
-          managed: materialized.managed,
-        });
-        setWebViewStack((prev) =>
-          addWebViewEntry(
-            prev,
-            {
-              panelId,
+            runtimeEntityId: null,
+            url: "about:blank",
+            managed: !isBrowserPanelSource(snapshot.source),
+            panelInit: null,
+            lastActive: Date.now(),
+          },
+          {
+            activePanelId: activePanelIdRef.current,
+            isPinned: (id) => pinnedPanelIdsRef.current.has(id),
+            isKeepLoaded: (id) => !!shellClient.panels.registry.getRuntimeLease(id)?.keepLoaded,
+          }
+        )
+      );
+    },
+    [hostConfig, panelMaterializationRetryQueue, shellClient, setActivePanelId, updateWebViewStack]
+  );
+  // WebViews are retained presentation slots, not runtime identities. Converge
+  // every retained slot when its immutable runtime entity changes—whether the
+  // change came from build completion or navigation, and whether it is visible.
+  useEffect(() => {
+    if (!hostConfig || !shellClient) return;
+    const retainedPanelIds = new Set(webViewStack.map((entry) => entry.panelId));
+    panelMaterializationRetryQueue.retainOnly(retainedPanelIds);
+    for (const entry of webViewStack) {
+      const panel = shellClient.panels.registry.getPanel(entry.panelId);
+      if (!panel || !needsMobilePanelMaterialization(panel, entry)) {
+        panelMaterializationRetryQueue.cancel(entry.panelId, { resetAttempts: true });
+        setLoadingPanelId((current) => (current === entry.panelId ? null : current));
+        continue;
+      }
+      if (pendingPanelLoads.current.has(entry.panelId)) {
+        continue;
+      }
+      // A real tree/stack change supersedes the delayed fallback poll. Preserve
+      // its attempt count so a persistent failure still backs off.
+      panelMaterializationRetryQueue.cancel(entry.panelId, { resetAttempts: false });
+      pendingPanelLoads.current.add(entry.panelId);
+      void withTimeout(
+        materializeLatestMobilePanel({
+          panelId: entry.panelId,
+          hostConfig,
+          getPanel: () => shellClient.panels.registry.getPanel(entry.panelId) ?? null,
+          getPanelInit: (id) => shellClient.panels.getPanelInit(id),
+          acquireLease: (id, entityId, opts) => shellClient.panels.acquireLease(id, entityId, opts),
+          takeOverLease: (id, entityId, opts) =>
+            shellClient.panels.takeOverLease(id, entityId, opts),
+          leaseMode: "acquire",
+        }),
+        PANEL_MATERIALIZE_TIMEOUT_MS,
+        `Timed out preparing panel ${entry.panelId} for mobile.`
+      )
+        .then((materialized) => {
+          const currentEntry = webViewStackRef.current.find(
+            (candidate) => candidate.panelId === entry.panelId
+          );
+          const currentPanel = shellClient.panels.registry.getPanel(entry.panelId);
+          if (
+            !currentEntry ||
+            !currentPanel ||
+            materialized.runtimeEntityId !== currentPanel.runtimeEntityId
+          ) {
+            return;
+          }
+          if (hostConfig.protocol === "http") {
+            console.log(`[MainScreen] Materialized panel ${entry.panelId}`, {
               url: materialized.url,
               managed: materialized.managed,
-              panelInit: materialized.panelInit,
-              lastActive: Date.now(),
-            },
-            {
-              activePanelId: activePanelIdRef.current,
-              isPinned: (id) => pinnedPanelIdsRef.current.has(id),
-              isKeepLoaded: (id) => !!shellClient.panels.registry.getRuntimeLease(id)?.keepLoaded,
-            }
-          )
-        );
-        setPanelLoadErrors((prev) => {
-          if (!prev[panelId]) return prev;
-          const { [panelId]: _removed, ...rest } = prev;
-          return rest;
-        });
-      })()
-        .catch((err: unknown) => {
-          console.error(`[MainScreen] Failed to activate panel ${panelId}:`, err);
-          const message = err instanceof Error ? err.message : "Could not load this panel.";
-          setPanelLoadErrors((prev) => ({ ...prev, [panelId]: message }));
-          pushToast({
-            title: "Panel failed to load",
-            message,
-            tone: "danger",
-            durationMs: 10000,
+            });
+          }
+          smokePhase("workspace-panel-materialized", {
+            panelId: entry.panelId,
+            managed: materialized.managed,
           });
-          smokePhase("workspace-panel-activate-failed", { panelId, message });
+          updateWebViewStack((current) =>
+            current.map((currentEntry) =>
+              currentEntry.panelId === entry.panelId
+                ? {
+                    ...currentEntry,
+                    runtimeEntityId: materialized.runtimeEntityId,
+                    url: materialized.url,
+                    managed: materialized.managed,
+                    panelInit: materialized.panelInit,
+                  }
+                : currentEntry
+            )
+          );
+          panelMaterializationRetryQueue.cancel(entry.panelId, { resetAttempts: true });
+          setPanelLoadErrors((current) => {
+            if (!current[entry.panelId]) return current;
+            const { [entry.panelId]: _removed, ...rest } = current;
+            return rest;
+          });
+          setLoadingPanelId((current) => (current === entry.panelId ? null : current));
+        })
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : "Could not load this panel.";
+          setPanelLoadErrors((current) => ({ ...current, [entry.panelId]: message }));
+          setLoadingPanelId((current) => (current === entry.panelId ? null : current));
+          panelMaterializationRetryQueue.schedule(entry.panelId);
+          smokePhase("workspace-panel-activate-failed", { panelId: entry.panelId, message });
         })
         .finally(() => {
-          pendingPanelLoads.current.delete(panelId);
-          setLoadingPanelId((current) => (current === panelId ? null : current));
+          pendingPanelLoads.current.delete(entry.panelId);
         });
-    },
-    [hostConfig, pushToast, shellClient, setActivePanelId]
-  );
-  // A reserved panel gets a WebView immediately at about:blank. When the
-  // shared server snapshot publishes its immutable build identity, complete
-  // materialization in that same stack entry instead of requiring another tap.
-  useEffect(() => {
-    if (
-      !activePanelId ||
-      !activePanel ||
-      !hostConfig ||
-      !shellClient ||
-      !/^[0-9a-f]{64}$/.test(activePanel.buildKey ?? "")
-    ) {
-      return;
     }
-    const preparing = webViewStackRef.current.some(
-      (entry) => entry.panelId === activePanelId && entry.url === "about:blank"
-    );
-    if (!preparing || pendingPanelLoads.current.has(activePanelId)) return;
-    pendingPanelLoads.current.add(activePanelId);
-    void materializeMobilePanel({
-      panelId: activePanelId,
-      panel: activePanel,
-      hostConfig,
-      getPanelInit: (id) => shellClient.panels.getPanelInit(id),
-      acquireLease: (id, entityId, opts) => shellClient.panels.acquireLease(id, entityId, opts),
-      takeOverLease: (id, entityId, opts) => shellClient.panels.takeOverLease(id, entityId, opts),
-      leaseMode: "acquire",
-    })
-      .then((materialized) => {
-        setWebViewStack((current) =>
-          current.map((entry) =>
-            entry.panelId === activePanelId
-              ? {
-                  ...entry,
-                  url: materialized.url,
-                  managed: materialized.managed,
-                  panelInit: materialized.panelInit,
-                }
-              : entry
-          )
-        );
-      })
-      .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : "Could not finish loading panel.";
-        setPanelLoadErrors((current) => ({ ...current, [activePanelId]: message }));
-      })
-      .finally(() => {
-        pendingPanelLoads.current.delete(activePanelId);
-      });
-  }, [activePanel, activePanelId, hostConfig, shellClient]);
+  }, [
+    hostConfig,
+    panelForest,
+    panelMaterializationRetryEpoch,
+    panelMaterializationRetryQueue,
+    shellClient,
+    updateWebViewStack,
+    webViewStack,
+  ]);
   const takeOverActivePanel = useCallback(() => {
     if (!activePanelId || !activePanel || !hostConfig || !shellClient) return;
     pendingPanelLoads.current.add(activePanelId);
     setLoadingPanelId(activePanelId);
-    void materializeMobilePanel({
+    void materializeLatestMobilePanel({
       panelId: activePanelId,
-      panel: activePanel,
       hostConfig,
+      getPanel: () => shellClient.panels.registry.getPanel(activePanelId) ?? null,
       getPanelInit: (id) => shellClient.panels.getPanelInit(id),
       acquireLease: (id, entityId, opts) => shellClient.panels.acquireLease(id, entityId, opts),
       takeOverLease: (id, entityId, opts) => shellClient.panels.takeOverLease(id, entityId, opts),
       leaseMode: "takeOver",
     })
       .then((materialized) => {
-        setWebViewStack((prev) =>
+        updateWebViewStack((prev) =>
           addWebViewEntry(
             prev,
             {
               panelId: materialized.panelId,
+              runtimeEntityId: materialized.runtimeEntityId,
               url: materialized.url,
               managed: materialized.managed,
               panelInit: materialized.panelInit,
@@ -786,8 +821,18 @@ export function MainScreen() {
     approvalStateController.start();
     void subscribeAll()
       .then(() => {})
-      .catch(() => {
-        if (!disposed) void approvalStateController.refresh("manual").catch(() => {});
+      .catch((error: unknown) => {
+        console.warn("[MainScreen] Failed to subscribe to approval events:", error);
+        if (!disposed) {
+          void approvalStateController
+            .refresh("manual")
+            .catch((refreshError: unknown) =>
+              console.warn(
+                "[MainScreen] Failed to refresh approvals after subscribe failure:",
+                refreshError
+              )
+            );
+        }
       });
     const unsubReconnect = shellClient.transport.onReconnect(() => {
       void subscribeAll()
@@ -872,7 +917,13 @@ export function MainScreen() {
       void shellClient.panels
         .refresh()
         .then(refreshTree)
-        .catch(() => refreshTree());
+        .catch((error: unknown) => {
+          console.warn("[MainScreen] Panel refresh after workspace revision failed:", error);
+          return refreshTree();
+        })
+        .catch((error: unknown) =>
+          console.warn("[MainScreen] Panel tree fallback refresh failed:", error)
+        );
     });
     return () => {
       disposed = true;
@@ -915,7 +966,7 @@ export function MainScreen() {
     const previous = blurStampRef.current;
     blurStampRef.current = activePanelId;
     if (previous && previous !== activePanelId) {
-      setWebViewStack((stack) =>
+      updateWebViewStack((stack) =>
         stack.map((entry) =>
           entry.panelId === previous ? { ...entry, lastActive: Date.now() } : entry
         )
@@ -959,7 +1010,7 @@ export function MainScreen() {
     if (!shellClient || !pinsHydrated) return;
     const predicates = buildStackPredicates();
     const sweepTimer = setInterval(() => {
-      setWebViewStack((prev) =>
+      updateWebViewStack((prev) =>
         sweepIdleWebViews(prev, {
           now: Date.now(),
           // Read activePanelId via ref so the interval isn't recreated on every
@@ -968,14 +1019,20 @@ export function MainScreen() {
           activePanelId: activePanelIdRef.current,
           foreground: isForegroundRef.current,
           unload: (id) => {
-            void shellClient.panels.unload(id).catch(() => {});
+            void shellClient.panels.unload(id).catch((error: unknown) =>
+              pushToast({
+                title: "Could not unload panel",
+                message: error instanceof Error ? error.message : "Try again.",
+                tone: "danger",
+              })
+            );
           },
           ...predicates,
         })
       );
     }, PANEL_UI_IDLE_SWEEP_MS);
     return () => clearInterval(sweepTimer);
-  }, [shellClient, pinsHydrated, buildStackPredicates]);
+  }, [buildStackPredicates, pinsHydrated, pushToast, shellClient]);
   useEffect(() => {
     const mode = colorScheme === "light" ? "light" : "dark";
     syncManagedWebViewThemes(
@@ -997,7 +1054,7 @@ export function MainScreen() {
   }, [activePanelId, activePanelLeasedElsewhere, activatePanel, webViewStack]);
   useEffect(() => {
     if (!shellClient) return;
-    setWebViewStack((prev) =>
+    updateWebViewStack((prev) =>
       prev.filter((entry) => {
         const lease = shellClient.panels.registry.getRuntimeLease(entry.panelId);
         return !lease || lease.clientSessionId === shellClient.credentials.deviceId;
@@ -1126,7 +1183,7 @@ export function MainScreen() {
           return;
         case "unload":
           void shellClient.panels.unload(panelId);
-          setWebViewStack((prev) => prev.filter((entry) => entry.panelId !== panelId));
+          updateWebViewStack((prev) => prev.filter((entry) => entry.panelId !== panelId));
           return;
         case "archive":
           void shellClient.panels.archive(panelId).then(refreshTree);
@@ -1288,7 +1345,7 @@ export function MainScreen() {
           if (!activePanelId) return;
           const active = shellClient.panels.registry.getPanel(activePanelId);
           if (active && isBrowserPanelSource(getCurrentSnapshot(active).source)) {
-            setWebViewStack((prev) =>
+            updateWebViewStack((prev) =>
               prev.map((entry) =>
                 entry.panelId === activePanelId ? { ...entry, url: action.url } : entry
               )
@@ -1325,7 +1382,7 @@ export function MainScreen() {
         if (targetMode === "current" && activePanelId) {
           const active = shellClient.panels.registry.getPanel(activePanelId);
           if (active && isBrowserPanelSource(getCurrentSnapshot(active).source)) {
-            setWebViewStack((prev) =>
+            updateWebViewStack((prev) =>
               prev.map((entry) => (entry.panelId === activePanelId ? { ...entry, url } : entry))
             );
             setWebViewNavigation((prev) => ({
@@ -1512,7 +1569,11 @@ export function MainScreen() {
       const navUrl = webViewNavigationRef.current[panelId]?.url;
       const panel = shellClient.panels.registry.getPanel(panelId);
       if (navUrl && panel && isBrowserPanelSource(getCurrentSnapshot(panel).source)) {
-        void shellClient.panels.updateHistoryTitle({ url: navUrl, title }).catch(() => {});
+        void shellClient.panels
+          .updateHistoryTitle({ url: navUrl, title })
+          .catch((error: unknown) =>
+            console.warn(`[MainScreen] Failed to update history title for ${panelId}:`, error)
+          );
       }
       void shellClient.panels
         .updateTitle(panelId, title)
@@ -1522,6 +1583,31 @@ export function MainScreen() {
         });
     },
     [refreshTree, shellClient]
+  );
+  const handlePanelBootObservation = useCallback(
+    (
+      panelId: string,
+      runtimeEntityId: PanelEntityId,
+      connectionId: string,
+      observation: PanelPageObservation
+    ) => {
+      if (!shellClient) return;
+      void shellClient.panels
+        .reportView(runtimeEntityId, connectionId, observation)
+        .then(() => {
+          if (hostConfig?.protocol === "http") {
+            console.log(`[MainScreen] Reported panel boot for ${panelId}`, {
+              phase: observation.boot.phase,
+              runtimeEntityId,
+              connectionId,
+            });
+          }
+        })
+        .catch((error: unknown) => {
+          console.warn(`[MainScreen] Failed to report panel boot for ${panelId}:`, error);
+        });
+    },
+    [hostConfig?.protocol, shellClient]
   );
   const recordMobileBrowserNavigation = useCallback(
     (panelId: string, navState: WebViewNavigation) => {
@@ -1544,7 +1630,9 @@ export function MainScreen() {
           typed: intent.typed,
           visitTime: now,
         })
-        .catch(() => {});
+        .catch((error: unknown) =>
+          console.warn("[MainScreen] Failed to record browser history:", error)
+        );
     },
     [shellClient]
   );
@@ -1555,7 +1643,11 @@ export function MainScreen() {
         [panelId]: navState,
       }));
       if (!managed && /^https?:\/\//i.test(navState.url)) {
-        void shellClient?.panels.updateBrowserUrl(panelId, navState.url).catch(() => {});
+        void shellClient?.panels
+          .updateBrowserUrl(panelId, navState.url)
+          .catch((error: unknown) =>
+            console.warn("[MainScreen] Failed to update browser URL:", error)
+          );
         recordMobileBrowserNavigation(panelId, navState);
       }
     },
@@ -1846,6 +1938,7 @@ export function MainScreen() {
               onPanelNavigate={handlePanelNavigate}
               onNavigationStateChange={handleWebViewNavigationStateChange}
               onTitleChange={handlePanelTitleChange}
+              onBootObservation={handlePanelBootObservation}
               onBridgeCall={handleBridgeCall}
               onUnmount={handleWebViewUnmount}
             />

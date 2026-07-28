@@ -154,16 +154,19 @@ DOs.
 
 ## 7. Seeding
 
-`seedPanelTreeIfEmpty` (`panelRuntimeRegistration.ts:202-263`) becomes per-user: a user's
-first attach seeds *their* init tree from `workspaceConfig.initPanels` under their
-`owner_user_id`, rather than a single global init multiset. Root's tree seeds at workspace
-first-run; each invited user's tree seeds on first attach.
+`seedPanelTreeIfEmpty` is per-user and runs only at the explicit
+`panelTree.attachInitialPanels` boundary used by an interactive shell. That attach seeds the
+user's init tree from `workspaceConfig.initPanels` under their `owner_user_id`, rather than a
+single global init multiset. Ordinary tree reads are pure. Renderer-only headless hosts hydrate
+the authoritative snapshot with `getTreeSnapshot` and never seed an interactive chat panel or
+start a background agent merely because inspection was requested. Root's tree seeds at the
+first interactive attach; each invited user's tree seeds on their first interactive attach.
 
 ---
 
 ## 8. Testing
 
-- **Forest visibility:** two users open panels; each `getTreeSnapshot` returns a 2-owner
+- **Forest visibility:** two users attach and open panels; each `getTreeSnapshot` returns a 2-owner
   forest; both see both trees.
 - **Owner stamping:** a panel created by user A has `owner === A`; one an agent-of-A opens
   inherits `owner === A`.

@@ -4,6 +4,7 @@ import type { CreateChildOptions, PanelPlacementHint } from "@vibestudio/types";
 import type { CapabilityScope } from "@vibestudio/rpc";
 import type { UnitAuthorityManifest } from "./authorityManifest.js";
 import type { StateArgsSchema, StateArgsValue } from "./stateArgs.js";
+import type { PanelFailureCode } from "./panel/observation.js";
 
 // Re-export types for consumers of this module
 export type { StateArgsSchema, StateArgsValue };
@@ -180,10 +181,23 @@ export interface PanelInfo {
  */
 export type PanelBuildState = "pending" | "cloning" | "building" | "ready" | "error";
 
+/**
+ * Failure produced while a host materializes a panel view. This is distinct
+ * from a source build failure: retrying the same sealed build in a fresh view
+ * is valid and must not require a rebuild.
+ */
+export interface PanelViewFailure {
+  code: Extract<PanelFailureCode, "navigation_failed">;
+  message: string;
+}
+
 export interface PanelArtifacts {
   htmlPath?: string;
   bundlePath?: string;
+  /** Source-resolution or compilation failure. */
   error?: string;
+  /** Host view/navigation failure for an otherwise valid panel build. */
+  viewFailure?: PanelViewFailure;
   buildRevision?: number;
   /** Build state for async main-process builds */
   buildState?: PanelBuildState;
@@ -207,6 +221,7 @@ export interface PanelViewStatus {
   exists: boolean;
   url?: string;
   visible?: boolean;
+  failure?: PanelViewFailure;
 }
 
 export interface PanelRuntimeStatus {

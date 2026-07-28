@@ -112,3 +112,83 @@ describe("panel runtime openPanel lifecycle", () => {
     });
   });
 });
+
+describe("panel runtime recursive orchestration", () => {
+  it("hydrates one revisioned subtree with depth, leaves, and live handles", async () => {
+    interface TestNode {
+      panelId: string;
+      title: string;
+      source: string;
+      kind: "workspace" | "browser";
+      parentId: string | null;
+      contextId: string;
+      children: TestNode[];
+    }
+    const makePanel = (
+      id: string,
+      title: string,
+      source: string,
+      parentId: string | null,
+      children: TestNode[] = []
+    ): TestNode => ({
+      panelId: id,
+      title,
+      source,
+      kind: source.startsWith("browser:") ? "browser" : "workspace",
+      parentId,
+      contextId: `ctx:${id}`,
+      children,
+    });
+    const call = vi.fn(async (_target: string, method: string) => {
+      if (method !== "panelTree.getSubtree") {
+        throw new Error(`Unexpected RPC method: ${method}`);
+      }
+      return {
+        revision: 17,
+        root: makePanel("root", "Research", "about/collection", null, [
+          makePanel("group", "Window 1", "about/collection", "root", [
+            makePanel("browser", "Example", "browser:https://example.com/", "group"),
+          ]),
+        ]),
+      };
+    });
+    const runtime = createPanelRuntime({
+      rpc: { call, emit: vi.fn(), on: vi.fn() } as never,
+      createCdp: () => ({}) as never,
+    });
+
+    const scope = await runtime.panelTree.subtree("root");
+
+    expect(scope.revision).toBe(17);
+    expect(scope.nodes.map((node) => [node.handle.id, node.depth])).toEqual([
+      ["root", 0],
+      ["group", 1],
+      ["browser", 2],
+    ]);
+    expect(scope.leaves.map((node) => node.handle.id)).toEqual(["browser"]);
+    expect(scope.leaves[0]?.handle).toMatchObject({
+      kind: "browser",
+      source: "https://example.com/",
+      parentId: "group",
+    });
+    await expect(runtime.panelTree.descendants("root")).resolves.toHaveLength(2);
+  });
+
+  it("renames an arbitrary slot without requiring it to be loaded", async () => {
+    const call = vi.fn(async () => undefined);
+    const runtime = createPanelRuntime({
+      rpc: { call, emit: vi.fn(), on: vi.fn() } as never,
+      createCdp: () => ({}) as never,
+    });
+    const handle = runtime.panelTree.get("panel:tree/browser", "browser");
+
+    await handle.setTitle("Support inbox", { explicit: true });
+
+    expect(call).toHaveBeenCalledWith("main", "panelTree.setTitle", [
+      "panel:tree/browser",
+      "Support inbox",
+      { explicit: true },
+    ]);
+    expect(handle.title).toBe("Support inbox");
+  });
+});

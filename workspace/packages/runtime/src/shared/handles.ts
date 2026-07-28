@@ -14,6 +14,7 @@ import type {
   PanelHandleContractRole,
   PanelHandleFromContract,
   PanelNavigateOptions,
+  PanelSetTitleOptions,
   Rpc,
   TypedCallProxy,
 } from "../core/index.js";
@@ -42,6 +43,7 @@ export interface PanelHandleHostOps {
   close?(id: string): Promise<PanelLifecycleResult>;
   archive?(id: string): Promise<void>;
   unload?(id: string): Promise<PanelLifecycleResult>;
+  setTitle?(id: string, title: string, options?: PanelSetTitleOptions): Promise<void>;
   movePanel?(id: string, newParentId: string | null, targetPosition: number): Promise<void>;
   takeOver?(id: string): Promise<void>;
   openDevTools?(id: string, mode?: "detach" | "right" | "bottom"): Promise<void>;
@@ -229,6 +231,11 @@ export function createPanelHandle<
       if (!ops?.unload) throw new Error("unload is not available for this handle");
       return ops.unload(metadata.id);
     },
+    setTitle: async (title: string, titleOptions?: PanelSetTitleOptions) => {
+      if (!ops?.setTitle) throw new Error("setTitle is not available for this handle");
+      await ops.setTitle(metadata.id, title, titleOptions);
+      metadata = normalizeMetadata({ ...metadata, title });
+    },
     movePanel: async (newParentId: string | null, targetPosition: number) => {
       if (!ops?.movePanel) throw new Error("movePanel is not available for this handle");
       await ops.movePanel(metadata.id, newParentId, targetPosition);
@@ -318,6 +325,7 @@ export function createNoPanelHandle(): PanelHandle {
     close: noParent,
     archive: noParent,
     unload: noParent,
+    setTitle: noParent,
     movePanel: noParent,
     takeOver: noParent,
     openDevTools: noParent,
@@ -421,6 +429,7 @@ export function createNonPanelRuntimeHandle(options: {
     close: unavailable,
     archive: unavailable,
     unload: unavailable,
+    setTitle: unavailable,
     movePanel: unavailable,
     takeOver: unavailable,
     openDevTools: unavailable,

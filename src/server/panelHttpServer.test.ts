@@ -502,6 +502,14 @@ describe("PanelHttpServer build cache", () => {
     });
     expect(getBuildByKey).toHaveBeenCalledWith(BUILD_KEY);
 
+    const nestedResponse = await handlePanelRequest(server, "/panels/my-app/assets/icon.svg", {
+      referer: `http://localhost/panels/my-app/?contextId=ctx-panel&buildKey=${BUILD_KEY}`,
+    });
+    expect(nestedResponse.statusCodeWritten).toBe(307);
+    expect(nestedResponse.headersWritten).toMatchObject({
+      Location: `../../../__vibestudio/panel-build/${BUILD_KEY}/assets/icon.svg`,
+    });
+
     const pinned = await handlePanelRequest(
       server,
       `/__vibestudio/panel-build/${BUILD_KEY}/bundle.js`

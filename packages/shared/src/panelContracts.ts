@@ -22,6 +22,7 @@ import type {
   PanelSnapshot,
   PanelSnapshotHistory,
   PanelTreeSnapshot,
+  PanelViewFailure,
   PanelViewStatus,
   ThemeConfig,
 } from "./types.js";
@@ -259,10 +260,16 @@ type _PanelRuntimeLeaseSchemaMatchesContract = Assert<
     : false
 >;
 
+const PanelViewFailureSchema: z.ZodType<PanelViewFailure> = z.object({
+  code: z.literal("navigation_failed"),
+  message: z.string(),
+});
+
 const PanelArtifactsSchema: z.ZodType<PanelArtifacts> = z.object({
   htmlPath: z.string().optional(),
   bundlePath: z.string().optional(),
   error: z.string().optional(),
+  viewFailure: PanelViewFailureSchema.optional(),
   buildRevision: z.number().optional(),
   buildState: z.enum(["pending", "cloning", "building", "ready", "error"]).optional(),
   buildProgress: z.string().optional(),
@@ -283,6 +290,7 @@ const PanelViewStatusSchema: z.ZodType<PanelViewStatus> = z.object({
   exists: z.boolean(),
   url: z.string().optional(),
   visible: z.boolean().optional(),
+  failure: PanelViewFailureSchema.optional(),
 });
 
 const PanelRuntimeStatusSchema: z.ZodType<PanelRuntimeStatus> = z.object({

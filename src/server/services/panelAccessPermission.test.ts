@@ -72,6 +72,43 @@ describe("preparePanelAccessAuthority", () => {
     expect(isEntityControlledBy).toHaveBeenCalledWith("panel:created-runtime", "panel:requester");
   });
 
+  it("keeps a collection agent's same-context subtree operations prompt-free", async () => {
+    const collectionAgent = createVerifiedCaller(
+      "do:collection-conductor",
+      "agent",
+      {
+        callerId: "do:collection-conductor",
+        callerKind: "do",
+        repoPath: "workers/agent-worker",
+        effectiveVersion: "v1",
+      },
+      {
+        entityId: "panel:collection",
+        contextId: "ctx-collection",
+        channelId: "collection-channel",
+        agentId: "agent:collection-conductor",
+      }
+    );
+    const agentContext: ServiceContext = { caller: collectionAgent };
+    const collectionDeps = deps({
+      resolveCallerContext: async () => null,
+      resolveEntityContext: () => "ctx-collection",
+    });
+
+    await expect(
+      preparePanelAccessAuthority(collectionDeps, agentContext, "updatePanelState", {
+        id: "nested-collection",
+        contextId: "ctx-collection",
+      })
+    ).resolves.toEqual([]);
+    await expect(
+      preparePanelAccessAuthority(collectionDeps, agentContext, "movePanel", {
+        id: "imported-browser-panel",
+        contextId: "ctx-collection",
+      })
+    ).resolves.toEqual([]);
+  });
+
   it("selects critical for privileged targets and bypasses authorized chrome", async () => {
     await expect(
       preparePanelAccessAuthority(deps(), ctx, "close", {

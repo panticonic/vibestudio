@@ -1215,7 +1215,7 @@ function initializePanelTreeOnce(reason: string): void {
   panelTreeInitializationStarted = true;
   clearPanelInitializationFailure();
   log.info(`[panels] Initializing panel tree after ${reason}`);
-  orchestrator.initializePanelTree().then(
+  orchestrator.initializePanelTree({ seedInitialPanels: !IS_HEADLESS_HOST }).then(
     () => clearPanelInitializationFailure(),
     (error) => {
       panelTreeInitializationStarted = false;

@@ -18,6 +18,7 @@ export function explicitStateFromArtifacts(
     view: {
       exists: Boolean(artifacts.htmlPath),
       url: artifacts.htmlPath,
+      failure: artifacts.viewFailure,
     },
     runtime: lease
       ? {

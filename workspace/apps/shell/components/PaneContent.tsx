@@ -77,10 +77,21 @@ export function PaneContent({
     setTakeoverError(null);
     setTakeoverBusy(false);
     setBuildSlow(false);
-    if (!fullPanel || fullPanel.artifacts?.htmlPath || fullPanel.artifacts?.error) return;
+    if (
+      !fullPanel ||
+      fullPanel.artifacts?.htmlPath ||
+      fullPanel.artifacts?.error ||
+      fullPanel.artifacts?.viewFailure
+    )
+      return;
     const timer = window.setTimeout(() => setBuildSlow(true), 60_000);
     return () => window.clearTimeout(timer);
-  }, [fullPanel?.id, fullPanel?.artifacts?.htmlPath, fullPanel?.artifacts?.error]);
+  }, [
+    fullPanel?.id,
+    fullPanel?.artifacts?.htmlPath,
+    fullPanel?.artifacts?.error,
+    fullPanel?.artifacts?.viewFailure,
+  ]);
 
   // Keyed on (panelId, resident), not panelId alone: un-parking must re-run
   // loading because a parked panel may have been GC-unloaded (§5.4).
@@ -168,20 +179,24 @@ export function PaneContent({
     );
   }
 
-  if (artifacts?.error) {
+  const panelError = artifacts?.error ?? artifacts?.viewFailure?.message;
+  if (panelError) {
+    const isBuildFailure = Boolean(artifacts?.error);
     return (
       <Flex direction="column" align="center" justify="center" height="100%" p="4">
         <Text color="red" size="4" weight="bold" mb="2">
-          Panel Error
+          {isBuildFailure ? "Panel build failed" : "Panel failed to load"}
         </Text>
         <Text color="red" size="2" style={{ fontFamily: "monospace" }}>
-          {artifacts.error}
+          {panelError}
         </Text>
         <Flex gap="2" mt="3">
           <Button variant="soft" onClick={() => void panelService.reload(panelId)}>
             Reload
           </Button>
-          <Button onClick={() => void panelService.rebuildPanel(panelId)}>Rebuild</Button>
+          {isBuildFailure ? (
+            <Button onClick={() => void panelService.rebuildPanel(panelId)}>Rebuild</Button>
+          ) : null}
         </Flex>
       </Flex>
     );

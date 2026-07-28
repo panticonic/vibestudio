@@ -7,7 +7,14 @@ const NONE = {
 };
 
 function entry(panelId: string, lastActive: number): WebViewEntry {
-  return { panelId, url: `http://x/${panelId}`, managed: true, panelInit: null, lastActive };
+  return {
+    panelId,
+    runtimeEntityId: `panel:nav-${panelId}` as WebViewEntry["runtimeEntityId"],
+    url: `http://x/${panelId}`,
+    managed: true,
+    panelInit: null,
+    lastActive,
+  };
 }
 
 describe("addWebViewEntry", () => {

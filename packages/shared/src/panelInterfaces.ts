@@ -13,6 +13,7 @@
 
 import type { AppCapability } from "./unitManifest.js";
 import type { CapabilityScope } from "@vibestudio/rpc";
+import type { PanelLifecycleResult, PanelPlacementHint } from "./types.js";
 
 export interface HostedCodeIdentity {
   source?: string;
@@ -21,7 +22,16 @@ export interface HostedCodeIdentity {
   executionDigest?: string | null;
   requested?: readonly CapabilityScope[];
 }
-import type { PanelLifecycleResult, PanelPlacementHint } from "./types.js";
+
+export const PANEL_INITIAL_LOAD_POLICIES = ["eager", "deferred"] as const;
+export type PanelInitialLoadPolicy = (typeof PANEL_INITIAL_LOAD_POLICIES)[number];
+
+/** Canonical interpretation of the creation-time materialization policy. */
+export function shouldMaterializePanelOnCreate(
+  policy: PanelInitialLoadPolicy | undefined
+): boolean {
+  return policy !== "deferred";
+}
 
 /** Derive the materialized Electron partition for one opaque environment. */
 export function browserEnvironmentPartition(environmentKey: string): string {
@@ -154,6 +164,11 @@ export type PanelCreateOptions = {
   contextId?: string;
   /** Present the new panel after creation (default true); false creates it in the background. */
   focus?: boolean;
+  /**
+   * Whether to materialize a runtime/view during creation. Deferred panels
+   * remain durable unloaded slots until focus or ensureLoaded.
+   */
+  initialLoad?: PanelInitialLoadPolicy;
   /** Per-call layout placement hint; wins over the manifest's `placement`. */
   placement?: PanelPlacementHint;
 };

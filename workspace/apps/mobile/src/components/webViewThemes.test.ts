@@ -5,6 +5,7 @@ import type { WebViewEntry } from "./webViewStack";
 function entry(overrides: Partial<WebViewEntry> = {}): WebViewEntry {
   return {
     panelId: "panel-1",
+    runtimeEntityId: "panel:nav-panel-1" as WebViewEntry["runtimeEntityId"],
     url: "http://127.0.0.1/panel",
     managed: true,
     panelInit: null,

@@ -12,6 +12,7 @@ export type PanelReadinessSnapshot = {
     buildState: string | null;
     htmlPath: string | null;
     error: string | null;
+    viewFailure: string | null;
   };
   runtime: PanelRuntimeStatus | null;
   nativeSlotBound: boolean;
@@ -28,7 +29,8 @@ export function isPanelContentReady(signals: PanelReadinessSignals): boolean {
     signals.view.isLoading === false &&
     signals.artifacts.buildState === "ready" &&
     !!signals.artifacts.htmlPath &&
-    !signals.artifacts.error
+    !signals.artifacts.error &&
+    !signals.artifacts.viewFailure
   );
 }
 

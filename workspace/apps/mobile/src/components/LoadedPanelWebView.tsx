@@ -5,6 +5,8 @@ import type { ThemeColors } from "../state/themeAtoms";
 import type { WebViewEntry } from "./webViewStack";
 import { PanelWebView, type PanelNavigationEvent, type PanelWebViewHandle } from "./PanelWebView";
 import { WebViewErrorBoundary } from "./WebViewErrorBoundary";
+import type { PanelPageObservation } from "@vibestudio/shared/panel/observation";
+import type { PanelEntityId } from "@vibestudio/shared/panel/ids";
 
 export interface LoadedPanelWebViewProps {
   entry: WebViewEntry;
@@ -16,6 +18,12 @@ export interface LoadedPanelWebViewProps {
   onPanelNavigate: (event: PanelNavigationEvent) => void;
   onNavigationStateChange: (panelId: string, managed: boolean, navState: WebViewNavigation) => void;
   onTitleChange: (panelId: string, title: string) => void;
+  onBootObservation: (
+    panelId: string,
+    runtimeEntityId: PanelEntityId,
+    connectionId: string,
+    observation: PanelPageObservation
+  ) => void;
   onBridgeCall: (panelId: string, method: string, args: unknown[]) => Promise<unknown>;
   onUnmount: (panelId: string) => void;
 }
@@ -37,6 +45,7 @@ function LoadedPanelWebViewImpl({
   onPanelNavigate,
   onNavigationStateChange,
   onTitleChange,
+  onBootObservation,
   onBridgeCall,
   onUnmount,
 }: LoadedPanelWebViewProps) {
@@ -77,6 +86,7 @@ function LoadedPanelWebViewImpl({
           onPanelNavigate={onPanelNavigate}
           onNavigationStateChange={handleNavigationStateChange}
           onTitleChange={onTitleChange}
+          onBootObservation={onBootObservation}
           onBridgeCall={onBridgeCall}
           onUnmount={onUnmount}
           diagnosticsEnabled={diagnosticsEnabled}

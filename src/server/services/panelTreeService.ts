@@ -85,6 +85,7 @@ const METHOD_ACCESS: Partial<Record<string, PanelAccessOperation>> = {
   updatePanelState: "updatePanelState",
   setCollapsed: "updatePanelState",
   setStateArgs: "stateArgs.set",
+  setTitle: "updatePanelState",
 };
 
 const READONLY_AGENT_METHODS = new Set([
@@ -329,6 +330,7 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
       [
         "create",
         "setStateArgs",
+        "setTitle",
         "reload",
         "close",
         "archive",
@@ -361,6 +363,8 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
       list: (ctx, args) => dispatch(ctx, "list", args),
       roots: (ctx, args) => dispatch(ctx, "roots", args),
       getTreeSnapshot: (ctx, args) => dispatch(ctx, "getTreeSnapshot", args),
+      getSubtree: (ctx, args) => dispatch(ctx, "getSubtree", args),
+      attachInitialPanels: (ctx, args) => dispatch(ctx, "attachInitialPanels", args),
       getFocusedPanelId: (ctx, args) => dispatch(ctx, "getFocusedPanelId", args),
       create: (ctx, args) => dispatch(ctx, "create", args),
       getRuntimeLease: (ctx, args) => dispatch(ctx, "getRuntimeLease", args),
@@ -368,6 +372,7 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
       diagnose: (ctx, args) => dispatch(ctx, "diagnose", args),
       getStateArgs: (ctx, args) => dispatch(ctx, "getStateArgs", args),
       setStateArgs: (ctx, args) => dispatch(ctx, "setStateArgs", args),
+      setTitle: (ctx, args) => dispatch(ctx, "setTitle", args),
       reload: (ctx, args) => dispatch(ctx, "reload", args),
       close: (ctx, args) => dispatch(ctx, "close", args),
       archive: (ctx, args) => dispatch(ctx, "archive", args),

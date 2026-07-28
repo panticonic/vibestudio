@@ -266,6 +266,30 @@ describe("PanelRegistry", () => {
         connectionId: "conn-a",
       });
     });
+
+    it("does not invalidate a stale panel projection for a replacement entity lease event", () => {
+      registry.addPanel(
+        makePanel("panel:tree/slot-a", {
+          runtimeEntityId: asPanelEntityId("panel:nav-old"),
+        }),
+        null,
+        { addAsRoot: true }
+      );
+
+      const projectionChanged = registry.applyRuntimeLeaseChanged({
+        type: "panel:runtimeLeaseChanged",
+        version: { epoch: "test", counter: 1 },
+        slotId: asPanelSlotId("panel:tree/slot-a"),
+        runtimeEntityId: asPanelEntityId("panel:nav-new"),
+        previous: null,
+        next: null,
+        reason: "released",
+      });
+
+      expect(projectionChanged).toBe(false);
+      expect(registry.getRuntimeLeaseVersion()).toEqual({ epoch: "test", counter: 1 });
+      expect(registry.getPanel("panel:tree/slot-a")?.runtimeEntityId).toBe("panel:nav-old");
+    });
   });
 
   // -------------------------------------------------------------------------

@@ -9,7 +9,12 @@ import {
   type PanelObservation,
   type PanelSnapshotObservation,
 } from "@vibestudio/shared/panel/observation";
-import type { PanelFocusOptions, PanelHandle, PanelNavigateOptions } from "../core/index.js";
+import type {
+  PanelFocusOptions,
+  PanelHandle,
+  PanelNavigateOptions,
+  PanelSetTitleOptions,
+} from "../core/index.js";
 import { createCdpAutomation, type CdpAutomation } from "../panel/cdpAutomation.js";
 import {
   createNonPanelRuntimeHandle,
@@ -30,6 +35,11 @@ export interface PanelRuntimeListItem {
   buildKey?: string | null;
   ref?: string | null;
   children?: PanelRuntimeListItem[];
+}
+
+interface PanelRuntimeSubtreeResult {
+  revision: number;
+  root: PanelRuntimeListItem & { children: PanelRuntimeListItem[] };
 }
 
 interface PanelRuntimeMetadataResult {
@@ -72,8 +82,31 @@ export interface PanelRuntimeTree {
   list(): Promise<PanelHandle[]>;
   roots(): Promise<PanelHandle[]>;
   children(id: string): Promise<PanelHandle[]>;
+  /**
+   * Return one authoritative recursive view rooted at `id`. The revision lets
+   * long-running orchestration code cheaply detect that it should refresh.
+   */
+  subtree(id: string): Promise<PanelSubtreeSnapshot>;
+  /** Pre-order descendants of `id`, excluding the root itself. */
+  descendants(id: string): Promise<PanelHandle[]>;
   parent(id: string): PanelHandle | null;
   navigate(id: string, source: string, options?: PanelNavigateOptions): Promise<PanelObservation>;
+}
+
+export interface PanelSubtreeNode {
+  handle: PanelHandle;
+  depth: number;
+  children: PanelSubtreeNode[];
+}
+
+export interface PanelSubtreeSnapshot {
+  revision: number;
+  root: PanelSubtreeNode;
+  /** Pre-order, including the root. */
+  nodes: PanelSubtreeNode[];
+  /** Pre-order, excluding the root. */
+  descendants: PanelSubtreeNode[];
+  leaves: PanelSubtreeNode[];
 }
 
 export interface PanelRuntimeApi {
@@ -215,6 +248,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       options.onClose?.(id);
     },
     unload: (id) => callPanel<PanelLifecycleResult>("unload", [id]),
+    setTitle: (id, title, titleOptions) => callPanel("setTitle", [id, title, titleOptions]),
     navigate: async (id, source, navigateOptions) => {
       const result = await callPanel<PanelRuntimeMetadataResult>("navigate", [
         id,
@@ -269,6 +303,21 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
 
   const hydrate = (item: PanelRuntimeListItem): PanelHandle => fromMetadata(itemToMetadata(item));
 
+  const buildSubtreeNode = (
+    item: PanelRuntimeListItem,
+    depth: number,
+    nodes: PanelSubtreeNode[]
+  ): PanelSubtreeNode => {
+    const node: PanelSubtreeNode = {
+      handle: hydrate(item),
+      depth,
+      children: [],
+    };
+    nodes.push(node);
+    node.children = (item.children ?? []).map((child) => buildSubtreeNode(child, depth + 1, nodes));
+    return node;
+  };
+
   const flatten = (items: PanelRuntimeListItem[]): PanelRuntimeListItem[] => {
     const out: PanelRuntimeListItem[] = [];
     const visit = (item: PanelRuntimeListItem) => {
@@ -316,6 +365,23 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     },
     async children(id) {
       return (await callPanel<PanelRuntimeListItem[]>("list", [id])).map(hydrate);
+    },
+    async subtree(id) {
+      const snapshot = await callPanel<PanelRuntimeSubtreeResult | null>("getSubtree", [id]);
+      if (!snapshot) throw new Error(`Panel subtree root not found: ${id}`);
+      const nodes: PanelSubtreeNode[] = [];
+      const root = buildSubtreeNode(snapshot.root, 0, nodes);
+      const descendants = nodes.slice(1);
+      return {
+        revision: snapshot.revision,
+        root,
+        nodes,
+        descendants,
+        leaves: nodes.filter((node) => node.children.length === 0),
+      };
+    },
+    async descendants(id) {
+      return (await panelTree.subtree(id)).descendants.map((node) => node.handle);
     },
     parent(id) {
       const parentId =

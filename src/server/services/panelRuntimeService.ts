@@ -52,6 +52,15 @@ export function createPanelRuntimeService(deps: {
         deps.coordinator.release(panelId, connectionId);
         return undefined;
       },
+      reportView: (ctx, [panelId, connectionId, observation]) => {
+        const lease = deps.coordinator.getLease(panelId);
+        if (!lease || lease.connectionId !== connectionId) {
+          throw new Error(`Panel runtime view report has no matching lease: ${panelId}`);
+        }
+        assertOwnsClientSession(ctx.caller.runtime.id, lease.clientSessionId);
+        deps.coordinator.reportView(panelId, connectionId, observation);
+        return undefined;
+      },
     }),
   };
 }

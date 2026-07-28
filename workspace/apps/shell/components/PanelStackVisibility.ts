@@ -6,7 +6,8 @@ export function shouldShowPanelView(artifacts: PanelArtifacts | undefined): bool
     artifacts?.htmlPath &&
     artifacts.buildState !== "pending" &&
     artifacts.buildState !== "error" &&
-    !artifacts.error
+    !artifacts.error &&
+    !artifacts.viewFailure
   );
 }
 

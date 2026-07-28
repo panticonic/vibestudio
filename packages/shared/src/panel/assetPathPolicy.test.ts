@@ -25,6 +25,25 @@ describe("panel gateway asset path policy", () => {
     }
   });
 
+  it("admits immutable panel build assets only under an exact build digest", () => {
+    const pathname = `/__vibestudio/panel-build/${DIGEST}/bundle-ABC123.js`;
+    expect(checkPanelGatewayPath(`${pathname}?cache=1`)).toEqual({
+      allowed: true,
+      target: `${pathname}?cache=1`,
+    });
+
+    for (const denied of [
+      "/__vibestudio/panel-build/not-a-digest/bundle.js",
+      `/__vibestudio/panel-build/${DIGEST}`,
+      `/__vibestudio/panel-build/${DIGEST}/`,
+    ]) {
+      expect(checkPanelGatewayPath(denied), denied).toMatchObject({
+        allowed: false,
+        denied: "policy",
+      });
+    }
+  });
+
   it("continues to deny management and origin-escape paths", () => {
     for (const denied of ["/_r/s/auth/issue-device", "/rpc", "/_w/do/x", "//evil.test/x"]) {
       expect(checkPanelGatewayPath(denied), denied).toMatchObject({ allowed: false });

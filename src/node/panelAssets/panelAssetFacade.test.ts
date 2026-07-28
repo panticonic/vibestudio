@@ -113,6 +113,7 @@ describe("startPanelAssetFacade", () => {
         "/_r/w/workers/my-worker/hook",
         "/_a/build-key/index.html",
         `/__vibestudio/shared-style/${"a".repeat(64)}.css`,
+        `/__vibestudio/panel-build/${"b".repeat(64)}/bundle.js`,
       ]) {
         const res = await fetch(`http://127.0.0.1:${facade.port}${allowed}`);
         expect(res.status, allowed).toBe(200);
@@ -120,7 +121,7 @@ describe("startPanelAssetFacade", () => {
     } finally {
       await facade.close();
     }
-    expect(stream).toHaveBeenCalledTimes(3); // only the allowed paths hit the pipe
+    expect(stream).toHaveBeenCalledTimes(4); // only the allowed paths hit the pipe
   });
 
   it("responds 502 when the gateway.fetch stream rejects", async () => {

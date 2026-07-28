@@ -18,6 +18,11 @@ import { isManagedHost, parsePanelUrl, LOOPBACK_PANEL_HOST } from "../services/p
 import { tryParsePanelLocationLink, type PanelDisposition } from "@vibestudio/shared/panelLocation";
 import { openExternalUrl } from "../services/nativeCapabilities";
 import { VibestudioLogo } from "./VibestudioLogo";
+import type {
+  PanelBootObservation,
+  PanelPageObservation,
+} from "@vibestudio/shared/panel/observation";
+import type { PanelEntityId } from "@vibestudio/shared/panel/ids";
 
 export interface PanelNavigationEvent {
   type: "panel-switch";
@@ -65,6 +70,12 @@ export interface PanelWebViewProps {
   onNavigationStateChange?: (navState: WebViewNavigation) => void;
   onPanelNavigate?: (event: PanelNavigationEvent) => void;
   onTitleChange?: (panelId: string, title: string) => void;
+  onBootObservation?: (
+    panelId: string,
+    runtimeEntityId: PanelEntityId,
+    connectionId: string,
+    observation: PanelPageObservation
+  ) => void;
   onBridgeCall?: (panelId: string, method: string, args: unknown[]) => Promise<unknown>;
   onUnmount?: (panelId: string) => void;
   diagnosticsEnabled?: boolean;
@@ -402,9 +413,66 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
         deliverEnvelope,
       };
       globalThis.__vibestudioShell = shell;
+      function reportPanelBoot(boot) {
+        try {
+          globalThis.ReactNativeWebView.postMessage(JSON.stringify({
+            __vibestudioPanelBoot: true,
+            runtimeEntityId:
+              panelInit && typeof panelInit.entityId === "string" ? panelInit.entityId : null,
+            connectionId:
+              panelInit && typeof panelInit.connectionId === "string"
+                ? panelInit.connectionId
+                : null,
+            url: typeof location.href === "string" ? location.href : "",
+            loading: document.readyState === "loading",
+            boot: boot || globalThis.__vibestudioPanelBoot || { phase: "unavailable" },
+          }));
+        } catch (_) {}
+      }
+      globalThis.addEventListener("vibestudio:panel-boot", function (event) {
+        reportPanelBoot(event && event.detail);
+      });
+      if (globalThis.__vibestudioPanelBoot) {
+        reportPanelBoot(globalThis.__vibestudioPanelBoot);
+      }
     })();
     true;
   `;
+}
+
+function parseBootObservation(value: unknown): PanelBootObservation | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const phase = record["phase"];
+  if (
+    phase !== "unavailable" &&
+    phase !== "loading" &&
+    phase !== "booting" &&
+    phase !== "ready" &&
+    phase !== "failed"
+  ) {
+    return null;
+  }
+  const error =
+    record["error"] && typeof record["error"] === "object" && !Array.isArray(record["error"])
+      ? (record["error"] as Record<string, unknown>)
+      : null;
+  return {
+    phase,
+    ...(typeof record["runtimeEntityId"] === "string"
+      ? { runtimeEntityId: record["runtimeEntityId"] }
+      : {}),
+    ...(typeof record["source"] === "string" ? { source: record["source"] } : {}),
+    ...(typeof record["contextId"] === "string" ? { contextId: record["contextId"] } : {}),
+    ...(typeof record["effectiveVersion"] === "string"
+      ? { effectiveVersion: record["effectiveVersion"] }
+      : {}),
+    ...(typeof record["buildKey"] === "string" ? { buildKey: record["buildKey"] } : {}),
+    ...(typeof record["updatedAt"] === "number" ? { updatedAt: record["updatedAt"] } : {}),
+    ...(typeof error?.["message"] === "string" ? { message: error["message"] } : {}),
+    ...(typeof error?.["name"] === "string" ? { errorName: error["name"] } : {}),
+    ...(typeof error?.["stack"] === "string" ? { stack: error["stack"] } : {}),
+  };
 }
 
 function hostAuthorityOf(url: string): string | null {
@@ -423,6 +491,7 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
     onNavigationStateChange,
     onPanelNavigate,
     onTitleChange,
+    onBootObservation,
     onBridgeCall,
     onUnmount,
     diagnosticsEnabled = false,
@@ -638,7 +707,11 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
   const handleShouldStartLoad = useCallback(
     (request: ShouldStartLoadRequest): boolean => {
       const { url: requestUrl, isTopFrame } = request;
-      if (!isTopFrame) return true;
+      // Android omits isTopFrame for top-level location.assign navigations.
+      // Only an explicit false is a subframe; treating "missing" as false
+      // bypasses managed panel navigation and leaves the old runtime identity
+      // attached to new panel code.
+      if (isTopFrame === false) return true;
       if (requestUrl === url) return true;
 
       if (emitPanelNavigation(requestUrl)) {
@@ -697,6 +770,7 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
           __vibestudioDebug?: boolean;
           __vibestudioDomSnapshot?: boolean;
           __vibestudioTitle?: boolean;
+          __vibestudioPanelBoot?: boolean;
           id?: string;
           method?: string;
           args?: unknown[];
@@ -704,6 +778,11 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
           text?: string;
           childCount?: number;
           title?: string;
+          url?: string;
+          loading?: boolean;
+          boot?: unknown;
+          runtimeEntityId?: string | null;
+          connectionId?: string | null;
         };
         if (message.__vibestudioDebug) {
           if (!diagnosticsEnabled && !__DEV__) return;
@@ -729,6 +808,38 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
           }
           return;
         }
+        if (message.__vibestudioPanelBoot) {
+          const boot = parseBootObservation(message.boot);
+          logDiagnostic("panel boot observation", {
+            phase: boot?.phase ?? null,
+            runtimeEntityId: message.runtimeEntityId ?? null,
+            connectionId: message.connectionId ?? null,
+            source: boot?.source ?? null,
+            contextId: boot?.contextId ?? null,
+            buildKey: boot?.buildKey ?? null,
+          });
+          if (
+            boot &&
+            typeof message.runtimeEntityId === "string" &&
+            message.runtimeEntityId.startsWith("panel:nav-") &&
+            typeof message.connectionId === "string" &&
+            message.connectionId.length > 0
+          ) {
+            onBootObservation?.(
+              panelId,
+              message.runtimeEntityId as PanelEntityId,
+              message.connectionId,
+              {
+                view: {
+                  url: typeof message.url === "string" ? message.url : sourceUrl,
+                  loading: message.loading === true,
+                },
+                boot,
+              }
+            );
+          }
+          return;
+        }
         if (!onBridgeCall) return;
         if (!message.__vibestudioBridge || !message.id || !message.method) return;
 
@@ -747,7 +858,16 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
         // Ignore non-bridge messages.
       }
     },
-    [diagnosticsEnabled, managed, managedHostAuthority, onBridgeCall, onTitleChange, panelId]
+    [
+      diagnosticsEnabled,
+      logDiagnostic,
+      managed,
+      managedHostAuthority,
+      onBootObservation,
+      onBridgeCall,
+      onTitleChange,
+      panelId,
+    ]
   );
 
   const handleError = useCallback(

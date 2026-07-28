@@ -4,9 +4,13 @@ import * as path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
-import { PanelManager } from "./panelManager.js";
+import { PanelLifecycleAggregateError, PanelManager } from "./panelManager.js";
 import { canonicalEntityId, runtimeEntitySource } from "@vibestudio/shared/runtime/entitySpec";
-import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
+import {
+  asPanelEntityId,
+  type PanelEntityId,
+  type PanelSlotId,
+} from "@vibestudio/shared/panel/ids";
 import type {
   EntityRecord,
   RuntimeEntityCreateSpec,
@@ -25,6 +29,17 @@ import type {
  * Tracks slots, slot_history, and entity rows just enough for the panel
  * manager's three-concept flow to round-trip locally.
  */
+it("preserves every panel lifecycle failure without relying on AggregateError", () => {
+  const failures = [new Error("primary"), new Error("cleanup")];
+  const error = new PanelLifecycleAggregateError(failures, "panel lifecycle failed");
+
+  expect(error).toMatchObject({
+    name: "PanelLifecycleAggregateError",
+    message: "panel lifecycle failed",
+    errors: failures,
+  });
+});
+
 function createWorkspaceMemory() {
   interface MemSlot {
     slot_id: PanelSlotId;
@@ -429,6 +444,26 @@ describe("PanelManager", () => {
       aboutResult.source
     );
     expect(mem.state.slots.size).toBe(2);
+  });
+
+  it("places an external panel in an explicitly shared orchestration context", async () => {
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps("/tmp/workspace");
+    const manager = new PanelManager({
+      registry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+
+    const created = await manager.createBrowser(null, "https://shared.example", {
+      addAsRoot: true,
+      contextId: "ctx-collection",
+    });
+
+    expect(created.contextId).toBe("ctx-collection");
+    expect(getCurrentSnapshot(registry.getPanel(created.panelId)!).contextId).toBe(
+      "ctx-collection"
+    );
   });
 
   it("rejects unsupported browser URL schemes", async () => {
@@ -1782,5 +1817,26 @@ describe("PanelManager", () => {
     expect(registry.getPanel(created.panelId)).toBeDefined();
     expect(manager.applyForestSnapshot({ revision: 8, forest: [] })).toBe(true);
     expect(registry.getRootPanels()).toEqual([]);
+  });
+
+  it("reconciles the entity cache when a forest event replaces a panel runtime", async () => {
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps("/tmp/workspace");
+    const manager = new PanelManager({
+      registry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+    const created = await manager.createBrowser(null, "https://example.test", {
+      addAsRoot: true,
+    });
+    const forest = structuredClone(registry.getPanelTreeSnapshot().forest);
+    const replacementEntityId = asPanelEntityId("panel:nav-replacement");
+    forest[0]!.rootPanels[0]!.runtimeEntityId = replacementEntityId;
+
+    expect(manager.applyForestSnapshot({ revision: 7, forest })).toBe(true);
+    await manager.getPanelInit(created.panelId);
+
+    expect(deps.grantConnection).toHaveBeenLastCalledWith(replacementEntityId);
   });
 });

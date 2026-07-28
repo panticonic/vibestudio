@@ -14,6 +14,7 @@ import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
 import { CONTEXT_BOUNDARY_CAPABILITY, contextBoundaryResourceKey } from "./contextBoundary.js";
 import { createPanelTreeService, type PanelTreeServiceDeps } from "./panelTreeService.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
+import type { AgentExecutionTestPolicy } from "@vibestudio/rpc";
 
 type PanelTreeTestDeps = PanelTreeServiceDeps & {
   approvalQueue: ApprovalQueue;
@@ -102,11 +103,16 @@ async function dispatchPanelTree(
   deps: PanelTreeTestDeps,
   context: ServiceContext,
   method: string,
-  args: unknown[]
+  args: unknown[],
+  resolveAuthority: (
+    caller: VerifiedCaller,
+    capability: string,
+    resourceKey: string
+  ) => ReturnType<typeof testAuthority> = testAuthority
 ) {
   const dispatcher = new ServiceDispatcher();
   dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) => {
-    const resolved = testAuthority(caller, capability, resourceKey);
+    const resolved = resolveAuthority(caller, capability, resourceKey);
     return capability === CONTEXT_BOUNDARY_CAPABILITY
       ? {
           ...resolved,
@@ -150,6 +156,31 @@ function chromeAppCtx() {
         { capability: "context.boundary", resource: { kind: "network", value: "*" } },
       ],
     }),
+  };
+}
+
+function collectionAgentCtx(): ServiceContext {
+  return {
+    caller: createVerifiedCaller(
+      "do:collection-conductor",
+      "agent",
+      {
+        callerId: "do:collection-conductor",
+        callerKind: "do",
+        repoPath: "workers/agent-worker",
+        effectiveVersion: "v1",
+        requested: [
+          { capability: "service:panelTree.*", resource: { kind: "network", value: "*" } },
+          { capability: "context.boundary", resource: { kind: "network", value: "*" } },
+        ],
+      },
+      {
+        entityId: "do:collection-conductor",
+        contextId: "ctx-collection",
+        channelId: "collection-channel",
+        agentId: "agent:collection-conductor",
+      }
+    ),
   };
 }
 
@@ -218,6 +249,267 @@ describe("panelTreeService", () => {
     expect(bridge).toHaveBeenCalledWith({
       callerId: "panel:requester",
       callerKind: "panel",
+      method: "roots",
+      args: [],
+    });
+  });
+
+  it("delegates a bounded recursive subtree read without approval", async () => {
+    const subtree = {
+      revision: 3,
+      root: {
+        panelId: "root-1",
+        title: "Collection",
+        source: "about/collection",
+        kind: "workspace",
+        parentId: null,
+        contextId: "ctx-root",
+        children: [],
+      },
+    };
+    const approvalQueue = approvalQueueMock("deny");
+    const bridge = vi.fn(async () => subtree);
+    const deps = treeDeps({ approvalQueue, bridge });
+    const service = createPanelTreeService(deps);
+
+    await expect(service.handler(ctx(), "getSubtree", ["root-1"])).resolves.toEqual(subtree);
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(bridge).toHaveBeenCalledWith({
+      callerId: "panel:requester",
+      callerKind: "panel",
+      method: "getSubtree",
+      args: ["root-1"],
+    });
+  });
+
+  it("lets a collection agent rename and regroup its shared-context subtree without approval", async () => {
+    const approvalQueue = approvalQueueMock("deny");
+    const bridge = vi.fn(async (request: { method: string; args: unknown[] }) => {
+      if (request.method === "metadata") {
+        return {
+          id: String(request.args[0]),
+          title: "Imported tab",
+          source: "browser:https://example.com",
+          kind: "browser",
+          contextId: "ctx-collection",
+          runtimeEntityId: "panel:imported-tab",
+        };
+      }
+      return undefined;
+    });
+    const deps = treeDeps({
+      approvalQueue,
+      bridge,
+      resolveCallerContext: vi.fn(async () => null),
+      resolveEntityContext: vi.fn(() => "ctx-collection"),
+      isEntityControlledBy: vi.fn(() => false),
+    });
+    const service = createPanelTreeService(deps);
+    const agent = collectionAgentCtx();
+
+    await expect(
+      dispatchPanelTree(service, deps, agent, "setTitle", [
+        "imported-tab",
+        "Example · Account dashboard",
+        { explicit: true },
+      ])
+    ).resolves.toBeUndefined();
+    await expect(
+      dispatchPanelTree(service, deps, agent, "movePanel", [
+        {
+          panelId: "imported-tab",
+          newParentId: "release-engineering",
+          targetPosition: 0,
+        },
+      ])
+    ).resolves.toBeUndefined();
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(bridge).toHaveBeenCalledWith({
+      callerId: "do:collection-conductor",
+      callerKind: "agent",
+      method: "setTitle",
+      args: ["imported-tab", "Example · Account dashboard", { explicit: true }],
+    });
+    expect(bridge).toHaveBeenCalledWith({
+      callerId: "do:collection-conductor",
+      callerKind: "agent",
+      method: "movePanel",
+      args: [
+        {
+          panelId: "imported-tab",
+          newParentId: "release-engineering",
+          targetPosition: 0,
+        },
+      ],
+    });
+  });
+
+  it("admits an authenticated desktop owner at the initial-panel attach boundary", async () => {
+    const snapshot = { revision: 0, forest: [] };
+    const bridge = vi.fn(async () => snapshot);
+    const deps = treeDeps({ bridge });
+    const service = createPanelTreeService(deps);
+    const subject = { userId: "usr_alice", handle: "alice" };
+    const shellContext = {
+      caller: createVerifiedCaller("shell:desktop", "shell", null, null, subject),
+    };
+
+    await expect(
+      dispatchPanelTree(service, deps, shellContext, "attachInitialPanels", [])
+    ).resolves.toEqual(snapshot);
+
+    expect(bridge).toHaveBeenCalledWith({
+      callerId: "shell:desktop",
+      callerKind: "shell",
+      subject,
+      method: "attachInitialPanels",
+      args: [],
+    });
+  });
+
+  it("rejects an unauthenticated shell at the initial-panel attach boundary", async () => {
+    const bridge = vi.fn();
+    const deps = treeDeps({ bridge });
+    const service = createPanelTreeService(deps);
+
+    await expect(
+      dispatchPanelTree(
+        service,
+        deps,
+        { caller: createVerifiedCaller("shell:anonymous", "shell") },
+        "attachInitialPanels",
+        [],
+        (caller, capability, resourceKey) => {
+          const resolved = testAuthority(caller, capability, resourceKey);
+          return {
+            context: {
+              ...resolved.context,
+              authorizingOrigin: { kind: "user", principal: "user:anonymous" },
+              actingUser: null,
+              workspace: {
+                workspaceId: "test",
+                member: false,
+                role: null,
+                revision: "test",
+              },
+            },
+            grants: [],
+          };
+        }
+      )
+    ).rejects.toThrow(/workspace-member|no authority branch admits/i);
+
+    expect(bridge).not.toHaveBeenCalled();
+  });
+
+  it("does not let attributed panel code invoke the owner attach boundary", async () => {
+    const bridge = vi.fn();
+    const deps = treeDeps({ bridge });
+    const service = createPanelTreeService(deps);
+    const panelCaller = createVerifiedCaller(
+      "panel:requester",
+      "panel",
+      {
+        callerId: "panel:requester",
+        callerKind: "panel",
+        repoPath: "panels/requester",
+        effectiveVersion: "v1",
+        requested: [
+          {
+            capability: "service:panelTree.attachInitialPanels",
+            resource: { kind: "network", value: "*" },
+          },
+        ],
+      },
+      null,
+      { userId: "usr_alice", handle: "alice" }
+    );
+
+    await expect(
+      dispatchPanelTree(service, deps, { caller: panelCaller }, "attachInitialPanels", [])
+    ).rejects.toThrow(/no authority branch admits|principal is required/i);
+
+    expect(bridge).not.toHaveBeenCalled();
+  });
+
+  it("preserves the verified initiator when an extension mutates the panel tree", async () => {
+    const bridge = vi.fn(async () => readyPanelResult("created", "Created"));
+    const service = createPanelTreeService(treeDeps({ bridge }));
+    const extensionCaller = createVerifiedCaller(
+      "@workspace-extensions/browser-data",
+      "extension",
+      {
+        callerId: "@workspace-extensions/browser-data",
+        callerKind: "extension",
+        repoPath: "extensions/browser-data",
+        effectiveVersion: "v1",
+      },
+      null,
+      { userId: "system", handle: "system" }
+    );
+    const initiator = createVerifiedCaller(
+      "panel:nav-browser-import",
+      "panel",
+      {
+        callerId: "panel:nav-browser-import",
+        callerKind: "panel",
+        repoPath: "about/browser-import-inspector",
+        effectiveVersion: "v1",
+      },
+      null,
+      { userId: "usr_alice", handle: "alice" }
+    );
+
+    await expect(
+      service.handler({ caller: extensionCaller, authorizingCaller: initiator }, "create", [
+        { surface: "code", source: "about/collection" },
+        { parentId: "panel:tree/browser-import" },
+      ])
+    ).resolves.toMatchObject({ id: "created" });
+
+    expect(bridge).toHaveBeenCalledWith({
+      callerId: "panel:nav-browser-import",
+      callerKind: "panel",
+      subject: { userId: "usr_alice", handle: "alice" },
+      method: "create",
+      args: [
+        { surface: "code", source: "about/collection" },
+        { parentId: "panel:tree/browser-import" },
+      ],
+    });
+  });
+
+  it("carries the verified case policy when a server deputy mediates panel work", async () => {
+    const bridge = vi.fn(async () => [{ panelId: "root-1" }]);
+    const service = createPanelTreeService(treeDeps({ bridge }));
+    const policy: AgentExecutionTestPolicy = {
+      policyId: "test:panel-tree:case",
+      kind: "case",
+      orchestratorPolicyId: "test:panel-tree",
+      case: {
+        testId: "panel-tree",
+        agent: {
+          model: "openai-codex:gpt-5.3-codex-spark",
+          approvalLevel: 2,
+          fallback: "disabled",
+        },
+        authority: [],
+        userland: [],
+        unexpectedPrompts: "fail",
+      },
+    };
+    const caseCaller = createVerifiedCaller("do:eval:case", "do", null, null, null, null, policy);
+    const serverDeputy = createVerifiedCaller("server", "server");
+
+    await expect(
+      service.handler({ caller: caseCaller, authorizingCaller: serverDeputy }, "roots", [])
+    ).resolves.toEqual([{ panelId: "root-1" }]);
+
+    expect(bridge).toHaveBeenCalledWith({
+      callerId: "server",
+      callerKind: "server",
+      testPolicy: policy,
       method: "roots",
       args: [],
     });
@@ -601,6 +893,48 @@ describe("panelTreeService", () => {
       callerKind: "panel",
       method: "setStateArgs",
       args: ["requester-slot", { mode: "edit" }],
+    });
+  });
+
+  it("routes semantic title changes through the same panel boundary as other mutations", async () => {
+    const approvalQueue = approvalQueueMock("deny");
+    const bridge = vi.fn(async (request: { method: string }) =>
+      request.method === "metadata"
+        ? {
+            id: "requester-slot",
+            title: "Requester",
+            source: "panels/requester",
+            runtimeEntityId: "panel:requester",
+            contextId: "ctx-self",
+          }
+        : undefined
+    );
+    const service = createPanelTreeService(
+      treeDeps({
+        approvalQueue,
+        bridge,
+        resolveCallerContext: vi.fn(async () => "ctx-self"),
+        resolveRequesterPanel: vi.fn(async () => ({
+          id: "requester-slot",
+          runtimeEntityId: "panel:requester",
+        })),
+      })
+    );
+
+    await expect(
+      service.handler(ctx(), "setTitle", [
+        "requester-slot",
+        "Release engineering",
+        { explicit: true },
+      ])
+    ).resolves.toBeUndefined();
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(bridge).toHaveBeenLastCalledWith({
+      callerId: "panel:requester",
+      callerKind: "panel",
+      method: "setTitle",
+      args: ["requester-slot", "Release engineering", { explicit: true }],
     });
   });
 

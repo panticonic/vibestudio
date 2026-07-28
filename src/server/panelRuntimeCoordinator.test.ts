@@ -214,6 +214,53 @@ describe("PanelRuntimeCoordinator", () => {
       hostConnectionId: "mobile-host",
       supportsCdp: false,
     });
+
+    coordinator.reportView("panel:nav-mobile-held", "mobile-runtime-conn", {
+      url: "http://127.0.0.1/panels/chat/",
+      loading: false,
+      boot: {
+        phase: "ready",
+        runtimeEntityId: "panel:nav-mobile-held",
+        source: "panels/chat",
+        contextId: "ctx-mobile",
+        buildKey: "build-mobile",
+      },
+    });
+    expect(coordinator.reportedViewForSlot("panel:tree/slot-mobile")).toMatchObject({
+      lease: { holderLabel: "Phone", supportsCdp: false },
+      observation: {
+        view: { url: "http://127.0.0.1/panels/chat/", loading: false },
+        boot: {
+          phase: "ready",
+          runtimeEntityId: "panel:nav-mobile-held",
+          source: "panels/chat",
+        },
+      },
+    });
+
+    coordinator.acquire("panel:nav-mobile-held", {
+      slotId: "panel:tree/slot-mobile",
+      clientSessionId: "mobile-session",
+      connectionId: "mobile-runtime-conn",
+    });
+    expect(coordinator.reportedViewForSlot("panel:tree/slot-mobile")).toMatchObject({
+      observation: { boot: { phase: "ready" } },
+    });
+
+    expect(() =>
+      coordinator.reportView("panel:nav-mobile-held", "stale-connection", {
+        url: "http://127.0.0.1/",
+        loading: false,
+        boot: { phase: "ready" },
+      })
+    ).toThrow(/does not match the active lease/);
+
+    coordinator.takeOver("panel:nav-mobile-held", {
+      slotId: "panel:tree/slot-mobile",
+      clientSessionId: "mobile-session",
+      connectionId: "replacement-runtime-conn",
+    });
+    expect(coordinator.reportedViewForSlot("panel:tree/slot-mobile")).toBeNull();
   });
 
   it("resolves CDP host connection ids by visible panel slot", () => {
@@ -336,6 +383,48 @@ describe("PanelRuntimeCoordinator", () => {
         runtimeEntityId: "panel:nav-new",
         previous: expect.objectContaining({ runtimeEntityId: "panel:nav-old" }),
         next: expect.objectContaining({ runtimeEntityId: "panel:nav-new" }),
+      }),
+    ]);
+  });
+
+  it("releases a mobile lease so the host can self-acquire the replacement runtime", () => {
+    const coordinator = new PanelRuntimeCoordinator();
+    const closeConnection = vi.fn();
+    coordinator.setCloseConnection(closeConnection);
+    coordinator.registerClient({
+      clientSessionId: "mobile-session",
+      hostConnectionId: "mobile-host",
+      label: "Phone",
+      platform: "mobile",
+      supportsCdp: false,
+      loadOnLeaseAssignment: false,
+    });
+    coordinator.acquire("panel:nav-old", {
+      slotId: "panel:tree/slot-a",
+      clientSessionId: "mobile-session",
+      connectionId: "mobile-runtime",
+    });
+    const leaseEvents: unknown[] = [];
+    coordinator.onLeaseChanged((event) => leaseEvents.push(event));
+
+    expect(
+      coordinator.replaceRuntimeEntityForSlot("panel:tree/slot-a", "panel:nav-old", "panel:nav-new")
+    ).toBeNull();
+    expect(coordinator.getLease("panel:nav-old")).toBeNull();
+    expect(coordinator.getLease("panel:nav-new")).toBeNull();
+    expect(closeConnection).toHaveBeenCalledWith(
+      "panel:nav-old",
+      "mobile-runtime",
+      4091,
+      "Panel runtime replaced"
+    );
+    expect(leaseEvents).toEqual([
+      expect.objectContaining({
+        slotId: "panel:tree/slot-a",
+        runtimeEntityId: "panel:nav-new",
+        previous: expect.objectContaining({ runtimeEntityId: "panel:nav-old" }),
+        next: null,
+        reason: "released",
       }),
     ]);
   });

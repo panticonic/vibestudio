@@ -9,6 +9,7 @@ import type {
   RuntimeLeaseSnapshot,
   RuntimeLeaseVersion,
 } from "@vibestudio/shared/panel/panelLease";
+import { PanelBootObservationSchema } from "@vibestudio/shared/panelContracts";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { SchemaCoversType } from "@vibestudio/shared/schemaTypeGuard";
 import type {
@@ -71,6 +72,14 @@ export const leaseRequestSchema = z.object({
     .optional()
     .describe("Host transport connection id; defaults to the client's registered host connection."),
 });
+
+export const panelHostViewReportSchema = z
+  .object({
+    url: z.string(),
+    loading: z.boolean(),
+    boot: PanelBootObservationSchema,
+  })
+  .strict();
 
 export const runtimeLeaseVersionSchema = z
   .object({
@@ -179,6 +188,13 @@ export const panelRuntimeMethods = defineServiceMethods({
     description:
       "Release the lease for a panel entity held by the given connection id. No-op unless the connection matches the current holder.",
     args: z.tuple([z.string(), z.string()]),
+    returns: z.void(),
+    access: LEASE_ACCESS,
+  },
+  reportView: {
+    description:
+      "Report the current page and boot observation for a leased panel from a host without an inspection transport.",
+    args: z.tuple([panelEntityIdSchema, z.string().min(1), panelHostViewReportSchema]),
     returns: z.void(),
     access: LEASE_ACCESS,
   },

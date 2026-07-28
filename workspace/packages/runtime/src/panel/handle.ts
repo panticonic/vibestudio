@@ -161,6 +161,8 @@ export const panelTree: PanelTreeApi = {
   list: () => getRuntime().panelTree.list(),
   roots: () => getRuntime().panelTree.roots(),
   children: (id) => getRuntime().panelTree.children(id),
+  subtree: (id) => getRuntime().panelTree.subtree(id),
+  descendants: (id) => getRuntime().panelTree.descendants(id),
   parent: (id) => getRuntime().panelTree.parent(id),
   navigate: (id, source, options) => getRuntime().panelTree.navigate(id, source, options),
 };

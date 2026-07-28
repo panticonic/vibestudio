@@ -20,6 +20,11 @@ describe("shouldShowPanelView", () => {
     { htmlPath: "http://localhost:1234/panels/chat/", buildState: "pending" },
     { htmlPath: "http://localhost:1234/panels/chat/", buildState: "error" },
     { htmlPath: "http://localhost:1234/panels/chat/", buildState: "error", error: "failed" },
+    {
+      htmlPath: "http://localhost:1234/panels/chat/",
+      buildState: "ready",
+      viewFailure: { code: "navigation_failed", message: "failed" },
+    },
   ])("does not show a panel without a displayable native view: %j", (artifacts) => {
     expect(shouldShowPanelView(artifacts)).toBe(false);
   });

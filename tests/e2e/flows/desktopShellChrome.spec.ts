@@ -59,7 +59,15 @@ async function listWebContents(testApp: TestApp): Promise<WebContentsSnapshot[]>
 }
 
 async function getPanelSurfaceLayout(testApp: TestApp): Promise<{
-  surface: { x: number; y: number; width: number; height: number; bottom: number } | null;
+  surfaces: Array<{
+    nativeSlotId: string;
+    panelId: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    bottom: number;
+  }>;
   approval: { x: number; y: number; width: number; height: number; bottom: number } | null;
   topChrome: { x: number; y: number; width: number; height: number; bottom: number }[];
   sidebar: { x: number; y: number; width: number; height: number; bottom: number } | null;
@@ -82,10 +90,19 @@ async function getPanelSurfaceLayout(testApp: TestApp): Promise<{
                 bottom: Math.round(rect.bottom),
               };
             };
-            const surface = rectFor(document.querySelector('[data-native-panel-slot-id="panel-stack:primary"]'));
-            if (!surface) return null;
+            const surfaces = Array.from(document.querySelectorAll("[data-native-panel-slot-id]"))
+              .map((node) => {
+                const rect = rectFor(node);
+                const nativeSlotId = node.getAttribute("data-native-panel-slot-id");
+                const panelId = node.getAttribute("data-panel-id");
+                return rect && nativeSlotId && panelId
+                  ? { nativeSlotId, panelId, ...rect }
+                  : null;
+              })
+              .filter(Boolean);
+            if (surfaces.length === 0) return null;
             return {
-              surface,
+              surfaces,
               approval: rectFor(document.querySelector(".approval-card, .approval-pill")),
               topChrome: Array.from(document.querySelectorAll("[data-shell-top-chrome]"))
                 .map(rectFor)
@@ -95,12 +112,12 @@ async function getPanelSurfaceLayout(testApp: TestApp): Promise<{
           })()`,
           true
         );
-        if (result?.surface) return result;
+        if (result?.surfaces?.length) return result;
       } catch {
         // Ignore non-DOM webContents.
       }
     }
-    return { surface: null, approval: null, topChrome: [], sidebar: null };
+    return { surfaces: [], approval: null, topChrome: [], sidebar: null };
   });
 }
 
@@ -185,40 +202,44 @@ test.describe("Desktop Shell Chrome", () => {
             getPanelTree(testApp!.app).catch(() => []),
             getNativePanelSlotDebugInfo(testApp!.app).catch(() => []),
             getPanelSurfaceLayout(testApp!).catch(() => ({
-              surface: null,
+              surfaces: [],
               approval: null,
               topChrome: [],
               sidebar: null,
             })),
           ]);
-          const slot = slots.find((item) => item.nativeSlotId === "panel-stack:primary");
-          if (!slot || !layout.surface) return false;
+          if (slots.length === 0 || slots.length !== layout.surfaces.length) return false;
 
-          const matchesPanel = panels.some((panel) => panel.id === slot.panelId);
-          const matchesBounds =
-            Math.abs(slot.bounds.x - layout.surface.x) <= 1 &&
-            Math.abs(slot.bounds.y - layout.surface.y) <= 1 &&
-            Math.abs(slot.bounds.width - layout.surface.width) <= 1 &&
-            Math.abs(slot.bounds.height - layout.surface.height) <= 1;
-          // The approval card is now a deliberate overlay floating over the
-          // panel surface, so it is exempt from the no-overlap rule. The
-          // minimized approval pill is in-flow top chrome and is covered by the
-          // topChrome check below.
-          const topChromeDoesNotOverlap = layout.topChrome.every(
-            (rect) => rect.bottom <= layout.surface!.y || rect.y >= layout.surface!.bottom
-          );
-          const sidebarDoesNotOverlap =
-            !layout.sidebar ||
-            layout.sidebar.x + layout.sidebar.width <= layout.surface.x ||
-            layout.sidebar.x >= layout.surface.x + layout.surface.width ||
-            layout.sidebar.bottom <= layout.surface.y ||
-            layout.sidebar.y >= layout.surface.bottom;
-          return (
-            matchesPanel &&
-            matchesBounds &&
-            topChromeDoesNotOverlap &&
-            sidebarDoesNotOverlap
-          );
+          const panelIds = new Set(panels.map((panel) => panel.id));
+          const slotsMatchSurfaces = slots.every((slot) => {
+            const surface = layout.surfaces.find(
+              (candidate) => candidate.nativeSlotId === slot.nativeSlotId
+            );
+            return (
+              surface !== undefined &&
+              surface.panelId === slot.panelId &&
+              panelIds.has(slot.panelId) &&
+              Math.abs(slot.bounds.x - surface.x) <= 1 &&
+              Math.abs(slot.bounds.y - surface.y) <= 1 &&
+              Math.abs(slot.bounds.width - surface.width) <= 1 &&
+              Math.abs(slot.bounds.height - surface.height) <= 1
+            );
+          });
+          const chromeDoesNotOverlapSurfaces = layout.surfaces.every((surface) => {
+            // The approval card is a deliberate overlay above the panel. In-flow
+            // top chrome and the sidebar still must not consume the panel box.
+            const topChromeDoesNotOverlap = layout.topChrome.every(
+              (rect) => rect.bottom <= surface.y || rect.y >= surface.bottom
+            );
+            const sidebarDoesNotOverlap =
+              !layout.sidebar ||
+              layout.sidebar.x + layout.sidebar.width <= surface.x ||
+              layout.sidebar.x >= surface.x + surface.width ||
+              layout.sidebar.bottom <= surface.y ||
+              layout.sidebar.y >= surface.bottom;
+            return topChromeDoesNotOverlap && sidebarDoesNotOverlap;
+          });
+          return slotsMatchSurfaces && chromeDoesNotOverlapSurfaces;
         },
         { timeout: 120_000, intervals: [500, 1000, 2000] }
       )

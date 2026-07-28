@@ -16,6 +16,7 @@ import type {
   PanelRuntimeLeaseChangedEvent,
   RuntimeLeaseSnapshot,
 } from "@vibestudio/shared/panel/panelLease";
+import type { PanelPageObservation } from "@vibestudio/shared/panel/observation";
 import {
   createPanelHostRegistration,
   createPanelRuntimeLeaseRequest,
@@ -273,7 +274,28 @@ class MobilePanels implements PanelHost {
     await this.syncRuntimeLeases();
   }
   applyTreeSnapshot(snapshot: PanelTreeSnapshot): boolean {
-    return this.requireManager().applyForestSnapshot(snapshot);
+    const before = new Map(
+      this.registry
+        .listPanels()
+        .map((panel) => [panel.panelId, panel.runtimeEntityId ?? null] as const)
+    );
+    const applied = this.requireManager().applyForestSnapshot(snapshot);
+    const runtimeChanges = this.registry
+      .listPanels()
+      .filter((panel) => before.get(panel.panelId) !== (panel.runtimeEntityId ?? null))
+      .map((panel) => ({
+        panelId: panel.panelId,
+        previousRuntimeEntityId: before.get(panel.panelId) ?? null,
+        runtimeEntityId: panel.runtimeEntityId ?? null,
+      }));
+    if (runtimeChanges.length > 0 || !applied) {
+      smokePhase("workspace-panel-tree-snapshot", {
+        revision: snapshot.revision,
+        applied,
+        runtimeChanges,
+      });
+    }
+    return applied;
   }
   getTreeSnapshot(): PanelTreeSnapshot {
     return this.registry.getPanelTreeSnapshot();
@@ -511,6 +533,17 @@ class MobilePanels implements PanelHost {
       });
     }
   }
+  async reportView(
+    runtimeEntityId: PanelEntityId,
+    connectionId: string,
+    observation: PanelPageObservation
+  ): Promise<void> {
+    await this.panelRuntime.reportView(runtimeEntityId, connectionId, {
+      url: observation.view.url,
+      loading: observation.view.loading,
+      boot: observation.boot,
+    });
+  }
   async getPanelInit(panelId: string): Promise<unknown> {
     const slotId = asPanelSlotId(panelId);
     const panelInit = await this.requireManager().getPanelInit(slotId);
@@ -568,13 +601,11 @@ class MobilePanels implements PanelHost {
     ) {
       this.clearTrackedRuntimeLease(String(event.slotId));
     }
-    this.emitTreeUpdated();
   }
   async syncRuntimeLeases(): Promise<void> {
     const snapshot = await this.panelRuntime.getSnapshot();
     this.registry.applyRuntimeLeaseSnapshot(snapshot);
     this.syncTrackedRuntimeLeases(snapshot);
-    this.emitTreeUpdated();
   }
   async handleBridgeCall(panelId: string, method: string, args: unknown[]): Promise<unknown> {
     if (!this.bridgeAdapterInstance) throw new Error("Panels not initialized");
@@ -969,7 +1000,13 @@ export class ShellClient {
       })
     );
     if (needsSubscribe) {
-      await Promise.all(eventNames.map((name) => this.events.subscribe(name).catch(() => {})));
+      await Promise.all(
+        eventNames.map((name) =>
+          this.events.subscribe(name).catch((error) => {
+            console.warn(`[mobile] Failed to subscribe to ${name}:`, error);
+          })
+        )
+      );
     }
     // The launch may settle between beginHostTargetLaunch() returning and the
     // server acknowledging our event subscription. Read once after subscribing

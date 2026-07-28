@@ -620,7 +620,7 @@ async function expectShellFitsMobileViewport(app: ElectronApplication): Promise<
       scrollHeight: document.documentElement.scrollHeight,
       titleBarText: document.body.innerText,
       hasMenu: Boolean(document.querySelector('[aria-label="Menu"]')),
-      hasNewPanel: Boolean(document.querySelector('[aria-label="New panel"]')),
+      hasNewPanel: Boolean(document.querySelector('[aria-label="New child panel"]')),
     }))()`
   );
   expect(audit).not.toBeNull();
@@ -865,7 +865,7 @@ test.describe("Mobile Panels", () => {
     await waitForAnyPanel(testApp!.app);
     const initialCount = (await getPanelTree(testApp!.app)).length;
 
-    expect(await shellClickByLabel(testApp!.app, "New panel")).toBe(true);
+    expect(await shellClickByLabel(testApp!.app, "New child panel")).toBe(true);
 
     await expect
       .poll(

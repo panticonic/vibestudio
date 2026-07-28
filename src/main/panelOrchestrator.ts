@@ -31,7 +31,9 @@ import type {
   PanelViewLike,
   PanelHttpServerLike,
   PanelCreateOptions,
+  PanelInitialLoadPolicy,
 } from "@vibestudio/shared/panelInterfaces";
+import { shouldMaterializePanelOnCreate } from "@vibestudio/shared/panelInterfaces";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import type { PanelRestorePolicy } from "@vibestudio/workspace-contracts/types";
 import { buildPanelUrl } from "@vibestudio/shared/panelFactory";
@@ -206,8 +208,8 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       stateArgs?: Record<string, unknown>;
       placement?: PanelPlacementHint;
       focus?: boolean;
+      initialLoad?: PanelInitialLoadPolicy;
     },
-    attachOpts: { focus?: boolean },
     callPanelTree: PanelTreeCall
   ): Promise<{ id: string; title: string }> {
     const result = (await callPanelTree("create", [execution, createOpts])) as {
@@ -218,21 +220,23 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     };
     try {
       await this.awaitPanelInMirror(result.id);
-      await this.attachCreatedPanel(
-        {
-          panelId: result.id,
-          title: result.title,
-          contextId: result.contextId,
-          source: result.source,
-        },
-        attachOpts
-      );
+      if (shouldMaterializePanelOnCreate(createOpts.initialLoad)) {
+        await this.attachCreatedPanel(
+          {
+            panelId: result.id,
+            title: result.title,
+            contextId: result.contextId,
+            source: result.source,
+          },
+          { focus: createOpts.focus }
+        );
+      }
       return { id: result.id, title: result.title };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (this.registry.getPanel(result.id)) {
-        this.runtime.markPanelLoadError(result.id, message);
-        if (attachOpts.focus) await this.focusPanelLocally(result.id).catch(() => {});
+        this.runtime.recordPanelViewFailure(result.id, message);
+        if (createOpts.focus) await this.focusPanelLocally(result.id).catch(() => {});
       } else {
         await callPanelTree("archive", [result.id]).catch(() => {});
       }
@@ -284,8 +288,8 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         stateArgs,
         ...(options?.placement ? { placement: options.placement } : {}),
         focus: options?.focus !== false,
+        ...(options?.initialLoad ? { initialLoad: options.initialLoad } : {}),
       },
-      { focus: options?.focus !== false },
       scopedCaller ? this.panelTreeCallAs(scopedCaller) : this.panelTreeCallAsServer()
     );
   }
@@ -342,6 +346,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       /** @deprecated Alias for `title`. */
       name?: string;
       focus?: boolean;
+      initialLoad?: PanelInitialLoadPolicy;
       placement?: "child" | "sibling";
     },
     caller?: ScopedServerCaller
@@ -362,8 +367,8 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         slug: options?.slug,
         name: options?.name,
         focus: options?.focus !== false,
+        ...(options?.initialLoad ? { initialLoad: options.initialLoad } : {}),
       },
-      { focus: options?.focus !== false },
       caller ? this.panelTreeCallAs(caller) : this.panelTreeCallAsServer()
     );
   }
@@ -425,14 +430,12 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         loaded: reloaded,
         reloaded,
       });
-    } else {
-      const result = await this.rebuildUnloadedPanel(panelId);
-      return {
-        ...result,
-        operation: "reload",
-        status: result.rebuilt ? "loaded_after_rebuild" : result.status,
-      };
     }
+    const result = await this.ensureLoaded(panelId);
+    return this.lifecycleResult(panelId, "reload", result.status, {
+      loaded: result.loaded,
+      reloaded: result.loaded,
+    });
   }
 
   async rebuildUnloadedPanel(
@@ -716,7 +719,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
             loaded: true,
           };
         }
-        this.runtime.markPanelLoadError(targetPanelId, "Panel view was not created");
+        this.runtime.recordPanelViewFailure(targetPanelId, "Panel view was not created");
         return {
           panelId: targetPanelId,
           status: "view_creation_failed",
@@ -728,7 +731,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         const message = error instanceof Error ? error.message : String(error);
         const lease = this.registry.getRuntimeLease(targetPanelId);
         const isLeaseFailure = /running on|leased by/i.test(message);
-        if (!isLeaseFailure) this.runtime.markPanelLoadError(targetPanelId, message);
+        if (!isLeaseFailure) this.runtime.recordPanelViewFailure(targetPanelId, message);
         return {
           panelId: targetPanelId,
           status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
@@ -800,7 +803,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       await this.runtime.loadPanelIntoView(panelId);
       const nextView = this.getPanelView();
       const loaded = Boolean(nextView?.hasView(panelId));
-      if (!loaded) this.runtime.markPanelLoadError(panelId, "Panel view was not created");
+      if (!loaded) this.runtime.recordPanelViewFailure(panelId, "Panel view was not created");
       return {
         panelId,
         status: loaded ? "loaded" : "view_creation_failed",
@@ -812,7 +815,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       const message = error instanceof Error ? error.message : String(error);
       const lease = this.registry.getRuntimeLease(panelId);
       const isLeaseFailure = /running on|leased by/i.test(message);
-      if (!isLeaseFailure) this.runtime.markPanelLoadError(panelId, message);
+      if (!isLeaseFailure) this.runtime.recordPanelViewFailure(panelId, message);
       return {
         panelId,
         status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
@@ -828,13 +831,16 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   // Tree initialization
   // =========================================================================
 
-  async initializePanelTree(): Promise<void> {
+  async initializePanelTree(options: { seedInitialPanels?: boolean } = {}): Promise<void> {
     // The server is the sole tree authority. This canonical, authenticated
     // panelTree read both performs first-attach seeding for the acting account
     // and returns the resulting authoritative snapshot. Reading workspace-state
     // directly here would bypass the owner-aware service boundary and could
     // strand a fresh shell on an empty mirror forever.
-    const snapshot = (await this.callPanelTreeAsServer("getTreeSnapshot", [])) as PanelTreeSnapshot;
+    const snapshot = (await this.callPanelTreeAsServer(
+      options.seedInitialPanels === false ? "getTreeSnapshot" : "attachInitialPanels",
+      []
+    )) as PanelTreeSnapshot;
     log.info(
       `[initializePanelTree] Received authoritative tree revision ${snapshot.revision} with ${snapshot.forest.reduce((count, group) => count + group.rootPanels.length, 0)} root(s)`
     );
@@ -972,7 +978,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     const panel = this.registry.getPanel(panelId);
     if (!panel) throw new Error(`Panel not found: ${panelId}`);
 
-    this.runtime.unloadPanelTree(panelId, transition);
+    this.runtime.unloadPanel(panelId, transition);
     this.registry.notifyPanelTreeUpdate();
     return this.lifecycleResult(
       panelId,
@@ -1166,7 +1172,8 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       | undefined;
     const viewExists = Boolean(contents && !contents.isDestroyed());
     const lease = this.registry.getRuntimeLease(panelId);
-    const error = panel?.artifacts.error;
+    const buildError = panel?.artifacts.error;
+    const viewFailure = panel?.artifacts.viewFailure;
     let failure:
       | {
           code: PanelFailureCode;
@@ -1175,13 +1182,22 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
           details?: Record<string, unknown>;
         }
       | undefined;
-    if (error) {
-      const unitMissing = /unknown (?:runtime )?build unit|unknown build unit/iu.test(error);
-      const navigation = /navigation|load|connection_refused|not found/iu.test(error);
+    if (viewFailure) {
       failure = {
-        code: unitMissing ? "unit_not_found" : navigation ? "navigation_failed" : "compile_failed",
-        stage: unitMissing ? "resolve" : navigation ? "load" : "build",
-        message: error,
+        code: viewFailure.code,
+        stage: "load",
+        message: viewFailure.message,
+        details: {
+          buildState: panel?.artifacts.buildState ?? null,
+          buildProgress: panel?.artifacts.buildProgress ?? null,
+        },
+      };
+    } else if (buildError) {
+      const unitMissing = /unknown (?:runtime )?build unit|unknown build unit/iu.test(buildError);
+      failure = {
+        code: unitMissing ? "unit_not_found" : "compile_failed",
+        stage: unitMissing ? "resolve" : "build",
+        message: buildError,
         details: {
           buildState: panel?.artifacts.buildState ?? null,
           buildProgress: panel?.artifacts.buildProgress ?? null,
@@ -1247,7 +1263,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!/running on|leased by/i.test(message))
-        this.runtime.markPanelLoadError(result.panelId, message);
+        this.runtime.recordPanelViewFailure(result.panelId, message);
       this.runtime.releaseLocalPanelRuntime(result.panelId, "unload");
       throw error;
     }

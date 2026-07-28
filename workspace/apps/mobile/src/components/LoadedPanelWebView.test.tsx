@@ -2,6 +2,7 @@ import React from "react";
 import { render } from "@testing-library/react-native";
 import { LoadedPanelWebView, type LoadedPanelWebViewProps } from "./LoadedPanelWebView";
 import type { ThemeColors } from "../state/themeAtoms";
+import type { WebViewEntry } from "./webViewStack";
 
 const mockPanelWebViewRender = jest.fn();
 
@@ -50,6 +51,7 @@ function props(overrides: Partial<LoadedPanelWebViewProps> = {}): LoadedPanelWeb
   return {
     entry: {
       panelId: "panel-1",
+      runtimeEntityId: "panel:nav-panel-1" as WebViewEntry["runtimeEntityId"],
       url: "https://example.test",
       managed: false,
       panelInit: null,

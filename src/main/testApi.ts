@@ -278,11 +278,12 @@ export function setupTestApi(
       const buildState = artifacts?.buildState ?? null;
       const htmlPath = artifacts?.htmlPath ?? null;
       const error = artifacts?.error ?? null;
+      const viewFailure = artifacts?.viewFailure?.message ?? null;
       return panelReadinessSnapshot({
         panelId,
         source: panel ? getPanelSource(panel) : null,
         view: { exists: viewExists, url, isLoading },
-        artifacts: { buildState, htmlPath, error },
+        artifacts: { buildState, htmlPath, error, viewFailure },
         runtime: panel?.state?.runtime ?? null,
         nativeSlotBound,
       });

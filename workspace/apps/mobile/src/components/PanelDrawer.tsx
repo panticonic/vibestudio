@@ -156,11 +156,16 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       await shellClient.panels.refresh();
       // Update the atom so the UI re-renders with the new tree
       setPanelForest(shellClient.panels.getTreeSnapshot());
-    } catch {
-      // Offline -- ignore
+    } catch (error) {
+      pushToast({
+        title: "Could not refresh panels",
+        message: error instanceof Error ? error.message : "Try again.",
+        tone: "danger",
+      });
+    } finally {
+      setRefreshing(false);
     }
-    setRefreshing(false);
-  }, [shellClient, setPanelForest]);
+  }, [pushToast, shellClient, setPanelForest]);
 
   const handlePanelPress = useCallback(
     (panelId: string) => {
@@ -238,18 +243,38 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
               .createBrowserUrlPanel(null, snapshot.source.slice("browser:".length), {
                 focus: true,
               })
-              .then((result) => onSelectPanel(result.id));
+              .then((result) => onSelectPanel(result.id))
+              .catch((error: unknown) =>
+                pushToast({
+                  title: "Could not duplicate panel",
+                  message: error instanceof Error ? error.message : "Try again.",
+                  tone: "danger",
+                })
+              );
           } else {
             void shellClient.panels
               .createRootPanel(snapshot.source)
-              .then((result) => onSelectPanel(result.id));
+              .then((result) => onSelectPanel(result.id))
+              .catch((error: unknown) =>
+                pushToast({
+                  title: "Could not duplicate panel",
+                  message: error instanceof Error ? error.message : "Try again.",
+                  tone: "danger",
+                })
+              );
           }
           return;
         case "archive":
           void shellClient.panels
             .archive(panelId)
             .then(() => shellClient.panels.refresh())
-            .catch(() => {});
+            .catch((error: unknown) =>
+              pushToast({
+                title: "Could not archive panel",
+                message: error instanceof Error ? error.message : "Try again.",
+                tone: "danger",
+              })
+            );
           return;
         default:
           onSelectPanel(panelId);

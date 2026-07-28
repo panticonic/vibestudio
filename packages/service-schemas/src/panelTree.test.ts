@@ -36,6 +36,22 @@ describe("PanelTreeCreateOptionsSchema", () => {
     expect(PanelTreeCreateOptionsSchema.parse({ focus: true })?.placement).toBeUndefined();
     expect(PanelTreeCreateOptionsSchema.parse(undefined)).toBeUndefined();
   });
+
+  it("supports durable unloaded creation only for background panels", () => {
+    expect(
+      PanelTreeCreateOptionsSchema.parse({
+        parentId: "panel:tree/parent",
+        focus: false,
+        initialLoad: "deferred",
+      })
+    ).toMatchObject({ focus: false, initialLoad: "deferred" });
+    expect(() =>
+      PanelTreeCreateOptionsSchema.parse({ focus: true, initialLoad: "deferred" })
+    ).toThrow("Deferred panels must be created with focus:false");
+    expect(() => PanelTreeCreateOptionsSchema.parse({ initialLoad: "deferred" })).toThrow(
+      "Deferred panels must be created with focus:false"
+    );
+  });
 });
 
 describe("PanelTreeFocusOptionsSchema", () => {

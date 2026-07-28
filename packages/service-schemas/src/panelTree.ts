@@ -25,6 +25,10 @@ import {
   PanelTreeSnapshotSchema,
 } from "@vibestudio/shared/panelContracts";
 import { JsonObjectSchema, JsonValueSchema } from "@vibestudio/shared/wireValues";
+import {
+  PANEL_INITIAL_LOAD_POLICIES,
+  shouldMaterializePanelOnCreate,
+} from "@vibestudio/shared/panelInterfaces";
 import { CodeExecutionSchema, ExternalDocumentExecutionSchema } from "./runtime.js";
 
 // Access descriptors classify panel-tree operations. The service and method
@@ -114,6 +118,25 @@ const PanelListItemSchema = z.object({
   ref: z.string().nullable().optional(),
   owner: z.string().nullable().optional(),
 });
+interface PanelSubtreeListItem {
+  panelId: string;
+  title: string;
+  source: string;
+  kind: "workspace" | "browser";
+  parentId: string | null;
+  contextId: string;
+  runtimeEntityId?: string | null;
+  effectiveVersion?: string | null;
+  buildKey?: string | null;
+  ref?: string | null;
+  owner?: string | null;
+  children: PanelSubtreeListItem[];
+}
+const PanelSubtreeListItemSchema: z.ZodType<PanelSubtreeListItem> = z.lazy(() =>
+  PanelListItemSchema.extend({
+    children: z.array(PanelSubtreeListItemSchema),
+  })
+);
 const PanelMetadataSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -193,6 +216,12 @@ export const PanelTreeCreateOptionsSchema = z
       .describe(
         "Present and focus the new panel; defaults to true. Pass false for background creation."
       ),
+    initialLoad: z
+      .enum(PANEL_INITIAL_LOAD_POLICIES)
+      .optional()
+      .describe(
+        "Runtime materialization policy. Eager (default) assigns a host and creates a view immediately; deferred commits an unloaded slot that materializes on focus or ensureLoaded."
+      ),
     contextId: z
       .string()
       .optional()
@@ -203,6 +232,15 @@ export const PanelTreeCreateOptionsSchema = z
     placement: PanelPlacementHintSchema.optional().describe(
       "Layout placement hint for the new panel; overrides the manifest's placement default."
     ),
+  })
+  .superRefine((options, ctx) => {
+    if (!shouldMaterializePanelOnCreate(options.initialLoad) && options.focus !== false) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["initialLoad"],
+        message: "Deferred panels must be created with focus:false",
+      });
+    }
   })
   .optional();
 
@@ -255,6 +293,34 @@ export const panelTreeMethods = defineServiceMethods({
     // step of the CLI panel screenshot/console loop. Read-only widening; every
     // mutating panelTree op stays closed to entity-only authority.
     authority: { principals: ["code", "user", "host"] },
+  },
+  getSubtree: {
+    description:
+      "Return one revisioned recursive panel subtree rooted at the requested stable slot id, or null when that slot is not active.",
+    args: z.tuple([PanelIdSchema]),
+    returns: z
+      .object({
+        revision: z.number().int().nonnegative(),
+        root: PanelSubtreeListItemSchema,
+      })
+      .nullable(),
+    access: READ_ACCESS,
+    authority: { principals: ["code", "user", "host"] },
+  },
+  attachInitialPanels: {
+    description:
+      "Authenticated-owner attach boundary: reconcile that owner's configured initial panels once and return the authoritative tree snapshot.",
+    args: z.tuple([]),
+    returns: PanelTreeSnapshotSchema,
+    access: WRITE_ACCESS,
+    authority: { principals: ["user", "host"] },
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale:
+        "Owner-scoped attach operation with no caller-supplied target; the bridge mediates the host work and code/session principals remain excluded.",
+    },
+    agentFacing: false,
   },
   getFocusedPanelId: {
     description: "Return the id of the currently focused panel, or null if none is focused.",
@@ -322,6 +388,18 @@ export const panelTreeMethods = defineServiceMethods({
     args: z.tuple([PanelIdSchema, StateArgsSchema]),
     returns: JsonObjectSchema,
     authority: panelBoundaryAuthority("setStateArgs"),
+    access: WRITE_ACCESS,
+  },
+  setTitle: {
+    description:
+      "Set a panel slot's semantic display title without loading its runtime. Explicit titles are preserved across inferred page-title updates.",
+    args: z.tuple([
+      PanelIdSchema,
+      z.string().trim().min(1).max(200),
+      z.object({ explicit: z.boolean().optional() }).optional(),
+    ]),
+    returns: z.void(),
+    authority: panelBoundaryAuthority("setTitle"),
     access: WRITE_ACCESS,
   },
   reload: {

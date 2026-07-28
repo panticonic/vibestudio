@@ -152,6 +152,14 @@ export interface PanelNavigateOptions {
   stateArgs?: Record<string, unknown>;
 }
 
+export interface PanelSetTitleOptions {
+  /**
+   * Preserve this semantic/user-chosen title across inferred document-title
+   * updates from the hosted page.
+   */
+  explicit?: boolean;
+}
+
 /**
  * Unified handle for communicating with any panel-tree member.
  * Parent helpers return this same handle type.
@@ -262,6 +270,8 @@ export interface PanelHandle<
   diagnose(): Promise<PanelDiagnosticsResult>;
   archive(): Promise<void>;
   unload(): Promise<PanelLifecycleResult>;
+  /** Set this slot's display title without loading its runtime. */
+  setTitle(title: string, options?: PanelSetTitleOptions): Promise<void>;
   movePanel(newParentId: string | null, targetPosition: number): Promise<void>;
   takeOver(): Promise<void>;
   openDevTools(mode?: "detach" | "right" | "bottom"): Promise<void>;

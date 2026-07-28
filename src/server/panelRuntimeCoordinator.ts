@@ -17,6 +17,10 @@ import {
   isPanelSlotId,
 } from "@vibestudio/shared/panel/ids";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
+import type {
+  PanelBootObservation,
+  PanelPageObservation,
+} from "@vibestudio/shared/panel/observation";
 
 const LEASE_RECONNECT_GRACE_MS = 3000;
 
@@ -39,6 +43,10 @@ export class PanelRuntimeCoordinator {
   private clients = new Map<string, ClientSession>();
   private expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private defaultCdpLeaseConnections = new Set<string>();
+  private reportedViews = new Map<
+    PanelEntityId,
+    { connectionId: string; observation: PanelPageObservation }
+  >();
   /**
    * Slots that must stay loaded on their serving host (≥1 CDP client attached).
    * Leases for a pinned slot carry `keepLoaded: true` and are refused for
@@ -121,6 +129,7 @@ export class PanelRuntimeCoordinator {
       if (lease.clientSessionId !== clientSessionId) continue;
       this.clearExpiry(entityId);
       this.leases.delete(entityId);
+      this.reportedViews.delete(entityId);
       const wasDefaultCdpLease = this.defaultCdpLeaseConnections.delete(lease.connectionId);
       this.closeConnection?.(
         lease.runtimeEntityId,
@@ -176,6 +185,38 @@ export class PanelRuntimeCoordinator {
       if (lease.slotId === normalizedSlotId) {
         return { hostConnectionId: lease.hostConnectionId, supportsCdp: lease.supportsCdp };
       }
+    }
+    return null;
+  }
+
+  reportView(
+    runtimeEntityId: string,
+    connectionId: string,
+    input: { url: string; loading: boolean; boot: PanelBootObservation }
+  ): void {
+    const entityId = asPanelEntityId(runtimeEntityId);
+    const lease = this.leases.get(entityId);
+    if (!lease || lease.connectionId !== connectionId) {
+      throw new Error(`Panel runtime view report does not match the active lease: ${entityId}`);
+    }
+    this.reportedViews.set(entityId, {
+      connectionId,
+      observation: {
+        view: { url: input.url, loading: input.loading },
+        boot: { ...input.boot, updatedAt: Date.now() },
+      },
+    });
+  }
+
+  reportedViewForSlot(
+    slotId: string
+  ): { lease: PanelRuntimeLease; observation: PanelPageObservation } | null {
+    const normalizedSlotId = asPanelSlotId(slotId);
+    for (const [entityId, lease] of this.leases) {
+      if (lease.slotId !== normalizedSlotId) continue;
+      const reported = this.reportedViews.get(entityId);
+      if (!reported || reported.connectionId !== lease.connectionId) return null;
+      return { lease, observation: reported.observation };
     }
     return null;
   }
@@ -375,6 +416,7 @@ export class PanelRuntimeCoordinator {
       // second lease for the same slot.
       this.clearExpiry(previousEntityId);
       this.leases.delete(previousEntityId);
+      this.reportedViews.delete(previousEntityId);
       this.defaultCdpLeaseConnections.delete(previous.connectionId);
       this.closeConnection?.(
         previousEntityId,
@@ -389,7 +431,18 @@ export class PanelRuntimeCoordinator {
     const wasDefaultCdpLease = this.defaultCdpLeaseConnections.delete(previous.connectionId);
     this.clearExpiry(previousEntityId);
     this.leases.delete(previousEntityId);
+    this.reportedViews.delete(previousEntityId);
     this.closeConnection?.(previousEntityId, previous.connectionId, 4091, "Panel runtime replaced");
+
+    if (!previous.loadOnLeaseAssignment) {
+      // Hosts such as mobile own their renderer lifecycle and cannot realize a
+      // server-assigned connection id. Release the retired incarnation and let
+      // that host acquire the new entity with its own connection after the
+      // canonical tree update. Transferring a fabricated lease here strands
+      // the host on an unregistered principal.
+      this.emitChange(nextEntityId, normalizedSlotId, previous, null, "released");
+      return null;
+    }
 
     const next: PanelRuntimeLease = {
       ...previous,
@@ -464,6 +517,7 @@ export class PanelRuntimeCoordinator {
     }
     this.clearExpiry(entityId);
     this.leases.delete(entityId);
+    this.reportedViews.delete(entityId);
     const wasDefaultCdpLease = this.defaultCdpLeaseConnections.delete(existing.connectionId);
     this.emitChange(entityId, existing.slotId, existing, null, reason);
     if (
@@ -482,6 +536,7 @@ export class PanelRuntimeCoordinator {
       if (lease.slotId !== normalizedSlotId) continue;
       this.clearExpiry(entityId);
       this.leases.delete(entityId);
+      this.reportedViews.delete(entityId);
       this.defaultCdpLeaseConnections.delete(lease.connectionId);
       this.closeConnection?.(
         lease.runtimeEntityId,
@@ -504,6 +559,7 @@ export class PanelRuntimeCoordinator {
     if (!existing) return;
     this.clearExpiry(entityId);
     this.leases.delete(entityId);
+    this.reportedViews.delete(entityId);
     this.defaultCdpLeaseConnections.delete(existing.connectionId);
     this.closeConnection?.(
       runtimeEntityId,
@@ -598,6 +654,13 @@ export class PanelRuntimeCoordinator {
     const slotId = asPanelSlotId(input.slotId);
     const previous = this.leases.get(runtimeEntityId) ?? null;
     this.clearExpiry(runtimeEntityId);
+    // Re-acquiring the exact same runtime connection is an idempotent lease
+    // refresh. Its page did not change, so keep the observation. A different
+    // connection is a different host incarnation and must prove readiness for
+    // itself.
+    if (previous?.connectionId !== input.connectionId) {
+      this.reportedViews.delete(runtimeEntityId);
+    }
     if (previous) this.defaultCdpLeaseConnections.delete(previous.connectionId);
     const lease: PanelRuntimeLease = {
       slotId,
@@ -653,6 +716,7 @@ export class PanelRuntimeCoordinator {
     this.defaultCdpLeaseConnections.delete(existing.connectionId);
     this.clearExpiry(existing.runtimeEntityId);
     this.leases.delete(existing.runtimeEntityId);
+    this.reportedViews.delete(existing.runtimeEntityId);
     this.closeConnection?.(
       existing.runtimeEntityId,
       existing.connectionId,

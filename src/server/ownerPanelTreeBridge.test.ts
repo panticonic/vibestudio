@@ -1120,18 +1120,19 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
       isProviderConnected: vi.fn(() => true),
       isTargetRegisteredForHost: vi.fn(() => targetReady),
       isTargetRegistered: vi.fn(() => targetReady),
-      sendHostCommand: vi.fn(async (_panelId: string, action: string) => {
+      sendHostCommand: vi.fn(async (panelId: string, action: string) => {
         if (action !== "panelObservation") return undefined;
-        const active = [...entities.values()].find(
-          (record) =>
-            (record["source"] as { repoPath?: string } | undefined)?.repoPath === "panels/new"
-        )!;
+        const slot = slots.get(panelId);
+        const active = entities.get(String(slot?.["current_entity_id"]))!;
+        const source = String(
+          (active["source"] as { repoPath?: string } | undefined)?.repoPath ?? ""
+        );
         return {
-          view: { exists: true, url: "http://localhost/panels/new", loading: false },
+          view: { exists: true, url: `http://localhost/${source}`, loading: false },
           boot: readyBoot(
             String(active["id"]),
             String(active["activeBuildKey"]),
-            "panels/new",
+            source,
             String(active["contextId"])
           ),
         };
@@ -1194,6 +1195,52 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
     const roots = lastTree.forest.flatMap((group) => group.rootPanels);
     expect(roots).toHaveLength(2);
     expect(roots.map((p) => p.id)).toContain("slot-existing");
+
+    ensureDefaultCdpHostForSlot.mockClear();
+    const deferred = await bridge({
+      callerId: "server",
+      callerKind: "server",
+      method: "create",
+      args: [
+        { surface: "code", source: "panels/deferred" },
+        { focus: false, initialLoad: "deferred" },
+      ],
+    });
+    expect(deferred).toMatchObject({ source: "panels/deferred" });
+    await vi.waitFor(() =>
+      expect(
+        [...entities.values()].find(
+          (record) =>
+            (record["source"] as { repoPath?: string } | undefined)?.repoPath === "panels/deferred"
+        )?.["status"]
+      ).toBe("active")
+    );
+    expect(ensureDefaultCdpHostForSlot).not.toHaveBeenCalled();
+
+    const shellCreated = await bridge({
+      callerId: "shell:mobile",
+      callerKind: "shell",
+      method: "create",
+      args: [{ surface: "code", source: "panels/mobile" }, { focus: true }],
+    });
+    expect(shellCreated).toMatchObject({ source: "panels/mobile" });
+    await vi.waitFor(() =>
+      expect(
+        [...entities.values()].find(
+          (record) =>
+            (record["source"] as { repoPath?: string } | undefined)?.repoPath === "panels/mobile"
+        )?.["status"]
+      ).toBe("active")
+    );
+    expect(eventService.emitToCaller).toHaveBeenCalledWith(
+      "shell:mobile",
+      "panel-created",
+      expect.objectContaining({
+        panelId: (shellCreated as { id: string }).id,
+        focus: true,
+      })
+    );
+    expect(ensureDefaultCdpHostForSlot).not.toHaveBeenCalled();
   });
 
   it("returns the resolved owning slot parent when a panel entity creates a child", async () => {
@@ -1754,12 +1801,21 @@ describe("seedPanelTreeIfEmpty", () => {
     });
     const wrapped = createOwnerSeedingPanelTreeBridge(bridge, [{ source: "panels/chat" }]);
 
+    await wrapped({
+      callerId: "headless-host",
+      callerKind: "shell",
+      subject: { userId: "alice", handle: "alice" },
+      method: "getTreeSnapshot",
+      args: [],
+    });
+    expect(calls.filter((call) => call.method === "create")).toHaveLength(0);
+
     await Promise.all([
       wrapped({
         callerId: "panel:a",
         callerKind: "panel",
         subject: { userId: "alice", handle: "alice" },
-        method: "getTreeSnapshot",
+        method: "attachInitialPanels",
         args: [],
       }),
       wrapped({
@@ -1798,7 +1854,7 @@ describe("seedPanelTreeIfEmpty", () => {
       callerId: "shell:alice",
       callerKind: "shell",
       subject: { userId: "alice", handle: "alice" },
-      method: "getTreeSnapshot",
+      method: "attachInitialPanels",
       args: [],
     };
 

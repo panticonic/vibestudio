@@ -752,8 +752,11 @@ export class PanelHttpServer {
       await this.writeArtifact(req, res, build, { ...build.htmlArtifact, content });
       return;
     }
+    const artifactPath = resource.replace(/^\/+/, "");
+    const artifactDirectoryDepth = Math.max(0, artifactPath.split("/").length - 1);
+    const sourceRoot = "../".repeat(2 + artifactDirectoryDepth);
     res.writeHead(307, {
-      Location: `../../__vibestudio/panel-build/${buildKey}/${resource.replace(/^\/+/, "")}`,
+      Location: `${sourceRoot}__vibestudio/panel-build/${buildKey}/${artifactPath}`,
       "Cache-Control": "no-store",
     });
     res.end();
