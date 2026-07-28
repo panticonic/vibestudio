@@ -21,7 +21,7 @@ import type {
   PairingContext,
 } from "@vibestudio/rpc/protocol/wsProtocol";
 import { isAuthenticatedServerCaller } from "@vibestudio/rpc/protocol/sessionNegotiation";
-import { NodeWsLike } from "@vibestudio/shell-core/transport/nodeWsLike";
+import { NodeWsLike } from "@vibestudio/rpc/transports/nodeWsLike";
 import { authMethods } from "@vibestudio/service-schemas/auth";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { EventName, EventPayloads } from "@vibestudio/shared/events";

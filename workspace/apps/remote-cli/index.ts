@@ -1,5 +1,5 @@
 import { createRpcClient, type RpcClient } from "@vibestudio/rpc";
-import { NodeWsLike } from "@vibestudio/shell-core/transport/nodeWsLike";
+import { NodeWsLike } from "@vibestudio/rpc/transports/nodeWsLike";
 import { createServerWsTransport } from "@vibestudio/shell-core/transport/serverWsTransport";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";

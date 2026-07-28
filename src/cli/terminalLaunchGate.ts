@@ -6,7 +6,7 @@ import {
   type BootstrapDecision,
 } from "@vibestudio/shared/bootstrapLaunchGate";
 import { createRpcClient } from "@vibestudio/rpc";
-import { NodeWsLike } from "@vibestudio/shell-core/transport/nodeWsLike";
+import { NodeWsLike } from "@vibestudio/rpc/transports/nodeWsLike";
 import { createServerWsTransport } from "@vibestudio/shell-core/transport/serverWsTransport";
 import { WebSocket } from "ws";
 import {

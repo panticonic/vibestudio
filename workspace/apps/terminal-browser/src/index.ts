@@ -1,7 +1,7 @@
 import React from "react";
 import { render } from "ink";
 import { createRpcClient, type RpcClient } from "@vibestudio/rpc";
-import { NodeWsLike } from "@vibestudio/shell-core/transport/nodeWsLike";
+import { NodeWsLike } from "@vibestudio/rpc/transports/nodeWsLike";
 import { createServerWsTransport } from "@vibestudio/shell-core/transport/serverWsTransport";
 import WebSocket from "ws";
 import { SessionManager } from "./host/SessionManager.js";

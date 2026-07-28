@@ -64,6 +64,10 @@
       "types": "./dist/transports/wsClient.d.ts",
       "default": "./dist/transports/wsClient.js"
     },
+    "./transports/nodeWsLike": {
+      "types": "./dist/transports/nodeWsLike.d.ts",
+      "default": "./dist/transports/nodeWsLike.js"
+    },
     "./transports/httpClient": {
       "types": "./dist/transports/httpClient.d.ts",
       "default": "./dist/transports/httpClient.js"
