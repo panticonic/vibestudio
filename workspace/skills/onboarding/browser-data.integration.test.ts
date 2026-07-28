@@ -46,6 +46,7 @@ describe("onboarding browser-data component chain", () => {
           method: string,
           ...args: unknown[]
         ) => Promise<T>,
+        stream: vi.fn(async () => new Response()),
       },
       workers: {
         resolveDurableObject: vi.fn(async () => ({
@@ -79,11 +80,7 @@ describe("onboarding browser-data component chain", () => {
       async (target: string, method: string, args: unknown[]): Promise<unknown> => {
         expect(target).toBe("main");
         expect(method).toBe("extensions.invokeProvider");
-        const [namespace, providerMethod, providerArgs] = args as [
-          string,
-          string,
-          unknown[],
-        ];
+        const [namespace, providerMethod, providerArgs] = args as [string, string, unknown[]];
         expect(namespace).toBe("browserData");
         return provider[providerMethod]!(...providerArgs);
       }

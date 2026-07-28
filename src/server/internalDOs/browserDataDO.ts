@@ -1,21 +1,25 @@
-import {
-  DurableObjectBase,
-  rpc,
-  type DurableObjectContext,
-  type DurableObjectSchemaMigration,
-} from "@vibestudio/durable";
+import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibestudio/durable";
 import type { RpcAuthorityPolicy } from "@vibestudio/rpc";
 import { allOf, anyOf, capability, relationship } from "@vibestudio/shared/authorization";
 import {
   ApplyCookieMutationsRequestSchema,
   BROWSER_DATA_SCHEMA,
   FORM_FILL_TYPES,
+  MAX_PAGE_FAVICON_BYTES,
+  detectFaviconMimeType,
+  isPersistableFormFillType,
+  isFaviconMimeType,
+  browserCookiePartitionFromStorageKey,
+  browserCookiePartitionStorageKey,
+  normalizeBrowserCookiePartitionKey,
+  normalizeCookieExpirationSeconds,
   type ApplyCookieMutationsRequest,
   type BrowserCookieInput,
   type BrowserCookieKey,
   type BrowserCookieRecord,
   type BrowserDownloadRecord,
   type FormFillSuggestionQuery,
+  type FormFillType,
   type FormFillValueInput,
   type ImportedBookmark,
   type ImportedHistoryEntry,
@@ -30,7 +34,6 @@ import {
 } from "@vibestudio/browser-data";
 
 const BATCH_SIZE = 500;
-const MAX_FAVICON_BYTES = 128 * 1024;
 
 interface ImportSourceMeta {
   sourceId: string;
@@ -57,8 +60,7 @@ interface PreparedCookiePut {
  * not survive JSON transport (they arrive as `{"0":137,…}` and inflate ~6x), so
  * the conversion happens here, at the storage boundary, in both directions.
  */
-function decodeFaviconPng(value: string | undefined): Uint8Array | undefined {
-  if (!value) return undefined;
+function decodeFaviconData(value: string): Uint8Array {
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) {
@@ -67,7 +69,7 @@ function decodeFaviconPng(value: string | undefined): Uint8Array | undefined {
   return bytes;
 }
 
-function encodeFaviconPng(value: unknown): string | null {
+function encodeFaviconData(value: unknown): string | null {
   if (!value) return null;
   const bytes =
     value instanceof Uint8Array
@@ -86,8 +88,7 @@ function encodeFaviconPng(value: unknown): string | null {
 function encodeFaviconRow(row: Record<string, unknown>): Record<string, unknown> {
   return {
     ...row,
-    png16: encodeFaviconPng(row["png16"]),
-    png32: encodeFaviconPng(row["png32"]),
+    image_data: encodeFaviconData(row["image_data"]),
   };
 }
 
@@ -118,11 +119,7 @@ function browserDataAuthority(sensitivity: RpcAuthorityPolicy["sensitivity"]): R
 }
 
 export class BrowserDataDO extends DurableObjectBase {
-  static override schemaVersion = 7;
-
-  protected override schemaProductionBaseline() {
-    return { version: 1, name: "browser-data-v1" } as const;
-  }
+  static override schemaVersion = 1;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -136,104 +133,6 @@ export class BrowserDataDO extends DurableObjectBase {
 
   protected createTables(): void {
     this.executeSchema(BROWSER_DATA_SCHEMA);
-  }
-
-  protected override schemaMigrations(): readonly DurableObjectSchemaMigration[] {
-    // Versions 2–4 are retained only so existing ledgers remain recognizable.
-    // The repository is pre-release; v5 deliberately drops all browser state
-    // and requires a fresh import instead of translating profile-scoped data.
-    return [
-      {
-        version: 2,
-        name: "preserve-history-visit-provenance",
-        validateSource: () => {},
-        migrate: () => {},
-      },
-      {
-        version: 3,
-        name: "preserve-import-source-identity",
-        validateSource: () => {},
-        migrate: () => {},
-      },
-      {
-        version: 4,
-        name: "preserve-import-runs-and-secret-metadata",
-        validateSource: () => {},
-        migrate: () => {},
-      },
-      {
-        version: 5,
-        name: "canonical-browser-environment-cutover",
-        validateSource: () => {},
-        migrate: (sql) => {
-          for (const trigger of ["history_ai", "history_ad", "history_au"]) {
-            sql.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
-          }
-          for (const table of [
-            "history_fts",
-            "import_run_summaries",
-            "import_runs",
-            "import_log",
-            "permissions",
-            "autofill",
-            "cookies",
-            "password_never_save",
-            "passwords",
-            "history_visits",
-            "history",
-            "bookmarks",
-            "favicons",
-            "search_engines",
-            "cookie_state",
-            "cookie_mutations",
-            "form_fill_values",
-            "page_favicons",
-            "import_jobs",
-            "import_batches",
-          ]) {
-            sql.exec(`DROP TABLE IF EXISTS ${table}`);
-          }
-          this.executeSchema(BROWSER_DATA_SCHEMA, sql);
-        },
-      },
-      {
-        version: 6,
-        name: "browser-site-preferences",
-        validateSource: () => {},
-        migrate: (sql) => {
-          sql.exec(`CREATE TABLE IF NOT EXISTS site_preferences (
-            origin TEXT PRIMARY KEY,
-            zoom_factor REAL NOT NULL DEFAULT 1.0
-              CHECK (zoom_factor >= 0.25 AND zoom_factor <= 5.0),
-            updated_at INTEGER NOT NULL
-          )`);
-        },
-      },
-      {
-        version: 7,
-        name: "canonical-download-metadata",
-        validateSource: () => {},
-        migrate: (sql) => {
-          sql.exec(`CREATE TABLE IF NOT EXISTS downloads (
-            id TEXT PRIMARY KEY,
-            environment_key TEXT NOT NULL,
-            host_id TEXT NOT NULL,
-            panel_id TEXT,
-            origin TEXT,
-            url TEXT NOT NULL,
-            filename TEXT NOT NULL,
-            save_path TEXT NOT NULL,
-            received_bytes INTEGER NOT NULL,
-            total_bytes INTEGER NOT NULL,
-            state TEXT NOT NULL,
-            started_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-          )`);
-          sql.exec(`CREATE INDEX IF NOT EXISTS idx_downloads_host_updated
-            ON downloads(host_id, updated_at DESC)`);
-        },
-      },
-    ];
   }
 
   protected override requiredTables(): readonly string[] {
@@ -704,13 +603,26 @@ export class BrowserDataDO extends DurableObjectBase {
 
   @rpc(browserDataAuthority("read"))
   async getFormFillSuggestions(query: FormFillSuggestionQuery) {
-    if (!FORM_FILL_TYPES.includes(query.type)) throw new Error("Unknown form-fill type");
+    if (query.type !== undefined && !FORM_FILL_TYPES.includes(query.type)) {
+      throw new Error("Unknown form-fill type");
+    }
+    const fieldName = query.fieldName;
+    if (fieldName !== undefined) this.requireFormFillFieldName(fieldName);
+    if (query.type === undefined && fieldName === undefined) {
+      throw new Error("A form-fill query requires a field name or semantic type");
+    }
     const limit = Math.min(Math.max(query.limit ?? 20, 1), 100);
+    const fieldKeys = [
+      ...(query.type === undefined ? [] : [this.formFillFieldKey(query.type, "")]),
+      ...(fieldName === undefined ? [] : [this.formFillFieldKey(undefined, fieldName)]),
+    ];
+    const uniqueFieldKeys = [...new Set(fieldKeys)];
+    const placeholders = uniqueFieldKeys.map(() => "?").join(", ");
     const rows = this.sql
       .exec(
-        `SELECT * FROM form_fill_values WHERE type = ?
+        `SELECT * FROM form_fill_values WHERE field_key IN (${placeholders})
          ORDER BY use_count DESC, updated_at DESC LIMIT ?`,
-        query.type,
+        ...uniqueFieldKeys,
         limit * 4
       )
       .toArray();
@@ -723,20 +635,41 @@ export class BrowserDataDO extends DurableObjectBase {
 
   @rpc(browserDataAuthority("write"))
   async addFormFillValue(input: FormFillValueInput, sourceId?: string): Promise<number> {
-    if (!FORM_FILL_TYPES.includes(input.type)) throw new Error("Unknown form-fill type");
-    const value = input.value.trim();
-    if (!value) throw new Error("Form-fill value cannot be empty");
+    if (input.type !== undefined && !FORM_FILL_TYPES.includes(input.type)) {
+      throw new Error("Unknown form-fill type");
+    }
+    if (input.type !== undefined && !isPersistableFormFillType(input.type)) {
+      throw new Error(`Form-fill type ${input.type} is not reusable form history`);
+    }
+    const fieldName = this.requireFormFillFieldName(input.fieldName);
+    const value = input.value;
     const now = Date.now();
+    const fieldKey = this.formFillFieldKey(input.type, fieldName);
     const valueHash = await this.hashSecret(value);
     const encrypted = await this.encryptText(value);
-    const aliases = JSON.stringify(this.normalizedAliases(input.aliases));
+    const existing = this.sql
+      .exec(
+        `SELECT field_name, aliases FROM form_fill_values
+         WHERE field_key = ? AND value_hash = ?`,
+        fieldKey,
+        valueHash
+      )
+      .toArray()[0];
+    const aliases = JSON.stringify(
+      this.normalizedAliases([
+        ...(existing ? [String(existing["field_name"])] : []),
+        ...(existing ? this.parseStringArray(existing["aliases"]) : []),
+        fieldName,
+        ...(input.aliases ?? []),
+      ])
+    );
     const row = this.sql
       .exec(
         `INSERT INTO form_fill_values
-          (type, value_hash, value_encrypted, display_label, aliases, created_at, updated_at,
-           use_count, source_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(type, value_hash) DO UPDATE SET
+          (field_name, field_key, type, value_hash, value_encrypted, display_label, aliases,
+           created_at, updated_at, use_count, source_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(field_key, value_hash) DO UPDATE SET
            value_encrypted = excluded.value_encrypted,
            display_label = COALESCE(excluded.display_label, form_fill_values.display_label),
            aliases = excluded.aliases,
@@ -744,7 +677,9 @@ export class BrowserDataDO extends DurableObjectBase {
            use_count = MAX(form_fill_values.use_count, excluded.use_count),
            source_id = COALESCE(excluded.source_id, form_fill_values.source_id)
          RETURNING id`,
-        input.type,
+        fieldName,
+        fieldKey,
+        input.type ?? null,
         valueHash,
         encrypted,
         input.displayLabel?.trim() || null,
@@ -863,7 +798,7 @@ export class BrowserDataDO extends DurableObjectBase {
               item.input.name,
               item.input.domain,
               item.input.path,
-              item.input.partitionKey ?? "",
+              browserCookiePartitionStorageKey(item.input.partitionKey),
               item.encryptedValue,
               item.contentHash,
               item.input.hostOnly ? 1 : 0,
@@ -886,7 +821,7 @@ export class BrowserDataDO extends DurableObjectBase {
             key.name,
             key.domain,
             key.path,
-            key.partitionKey ?? ""
+            browserCookiePartitionStorageKey(key.partitionKey)
           );
           changed =
             Number((result as unknown as { changes?: number }).changes ?? this.changes()) > 0;
@@ -916,7 +851,9 @@ export class BrowserDataDO extends DurableObjectBase {
         now
       )
       .toArray();
-    const cookies = await Promise.all(rows.map((row) => this.cookieRow(row)));
+    const cookies = (await Promise.all(rows.map((row) => this.cookieRow(row)))).filter(
+      (cookie) => cookie.expirationDate === undefined || cookie.expirationDate > now
+    );
     return { revision: this.currentCookieRevision(), cookies };
   }
 
@@ -1008,32 +945,37 @@ export class BrowserDataDO extends DurableObjectBase {
     const origin = new URL(favicon.origin);
     if (
       (page.protocol !== "http:" && page.protocol !== "https:") ||
-      page.origin !== origin.origin ||
-      favicon.mimeType !== "image/png"
+      page.origin !== origin.origin
     ) {
       throw new Error("Favicon page association must use one matching HTTP(S) origin");
     }
-    const png16 = decodeFaviconPng(favicon.png16);
-    const png32 = decodeFaviconPng(favicon.png32);
-    this.assertFaviconBytes(png16);
-    this.assertFaviconBytes(png32);
-    if (!png16 && !png32) throw new Error("Favicon has no raster data");
+    if (!isFaviconMimeType(favicon.mimeType)) {
+      throw new Error(`Unsupported favicon MIME type: ${favicon.mimeType}`);
+    }
+    const imageData = decodeFaviconData(favicon.data);
+    this.assertFaviconBytes(imageData);
+    const detectedMimeType = detectFaviconMimeType(imageData);
+    if (detectedMimeType !== favicon.mimeType) {
+      throw new Error(
+        `Favicon bytes are ${detectedMimeType ?? "not a supported image"}, not ${favicon.mimeType}`
+      );
+    }
     this.sql.exec(
       `INSERT INTO page_favicons
-        (page_url, origin, source_url, png16, png32, mime_type, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'image/png', ?)
+        (page_url, origin, source_url, image_data, mime_type, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(page_url) DO UPDATE SET
          origin = excluded.origin,
          source_url = excluded.source_url,
-         png16 = excluded.png16,
-         png32 = excluded.png32,
+         image_data = excluded.image_data,
+         mime_type = excluded.mime_type,
          updated_at = excluded.updated_at
        WHERE excluded.updated_at >= page_favicons.updated_at`,
       page.href,
       origin.origin,
       favicon.sourceUrl ?? null,
-      png16 ?? null,
-      png32 ?? null,
+      imageData,
+      favicon.mimeType,
       favicon.updatedAt
     );
   }
@@ -1391,6 +1333,7 @@ export class BrowserDataDO extends DurableObjectBase {
       ...input,
       ...key,
       sameSite: input.sameSite,
+      expirationDate: normalizeCookieExpirationSeconds(input.expirationDate),
       sourcePort: input.sourcePort === undefined ? undefined : Math.trunc(input.sourcePort),
     };
   }
@@ -1404,7 +1347,9 @@ export class BrowserDataDO extends DurableObjectBase {
       name,
       domain,
       path,
-      ...(key.partitionKey ? { partitionKey: key.partitionKey } : {}),
+      ...(key.partitionKey
+        ? { partitionKey: normalizeBrowserCookiePartitionKey(key.partitionKey) }
+        : {}),
     };
   }
 
@@ -1417,7 +1362,7 @@ export class BrowserDataDO extends DurableObjectBase {
           key.name,
           key.domain,
           key.path,
-          key.partitionKey ?? ""
+          browserCookiePartitionStorageKey(key.partitionKey)
         )
         .toArray()[0] ?? null
     );
@@ -1425,21 +1370,32 @@ export class BrowserDataDO extends DurableObjectBase {
 
   private async cookieRow(row: Record<string, unknown>): Promise<StoredCookie> {
     const encryptedValue = String(row["encrypted_value"]);
-    return {
+    const value = await this.decryptText(encryptedValue);
+    const expirationDate = normalizeCookieExpirationSeconds(
+      row["expiration_date"] == null ? undefined : Number(row["expiration_date"])
+    );
+    const partitionKey = browserCookiePartitionFromStorageKey(String(row["partition_key"] ?? ""));
+    const cookie = {
       name: String(row["name"]),
       domain: String(row["domain"]),
       path: String(row["path"]),
-      ...(String(row["partition_key"] ?? "") ? { partitionKey: String(row["partition_key"]) } : {}),
-      encryptedValue,
-      value: await this.decryptText(encryptedValue),
-      contentHash: String(row["content_hash"]),
+      ...(partitionKey ? { partitionKey } : {}),
+      value,
       hostOnly: Number(row["host_only"]) === 1,
       secure: Number(row["secure"]) === 1,
       httpOnly: Number(row["http_only"]) === 1,
       sameSite: String(row["same_site"]) as BrowserCookieRecord["sameSite"],
-      ...(row["expiration_date"] == null ? {} : { expirationDate: Number(row["expiration_date"]) }),
+      ...(expirationDate === undefined ? {} : { expirationDate }),
       ...(row["source_scheme"] == null ? {} : { sourceScheme: String(row["source_scheme"]) }),
       ...(row["source_port"] == null ? {} : { sourcePort: Number(row["source_port"]) }),
+    } satisfies BrowserCookieInput;
+    return {
+      ...cookie,
+      encryptedValue,
+      // Projection equality covers only attributes Chromium can materialize.
+      // Recompute at the trusted boundary so rows written by an older hash
+      // definition converge without a destructive data migration.
+      contentHash: await this.cookieContentHash(cookie),
       createdAt: Number(row["created_at"]),
       ...(row["last_accessed"] == null ? {} : { lastAccessed: Number(row["last_accessed"]) }),
       revision: Number(row["revision"]),
@@ -1468,14 +1424,12 @@ export class BrowserDataDO extends DurableObjectBase {
         cookie.value,
         cookie.domain,
         cookie.path,
-        cookie.partitionKey ?? "",
+        browserCookiePartitionStorageKey(cookie.partitionKey),
         cookie.hostOnly,
         cookie.secure,
         cookie.httpOnly,
         cookie.sameSite,
-        cookie.expirationDate ?? null,
-        cookie.sourceScheme ?? null,
-        cookie.sourcePort ?? null,
+        normalizeCookieExpirationSeconds(cookie.expirationDate) ?? null,
       ])
     );
   }
@@ -1512,7 +1466,8 @@ export class BrowserDataDO extends DurableObjectBase {
   private async formFillRow(row: Record<string, unknown>) {
     return {
       id: Number(row["id"]),
-      type: String(row["type"]),
+      fieldName: String(row["field_name"]),
+      type: row["type"] == null ? null : (String(row["type"]) as FormFillType),
       value: await this.decryptText(String(row["value_encrypted"])),
       displayLabel: row["display_label"] == null ? null : String(row["display_label"]),
       aliases: this.parseStringArray(row["aliases"]),
@@ -1652,13 +1607,28 @@ export class BrowserDataDO extends DurableObjectBase {
   }
 
   private normalizedAliases(aliases: string[] | undefined): string[] {
-    return [
-      ...new Set(
-        (aliases ?? [])
-          .map((alias) => alias.trim().toLocaleLowerCase())
-          .filter((alias) => alias.length > 0 && alias.length <= 200)
-      ),
-    ].slice(0, 50);
+    const unique = new Map<string, string>();
+    for (const alias of aliases ?? []) {
+      const trimmed = alias.trim();
+      if (trimmed.length === 0 || trimmed.length > 1_000) continue;
+      const key = this.normalizeFormFillFieldName(trimmed);
+      if (!unique.has(key)) unique.set(key, trimmed);
+    }
+    return [...unique.values()].slice(0, 50);
+  }
+
+  private requireFormFillFieldName(fieldName: string): string {
+    if (typeof fieldName !== "string") throw new Error("Form-fill field name must be text");
+    if (fieldName.length > 1_000) throw new Error("Form-fill field name is too long");
+    return fieldName;
+  }
+
+  private normalizeFormFillFieldName(fieldName: string): string {
+    return fieldName.trim().normalize("NFKC").toLocaleLowerCase();
+  }
+
+  private formFillFieldKey(type: FormFillType | undefined, fieldName: string): string {
+    return type ? `type:${type}` : `field:${this.normalizeFormFillFieldName(fieldName)}`;
   }
 
   private parseStringArray(value: unknown): string[] {
@@ -1678,8 +1648,11 @@ export class BrowserDataDO extends DurableObjectBase {
   }
 
   private assertFaviconBytes(value: Uint8Array | undefined): void {
-    if (value && value.byteLength > MAX_FAVICON_BYTES) {
-      throw new Error(`Favicon exceeds ${MAX_FAVICON_BYTES} bytes`);
+    if (!value || value.byteLength === 0) {
+      throw new Error("Favicon has no image data");
+    }
+    if (value.byteLength > MAX_PAGE_FAVICON_BYTES) {
+      throw new Error(`Favicon exceeds ${MAX_PAGE_FAVICON_BYTES} bytes`);
     }
   }
 

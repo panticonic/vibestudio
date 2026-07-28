@@ -14,6 +14,7 @@ import type { BrowserImportHostProvider } from "./browserImportHostProvider.js";
 
 export function createBrowserEnvironmentService(deps: {
   getProjection(): BrowserCookieProjectionApi | null;
+  waitForProjection(): Promise<BrowserCookieProjectionApi>;
   getDownloads(): BrowserDownloadManager | null;
   getImportProvider(): BrowserImportHostProvider | null;
   browserDataBrokerRepoPath: string | null;
@@ -62,8 +63,7 @@ export function createBrowserEnvironmentService(deps: {
       listImportOpenTabs: (_ctx, [sourceId]) =>
         requireImportProvider(deps).listOpenTabs(sourceId, _ctx.signal),
       flushCookieProjection: async (_ctx, [origins]) => {
-        const projection = deps.getProjection();
-        if (!projection) throw new Error("Browser cookie projection is unavailable");
+        const projection = await deps.waitForProjection();
         return projection.flush(origins);
       },
       getCookieProjectionDiagnostics: () => {

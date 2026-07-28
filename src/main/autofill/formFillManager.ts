@@ -80,6 +80,7 @@ interface FieldInfo {
 interface FocusInfo {
   fieldType: "username" | "password" | "form-fill";
   formFillType?: FormFillType;
+  formFillFieldName?: string;
   selector?: string;
   prefix?: string;
   rect: {
@@ -115,7 +116,7 @@ interface PendingFormFillSnapshot {
   timestamp: number;
   pageUrl: string;
   actionUrl: string | null;
-  values: Array<{ type: FormFillType; value: string; label: string }>;
+  values: Array<{ fieldName: string; type?: FormFillType; value: string; label: string }>;
 }
 
 interface FormFillPanelState {
@@ -137,7 +138,8 @@ interface FormFillPanelState {
   warnedSubFrameOrigins: Set<string>;
   valueSuggestions: StoredFormFill[];
   valueFocus?: {
-    type: FormFillType;
+    fieldName?: string;
+    type?: FormFillType;
     selector: string;
   };
   pendingFormFill?: PendingFormFillSnapshot;
@@ -568,17 +570,23 @@ export class FormFillManager {
     // Handle field focus -> show dropdown or re-fill
     if (
       pulled.focus?.fieldType === "form-fill" &&
-      pulled.focus.formFillType &&
+      (pulled.focus.formFillType !== undefined || pulled.focus.formFillFieldName !== undefined) &&
       pulled.focus.selector
     ) {
       const suggestions = await this.formFillStore.getFormFillSuggestions({
-        type: pulled.focus.formFillType,
+        ...(pulled.focus.formFillType === undefined ? {} : { type: pulled.focus.formFillType }),
+        ...(pulled.focus.formFillFieldName === undefined
+          ? {}
+          : { fieldName: pulled.focus.formFillFieldName }),
         prefix: pulled.focus.prefix || undefined,
         limit: 20,
       });
       state.valueSuggestions = suggestions;
       state.valueFocus = {
-        type: pulled.focus.formFillType,
+        ...(pulled.focus.formFillType === undefined ? {} : { type: pulled.focus.formFillType }),
+        ...(pulled.focus.formFillFieldName === undefined
+          ? {}
+          : { fieldName: pulled.focus.formFillFieldName }),
         selector: pulled.focus.selector,
       };
       if (suggestions.length > 0) {
@@ -779,7 +787,7 @@ export class FormFillManager {
       state.valueSuggestions.map((suggestion) => ({
         id: suggestion.id,
         primary: suggestion.value,
-        secondary: suggestion.displayLabel ?? humanizeFormFillType(suggestion.type),
+        secondary: suggestion.displayLabel ?? humanizeFormFillIdentity(suggestion),
       })),
       bounds
     );
@@ -884,8 +892,8 @@ export class FormFillManager {
       panelId,
       origin: state.origin,
       fields: pending.values.map((field) => ({
-        type: field.type,
-        label: field.label || humanizeFormFillType(field.type),
+        type: field.type ?? field.fieldName,
+        label: field.label || humanizeFormFillIdentity(field),
       })),
     });
   }
@@ -1108,9 +1116,10 @@ export class FormFillManager {
 
     for (const field of pending.values) {
       await this.formFillStore.addFormFillValue({
-        type: field.type,
+        fieldName: field.fieldName,
+        ...(field.type === undefined ? {} : { type: field.type }),
         value: field.value,
-        displayLabel: field.label || humanizeFormFillType(field.type),
+        displayLabel: field.label || humanizeFormFillIdentity(field),
       });
     }
     this.eventService.emit("browser-data-changed", { dataType: "formFill" });
@@ -1189,6 +1198,9 @@ export class FormFillManager {
   }
 }
 
-function humanizeFormFillType(type: FormFillType): string {
-  return type.replace(/-/g, " ");
+function humanizeFormFillIdentity(identity: {
+  fieldName: string;
+  type?: FormFillType | null;
+}): string {
+  return (identity.type ?? identity.fieldName).replace(/[-_]/g, " ");
 }

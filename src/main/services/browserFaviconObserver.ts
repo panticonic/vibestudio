@@ -70,12 +70,12 @@ export class CanonicalBrowserFaviconObserver implements BrowserFaviconObserver {
       throw new Error("icon dimensions are invalid");
     }
     const updatedAt = Date.now();
+    const png = image.resize({ width: 32, height: 32, quality: "best" }).toPNG();
     await this.store.putPageFavicon({
       pageUrl,
       origin: new URL(pageUrl).origin,
       sourceUrl,
-      png16: image.resize({ width: 16, height: 16, quality: "best" }).toPNG().toString("base64"),
-      png32: image.resize({ width: 32, height: 32, quality: "best" }).toPNG().toString("base64"),
+      data: png.toString("base64"),
       mimeType: "image/png",
       updatedAt,
     });

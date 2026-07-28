@@ -13,6 +13,8 @@
  * - Notify main process via ping() (argless, zero-data)
  */
 
+import { FORM_FILL_TYPES, NON_PERSISTABLE_FORM_FILL_TYPES } from "@vibestudio/browser-data";
+
 export function getContentScript(): string {
   return `(function() {
   'use strict';
@@ -211,39 +213,43 @@ export function getContentScript(): string {
   function classifyValueField(el) {
     if (!el || el.disabled || el.readOnly || el.type === 'hidden' || el.type === 'password') return null;
     if (el.offsetWidth === 0 || el.offsetHeight === 0 || getComputedStyle(el).visibility === 'hidden') return null;
-    var excluded = ((el.autocomplete || '') + ' ' + (el.name || '') + ' ' + (el.id || '')).toLowerCase();
-    if (/cc-|card|cvc|cvv|password|passwd|one-time|otp|token|secret/.test(excluded)) return null;
-    var allowed = [
-      'name','given-name','additional-name','family-name','honorific-prefix','honorific-suffix',
-      'email','tel','organization','street-address','address-line1','address-line2',
-      'address-line3','address-level1','address-level2','postal-code','country','country-name'
-    ];
+    if (['submit', 'button', 'reset', 'file', 'checkbox', 'radio', 'image'].indexOf((el.type || '').toLowerCase()) >= 0) return null;
+    var fieldName = String(el.name || el.id || '');
+    var allowed = ${JSON.stringify(FORM_FILL_TYPES)};
+    var nonPersistable = ${JSON.stringify(NON_PERSISTABLE_FORM_FILL_TYPES)};
     var autocomplete = (el.autocomplete || '').toLowerCase().split(/\\s+/);
+    var semanticType = null;
     for (var i = autocomplete.length - 1; i >= 0; i--) {
-      if (allowed.indexOf(autocomplete[i]) >= 0) return autocomplete[i];
+      if (allowed.indexOf(autocomplete[i]) >= 0) {
+        semanticType = autocomplete[i];
+        break;
+      }
     }
     var label = '';
     if (el.labels && el.labels.length) label = Array.from(el.labels).map(function(item) { return item.textContent || ''; }).join(' ');
     var hint = ((el.type || '') + ' ' + (el.name || '') + ' ' + (el.id || '') + ' ' +
       (el.placeholder || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' + label)
       .toLowerCase().replace(/_/g, '-');
-    if (el.type === 'email' || /e-?mail/.test(hint)) return 'email';
-    if (el.type === 'tel' || /phone|mobile|telephone/.test(hint)) return 'tel';
-    if (/first|given/.test(hint) && /name/.test(hint)) return 'given-name';
-    if (/last|family|surname/.test(hint) && /name/.test(hint)) return 'family-name';
-    if (/full.?name|your.?name/.test(hint)) return 'name';
-    if (/company|organisation|organization/.test(hint)) return 'organization';
-    if (/zip|postal|postcode/.test(hint)) return 'postal-code';
-    if (/city|town/.test(hint)) return 'address-level2';
-    if (/state|province|region/.test(hint)) return 'address-level1';
-    if (/country/.test(hint)) return 'country-name';
-    if (/address.?2|address-line.?2/.test(hint)) return 'address-line2';
-    if (/address.?1|address-line.?1/.test(hint)) return 'address-line1';
-    if (/street|address/.test(hint)) return 'street-address';
-    return null;
+    if (!semanticType && (el.type === 'email' || /e-?mail/.test(hint))) semanticType = 'email';
+    if (!semanticType && (el.type === 'tel' || /phone|mobile|telephone/.test(hint))) semanticType = 'tel';
+    if (!semanticType && /first|given/.test(hint) && /name/.test(hint)) semanticType = 'given-name';
+    if (!semanticType && /last|family|surname/.test(hint) && /name/.test(hint)) semanticType = 'family-name';
+    if (!semanticType && /full.?name|your.?name/.test(hint)) semanticType = 'name';
+    if (!semanticType && /company|organisation|organization/.test(hint)) semanticType = 'organization';
+    if (!semanticType && /zip|postal|postcode/.test(hint)) semanticType = 'postal-code';
+    if (!semanticType && /city|town/.test(hint)) semanticType = 'address-level2';
+    if (!semanticType && /state|province|region/.test(hint)) semanticType = 'address-level1';
+    if (!semanticType && /country/.test(hint)) semanticType = 'country-name';
+    if (!semanticType && /address.?2|address-line.?2/.test(hint)) semanticType = 'address-line2';
+    if (!semanticType && /address.?1|address-line.?1/.test(hint)) semanticType = 'address-line1';
+    if (!semanticType && /street|address/.test(hint)) semanticType = 'street-address';
+    if (!fieldName) fieldName = semanticType || '';
+    if (!fieldName && !semanticType) return null;
+    if (semanticType && nonPersistable.indexOf(semanticType) >= 0) return null;
+    return { fieldName: fieldName, type: semanticType };
   }
 
-  function setupValueField(field, formFillType) {
+  function setupValueField(field, identity) {
     if (trackedValueFields.has(field)) return;
     trackedValueFields.add(field);
     function onKeyDown(evt) {
@@ -257,7 +263,8 @@ export function getContentScript(): string {
     field.addEventListener('focus', function() {
       window.__vibestudio_af_focus = {
         fieldType: 'form-fill',
-        formFillType: formFillType,
+        formFillType: identity.type,
+        formFillFieldName: identity.fieldName,
         selector: buildSelector(field),
         rect: getFieldRect(field),
         element: field,
@@ -282,10 +289,10 @@ export function getContentScript(): string {
   }
 
   function scanValueFields() {
-    var fields = document.querySelectorAll('input, textarea');
+    var fields = document.querySelectorAll('input, textarea, select');
     for (var i = 0; i < fields.length; i++) {
-      var type = classifyValueField(fields[i]);
-      if (type) setupValueField(fields[i], type);
+      var identity = classifyValueField(fields[i]);
+      if (identity) setupValueField(fields[i], identity);
     }
 
     var forms = document.querySelectorAll('form');
@@ -297,15 +304,20 @@ export function getContentScript(): string {
         var submitted = event.currentTarget;
         if (!submitted || (submitted.method || '').toLowerCase() === 'get') return;
         if (submitted.querySelector('input[type="password"]')) return;
-        var candidates = submitted.querySelectorAll('input, textarea');
+        var candidates = submitted.querySelectorAll('input, textarea, select');
         var values = [];
         for (var k = 0; k < candidates.length && values.length < 20; k++) {
           var field = candidates[k];
-          var fieldType = classifyValueField(field);
+          var fieldIdentity = classifyValueField(field);
           var value = String(field.value || '').trim();
-          if (!fieldType || !value || value.length > 1000) continue;
+          if (!fieldIdentity || !value || value.length > 1000) continue;
           var label = field.getAttribute('aria-label') || field.placeholder || field.name || '';
-          values.push({ type: fieldType, value: value, label: String(label).slice(0, 120) });
+          values.push({
+            fieldName: fieldIdentity.fieldName,
+            type: fieldIdentity.type,
+            value: value,
+            label: String(label).slice(0, 120)
+          });
         }
         if (values.length === 0) return;
         window.__vibestudio_af_form_pending = {
@@ -527,6 +539,7 @@ export function getPullStateScript(): string {
     focus = {
       fieldType: focus.fieldType,
       formFillType: focus.formFillType,
+      formFillFieldName: focus.formFillFieldName,
       selector: focus.selector,
       prefix: focus.prefix || '',
       rect: {
@@ -605,7 +618,11 @@ export function getFillValueScript(selector: string, value: string): string {
   if (!el || el.disabled || el.readOnly) return;
   if (el.type === 'hidden' || el.type === 'password') return;
   if (el.offsetWidth === 0 || el.offsetHeight === 0 || getComputedStyle(el).visibility === 'hidden') return;
-  var prototype = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  var prototype = el instanceof HTMLSelectElement
+    ? HTMLSelectElement.prototype
+    : el instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
   var setter = Object.getOwnPropertyDescriptor(prototype, 'value').set;
   setter.call(el, ${JSON.stringify(value)});
   el.dispatchEvent(new Event('input', {bubbles:true}));

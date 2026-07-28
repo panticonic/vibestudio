@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { detectFaviconMimeType } from "@vibestudio/browser-data";
 import type { Database } from "./sqlJsReader.js";
 import { openReadonlySqlite } from "./sqlJsReader.js";
 import type {
@@ -22,11 +23,18 @@ import type {
 import { BrowserDataError } from "../errors.js";
 import { copyDatabaseToTemp, cleanupTempCopy } from "../import/fileCopier.js";
 import { chromeTimestampToMs } from "../normalize/history.js";
-import { chromiumSameSite, chromiumSourceScheme, isHostOnlyCookie } from "../normalize/cookies.js";
-import { normalizeFieldName } from "../normalize/autofill.js";
+import {
+  chromiumCookieIsolation,
+  chromiumSameSite,
+  chromiumSourceScheme,
+  isHostOnlyCookie,
+} from "../normalize/cookies.js";
 import { normalizeSearchUrl } from "../normalize/searchEngines.js";
 import { parseChromiumManifest } from "../normalize/extensions.js";
-import { chromiumSettingToPermission, mapChromiumPermissionName } from "../normalize/permissions.js";
+import {
+  chromiumSettingToPermission,
+  mapChromiumPermissionName,
+} from "../normalize/permissions.js";
 import { extractChromiumSettings } from "../normalize/settings.js";
 import { normalizeTitle } from "../normalize/bookmarks.js";
 
@@ -71,10 +79,17 @@ function tableExists(db: Database, tableName: string): boolean {
   return !!row;
 }
 
-async function withDatabase<T>(
-  dbPath: string,
-  fn: (db: Database) => T,
-): Promise<T> {
+function tableColumns(db: Database, tableName: string): Set<string> {
+  return new Set(
+    (
+      db.prepare(`PRAGMA table_info("${tableName.replaceAll('"', '""')}")`).all() as Array<{
+        name: string;
+      }>
+    ).map((row) => row.name)
+  );
+}
+
+async function withDatabase<T>(dbPath: string, fn: (db: Database) => T): Promise<T> {
   const tempPath = await copyDatabaseToTemp(dbPath);
   try {
     const db = await openReadonlySqlite(fs.readFileSync(tempPath));
@@ -86,13 +101,20 @@ async function withDatabase<T>(
   } catch (err) {
     if (err instanceof BrowserDataError) throw err;
     const error = err as Error;
-    if (error.message?.includes("SQLITE_CORRUPT") || error.message?.includes("database disk image is malformed")) {
+    if (
+      error.message?.includes("SQLITE_CORRUPT") ||
+      error.message?.includes("database disk image is malformed")
+    ) {
       throw new BrowserDataError("DB_CORRUPT", `Database is corrupt: ${dbPath}`, error.message);
     }
     if (error.message?.includes("SQLITE_BUSY") || error.message?.includes("database is locked")) {
       throw new BrowserDataError("DB_LOCKED", `Database is locked: ${dbPath}`, error.message);
     }
-    throw new BrowserDataError("SCHEMA_MISMATCH", `Failed to read database: ${dbPath}`, error.message);
+    throw new BrowserDataError(
+      "SCHEMA_MISMATCH",
+      `Failed to read database: ${dbPath}`,
+      error.message
+    );
   } finally {
     cleanupTempCopy(tempPath);
   }
@@ -135,7 +157,7 @@ export class ChromiumReader implements BrowserDataReader {
   private traverseBookmarkNode(
     node: Record<string, unknown>,
     folderPath: string[],
-    results: ImportedBookmark[],
+    results: ImportedBookmark[]
   ): void {
     const type = node["type"] as string;
     const name = normalizeTitle(node["name"] as string);
@@ -180,7 +202,7 @@ export class ChromiumReader implements BrowserDataReader {
                   v.visit_time, v.transition
            FROM urls u
            LEFT JOIN visits v ON v.url = u.id
-           ORDER BY v.visit_time DESC`,
+           ORDER BY v.visit_time DESC`
         )
         .all() as Array<{
         url: string;
@@ -198,7 +220,8 @@ export class ChromiumReader implements BrowserDataReader {
         const existing = byUrl.get(row.url);
         const visitTime = row.visit_time ? chromeTimestampToMs(row.visit_time) : 0;
         const lastVisit = chromeTimestampToMs(row.last_visit_time);
-        const transition = row.transition != null ? chromeTransitionType(row.transition) : undefined;
+        const transition =
+          row.transition != null ? chromeTransitionType(row.transition) : undefined;
 
         if (!existing) {
           byUrl.set(row.url, {
@@ -210,11 +233,13 @@ export class ChromiumReader implements BrowserDataReader {
             typedCount: row.typed_count || undefined,
             transition,
             visits: visitTime
-              ? [{
-                visitTime,
-                transition,
-                typed: transition === "typed",
-              } satisfies ImportedHistoryVisit]
+              ? [
+                  {
+                    visitTime,
+                    transition,
+                    typed: transition === "typed",
+                  } satisfies ImportedHistoryVisit,
+                ]
               : [],
           });
         } else {
@@ -235,11 +260,13 @@ export class ChromiumReader implements BrowserDataReader {
       for (const entry of byUrl.values()) {
         if (!entry.firstVisitTime) entry.firstVisitTime = entry.lastVisitTime;
         if (!entry.visits?.length && entry.lastVisitTime) {
-          entry.visits = [{
-            visitTime: entry.lastVisitTime,
-            transition: entry.transition,
-            typed: entry.transition === "typed",
-          }];
+          entry.visits = [
+            {
+              visitTime: entry.lastVisitTime,
+              transition: entry.transition,
+              typed: entry.transition === "typed",
+            },
+          ];
         }
       }
 
@@ -257,13 +284,21 @@ export class ChromiumReader implements BrowserDataReader {
     // Collect rows synchronously from the database
     const rawRows = await withDatabase(dbPath, (db) => {
       if (!tableExists(db, "cookies")) return [];
+      const columns = tableColumns(db, "cookies");
+      const sourcePartitionColumn = columns.has("top_frame_site_key")
+        ? "top_frame_site_key"
+        : "'' AS top_frame_site_key";
+      const crossSiteAncestorColumn = columns.has("has_cross_site_ancestor")
+        ? "has_cross_site_ancestor"
+        : "1 AS has_cross_site_ancestor";
 
       return db
         .prepare(
           `SELECT host_key, name, value, encrypted_value, path,
                   expires_utc, is_secure, is_httponly, samesite,
-                  source_scheme, source_port
-           FROM cookies`,
+                  source_scheme, source_port, ${sourcePartitionColumn},
+                  ${crossSiteAncestorColumn}
+           FROM cookies`
         )
         .all() as Array<{
         host_key: string;
@@ -277,6 +312,8 @@ export class ChromiumReader implements BrowserDataReader {
         samesite: number;
         source_scheme: number;
         source_port: number;
+        top_frame_site_key: string;
+        has_cross_site_ancestor: number;
       }>;
     });
 
@@ -286,27 +323,43 @@ export class ChromiumReader implements BrowserDataReader {
 
     for (const row of rawRows) {
       const hasEncrypted = row.encrypted_value && row.encrypted_value.length > 0;
-      let cookieValue = hasEncrypted ? "" : (row.value || "");
+      let importedValue:
+        | { valueStatus: "available"; value: string }
+        | { valueStatus: "unavailable"; value: ""; unavailableReason: "decryption_failed" } =
+        hasEncrypted
+          ? {
+              valueStatus: "unavailable",
+              value: "",
+              unavailableReason: "decryption_failed",
+            }
+          : { valueStatus: "available", value: row.value || "" };
 
       if (hasEncrypted && this.cryptoProvider && this.browser) {
         try {
-          cookieValue = await this.cryptoProvider.decryptChromiumValue(
-            row.encrypted_value!, this.browser, localStatePath,
-          );
+          importedValue = {
+            valueStatus: "available",
+            value: await this.cryptoProvider.decryptChromiumValue(
+              row.encrypted_value!,
+              this.browser,
+              localStatePath
+            ),
+          };
         } catch {
-          // Decryption failed — value stays empty
+          // Preserve the explicit unavailable state. Empty plaintext is valid.
         }
       }
 
       const expiresUtc = Number(row.expires_utc);
-      const expirationDate = expiresUtc > 0 ? chromeTimestampToMs(row.expires_utc) / 1000 : undefined;
+      const expirationDate =
+        expiresUtc > 0 ? chromeTimestampToMs(row.expires_utc) / 1000 : undefined;
 
       cookies.push({
         name: row.name,
-        value: cookieValue,
+        ...importedValue,
         domain: row.host_key,
         hostOnly: isHostOnlyCookie(row.host_key),
         path: row.path,
+        ...chromiumCookieIsolation(row.top_frame_site_key, row.has_cross_site_ancestor === 1),
         expirationDate,
         secure: row.is_secure === 1,
         httpOnly: row.is_httponly === 1,
@@ -331,7 +384,7 @@ export class ChromiumReader implements BrowserDataReader {
         .prepare(
           `SELECT origin_url, action_url, username_value, password_value,
                   date_created, date_last_used, date_password_modified, times_used
-           FROM logins`,
+           FROM logins`
         )
         .all() as Array<{
         origin_url: string;
@@ -355,10 +408,17 @@ export class ChromiumReader implements BrowserDataReader {
       const datePasswordChanged = Number(row.date_password_modified);
 
       let decryptedPassword = "";
-      if (row.password_value && row.password_value.length > 0 && this.cryptoProvider && this.browser) {
+      if (
+        row.password_value &&
+        row.password_value.length > 0 &&
+        this.cryptoProvider &&
+        this.browser
+      ) {
         try {
           decryptedPassword = await this.cryptoProvider.decryptChromiumValue(
-            row.password_value, this.browser, localStatePath,
+            row.password_value,
+            this.browser,
+            localStatePath
           );
         } catch {
           // Decryption failed — password stays empty
@@ -372,7 +432,8 @@ export class ChromiumReader implements BrowserDataReader {
         password: decryptedPassword,
         dateCreated: dateCreated > 0 ? chromeTimestampToMs(row.date_created) : undefined,
         dateLastUsed: dateLastUsed > 0 ? chromeTimestampToMs(row.date_last_used) : undefined,
-        datePasswordChanged: datePasswordChanged > 0 ? chromeTimestampToMs(row.date_password_modified) : undefined,
+        datePasswordChanged:
+          datePasswordChanged > 0 ? chromeTimestampToMs(row.date_password_modified) : undefined,
         timesUsed: row.times_used || undefined,
       });
     }
@@ -390,7 +451,7 @@ export class ChromiumReader implements BrowserDataReader {
       const rows = db
         .prepare(
           `SELECT name, value, date_created, date_last_used, count
-           FROM autofill`,
+           FROM autofill`
         )
         .all() as Array<{
         name: string;
@@ -405,7 +466,7 @@ export class ChromiumReader implements BrowserDataReader {
         const dateLastUsed = Number(row.date_last_used);
 
         return {
-          fieldName: normalizeFieldName(row.name),
+          fieldName: row.name,
           value: row.value,
           dateCreated: dateCreated > 0 ? chromeTimestampToMs(row.date_created) : undefined,
           dateLastUsed: dateLastUsed > 0 ? chromeTimestampToMs(row.date_last_used) : undefined,
@@ -425,7 +486,7 @@ export class ChromiumReader implements BrowserDataReader {
       const rows = db
         .prepare(
           `SELECT id, short_name, keyword, url, suggestions_url, favicon_url, is_active
-           FROM keywords`,
+           FROM keywords`
         )
         .all() as Array<{
         id: number;
@@ -458,7 +519,9 @@ export class ChromiumReader implements BrowserDataReader {
     const prefs = readJsonFile(prefsPath) as Record<string, unknown> | null;
     if (prefs) {
       const extensions = prefs["extensions"] as Record<string, unknown> | undefined;
-      const settings = extensions?.["settings"] as Record<string, Record<string, unknown>> | undefined;
+      const settings = extensions?.["settings"] as
+        | Record<string, Record<string, unknown>>
+        | undefined;
       if (settings) {
         for (const [id, extSettings] of Object.entries(settings)) {
           const state = extSettings["state"] as number | undefined;
@@ -527,7 +590,9 @@ export class ChromiumReader implements BrowserDataReader {
 
     const profile = prefs["profile"] as Record<string, unknown> | undefined;
     const contentSettings = profile?.["content_settings"] as Record<string, unknown> | undefined;
-    const exceptions = contentSettings?.["exceptions"] as Record<string, Record<string, Record<string, unknown>>> | undefined;
+    const exceptions = contentSettings?.["exceptions"] as
+      | Record<string, Record<string, Record<string, unknown>>>
+      | undefined;
     if (!exceptions) return [];
 
     const results: ImportedPermission[] = [];
@@ -578,23 +643,27 @@ export class ChromiumReader implements BrowserDataReader {
 
       const rows = db
         .prepare(
-          `SELECT im.page_url, fb.image_data, f.icon_type
+          `SELECT im.page_url, f.url AS icon_url, fb.image_data
            FROM icon_mapping im
            JOIN favicons f ON f.id = im.icon_id
            JOIN favicon_bitmaps fb ON fb.icon_id = f.id
-           WHERE fb.image_data IS NOT NULL AND length(fb.image_data) > 0`,
+           WHERE fb.image_data IS NOT NULL AND length(fb.image_data) > 0`
         )
         .all() as Array<{
         page_url: string;
+        icon_url: string;
         image_data: Buffer;
-        icon_type: number;
       }>;
 
-      return rows.map((row) => ({
-        url: row.page_url,
-        data: Buffer.from(row.image_data),
-        mimeType: row.icon_type === 2 ? "image/x-icon" : "image/png",
-      }));
+      return rows.map((row) => {
+        const data = Buffer.from(row.image_data);
+        return {
+          url: row.page_url,
+          data,
+          mimeType: detectFaviconMimeType(data) ?? "application/octet-stream",
+          sourceUrl: row.icon_url,
+        };
+      });
     });
   }
 }

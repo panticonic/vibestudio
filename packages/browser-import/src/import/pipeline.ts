@@ -17,14 +17,50 @@ import { createCryptoProvider } from "../crypto/index.js";
 import { ProgressEmitter, type ProgressCallback } from "./progressEmitter.js";
 
 interface BrowserDataStore {
-  bookmarks: { addBatch(items: Awaited<ReturnType<Awaited<ReturnType<typeof getReader>>["readBookmarks"]>>, meta?: ImportBatchMeta): number | Promise<number> };
-  history: { addBatch(items: Awaited<ReturnType<Awaited<ReturnType<typeof getReader>>["readHistory"]>>, meta?: ImportHistoryBatchMeta): number | Promise<number> };
-  cookies: { addBatch(items: Awaited<ReturnType<Awaited<ReturnType<typeof getReader>>["readCookies"]>>): number | Promise<number> };
-  passwords: { addBatch(items: Awaited<ReturnType<Awaited<ReturnType<typeof getReader>>["readPasswords"]>>): number | Promise<number> };
-  autofill: { addBatch(items: Awaited<ReturnType<Awaited<ReturnType<typeof getReader>>["readAutofill"]>>, meta?: ImportBatchMeta): number | Promise<number> };
-  searchEngines: { addBatch(items: Awaited<ReturnType<Awaited<ReturnType<typeof getReader>>["readSearchEngines"]>>, meta?: ImportBatchMeta): number | Promise<number> };
-  permissions: { addBatch(items: Awaited<ReturnType<Awaited<ReturnType<typeof getReader>>["readPermissions"]>>): number | Promise<number> };
-  favicons: { addBatch(items: Awaited<ReturnType<Awaited<ReturnType<typeof getReader>>["readFavicons"]>>): number | Promise<number> };
+  bookmarks: {
+    addBatch(
+      items: Awaited<ReturnType<Awaited<ReturnType<typeof getReader>>["readBookmarks"]>>,
+      meta?: ImportBatchMeta
+    ): number | Promise<number>;
+  };
+  history: {
+    addBatch(
+      items: Awaited<ReturnType<Awaited<ReturnType<typeof getReader>>["readHistory"]>>,
+      meta?: ImportHistoryBatchMeta
+    ): number | Promise<number>;
+  };
+  cookies: {
+    addBatch(
+      items: Awaited<ReturnType<Awaited<ReturnType<typeof getReader>>["readCookies"]>>
+    ): number | Promise<number>;
+  };
+  passwords: {
+    addBatch(
+      items: Awaited<ReturnType<Awaited<ReturnType<typeof getReader>>["readPasswords"]>>
+    ): number | Promise<number>;
+  };
+  autofill: {
+    addBatch(
+      items: Awaited<ReturnType<Awaited<ReturnType<typeof getReader>>["readAutofill"]>>,
+      meta?: ImportBatchMeta
+    ): number | Promise<number>;
+  };
+  searchEngines: {
+    addBatch(
+      items: Awaited<ReturnType<Awaited<ReturnType<typeof getReader>>["readSearchEngines"]>>,
+      meta?: ImportBatchMeta
+    ): number | Promise<number>;
+  };
+  permissions: {
+    addBatch(
+      items: Awaited<ReturnType<Awaited<ReturnType<typeof getReader>>["readPermissions"]>>
+    ): number | Promise<number>;
+  };
+  favicons: {
+    addBatch(
+      items: Awaited<ReturnType<Awaited<ReturnType<typeof getReader>>["readFavicons"]>>
+    ): number | Promise<number>;
+  };
 }
 
 function getBrowserFamily(name: BrowserName): BrowserFamily {
@@ -42,7 +78,7 @@ function getBrowserFamily(name: BrowserName): BrowserFamily {
 export async function runImportPipeline(
   request: ImportRequest,
   store: BrowserDataStore,
-  onProgress?: ProgressCallback,
+  onProgress?: ProgressCallback
 ): Promise<ImportResult[]> {
   // Resolve profile to a concrete path, then normalize request for readers.
   const profilePath = resolveProfilePath(request);
@@ -63,7 +99,10 @@ export async function runImportPipeline(
     cryptoProvider = await createCryptoProvider();
   } catch (err) {
     // Crypto unavailable — passwords/cookies may not decrypt
-    console.warn("[BrowserData] Crypto provider unavailable — passwords/cookies may not decrypt:", err instanceof Error ? err.message : String(err));
+    console.warn(
+      "[BrowserData] Crypto provider unavailable — passwords/cookies may not decrypt:",
+      err instanceof Error ? err.message : String(err)
+    );
   }
 
   const reader = await getReader(family, {
@@ -82,7 +121,7 @@ export async function runImportPipeline(
         store,
         progress,
         cryptoProvider,
-        importMeta,
+        importMeta
       );
       results.push(result);
     } catch (err) {
@@ -110,7 +149,7 @@ async function importDataType(
   store: BrowserDataStore,
   progress: ProgressEmitter,
   cryptoProvider?: CryptoProvider,
-  importMeta?: ImportBatchMeta,
+  importMeta?: ImportBatchMeta
 ): Promise<ImportResult> {
   const warnings: string[] = [];
 
@@ -157,16 +196,43 @@ async function importDataType(
       const cookies = await reader.readCookies(request.profilePath);
       progress.reading(dataType, cookies.length, cookies.length);
 
-      // Count cookies with empty values (failed decryption) as skipped
-      const skipped = cookies.filter((c) => c.value === "").length;
-      if (skipped > 0) {
+      const now = Date.now() / 1_000;
+      const importable = cookies.filter(
+        (cookie) =>
+          cookie.valueStatus === "available" &&
+          !cookie.unsupportedIsolation &&
+          (cookie.expirationDate === undefined || cookie.expirationDate > now)
+      );
+      const unreadable = cookies.filter((cookie) => cookie.valueStatus === "unavailable").length;
+      const unsupportedIsolation = cookies.filter(
+        (cookie) => cookie.valueStatus === "available" && Boolean(cookie.unsupportedIsolation)
+      ).length;
+      const expired = cookies.filter(
+        (cookie) =>
+          cookie.valueStatus === "available" &&
+          !cookie.unsupportedIsolation &&
+          cookie.expirationDate !== undefined &&
+          cookie.expirationDate <= now
+      ).length;
+      const skipped = unreadable + unsupportedIsolation + expired;
+      if (unreadable > 0) {
         warnings.push(
-          `${skipped} cookies had encrypted values that could not be decrypted`,
+          `${unreadable} encrypted cookie value${unreadable === 1 ? "" : "s"} could not be decrypted`
+        );
+      }
+      if (expired > 0) {
+        warnings.push(`${expired} expired cookie${expired === 1 ? "" : "s"} ignored`);
+      }
+      if (unsupportedIsolation > 0) {
+        warnings.push(
+          `${unsupportedIsolation} cookie${
+            unsupportedIsolation === 1 ? "" : "s"
+          } from private, container, opaque, or insecure partitioned source contexts could not be represented in Chromium`
         );
       }
 
       progress.storing(dataType, 0, cookies.length);
-      await store.cookies.addBatch(cookies);
+      await store.cookies.addBatch(importable);
       progress.done(dataType, cookies.length);
       return {
         dataType,
@@ -186,9 +252,7 @@ async function importDataType(
       if (family === "safari" && request.csvPasswordFile) {
         const { SafariReader } = await import("../readers/safariReader.js");
         const safariReader = new SafariReader();
-        const csvPasswords = await safariReader.readPasswordsFromCsv(
-          request.csvPasswordFile,
-        );
+        const csvPasswords = await safariReader.readPasswordsFromCsv(request.csvPasswordFile);
         passwords = [...passwords, ...csvPasswords];
       }
 
@@ -202,24 +266,21 @@ async function importDataType(
             const username = await cryptoProvider.decryptFirefoxLogin(
               pw.username,
               request.profilePath + "/key4.db",
-              request.masterPassword,
+              request.masterPassword
             );
             const password = await cryptoProvider.decryptFirefoxLogin(
               pw.password,
               request.profilePath + "/key4.db",
-              request.masterPassword,
+              request.masterPassword
             );
             decryptedPasswords.push({ ...pw, username, password });
           } catch (err) {
-            if (
-              err instanceof BrowserDataError &&
-              err.code === "WRONG_MASTER_PASSWORD"
-            ) {
+            if (err instanceof BrowserDataError && err.code === "WRONG_MASTER_PASSWORD") {
               throw err; // Re-throw master password errors
             }
             skipped++;
             warnings.push(
-              `Failed to decrypt password for ${pw.url}: ${err instanceof Error ? err.message : String(err)}`,
+              `Failed to decrypt password for ${pw.url}: ${err instanceof Error ? err.message : String(err)}`
             );
           }
           progress.decrypting(dataType, decryptedPasswords.length + skipped, passwords.length);
@@ -235,9 +296,7 @@ async function importDataType(
         const emptyCount = passwords.filter((p) => p.password === "").length;
         if (emptyCount > 0) {
           skipped += emptyCount;
-          warnings.push(
-            `${emptyCount} passwords had encrypted values that could not be decrypted`,
-          );
+          warnings.push(`${emptyCount} passwords had encrypted values that could not be decrypted`);
         }
       }
 
@@ -324,7 +383,7 @@ async function importDataType(
       const settingsCount = Object.keys(settings).length;
       if (settingsCount > 0) {
         warnings.push(
-          `${settingsCount} settings were read but not stored (settings storage not yet implemented)`,
+          `${settingsCount} settings were read but not stored (settings storage not yet implemented)`
         );
       }
       progress.done(dataType, 0);
@@ -354,10 +413,7 @@ async function importDataType(
     }
 
     default:
-      throw new BrowserDataError(
-        "BROWSER_NOT_FOUND",
-        `Unknown data type: ${dataType}`,
-      );
+      throw new BrowserDataError("BROWSER_NOT_FOUND", `Unknown data type: ${dataType}`);
   }
 }
 
@@ -380,7 +436,7 @@ export interface PreviewResult extends PreviewTypeCounts {
 export type PreviewClassifier = (
   dataType: ImportDataType,
   items: unknown[],
-  meta: ImportBatchMeta,
+  meta: ImportBatchMeta
 ) => Promise<PreviewTypeCounts>;
 
 /**
@@ -390,7 +446,7 @@ export type PreviewClassifier = (
  */
 export async function previewImportPipeline(
   request: ImportRequest,
-  classify: PreviewClassifier,
+  classify: PreviewClassifier
 ): Promise<PreviewResult[]> {
   const profilePath = resolveProfilePath(request);
   const resolved = { ...request, profilePath };
@@ -413,7 +469,7 @@ export async function previewImportPipeline(
         resolved,
         reader,
         family,
-        cryptoProvider,
+        cryptoProvider
       );
       const counts = await classify(dataType, items, meta);
       results.push({ dataType, ...counts, warnings });
@@ -439,7 +495,7 @@ async function readItemsForPreview(
   request: ImportRequest & { profilePath: string },
   reader: Awaited<ReturnType<typeof getReader>>,
   family: BrowserFamily,
-  cryptoProvider?: CryptoProvider,
+  cryptoProvider?: CryptoProvider
 ): Promise<{ items: unknown[]; warnings: string[] }> {
   const warnings: string[] = [];
   switch (dataType) {
@@ -478,12 +534,12 @@ async function readItemsForPreview(
             const username = await cryptoProvider.decryptFirefoxLogin(
               pw.username,
               request.profilePath + "/key4.db",
-              request.masterPassword,
+              request.masterPassword
             );
             const password = await cryptoProvider.decryptFirefoxLogin(
               pw.password,
               request.profilePath + "/key4.db",
-              request.masterPassword,
+              request.masterPassword
             );
             decrypted.push({ ...pw, username, password });
           } catch (err) {

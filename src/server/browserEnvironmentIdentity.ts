@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  verifiedInitiator,
+  type ServiceContext,
+  type VerifiedCaller,
+} from "@vibestudio/shared/serviceDispatcher";
 
 export interface BrowserEnvironmentIdentity {
   workspaceId: string;
@@ -40,7 +44,7 @@ export function browserEnvironmentIdentityFromContext(
   workspaceId: string,
   ctx: Pick<ServiceContext, "caller" | "authorizingCaller">
 ): BrowserEnvironmentIdentity {
-  return browserEnvironmentIdentity(workspaceId, ctx.authorizingCaller ?? ctx.caller);
+  return browserEnvironmentIdentity(workspaceId, verifiedInitiator(ctx));
 }
 
 export function isBrowserDataDurableObject(source: string, className: string): boolean {

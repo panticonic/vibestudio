@@ -11,6 +11,7 @@ import {
   Heading,
   IconButton,
   Progress,
+  RadioGroup,
   Separator,
   Spinner,
   Text,
@@ -34,6 +35,7 @@ import type {
   ImportCategoryBreakdown,
   ImportedBrowserOpenTab,
   ImportJobSnapshot,
+  OpenTabsPanelDestination,
 } from "@vibestudio/browser-data/client";
 import type { ImportSourceSelection } from "./ImportSourceRail";
 import {
@@ -48,21 +50,20 @@ import {
   relativeTime,
   useAsync,
 } from "../useBrowserData";
-
-const TERMINAL_PHASES = new Set(["complete", "cancelled", "failed", "partial"]);
+import {
+  categoryProgressPresentation,
+  importStatusPresentation,
+  isMigrationStepComplete,
+  isSuccessfulImportPhase,
+  isTerminalImportPhase,
+  shouldShowImportOptions,
+} from "../importPresentation";
 
 /** Transient RPC hiccups are common; a persistent failure is not. */
 const POLL_FAILURES_BEFORE_GIVING_UP = 3;
 
 /** Above this many tabs the window groups start collapsed. */
 const AUTO_COLLAPSE_TABS = 25;
-
-const PHASE_COLOR: Record<string, "green" | "red" | "amber" | "blue"> = {
-  complete: "green",
-  failed: "red",
-  cancelled: "amber",
-  partial: "amber",
-};
 
 export function MigrateTab(props: { selection: ImportSourceSelection; now: number }) {
   const selectionKey = `${props.selection.host.hostId}\0${props.selection.source.sourceId}`;
@@ -72,13 +73,14 @@ export function MigrateTab(props: { selection: ImportSourceSelection; now: numbe
     [supported]
   );
   const [types, setTypes] = useState<Set<string>>(() => new Set(supported));
-  const [preview, setPreview] = useState<Awaited<ReturnType<typeof browserData.previewImport>> | null>(
-    null
-  );
+  const [preview, setPreview] = useState<Awaited<
+    ReturnType<typeof browserData.previewImport>
+  > | null>(null);
   const [job, setJob] = useState<ImportJobSnapshot | null>(null);
   const [busy, setBusy] = useState<"preview" | "import" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [step, setStep] = useState<Step>("data");
+  const [reimporting, setReimporting] = useState(false);
 
   useEffect(() => {
     setTypes(new Set(supported));
@@ -87,10 +89,11 @@ export function MigrateTab(props: { selection: ImportSourceSelection; now: numbe
     setError(null);
     setBusy(null);
     setStep("data");
+    setReimporting(false);
   }, [selectionKey]);
 
   useEffect(() => {
-    if (!job || TERMINAL_PHASES.has(job.phase)) return;
+    if (!job || isTerminalImportPhase(job.phase)) return;
     // A poll that throws must not become an unhandled rejection every 500ms.
     // Losing the extension mid-import is exactly when the panel has to stay
     // legible, so report the failure and stop asking rather than spinning.
@@ -139,6 +142,7 @@ export function MigrateTab(props: { selection: ImportSourceSelection; now: numbe
       const next = await browserData.startImport(request());
       setJob(next);
       setPreview(null);
+      setReimporting(false);
     } catch (cause) {
       setError(classifyError(cause).message);
     } finally {
@@ -167,17 +171,15 @@ export function MigrateTab(props: { selection: ImportSourceSelection; now: numbe
       entry.hostId === props.selection.host.hostId &&
       (entry.phase === "complete" || entry.phase === "partial")
   );
-  const imported = job?.phase === "complete" || job?.phase === "partial" || importedBefore;
+  const imported = (job !== null && isSuccessfulImportPhase(job.phase)) || importedBefore;
+  const running = job !== null && !isTerminalImportPhase(job.phase);
+  const hasCurrentResult = job !== null && isSuccessfulImportPhase(job.phase);
+  const showImportOptions = shouldShowImportOptions(job?.phase ?? null, reimporting);
 
   return (
     <Flex direction="column" gap="4" p="4" style={{ overflowY: "auto", height: "100%" }}>
       <SourceHeader selection={props.selection} />
-      <Stepper
-        step={step}
-        onStep={setStep}
-        dataDone={imported}
-        busy={busy !== null || (job !== null && !TERMINAL_PHASES.has(job.phase))}
-      />
+      <Stepper step={step} onStep={setStep} dataDone={imported} busy={busy !== null || running} />
 
       {step === "tabs" ? (
         <>
@@ -190,79 +192,100 @@ export function MigrateTab(props: { selection: ImportSourceSelection; now: numbe
         </>
       ) : (
         <>
-      <Card style={{ flexShrink: 0 }}>
-        <Flex justify="between" align="center" mb="1" gap="2">
-          <Heading size="2">Choose what to import</Heading>
-          <Button
-            size="1"
-            variant="ghost"
-            onClick={() =>
-              setTypes(allSelected ? new Set() : new Set(selectableTypes.map((item) => item.key)))
-            }
-          >
-            {allSelected ? "Clear all" : "Select all"}
-          </Button>
-        </Flex>
-        <Text size="1" color="gray" as="div" mb="3">
-          Copies the data into Vibestudio's own store. Review first to see the counts without writing
-          anything.
-        </Text>
+          {showImportOptions && (
+            <Card style={{ flexShrink: 0 }}>
+              <Flex justify="between" align="center" mb="1" gap="2">
+                <Heading size="2">
+                  {hasCurrentResult ? "Import more browser data" : "Choose what to import"}
+                </Heading>
+                <Button
+                  size="1"
+                  variant="ghost"
+                  onClick={() =>
+                    setTypes(
+                      allSelected ? new Set() : new Set(selectableTypes.map((item) => item.key))
+                    )
+                  }
+                >
+                  {allSelected ? "Clear all" : "Select all"}
+                </Button>
+              </Flex>
+              <Text size="1" color="gray" as="div" mb="3">
+                Copies the data into Vibestudio's own store. Review first to see the counts without
+                writing anything.
+              </Text>
 
-        <Grid columns={{ initial: "1", sm: "2", lg: "3" }} gap="2">
-          {selectableTypes.map((item) => (
-            <TypeTile
-              key={item.key}
-              label={item.label}
-              hint={item.hint}
-              checked={types.has(item.key)}
-              onToggle={() =>
-                setTypes((current) => {
-                  const next = new Set(current);
-                  next.has(item.key) ? next.delete(item.key) : next.add(item.key);
-                  return next;
-                })
-              }
+              <Grid columns={{ initial: "1", sm: "2", lg: "3" }} gap="2">
+                {selectableTypes.map((item) => (
+                  <TypeTile
+                    key={item.key}
+                    label={item.label}
+                    hint={item.hint}
+                    checked={types.has(item.key)}
+                    onToggle={() =>
+                      setTypes((current) => {
+                        const next = new Set(current);
+                        next.has(item.key) ? next.delete(item.key) : next.add(item.key);
+                        return next;
+                      })
+                    }
+                  />
+                ))}
+              </Grid>
+
+              {types.size === 0 && (
+                <Text size="1" color="gray" as="div" mt="3">
+                  Pick at least one category, or skip importing entirely.
+                </Text>
+              )}
+              {error && (
+                <Callout.Root color="red" mt="3">
+                  <Callout.Text>{error}</Callout.Text>
+                </Callout.Root>
+              )}
+            </Card>
+          )}
+
+          {showImportOptions && preview && (
+            <ProgressCard
+              mode="preview"
+              job={preview.job}
+              detail={`${plural(preview.openTabCount, "open tab")} available · ${plural(
+                preview.localDataSetCount,
+                "local data set"
+              )}`}
             />
-          ))}
-        </Grid>
+          )}
+          {showImportOptions && preview && <BreakdownCard breakdowns={preview.breakdowns} />}
+          {job && <ProgressCard mode="import" job={job} />}
+          {!showImportOptions && error && (
+            <Callout.Root color="red">
+              <Callout.Text>{error}</Callout.Text>
+            </Callout.Root>
+          )}
+          <ImportHistory now={props.now} jobs={history.state.data ?? []} />
 
-        {types.size === 0 && (
-          <Text size="1" color="gray" as="div" mt="3">
-            Pick at least one category, or skip importing entirely.
-          </Text>
-        )}
-        {error && (
-          <Callout.Root color="red" mt="3">
-            <Callout.Text>{error}</Callout.Text>
-          </Callout.Root>
-        )}
-      </Card>
-
-      {preview && (
-        <ProgressCard
-          title="Review"
-          job={preview.job}
-          detail={`${plural(preview.openTabCount, "open tab")} available · ${plural(
-            preview.localDataSetCount,
-            "local data set"
-          )}`}
-        />
-      )}
-      {preview && <BreakdownCard breakdowns={preview.breakdowns} />}
-      {job && <ProgressCard title="Import" job={job} />}
-      <ImportHistory now={props.now} jobs={history.state.data ?? []} />
-
-      <DataStepFooter
-        busy={busy}
-        running={job !== null && !TERMINAL_PHASES.has(job.phase)}
-        imported={imported}
-        selectedCount={types.size}
-        allSelected={allSelected}
-        onReview={runPreview}
-        onImport={startImport}
-        onCancel={cancel}
-        onContinue={() => setStep("tabs")}
-      />
+          <DataStepFooter
+            busy={busy}
+            running={running}
+            imported={imported}
+            choosing={showImportOptions}
+            canReturnToResult={hasCurrentResult && reimporting}
+            selectedCount={types.size}
+            allSelected={allSelected}
+            onReview={runPreview}
+            onImport={startImport}
+            onCancel={cancel}
+            onChooseImportAgain={() => {
+              setPreview(null);
+              setReimporting(true);
+            }}
+            onReturnToResult={() => {
+              setPreview(null);
+              setReimporting(false);
+            }}
+            onContinue={() => setStep("tabs")}
+          />
         </>
       )}
     </Flex>
@@ -281,11 +304,15 @@ function DataStepFooter(props: {
   busy: "preview" | "import" | null;
   running: boolean;
   imported: boolean;
+  choosing: boolean;
+  canReturnToResult: boolean;
   selectedCount: number;
   allSelected: boolean;
   onReview: () => void;
   onImport: () => void;
   onCancel: () => void;
+  onChooseImportAgain: () => void;
+  onReturnToResult: () => void;
   onContinue: () => void;
 }) {
   const blocked = props.busy !== null || props.selectedCount === 0;
@@ -295,35 +322,45 @@ function DataStepFooter(props: {
 
   return (
     <Flex justify="between" align="center" gap="2" wrap="wrap" style={{ flexShrink: 0 }}>
-      <Button variant="ghost" disabled={blocked} onClick={props.onReview}>
-        {props.busy === "preview" ? <Spinner size="1" /> : <MagnifyingGlassIcon />} Review without
-        importing
-      </Button>
+      {props.choosing ? (
+        <Button variant="ghost" disabled={blocked} onClick={props.onReview}>
+          {props.busy === "preview" ? <Spinner size="1" /> : <MagnifyingGlassIcon />} Review without
+          importing
+        </Button>
+      ) : (
+        <Box />
+      )}
 
       <Flex align="center" gap="2">
         {props.running ? (
           <Button color="red" variant="soft" onClick={props.onCancel}>
             <StopIcon /> Cancel import
           </Button>
-        ) : props.imported ? (
+        ) : props.imported && !props.choosing ? (
           <>
-            <Button variant="soft" disabled={blocked} onClick={props.onImport}>
+            <Button variant="soft" onClick={props.onChooseImportAgain}>
               <DownloadIcon /> Import again
             </Button>
             <Button onClick={props.onContinue}>
               Open tabs as panels <ArrowRightIcon />
             </Button>
           </>
-        ) : (
+        ) : props.choosing ? (
           <>
-            <Button variant="soft" onClick={props.onContinue}>
-              Skip import <ArrowRightIcon />
-            </Button>
+            {props.canReturnToResult ? (
+              <Button variant="soft" onClick={props.onReturnToResult}>
+                Back to result
+              </Button>
+            ) : (
+              <Button variant="soft" onClick={props.onContinue}>
+                {props.imported ? "Open tabs" : "Skip import"} <ArrowRightIcon />
+              </Button>
+            )}
             <Button disabled={blocked} onClick={props.onImport}>
               {props.busy === "import" ? <Spinner size="1" /> : <DownloadIcon />} {importLabel}
             </Button>
           </>
-        )}
+        ) : null}
       </Flex>
     </Flex>
   );
@@ -336,14 +373,18 @@ function Stepper(props: {
   busy: boolean;
 }) {
   const steps: Array<{ key: Step; label: string; hint: string }> = [
-    { key: "data", label: "Browser data", hint: "Cookies, passwords, history — copied into Vibestudio" },
+    {
+      key: "data",
+      label: "Browser data",
+      hint: "Cookies, passwords, history — copied into Vibestudio",
+    },
     { key: "tabs", label: "Open tabs", hint: "Opened as panels; nothing is copied" },
   ];
   return (
     <Flex gap="2" style={{ flexShrink: 0 }}>
       {steps.map((step, index) => {
         const active = props.step === step.key;
-        const done = step.key === "data" && props.dataDone && !active;
+        const done = isMigrationStepComplete(step.key, props.dataDone);
         return (
           <Card
             key={step.key}
@@ -367,10 +408,10 @@ function Stepper(props: {
                     borderRadius: "50%",
                     fontSize: 11,
                     fontWeight: 700,
-                    background: active
-                      ? "var(--accent-9)"
-                      : done
-                        ? "var(--green-9)"
+                    background: done
+                      ? "var(--green-9)"
+                      : active
+                        ? "var(--accent-9)"
                         : "var(--gray-a5)",
                     color: active || done ? "white" : "var(--gray-11)",
                   }}
@@ -538,12 +579,7 @@ function SourceHeader(props: { selection: ImportSourceSelection }) {
   );
 }
 
-function TypeTile(props: {
-  label: string;
-  hint: string;
-  checked: boolean;
-  onToggle: () => void;
-}) {
+function TypeTile(props: { label: string; hint: string; checked: boolean; onToggle: () => void }) {
   return (
     <Flex
       asChild
@@ -573,17 +609,40 @@ function TypeTile(props: {
   );
 }
 
-function ProgressCard(props: { title: string; job: ImportJobSnapshot; detail?: string }) {
-  const running = !TERMINAL_PHASES.has(props.job.phase);
+function ProgressCard(props: {
+  mode: "preview" | "import";
+  job: ImportJobSnapshot;
+  detail?: string;
+}) {
+  const running = !isTerminalImportPhase(props.job.phase);
+  const status = importStatusPresentation(props.job.phase);
+  const title = props.mode === "preview" ? "Review" : status.heading;
   return (
-    <Card style={{ flexShrink: 0 }}>
+    <Card
+      style={{
+        flexShrink: 0,
+        background:
+          props.mode === "import"
+            ? props.job.phase === "complete"
+              ? "var(--green-a2)"
+              : props.job.phase === "partial"
+                ? "var(--amber-a2)"
+                : undefined
+            : undefined,
+      }}
+    >
       <Flex justify="between" align="center" gap="2">
         <Flex align="center" gap="2">
-          <Heading size="2">{props.title}</Heading>
+          <Heading size="2">{title}</Heading>
           {running && <Spinner size="1" />}
         </Flex>
-        <Badge color={PHASE_COLOR[props.job.phase] ?? "blue"}>{props.job.phase}</Badge>
+        <Badge color={status.color}>{status.badge}</Badge>
       </Flex>
+      {props.mode === "import" && status.note && (
+        <Text size="2" color="gray" as="div" mt="1">
+          {status.note}
+        </Text>
+      )}
       {props.detail && (
         <Text size="2" as="div" mt="1">
           {props.detail}
@@ -592,39 +651,50 @@ function ProgressCard(props: { title: string; job: ImportJobSnapshot; detail?: s
 
       <Flex direction="column" gap="3" mt="3">
         {props.job.progress.map((progress) => {
-          const total = Math.max(progress.itemsProcessed, progress.stored + progress.skipped, 1);
+          const progressView = categoryProgressPresentation(progress, props.job.phase);
           return (
             <Box key={progress.dataType}>
               <Flex justify="between" align="baseline" gap="2">
                 <Text size="2">{labelForType(progress.dataType)}</Text>
                 <Flex gap="2" align="center">
                   <Text size="1" color="gray">
-                    {progress.stored} stored
+                    {progressView.label}
                   </Text>
-                  {progress.skipped > 0 && (
-                    <Text size="1" color="gray">
-                      · {progress.skipped} skipped
-                    </Text>
-                  )}
-                  {progress.errors > 0 && (
-                    <Badge color="red" size="1">
-                      {plural(progress.errors, "error")}
-                    </Badge>
-                  )}
                 </Flex>
               </Flex>
               <Progress
                 mt="1"
                 size="1"
-                value={Math.min(100, Math.round((progress.stored / total) * 100))}
-                color={progress.errors > 0 ? "amber" : "iris"}
+                value={progressView.value}
+                color={
+                  progress.errors > 0
+                    ? "amber"
+                    : isSuccessfulImportPhase(props.job.phase)
+                      ? "green"
+                      : "iris"
+                }
               />
+              <Flex gap="2" align="center" mt="1">
+                <Text size="1" color="gray">
+                  {progress.stored} stored
+                </Text>
+                {progress.skipped > 0 && (
+                  <Badge color="gray" size="1" variant="soft">
+                    {progress.skipped} skipped
+                  </Badge>
+                )}
+                {progress.errors > 0 && (
+                  <Badge color="red" size="1">
+                    {plural(progress.errors, "error")}
+                  </Badge>
+                )}
+              </Flex>
             </Box>
           );
         })}
         {props.job.progress.length === 0 && (
           <Text size="1" color="gray">
-            Waiting for the first counts…
+            {running ? "Waiting for the first counts…" : "No records were processed."}
           </Text>
         )}
       </Flex>
@@ -662,7 +732,12 @@ function groupByWindow(tabs: readonly ImportedBrowserOpenTab[]): TabWindow[] {
   for (const tab of tabs) {
     const existing = windows.get(tab.windowId);
     if (existing) existing.tabs.push(tab);
-    else windows.set(tab.windowId, { windowId: tab.windowId, ordinal: tab.windowOrdinal, tabs: [tab] });
+    else
+      windows.set(tab.windowId, {
+        windowId: tab.windowId,
+        ordinal: tab.windowOrdinal,
+        tabs: [tab],
+      });
   }
   return [...windows.values()].sort((a, b) => a.ordinal - b.ordinal);
 }
@@ -678,6 +753,7 @@ function OpenTabs(props: { selection: ImportSourceSelection }) {
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
   const [groupIntoCollections, setGroupIntoCollections] = useState(true);
+  const [destination, setDestination] = useState<OpenTabsPanelDestination>("new-root");
   const [message, setMessage] = useState<{ tone: "green" | "red"; text: string } | null>(null);
 
   const [autoCollapsedKey, setAutoCollapsedKey] = useState<string | null>(null);
@@ -687,6 +763,7 @@ function OpenTabs(props: { selection: ImportSourceSelection }) {
     setCollapsedWindows(new Set());
     setFilter("");
     setMessage(null);
+    setDestination("new-root");
     setAutoCollapsedKey(null);
   }, [sourceKey]);
 
@@ -739,7 +816,7 @@ function OpenTabs(props: { selection: ImportSourceSelection }) {
   const setMany = (ids: string[], on: boolean) =>
     setSelected((current) => {
       const next = new Set(current);
-      for (const id of ids) (on ? next.add(id) : next.delete(id));
+      for (const id of ids) on ? next.add(id) : next.delete(id);
       return next;
     });
 
@@ -752,12 +829,17 @@ function OpenTabs(props: { selection: ImportSourceSelection }) {
         hostId: props.selection.host.hostId,
         sourceId: props.selection.source.sourceId,
         selection: [...selected],
+        destination,
         groupBy: groupIntoCollections ? "window" : "none",
       });
       const collections = result.collections?.length ?? 0;
-      const opened = collections
-        ? `Opened ${plural(result.panelsOpened, "panel")} in ${plural(collections, "collection")}.`
-        : `Opened ${plural(result.panelsOpened, "panel")}.`;
+      const opened = result.root
+        ? `Opened ${plural(result.panelsOpened, "panel")} under the new root “${result.root.title}”.`
+        : result.destination === "caller" && collections
+          ? `Opened ${plural(result.panelsOpened, "panel")} in ${plural(collections, "collection")} under Browser Migration & State.`
+          : result.destination === "caller"
+            ? `Opened ${plural(result.panelsOpened, "panel")} under Browser Migration & State.`
+            : `Opened ${plural(result.panelsOpened, "panel")}.`;
       // Never report a silent zero: if panels did not open, say why.
       const reasons = [...new Set((result.skipped ?? []).map((entry) => entry.reason))];
       setMessage({
@@ -787,13 +869,52 @@ function OpenTabs(props: { selection: ImportSourceSelection }) {
         )}
       </Flex>
       <Text size="1" color="gray" as="div">
-        Not part of the import — each tab you pick opens as its own panel.
+        Not part of the data import — each selected tab becomes a deferred browser panel.
       </Text>
       {closedSummary && (
         <Callout.Root color="amber" size="1" mt="2">
           <Callout.Text>{closedSummary}</Callout.Text>
         </Callout.Root>
       )}
+      <Box mt="3">
+        <Text as="div" size="2" weight="medium" mb="1">
+          Place imported tabs
+        </Text>
+        <RadioGroup.Root
+          value={destination}
+          onValueChange={(value) => setDestination(value as OpenTabsPanelDestination)}
+        >
+          <Flex direction="column" gap="2">
+            <Text as="label" size="2">
+              <Flex gap="2" align="start">
+                <RadioGroup.Item value="new-root" mt="1" />
+                <Box>
+                  <Text as="div" size="2">
+                    In a new workspace root
+                  </Text>
+                  <Text as="div" size="1" color="gray">
+                    Creates “{props.selection.source.displayName} · Imported Tabs” as a lasting
+                    top-level hierarchy.
+                  </Text>
+                </Box>
+              </Flex>
+            </Text>
+            <Text as="label" size="2">
+              <Flex gap="2" align="start">
+                <RadioGroup.Item value="caller" mt="1" />
+                <Box>
+                  <Text as="div" size="2">
+                    Under Browser Migration &amp; State
+                  </Text>
+                  <Text as="div" size="1" color="gray">
+                    Keeps the imported hierarchy attached to this onboarding panel.
+                  </Text>
+                </Box>
+              </Flex>
+            </Text>
+          </Flex>
+        </RadioGroup.Root>
+      </Box>
       <Text as="label" size="2">
         <Flex gap="2" align="center" mt="2">
           <Checkbox
@@ -805,8 +926,7 @@ function OpenTabs(props: { selection: ImportSourceSelection }) {
               Group each window into a collection
             </Text>
             <Text as="div" size="1" color="gray">
-              Nests the tabs under one collection panel per window — notes and agentic debug
-              sessions live there.
+              Adds one nested collection per source-browser window.
             </Text>
           </Box>
         </Flex>
@@ -890,7 +1010,12 @@ function OpenTabs(props: { selection: ImportSourceSelection }) {
                   })
                 }
                 onToggleTab={(tabId, on) => setMany([tabId], on)}
-                onToggleWindow={(on) => setMany(window.tabs.map((tab) => tab.tabId), on)}
+                onToggleWindow={(on) =>
+                  setMany(
+                    window.tabs.map((tab) => tab.tabId),
+                    on
+                  )
+                }
               />
             ))}
           </Flex>
@@ -1119,7 +1244,7 @@ function ImportHistory(props: { now: number; jobs: readonly ImportJobSnapshot[] 
               {job.requestedDataTypes.map(labelForType).join(", ")}
             </Text>
             <Flex gap="2" align="center" style={{ flexShrink: 0 }}>
-              <Badge size="1" color={PHASE_COLOR[job.phase] ?? "blue"}>
+              <Badge size="1" color={importStatusPresentation(job.phase).color}>
                 {job.phase}
               </Badge>
               <Text size="1" color="gray">

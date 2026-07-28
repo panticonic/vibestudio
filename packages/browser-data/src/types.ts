@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { BrowserCookiePartitionKey } from "./cookies.js";
 
 // ---- Browser Detection ----
 
@@ -155,12 +156,18 @@ export type SameSiteValue = (typeof SAME_SITE_VALUES)[number];
 export const SOURCE_SCHEME_VALUES = ["unset", "non_secure", "secure"] as const;
 export type SourceScheme = (typeof SOURCE_SCHEME_VALUES)[number];
 
-export interface ImportedCookie {
+interface ImportedCookieMetadata {
   name: string;
-  value: string;
   domain: string;
   hostOnly: boolean;
   path: string;
+  /**
+   * Source-browser isolation context (for example Firefox originAttributes or
+   * Chromium's top-frame site key). This is source metadata, not Vibestudio's
+   * Electron session partition.
+   */
+  partitionKey?: BrowserCookiePartitionKey;
+  unsupportedIsolation?: "container" | "private" | "opaque" | "insecure_partition";
   expirationDate?: number;
   secure: boolean;
   httpOnly: boolean;
@@ -168,6 +175,17 @@ export interface ImportedCookie {
   sourceScheme: SourceScheme;
   sourcePort: number;
 }
+
+/**
+ * Cookie values have an explicit read outcome because an empty string is a
+ * valid cookie value. Readers must never use `""` as a decryption-failure
+ * sentinel.
+ */
+export type ImportedCookie = ImportedCookieMetadata &
+  (
+    | { valueStatus: "available"; value: string }
+    | { valueStatus: "unavailable"; value: ""; unavailableReason: "decryption_failed" }
+  );
 
 export interface ImportedPassword {
   url: string;
@@ -225,6 +243,7 @@ export interface ImportedFavicon {
   url: string;
   data: Buffer;
   mimeType: string;
+  sourceUrl?: string;
 }
 
 export interface ImportedOpenTab {
@@ -261,13 +280,38 @@ export const BrowserOpenTabsRequestSchema = z
     message: "'profile' (DetectedProfile or path string) is required",
   });
 
+export type OpenTabsPanelDestination = "new-root" | "caller";
+export type OpenTabsPanelGrouping = "window" | "none";
+
+export interface OpenTabsAsPanelsRequest {
+  hostId: string;
+  sourceId: string;
+  selection: string[];
+  /**
+   * Where the imported hierarchy is anchored. A new root keeps migration
+   * tooling out of the imported browser's lasting workspace structure.
+   */
+  destination?: OpenTabsPanelDestination;
+  /** "window" adds one nested collection per source-browser window. */
+  groupBy?: OpenTabsPanelGrouping;
+}
+
 export interface OpenTabsAsPanelsResult {
+  destination: OpenTabsPanelDestination;
+  groupBy: OpenTabsPanelGrouping;
   tabsFound: number;
   panelsOpened: number;
-  /** Collection panels created to hold the opened tabs, when grouping was requested. */
+  /** The new root collection, when `destination` is `"new-root"`. */
+  root?: {
+    id: string;
+    title: string;
+    panelsOpened: number;
+  };
+  /** Non-root collection panels created for source-browser windows. */
   collections: Array<{
     id: string;
     title: string;
+    parentId: string;
     panelsOpened: number;
   }>;
   panels: Array<{

@@ -1,16 +1,11 @@
 /**
- * Collection — a generic parent panel that holds other panels.
+ * Collection — a recursive panel subtree with a resident orchestration agent.
  *
- * It does three things: it gives a set of child panels a name and a place in the
- * tree, it lets the user write notes on the collection and on each member, and
- * it launches agentic debug sessions (a child `panels/chat`) seeded with that
- * context so an agent can investigate or automate the panels it holds.
- *
- * Anything can create one — `openPanel("about/collection", { name, stateArgs })`
- * — and then parent panels under it. The browser migration panel uses it to group
- * the tabs of one source browser window.
+ * The panel tree remains the source of truth. The collection UI and its agent
+ * both read the same revisioned subtree; chat is part of this panel rather than
+ * a synthetic child that pollutes the collection being supervised.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Badge,
   Box,
@@ -19,7 +14,6 @@ import {
   Flex,
   Heading,
   IconButton,
-  Separator,
   Spinner,
   Text,
   TextArea,
@@ -35,48 +29,163 @@ import {
   Pencil1Icon,
   ReloadIcon,
 } from "@radix-ui/react-icons";
-import "@radix-ui/themes/styles.css";
-import "@workspace/ui/tokens.css";
-import { openPanel, panel, panelTree, type PanelHandle } from "@workspace/runtime";
-import { usePanelTheme, useStateArgs } from "@workspace/react";
 import {
-  buildCollectionDebugPrompt,
-  pruneNotes,
-  withMemberNote,
-  type CollectionMember,
-  type CollectionStateArgs,
-} from "./collection";
+  contextId,
+  panel,
+  panelTree,
+  rpc,
+  type PanelSubtreeNode,
+  type PanelSubtreeSnapshot,
+} from "@workspace/runtime";
+import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
+import { usePanelTheme, useStateArgs } from "@workspace/react";
+import { createPanelSandboxConfig, launchAgentIntoChannel } from "@workspace/agentic-core";
+import type { AgenticChatHandle } from "@workspace/agentic-chat";
+import type { ConnectionConfig } from "@workspace/agentic-chat/types";
+import {
+  buildCollectionAgentSystemPrompt,
+  COLLECTION_AGENT_CLASS,
+  COLLECTION_AGENT_HANDLE,
+  COLLECTION_AGENT_SOURCE,
+  createCollectionSession,
+  promptForCollectionStartupTask,
+  type CollectionSessionDescriptor,
+} from "@workspace/collection-orchestration";
+import "@radix-ui/themes/styles.css";
+import "@workspace/agentic-chat/styles.css";
+import "@workspace/ui/tokens.css";
+import { pruneNotes, withMemberNote, type CollectionStateArgs } from "./collection";
+import "./style.css";
+
+const AgenticChat = lazy(() =>
+  import("@workspace/agentic-chat/chat").then((module) => ({ default: module.AgenticChat }))
+);
+
+function requireContextId(value: string | undefined): string {
+  const resolved = value?.trim();
+  if (!resolved) throw new Error("Collection panel runtime has no workspace context");
+  return resolved;
+}
+
+function nodeLabel(node: PanelSubtreeNode): string {
+  return node.handle.title || node.handle.source;
+}
+
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+function MemberNoteEditor(props: { value: string; onCommit(value: string): void }) {
+  const [draft, setDraft] = useState(props.value);
+  const editing = useRef(false);
+
+  useEffect(() => {
+    if (!editing.current) setDraft(props.value);
+  }, [props.value]);
+
+  return (
+    <TextField.Root
+      mt="2"
+      size="1"
+      placeholder="Note for the conductor"
+      value={draft}
+      onFocus={() => {
+        editing.current = true;
+      }}
+      onChange={(event) => setDraft(event.currentTarget.value)}
+      onBlur={() => {
+        editing.current = false;
+        props.onCommit(draft);
+      }}
+    />
+  );
+}
 
 export default function CollectionPanel() {
   const theme = usePanelTheme();
   const stateArgs = useStateArgs<CollectionStateArgs>();
+  const resolvedContextId = requireContextId(contextId);
   const [title, setTitle] = useState(stateArgs.title ?? "Collection");
   const [editingTitle, setEditingTitle] = useState(false);
   const [note, setNote] = useState(stateArgs.note ?? "");
   const [notes, setNotes] = useState<Record<string, string>>(stateArgs.notes ?? {});
-  const [members, setMembers] = useState<PanelHandle[] | null>(null);
+  const [tree, setTree] = useState<PanelSubtreeSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [launching, setLaunching] = useState<string | null>(null);
+  const [agentError, setAgentError] = useState<string | null>(null);
+  const [agentReady, setAgentReady] = useState(false);
+  const [agentLaunchAttempt, setAgentLaunchAttempt] = useState(0);
+  const [sending, setSending] = useState<string | null>(null);
+  const [session] = useState<CollectionSessionDescriptor>(() => {
+    const created = createCollectionSession();
+    return {
+      channelName: stateArgs.channelName ?? created.channelName,
+      agentKey: stateArgs.agentKey ?? created.agentKey,
+    };
+  });
+  const initialPrompt = useRef(
+    stateArgs.initialPrompt ??
+      (stateArgs.startupTask ? promptForCollectionStartupTask(stateArgs.startupTask) : undefined)
+  );
+  const chatRef = useRef<AgenticChatHandle | null>(null);
+  const editingTitleRef = useRef(false);
+  const savingTitleRef = useRef(false);
+  const editingNoteRef = useRef(false);
+  const refreshInFlight = useRef<Promise<void> | null>(null);
 
-  // The creator passes the label through stateArgs, not `panelTree.create`'s
-  // `name` — that option mints the panel's id segment, not its display title.
+  const persist = useCallback(
+    (patch: Partial<CollectionStateArgs>) => panel.stateArgs.set(patch),
+    []
+  );
+
+  useEffect(() => {
+    if (stateArgs.channelName === session.channelName && stateArgs.agentKey === session.agentKey) {
+      return;
+    }
+    void persist({ channelName: session.channelName, agentKey: session.agentKey }).catch((cause) =>
+      setError(errorMessage(cause))
+    );
+  }, [persist, session, stateArgs.agentKey, stateArgs.channelName]);
+
+  // The creator passes the label through stateArgs; keep the slot's semantic
+  // title explicit so a nested collection remains intelligible in its parent.
   const titledFor = useRef<string | null>(null);
   useEffect(() => {
     const wanted = stateArgs.title?.trim();
     if (!wanted || titledFor.current === wanted) return;
     titledFor.current = wanted;
     setTitle(wanted);
-    void panel.setTitle(wanted, { explicit: true });
+    void panel.setTitle(wanted, { explicit: true }).catch((cause) => setError(errorMessage(cause)));
   }, [stateArgs.title]);
 
-  const refresh = useCallback(async () => {
-    try {
-      const children = await panelTree.self().children();
-      setMembers(children);
-      setError(null);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
+  const refresh = useCallback((): Promise<void> => {
+    if (refreshInFlight.current) return refreshInFlight.current;
+    const pending = (async () => {
+      try {
+        const [next, persisted] = await Promise.all([
+          panelTree.subtree(panel.slotId),
+          panelTree.get(panel.slotId).stateArgs.get<CollectionStateArgs>(),
+        ]);
+        setTree((current) => (current?.revision === next.revision ? current : next));
+        const persistedNotes = persisted.notes ?? {};
+        setNotes((current) =>
+          JSON.stringify(current) === JSON.stringify(persistedNotes) ? current : persistedNotes
+        );
+        if (!editingTitleRef.current && !savingTitleRef.current && persisted.title?.trim()) {
+          setTitle(persisted.title.trim());
+        }
+        if (!editingNoteRef.current) {
+          setNote(persisted.note ?? "");
+        }
+        setError(null);
+      } catch (cause) {
+        setError(errorMessage(cause));
+      }
+    })();
+    refreshInFlight.current = pending;
+    void pending.finally(() => {
+      if (refreshInFlight.current === pending) refreshInFlight.current = null;
+    });
+    return pending;
   }, []);
 
   useEffect(() => {
@@ -85,96 +194,159 @@ export default function CollectionPanel() {
     return unsubscribe;
   }, [refresh]);
 
-  // Members change through actions taken in other panels too (a child closing,
-  // an agent opening one), so poll gently in addition to the creation event.
+  // Mutations may originate in the resident agent or another client. Revision
+  // comparison makes this a cheap convergence fallback; the authoritative
+  // recursive snapshot, rather than local incremental bookkeeping, wins.
   useEffect(() => {
-    const timer = setInterval(() => void refresh(), 4_000);
+    const timer = setInterval(() => void refresh(), 2_000);
     return () => clearInterval(timer);
   }, [refresh]);
 
-  const rows: CollectionMember[] = useMemo(
-    () =>
-      (members ?? []).map((member) => ({
-        id: member.id,
-        title: member.title || member.source,
-        source: member.source,
-        ...(notes[member.id] ? { note: notes[member.id] } : {}),
-      })),
-    [members, notes]
-  );
+  const descendants = tree?.descendants ?? [];
 
-  const persist = (patch: Partial<CollectionStateArgs>) => {
-    void panel.stateArgs.set({ ...panel.stateArgs.get(), ...patch });
-  };
-
-  const commitTitle = () => {
-    const next = title.trim() || "Collection";
-    setTitle(next);
-    setEditingTitle(false);
-    persist({ title: next });
-    void panel.setTitle(next, { explicit: true });
-  };
-
-  const setMemberNote = (panelId: string, value: string) => {
-    setNotes((current) => {
-      const next = withMemberNote(current, panelId, value);
-      persist({ notes: next });
-      return next;
-    });
-  };
-
-  // Notes for panels that have gone away would otherwise accumulate in stateArgs.
+  // Notes are scoped to this collection root and may target any recursive
+  // descendant. Moving within the subtree therefore preserves them.
   const prunedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!members) return;
-    const key = members.map((member) => member.id).sort().join(",");
+    if (!tree) return;
+    const ids = descendants.map((node) => node.handle.id);
+    const key = `${ids.slice().sort().join(",")}\0${Object.keys(notes).sort().join(",")}`;
     if (prunedFor.current === key) return;
-    prunedFor.current = key;
-    const next = pruneNotes(notes, members.map((member) => member.id));
-    if (Object.keys(next).length !== Object.keys(notes).length) {
-      setNotes(next);
-      persist({ notes: next });
-    }
-  }, [members, notes]);
+    let cancelled = false;
+    void panelTree
+      .get(panel.slotId)
+      .stateArgs.get<CollectionStateArgs>()
+      .then(async (persisted) => {
+        const current = persisted.notes ?? {};
+        const next = pruneNotes(current, ids);
+        if (Object.keys(next).length !== Object.keys(current).length) {
+          await persist({ notes: next });
+        }
+        if (!cancelled) {
+          prunedFor.current = key;
+          setNotes(next);
+        }
+      })
+      .catch((cause) => {
+        if (!cancelled) setError(errorMessage(cause));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [descendants, notes, persist, tree]);
 
-  const startDebugSession = async (focusId?: string) => {
-    setLaunching(focusId ?? "collection");
+  const systemPrompt = useMemo(
+    () => buildCollectionAgentSystemPrompt({ rootPanelId: panel.slotId, title }),
+    [title]
+  );
+
+  // A collection owns one resident general-purpose agent. Re-subscribing the
+  // stable key is the recovery path as well as first bootstrap.
+  useEffect(() => {
+    let cancelled = false;
+    setAgentReady(false);
+    setAgentError(null);
+    void launchAgentIntoChannel(rpc, {
+      source: COLLECTION_AGENT_SOURCE,
+      className: COLLECTION_AGENT_CLASS,
+      key: session.agentKey,
+      channelId: session.channelName,
+      contextId: resolvedContextId,
+      replay: true,
+      config: {
+        handle: COLLECTION_AGENT_HANDLE,
+        name: "Collection conductor",
+        systemPrompt,
+        systemPromptMode: "append",
+        ...(stateArgs.agentConfig ?? {}),
+      },
+    })
+      .then(() => {
+        if (!cancelled) setAgentReady(true);
+      })
+      .catch((cause) => {
+        if (!cancelled) setAgentError(errorMessage(cause));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    resolvedContextId,
+    session.agentKey,
+    session.channelName,
+    stateArgs.agentConfig,
+    systemPrompt,
+    agentLaunchAttempt,
+  ]);
+
+  const commitTitle = () => {
+    if (!editingTitleRef.current) return;
+    const next = title.trim() || "Collection";
+    editingTitleRef.current = false;
+    savingTitleRef.current = true;
+    setTitle(next);
+    setEditingTitle(false);
+    void Promise.all([persist({ title: next }), panel.setTitle(next, { explicit: true })])
+      .catch((cause) => setError(errorMessage(cause)))
+      .finally(() => {
+        savingTitleRef.current = false;
+        void refresh();
+      });
+  };
+
+  const setMemberNote = async (panelId: string, value: string) => {
     try {
-      const prompt = buildCollectionDebugPrompt({
-        title,
-        ...(note.trim() ? { note } : {}),
-        ...(stateArgs.origin ? { origin: stateArgs.origin } : {}),
-        members: rows,
-        ...(focusId ? { focusId } : {}),
-      });
-      const target = focusId ? rows.find((row) => row.id === focusId) : undefined;
-      await openPanel("panels/chat", {
-        parentId: panel.slotId,
-        focus: true,
-        title: `debug · ${target ? target.title : title}`.slice(0, 80),
-        stateArgs: { initialPrompt: prompt },
-      });
-      await refresh();
+      const root = panelTree.get(panel.slotId);
+      const persisted = await root.stateArgs.get<CollectionStateArgs>();
+      const next = withMemberNote(persisted.notes, panelId, value);
+      setNotes(next);
+      await root.stateArgs.set({ notes: next });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setLaunching(null);
+      setError(errorMessage(cause));
+      await refresh();
     }
+  };
+
+  const sendAgentMessage = useCallback(async (message: string, key: string) => {
+    setSending(key);
+    setAgentError(null);
+    try {
+      const chat = chatRef.current;
+      if (!chat) throw new Error("Collection conductor chat is not ready");
+      await chat.send(message);
+    } catch (cause) {
+      setAgentError(errorMessage(cause));
+    } finally {
+      setSending(null);
+    }
+  }, []);
+
+  const investigate = (node?: PanelSubtreeNode) => {
+    const message = node
+      ? `Focus on panel \`${node.handle.id}\` ("${nodeLabel(node)}") within this collection. Refresh the recursive scope, inspect it in context, and help me understand or improve it.`
+      : "Refresh this collection's recursive scope, inspect its current organization and panel state, and suggest or perform the most useful cleanup. Preserve intentional structure and explain any material changes.";
+    void sendAgentMessage(message, node?.handle.id ?? "collection");
   };
 
   const act = async (action: () => Promise<unknown>) => {
     try {
       await action();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(errorMessage(cause));
     } finally {
       await refresh();
     }
   };
 
+  const config = useMemo<ConnectionConfig>(
+    () => ({ clientId: panel.slotId, rpc, recoveryCoordinator }),
+    []
+  );
+  const sandbox = useMemo(() => createPanelSandboxConfig(rpc), []);
+
   return (
-    <Theme appearance={theme} accentColor="iris" radius="medium">
-      <Flex direction="column" gap="3" p="4" style={{ minHeight: "100vh" }}>
+    <Theme appearance={theme} accentColor="iris" radius="medium" style={{ height: "100dvh" }}>
+      <Flex direction="column" gap="3" p="4" className="collection-shell">
         <Flex justify="between" align="center" gap="2">
           {editingTitle ? (
             <TextField.Root
@@ -187,6 +359,7 @@ export default function CollectionPanel() {
                 if (event.key === "Escape") {
                   setTitle(stateArgs.title ?? "Collection");
                   setEditingTitle(false);
+                  editingTitleRef.current = false;
                 }
               }}
               style={{ flex: 1 }}
@@ -200,116 +373,213 @@ export default function CollectionPanel() {
                 size="1"
                 variant="ghost"
                 aria-label="Rename collection"
-                onClick={() => setEditingTitle(true)}
+                onClick={() => {
+                  editingTitleRef.current = true;
+                  setEditingTitle(true);
+                }}
               >
                 <Pencil1Icon />
               </IconButton>
+              {tree ? (
+                <Badge color="gray" title={`Tree revision ${tree.revision}`}>
+                  {tree.descendants.length} panels
+                </Badge>
+              ) : null}
             </Flex>
           )}
           <Flex align="center" gap="2">
-            <IconButton size="1" variant="ghost" aria-label="Refresh" onClick={() => void refresh()}>
+            <IconButton
+              size="1"
+              variant="ghost"
+              aria-label="Refresh"
+              onClick={() => void refresh()}
+            >
               <ReloadIcon />
             </IconButton>
             <Button
               size="2"
-              onClick={() => void startDebugSession()}
-              disabled={launching !== null}
+              variant="soft"
+              onClick={() => investigate()}
+              disabled={!agentReady || sending !== null}
             >
-              {launching === "collection" ? <Spinner size="1" /> : <MagicWandIcon />} Debug session
+              {sending === "collection" ? <Spinner size="1" /> : <MagicWandIcon />} Organize
             </Button>
           </Flex>
         </Flex>
 
-        {stateArgs.origin && (
+        {stateArgs.origin ? (
           <Text size="1" color="gray">
             From {stateArgs.origin}
           </Text>
-        )}
+        ) : null}
 
         <TextArea
-          placeholder="Notes about this collection — what it is for, what you are trying to work out. A debug session gets these too."
+          placeholder="Collection goal, context, or constraints. The resident conductor uses these notes."
           value={note}
           onChange={(event) => setNote(event.currentTarget.value)}
-          onBlur={() => persist({ note })}
-          rows={3}
+          onFocus={() => {
+            editingNoteRef.current = true;
+          }}
+          onBlur={() => {
+            void persist({ note })
+              .catch((cause) => setError(errorMessage(cause)))
+              .finally(() => {
+                editingNoteRef.current = false;
+                void refresh();
+              });
+          }}
+          rows={2}
         />
 
-        {error && (
+        {error ? (
           <Text color="red" size="1">
             {error}
           </Text>
-        )}
+        ) : null}
 
-        <Flex align="center" gap="2">
-          <Heading size="3">Panels</Heading>
-          {members && <Badge color="gray">{members.length}</Badge>}
-        </Flex>
+        <Box className="collection-workspace">
+          <Flex direction="column" gap="2" className="collection-tree">
+            <Flex align="center" gap="2">
+              <Heading size="3">Panel tree</Heading>
+              {tree ? <Badge color="gray">revision {tree.revision}</Badge> : null}
+            </Flex>
 
-        {members === null && <Spinner size="2" />}
-        {members?.length === 0 && (
-          <Card>
-            <Text size="2" color="gray">
-              Nothing collected yet. Panels opened under this one appear here — and a debug session
-              can investigate or automate them once they do.
-            </Text>
-          </Card>
-        )}
+            {!tree ? <Spinner size="2" /> : null}
+            {tree?.descendants.length === 0 ? (
+              <Card>
+                <Text size="2" color="gray">
+                  Nothing collected yet. Child panels appear here recursively and are immediately
+                  available to the resident conductor.
+                </Text>
+              </Card>
+            ) : null}
 
-        <Flex direction="column" gap="2">
-          {rows.map((row, index) => (
-            <Card key={row.id}>
+            {descendants.map((node) => (
+              <Card
+                key={node.handle.id}
+                className="collection-tree-node"
+                style={{ marginLeft: Math.min(node.depth - 1, 5) * 14 }}
+              >
+                <Flex align="center" gap="2">
+                  <Box style={{ minWidth: 0, flex: 1 }}>
+                    <Flex align="center" gap="1">
+                      <Text as="div" size="2" weight="medium" truncate>
+                        {nodeLabel(node)}
+                      </Text>
+                      {node.children.length > 0 ? (
+                        <Badge size="1" color="iris">
+                          {node.children.length}
+                        </Badge>
+                      ) : null}
+                    </Flex>
+                    <Text as="div" size="1" color="gray" truncate>
+                      {node.handle.source}
+                    </Text>
+                  </Box>
+                  <Tooltip content="Focus this panel">
+                    <IconButton
+                      size="1"
+                      variant="soft"
+                      aria-label="Focus panel"
+                      onClick={() => void act(() => node.handle.focus())}
+                    >
+                      <EnterIcon />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip content="Ask the conductor about this panel">
+                    <IconButton
+                      size="1"
+                      variant="soft"
+                      aria-label="Investigate panel"
+                      disabled={!agentReady || sending !== null}
+                      onClick={() => investigate(node)}
+                    >
+                      {sending === node.handle.id ? <Spinner size="1" /> : <ChatBubbleIcon />}
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip content="Close this panel and its descendants">
+                    <IconButton
+                      size="1"
+                      variant="soft"
+                      color="red"
+                      aria-label="Close panel"
+                      onClick={() => void act(() => node.handle.close())}
+                    >
+                      <Cross2Icon />
+                    </IconButton>
+                  </Tooltip>
+                </Flex>
+                <MemberNoteEditor
+                  value={notes[node.handle.id] ?? ""}
+                  onCommit={(value) => void setMemberNote(node.handle.id, value)}
+                />
+              </Card>
+            ))}
+          </Flex>
+
+          <Box className="collection-chat">
+            <Flex align="center" justify="between" px="3" py="2" className="collection-chat-header">
               <Flex align="center" gap="2">
-                <Box style={{ minWidth: 0, flex: 1 }}>
-                  <Text as="div" size="2" weight="medium" truncate>
-                    {row.title}
-                  </Text>
-                  <Text as="div" size="1" color="gray" truncate>
-                    {row.source}
-                  </Text>
-                </Box>
-                <Tooltip content="Focus this panel">
-                  <IconButton
+                <ChatBubbleIcon />
+                <Heading size="3">Conductor</Heading>
+                <Badge color={agentReady ? "green" : agentError ? "red" : "gray"}>
+                  {agentReady ? "ready" : agentError ? "error" : "starting"}
+                </Badge>
+                {agentError ? (
+                  <Button
                     size="1"
                     variant="soft"
-                    aria-label="Focus panel"
-                    onClick={() => void act(() => (members?.[index] ?? panelTree.get(row.id)).focus())}
+                    onClick={() => setAgentLaunchAttempt((attempt) => attempt + 1)}
                   >
-                    <EnterIcon />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip content="Debug session for just this panel">
-                  <IconButton
-                    size="1"
-                    variant="soft"
-                    aria-label="Investigate panel"
-                    disabled={launching !== null}
-                    onClick={() => void startDebugSession(row.id)}
-                  >
-                    {launching === row.id ? <Spinner size="1" /> : <ChatBubbleIcon />}
-                  </IconButton>
-                </Tooltip>
-                <Tooltip content="Close this panel">
-                  <IconButton
-                    size="1"
-                    variant="soft"
-                    color="red"
-                    aria-label="Close panel"
-                    onClick={() => void act(() => (members?.[index] ?? panelTree.get(row.id)).close())}
-                  >
-                    <Cross2Icon />
-                  </IconButton>
-                </Tooltip>
+                    <ReloadIcon /> Retry
+                  </Button>
+                ) : null}
               </Flex>
-              <Separator size="4" my="2" />
-              <TextField.Root
-                size="1"
-                placeholder="Note on this panel"
-                defaultValue={notes[row.id] ?? ""}
-                onBlur={(event) => setMemberNote(row.id, event.currentTarget.value)}
-              />
-            </Card>
-          ))}
-        </Flex>
+            </Flex>
+            {agentError ? (
+              <Box px="3" py="2">
+                <Text color="red" size="1">
+                  {agentError}
+                </Text>
+              </Box>
+            ) : null}
+            {agentReady ? (
+              <Suspense
+                fallback={
+                  <Flex align="center" justify="center" style={{ height: "100%" }}>
+                    <Spinner />
+                  </Flex>
+                }
+              >
+                <AgenticChat
+                  ref={chatRef}
+                  config={config}
+                  channelName={session.channelName}
+                  contextId={resolvedContextId}
+                  metadata={{
+                    name: `${title} conductor`,
+                    type: "panel",
+                    handle: "collection",
+                  }}
+                  theme={theme}
+                  installedAgents={[
+                    { agentId: COLLECTION_AGENT_CLASS, handle: COLLECTION_AGENT_HANDLE },
+                  ]}
+                  initialPrompt={initialPrompt.current}
+                  forceInitialPrompt={Boolean(stateArgs.startupTask)}
+                  sandbox={sandbox}
+                />
+              </Suspense>
+            ) : (
+              <Flex align="center" justify="center" gap="2" className="collection-chat-loading">
+                <Spinner />
+                <Text size="2" color="gray">
+                  Starting the collection conductor…
+                </Text>
+              </Flex>
+            )}
+          </Box>
+        </Box>
       </Flex>
     </Theme>
   );

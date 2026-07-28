@@ -4,10 +4,7 @@ import type {
   BrowserImportProvider,
   ImportJobSnapshot,
 } from "./environment.js";
-import {
-  BrowserImportCoordinator,
-  type BrowserImportStore,
-} from "./importCoordinator.js";
+import { BrowserImportCoordinator, type BrowserImportStore } from "./importCoordinator.js";
 
 const identity: BrowserEnvironmentIdentity = {
   workspaceId: "workspace-a",
@@ -147,6 +144,44 @@ describe("BrowserImportCoordinator", () => {
       })
     );
     expect(backing.jobs.get(started.jobId)?.phase).toBe("complete");
+  });
+
+  it("does not report completion until stored data is reconciled", async () => {
+    const backing = store();
+    let releaseReconciliation!: () => void;
+    const reconciliation = new Promise<void>((resolve) => {
+      releaseReconciliation = resolve;
+    });
+    backing.value.reconcileImport = vi.fn(async () => reconciliation);
+    const coordinator = new BrowserImportCoordinator(backing.value);
+    coordinator.registerHost({
+      hostId: "desktop-a",
+      ownerUserId: "user-a",
+      displayName: "Laptop",
+      platform: "linux",
+      location: "desktop",
+      connected: true,
+      provider: provider(),
+    });
+
+    const started = coordinator.start(identity, {
+      hostId: "desktop-a",
+      sourceId: "source-a",
+      dataTypes: ["bookmarks"],
+    });
+    await vi.waitFor(() => expect(backing.jobs.get(started.jobId)?.phase).toBe("reconciling"));
+
+    let completed = false;
+    const waiting = coordinator.waitForJob(identity, started.jobId).then((job) => {
+      completed = true;
+      return job;
+    });
+    await Promise.resolve();
+    expect(completed).toBe(false);
+    expect(backing.value.reconcileImport).toHaveBeenCalledWith(identity, ["bookmarks"]);
+
+    releaseReconciliation();
+    await expect(waiting).resolves.toMatchObject({ phase: "complete" });
   });
 
   it("hydrates and resumes a persisted resumable job", async () => {

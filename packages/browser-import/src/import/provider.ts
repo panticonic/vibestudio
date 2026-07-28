@@ -3,7 +3,6 @@ import type {
   BrowserImportDataType,
   BrowserImportProvider,
   BrowserImportSource,
-  FormFillType,
   FormFillValueInput,
   ImportBatchSink,
   ImportCategoryBreakdown,
@@ -13,6 +12,10 @@ import type {
   ImportPreviewSummary,
   ImportSummary,
   PageFavicon,
+} from "@vibestudio/browser-data";
+import {
+  browserCookiePartitionStorageKey,
+  isPersistableFormFillType,
 } from "@vibestudio/browser-data";
 import type {
   BrowserFamily,
@@ -24,13 +27,14 @@ import type {
 } from "../types.js";
 import { createCryptoProvider } from "../crypto/index.js";
 import { detectBrowsers } from "../detection/index.js";
+import { classifyAutofillFieldName } from "../normalize/autofill.js";
 import { getReader } from "../readers/index.js";
 import { readOpenTabs } from "../readers/openTabs.js";
 import { profileSessionState } from "../readers/profileSession.js";
 import { computeCategoryBreakdown } from "./breakdown.js";
+import { normalizeFavicon } from "../normalize/favicon.js";
 
 const IMPORT_BATCH_SIZE = 250;
-const MAX_FAVICON_BYTES = 128 * 1024;
 
 interface ProviderSource {
   browser: DetectedBrowser;
@@ -41,6 +45,19 @@ interface ReadResult {
   items: unknown[];
   skipped: number;
   warnings: string[];
+}
+
+export function importedFormFillValue(entry: ImportedAutofillEntry): FormFillValueInput {
+  const type = classifyAutofillFieldName(entry.fieldName);
+  return {
+    fieldName: entry.fieldName,
+    ...(type === undefined ? {} : { type }),
+    value: entry.value,
+    aliases: [entry.fieldName],
+    createdAt: entry.dateCreated,
+    updatedAt: entry.dateLastUsed ?? entry.dateCreated,
+    useCount: entry.timesUsed,
+  };
 }
 
 export class LocalBrowserImportProvider implements BrowserImportProvider {
@@ -142,14 +159,7 @@ export class LocalBrowserImportProvider implements BrowserImportProvider {
         });
         stored += items.length;
         await sink.progress(
-          this.progress(
-            dataType,
-            stored,
-            result.items.length,
-            stored,
-            result.skipped,
-            0
-          )
+          this.progress(dataType, stored, result.items.length, stored, result.skipped, 0)
         );
         batchIndex += 1;
       }
@@ -225,6 +235,7 @@ export class LocalBrowserImportProvider implements BrowserImportProvider {
     const items: unknown[] = [];
     const warnings: string[] = [];
     let skipped = 0;
+    const seenCookieKeys = new Set<string>();
     for (const profile of this.orderedProfiles(browser)) {
       this.throwIfAborted(signal);
       try {
@@ -237,9 +248,65 @@ export class LocalBrowserImportProvider implements BrowserImportProvider {
             break;
           case "cookies": {
             const cookies = await reader.readCookies(profile.path);
-            const readable = cookies.filter((cookie) => cookie.value !== "");
-            skipped += cookies.length - readable.length;
-            items.push(...readable.map((cookie) => this.cookieInput(cookie)));
+            const now = Date.now() / 1_000;
+            let unreadable = 0;
+            let expired = 0;
+            let unsupportedIsolation = 0;
+            let shadowed = 0;
+            for (const cookie of cookies) {
+              if (cookie.valueStatus === "unavailable") {
+                unreadable += 1;
+                continue;
+              }
+              if (cookie.unsupportedIsolation) {
+                unsupportedIsolation += 1;
+                continue;
+              }
+              if (cookie.expirationDate !== undefined && cookie.expirationDate <= now) {
+                expired += 1;
+                continue;
+              }
+              const key = `${cookie.name}\x00${cookie.domain.toLocaleLowerCase()}\x00${
+                cookie.path || "/"
+              }\x00${browserCookiePartitionStorageKey(cookie.partitionKey)}`;
+              // Profiles are ordered default-first. A single Vibestudio
+              // environment is one cookie jar, so the active/default profile
+              // wins deterministic key collisions instead of being overwritten
+              // later by an abandoned profile.
+              if (seenCookieKeys.has(key)) {
+                shadowed += 1;
+                continue;
+              }
+              seenCookieKeys.add(key);
+              items.push(this.cookieInput(cookie));
+            }
+            skipped += unreadable + expired + unsupportedIsolation + shadowed;
+            if (unreadable > 0) {
+              warnings.push(
+                `${browser.displayName}: ${unreadable} encrypted cookie value${
+                  unreadable === 1 ? "" : "s"
+                } could not be decrypted.`
+              );
+            }
+            if (expired > 0) {
+              warnings.push(
+                `${browser.displayName}: ${expired} expired cookie${expired === 1 ? "" : "s"} ignored.`
+              );
+            }
+            if (unsupportedIsolation > 0) {
+              warnings.push(
+                `${browser.displayName}: ${unsupportedIsolation} cookie${
+                  unsupportedIsolation === 1 ? "" : "s"
+                } from private, container, opaque, or insecure partitioned source contexts could not be represented in Chromium.`
+              );
+            }
+            if (shadowed > 0) {
+              warnings.push(
+                `${browser.displayName}: ${shadowed} cookie${
+                  shadowed === 1 ? "" : "s"
+                } from a lower-priority profile were superseded by a higher-priority profile.`
+              );
+            }
             break;
           }
           case "passwords": {
@@ -257,10 +324,22 @@ export class LocalBrowserImportProvider implements BrowserImportProvider {
           }
           case "formFill": {
             const values = await reader.readAutofill(profile.path);
+            let nonPersistable = 0;
             for (const value of values) {
-              const mapped = this.formFillValue(value);
-              if (mapped) items.push(mapped);
-              else skipped += 1;
+              const imported = importedFormFillValue(value);
+              if (imported.type !== undefined && !isPersistableFormFillType(imported.type)) {
+                nonPersistable += 1;
+                continue;
+              }
+              items.push(imported);
+            }
+            skipped += nonPersistable;
+            if (nonPersistable > 0) {
+              warnings.push(
+                `${browser.displayName}: ${nonPersistable} transient credential or security-code field${
+                  nonPersistable === 1 ? " was" : "s were"
+                } not imported into reusable form history.`
+              );
             }
             break;
           }
@@ -350,95 +429,23 @@ export class LocalBrowserImportProvider implements BrowserImportProvider {
       domain: cookie.domain,
       hostOnly: cookie.hostOnly,
       path: cookie.path || "/",
+      ...(cookie.partitionKey ? { partitionKey: cookie.partitionKey } : {}),
       secure: cookie.secure,
       httpOnly: cookie.httpOnly,
       sameSite: cookie.sameSite,
-      ...(cookie.expirationDate === undefined
-        ? {}
-        : { expirationDate: cookie.expirationDate }),
+      ...(cookie.expirationDate === undefined ? {} : { expirationDate: cookie.expirationDate }),
       sourceScheme: cookie.sourceScheme,
       sourcePort: cookie.sourcePort,
     };
-  }
-
-  private formFillValue(entry: ImportedAutofillEntry): FormFillValueInput | null {
-    const field = entry.fieldName.trim().toLocaleLowerCase().replace(/_/g, "-");
-    const type = this.formFillType(field);
-    const value = entry.value.trim();
-    if (!type || !value || this.isExcludedFormValue(field)) return null;
-    return {
-      type,
-      value,
-      aliases: [field],
-      createdAt: entry.dateCreated,
-      updatedAt: entry.dateLastUsed ?? entry.dateCreated,
-      useCount: entry.timesUsed,
-    };
-  }
-
-  private formFillType(field: string): FormFillType | null {
-    const exact = new Set<FormFillType>([
-      "name",
-      "given-name",
-      "additional-name",
-      "family-name",
-      "honorific-prefix",
-      "honorific-suffix",
-      "email",
-      "tel",
-      "organization",
-      "street-address",
-      "address-line1",
-      "address-line2",
-      "address-line3",
-      "address-level1",
-      "address-level2",
-      "postal-code",
-      "country",
-      "country-name",
-    ]);
-    if (exact.has(field as FormFillType)) return field as FormFillType;
-    if (/^(first|given)(-?name)?$/.test(field)) return "given-name";
-    if (/^(last|family|sur)(-?name)?$/.test(field)) return "family-name";
-    if (/^(full-?)?name$/.test(field)) return "name";
-    if (/e-?mail|email-?address/.test(field)) return "email";
-    if (/^(phone|mobile|telephone|phone-number)$/.test(field)) return "tel";
-    if (/company|organisation|organization/.test(field)) return "organization";
-    if (/^(zip|zip-code|postcode)$/.test(field)) return "postal-code";
-    if (/^(city|town)$/.test(field)) return "address-level2";
-    if (/^(state|province|region)$/.test(field)) return "address-level1";
-    if (/^country(-name)?$/.test(field)) return "country-name";
-    if (/^(address|street)$/.test(field)) return "street-address";
-    if (/^(address-?1|address-line-?1)$/.test(field)) return "address-line1";
-    if (/^(address-?2|address-line-?2)$/.test(field)) return "address-line2";
-    return null;
-  }
-
-  private isExcludedFormValue(field: string): boolean {
-    return /(card|cc-|credit|cvc|cvv|password|passwd|otp|one-time|token|secret)/.test(field);
   }
 
   private pageFavicon(icon: {
     url: string;
     data: Buffer;
     mimeType: string;
+    sourceUrl?: string;
   }): PageFavicon | null {
-    if (icon.mimeType !== "image/png" || icon.data.byteLength > MAX_FAVICON_BYTES) return null;
-    try {
-      const page = new URL(icon.url);
-      if (page.protocol !== "http:" && page.protocol !== "https:") return null;
-      // One icon, stored once. This used to be assigned to both png16 and
-      // png32, doubling every payload for an image that was never resized.
-      return {
-        pageUrl: page.href,
-        origin: page.origin,
-        png32: icon.data.toString("base64"),
-        mimeType: "image/png",
-        updatedAt: Date.now(),
-      };
-    } catch {
-      return null;
-    }
+    return normalizeFavicon(icon);
   }
 
   private maskedSamples(dataType: BrowserImportDataType, items: unknown[]): unknown[] {
@@ -505,7 +512,9 @@ export class LocalBrowserImportProvider implements BrowserImportProvider {
 
   private throwIfAborted(signal: AbortSignal): void {
     if (signal.aborted) {
-      throw signal.reason instanceof Error ? signal.reason : new DOMException("Cancelled", "AbortError");
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new DOMException("Cancelled", "AbortError");
     }
   }
 }

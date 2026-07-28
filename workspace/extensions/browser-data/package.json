@@ -53,6 +53,15 @@
           },
           "tier": "gated",
           "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace-service:channel",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         }
       ]
     },
@@ -137,6 +146,7 @@
   },
   "dependencies": {
     "@vibestudio/browser-data": "workspace:*",
-    "@vibestudio/browser-import": "workspace:*"
+    "@vibestudio/browser-import": "workspace:*",
+    "@workspace/collection-orchestration": "workspace:*"
   }
 }

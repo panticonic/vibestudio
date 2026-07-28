@@ -519,6 +519,15 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@workspace/agentic-chat':
+        specifier: workspace:*
+        version: link:../../packages/agentic-chat
+      '@workspace/agentic-core':
+        specifier: workspace:*
+        version: link:../../packages/agentic-core
+      '@workspace/collection-orchestration':
+        specifier: workspace:*
+        version: link:../../packages/collection-orchestration
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
@@ -866,6 +875,9 @@ importers:
       '@vibestudio/browser-import':
         specifier: workspace:*
         version: link:../../../packages/browser-import
+      '@workspace/collection-orchestration':
+        specifier: workspace:*
+        version: link:../../packages/collection-orchestration
 
   extensions/claude-code:
     dependencies:
@@ -1187,6 +1199,19 @@ importers:
       '@workspace/agentic-protocol':
         specifier: workspace:*
         version: link:../agentic-protocol
+
+  packages/collection-orchestration:
+    dependencies:
+      '@workspace/agentic-core':
+        specifier: workspace:*
+        version: link:../agentic-core
+      '@workspace/pubsub':
+        specifier: workspace:*
+        version: link:../pubsub
+    devDependencies:
+      vitest:
+        specifier: ^3.2.2
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   packages/eval:
     dependencies:

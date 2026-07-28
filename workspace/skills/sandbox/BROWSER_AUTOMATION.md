@@ -12,8 +12,7 @@ debugging that app, but do not use them as disposable web pages.
 > browser panel opened from eval can be driven there directly. The "Inline UI:
 > Browser Control Panel" example below shows the panel/component
 > shape; the `eval` snippets show the same page API. (`browserData` from
-> `browserData` from `@workspace/runtime` is shell-only and not reachable from server-side
-> eval.)
+> `@workspace/runtime` is shell-only and not reachable from server-side eval.)
 
 ## Open Once, Reuse Across Calls (component refs)
 
@@ -83,6 +82,22 @@ const page = await target.cdp.page();
 console.log(await page.title());
 ```
 
+For a collection or any recursive container, take one revisioned subtree
+snapshot instead of recursively issuing `children()` calls:
+
+```ts
+const scope = await panelTree.subtree(collectionRootId);
+const browserTargets = scope.descendants.filter((node) => node.handle.kind === "browser");
+```
+
+Refresh the snapshot after tree mutations. Imported browser targets may be
+deferred; acquiring CDP materializes them, so automate mass imports with
+bounded concurrency rather than an unbounded `Promise.all`.
+
+When the root is an `about/collection` panel, read its co-located
+[collection conductor skill](../../about/collection/SKILL.md) for recursive
+grouping, semantic titles, notes, and orchestration-context rules.
+
 With a known slot id:
 
 ```ts
@@ -100,6 +115,14 @@ non-owned: observe first, and do not call `handle.navigate`,
 parent chat panel, or any workspace panel discovered from `panelTree` unless
 the requested task is to replace that exact panel. Open a browser panel for web
 navigation instead.
+
+Ownership here is verified launch ancestry, not current tree placement. A panel,
+agent, or eval may control browser panels it spawned without a prompt for every
+operation. A collection-owned subtree may also share one explicit orchestration
+context, allowing its recursive conductors to operate without per-panel prompts.
+Discovering an unrelated browser panel in `panelTree`, or merely moving one under
+a collection, does not transfer that authority; foreign-context CDP remains
+behind the exact context-boundary decision.
 
 The panel slot is durably created before application readiness settles. If
 `openPanel()` throws `PanelOperationError`, use

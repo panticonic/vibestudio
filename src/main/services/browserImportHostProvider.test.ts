@@ -55,7 +55,7 @@ describe("frameChunks", () => {
   it("splits by encoded size when items are large", () => {
     // A favicon-sized base64 payload: a handful of these must not share a frame
     // with 49 others, or the frame exceeds the websocket ingress cap.
-    const heavy = { png32: "A".repeat(1_500_000) };
+    const heavy = { data: "A".repeat(1_500_000) };
     const frames = frameChunks(Array.from({ length: 8 }, () => heavy));
     expect(frames.length).toBeGreaterThan(1);
     for (const frame of frames) {

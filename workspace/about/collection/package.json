@@ -5,7 +5,7 @@
   "type": "module",
   "vibestudio": {
     "title": "Collection",
-    "description": "Group panels under one parent, keep notes on them, and launch agentic debug sessions over the group",
+    "description": "Organize a recursive panel subtree with an embedded resident agent that can inspect and automate its children",
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true,
     "authority": {
@@ -79,6 +79,9 @@
   "dependencies": {
     "@workspace/react": "workspace:*",
     "@workspace/runtime": "workspace:*",
+    "@workspace/agentic-chat": "workspace:*",
+    "@workspace/agentic-core": "workspace:*",
+    "@workspace/collection-orchestration": "workspace:*",
     "@workspace/ui": "workspace:*",
     "@radix-ui/themes": "^3.2.1",
     "@radix-ui/react-icons": "^1.3.2",

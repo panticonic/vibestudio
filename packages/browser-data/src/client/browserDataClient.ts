@@ -16,6 +16,7 @@ import type {
 } from "../environment.js";
 import type {
   ImportedPassword,
+  OpenTabsAsPanelsRequest,
   OpenTabsAsPanelsResult,
   RecordHistoryVisitRequest,
   UpdateHistoryTitleRequest,
@@ -53,13 +54,7 @@ export interface BrowserDataClient {
   getImportJob(jobId: string): Promise<ImportJobSnapshot | null>;
   listImportJobs(): Promise<ImportJobSnapshot[]>;
   listOpenTabs(hostId: string, sourceId: string): Promise<ImportedBrowserOpenTab[]>;
-  openTabsAsPanels(request: {
-    hostId: string;
-    sourceId: string;
-    selection: string[];
-    /** "window" nests the opened tabs under one collection panel per source window. */
-    groupBy?: "window" | "none";
-  }): Promise<OpenTabsAsPanelsResult>;
+  openTabsAsPanels(request: OpenTabsAsPanelsRequest): Promise<OpenTabsAsPanelsResult>;
   getSitePreferences(
     origin: string
   ): Promise<{ origin: string; zoomFactor: number; updatedAt?: number }>;

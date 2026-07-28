@@ -1,5 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+
+const orchestrationMocks = vi.hoisted(() => ({
+  launchCollectionTask: vi.fn(async () => undefined),
+}));
+
+vi.mock("@workspace/collection-orchestration", async () => {
+  const actual = await vi.importActual<typeof import("@workspace/collection-orchestration")>(
+    "@workspace/collection-orchestration"
+  );
+  return {
+    ...actual,
+    launchCollectionTask: orchestrationMocks.launchCollectionTask,
+  };
+});
 
 vi.mock("@vibestudio/browser-import", async () => {
   const actual = await vi.importActual<typeof import("@vibestudio/browser-import")>(
@@ -16,7 +30,7 @@ vi.mock("@vibestudio/browser-import", async () => {
             displayName: "Chrome",
             status: "readable",
             localDataSetCount: 2,
-            supportedDataTypes: ["bookmarks", "history"],
+            supportedDataTypes: ["bookmarks", "history", "cookies"],
             warnings: [],
           },
         ];
@@ -29,6 +43,7 @@ vi.mock("@vibestudio/browser-import", async () => {
         dataTypes: string[],
         sink: { store(batch: unknown): Promise<void>; progress(progress: unknown): Promise<void> }
       ) {
+        const progress = [];
         if (dataTypes.includes("bookmarks")) {
           await sink.store({
             jobId: "",
@@ -38,24 +53,48 @@ vi.mock("@vibestudio/browser-import", async () => {
             idempotencyKey: "",
             items: [{ title: "Example", url: "https://example.com" }],
           });
-          await sink.progress({
+          const bookmarks = {
             dataType: "bookmarks",
             itemsProcessed: 1,
             stored: 1,
             skipped: 0,
             errors: 0,
+          };
+          await sink.progress(bookmarks);
+          progress.push(bookmarks);
+        }
+        if (dataTypes.includes("cookies")) {
+          await sink.store({
+            jobId: "",
+            sourceId,
+            dataType: "cookies",
+            batchIndex: 0,
+            idempotencyKey: "",
+            items: [
+              {
+                name: "session",
+                value: "opaque",
+                domain: "example.com",
+                hostOnly: true,
+                path: "/",
+                secure: true,
+                httpOnly: true,
+                sameSite: "lax",
+              },
+            ],
           });
+          const cookies = {
+            dataType: "cookies",
+            itemsProcessed: 1,
+            stored: 1,
+            skipped: 0,
+            errors: 0,
+          };
+          await sink.progress(cookies);
+          progress.push(cookies);
         }
         return {
-          dataTypes: [
-            {
-              dataType: "bookmarks",
-              itemsProcessed: 1,
-              stored: 1,
-              skipped: 0,
-              errors: 0,
-            },
-          ],
+          dataTypes: progress,
           warnings: [],
         };
       }
@@ -104,19 +143,27 @@ function makeContext(
   approvalChoice: ApprovalChoice = { kind: "choice", choice: "allow" }
 ) {
   let createdPanels = 0;
-  const rpcCall = vi.fn(async (_targetId: string, method: string, ..._args: unknown[]) => {
-    if (method === "addBookmarksBatch") return 1;
-    if (method === "addBookmark") return 42;
-    if (method === "getBookmarks") return [{ id: 1, title: "Example" }];
-    if (method === "getPasswords") return [{ id: 7, origin_url: "https://example.com" }];
-    if (method === "panelTree.archive") return true;
-    if (method === "panelTree.create") {
-      createdPanels += 1;
-      return { id: `browser-panel-${createdPanels}`, title: `panel-${createdPanels}` };
+  const rpcCall = vi.fn(
+    async (_targetId: string, method: string, ..._args: unknown[]): Promise<unknown> => {
+      if (method === "addBookmarksBatch") return 1;
+      if (method === "addBookmark") return 42;
+      if (method === "getBookmarks") return [{ id: 1, title: "Example" }];
+      if (method === "getPasswords") return [{ id: 7, origin_url: "https://example.com" }];
+      if (method === "panelTree.archive") return true;
+      if (method === "panelTree.metadata") return { contextId: "ctx-caller" };
+      if (method === "panelTree.create") {
+        createdPanels += 1;
+        return {
+          id: `browser-panel-${createdPanels}`,
+          title: `panel-${createdPanels}`,
+          contextId: `ctx-panel-${createdPanels}`,
+        };
+      }
+      return [];
     }
-    return [];
-  });
+  );
   const emit = vi.fn();
+  const rpcStream = vi.fn(async () => new Response());
   const health = { healthy: vi.fn(), degraded: vi.fn(), unhealthy: vi.fn() };
   const resolveDurableObject = vi.fn(async () => ({
     targetId: "do:vibestudio/internal:BrowserDataDO:environment-key",
@@ -125,7 +172,7 @@ function makeContext(
   const approvalsRequest = vi.fn(async () => approvalChoice);
   return {
     ctx: {
-      rpc: { call: rpcCall },
+      rpc: { call: rpcCall, stream: rpcStream },
       workers: { resolveDurableObject },
       invocation: {
         current: () =>
@@ -142,11 +189,12 @@ function makeContext(
         signal: () => null,
       },
       approvals: { request: approvalsRequest },
-      log: { info: vi.fn() },
+      log: { info: vi.fn(), warn: vi.fn() },
       health,
       emit,
     },
     rpcCall,
+    rpcStream,
     resolveDurableObject,
     approvalsRequest,
     emit,
@@ -155,6 +203,11 @@ function makeContext(
 }
 
 describe("@workspace-extensions/browser-data", () => {
+  beforeEach(() => {
+    orchestrationMocks.launchCollectionTask.mockReset();
+    orchestrationMocks.launchCollectionTask.mockResolvedValue(undefined);
+  });
+
   it("matches the manifest-declared provider and contains no retired import methods", async () => {
     const { ctx } = makeContext();
     const activated = await activate(ctx as never);
@@ -285,7 +338,48 @@ describe("@workspace-extensions/browser-data", () => {
     expect(health.healthy).toHaveBeenLastCalledWith({ summary: "Browser data import completed" });
   });
 
-  it("opens only selected HTTP tabs as ordinary child panels", async () => {
+  it("keeps cookie imports reconciling until the active desktop jar is flushed", async () => {
+    const { ctx, rpcCall, emit } = makeContext();
+    rpcCall.mockImplementation(async (_targetId: string, method: string) => {
+      if (method === "browserEnvironment.getImportHost") {
+        return {
+          hostId: "desktop-1",
+          displayName: "This device",
+          platform: "linux",
+          location: "desktop",
+          connected: true,
+        };
+      }
+      if (method === "browserEnvironment.flushCookieProjection") return { revision: 1 };
+      return [];
+    });
+    const api = (await activate(ctx as never)).providerContracts.browserData;
+    const hosts = await api.listImportHosts();
+    const server = hosts.find((host) => host.hostId.startsWith("server:"));
+    const result = await api.startImport({
+      hostId: server!.hostId,
+      sourceId: "opaque-chrome",
+      dataTypes: ["cookies"],
+    });
+
+    await vi.waitFor(async () => {
+      expect(((await api.getImportJob(result.jobId)) as { phase?: string } | null)?.phase).toBe(
+        "complete"
+      );
+    });
+    const flushCall = rpcCall.mock.calls.find(
+      (call) => call[1] === "browserEnvironment.flushCookieProjection"
+    );
+    const completeEvent = emit.mock.calls.find((call) => call[0] === "import-complete");
+    expect(flushCall).toBeDefined();
+    expect(completeEvent?.[1]).toMatchObject({ phase: "complete" });
+    expect(flushCall![0]).toBe("main");
+    expect(rpcCall.mock.invocationCallOrder[rpcCall.mock.calls.indexOf(flushCall!)]).toBeLessThan(
+      emit.mock.invocationCallOrder[emit.mock.calls.indexOf(completeEvent!)]!
+    );
+  });
+
+  it("can keep selected HTTP tabs directly under the calling panel", async () => {
     const { ctx, rpcCall } = makeContext("panel", "panel-parent");
     const api = (await activate(ctx as never)).providerContracts.browserData;
     const [host] = await api.listImportHosts();
@@ -294,6 +388,8 @@ describe("@workspace-extensions/browser-data", () => {
         hostId: host!.hostId,
         sourceId: "opaque-chrome",
         selection: ["tab-1", "tab-2"],
+        destination: "caller",
+        groupBy: "none",
       })
     ).resolves.toMatchObject({ tabsFound: 2, panelsOpened: 1 });
     expect(rpcCall).toHaveBeenCalledWith(
@@ -304,11 +400,14 @@ describe("@workspace-extensions/browser-data", () => {
         parentId: "panel-parent",
         title: "Example",
         focus: false,
+        initialLoad: "deferred",
+        contextId: "ctx-caller",
       }
     );
+    expect(orchestrationMocks.launchCollectionTask).not.toHaveBeenCalled();
   });
 
-  it("nests tabs under one collection panel per source window when grouping", async () => {
+  it("defaults to a new root with nested window collections and deferred tabs", async () => {
     const { ctx, rpcCall } = makeContext("panel", "panel-parent");
     const api = (await activate(ctx as never)).providerContracts.browserData;
     const [host] = await api.listImportHosts();
@@ -316,10 +415,10 @@ describe("@workspace-extensions/browser-data", () => {
       hostId: host!.hostId,
       sourceId: "opaque-chrome",
       selection: ["tab-1", "tab-2", "tab-3"],
-      groupBy: "window",
     });
 
     expect(result).toMatchObject({ tabsFound: 3, panelsOpened: 2 });
+    expect(result.root).toMatchObject({ id: "browser-panel-1", panelsOpened: 2 });
     expect(result.collections).toHaveLength(2);
     expect(result.collections.map((entry) => entry.panelsOpened)).toEqual([1, 1]);
 
@@ -329,22 +428,41 @@ describe("@workspace-extensions/browser-data", () => {
         (call[2] as { surface?: string; source?: string })?.surface === "code" &&
         (call[2] as { source?: string }).source === "about/collection"
     );
-    expect(collectionCalls).toHaveLength(2);
-    // `name` would mint the panel's id segment, not a label: the collection
-    // takes its title from stateArgs instead.
+    expect(collectionCalls).toHaveLength(3);
     expect(collectionCalls[0]?.[3]).toMatchObject({
-      parentId: "panel-parent",
-      title: "Chrome \u00b7 Window 1",
-      stateArgs: { title: "Chrome \u00b7 Window 1" },
+      parentId: null,
+      title: "Chrome \u00b7 Imported Tabs",
+      focus: false,
+      initialLoad: "deferred",
+      stateArgs: {
+        title: "Chrome \u00b7 Imported Tabs",
+        origin: "Chrome \u00b7 browser import",
+        startupTask: {
+          kind: "title-browser-import-windows",
+          sourceName: "Chrome",
+        },
+        agentConfig: { approvalLevel: 2 },
+        channelName: expect.stringMatching(/^collection-/),
+        agentKey: expect.stringMatching(/^conductor-/),
+      },
     });
-    // `name` would mint an id segment; identity stays generated.
+    expect(collectionCalls[1]?.[3]).toMatchObject({
+      parentId: "browser-panel-1",
+      title: "Window 1",
+      initialLoad: "deferred",
+      contextId: "ctx-panel-1",
+      stateArgs: { title: "Window 1" },
+    });
     expect(collectionCalls[0]?.[3]).not.toHaveProperty("name");
     expect(collectionCalls[0]?.[3]).not.toHaveProperty("slug");
-    expect(collectionCalls[1]?.[3]).toMatchObject({
-      stateArgs: { title: "Chrome \u00b7 Window 2" },
+    expect(collectionCalls[2]?.[3]).toMatchObject({
+      parentId: "browser-panel-1",
+      title: "Window 2",
+      initialLoad: "deferred",
+      contextId: "ctx-panel-1",
+      stateArgs: { title: "Window 2" },
     });
 
-    // Each tab is parented to its window's collection, not to the caller.
     const tabParents = rpcCall.mock.calls
       .filter(
         (call) =>
@@ -353,27 +471,67 @@ describe("@workspace-extensions/browser-data", () => {
       )
       .map((call) => (call[3] as { parentId?: string }).parentId);
     expect(new Set(tabParents).size).toBe(2);
+    expect(tabParents).not.toContain("browser-panel-1");
     expect(tabParents).not.toContain("panel-parent");
+    const tabContexts = rpcCall.mock.calls
+      .filter(
+        (call) =>
+          call[1] === "panelTree.create" &&
+          (call[2] as { surface?: string })?.surface === "external"
+      )
+      .map((call) => (call[3] as { contextId?: string }).contextId);
+    expect(new Set(tabContexts)).toEqual(new Set(["ctx-panel-1"]));
+    const rootState = (
+      collectionCalls[0]?.[3] as {
+        stateArgs: { channelName: string; agentKey: string };
+      }
+    ).stateArgs;
+    expect(orchestrationMocks.launchCollectionTask).toHaveBeenCalledOnce();
+    expect(orchestrationMocks.launchCollectionTask).toHaveBeenCalledWith(
+      expect.objectContaining({ selfId: "@workspace-extensions/browser-data" }),
+      expect.objectContaining({
+        rootPanelId: "browser-panel-1",
+        rootTitle: "panel-1",
+        contextId: "ctx-panel-1",
+        session: {
+          channelName: rootState.channelName,
+          agentKey: rootState.agentKey,
+        },
+        task: expect.stringContaining("window collection"),
+        idempotencyKey: `initial-prompt:${rootState.channelName}`,
+      })
+    );
+    const lastPanelCreateOrder = Math.max(
+      ...rpcCall.mock.invocationCallOrder.filter(
+        (_, index) => rpcCall.mock.calls[index]?.[1] === "panelTree.create"
+      )
+    );
+    expect(orchestrationMocks.launchCollectionTask.mock.invocationCallOrder[0]).toBeGreaterThan(
+      lastPanelCreateOrder
+    );
   });
 
-  it("still opens tabs when their collection cannot host children", async () => {
+  it("does not silently flatten tabs when a requested window collection cannot be created", async () => {
     const { ctx, rpcCall } = makeContext("panel", "panel-parent");
     const api = (await activate(ctx as never)).providerContracts.browserData;
     const [host] = await api.listImportHosts();
 
-    // Collections are created fine, but parenting a tab under one fails —
-    // the failure mode that silently produced empty collections.
     const passthrough = rpcCall.getMockImplementation()!;
+    let collectionCreates = 0;
     rpcCall.mockImplementation(async (targetId: string, method: string, ...args: unknown[]) => {
       if (method !== "panelTree.create") return passthrough(targetId, method, ...args);
-      const [execution, options] = args as [
+      const [execution] = args as [
         { surface: "code"; source: string } | { surface: "external"; url: string },
-        { parentId?: string },
       ];
       if (execution.surface === "code" && execution.source === "about/collection") {
-        return { id: "collection-1", title: "Collection" };
-      }
-      if (options?.parentId === "collection-1") {
+        collectionCreates += 1;
+        if (collectionCreates === 1) {
+          return {
+            id: "import-root",
+            title: "Chrome · Imported Tabs",
+            contextId: "ctx-import-root",
+          };
+        }
         throw new Error("Server auth failed: Not a member of this workspace");
       }
       return { id: "tab-panel-1", title: "Example" };
@@ -383,19 +541,41 @@ describe("@workspace-extensions/browser-data", () => {
       hostId: host!.hostId,
       sourceId: "opaque-chrome",
       selection: ["tab-1"],
-      groupBy: "window",
     });
 
-    // The tab lands under the caller rather than being lost.
-    expect(result.panelsOpened).toBe(1);
+    expect(result.panelsOpened).toBe(0);
+    expect(result.root).toBeUndefined();
     expect(result.collections).toEqual([]);
     expect(result.skipped.map((entry) => entry.reason)).toEqual([
-      expect.stringContaining("Tabs opened outside their collection"),
+      expect.stringContaining("Could not create Window 1"),
     ]);
-    expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.archive", "collection-1");
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.archive", "import-root");
+    expect(orchestrationMocks.launchCollectionTask).not.toHaveBeenCalled();
   });
 
-  it("skips grouping when groupBy is omitted", async () => {
+  it("preserves the queued collection task when immediate conductor launch is transiently unavailable", async () => {
+    orchestrationMocks.launchCollectionTask.mockRejectedValueOnce(
+      new Error("model provider unavailable")
+    );
+    const { ctx } = makeContext("panel", "panel-parent");
+    const api = (await activate(ctx as never)).providerContracts.browserData;
+    const [host] = await api.listImportHosts();
+
+    await expect(
+      api.openTabsAsPanels({
+        hostId: host!.hostId,
+        sourceId: "opaque-chrome",
+        selection: ["tab-1"],
+        groupBy: "none",
+      })
+    ).resolves.toMatchObject({ panelsOpened: 1 });
+
+    expect(ctx.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("could not start collection title assignment")
+    );
+  });
+
+  it("uses one new root collection without scattering ungrouped tabs as roots", async () => {
     const { ctx, rpcCall } = makeContext("panel", "panel-parent");
     const api = (await activate(ctx as never)).providerContracts.browserData;
     const [host] = await api.listImportHosts();
@@ -403,14 +583,15 @@ describe("@workspace-extensions/browser-data", () => {
       hostId: host!.hostId,
       sourceId: "opaque-chrome",
       selection: ["tab-1", "tab-3"],
+      groupBy: "none",
     });
+    expect(result.root).toMatchObject({ id: "browser-panel-1", panelsOpened: 2 });
     expect(result.collections).toEqual([]);
-    expect(
-      rpcCall.mock.calls.filter(
-        (call) =>
-          (call[2] as { surface?: string; source?: string })?.surface === "code" &&
-          (call[2] as { source?: string }).source === "about/collection"
-      )
-    ).toHaveLength(0);
+    const createCalls = rpcCall.mock.calls.filter((call) => call[1] === "panelTree.create");
+    expect(createCalls).toHaveLength(3);
+    expect(createCalls[0]?.[3]).toMatchObject({ parentId: null });
+    expect(createCalls.slice(1).map((call) => (call[3] as { parentId?: string }).parentId)).toEqual(
+      ["browser-panel-1", "browser-panel-1"]
+    );
   });
 });

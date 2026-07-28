@@ -81,7 +81,7 @@ describe("readOpenTabs", () => {
         fixedCommand(2, int32Payload(102, 0)),
         navigationCommand(102, 0, "chrome://settings/", "Settings"),
         fixedCommand(8, int32Payload(10, 0)),
-      ]),
+      ])
     );
 
     const tabs = readOpenTabs({ browser: "chrome", profile: profilePath });
@@ -116,6 +116,7 @@ describe("ChromiumReader cookie import", () => {
     expect(cookies).toEqual([
       expect.objectContaining({
         name: "sid",
+        valueStatus: "available",
         value: "abc123",
         domain: ".example.com",
         hostOnly: false,
@@ -126,17 +127,35 @@ describe("ChromiumReader cookie import", () => {
         sourceScheme: "secure",
         sourcePort: 443,
       }),
+      expect.objectContaining({
+        name: "empty-is-valid",
+        valueStatus: "available",
+        value: "",
+      }),
+      expect.objectContaining({
+        name: "encrypted-unavailable",
+        valueStatus: "unavailable",
+        value: "",
+        unavailableReason: "decryption_failed",
+      }),
+      expect.objectContaining({
+        name: "partitioned",
+        valueStatus: "available",
+        partitionKey: {
+          topLevelSite: "https://top-frame.example",
+          hasCrossSiteAncestor: true,
+        },
+      }),
     ]);
   });
 });
 
 function writeMozLz4Json(filePath: string, value: unknown): void {
   const json = Buffer.from(JSON.stringify(value), "utf-8");
-  fs.writeFileSync(filePath, Buffer.concat([
-    Buffer.from("mozLz40\0", "ascii"),
-    uint32(json.length),
-    lz4LiteralBlock(json),
-  ]));
+  fs.writeFileSync(
+    filePath,
+    Buffer.concat([Buffer.from("mozLz40\0", "ascii"), uint32(json.length), lz4LiteralBlock(json)])
+  );
 }
 
 function lz4LiteralBlock(data: Buffer): Buffer {
@@ -172,7 +191,7 @@ function navigationCommand(tabId: number, index: number, url: string, title: str
       pickleString16(title),
       pickleString(""),
       int32(0),
-    ]),
+    ])
   );
 }
 
@@ -234,7 +253,8 @@ async function writeChromiumCookiesDb(filePath: string): Promise<void> {
       is_httponly INTEGER,
       samesite INTEGER,
       source_scheme INTEGER,
-      source_port INTEGER
+      source_port INTEGER,
+      top_frame_site_key TEXT
     );
     INSERT INTO cookies VALUES (
       '.example.com',
@@ -247,7 +267,50 @@ async function writeChromiumCookiesDb(filePath: string): Promise<void> {
       1,
       1,
       2,
-      443
+      443,
+      ''
+    );
+    INSERT INTO cookies VALUES (
+      '.example.com',
+      'empty-is-valid',
+      '',
+      X'',
+      '/',
+      0,
+      0,
+      0,
+      -1,
+      1,
+      80,
+      ''
+    );
+    INSERT INTO cookies VALUES (
+      '.example.com',
+      'encrypted-unavailable',
+      '',
+      X'0102',
+      '/',
+      0,
+      1,
+      1,
+      1,
+      2,
+      443,
+      ''
+    );
+    INSERT INTO cookies VALUES (
+      '.example.com',
+      'partitioned',
+      'isolated',
+      X'',
+      '/',
+      0,
+      1,
+      1,
+      1,
+      2,
+      443,
+      'https://top-frame.example'
     );
   `);
   fs.writeFileSync(filePath, Buffer.from(db.export()));

@@ -1,8 +1,5 @@
 export { createBrowserDataClient } from "./client/browserDataClient.js";
-export type {
-  BrowserDataClient,
-  ImportPreview,
-} from "./client/browserDataClient.js";
+export type { BrowserDataClient, ImportPreview } from "./client/browserDataClient.js";
 export type {
   ApplyCookieMutationsRequest,
   BrowserImportSelection,
@@ -19,6 +16,9 @@ export type {
 } from "./environment.js";
 export type {
   ImportedPassword,
+  OpenTabsAsPanelsRequest,
+  OpenTabsPanelDestination,
+  OpenTabsPanelGrouping,
   OpenTabsAsPanelsResult,
   RecordHistoryVisitRequest,
   UpdateHistoryTitleRequest,

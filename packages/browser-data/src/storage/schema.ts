@@ -2,16 +2,25 @@
  * Canonical browser-environment schema. Browser profiles are provider-local
  * discovery details and secrets are encrypted before they reach SQLite.
  */
-export const BROWSER_DATA_SCHEMA = `
+
+import { FAVICON_MIME_TYPES } from "../favicon.js";
+
+const FAVICON_MIME_TYPE_SQL = FAVICON_MIME_TYPES.map(
+  (mimeType) => `'${mimeType.replaceAll("'", "''")}'`
+).join(", ");
+
+export const PAGE_FAVICONS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS page_favicons (
   page_url TEXT PRIMARY KEY,
   origin TEXT NOT NULL,
   source_url TEXT,
-  png16 BLOB,
-  png32 BLOB,
-  mime_type TEXT NOT NULL CHECK (mime_type = 'image/png'),
+  image_data BLOB NOT NULL,
+  mime_type TEXT NOT NULL CHECK (mime_type IN (${FAVICON_MIME_TYPE_SQL})),
   updated_at INTEGER NOT NULL
-);
+);`;
+
+export const BROWSER_DATA_SCHEMA = `
+${PAGE_FAVICONS_TABLE_SQL}
 CREATE INDEX IF NOT EXISTS idx_page_favicons_origin ON page_favicons(origin);
 
 CREATE TABLE IF NOT EXISTS site_preferences (
@@ -136,7 +145,9 @@ CREATE TABLE IF NOT EXISTS cookie_mutations (
 
 CREATE TABLE IF NOT EXISTS form_fill_values (
   id INTEGER PRIMARY KEY,
-  type TEXT NOT NULL,
+  field_name TEXT NOT NULL,
+  field_key TEXT NOT NULL,
+  type TEXT,
   value_hash BLOB NOT NULL,
   value_encrypted BLOB NOT NULL,
   display_label TEXT,
@@ -145,9 +156,10 @@ CREATE TABLE IF NOT EXISTS form_fill_values (
   updated_at INTEGER NOT NULL,
   use_count INTEGER NOT NULL DEFAULT 0,
   source_id TEXT,
-  UNIQUE(type, value_hash)
+  UNIQUE(field_key, value_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_form_fill_values_type ON form_fill_values(type);
+CREATE INDEX IF NOT EXISTS idx_form_fill_values_field_key ON form_fill_values(field_key);
 
 CREATE TABLE IF NOT EXISTS search_engines (
   id INTEGER PRIMARY KEY,

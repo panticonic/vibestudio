@@ -97,10 +97,7 @@ export function parseBinaryCookies(data: Buffer): RawCookie[] {
 
   const magic = data.subarray(0, 4).toString("ascii");
   if (magic !== "cook") {
-    throw new BrowserDataError(
-      "SCHEMA_MISMATCH",
-      "Not a valid Safari binary cookies file",
-    );
+    throw new BrowserDataError("SCHEMA_MISMATCH", "Not a valid Safari binary cookies file");
   }
 
   const numPages = data.readUInt32BE(4);
@@ -154,12 +151,8 @@ export function parseSafariPasswordCsv(content: string): ImportedPassword[] {
 
   const header = parseCSVLine(lines[0]!);
   const urlIdx = header.findIndex((h) => h.toLowerCase() === "url");
-  const usernameIdx = header.findIndex(
-    (h) => h.toLowerCase() === "username",
-  );
-  const passwordIdx = header.findIndex(
-    (h) => h.toLowerCase() === "password",
-  );
+  const usernameIdx = header.findIndex((h) => h.toLowerCase() === "username");
+  const passwordIdx = header.findIndex((h) => h.toLowerCase() === "password");
   const titleIdx = header.findIndex((h) => h.toLowerCase() === "title");
 
   if (urlIdx === -1 || usernameIdx === -1 || passwordIdx === -1) {
@@ -243,19 +236,13 @@ interface PlistBookmarkNode {
   ReadingListNonSync?: { Title?: string };
 }
 
-function extractBookmarks(
-  node: PlistBookmarkNode,
-  folderPath: string[],
-): ImportedBookmark[] {
+function extractBookmarks(node: PlistBookmarkNode, folderPath: string[]): ImportedBookmark[] {
   const results: ImportedBookmark[] = [];
 
   if (node.WebBookmarkType === "WebBookmarkTypeLeaf") {
     const url = node.URLString;
     if (url) {
-      const title =
-        node.URIDictionary?.title ||
-        node.ReadingListNonSync?.Title ||
-        url;
+      const title = node.URIDictionary?.title || node.ReadingListNonSync?.Title || url;
       results.push({
         title,
         url,
@@ -263,10 +250,7 @@ function extractBookmarks(
         folder: folderPath,
       });
     }
-  } else if (
-    node.WebBookmarkType === "WebBookmarkTypeList" &&
-    node.Children
-  ) {
+  } else if (node.WebBookmarkType === "WebBookmarkTypeList" && node.Children) {
     let currentFolder = folderPath;
     if (node.Title && node.Title !== "") {
       // Map Safari internal folder names to friendlier names
@@ -296,7 +280,7 @@ function handleAccessError(err: unknown, context: string): never {
     throw new BrowserDataError(
       "TCC_ACCESS_DENIED",
       `macOS denied access to ${context}. Grant Full Disk Access in System Settings > Privacy & Security.`,
-      error.code,
+      error.code
     );
   }
   throw err;
@@ -348,7 +332,7 @@ export class SafariReader implements BrowserDataReader {
               hv.visit_time
             FROM history_items hi
             JOIN history_visits hv ON hv.history_item = hi.id
-            ORDER BY hv.visit_time DESC`,
+            ORDER BY hv.visit_time DESC`
           )
           .all() as Array<{
           url: string;
@@ -378,10 +362,7 @@ export class SafariReader implements BrowserDataReader {
               existing.lastVisitTime = visitTimeMs;
               if (row.title) existing.title = row.title;
             }
-            if (
-              existing.firstVisitTime === undefined ||
-              visitTimeMs < existing.firstVisitTime
-            ) {
+            if (existing.firstVisitTime === undefined || visitTimeMs < existing.firstVisitTime) {
               existing.firstVisitTime = visitTimeMs;
             }
           }
@@ -396,10 +377,7 @@ export class SafariReader implements BrowserDataReader {
       if (error.code === "EPERM" || error.code === "EACCES") {
         handleAccessError(err, "Safari history");
       }
-      if (
-        err instanceof BrowserDataError &&
-        err.code === "TCC_ACCESS_DENIED"
-      ) {
+      if (err instanceof BrowserDataError && err.code === "TCC_ACCESS_DENIED") {
         throw err;
       }
       if (err instanceof BrowserDataError) {
@@ -413,12 +391,7 @@ export class SafariReader implements BrowserDataReader {
 
   async readCookies(_profilePath: string): Promise<ImportedCookie[]> {
     // Safari cookies are stored at ~/Library/Cookies/Cookies.binarycookies
-    const cookiePath = path.join(
-      os.homedir(),
-      "Library",
-      "Cookies",
-      "Cookies.binarycookies",
-    );
+    const cookiePath = path.join(os.homedir(), "Library", "Cookies", "Cookies.binarycookies");
 
     if (!fs.existsSync(cookiePath)) {
       return [];
@@ -444,14 +417,13 @@ export class SafariReader implements BrowserDataReader {
 
       return {
         name: c.name,
+        valueStatus: "available" as const,
         value: c.value,
         domain: c.domain,
         hostOnly,
         path: c.path,
         expirationDate:
-          c.expirationDate > 0
-            ? macTimestampToMs(c.expirationDate)
-            : undefined,
+          c.expirationDate > 0 ? macTimestampToMs(c.expirationDate) / 1_000 : undefined,
         secure,
         httpOnly,
         sameSite: "unspecified" as const,
@@ -494,9 +466,7 @@ export class SafariReader implements BrowserDataReader {
     return [];
   }
 
-  async readSearchEngines(
-    _profilePath: string,
-  ): Promise<ImportedSearchEngine[]> {
+  async readSearchEngines(_profilePath: string): Promise<ImportedSearchEngine[]> {
     // Safari does not expose search engine config in a parseable format
     return [];
   }
@@ -522,18 +492,14 @@ export class SafariReader implements BrowserDataReader {
         // columns: domain, key, value
         // Check if the table exists
         const tableCheck = db
-          .prepare(
-            `SELECT name FROM sqlite_master WHERE type='table' AND name='preference_values'`,
-          )
+          .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='preference_values'`)
           .get() as { name: string } | undefined;
 
         if (!tableCheck) {
           return [];
         }
 
-        const rows = db
-          .prepare(`SELECT domain, key, value FROM preference_values`)
-          .all() as Array<{
+        const rows = db.prepare(`SELECT domain, key, value FROM preference_values`).all() as Array<{
           domain: string;
           key: string;
           value: string | number;
@@ -542,11 +508,7 @@ export class SafariReader implements BrowserDataReader {
         const permissions: ImportedPermission[] = [];
         for (const row of rows) {
           let setting: "allow" | "block" | "ask" = "ask";
-          if (
-            row.value === 1 ||
-            row.value === "1" ||
-            row.value === "allow"
-          ) {
+          if (row.value === 1 || row.value === "1" || row.value === "allow") {
             setting = "allow";
           } else if (
             row.value === 0 ||
@@ -584,12 +546,7 @@ export class SafariReader implements BrowserDataReader {
 
   async readSettings(profilePath: string): Promise<ImportedSettings> {
     // Safari preferences are in ~/Library/Preferences/com.apple.Safari.plist
-    const prefsPath = path.join(
-      os.homedir(),
-      "Library",
-      "Preferences",
-      "com.apple.Safari.plist",
-    );
+    const prefsPath = path.join(os.homedir(), "Library", "Preferences", "com.apple.Safari.plist");
 
     if (!fs.existsSync(prefsPath)) {
       return {};
@@ -601,21 +558,20 @@ export class SafariReader implements BrowserDataReader {
 
       const settings: ImportedSettings = {};
 
-      if (typeof prefs['HomePage'] === "string") {
-        settings.homepage = prefs['HomePage'];
+      if (typeof prefs["HomePage"] === "string") {
+        settings.homepage = prefs["HomePage"];
       }
 
-      if (typeof prefs['ShowFavoritesBar'] === "boolean") {
-        settings.showBookmarksBar = prefs['ShowFavoritesBar'] as boolean;
+      if (typeof prefs["ShowFavoritesBar"] === "boolean") {
+        settings.showBookmarksBar = prefs["ShowFavoritesBar"] as boolean;
       }
       // Also check older key name
       if (typeof prefs["ShowFavoritesBar-v2"] === "boolean") {
         settings.showBookmarksBar = prefs["ShowFavoritesBar-v2"] as boolean;
       }
 
-      if (typeof prefs['SearchProviderShortName'] === "string") {
-        settings.defaultSearchEngine =
-          prefs['SearchProviderShortName'] as string;
+      if (typeof prefs["SearchProviderShortName"] === "string") {
+        settings.defaultSearchEngine = prefs["SearchProviderShortName"] as string;
       }
 
       return settings;

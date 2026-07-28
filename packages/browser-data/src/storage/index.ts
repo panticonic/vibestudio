@@ -1,4 +1,4 @@
-export { BROWSER_DATA_SCHEMA } from "./schema.js";
+export { BROWSER_DATA_SCHEMA, PAGE_FAVICONS_TABLE_SQL } from "./schema.js";
 export type {
   StoredBookmark,
   StoredCookie,

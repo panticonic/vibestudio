@@ -1,4 +1,6 @@
 import { z } from "zod";
+import type { BrowserCookiePartitionKey } from "./cookies.js";
+import { FAVICON_MIME_TYPES, type FaviconMimeType } from "./favicon.js";
 import { BrowserNameSchema } from "./types.js";
 import type { BrowserName } from "./types.js";
 
@@ -281,7 +283,7 @@ export interface BrowserCookieKey {
   name: string;
   domain: string;
   path: string;
-  partitionKey?: string;
+  partitionKey?: BrowserCookiePartitionKey;
 }
 
 export interface BrowserCookieInput extends BrowserCookieKey {
@@ -325,12 +327,19 @@ export interface CookieSnapshot {
   cookies: BrowserCookieRecord[];
 }
 
+export const BrowserCookiePartitionKeySchema = z
+  .object({
+    topLevelSite: z.string().url().max(4_096),
+    hasCrossSiteAncestor: z.boolean(),
+  })
+  .strict();
+
 export const BrowserCookieKeySchema = z
   .object({
     name: z.string().min(1).max(4_096),
     domain: z.string().min(1).max(4_096),
     path: z.string().min(1).max(4_096),
-    partitionKey: z.string().max(4_096).optional(),
+    partitionKey: BrowserCookiePartitionKeySchema.optional(),
   })
   .strict();
 
@@ -377,8 +386,22 @@ export const FORM_FILL_TYPES = [
   "family-name",
   "honorific-prefix",
   "honorific-suffix",
+  "nickname",
+  "username",
+  "new-password",
+  "current-password",
+  "one-time-code",
+  "organization-title",
   "email",
   "tel",
+  "tel-country-code",
+  "tel-national",
+  "tel-area-code",
+  "tel-local",
+  "tel-local-prefix",
+  "tel-local-suffix",
+  "tel-extension",
+  "impp",
   "organization",
   "street-address",
   "address-line1",
@@ -386,15 +409,63 @@ export const FORM_FILL_TYPES = [
   "address-line3",
   "address-level1",
   "address-level2",
+  "address-level3",
+  "address-level4",
   "postal-code",
   "country",
   "country-name",
+  "cc-name",
+  "cc-given-name",
+  "cc-additional-name",
+  "cc-family-name",
+  "cc-number",
+  "cc-exp",
+  "cc-exp-month",
+  "cc-exp-year",
+  "cc-csc",
+  "cc-type",
+  "transaction-currency",
+  "transaction-amount",
+  "language",
+  "bday",
+  "bday-day",
+  "bday-month",
+  "bday-year",
+  "sex",
+  "url",
+  "photo",
 ] as const;
 export type FormFillType = (typeof FORM_FILL_TYPES)[number];
 export const FormFillTypeSchema = z.enum(FORM_FILL_TYPES);
 
+/**
+ * Standard field meanings that may be recognized for routing but must never be
+ * retained as reusable form history. Passwords belong to the credential store;
+ * one-time codes and card security codes are intentionally ephemeral.
+ */
+export const NON_PERSISTABLE_FORM_FILL_TYPES = [
+  "new-password",
+  "current-password",
+  "one-time-code",
+  "cc-csc",
+] as const satisfies readonly FormFillType[];
+
+const NON_PERSISTABLE_FORM_FILL_TYPE_SET = new Set<FormFillType>(NON_PERSISTABLE_FORM_FILL_TYPES);
+
+export function isPersistableFormFillType(
+  type: FormFillType | null | undefined
+): type is Exclude<FormFillType, (typeof NON_PERSISTABLE_FORM_FILL_TYPES)[number]> {
+  return type != null && !NON_PERSISTABLE_FORM_FILL_TYPE_SET.has(type);
+}
+
 export interface FormFillValueInput {
-  type: FormFillType;
+  /**
+   * Browser-native HTML field name. This is the lossless identity used when a
+   * field has no standard autocomplete meaning.
+   */
+  fieldName: string;
+  /** Standard HTML autocomplete meaning, when one can be determined. */
+  type?: FormFillType;
   value: string;
   displayLabel?: string;
   aliases?: string[];
@@ -405,7 +476,8 @@ export interface FormFillValueInput {
 
 export interface StoredFormFillValue {
   id: number;
-  type: FormFillType;
+  fieldName: string;
+  type: FormFillType | null;
   value: string;
   displayLabel: string | null;
   aliases: string[];
@@ -415,23 +487,28 @@ export interface StoredFormFillValue {
 }
 
 export interface FormFillSuggestionQuery {
-  type: FormFillType;
+  fieldName?: string;
+  type?: FormFillType;
   prefix?: string;
   limit?: number;
 }
 
 export const FormFillSuggestionQuerySchema = z
   .object({
-    type: FormFillTypeSchema,
+    fieldName: z.string().max(1_000).optional(),
+    type: FormFillTypeSchema.optional(),
     prefix: z.string().max(1_000).optional(),
     limit: z.number().int().min(1).max(100).optional(),
   })
-  .strict();
+  .strict()
+  .refine((query) => query.fieldName !== undefined || query.type !== undefined, {
+    message: "A form-fill query requires a field name or semantic type",
+  });
 
 /**
  * A page's icon as it travels between processes.
  *
- * Raster data is base64, not `Uint8Array`: every producer and consumer of this
+ * Image data is base64, not `Uint8Array`: every producer and consumer of this
  * type is on the far side of a JSON-encoded RPC hop, where a typed array
  * serializes to `{"0":137,"1":80,…}` — roughly six bytes of JSON per byte of
  * image, arriving as a plain object rather than a `Uint8Array`. Bulk favicon
@@ -442,11 +519,9 @@ export interface PageFavicon {
   pageUrl: string;
   origin: string;
   sourceUrl?: string;
-  /** base64-encoded PNG, 16px variant. */
-  png16?: string;
-  /** base64-encoded PNG, 32px variant. */
-  png32?: string;
-  mimeType: "image/png";
+  /** Base64-encoded bytes whose signature agrees with `mimeType`. */
+  data: string;
+  mimeType: FaviconMimeType;
   updatedAt: number;
 }
 
@@ -483,9 +558,8 @@ export const PageFaviconSchema = z
     pageUrl: z.string().url().max(16_384),
     origin: z.string().url().max(4_096),
     sourceUrl: z.string().url().max(16_384).optional(),
-    png16: z.string().base64().optional(),
-    png32: z.string().base64().optional(),
-    mimeType: z.literal("image/png"),
+    data: z.string().base64(),
+    mimeType: z.enum(FAVICON_MIME_TYPES),
     updatedAt: z.number().finite(),
   })
   .strict();

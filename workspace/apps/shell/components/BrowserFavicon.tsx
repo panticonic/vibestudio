@@ -26,11 +26,10 @@ export function BrowserFavicon({
     void browserData
       .getPageFavicon(handle.pageUrl)
       .then((record) => {
-        // Raster data arrives base64-encoded; raw bytes do not survive the
+        // Image data arrives base64-encoded; raw bytes do not survive the
         // JSON-encoded RPC hop between the store and this view.
-        const png = record?.png16 ?? record?.png32;
-        if (!png || cancelled) return;
-        const value = `data:image/png;base64,${png}`;
+        if (!record?.image_data || cancelled) return;
+        const value = `data:${record.mime_type};base64,${record.image_data}`;
         faviconCache.set(key, value);
         while (faviconCache.size > 128) {
           const oldest = faviconCache.entries().next().value as [string, string] | undefined;

@@ -61,7 +61,8 @@ export interface StoredCookie extends BrowserCookieRecord {
 
 export interface StoredFormFill {
   id: number;
-  type: FormFillType;
+  fieldName: string;
+  type: FormFillType | null;
   value: string;
   displayLabel: string | null;
   aliases: string[];
@@ -86,10 +87,9 @@ export interface StoredPageFavicon {
   page_url: string;
   origin: string;
   source_url: string | null;
-  /** base64-encoded PNG; see PageFavicon for why raster data is not raw bytes. */
-  png16: string | null;
-  png32: string | null;
-  mime_type: "image/png";
+  /** Base64-encoded icon bytes; see PageFavicon for why this is not a typed array. */
+  image_data: string;
+  mime_type: import("../favicon.js").FaviconMimeType;
   updated_at: number;
 }
 

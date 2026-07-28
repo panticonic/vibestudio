@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { detectFaviconMimeType } from "@vibestudio/browser-data";
 import type { Database } from "./sqlJsReader.js";
 import { openReadonlySqlite } from "./sqlJsReader.js";
 import type {
@@ -21,8 +22,11 @@ import { BrowserDataError } from "../errors.js";
 import { copyDatabaseToTemp, cleanupTempCopy } from "../import/fileCopier.js";
 import { buildFolderPath, normalizeTitle } from "../normalize/bookmarks.js";
 import { firefoxTimestampToMs } from "../normalize/history.js";
-import { isHostOnlyCookie, normalizeCookieExpiry } from "../normalize/cookies.js";
-import { normalizeFieldName } from "../normalize/autofill.js";
+import {
+  firefoxCookieIsolation,
+  isHostOnlyCookie,
+  normalizeCookieExpiry,
+} from "../normalize/cookies.js";
 import { normalizeFirefoxSearchUrl } from "../normalize/searchEngines.js";
 import { parseFirefoxExtension } from "../normalize/extensions.js";
 import { firefoxPermissionToSetting, mapFirefoxPermissionType } from "../normalize/permissions.js";
@@ -96,10 +100,7 @@ export function decompressMozLz4(data: Buffer): Buffer {
   const MAGIC = "mozLz40\0";
   const magicBytes = data.subarray(0, 8).toString("ascii");
   if (magicBytes !== MAGIC) {
-    throw new BrowserDataError(
-      "LZ4_DECOMPRESS_FAILED",
-      "Invalid mozLz4 magic header",
-    );
+    throw new BrowserDataError("LZ4_DECOMPRESS_FAILED", "Invalid mozLz4 magic header");
   }
 
   const uncompressedSize = data.readUInt32LE(8);
@@ -137,10 +138,7 @@ export function decompressMozLz4(data: Buffer): Buffer {
     srcPos += 2;
 
     if (offset === 0) {
-      throw new BrowserDataError(
-        "LZ4_DECOMPRESS_FAILED",
-        "Invalid LZ4 offset of 0",
-      );
+      throw new BrowserDataError("LZ4_DECOMPRESS_FAILED", "Invalid LZ4 offset of 0");
     }
 
     // Match length (minimum match is 4)
@@ -168,10 +166,7 @@ export function decompressMozLz4(data: Buffer): Buffer {
  * Helper to open a SQLite database from the profile, copying to temp first.
  * Returns [db, tempPath] so caller can clean up.
  */
-async function openProfileDb(
-  profilePath: string,
-  dbName: string,
-): Promise<[Database, string]> {
+async function openProfileDb(profilePath: string, dbName: string): Promise<[Database, string]> {
   const dbPath = path.join(profilePath, dbName);
   const tempPath = await copyDatabaseToTemp(dbPath);
   try {
@@ -193,10 +188,14 @@ async function openProfileDb(
  */
 function firefoxSameSite(value: number): SameSiteValue {
   switch (value) {
-    case 0: return "no_restriction";
-    case 1: return "lax";
-    case 2: return "strict";
-    default: return "unspecified";
+    case 0:
+      return "no_restriction";
+    case 1:
+      return "lax";
+    case 2:
+      return "strict";
+    default:
+      return "unspecified";
   }
 }
 
@@ -210,11 +209,15 @@ export class FirefoxReader implements BrowserDataReader {
     const [db, tempPath] = await openProfileDb(profilePath, "places.sqlite");
     try {
       // First, build folder map from all folders
-      const folderRows = db.prepare(`
+      const folderRows = db
+        .prepare(
+          `
         SELECT b.id, b.title, b.parent
         FROM moz_bookmarks b
         WHERE b.type = 2
-      `).all() as Array<{ id: number; title: string; parent: number }>;
+      `
+        )
+        .all() as Array<{ id: number; title: string; parent: number }>;
 
       const parentMap = new Map<number, { title: string; parentId: number }>();
       for (const row of folderRows) {
@@ -222,7 +225,9 @@ export class FirefoxReader implements BrowserDataReader {
       }
 
       // Query actual bookmarks (type=1)
-      const rows = db.prepare(`
+      const rows = db
+        .prepare(
+          `
         SELECT b.id, b.title, b.parent, b.dateAdded, b.lastModified, b.keyword_id,
                p.url
         FROM moz_bookmarks b
@@ -230,7 +235,9 @@ export class FirefoxReader implements BrowserDataReader {
         WHERE b.type = 1
           AND p.url IS NOT NULL
           AND p.url NOT LIKE 'place:%'
-      `).all() as Array<{
+      `
+        )
+        .all() as Array<{
         id: number;
         title: string | null;
         parent: number;
@@ -243,9 +250,10 @@ export class FirefoxReader implements BrowserDataReader {
       // Try to get keywords
       let keywordMap = new Map<number, string>();
       try {
-        const keywordRows = db.prepare(
-          "SELECT id, keyword FROM moz_keywords",
-        ).all() as Array<{ id: number; keyword: string }>;
+        const keywordRows = db.prepare("SELECT id, keyword FROM moz_keywords").all() as Array<{
+          id: number;
+          keyword: string;
+        }>;
         for (const kw of keywordRows) {
           keywordMap.set(kw.id, kw.keyword);
         }
@@ -262,9 +270,7 @@ export class FirefoxReader implements BrowserDataReader {
           title: normalizeTitle(row.title),
           url: row.url,
           dateAdded: firefoxTimestampToMs(row.dateAdded),
-          dateModified: row.lastModified
-            ? firefoxTimestampToMs(row.lastModified)
-            : undefined,
+          dateModified: row.lastModified ? firefoxTimestampToMs(row.lastModified) : undefined,
           folder,
           keyword,
           sourceId: String(row.id),
@@ -281,7 +287,9 @@ export class FirefoxReader implements BrowserDataReader {
   async readHistory(profilePath: string): Promise<ImportedHistoryEntry[]> {
     const [db, tempPath] = await openProfileDb(profilePath, "places.sqlite");
     try {
-      const rows = db.prepare(`
+      const rows = db
+        .prepare(
+          `
         SELECT p.url, p.title, p.visit_count, p.typed,
                v.visit_date, v.visit_type
         FROM moz_places p
@@ -289,7 +297,9 @@ export class FirefoxReader implements BrowserDataReader {
         WHERE p.url IS NOT NULL
           AND p.url NOT LIKE 'place:%'
         ORDER BY v.visit_date DESC
-      `).all() as Array<{
+      `
+        )
+        .all() as Array<{
         url: string;
         title: string | null;
         visit_count: number;
@@ -312,11 +322,13 @@ export class FirefoxReader implements BrowserDataReader {
             firstVisitTime: visitTime,
             typedCount: row.typed || undefined,
             transition,
-            visits: [{
-              visitTime,
-              transition,
-              typed: transition === "typed",
-            }],
+            visits: [
+              {
+                visitTime,
+                transition,
+                typed: transition === "typed",
+              },
+            ],
           });
           continue;
         }
@@ -346,11 +358,15 @@ export class FirefoxReader implements BrowserDataReader {
   async readCookies(profilePath: string): Promise<ImportedCookie[]> {
     const [db, tempPath] = await openProfileDb(profilePath, "cookies.sqlite");
     try {
-      const rows = db.prepare(`
+      const rows = db
+        .prepare(
+          `
         SELECT name, value, host, path, expiry, isSecure, isHttpOnly, sameSite,
                originAttributes
         FROM moz_cookies
-      `).all() as Array<{
+      `
+        )
+        .all() as Array<{
         name: string;
         value: string;
         host: string;
@@ -365,17 +381,22 @@ export class FirefoxReader implements BrowserDataReader {
       return rows.map((row) => {
         const domain = row.host;
         const secure = row.isSecure === 1;
+        const isolation = firefoxCookieIsolation(row.originAttributes, domain);
         return {
           name: row.name,
+          valueStatus: "available" as const,
           value: row.value,
           domain,
           hostOnly: isHostOnlyCookie(domain),
           path: row.path,
+          ...("partitionKey" in isolation && !secure
+            ? { unsupportedIsolation: "insecure_partition" as const }
+            : isolation),
           expirationDate: normalizeCookieExpiry(row.expiry, false),
           secure,
           httpOnly: row.isHttpOnly === 1,
           sameSite: firefoxSameSite(row.sameSite),
-          sourceScheme: secure ? "secure" as const : "non_secure" as const,
+          sourceScheme: secure ? ("secure" as const) : ("non_secure" as const),
           sourcePort: secure ? 443 : 80,
         };
       });
@@ -425,11 +446,7 @@ export class FirefoxReader implements BrowserDataReader {
     } catch (err: unknown) {
       if (err instanceof BrowserDataError) throw err;
       const message = err instanceof Error ? err.message : String(err);
-      throw new BrowserDataError(
-        "SCHEMA_MISMATCH",
-        "Failed to parse logins.json",
-        message,
-      );
+      throw new BrowserDataError("SCHEMA_MISMATCH", "Failed to parse logins.json", message);
     }
   }
 
@@ -441,10 +458,14 @@ export class FirefoxReader implements BrowserDataReader {
 
     const [db, tempPath] = await openProfileDb(profilePath, "formhistory.sqlite");
     try {
-      const rows = db.prepare(`
+      const rows = db
+        .prepare(
+          `
         SELECT fieldname, value, timesUsed, firstUsed, lastUsed
         FROM moz_formhistory
-      `).all() as Array<{
+      `
+        )
+        .all() as Array<{
         fieldname: string;
         value: string;
         timesUsed: number;
@@ -453,7 +474,7 @@ export class FirefoxReader implements BrowserDataReader {
       }>;
 
       return rows.map((row) => ({
-        fieldName: normalizeFieldName(row.fieldname),
+        fieldName: row.fieldname,
         value: row.value,
         dateCreated: row.firstUsed ? firefoxTimestampToMs(row.firstUsed) : undefined,
         dateLastUsed: row.lastUsed ? firefoxTimestampToMs(row.lastUsed) : undefined,
@@ -502,20 +523,17 @@ export class FirefoxReader implements BrowserDataReader {
           return engine._urls && engine._urls.length > 0;
         })
         .map((engine) => {
-          const searchUrlEntry = engine._urls!.find(
-            (u) => !u.type || u.type === "text/html",
-          ) || engine._urls![0];
+          const searchUrlEntry =
+            engine._urls!.find((u) => !u.type || u.type === "text/html") || engine._urls![0];
 
           const suggestUrlEntry = engine._urls!.find(
-            (u) => u.type === "application/x-suggestions+json",
+            (u) => u.type === "application/x-suggestions+json"
           );
 
           let searchUrl = normalizeFirefoxSearchUrl(searchUrlEntry!.template);
           // Append params if present
           if (searchUrlEntry!.params && searchUrlEntry!.params.length > 0) {
-            const params = searchUrlEntry!.params
-              .map((p) => `${p.name}=${p.value}`)
-              .join("&");
+            const params = searchUrlEntry!.params.map((p) => `${p.name}=${p.value}`).join("&");
             searchUrl += (searchUrl.includes("?") ? "&" : "?") + params;
           }
 
@@ -533,11 +551,7 @@ export class FirefoxReader implements BrowserDataReader {
     } catch (err: unknown) {
       if (err instanceof BrowserDataError) throw err;
       const message = err instanceof Error ? err.message : String(err);
-      throw new BrowserDataError(
-        "LZ4_DECOMPRESS_FAILED",
-        "Failed to read search engines",
-        message,
-      );
+      throw new BrowserDataError("LZ4_DECOMPRESS_FAILED", "Failed to read search engines", message);
     }
   }
 
@@ -567,11 +581,7 @@ export class FirefoxReader implements BrowserDataReader {
     } catch (err: unknown) {
       if (err instanceof BrowserDataError) throw err;
       const message = err instanceof Error ? err.message : String(err);
-      throw new BrowserDataError(
-        "SCHEMA_MISMATCH",
-        "Failed to parse extensions.json",
-        message,
-      );
+      throw new BrowserDataError("SCHEMA_MISMATCH", "Failed to parse extensions.json", message);
     }
   }
 
@@ -583,10 +593,14 @@ export class FirefoxReader implements BrowserDataReader {
 
     const [db, tempPath] = await openProfileDb(profilePath, "permissions.sqlite");
     try {
-      const rows = db.prepare(`
+      const rows = db
+        .prepare(
+          `
         SELECT origin, type, permission
         FROM moz_perms
-      `).all() as Array<{
+      `
+        )
+        .all() as Array<{
         origin: string;
         type: string;
         permission: number;
@@ -616,11 +630,7 @@ export class FirefoxReader implements BrowserDataReader {
     } catch (err: unknown) {
       if (err instanceof BrowserDataError) throw err;
       const message = err instanceof Error ? err.message : String(err);
-      throw new BrowserDataError(
-        "SCHEMA_MISMATCH",
-        "Failed to parse prefs.js",
-        message,
-      );
+      throw new BrowserDataError("SCHEMA_MISMATCH", "Failed to parse prefs.js", message);
     }
   }
 
@@ -632,7 +642,9 @@ export class FirefoxReader implements BrowserDataReader {
 
     const [db, tempPath] = await openProfileDb(profilePath, "favicons.sqlite");
     try {
-      const rows = db.prepare(`
+      const rows = db
+        .prepare(
+          `
         SELECT DISTINCT i.icon_url, i.data, i.width,
                p.page_url
         FROM moz_icons i
@@ -640,7 +652,9 @@ export class FirefoxReader implements BrowserDataReader {
         JOIN moz_pages_w_icons p ON ip.page_id = p.id
         WHERE i.data IS NOT NULL
           AND length(i.data) > 0
-      `).all() as Array<{
+      `
+        )
+        .all() as Array<{
         icon_url: string;
         data: Buffer;
         width: number;
@@ -648,21 +662,12 @@ export class FirefoxReader implements BrowserDataReader {
       }>;
 
       return rows.map((row) => {
-        // Determine mime type from icon_url or data
-        let mimeType = "image/png"; // default
-        const iconUrl = row.icon_url || "";
-        if (iconUrl.includes(".svg")) {
-          mimeType = "image/svg+xml";
-        } else if (iconUrl.includes(".ico")) {
-          mimeType = "image/x-icon";
-        } else if (iconUrl.includes(".jpg") || iconUrl.includes(".jpeg")) {
-          mimeType = "image/jpeg";
-        }
-
+        const data = Buffer.from(row.data);
         return {
           url: row.page_url,
-          data: Buffer.from(row.data),
-          mimeType,
+          data,
+          mimeType: detectFaviconMimeType(data) ?? "application/octet-stream",
+          sourceUrl: row.icon_url,
         };
       });
     } finally {

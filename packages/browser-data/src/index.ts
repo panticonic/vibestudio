@@ -12,6 +12,10 @@ export type {
   ImportedSearchEngine,
   ImportedFavicon,
   ImportedOpenTab,
+  OpenTabsAsPanelsRequest,
+  OpenTabsAsPanelsResult,
+  OpenTabsPanelDestination,
+  OpenTabsPanelGrouping,
   HistoryQuery,
   RecordHistoryVisitRequest,
   UpdateHistoryTitleRequest,
@@ -43,17 +47,22 @@ export { BrowserDataError } from "./errors.js";
 export type { BrowserDataErrorCode } from "./errors.js";
 
 export { createBrowserDataClient } from "./client/browserDataClient.js";
-export type {
-  BrowserDataClient,
-  ImportPreview,
-} from "./client/browserDataClient.js";
-export { BROWSER_DATA_SCHEMA } from "./storage/index.js";
+export type { BrowserDataClient, ImportPreview } from "./client/browserDataClient.js";
+export { BROWSER_DATA_SCHEMA, PAGE_FAVICONS_TABLE_SQL } from "./storage/index.js";
+export {
+  FAVICON_MIME_TYPES,
+  MAX_PAGE_FAVICON_BYTES,
+  detectFaviconMimeType,
+  isFaviconMimeType,
+} from "./favicon.js";
+export type { FaviconMimeType } from "./favicon.js";
 export {
   ApplyCookieMutationsRequestSchema,
   BROWSER_IMPORT_DATA_TYPES,
   BROWSER_PERMISSION_CAPABILITIES,
   BrowserCookieInputSchema,
   BrowserCookieKeySchema,
+  BrowserCookiePartitionKeySchema,
   BrowserCookieMutationSchema,
   BrowserEnvironmentIdentitySchema,
   BrowserImportDataTypeSchema,
@@ -69,7 +78,9 @@ export {
   ImportCategoryProgressSchema,
   ImportHostSummarySchema,
   ImportJobSnapshotSchema,
+  NON_PERSISTABLE_FORM_FILL_TYPES,
   PageFaviconSchema,
+  isPersistableFormFillType,
 } from "./environment.js";
 export {
   BrowserImportCoordinator,
@@ -77,6 +88,13 @@ export {
   type BrowserImportStore,
 } from "./importCoordinator.js";
 export { RemoteBrowserImportProvider } from "./remoteImportProvider.js";
+export {
+  browserCookiePartitionFromStorageKey,
+  browserCookiePartitionStorageKey,
+  normalizeBrowserCookiePartitionKey,
+  normalizeCookieExpirationSeconds,
+} from "./cookies.js";
+export type { BrowserCookiePartitionKey } from "./cookies.js";
 export type {
   ApplyCookieMutationsRequest,
   BrowserCookieInput,

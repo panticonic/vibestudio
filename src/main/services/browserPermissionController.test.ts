@@ -3,6 +3,7 @@ import {
   browserSecurityOrigin,
   capabilitiesForCheck,
   capabilitiesForRequest,
+  deniedPeripheralCapability,
   viewMayRequestPeripheral,
 } from "./browserPermissionController.js";
 
@@ -81,18 +82,69 @@ describe("browser permission capability mapping", () => {
     expect(
       viewMayRequestPeripheral(
         { type: "app", capabilities: ["camera", "microphone", "location"] },
-        ["camera", "microphone", "geolocation"]
+        ["camera", "microphone", "geolocation"],
+        "https://example.com"
       )
     ).toBe(true);
     expect(
-      viewMayRequestPeripheral({ type: "app", capabilities: ["camera"] }, ["camera", "microphone"])
+      viewMayRequestPeripheral(
+        { type: "app", capabilities: ["camera"] },
+        ["camera", "microphone"],
+        "https://example.com"
+      )
     ).toBe(false);
   });
 
-  it("rejects ordinary panels and unmanaged content from the app permission path", () => {
-    expect(viewMayRequestPeripheral({ type: "panel", capabilities: ["camera"] }, ["camera"])).toBe(
-      false
+  it("admits exact-identity workspace panels only within the declared resource scope", () => {
+    const exactIdentity = {
+      type: "panel",
+      capabilities: [],
+      codeIdentity: {
+        source: "panels/terminal",
+        effectiveVersion: "ev-terminal",
+        executionDigest: "a".repeat(64),
+        requested: [
+          {
+            capability: "clipboard",
+            resource: { kind: "origin" as const, origin: "https://allowed.example" },
+          },
+        ],
+      },
+    };
+    expect(viewMayRequestPeripheral(exactIdentity, ["clipboard"], "https://allowed.example")).toBe(
+      true
     );
-    expect(viewMayRequestPeripheral(null, ["camera"])).toBe(false);
+    expect(
+      viewMayRequestPeripheral(exactIdentity, ["clipboard"], "https://different.example")
+    ).toBe(false);
+    expect(
+      viewMayRequestPeripheral(
+        { type: "panel", capabilities: ["camera"] },
+        ["camera"],
+        "https://allowed.example"
+      )
+    ).toBe(false);
+    expect(
+      viewMayRequestPeripheral(
+        {
+          type: "panel",
+          capabilities: [],
+          codeIdentity: {
+            ...exactIdentity.codeIdentity,
+            effectiveVersion: null,
+          },
+        },
+        ["clipboard"],
+        "https://allowed.example"
+      )
+    ).toBe(false);
+    expect(viewMayRequestPeripheral(null, ["camera"], "https://allowed.example")).toBe(false);
+  });
+
+  it("keeps device privacy denial ahead of any unit or site approval", () => {
+    expect(
+      deniedPeripheralCapability(["camera", "microphone"], (capability) => capability === "camera")
+    ).toBe("microphone");
+    expect(deniedPeripheralCapability(["camera"], () => true)).toBeUndefined();
   });
 });

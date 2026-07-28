@@ -441,6 +441,7 @@ let browserDownloadManager:
 let browserPermissionController:
   | import("./services/browserPermissionController.js").BrowserPermissionController
   | null = null;
+let releaseBrowserAdBlocking: (() => void) | null = null;
 let websiteNotificationBridge:
   | import("./services/websiteNotificationBridge.js").WebsiteNotificationBridge
   | null = null;
@@ -945,6 +946,9 @@ async function handleCredentialSessionCaptureRequest(
       type CaptureResult = Record<string, unknown> | { error: string };
       type CookieChangeCause =
         | "explicit"
+        | "inserted"
+        | "inserted-no-change-overwrite"
+        | "inserted-no-value-change-overwrite"
         | "overwrite"
         | "expired"
         | "evicted"
@@ -1634,8 +1638,8 @@ app.on("ready", async () => {
 
   // Default to browser CORS. For panel fetch/XHR responses, relax CORS only
   // after the trusted shell approval flow grants that panel access to the
-  // target origin. Browser panels use a separate "persist:browser" partition
-  // and are unaffected.
+  // target origin. Browser panels use their workspace browser-environment
+  // partition and are unaffected.
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     void authorizeCorsResponseAccess(details)
       .then(({ allowed, requestOrigin }) => {
@@ -2720,6 +2724,9 @@ app.on("ready", async () => {
           },
           async onReady(api) {
             browserCookieProjection = api;
+            const browserSession = session.fromPartition(api.partition);
+            releaseBrowserAdBlocking?.();
+            releaseBrowserAdBlocking = adBlockManager.attachToSession(browserSession);
 
             // Browser views need the session partition and nothing else. The
             // subsystems below enrich the environment — site permissions, web
@@ -2769,7 +2776,7 @@ app.on("ready", async () => {
               const { BrowserDownloadManager } =
                 await import("./services/browserDownloadManager.js");
               const manager = new BrowserDownloadManager({
-                browserSession: session.fromPartition(api.partition),
+                browserSession,
                 environmentKey: api.identity.environmentKey,
                 hostId: `desktop:${cdpHostConnectionId}`,
                 downloadsDirectory: app.getPath("downloads"),
@@ -2796,6 +2803,8 @@ app.on("ready", async () => {
             browserPermissionController = null;
             await browserDownloadManager?.stop();
             browserDownloadManager = null;
+            releaseBrowserAdBlocking?.();
+            releaseBrowserAdBlocking = null;
             browserCookieProjection = null;
             activeBrowserSessionPartition = null;
           },
@@ -2819,6 +2828,13 @@ app.on("ready", async () => {
     electronContainer.registerRpc(
       createBrowserEnvironmentService({
         getProjection: () => browserCookieProjection,
+        waitForProjection: async () => {
+          await browserEnvironmentReadiness.wait();
+          if (!browserCookieProjection) {
+            throw new Error("Browser cookie projection is unavailable");
+          }
+          return browserCookieProjection;
+        },
         getDownloads: () => browserDownloadManager,
         getImportProvider: () => browserImportHostProvider,
         browserDataBrokerRepoPath: workspaceProviderExtensionRepoPath(
@@ -3076,8 +3092,7 @@ app.on("ready", async () => {
     setTimeout(async () => {
       try {
         await adBlockManager.initialize();
-        adBlockManager.enableForSession(session.defaultSession);
-        console.log("[AdBlock] Initialized and enabled for default session");
+        console.log("[AdBlock] Initialized for active browser environments");
       } catch (error) {
         console.warn("[AdBlock] Failed to initialize (non-fatal):", error);
       }

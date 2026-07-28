@@ -42,4 +42,10 @@ describe("onboarding catalog", () => {
       }
     }
   });
+
+  it("uses the concise browser import label", () => {
+    expect(onboardingCatalog.find((entry) => entry.id === "migration.browser-environment")?.title).toBe(
+      "Browser import"
+    );
+  });
 });

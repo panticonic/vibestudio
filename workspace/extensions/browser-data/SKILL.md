@@ -32,7 +32,13 @@ has a complete user-approved selection:
 4. `startImport({ hostId, sourceId, dataTypes })`
 5. Poll `getImportJob(jobId)`; use `cancelImport(jobId)` when requested.
 6. Optionally call `listOpenTabs(hostId, sourceId)` and
-   `openTabsAsPanels(...)`.
+   `openTabsAsPanels(...)`. It defaults to a new workspace root with nested
+   source-window collections; use `destination: "caller"` only when the user
+   wants the hierarchy attached to the invoking panel. The imported recursive
+   subtree shares its root collection's orchestration context, so its resident
+   conductors can title, regroup, and automate those panels without one
+   context-boundary prompt per tab. See
+   [the collection conductor skill](../../about/collection/SKILL.md).
 
 Sources are opaque installed-browser records. Local profiles are merged inside
 the trusted provider and are never presented to userland. Supported categories
@@ -50,9 +56,11 @@ samples, and warnings only.
 - Use bookmark/history methods for normal reads, writes, search, and deletion.
 - Cookie writes go to the canonical mutation API. Electron cookies are only a
   projection; use `flushCookieProjection` before an immediate post-login read.
-- Use structured `getFormFillSuggestions({ type, prefix })`; there is no flat
-  field-name autofill API.
-- Use `putPageFavicon` and `getPageFavicon` for safe page-associated PNGs.
+- Use `getFormFillSuggestions({ type, fieldName, prefix })`. Standard HTML
+  autocomplete types share semantically equivalent values; browser-native
+  field names preserve and match site-specific form history exactly.
+- Use `putPageFavicon` and `getPageFavicon` for byte-validated, page-associated
+  browser icons. PNG, JPEG, GIF, WebP, ICO, SVG, BMP, and AVIF are supported.
 - Site permissions are managed by the browser-permission approval service, not
   by browser data and never imported.
 

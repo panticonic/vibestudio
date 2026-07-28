@@ -288,6 +288,8 @@ if (host) {
     hostId: host.hostId,
     sourceId: chrome.sourceId,
     selection: tabs.map((tab) => tab.tabId),
+    destination: "new-root",
+    groupBy: "window",
   });
   console.log("Opened tabs:", opened);
 }
@@ -298,7 +300,10 @@ const bookmarks = await browserData.exportBookmarks("json");
 Profiles and filesystem paths never enter userland. `startImport` is
 deterministic for the same opaque host/source pair; reruns update changed
 source records without duplicating canonical data. `openTabsAsPanels()` is
-intentionally not idempotent; it creates panels each time it is called.
+intentionally not idempotent; it creates panels each time it is called. By
+default it creates a new source-browser root with one nested collection per
+window. Pass `destination: "caller"` to attach the hierarchy to the calling
+panel, or `groupBy: "none"` to place every tab directly under the chosen anchor.
 
 ## Interactive Cookie Manager (Inline UI)
 

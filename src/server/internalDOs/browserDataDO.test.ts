@@ -3,76 +3,163 @@ import { DatabaseSync } from "node:sqlite";
 import type { DurableObjectContext, SqlResult } from "@vibestudio/durable";
 import { BrowserDataDO } from "./browserDataDO.js";
 
-describe("BrowserDataDO schema migrations", () => {
-  it("cuts pre-release profile data over to the canonical v7 environment schema", () => {
+describe("BrowserDataDO schema", () => {
+  it("creates the one canonical pre-release schema directly", () => {
     const db = new DatabaseSync(":memory:");
-    db.exec(V1_BROWSER_DATA_SCHEMA);
-    db.prepare(`INSERT INTO state (key, value) VALUES ('schema_version', '1')`).run();
-    db.prepare(
-      `INSERT INTO history (id, url, title, visit_count, typed_count, first_visit, last_visit)
-       VALUES (1, 'https://example.test/', 'Example', 2, 1, 100, 200)`
-    ).run();
-    db.prepare(
-      `INSERT INTO history_visits (id, history_id, visit_time, transition) VALUES
-       (10, 1, 200, 'typed'), (11, 1, 200, 'typed')`
-    ).run();
-    db.prepare(
-      `INSERT INTO bookmarks (id, title, url, folder_path, date_added, source_browser)
-       VALUES (20, 'Saved', 'https://example.test/', '/', 100, 'chrome')`
-    ).run();
-    db.prepare(
-      `INSERT INTO passwords (
-         id, origin_url, username_hash, username_encrypted, password_encrypted
-       ) VALUES (30, 'https://example.test/', x'01', x'02', x'03')`
-    ).run();
-    db.prepare(
-      `INSERT INTO import_log (
-         id, browser, profile_path, data_type, items_imported, items_skipped, imported_at, warnings
-       ) VALUES (40, 'chrome', '/profile', 'history', 2, 1, 300, 'one warning')`
-    ).run();
-
-    const ctx = sqliteContext(db);
-    new BrowserDataDO(ctx, {});
+    new BrowserDataDO(sqliteContext(db), {});
 
     expect(db.prepare(`SELECT value FROM state WHERE key = 'schema_version'`).get()).toEqual({
-      value: "7",
-    });
-    expect(db.prepare(`SELECT COUNT(*) AS count FROM history`).get()).toEqual({ count: 0 });
-    expect(db.prepare(`SELECT COUNT(*) AS count FROM bookmarks`).get()).toEqual({ count: 0 });
-    expect(db.prepare(`SELECT COUNT(*) AS count FROM passwords`).get()).toEqual({ count: 0 });
-    expect(db.prepare(`SELECT COUNT(*) AS count FROM site_preferences`).get()).toEqual({
-      count: 0,
+      value: "1",
     });
     expect(
       db.prepare(`SELECT version, name FROM _vibestudio_schema_migrations ORDER BY version`).all()
-    ).toEqual([
-      { version: 1, name: "adopted:browser-data-v1" },
-      { version: 2, name: "preserve-history-visit-provenance" },
-      { version: 3, name: "preserve-import-source-identity" },
-      { version: 4, name: "preserve-import-runs-and-secret-metadata" },
-      { version: 5, name: "canonical-browser-environment-cutover" },
-      { version: 6, name: "browser-site-preferences" },
-      { version: 7, name: "canonical-download-metadata" },
+    ).toEqual([{ version: 1, name: "fresh-install:browserdatado-production-baseline" }]);
+    expect(
+      db
+        .prepare(`PRAGMA table_info(page_favicons)`)
+        .all()
+        .map((column) => column["name"])
+    ).toContain("image_data");
+    expect(
+      db
+        .prepare(`PRAGMA table_info(form_fill_values)`)
+        .all()
+        .map((column) => column["name"])
+    ).toEqual(expect.arrayContaining(["field_name", "field_key", "type"]));
+    db.close();
+  });
+});
+
+describe("BrowserDataDO form-fill field identity", () => {
+  it("rejects credentials and transient secrets from reusable form history", async () => {
+    const db = new DatabaseSync(":memory:");
+    const store = new BrowserDataDO(sqliteContext(db), {});
+
+    for (const type of ["current-password", "new-password", "one-time-code", "cc-csc"] as const) {
+      await expect(
+        store.addFormFillValue({ fieldName: type, type, value: "not-stored" })
+      ).rejects.toThrow("is not reusable form history");
+    }
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM form_fill_values`).get()).toEqual({
+      count: 0,
+    });
+    db.close();
+  });
+
+  it("stores and retrieves arbitrary browser-native field names", async () => {
+    const db = new DatabaseSync(":memory:");
+    const store = new BrowserDataDO(sqliteContext(db), {});
+
+    await store.addFormFillValue({
+      fieldName: "favorite_pizza_topping",
+      value: "artichoke",
+      useCount: 7,
+    });
+
+    await expect(
+      store.getFormFillSuggestions({ fieldName: "FAVORITE_PIZZA_TOPPING" })
+    ).resolves.toMatchObject([
+      {
+        fieldName: "favorite_pizza_topping",
+        type: null,
+        value: "artichoke",
+        useCount: 7,
+      },
     ]);
     db.close();
   });
 
-  it("drops unrecognized pre-release v1 shape instead of translating it", () => {
+  it("deduplicates semantic equivalents while retaining their native aliases", async () => {
     const db = new DatabaseSync(":memory:");
-    db.exec(V1_BROWSER_DATA_SCHEMA);
-    db.prepare(`INSERT INTO state (key, value) VALUES ('schema_version', '1')`).run();
-    db.exec(`ALTER TABLE history_visits ADD COLUMN unexpected TEXT`);
+    const store = new BrowserDataDO(sqliteContext(db), {});
 
-    new BrowserDataDO(sqliteContext(db), {});
-    expect(db.prepare(`SELECT value FROM state WHERE key = 'schema_version'`).get()).toEqual({
-      value: "7",
+    const firstId = await store.addFormFillValue({
+      fieldName: "email_address",
+      type: "email",
+      value: "person@example.test",
+      useCount: 2,
     });
-    expect(
-      db
-        .prepare(`PRAGMA table_info(history_visits)`)
-        .all()
-        .map((column) => column["name"])
-    ).not.toContain("unexpected");
+    const secondId = await store.addFormFillValue({
+      fieldName: "contactEmail",
+      type: "email",
+      value: "person@example.test",
+      useCount: 5,
+    });
+
+    expect(secondId).toBe(firstId);
+    await expect(store.getFormFillSuggestions({ type: "email" })).resolves.toMatchObject([
+      {
+        fieldName: "email_address",
+        type: "email",
+        aliases: ["email_address", "contactEmail"],
+        useCount: 5,
+      },
+    ]);
+    db.close();
+  });
+});
+
+describe("BrowserDataDO partitioned cookies", () => {
+  it("stores identical cookie triples independently by structured partition key", async () => {
+    const db = new DatabaseSync(":memory:");
+    const store = new BrowserDataDO(sqliteContext(db), {});
+    const base = {
+      name: "sid",
+      value: "one",
+      domain: ".embedded.example",
+      hostOnly: false,
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "no_restriction" as const,
+    };
+
+    await store.applyCookieMutations({
+      mutations: [
+        {
+          op: "put",
+          mutationId: "partition-one",
+          cookie: {
+            ...base,
+            partitionKey: {
+              topLevelSite: "https://one.example",
+              hasCrossSiteAncestor: true,
+            },
+          },
+        },
+        {
+          op: "put",
+          mutationId: "partition-two",
+          cookie: {
+            ...base,
+            value: "two",
+            partitionKey: {
+              topLevelSite: "https://two.example",
+              hasCrossSiteAncestor: true,
+            },
+          },
+        },
+      ],
+    });
+
+    await expect(store.getCookieSnapshot()).resolves.toMatchObject({
+      cookies: [
+        {
+          value: "one",
+          partitionKey: {
+            topLevelSite: "https://one.example",
+            hasCrossSiteAncestor: true,
+          },
+        },
+        {
+          value: "two",
+          partitionKey: {
+            topLevelSite: "https://two.example",
+            hasCrossSiteAncestor: true,
+          },
+        },
+      ],
+    });
     db.close();
   });
 });
@@ -118,13 +205,60 @@ describe("BrowserDataDO download metadata", () => {
   });
 });
 
+describe("BrowserDataDO native favicon formats", () => {
+  it("stores validated source bytes and serves them by page or origin", () => {
+    const db = new DatabaseSync(":memory:");
+    const store = new BrowserDataDO(sqliteContext(db), {});
+    const svg = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`);
+
+    store.putPageFavicon({
+      pageUrl: "https://example.test/one",
+      origin: "https://example.test",
+      sourceUrl: "https://example.test/favicon.svg",
+      data: svg.toString("base64"),
+      mimeType: "image/svg+xml",
+      updatedAt: 123,
+    });
+
+    expect(store.getPageFavicon("https://example.test/one")).toMatchObject({
+      page_url: "https://example.test/one",
+      image_data: svg.toString("base64"),
+      mime_type: "image/svg+xml",
+      updated_at: 123,
+    });
+    expect(store.getPageFavicon("https://example.test/two")).toMatchObject({
+      page_url: "https://example.test/one",
+      mime_type: "image/svg+xml",
+    });
+    db.close();
+  });
+
+  it("rejects MIME labels that disagree with the icon bytes", () => {
+    const db = new DatabaseSync(":memory:");
+    const store = new BrowserDataDO(sqliteContext(db), {});
+    const ico = Buffer.from([0x00, 0x00, 0x01, 0x00, 0x01, 0x00]);
+
+    expect(() =>
+      store.putPageFavicon({
+        pageUrl: "https://example.test/",
+        origin: "https://example.test",
+        data: ico.toString("base64"),
+        mimeType: "image/png",
+        updatedAt: 123,
+      })
+    ).toThrow(/bytes are image\/x-icon, not image\/png/);
+    db.close();
+  });
+});
+
 function sqliteContext(db: DatabaseSync): DurableObjectContext {
   const sql = {
     exec(query: string, ...bindings: unknown[]): SqlResult {
       const statement = db.prepare(query);
-      const rows = /^\s*(?:SELECT|PRAGMA|WITH|EXPLAIN)\b/i.test(query)
-        ? (statement.all(...(bindings as [])) as Record<string, unknown>[])
-        : (statement.run(...(bindings as [])), []);
+      const rows =
+        /^\s*(?:SELECT|PRAGMA|WITH|EXPLAIN)\b/i.test(query) || /\bRETURNING\b/i.test(query)
+          ? (statement.all(...(bindings as [])) as Record<string, unknown>[])
+          : (statement.run(...(bindings as [])), []);
       return {
         toArray: () => rows,
         one: () => {
@@ -160,82 +294,3 @@ function sqliteContext(db: DatabaseSync): DurableObjectContext {
     blockConcurrencyWhile: (fn) => fn(),
   };
 }
-
-const V1_BROWSER_DATA_SCHEMA = `
-  CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-  CREATE TABLE favicons (
-    id INTEGER PRIMARY KEY, url TEXT NOT NULL UNIQUE, data BLOB,
-    mime_type TEXT DEFAULT 'image/png', last_updated INTEGER
-  );
-  CREATE TABLE bookmarks (
-    id INTEGER PRIMARY KEY, title TEXT NOT NULL, url TEXT,
-    folder_path TEXT NOT NULL DEFAULT '/', date_added INTEGER NOT NULL,
-    date_modified INTEGER, favicon_id INTEGER REFERENCES favicons(id),
-    position INTEGER NOT NULL DEFAULT 0, source_browser TEXT, tags TEXT, keyword TEXT
-  );
-  CREATE INDEX idx_bookmarks_url ON bookmarks(url);
-  CREATE INDEX idx_bookmarks_folder ON bookmarks(folder_path);
-  CREATE TABLE history (
-    id INTEGER PRIMARY KEY, url TEXT NOT NULL UNIQUE, title TEXT,
-    visit_count INTEGER NOT NULL DEFAULT 0, typed_count INTEGER NOT NULL DEFAULT 0,
-    first_visit INTEGER, last_visit INTEGER NOT NULL,
-    favicon_id INTEGER REFERENCES favicons(id)
-  );
-  CREATE INDEX idx_history_url ON history(url);
-  CREATE INDEX idx_history_last_visit ON history(last_visit);
-  CREATE TABLE history_visits (
-    id INTEGER PRIMARY KEY, history_id INTEGER NOT NULL REFERENCES history(id) ON DELETE CASCADE,
-    visit_time INTEGER NOT NULL, transition TEXT DEFAULT 'link',
-    from_visit_id INTEGER REFERENCES history_visits(id)
-  );
-  CREATE INDEX idx_history_visits_history_id ON history_visits(history_id);
-  CREATE VIRTUAL TABLE history_fts USING fts5(url, title, content=history, content_rowid=id);
-  CREATE TRIGGER history_ai AFTER INSERT ON history BEGIN
-    INSERT INTO history_fts(rowid, url, title) VALUES (new.id, new.url, new.title);
-  END;
-  CREATE TRIGGER history_ad AFTER DELETE ON history BEGIN
-    INSERT INTO history_fts(history_fts, rowid, url, title) VALUES('delete', old.id, old.url, old.title);
-  END;
-  CREATE TRIGGER history_au AFTER UPDATE ON history BEGIN
-    INSERT INTO history_fts(history_fts, rowid, url, title) VALUES('delete', old.id, old.url, old.title);
-    INSERT INTO history_fts(rowid, url, title) VALUES (new.id, new.url, new.title);
-  END;
-  CREATE TABLE passwords (
-    id INTEGER PRIMARY KEY, origin_url TEXT NOT NULL, username_hash BLOB NOT NULL,
-    username_encrypted BLOB NOT NULL, password_encrypted BLOB NOT NULL,
-    action_url TEXT NOT NULL DEFAULT '', realm TEXT NOT NULL DEFAULT '', date_created INTEGER,
-    date_last_used INTEGER, date_password_changed INTEGER, times_used INTEGER DEFAULT 0,
-    UNIQUE(origin_url, username_hash, action_url, realm)
-  );
-  CREATE TABLE password_never_save (
-    id INTEGER PRIMARY KEY, origin TEXT NOT NULL UNIQUE, date_added INTEGER NOT NULL
-  );
-  CREATE TABLE cookies (
-    id INTEGER PRIMARY KEY, name TEXT NOT NULL, value TEXT NOT NULL, domain TEXT NOT NULL,
-    host_only INTEGER NOT NULL DEFAULT 0, path TEXT NOT NULL DEFAULT '/', expiration_date INTEGER,
-    secure INTEGER NOT NULL DEFAULT 0, http_only INTEGER NOT NULL DEFAULT 0,
-    same_site TEXT NOT NULL DEFAULT 'unspecified', source_scheme TEXT DEFAULT 'unset',
-    source_port INTEGER DEFAULT -1, source_browser TEXT, created_at INTEGER NOT NULL,
-    last_accessed INTEGER, UNIQUE(name, domain, path)
-  );
-  CREATE INDEX idx_cookies_domain ON cookies(domain);
-  CREATE TABLE autofill (
-    id INTEGER PRIMARY KEY, field_name TEXT NOT NULL, value TEXT NOT NULL,
-    date_created INTEGER, date_last_used INTEGER, times_used INTEGER NOT NULL DEFAULT 1,
-    UNIQUE(field_name, value)
-  );
-  CREATE INDEX idx_autofill_field ON autofill(field_name);
-  CREATE TABLE search_engines (
-    id INTEGER PRIMARY KEY, name TEXT NOT NULL, keyword TEXT, search_url TEXT NOT NULL,
-    suggest_url TEXT, favicon_url TEXT, is_default INTEGER NOT NULL DEFAULT 0
-  );
-  CREATE TABLE permissions (
-    id INTEGER PRIMARY KEY, origin TEXT NOT NULL, permission TEXT NOT NULL,
-    setting TEXT NOT NULL DEFAULT 'ask', date_set INTEGER, UNIQUE(origin, permission)
-  );
-  CREATE TABLE import_log (
-    id INTEGER PRIMARY KEY, browser TEXT NOT NULL, profile_path TEXT NOT NULL,
-    data_type TEXT NOT NULL, items_imported INTEGER NOT NULL DEFAULT 0,
-    items_skipped INTEGER NOT NULL DEFAULT 0, imported_at INTEGER NOT NULL, warnings TEXT
-  );
-`;

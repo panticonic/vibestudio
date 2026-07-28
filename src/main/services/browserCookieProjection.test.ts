@@ -3,20 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserCookieInput, StoredCookie } from "@vibestudio/browser-data";
-
-const electronMocks = vi.hoisted(() => ({
-  fromPartition: vi.fn(),
-}));
+import type { BrowserCookieJar } from "./chromiumCookieJar.js";
 
 vi.mock("electron", () => ({
-  session: { fromPartition: electronMocks.fromPartition },
+  session: { fromPartition: vi.fn() },
+  WebContentsView: vi.fn(),
 }));
 
 import {
   cookieContentHash,
   createBrowserCookieProjectionService,
   effectiveCookieContentHash,
-  toElectronCookie,
 } from "./browserCookieProjection.js";
 
 afterEach(() => {
@@ -52,21 +49,65 @@ function stored(partial: Partial<StoredCookie> = {}): StoredCookie {
   };
 }
 
+function fakeCookieJar(initial: BrowserCookieInput[] = []) {
+  let current = [...initial];
+  let changed: (() => void) | undefined;
+  const set = async (cookie: BrowserCookieInput) => {
+    const key = cookieIdentity(cookie);
+    current = [...current.filter((entry) => cookieIdentity(entry) !== key), cookie];
+    changed?.();
+  };
+  const jar: BrowserCookieJar = {
+    start: vi.fn(async (listener: () => void) => {
+      changed = listener;
+    }),
+    snapshot: vi.fn(async () => ({
+      cookies: [...current],
+      unsupportedOpaquePartitions: 0,
+    })),
+    set: vi.fn(set),
+    remove: vi.fn(async (key) => {
+      const identity = cookieIdentity(key);
+      current = current.filter((entry) => cookieIdentity(entry) !== identity);
+      changed?.();
+    }),
+    stop: vi.fn(async () => {}),
+  };
+  return {
+    jar,
+    set,
+    current: () => current,
+    changed: () => changed?.(),
+  };
+}
+
+function cookieIdentity(cookie: {
+  name: string;
+  domain: string;
+  path: string;
+  partitionKey?: { topLevelSite: string; hasCrossSiteAncestor: boolean };
+}): string {
+  return JSON.stringify([cookie.name, cookie.domain, cookie.path, cookie.partitionKey ?? null]);
+}
+
 describe("canonical browser cookie projection", () => {
   it("hashes canonical content deterministically and notices material changes", () => {
     expect(cookieContentHash(input())).toBe(cookieContentHash(input()));
     expect(cookieContentHash(input({ value: "other" }))).not.toBe(cookieContentHash(input()));
     expect(cookieContentHash(input({ domain: "EXAMPLE.TEST" }))).toBe(cookieContentHash(input()));
+    expect(cookieContentHash(input({ sourceScheme: "unset", sourcePort: 0 }))).toBe(
+      cookieContentHash(input())
+    );
   });
 
-  it("preserves host-only cookies by omitting Electron's domain field", () => {
-    expect(toElectronCookie(stored({ hostOnly: true }))).not.toHaveProperty("domain");
-  });
-
-  it("sets Electron's domain field for domain cookies", () => {
-    expect(toElectronCookie(stored({ hostOnly: false, domain: ".example.test" }))).toMatchObject({
-      domain: ".example.test",
+  it("includes the complete structured partition key in identity and content", () => {
+    const partitioned = input({
+      partitionKey: {
+        topLevelSite: "https://top.example",
+        hasCrossSiteAncestor: true,
+      },
     });
+    expect(cookieContentHash(partitioned)).not.toBe(cookieContentHash(input()));
   });
 
   it("preserves add-then-delete ordering before the outbox flushes", () => {
@@ -81,6 +122,7 @@ describe("canonical browser cookie projection", () => {
 
   it("never blocks service startup while the browser-data extension is unavailable", async () => {
     vi.useFakeTimers();
+    const createCookieJar = vi.fn(() => fakeCookieJar().jar);
     const browserDataClient = {
       getBrowserEnvironment: vi
         .fn()
@@ -95,6 +137,7 @@ describe("canonical browser cookie projection", () => {
       hostId: "desktop:test",
       outboxRoot: "/tmp/unused-browser-projection-test",
       setActivePartition: vi.fn(),
+      createCookieJar,
       onInitializing,
       onUnavailable,
       onReady,
@@ -107,6 +150,7 @@ describe("canonical browser cookie projection", () => {
     );
     expect(onReady).not.toHaveBeenCalled();
     expect(onUnavailable).not.toHaveBeenCalled();
+    expect(createCookieJar).not.toHaveBeenCalled();
 
     await service.stop?.(undefined);
     await vi.advanceTimersByTimeAsync(30_000);
@@ -125,6 +169,7 @@ describe("canonical browser cookie projection", () => {
       hostId: "desktop:test",
       outboxRoot: "/tmp/unused-browser-projection-test",
       setActivePartition: vi.fn(),
+      createCookieJar: vi.fn(() => fakeCookieJar().jar),
       onUnavailable,
     });
 
@@ -136,14 +181,8 @@ describe("canonical browser cookie projection", () => {
   it("attaches later when the browser-data extension becomes ready", async () => {
     vi.useFakeTimers();
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "browser-cookie-projection-"));
-    const cookies = {
-      on: vi.fn(),
-      off: vi.fn(),
-      get: vi.fn().mockResolvedValue([]),
-      set: vi.fn().mockResolvedValue(undefined),
-      remove: vi.fn().mockResolvedValue(undefined),
-    };
-    electronMocks.fromPartition.mockReturnValue({ cookies });
+    const { jar } = fakeCookieJar();
+    const createCookieJar = vi.fn(() => jar);
     const browserDataClient = {
       getBrowserEnvironment: vi
         .fn()
@@ -168,6 +207,7 @@ describe("canonical browser cookie projection", () => {
       hostId: "desktop:test",
       outboxRoot: tempRoot,
       setActivePartition,
+      createCookieJar,
       onReady,
       onStopped,
     });
@@ -181,11 +221,235 @@ describe("canonical browser cookie projection", () => {
       expect(setActivePartition).toHaveBeenCalledWith(
         "persist:browser-environment:environment-test"
       );
+      expect(createCookieJar).toHaveBeenCalledWith("persist:browser-environment:environment-test");
 
       await service.stop?.(undefined);
       expect(onStopped).toHaveBeenCalledTimes(1);
       expect(setActivePartition).toHaveBeenLastCalledWith(null);
     } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("removes a conflicting Secure cookie before projecting its insecure replacement", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "browser-cookie-projection-"));
+    const desired = stored({
+      value: "canonical",
+      secure: false,
+      sourceScheme: "non_secure",
+      sourcePort: 80,
+    });
+    const { jar } = fakeCookieJar([input({ value: "old-secure", secure: true })]);
+    const applyCookieMutations = vi.fn().mockResolvedValue({ revision: 1 });
+    const browserDataClient = {
+      getBrowserEnvironment: vi.fn().mockResolvedValue({
+        workspaceId: "workspace-test",
+        ownerUserId: "user-test",
+        environmentKey: "environment-test",
+      }),
+      applyCookieMutations,
+      getCookieSnapshot: vi.fn().mockResolvedValue({ revision: 1, cookies: [desired] }),
+    };
+    const onReady = vi.fn();
+    const service = createBrowserCookieProjectionService({
+      browserDataClient: browserDataClient as never,
+      serverClient: {
+        stream: vi.fn(),
+        call: vi.fn().mockResolvedValue(null),
+      } as never,
+      hostId: "desktop:test",
+      outboxRoot: tempRoot,
+      setActivePartition: vi.fn(),
+      createCookieJar: () => jar,
+      onReady,
+    });
+
+    try {
+      await service.start?.(() => undefined);
+      await vi.waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
+
+      expect(jar.remove).toHaveBeenCalledWith({
+        name: "sid",
+        domain: "example.test",
+        path: "/",
+      });
+      expect(vi.mocked(jar.remove).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(jar.set).mock.invocationCallOrder[0]!
+      );
+      expect(jar.set).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "sid", value: "canonical", secure: false })
+      );
+      expect(applyCookieMutations).not.toHaveBeenCalled();
+      expect(onReady.mock.calls[0]?.[0].diagnostics()).toMatchObject({
+        converged: true,
+        mismatchCount: 0,
+      });
+    } finally {
+      await service.stop?.(undefined);
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("materializes identical cookie triples independently in different partitions", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "browser-cookie-projection-"));
+    const first = stored({
+      partitionKey: {
+        topLevelSite: "https://one.example",
+        hasCrossSiteAncestor: true,
+      },
+    });
+    const second = stored({
+      value: "other",
+      partitionKey: {
+        topLevelSite: "https://two.example",
+        hasCrossSiteAncestor: true,
+      },
+    });
+    const state = fakeCookieJar();
+    const onReady = vi.fn();
+    const service = createBrowserCookieProjectionService({
+      browserDataClient: {
+        getBrowserEnvironment: vi.fn().mockResolvedValue({
+          workspaceId: "workspace-test",
+          ownerUserId: "user-test",
+          environmentKey: "environment-test",
+        }),
+        applyCookieMutations: vi.fn().mockResolvedValue({ revision: 1 }),
+        getCookieSnapshot: vi.fn().mockResolvedValue({ revision: 2, cookies: [first, second] }),
+      } as never,
+      serverClient: {
+        stream: vi.fn(),
+        call: vi.fn().mockResolvedValue(null),
+      } as never,
+      hostId: "desktop:test",
+      outboxRoot: tempRoot,
+      setActivePartition: vi.fn(),
+      createCookieJar: () => state.jar,
+      onReady,
+    });
+
+    try {
+      await service.start?.(() => undefined);
+      await vi.waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
+
+      expect(state.jar.set).toHaveBeenCalledTimes(2);
+      expect(state.current()).toEqual(expect.arrayContaining([first, second]));
+      expect(onReady.mock.calls[0]?.[0].diagnostics()).toMatchObject({
+        converged: true,
+        mismatchCount: 0,
+      });
+    } finally {
+      await service.stop?.(undefined);
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("continues projecting later cookies when one cookie is rejected", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "browser-cookie-projection-"));
+    const rejected = stored({ name: "a-rejected", domain: "bad.example" });
+    const accepted = stored({ name: "b-accepted", domain: "good.example" });
+    const state = fakeCookieJar();
+    vi.mocked(state.jar.set).mockImplementation(async (cookie) => {
+      if (cookie.name === rejected.name) {
+        throw new Error("Chromium rejected this cookie");
+      }
+      await state.set(cookie);
+    });
+    const browserDataClient = {
+      getBrowserEnvironment: vi.fn().mockResolvedValue({
+        workspaceId: "workspace-test",
+        ownerUserId: "user-test",
+        environmentKey: "environment-test",
+      }),
+      applyCookieMutations: vi.fn().mockResolvedValue({ revision: 1 }),
+      getCookieSnapshot: vi.fn().mockResolvedValue({ revision: 4, cookies: [rejected, accepted] }),
+    };
+    const onReady = vi.fn();
+    const service = createBrowserCookieProjectionService({
+      browserDataClient: browserDataClient as never,
+      serverClient: {
+        stream: vi.fn(),
+        call: vi.fn().mockResolvedValue(null),
+      } as never,
+      hostId: "desktop:test",
+      outboxRoot: tempRoot,
+      setActivePartition: vi.fn(),
+      createCookieJar: () => state.jar,
+      onReady,
+    });
+
+    try {
+      await service.start?.(() => undefined);
+      await vi.waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
+
+      expect(state.jar.set).toHaveBeenCalledTimes(2);
+      expect(state.current()).toEqual([
+        expect.objectContaining({ name: accepted.name, value: accepted.value }),
+      ]);
+      expect(onReady.mock.calls[0]?.[0].diagnostics()).toMatchObject({
+        converged: false,
+        mismatchCount: 1,
+        lastError: expect.stringContaining("1 write failures"),
+      });
+      await expect(onReady.mock.calls[0]?.[0].flush()).rejects.toThrow(
+        "Cookie projection did not converge"
+      );
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(browserDataClient.applyCookieMutations).not.toHaveBeenCalled();
+    } finally {
+      await service.stop?.(undefined);
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("captures browser-originated partitioned cookie changes with their complete identity", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "browser-cookie-projection-"));
+    const state = fakeCookieJar();
+    const applyCookieMutations = vi.fn().mockResolvedValue({ revision: 1 });
+    const onReady = vi.fn();
+    const service = createBrowserCookieProjectionService({
+      browserDataClient: {
+        getBrowserEnvironment: vi.fn().mockResolvedValue({
+          workspaceId: "workspace-test",
+          ownerUserId: "user-test",
+          environmentKey: "environment-test",
+        }),
+        applyCookieMutations,
+        getCookieSnapshot: vi.fn().mockResolvedValue({ revision: 0, cookies: [] }),
+      } as never,
+      serverClient: {
+        stream: vi.fn(),
+        call: vi.fn().mockResolvedValue(null),
+      } as never,
+      hostId: "desktop:test",
+      outboxRoot: tempRoot,
+      setActivePartition: vi.fn(),
+      createCookieJar: () => state.jar,
+      onReady,
+    });
+    const browserCookie = input({
+      partitionKey: {
+        topLevelSite: "https://top.example",
+        hasCrossSiteAncestor: true,
+      },
+    });
+
+    try {
+      await service.start?.(() => undefined);
+      await vi.waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
+
+      await state.set(browserCookie);
+      await vi.waitFor(() => expect(applyCookieMutations).toHaveBeenCalledTimes(1));
+      expect(applyCookieMutations).toHaveBeenCalledWith({
+        mutations: [
+          expect.objectContaining({
+            op: "put",
+            cookie: browserCookie,
+          }),
+        ],
+      });
+    } finally {
+      await service.stop?.(undefined);
       await rm(tempRoot, { recursive: true, force: true });
     }
   });

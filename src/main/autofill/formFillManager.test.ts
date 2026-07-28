@@ -72,7 +72,12 @@ type TestPanelState = {
     timestamp: number;
     pageUrl: string;
     actionUrl: string | null;
-    values: Array<{ type: "email" | "tel"; value: string; label: string }>;
+    values: Array<{
+      fieldName: string;
+      type?: "email" | "tel";
+      value: string;
+      label: string;
+    }>;
   };
   pendingSnapshot?: {
     username: string;
@@ -628,8 +633,18 @@ describe("FormFillManager", () => {
         pageUrl: "https://example.com/profile",
         actionUrl: "https://example.com/profile",
         values: [
-          { type: "email", value: "alice@example.com", label: "Email" },
-          { type: "tel", value: "+1 555 0100", label: "Phone" },
+          {
+            fieldName: "contact_email",
+            type: "email",
+            value: "alice@example.com",
+            label: "Email",
+          },
+          {
+            fieldName: "contact_phone",
+            type: "tel",
+            value: "+1 555 0100",
+            label: "Phone",
+          },
         ],
       };
 
@@ -653,6 +668,7 @@ describe("FormFillManager", () => {
       );
       expect(passwordStore.addFormFillValue).toHaveBeenCalledTimes(2);
       expect(passwordStore.addFormFillValue).toHaveBeenCalledWith({
+        fieldName: "contact_email",
         type: "email",
         value: "alice@example.com",
         displayLabel: "Email",

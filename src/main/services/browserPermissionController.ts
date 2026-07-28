@@ -9,8 +9,11 @@ import {
 } from "electron";
 import { browserPermissionsMethods } from "@vibestudio/service-schemas/browserPermissions";
 import type { BrowserSitePermissionCapability } from "@vibestudio/shared/approvals";
+import { capabilityPatternCovers } from "@vibestudio/shared/authorityManifest";
+import { scopeCovers } from "@vibestudio/shared/authorization";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import type { EventService } from "@vibestudio/shared/eventsService";
+import type { CapabilityScope } from "@vibestudio/rpc";
 import type { ServerClient } from "../serverClient.js";
 import type { ViewManager } from "../viewManager.js";
 
@@ -113,7 +116,11 @@ export class BrowserPermissionController {
   }
 
   ownsContents(contents: WebContents): boolean {
-    return this.isBrowserPanel(contents) || this.mayRequest(contents, ["notifications"]);
+    if (this.isBrowserPanel(contents)) return true;
+    const origin = browserSecurityOrigin(contents.getURL(), `contents:${contents.id}:top-level`);
+    return (
+      origin.kind === "tuple" && this.mayRequest(contents, ["notifications"], origin.serialized)
+    );
   }
 
   readonly checkPermission = (
@@ -143,9 +150,14 @@ export class BrowserPermissionController {
     }
 
     const capabilities = capabilitiesForCheck(permission, details);
-    if (!this.mayRequest(contents, capabilities)) return false;
     const panelId = this.deps.getViewManager()?.findViewIdByWebContentsId(contents.id);
     if (!panelId || this.isAutomationTainted(contents, panelId)) return false;
+    // Chromium already constrains sanitized writes to its secure-context and
+    // user-activation path. A Copy action must not require read capability.
+    if (permission === "clipboard-sanitized-write") return true;
+    if (deniedPeripheralCapability(capabilities)) return false;
+    if (this.hasApprovedUnitCapability(contents, capabilities, origin.serialized)) return true;
+    if (!this.mayRequest(contents, capabilities, origin.serialized)) return false;
     return (
       capabilities.length > 0 &&
       capabilities.every(
@@ -190,7 +202,6 @@ export class BrowserPermissionController {
       topLevelOrigin.kind !== "tuple" ||
       origin.serialized !== topLevelOrigin.serialized ||
       capabilities.length === 0 ||
-      !this.mayRequest(contents, capabilities) ||
       this.isAutomationTainted(contents, panelId)
     ) {
       this.notifyDenied(
@@ -201,13 +212,29 @@ export class BrowserPermissionController {
       finish(false);
       return;
     }
-    const osDenied = capabilities.find((capability) => !osAllows(capability));
+    // Match normal browser behavior: Chromium enforces the user gesture for
+    // sanitized writes, so panel manifests only need to declare clipboard for
+    // reading the device clipboard.
+    if (permission === "clipboard-sanitized-write") {
+      finish(true);
+      return;
+    }
+    const osDenied = deniedPeripheralCapability(capabilities);
     if (osDenied) {
       this.notifyDenied(
         panelId,
         [osDenied],
         `${capabilityLabel(osDenied)} access is disabled in system privacy settings.`
       );
+      finish(false);
+      return;
+    }
+    if (this.hasApprovedUnitCapability(contents, capabilities, origin.serialized)) {
+      finish(true);
+      return;
+    }
+    if (!this.mayRequest(contents, capabilities, origin.serialized)) {
+      this.notifyDenied(panelId, capabilities, "This page did not declare the requested access.");
       finish(false);
       return;
     }
@@ -335,12 +362,31 @@ export class BrowserPermissionController {
     return Boolean(panelId && manager?.getViewPartition(panelId) === this.deps.partition);
   }
 
-  private mayRequest(contents: WebContents, capabilities: BrowserPermissionCapability[]): boolean {
+  private mayRequest(
+    contents: WebContents,
+    capabilities: BrowserPermissionCapability[],
+    resourceKey: string
+  ): boolean {
     if (this.isBrowserPanel(contents)) return true;
     const manager = this.deps.getViewManager();
     const panelId = manager?.findViewIdByWebContentsId(contents.id);
     const info = panelId ? manager?.getViewInfo(panelId) : null;
-    return viewMayRequestPeripheral(info, capabilities);
+    return viewMayRequestPeripheral(info, capabilities, resourceKey);
+  }
+
+  private hasApprovedUnitCapability(
+    contents: WebContents,
+    capabilities: BrowserPermissionCapability[],
+    resourceKey: string
+  ): boolean {
+    if (this.isBrowserPanel(contents)) return false;
+    const manager = this.deps.getViewManager();
+    const viewId = manager?.findViewIdByWebContentsId(contents.id);
+    return viewMayRequestPeripheral(
+      viewId ? manager?.getViewInfo(viewId) : null,
+      capabilities,
+      resourceKey
+    );
   }
 
   private isAutomationTainted(contents: WebContents, panelId: string): boolean {
@@ -370,16 +416,45 @@ export function viewMayRequestPeripheral(
     | {
         type: string;
         capabilities: readonly string[];
+        codeIdentity?: {
+          source?: string;
+          effectiveVersion?: string | null;
+          executionDigest?: string | null;
+          requested?: readonly CapabilityScope[];
+        };
       }
     | null
     | undefined,
-  capabilities: readonly BrowserPermissionCapability[]
+  capabilities: readonly BrowserPermissionCapability[],
+  resourceKey: string
 ): boolean {
-  if (view?.type !== "app" || capabilities.length === 0) return false;
-  return capabilities.every((capability) => {
-    const manifestCapability = capability === "geolocation" ? "location" : capability;
-    return view.capabilities.includes(manifestCapability);
-  });
+  if (!view || capabilities.length === 0) return false;
+  const manifestCapabilities = capabilities.map((capability) =>
+    capability === "geolocation" ? "location" : capability
+  );
+  if (view.type === "app") {
+    return manifestCapabilities.every((capability) => view.capabilities.includes(capability));
+  }
+  if (
+    view.type !== "panel" ||
+    typeof view.codeIdentity?.source !== "string" ||
+    view.codeIdentity.source.length === 0 ||
+    typeof view.codeIdentity.effectiveVersion !== "string" ||
+    view.codeIdentity.effectiveVersion.length === 0 ||
+    typeof view.codeIdentity.executionDigest !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(view.codeIdentity.executionDigest) ||
+    !Array.isArray(view.codeIdentity.requested)
+  ) {
+    return false;
+  }
+  const requested = view.codeIdentity.requested;
+  return manifestCapabilities.every((capability) =>
+    requested.some(
+      (request) =>
+        capabilityPatternCovers(request.capability, capability) &&
+        scopeCovers(request.resource, resourceKey)
+    )
+  );
 }
 
 export function capabilitiesForRequest(
@@ -467,6 +542,13 @@ function osAllows(capability: BrowserPermissionCapability): boolean {
   if (capability !== "camera" && capability !== "microphone") return true;
   const status = systemPreferences.getMediaAccessStatus(capability);
   return status !== "denied" && status !== "restricted";
+}
+
+export function deniedPeripheralCapability(
+  capabilities: readonly BrowserPermissionCapability[],
+  allows: (capability: BrowserPermissionCapability) => boolean = osAllows
+): BrowserPermissionCapability | undefined {
+  return capabilities.find((capability) => !allows(capability));
 }
 
 function once(callback: (value: boolean) => void): (value: boolean) => void {

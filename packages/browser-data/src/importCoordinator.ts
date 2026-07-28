@@ -18,11 +18,16 @@ export interface BrowserImportHostRegistration extends ImportHostSummary {
 
 export interface BrowserImportStore {
   storeBatch(identity: BrowserEnvironmentIdentity, batch: ImportBatch): Promise<void>;
-  persistJob(identity: BrowserEnvironmentIdentity, job: ImportJobSnapshot): Promise<void>;
-  getJob(
+  /**
+   * Make newly stored data effective in any active browser environment before
+   * the job is allowed to report completion.
+   */
+  reconcileImport?(
     identity: BrowserEnvironmentIdentity,
-    jobId: string
-  ): Promise<ImportJobSnapshot | null>;
+    dataTypes: BrowserImportDataType[]
+  ): Promise<void>;
+  persistJob(identity: BrowserEnvironmentIdentity, job: ImportJobSnapshot): Promise<void>;
+  getJob(identity: BrowserEnvironmentIdentity, jobId: string): Promise<ImportJobSnapshot | null>;
 }
 
 interface JobState {
@@ -81,7 +86,10 @@ export class BrowserImportCoordinator {
     return [...this.hosts.values()]
       .filter((host) => host.ownerUserId === identity.ownerUserId)
       .map(({ ownerUserId: _owner, provider: _provider, ...summary }) => summary)
-      .sort((a, b) => Number(b.connected) - Number(a.connected) || a.displayName.localeCompare(b.displayName));
+      .sort(
+        (a, b) =>
+          Number(b.connected) - Number(a.connected) || a.displayName.localeCompare(b.displayName)
+      );
   }
 
   async listSources(
@@ -162,10 +170,7 @@ export class BrowserImportCoordinator {
     return this.clone(snapshot);
   }
 
-  async resume(
-    identity: BrowserEnvironmentIdentity,
-    jobId: string
-  ): Promise<ImportJobSnapshot> {
+  async resume(identity: BrowserEnvironmentIdentity, jobId: string): Promise<ImportJobSnapshot> {
     let current = this.jobs.get(jobId);
     if (!current || !this.sameEnvironment(current.identity, identity)) {
       const persisted = await this.store.getJob(identity, jobId);
@@ -267,9 +272,15 @@ export class BrowserImportCoordinator {
         },
         abort.signal
       );
-      snapshot.phase = summary.dataTypes.some((item) => item.errors > 0)
-        ? "partial"
-        : "complete";
+      if (this.store.reconcileImport) {
+        snapshot.phase = "reconciling";
+        snapshot.progress = summary.dataTypes;
+        snapshot.warnings = summary.warnings;
+        snapshot.updatedAt = Date.now();
+        await this.persist(identity, snapshot);
+        await this.store.reconcileImport(identity, snapshot.requestedDataTypes);
+      }
+      snapshot.phase = summary.dataTypes.some((item) => item.errors > 0) ? "partial" : "complete";
       snapshot.progress = summary.dataTypes;
       snapshot.warnings = summary.warnings;
       snapshot.updatedAt = Date.now();
@@ -302,11 +313,7 @@ export class BrowserImportCoordinator {
     };
   }
 
-  private failJob(
-    job: ImportJobSnapshot,
-    signal: AbortSignal,
-    error: unknown
-  ): void {
+  private failJob(job: ImportJobSnapshot, signal: AbortSignal, error: unknown): void {
     job.phase = signal.aborted ? "cancelled" : "failed";
     job.error = error instanceof Error ? error.message : String(error);
     job.updatedAt = Date.now();

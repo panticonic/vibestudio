@@ -20,10 +20,20 @@ import {
   type ImportedPassword,
   type ImportJobSnapshot,
   type ImportHostSummary,
+  type OpenTabsAsPanelsRequest,
+  type OpenTabsAsPanelsResult,
   type PageFavicon,
   type RecordHistoryVisitRequest,
   type UpdateHistoryTitleRequest,
 } from "@vibestudio/browser-data";
+import {
+  createCollectionSession,
+  launchCollectionTask,
+  promptForCollectionStartupTask,
+  type CollectionOrchestrationRpc,
+  type CollectionSessionDescriptor,
+  type CollectionStartupTask,
+} from "@workspace/collection-orchestration";
 
 interface InvocationLike {
   current(): {
@@ -63,6 +73,12 @@ interface ResolvedDurableObject {
 interface ExtensionContextLike {
   rpc: {
     call<T>(targetId: string, method: string, ...args: unknown[]): Promise<T>;
+    stream(
+      targetId: string,
+      method: string,
+      args: unknown[],
+      options?: { signal?: AbortSignal }
+    ): Promise<Response>;
   };
   workers: {
     resolveDurableObject(
@@ -156,6 +172,14 @@ const DANGEROUS_METHODS = new Set([
   "exportPasswords",
   "exportCookies",
 ]);
+
+function collectionOrchestrationRpc(ctx: ExtensionContextLike): CollectionOrchestrationRpc {
+  return {
+    selfId: "@workspace-extensions/browser-data",
+    call: (targetId, method, args) => ctx.rpc.call(targetId, method, ...args),
+    stream: (targetId, method, args, options) => ctx.rpc.stream(targetId, method, args, options),
+  };
+}
 
 const METHOD_LABELS: Record<string, string> = {
   listImportHosts: "Find devices with browser data",
@@ -277,6 +301,10 @@ export async function activate(ctx: ExtensionContextLike) {
         itemCount: batch.items.length,
       });
       ctx.emit("data-changed", { dataType: batch.dataType });
+    },
+    async reconcileImport(identity, dataTypes) {
+      if (!dataTypes.includes("cookies") || !desktopHosts.has(identity.environmentKey)) return;
+      await ctx.rpc.call("main", "browserEnvironment.flushCookieProjection", []);
     },
     persistJob(identity, job) {
       return callStoreForIdentity(identity, "upsertImportJob", {
@@ -483,37 +511,32 @@ export async function activate(ctx: ExtensionContextLike) {
         ctx.invocation.signal?.() ?? undefined
       );
     }),
-    openTabsAsPanels: guarded(
-      "openTabsAsPanels",
-      async (request: {
-        hostId: string;
-        sourceId: string;
-        selection: string[];
-        groupBy?: "window" | "none";
-      }) => {
-        const { identity } = await currentIdentity();
-        await ensureImportHosts(identity);
-        const tabs = await coordinator.listOpenTabs(
-          identity,
-          request.hostId,
-          request.sourceId,
-          ctx.invocation.signal?.() ?? undefined
-        );
-        const chosen =
-          request.selection.length > 0
-            ? tabs.filter((tab) => request.selection.includes(tab.tabId))
-            : tabs;
-        if (request.groupBy !== "window") return openTabsAsPanels(chosen, ctx);
-        const sources = await coordinator.listSources(
-          identity,
-          request.hostId,
-          ctx.invocation.signal?.() ?? undefined
-        );
-        const sourceName =
-          sources.find((source) => source.sourceId === request.sourceId)?.displayName ?? "Browser";
-        return openTabsAsPanels(chosen, ctx, { groupBy: "window", sourceName });
-      }
-    ),
+    openTabsAsPanels: guarded("openTabsAsPanels", async (request: OpenTabsAsPanelsRequest) => {
+      const { identity } = await currentIdentity();
+      await ensureImportHosts(identity);
+      const tabs = await coordinator.listOpenTabs(
+        identity,
+        request.hostId,
+        request.sourceId,
+        ctx.invocation.signal?.() ?? undefined
+      );
+      const chosen =
+        request.selection.length > 0
+          ? tabs.filter((tab) => request.selection.includes(tab.tabId))
+          : tabs;
+      const sources = await coordinator.listSources(
+        identity,
+        request.hostId,
+        ctx.invocation.signal?.() ?? undefined
+      );
+      const sourceName =
+        sources.find((source) => source.sourceId === request.sourceId)?.displayName ?? "Browser";
+      return openTabsAsPanels(chosen, ctx, {
+        destination: request.destination ?? "new-root",
+        groupBy: request.groupBy ?? "window",
+        sourceName,
+      });
+    }),
     getSitePreferences: guarded("getSitePreferences", async (origin: string) =>
       callStore("getSitePreferences", origin)
     ),
@@ -756,115 +779,243 @@ interface OpenableTab {
 async function openTabsAsPanels(
   tabs: OpenableTab[],
   ctx: ExtensionContextLike,
-  grouping?: { groupBy: "window"; sourceName: string }
-) {
+  policy: {
+    destination: "new-root" | "caller";
+    groupBy: "window" | "none";
+    sourceName: string;
+  }
+): Promise<OpenTabsAsPanelsResult> {
   const callerId = parentPanelIdFromInvocation(ctx.invocation.current());
   const panels: Array<{ id: string; title: string; url: string }> = [];
-  const collections: Array<{ id: string; title: string; panelsOpened: number }> = [];
+  const collections: Array<{
+    id: string;
+    title: string;
+    parentId: string;
+    panelsOpened: number;
+  }> = [];
   const skipped: Array<{ url: string; reason: string }> = [];
-  // One collection panel per source window, created lazily so a window whose
-  // tabs all fail to open does not leave an empty collection behind.
-  const collectionByWindow = new Map<string, string | null>();
-  // Reasons a collection could not hold its tabs, surfaced once rather than per tab.
-  const collectionErrors = new Set<string>();
-
-  const collectionFor = async (tab: OpenableTab): Promise<string | undefined> => {
-    if (!grouping || !tab.windowId) return callerId;
-    const cached = collectionByWindow.get(tab.windowId);
-    if (cached !== undefined) return cached ?? callerId;
-    const title = `${grouping.sourceName} · Window ${tab.windowOrdinal ?? collectionByWindow.size + 1}`;
-    try {
-      const created = await ctx.rpc.call<{ id: string; title: string }>(
-        "main",
-        "panelTree.create",
-        { surface: "code", source: "about/collection" },
-        {
-          ...(callerId ? { parentId: callerId } : {}),
-          title,
-          focus: false,
-          stateArgs: { title, origin: `${grouping.sourceName} · imported open tabs` },
-        }
-      );
-      collectionByWindow.set(tab.windowId, created.id);
-      collections.push({ id: created.id, title: created.title, panelsOpened: 0 });
-      return created.id;
-    } catch {
-      // Fall back to a flat open rather than losing the tabs entirely.
-      collectionByWindow.set(tab.windowId, null);
-      return callerId;
-    }
-  };
-
+  const openable: OpenableTab[] = [];
   for (const tab of tabs) {
     if (!/^https?:\/\//i.test(tab.url)) {
       skipped.push({ url: tab.url, reason: "unsupported browser-panel URL scheme" });
       continue;
     }
-    const parentId = await collectionFor(tab);
-    const name = (tab.title?.trim() || hostnameFromUrl(tab.url) || "Imported Tab").slice(0, 80);
-    const create = (under: string | undefined) =>
-      ctx.rpc.call<{ id: string; title: string }>(
-        "main",
-        "panelTree.create",
-        { surface: "external", url: tab.url },
-        {
-          ...(under ? { parentId: under } : {}),
-          // A label, not an id: page titles repeat constantly ("New Tab"), and
-          // as an id segment they collided.
-          title: name,
-          focus: false,
-        }
-      );
-    try {
-      let created: { id: string; title: string };
-      let landedIn = parentId;
-      try {
-        created = await create(parentId);
-      } catch (error) {
-        // A collection that cannot host children must not take the tabs down
-        // with it — retry flat under the caller before giving up on the tab.
-        if (parentId === callerId) throw error;
-        if (tab.windowId) collectionByWindow.set(tab.windowId, null);
-        created = await create(callerId);
-        landedIn = callerId;
-        collectionErrors.add(error instanceof Error ? error.message : String(error));
+    openable.push(tab);
+  }
+
+  if (openable.length === 0) {
+    return {
+      destination: policy.destination,
+      groupBy: policy.groupBy,
+      tabsFound: tabs.length,
+      panelsOpened: 0,
+      collections,
+      panels,
+      skipped,
+    };
+  }
+
+  const createCollection = (
+    parentId: string | null,
+    title: string,
+    origin: string,
+    options: {
+      contextId?: string;
+      stateArgs?: Record<string, unknown>;
+    } = {}
+  ): Promise<{ id: string; title: string; contextId: string }> =>
+    ctx.rpc.call(
+      "main",
+      "panelTree.create",
+      { surface: "code", source: "about/collection" },
+      {
+        parentId,
+        title,
+        focus: false,
+        initialLoad: "deferred",
+        ...(options.contextId ? { contextId: options.contextId } : {}),
+        stateArgs: { title, origin, ...(options.stateArgs ?? {}) },
       }
-      panels.push({ id: created.id, title: created.title, url: tab.url });
-      const collection = collections.find((entry) => entry.id === landedIn);
-      if (collection) collection.panelsOpened += 1;
-    } catch (error) {
-      skipped.push({
-        url: tab.url,
-        reason: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-  for (const reason of collectionErrors) {
-    skipped.push({
-      url: "(collection)",
-      reason: `Tabs opened outside their collection: ${reason}`,
+    );
+
+  let root: OpenTabsAsPanelsResult["root"];
+  let rootOrchestration:
+    | {
+        id: string;
+        title: string;
+        contextId: string;
+        session: CollectionSessionDescriptor;
+        startupTask: CollectionStartupTask;
+      }
+    | undefined;
+  let anchorId: string;
+  let orchestrationContextId: string | undefined;
+  if (policy.destination === "new-root") {
+    const title = `${policy.sourceName} · Imported Tabs`;
+    const session = createCollectionSession();
+    const startupTask: CollectionStartupTask = {
+      kind: "title-browser-import-windows",
+      sourceName: policy.sourceName,
+    };
+    const created = await createCollection(null, title, `${policy.sourceName} · browser import`, {
+      stateArgs: {
+        ...session,
+        startupTask,
+        agentConfig: { approvalLevel: 2 },
+      },
     });
+    root = { id: created.id, title: created.title, panelsOpened: 0 };
+    rootOrchestration = {
+      id: created.id,
+      title: created.title,
+      contextId: created.contextId,
+      session,
+      startupTask,
+    };
+    anchorId = created.id;
+    orchestrationContextId = created.contextId;
+  } else {
+    if (!callerId) {
+      throw new Error("The calling panel is unavailable; choose a new workspace root instead");
+    }
+    anchorId = callerId;
+    const anchor = await ctx.rpc.call<{ contextId?: string } | null>(
+      "main",
+      "panelTree.metadata",
+      anchorId
+    );
+    orchestrationContextId = anchor?.contextId;
   }
-  // Creating the parent must precede creating its first child, so a failed
-  // first child can leave a zero-member collection. Roll those containers back
-  // explicitly; filtering the result alone would hide an orphan in the tree.
-  for (const collection of collections) {
-    if (collection.panelsOpened > 0) continue;
+
+  const groups = new Map<string, { title: string; tabs: OpenableTab[] }>();
+  for (const tab of openable) {
+    const key = policy.groupBy === "window" && tab.windowId ? tab.windowId : "";
+    let group = groups.get(key);
+    if (!group) {
+      const ordinal = tab.windowOrdinal ?? groups.size + 1;
+      group = {
+        title:
+          policy.destination === "new-root"
+            ? `Window ${ordinal}`
+            : `${policy.sourceName} · Window ${ordinal}`,
+        tabs: [],
+      };
+      groups.set(key, group);
+    }
+    group.tabs.push(tab);
+  }
+
+  const archiveEmptyContainer = async (id: string, title: string) => {
     try {
-      await ctx.rpc.call("main", "panelTree.archive", collection.id);
+      await ctx.rpc.call("main", "panelTree.archive", id);
     } catch (error) {
       skipped.push({
         url: "(collection)",
-        reason: `Could not remove empty collection ${collection.title}: ${
+        reason: `Could not remove empty collection ${title}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       });
     }
+  };
+
+  for (const [windowId, group] of groups) {
+    let panelParentId = anchorId;
+    let collection: (typeof collections)[number] | undefined;
+    if (policy.groupBy === "window" && windowId) {
+      try {
+        const created = await createCollection(
+          anchorId,
+          group.title,
+          `${policy.sourceName} · imported browser window`,
+          { contextId: orchestrationContextId }
+        );
+        collection = {
+          id: created.id,
+          title: created.title,
+          parentId: anchorId,
+          panelsOpened: 0,
+        };
+        collections.push(collection);
+        panelParentId = created.id;
+      } catch (error) {
+        const reason = `Could not create ${group.title}: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+        skipped.push(...group.tabs.map((tab) => ({ url: tab.url, reason })));
+        continue;
+      }
+    }
+
+    for (const tab of group.tabs) {
+      const title = (tab.title?.trim() || hostnameFromUrl(tab.url) || "Imported Tab").slice(0, 80);
+      try {
+        const created = await ctx.rpc.call<{ id: string; title: string }>(
+          "main",
+          "panelTree.create",
+          { surface: "external", url: tab.url },
+          {
+            parentId: panelParentId,
+            // A label, not an id: page titles repeat constantly ("New Tab"), and
+            // as an id segment they collided.
+            title,
+            focus: false,
+            initialLoad: "deferred",
+            ...(orchestrationContextId ? { contextId: orchestrationContextId } : {}),
+          }
+        );
+        panels.push({ id: created.id, title: created.title, url: tab.url });
+        if (collection) collection.panelsOpened += 1;
+        if (root) root.panelsOpened += 1;
+      } catch (error) {
+        skipped.push({
+          url: tab.url,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (collection?.panelsOpened === 0) {
+      await archiveEmptyContainer(collection.id, collection.title);
+    }
+  }
+
+  const nonEmptyCollections = collections.filter((entry) => entry.panelsOpened > 0);
+  if (root?.panelsOpened === 0) {
+    await archiveEmptyContainer(root.id, root.title);
+    root = undefined;
+    rootOrchestration = undefined;
+  }
+  if (root && rootOrchestration) {
+    try {
+      await launchCollectionTask(collectionOrchestrationRpc(ctx), {
+        rootPanelId: rootOrchestration.id,
+        rootTitle: rootOrchestration.title,
+        contextId: rootOrchestration.contextId,
+        session: rootOrchestration.session,
+        task: promptForCollectionStartupTask(rootOrchestration.startupTask),
+        // The collection UI uses the same key for its queued fallback. A
+        // successful immediate publish therefore cannot duplicate on open.
+        idempotencyKey: `initial-prompt:${rootOrchestration.session.channelName}`,
+        agentConfig: { approvalLevel: 2 },
+      });
+    } catch (error) {
+      // Tab import is already durable. Preserve startupTask as the idempotent
+      // fallback when the user later opens the collection, and surface the
+      // transient launch problem without misreporting imported tabs as skipped.
+      ctx.log.warn?.(
+        `Imported tabs, but could not start collection title assignment: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
   }
   return {
+    destination: policy.destination,
+    groupBy: policy.groupBy,
     tabsFound: tabs.length,
     panelsOpened: panels.length,
-    collections: collections.filter((entry) => entry.panelsOpened > 0),
+    ...(root ? { root } : {}),
+    collections: nonEmptyCollections,
     panels,
     skipped,
   };
@@ -947,19 +1098,33 @@ function exportCookies(
   format: "json" | "netscape-txt",
   rows: Array<Record<string, unknown>>
 ): string {
-  const cookies: ImportedCookie[] = rows.map((row) => ({
-    name: String(row["name"] ?? ""),
-    value: String(row["value"] ?? ""),
-    domain: String(row["domain"] ?? ""),
-    hostOnly: Boolean(row["hostOnly"]),
-    path: String(row["path"] ?? "/"),
-    expirationDate: row["expirationDate"] == null ? undefined : Number(row["expirationDate"]),
-    secure: Boolean(row["secure"]),
-    httpOnly: Boolean(row["httpOnly"]),
-    sameSite: String(row["sameSite"] ?? "unspecified") as ImportedCookie["sameSite"],
-    sourceScheme: String(row["sourceScheme"] ?? "unset") as ImportedCookie["sourceScheme"],
-    sourcePort: Number(row["sourcePort"] ?? -1),
-  }));
+  const cookies: ImportedCookie[] = rows.map((row) => {
+    const partitionKey = row["partitionKey"];
+    return {
+      name: String(row["name"] ?? ""),
+      valueStatus: "available",
+      value: String(row["value"] ?? ""),
+      domain: String(row["domain"] ?? ""),
+      hostOnly: Boolean(row["hostOnly"]),
+      path: String(row["path"] ?? "/"),
+      ...(partitionKey && typeof partitionKey === "object"
+        ? {
+            partitionKey: partitionKey as NonNullable<ImportedCookie["partitionKey"]>,
+          }
+        : {}),
+      expirationDate: row["expirationDate"] == null ? undefined : Number(row["expirationDate"]),
+      secure: Boolean(row["secure"]),
+      httpOnly: Boolean(row["httpOnly"]),
+      sameSite: String(row["sameSite"] ?? "unspecified") as ImportedCookie["sameSite"],
+      sourceScheme: String(row["sourceScheme"] ?? "unset") as ImportedCookie["sourceScheme"],
+      sourcePort: Number(row["sourcePort"] ?? -1),
+    };
+  });
+  if (format === "netscape-txt" && cookies.some((cookie) => cookie.partitionKey)) {
+    throw new Error(
+      "Netscape cookie files cannot represent partition keys; use JSON export instead"
+    );
+  }
   return format === "netscape-txt"
     ? exportNetscapeCookies(cookies)
     : JSON.stringify(cookies, null, 2);

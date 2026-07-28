@@ -13,7 +13,7 @@ import { FiltersEngine, Request } from "@ghostery/adblocker";
 import fetch from "cross-fetch";
 import * as fs from "fs";
 import * as path from "path";
-import { session, ipcMain } from "electron";
+import { ipcMain, type Session } from "electron";
 import { parse } from "tldts";
 import { getCentralConfigDirectory } from "../paths.js";
 import { createDevLogger } from "@vibestudio/dev-log";
@@ -91,7 +91,7 @@ export class AdBlockManager {
   private config: AdBlockConfig;
   private cachePath: string;
   private configPath: string;
-  private enabledSessions = new Set<Electron.Session>();
+  private sessionBindings = new Map<Session, number>();
   private stats: AdBlockStats = { blockedRequests: 0, blockedElements: 0 };
   private ipcHandlersRegistered = false;
   private updateTimer: ReturnType<typeof setInterval> | null = null;
@@ -325,18 +325,17 @@ export class AdBlockManager {
   }
 
   /**
-   * Enable ad blocking for a session.
-   * Sets up webRequest handlers with whitelist support.
-   * Handlers check config.enabled on each request for efficient enable/disable.
+   * Attach ad blocking to a browser session for the lifetime of its owner.
+   *
+   * Binding does not depend on the filter engine being ready. The handlers
+   * pass requests through until initialization completes, so browser-
+   * environment startup and filter-list startup may finish in either order.
    */
-  enableForSession(ses: Electron.Session = session.defaultSession): void {
-    if (!this.engine) {
-      console.warn("[AdBlock] Cannot enable - engine not initialized");
-      return;
-    }
-
-    if (this.enabledSessions.has(ses)) {
-      return;
+  attachToSession(ses: Session): () => void {
+    const existingBindings = this.sessionBindings.get(ses) ?? 0;
+    this.sessionBindings.set(ses, existingBindings + 1);
+    if (existingBindings > 0) {
+      return this.sessionRelease(ses);
     }
 
     // Set up network request blocking
@@ -426,8 +425,26 @@ export class AdBlockManager {
     // Set up IPC handlers for cosmetic filtering (only once)
     this.setupCosmeticFilteringIpc();
 
-    this.enabledSessions.add(ses);
-    console.log("[AdBlock] Enabled for session with whitelist support");
+    console.log("[AdBlock] Attached to browser session with whitelist support");
+    return this.sessionRelease(ses);
+  }
+
+  private sessionRelease(ses: Session): () => void {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const bindings = this.sessionBindings.get(ses);
+      if (bindings === undefined) return;
+      if (bindings > 1) {
+        this.sessionBindings.set(ses, bindings - 1);
+        return;
+      }
+      this.sessionBindings.delete(ses);
+      ses.webRequest.onBeforeRequest(null);
+      ses.webRequest.onHeadersReceived(null);
+      console.log("[AdBlock] Detached from browser session");
+    };
   }
 
   /**
@@ -540,24 +557,6 @@ export class AdBlockManager {
   }
 
   /**
-   * Disable ad blocking for a session.
-   * Note: Handlers remain registered but check config.enabled for efficiency.
-   * This avoids the overhead of setting pass-through handlers on every request.
-   */
-  disableForSession(ses: Electron.Session = session.defaultSession): void {
-    if (!this.enabledSessions.has(ses)) {
-      return;
-    }
-
-    // Clear tracked main frame URLs for this session
-    // Note: We can't easily identify which webContentsIds belong to this session,
-    // so we keep the map entries (they'll be overwritten on next navigation)
-
-    this.enabledSessions.delete(ses);
-    console.log("[AdBlock] Disabled for session (handlers check config.enabled)");
-  }
-
-  /**
    * Clean up main frame URL tracking for a destroyed webContents.
    * Called when a browser panel is closed.
    */
@@ -643,15 +642,9 @@ export class AdBlockManager {
 
     if (enabled) {
       await this.initialize();
-      // Enable for default session
-      this.enableForSession(session.defaultSession);
     } else {
       // Stop automatic updates
       this.stopUpdateTimer();
-      // Disable for all sessions (handlers will check config.enabled)
-      for (const ses of this.enabledSessions) {
-        this.disableForSession(ses);
-      }
     }
   }
 

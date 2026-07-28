@@ -147,7 +147,7 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
   },
   {
     id: "migration.browser-environment",
-    title: "Browser environment",
+    title: "Browser import",
     summary: "Bring in selected bookmarks, history, cookies, passwords, or open tabs.",
     category: "environment",
     role: "migration",

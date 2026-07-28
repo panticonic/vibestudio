@@ -65,6 +65,7 @@ const passwords: ImportedPassword[] = [
 const cookies: ImportedCookie[] = [
   {
     name: "session_id",
+    valueStatus: "available",
     value: "abc123",
     domain: ".example.com",
     hostOnly: false,
@@ -78,6 +79,7 @@ const cookies: ImportedCookie[] = [
   },
   {
     name: "pref",
+    valueStatus: "available",
     value: "dark",
     domain: "other.com",
     hostOnly: true,
@@ -109,9 +111,7 @@ describe("exportNetscapeBookmarks", () => {
 
   it("escapes HTML entities in titles and URLs", () => {
     const html = exportNetscapeBookmarks(bookmarks);
-    expect(html).toContain(
-      "Title with &lt;html&gt; &amp; &quot;quotes&quot;",
-    );
+    expect(html).toContain("Title with &lt;html&gt; &amp; &quot;quotes&quot;");
     expect(html).toContain("https://special.com?a=1&amp;b=2");
   });
 
@@ -161,11 +161,16 @@ describe("exportChromiumBookmarks", () => {
     const other = parsed.roots.other;
 
     // "Other Site" has folder ["Other"], so should appear in Other > Other folder
-    function findUrls(node: { children?: { type: string; url?: string; name: string; children?: unknown[] }[] }): string[] {
+    function findUrls(node: {
+      children?: { type: string; url?: string; name: string; children?: unknown[] }[];
+    }): string[] {
       const urls: string[] = [];
       for (const child of node.children ?? []) {
         if (child.type === "url") urls.push(child.url!);
-        else urls.push(...findUrls(child as { children?: { type: string; url?: string; name: string }[] }));
+        else
+          urls.push(
+            ...findUrls(child as { children?: { type: string; url?: string; name: string }[] })
+          );
       }
       return urls;
     }
@@ -176,7 +181,7 @@ describe("exportChromiumBookmarks", () => {
     const json = exportChromiumBookmarks(bookmarks);
     const parsed = JSON.parse(json);
     const firstBookmark = parsed.roots.bookmark_bar.children.find(
-      (c: { type: string }) => c.type === "url",
+      (c: { type: string }) => c.type === "url"
     );
     const dateAdded = BigInt(firstBookmark.date_added);
     // Should be microseconds since 1601 epoch
@@ -189,7 +194,7 @@ describe("exportChromiumBookmarks", () => {
     const json = exportChromiumBookmarks(bookmarks);
     const parsed = JSON.parse(json);
     const devFolder = parsed.roots.bookmark_bar.children.find(
-      (c: { type: string; name: string }) => c.type === "folder" && c.name === "Dev",
+      (c: { type: string; name: string }) => c.type === "folder" && c.name === "Dev"
     );
     expect(devFolder).toBeDefined();
     expect(devFolder.children.length).toBe(1);
@@ -379,7 +384,7 @@ describe("exportJson", () => {
     // Should be base64 string, not Buffer JSON
     expect(typeof parsed.bookmarks[0]!.favicon).toBe("string");
     expect(Buffer.from(parsed.bookmarks[0]!.favicon, "base64")).toEqual(
-      Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47])
     );
   });
 
@@ -418,7 +423,9 @@ describe("round-trip preservation", () => {
     const json = exportChromiumBookmarks(bookmarks);
     const parsed = JSON.parse(json);
 
-    function collectUrls(node: { children?: { type: string; url?: string; name: string; children?: unknown[] }[] }): string[] {
+    function collectUrls(node: {
+      children?: { type: string; url?: string; name: string; children?: unknown[] }[];
+    }): string[] {
       const urls: string[] = [];
       for (const child of node.children ?? []) {
         if (child.type === "url") urls.push(child.url!);
@@ -427,10 +434,7 @@ describe("round-trip preservation", () => {
       return urls;
     }
 
-    const allUrls = [
-      ...collectUrls(parsed.roots.bookmark_bar),
-      ...collectUrls(parsed.roots.other),
-    ];
+    const allUrls = [...collectUrls(parsed.roots.bookmark_bar), ...collectUrls(parsed.roots.other)];
 
     for (const bm of bookmarks) {
       expect(allUrls).toContain(bm.url);

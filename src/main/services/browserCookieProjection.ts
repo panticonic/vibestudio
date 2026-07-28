@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { session, type Cookie, type Session } from "electron";
 import type {
   BrowserCookieInput,
   BrowserCookieKey,
@@ -10,7 +9,12 @@ import type {
   BrowserEnvironmentIdentity,
   StoredCookie,
 } from "@vibestudio/browser-data";
+import {
+  browserCookiePartitionStorageKey,
+  normalizeCookieExpirationSeconds,
+} from "@vibestudio/browser-data";
 import { browserEnvironmentPartition } from "@vibestudio/shared/panelInterfaces";
+import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import type { ManagedService } from "@vibestudio/shared/managedService";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
@@ -18,6 +22,7 @@ import type { EventName } from "@vibestudio/shared/events";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import { workspaceProviderExtensionPackageName } from "@vibestudio/workspace/configParser";
 import type { ServerClient } from "../serverClient.js";
+import { ChromiumCookieJar, type BrowserCookieJar } from "./chromiumCookieJar.js";
 
 const log = createDevLogger("BrowserCookieProjection");
 
@@ -104,6 +109,7 @@ export function createBrowserCookieProjectionService(deps: {
   hostId: string;
   outboxRoot: string;
   setActivePartition(partition: string | null): void;
+  createCookieJar?(partition: string): BrowserCookieJar;
   onInitializing?(): void;
   onUnavailable?(error: unknown): void | Promise<void>;
   onReady?(api: BrowserCookieProjectionApi): void | Promise<void>;
@@ -141,9 +147,10 @@ export function createBrowserCookieProjectionService(deps: {
       if (signal.aborted) throw abortError(signal);
 
       const partition = browserEnvironmentPartition(identity.environmentKey);
+      const cookieJar = deps.createCookieJar?.(partition) ?? new ChromiumCookieJar(partition);
       candidate = new BrowserCookieProjection({
         browserDataClient: deps.browserDataClient,
-        browserSession: session.fromPartition(partition),
+        cookieJar,
         identity,
         partition,
         hostId: deps.hostId,
@@ -240,7 +247,12 @@ export function createBrowserCookieProjectionService(deps: {
 class BrowserCookieProjection {
   private outbox: OutboxRecord[] = [];
   private nextSequence = 1;
-  private desired = new Map<string, StoredCookie>();
+  /**
+   * The last complete state observed in Chromium. Browser-originated mutations
+   * are changes relative to this baseline, not differences from canonical
+   * storage: a cookie that Chromium rejects must remain canonical and retryable.
+   */
+  private observedBrowser = new Map<string, BrowserCookieInput>();
   private appliedRevision = 0;
   private mismatchCount = 0;
   private lastError: string | undefined;
@@ -248,14 +260,17 @@ class BrowserCookieProjection {
   private stopped = false;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private revisionTimer: ReturnType<typeof setTimeout> | null = null;
+  private browserChangeTimer: ReturnType<typeof setTimeout> | null = null;
   private periodicTimer: ReturnType<typeof setInterval> | null = null;
   private operation: Promise<void> = Promise.resolve();
   private persistence: Promise<void> = Promise.resolve();
+  private readonly operationQueue = new Map<string, Promise<unknown>>();
+  private readonly persistenceQueue = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly deps: {
       browserDataClient: BrowserDataClient;
-      browserSession: Session;
+      cookieJar: BrowserCookieJar;
       identity: BrowserEnvironmentIdentity;
       partition: string;
       hostId: string;
@@ -276,9 +291,9 @@ class BrowserCookieProjection {
 
   async start(): Promise<void> {
     await this.loadOutbox();
-    // Subscribe before touching either side: Electron change notifications are
-    // lossy around restore, so startup always follows with full convergence.
-    this.deps.browserSession.cookies.on("changed", this.onCookieChanged);
+    // Subscribe before touching either side. The Electron event is only a dirty
+    // signal; the partition-complete CDP snapshot determines what changed.
+    await this.deps.cookieJar.start(() => this.notifyBrowserChanged());
     await this.queueOperation(async () => {
       await this.flushOutbox();
       await this.reconcileNow();
@@ -291,12 +306,13 @@ class BrowserCookieProjection {
 
   async stop(): Promise<void> {
     this.stopped = true;
-    this.deps.browserSession.cookies.off("changed", this.onCookieChanged);
     if (this.flushTimer) clearTimeout(this.flushTimer);
     if (this.revisionTimer) clearTimeout(this.revisionTimer);
+    if (this.browserChangeTimer) clearTimeout(this.browserChangeTimer);
     if (this.periodicTimer) clearInterval(this.periodicTimer);
     await this.operation.catch(() => {});
     await this.persistOutbox();
+    await this.deps.cookieJar.stop();
   }
 
   async flush(origins?: string[]): Promise<{ revision: number }> {
@@ -304,6 +320,9 @@ class BrowserCookieProjection {
       await this.flushOutbox();
       await this.reconcileNow(origins);
     });
+    if (!this.converged) {
+      throw new Error(this.lastError ?? "Cookie projection did not converge");
+    }
     return { revision: this.appliedRevision };
   }
 
@@ -326,29 +345,33 @@ class BrowserCookieProjection {
     }, REVISION_DEBOUNCE_MS);
   }
 
-  private readonly onCookieChanged = (
-    _event: Electron.Event,
-    cookie: Cookie,
-    _cause: "explicit" | "overwrite" | "expired" | "evicted" | "expired-overwrite",
-    removed: boolean
-  ): void => {
-    if (this.stopped || !cookie.domain) return;
-    const key = cookieKey(cookie);
-    const keyString = cookieKeyString(key);
-    const effectiveHash = effectiveCookieContentHash(
-      this.desired.get(keyString),
-      this.outbox.map((entry) => entry.mutation),
-      key
-    );
-    if (removed) {
-      if (effectiveHash === null) return;
-      this.enqueueMutation({ op: "delete", key, mutationId: randomUUID() });
-      return;
+  private notifyBrowserChanged(): void {
+    if (this.stopped) return;
+    if (this.browserChangeTimer) clearTimeout(this.browserChangeTimer);
+    this.browserChangeTimer = setTimeout(() => {
+      this.browserChangeTimer = null;
+      void this.queueOperation(() => this.captureBrowserChanges());
+    }, REVISION_DEBOUNCE_MS);
+  }
+
+  private async captureBrowserChanges(): Promise<void> {
+    const browser = await this.deps.cookieJar.snapshot();
+    const actual = new Map(browser.cookies.map((cookie) => [cookieKeyString(cookie), cookie]));
+    for (const [key, cookie] of actual) {
+      const previous = this.observedBrowser.get(key);
+      if (previous && cookieContentHash(previous) === cookieContentHash(cookie)) continue;
+      this.enqueueMutation({ op: "put", cookie, mutationId: randomUUID() });
     }
-    const input = electronCookieInput(cookie);
-    if (effectiveHash === cookieContentHash(input)) return;
-    this.enqueueMutation({ op: "put", cookie: input, mutationId: randomUUID() });
-  };
+    for (const [key, cookie] of this.observedBrowser) {
+      if (actual.has(key)) continue;
+      this.enqueueMutation({
+        op: "delete",
+        key: cookieKey(cookie),
+        mutationId: randomUUID(),
+      });
+    }
+    this.observedBrowser = actual;
+  }
 
   private enqueueMutation(mutation: BrowserCookieMutation): void {
     this.outbox.push({ sequence: this.nextSequence, mutation });
@@ -391,40 +414,60 @@ class BrowserCookieProjection {
             origins.some((origin) => cookieAppliesToOrigin(cookie, origin))
           )
         : snapshot.cookies;
-      this.desired = new Map(snapshot.cookies.map((cookie) => [cookieKeyString(cookie), cookie]));
-      const current = await this.deps.browserSession.cookies.get({});
+      const current = (await this.deps.cookieJar.snapshot()).cookies;
       const scopedCurrent = origins?.length
         ? current.filter((cookie) =>
-            origins.some((origin) => cookieAppliesToOrigin(electronCookieInput(cookie), origin))
+            origins.some((origin) => cookieAppliesToOrigin(cookie, origin))
           )
         : current;
       const currentByKey = new Map(
-        scopedCurrent
-          .filter((cookie): cookie is Cookie & { domain: string } => Boolean(cookie.domain))
-          .map((cookie) => [cookieKeyString(cookieKey(cookie)), cookie])
+        scopedCurrent.map((cookie) => [cookieKeyString(cookieKey(cookie)), cookie])
       );
 
+      let writeFailures = 0;
+      let firstWriteFailure: string | undefined;
+      const recordWriteFailure = (error: unknown) => {
+        writeFailures += 1;
+        firstWriteFailure ??= messageOf(error);
+      };
+
       for (const cookie of canonical) {
-        const existing = currentByKey.get(cookieKeyString(cookie));
-        if (existing && cookieContentHash(electronCookieInput(existing)) === cookie.contentHash) {
+        const key = cookieKeyString(cookie);
+        const existing = currentByKey.get(key);
+        if (existing && cookieContentHash(existing) === cookie.contentHash) {
           continue;
         }
-        await this.deps.browserSession.cookies.set(toElectronCookie(cookie));
+        try {
+          // Chromium protects an existing Secure cookie from being overwritten
+          // by an insecure Set-Cookie source. Reconciliation is replacing an
+          // exact cookie-jar key, so remove the old materialization through its
+          // complete key before setting the canonical version.
+          if (existing) {
+            await this.deps.cookieJar.remove(cookieKey(existing));
+          }
+          await this.deps.cookieJar.set(cookie);
+        } catch (error) {
+          recordWriteFailure(error);
+        }
       }
 
       const expectedKeys = new Set(canonical.map((cookie) => cookieKeyString(cookie)));
       for (const [key, cookie] of currentByKey) {
         if (expectedKeys.has(key)) continue;
-        await this.deps.browserSession.cookies.remove(
-          cookieUrl(electronCookieInput(cookie)),
-          cookie.name
-        );
+        try {
+          await this.deps.cookieJar.remove(cookieKey(cookie));
+        } catch (error) {
+          recordWriteFailure(error);
+        }
       }
 
-      const finalCookies = await this.deps.browserSession.cookies.get({});
+      const finalCookies = (await this.deps.cookieJar.snapshot()).cookies;
+      this.observedBrowser = new Map(
+        finalCookies.map((cookie) => [cookieKeyString(cookie), cookie])
+      );
       const finalScoped = origins?.length
         ? finalCookies.filter((cookie) =>
-            origins.some((origin) => cookieAppliesToOrigin(electronCookieInput(cookie), origin))
+            origins.some((origin) => cookieAppliesToOrigin(cookie, origin))
           )
         : finalCookies;
       this.mismatchCount = projectionMismatchCount(canonical, finalScoped);
@@ -434,7 +477,11 @@ class BrowserCookieProjection {
         : Math.min(this.appliedRevision, snapshot.revision);
       this.lastError = this.converged
         ? undefined
-        : `Cookie projection did not converge (${this.mismatchCount} mismatches)`;
+        : `Cookie projection did not converge (${this.mismatchCount} mismatches${
+            writeFailures > 0
+              ? `, ${writeFailures} write failures; first: ${firstWriteFailure ?? "unknown"}`
+              : ""
+          })`;
       if (!this.converged) {
         log.warn(this.lastError ?? "Cookie projection did not converge");
       }
@@ -446,8 +493,15 @@ class BrowserCookieProjection {
   }
 
   private queueOperation(run: () => Promise<void>): Promise<void> {
-    const next = this.operation.then(run, run);
-    this.operation = next.catch(() => {});
+    const next = serializeByKey(this.operationQueue, "projection", run);
+    this.operation = next.then(
+      () => undefined,
+      (error) => {
+        this.lastError = `Cookie projection operation failed: ${messageOf(error)}`;
+        log.warn(this.lastError);
+        return undefined;
+      }
+    );
     return next;
   }
 
@@ -474,52 +528,46 @@ class BrowserCookieProjection {
       nextSequence: this.nextSequence,
       records: this.outbox,
     });
-    const write = this.persistence.then(async () => {
+    const write = serializeByKey(this.persistenceQueue, "outbox", async () => {
       const directory = path.dirname(this.deps.outboxPath);
       await fs.mkdir(directory, { recursive: true, mode: 0o700 });
       const temporary = `${this.deps.outboxPath}.${process.pid}.${randomUUID()}.tmp`;
       await fs.writeFile(temporary, payload, { mode: 0o600 });
       await fs.rename(temporary, this.deps.outboxPath);
     });
-    this.persistence = write.catch(() => {});
+    this.persistence = write.then(
+      () => undefined,
+      (error) => {
+        this.lastError = `Cookie outbox persistence failed: ${messageOf(error)}`;
+        this.converged = false;
+        log.warn(this.lastError);
+        return undefined;
+      }
+    );
     await write;
   }
 }
 
-function electronCookieInput(cookie: Cookie): BrowserCookieInput {
-  const secure = cookie.secure === true;
+function cookieKey(cookie: BrowserCookieKey): BrowserCookieKey {
   return {
     name: cookie.name,
-    value: cookie.value,
-    domain: (cookie.domain ?? "").toLocaleLowerCase(),
-    hostOnly: cookie.hostOnly === true,
+    domain: cookie.domain.toLocaleLowerCase(),
     path: cookie.path || "/",
-    secure,
-    httpOnly: cookie.httpOnly === true,
-    sameSite: cookie.sameSite,
-    ...(cookie.expirationDate === undefined ? {} : { expirationDate: cookie.expirationDate }),
-    sourceScheme: secure ? "secure" : "non_secure",
-    sourcePort: secure ? 443 : 80,
-  };
-}
-
-function cookieKey(cookie: Cookie): BrowserCookieKey {
-  return {
-    name: cookie.name,
-    domain: (cookie.domain ?? "").toLocaleLowerCase(),
-    path: cookie.path || "/",
+    ...(cookie.partitionKey ? { partitionKey: cookie.partitionKey } : {}),
   };
 }
 
 function cookieKeyString(key: BrowserCookieKey): string {
-  return `${key.name}\x00${key.domain.toLocaleLowerCase()}\x00${key.path}\x00${key.partitionKey ?? ""}`;
+  return `${key.name}\x00${key.domain.toLocaleLowerCase()}\x00${key.path}\x00${browserCookiePartitionStorageKey(
+    key.partitionKey
+  )}`;
 }
 
 /**
  * Fold unflushed local mutations over the last canonical cookie snapshot.
- * Electron can emit an add followed by a delete before the debounce flush; the
- * pending put is therefore part of the effective state even though `desired`
- * has never contained it.
+ * Chromium can emit an add followed by a delete before the debounce flush; the
+ * pending put is therefore part of the effective state even when canonical
+ * storage has never contained it.
  */
 export function effectiveCookieContentHash(
   desired: StoredCookie | undefined,
@@ -548,46 +596,25 @@ export function cookieContentHash(cookie: BrowserCookieInput): string {
         cookie.value,
         cookie.domain.toLocaleLowerCase(),
         cookie.path,
-        cookie.partitionKey ?? "",
+        browserCookiePartitionStorageKey(cookie.partitionKey),
         cookie.hostOnly,
         cookie.secure,
         cookie.httpOnly,
         cookie.sameSite,
-        cookie.expirationDate ?? null,
-        cookie.sourceScheme ?? null,
-        cookie.sourcePort ?? null,
+        normalizeCookieExpirationSeconds(cookie.expirationDate) ?? null,
       ])
     )
     .digest("base64");
 }
 
-export function toElectronCookie(cookie: StoredCookie): Electron.CookiesSetDetails {
-  return {
-    url: cookieUrl(cookie),
-    name: cookie.name,
-    value: cookie.value,
-    ...(cookie.hostOnly ? {} : { domain: cookie.domain }),
-    path: cookie.path,
-    secure: cookie.secure,
-    httpOnly: cookie.httpOnly,
-    sameSite: cookie.sameSite,
-    ...(cookie.expirationDate === undefined ? {} : { expirationDate: cookie.expirationDate }),
-  };
-}
-
-function cookieUrl(cookie: Pick<BrowserCookieInput, "domain" | "path" | "secure">): string {
-  return `${cookie.secure ? "https" : "http"}://${cookie.domain.replace(/^\./, "")}${
-    cookie.path || "/"
-  }`;
-}
-
 function cookieAppliesToOrigin(
-  cookie: Pick<BrowserCookieInput, "domain" | "hostOnly" | "path" | "secure">,
+  cookie: Pick<BrowserCookieInput, "domain" | "hostOnly" | "path" | "secure" | "partitionKey">,
   origin: string
 ): boolean {
   try {
     const url = new URL(origin);
     if (cookie.secure && url.protocol !== "https:") return false;
+    if (cookie.partitionKey && cookie.partitionKey.topLevelSite !== url.origin) return false;
     const domain = cookie.domain.replace(/^\./, "").toLocaleLowerCase();
     const host = url.hostname.toLocaleLowerCase();
     return cookie.hostOnly ? host === domain : host === domain || host.endsWith(`.${domain}`);
@@ -596,17 +623,12 @@ function cookieAppliesToOrigin(
   }
 }
 
-function projectionMismatchCount(canonical: StoredCookie[], electron: Cookie[]): number {
+function projectionMismatchCount(canonical: StoredCookie[], browser: BrowserCookieInput[]): number {
   const expected = new Map(
     canonical.map((cookie) => [cookieKeyString(cookie), cookie.contentHash])
   );
   const actual = new Map(
-    electron
-      .filter((cookie) => Boolean(cookie.domain))
-      .map((cookie) => [
-        cookieKeyString(cookieKey(cookie)),
-        cookieContentHash(electronCookieInput(cookie)),
-      ])
+    browser.map((cookie) => [cookieKeyString(cookieKey(cookie)), cookieContentHash(cookie)])
   );
   let mismatches = 0;
   for (const [key, hash] of expected) {
