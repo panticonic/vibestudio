@@ -459,8 +459,14 @@ export class PanelManager {
         },
       });
     } catch (error) {
-      // Best-effort cleanup of the durable entity row.
-      await this.runtime.retireEntity(handle.id).catch(() => {});
+      try {
+        await this.runtime.retireEntity(handle.id);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          `Panel creation failed and entity cleanup also failed for ${handle.id}`
+        );
+      }
       throw error;
     }
     this.recordIncarnationCommit("create");
@@ -661,7 +667,14 @@ export class PanelManager {
         },
       });
     } catch (error) {
-      await this.runtime.retireEntity(handle.id).catch(() => {});
+      try {
+        await this.runtime.retireEntity(handle.id);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          `Panel creation failed and entity cleanup also failed for ${handle.id}`
+        );
+      }
       throw error;
     }
 
@@ -1161,14 +1174,26 @@ export class PanelManager {
   async shutdownCleanup(livePanelIds: PanelSlotId[]): Promise<void> {
     const liveSet = new Set<PanelSlotId>(livePanelIds);
     const slots = await this.workspaceState.listSlots();
+    const cleanupErrors: unknown[] = [];
     for (const slot of slots) {
       if (slot.closed_at != null) continue;
       if (liveSet.has(slot.slot_id)) continue;
       const entityId = slot.current_entity_id;
       if (entityId) {
-        await this.runtime.retireEntity(entityId).catch(() => {});
+        try {
+          await this.runtime.retireEntity(entityId);
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
       }
-      await this.workspaceState.closeSlot(slot.slot_id).catch(() => {});
+      try {
+        await this.workspaceState.closeSlot(slot.slot_id);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(cleanupErrors, "Panel shutdown cleanup was incomplete");
     }
   }
 
@@ -1197,7 +1222,7 @@ export class PanelManager {
     this.registry.updateSelectedPath(slotId);
     await this.persistViewState();
     this.searchIndex?.incrementAccessCount(slotId);
-    await this.activationClient?.markPanelActive(slotId).catch(() => {});
+    await this.activationClient?.markPanelActive(slotId);
   }
 
   setCurrentTheme(theme: ThemeAppearance): void {
@@ -1850,13 +1875,11 @@ export class PanelManager {
     for (const panel of this.registry.listPanels()) {
       panelTitles[panel.panelId] = { source: panel.source, title: panel.title };
     }
-    await Promise.resolve(
-      this.viewState?.save({
-        collapsedIds: [...this.collapsedIds],
-        focusedPanelId: this.registry.getFocusedPanelId(),
-        panelTitles,
-      })
-    ).catch(() => {});
+    await this.viewState?.save({
+      collapsedIds: [...this.collapsedIds],
+      focusedPanelId: this.registry.getFocusedPanelId(),
+      panelTitles,
+    });
   }
 
   private rankForPosition(
