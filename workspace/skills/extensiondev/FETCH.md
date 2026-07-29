@@ -82,10 +82,10 @@ A common pattern is to expose both: a typed RPC surface for in-app callers and a
 From a panel or worker:
 
 ```ts
-import { gatewayFetch } from "@workspace/runtime";
+import { gatewayFetch } from "@vibestudio/runtime";
 
 const res = await gatewayFetch(`/_r/ext/${encodeURIComponent("@workspace-extensions/hello")}/status`);
 console.log(await res.json());
 ```
 
-`gatewayFetch` is the bearer-authenticated fetch helper exported from `@workspace/runtime`. It signs the request with the caller's token so your extension gets proper caller attribution.
+`gatewayFetch` is the bearer-authenticated fetch helper exported from `@vibestudio/runtime`. It signs the request with the caller's token so your extension gets proper caller attribution.

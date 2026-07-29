@@ -6,7 +6,7 @@
  * runner build and issues the explicit test policy for its nested runs. No
  * session, shell, or arbitrary eval can impersonate that execution identity.
  */
-import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
+import { DurableObjectBase, rpc } from "@vibestudio/runtime/worker";
 import { anyOf, methodCapability, relationship } from "@vibestudio/shared/authorization";
 import {
   createEvalExecutor,

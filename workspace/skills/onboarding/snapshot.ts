@@ -1,4 +1,4 @@
-import { callMain } from "@workspace/runtime";
+import { callMain } from "@vibestudio/runtime";
 import type { OnboardingHostTopologySnapshot } from "@vibestudio/service-schemas/onboardingStatus";
 import {
   onboardingCatalog,

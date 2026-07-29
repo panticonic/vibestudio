@@ -16,8 +16,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import { GadWorkspaceDO } from "../../packages/semantic-control-plane/src/index.js";
+import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
+import { GadWorkspaceDO } from "@vibestudio/semantic-control-plane";
 import { PubSubChannel } from "../../workers/pubsub-channel/channel-do.js";
 import { activate as activateLocalModels } from "./index.js";
 import { AgentVesselBase } from "../../packages/agentic-do/src/agent-vessel.js";

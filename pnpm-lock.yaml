@@ -97,6 +97,9 @@ importers:
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:packages/rpc
+      '@vibestudio/semantic-control-plane':
+        specifier: workspace:*
+        version: link:packages/semantic-control-plane
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:packages/service-schemas
@@ -509,6 +512,22 @@ importers:
         specifier: ^4.0.0
         version: 4.86.0(@cloudflare/workers-types@4.20260426.1)
 
+  packages/agentic-protocol:
+    dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../content-addressing
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
+
   packages/browser-data:
     dependencies:
       '@vibestudio/service-schemas':
@@ -552,6 +571,12 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
+
+  packages/cdp-client:
+    dependencies:
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
 
   packages/content-addressing: {}
 
@@ -748,6 +773,83 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  packages/runtime:
+    dependencies:
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../agentic-protocol
+      '@vibestudio/browser-data':
+        specifier: workspace:*
+        version: link:../browser-data
+      '@vibestudio/cdp-client':
+        specifier: workspace:*
+        version: link:../cdp-client
+      '@vibestudio/credential-client':
+        specifier: workspace:*
+        version: link:../credential-client
+      '@vibestudio/durable':
+        specifier: workspace:*
+        version: link:../durable
+      '@vibestudio/extension':
+        specifier: workspace:*
+        version: link:../extension
+      '@vibestudio/git':
+        specifier: workspace:*
+        version: link:../git
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../service-schemas
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@vibestudio/shell-core':
+        specifier: workspace:*
+        version: link:../shell-core
+      '@vibestudio/types':
+        specifier: workspace:*
+        version: link:../types
+      buffer:
+        specifier: ^6.0.3
+        version: 6.0.3
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
+    devDependencies:
+      sql.js:
+        specifier: ^1.14.0
+        version: 1.14.1
+
+  packages/semantic-control-plane:
+    dependencies:
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../agentic-protocol
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../content-addressing
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../service-schemas
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@vibestudio/vcs-engine':
+        specifier: workspace:*
+        version: link:../vcs-engine
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
+
   packages/service-schemas:
     dependencies:
       '@vibestudio/content-addressing':
@@ -888,6 +990,15 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+
+  packages/vcs-engine:
+    dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../content-addressing
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
 
   packages/vcs-path-policy: {}
 

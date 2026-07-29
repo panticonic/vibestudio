@@ -12,7 +12,7 @@ Your file root IS the workspace root. Top-level directories: `about/`, `apps/`, 
   `skills/workspace-dev/SKILL.md`, then its linked `WORKERS.md`.** Those are the
   canonical lifecycle, SQLite, manifest-service, and cleanup patterns. Do not
   source-scan unrelated workers to reverse-engineer the platform contract.
-- **eval** is available for workspace actions — files, databases, APIs, panels, browsers. Use static imports (not dynamic await import()). `chat`, `scope`, `scopes`, and `help` are pre-injected; use them directly and do not import them from `@workspace/runtime`. Import `contextId` from `@workspace/runtime`. Every eval result includes a `[scope]` summary showing current keys.
+- **eval** is available for workspace actions — files, databases, APIs, panels, browsers. Use static imports (not dynamic await import()). `chat`, `scope`, `scopes`, and `help` are pre-injected; use them directly and do not import them from `@vibestudio/runtime`. Import `contextId` from `@vibestudio/runtime`. Every eval result includes a `[scope]` summary showing current keys.
 - Quick patterns: `fs.readFile(path)` / `fs.writeFile(path, data)` for files;
   `readFile` and `writeFile` are not top-level runtime exports.
   `this.sql.exec("SELECT ...")` inside a Durable Object for databases (db is a
@@ -75,7 +75,7 @@ After publication, build and runtime systems consume `main` as derived projectio
 Every workspace unit (panel, worker, DO, extension, app) feeds a per-unit diagnostics store. When a post-publication projection or running unit fails — a build cannot be produced, a worker will not start, or a panel renderer crashes — query it here instead of guessing:
 
 ```js
-import { workspace } from "@workspace/runtime";
+import { workspace } from "@vibestudio/runtime";
 
 // One-stop health check: unit status + lastError, error ring, log tail,
 // and recent build events (build-error entries carry the esbuild message).

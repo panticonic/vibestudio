@@ -339,7 +339,7 @@ describe("validateRequires", () => {
     expect(result.valid).toBe(false);
     expect(result.missingModule).toBe("node:child_process");
     expect(result.error).toContain("Node built-in module");
-    expect(result.error).toContain("@workspace/runtime");
+    expect(result.error).toContain("@vibestudio/runtime");
     expect(result.error).not.toContain("npm:latest");
   });
 

@@ -56,7 +56,7 @@ converted into a second provenance model.
 
 ## Use the public API
 
-Workspace code uses the typed `git` namespace from `@workspace/runtime`.
+Workspace code uses the typed `git` namespace from `@vibestudio/runtime`.
 Command-line workflows use `vibestudio vcs git ...`. Both reach the configured
 `gitInterop` provider. Userland code must not call the extension through
 `extensions.invoke` or hard-code its package name.
@@ -69,7 +69,7 @@ an explicit context ID. The `git` runtime namespace below starts only after the
 desired snapshot is already protected main.
 
 ```ts
-import { git } from "@workspace/runtime";
+import { git } from "@vibestudio/runtime";
 
 await git.setSharedRemote("projects/bgkit", {
   name: "origin",
@@ -326,7 +326,7 @@ When changing Git Bridge behavior, inspect the full path:
 - `workspace/extensions/git-bridge/index.ts`
 - `workspace/extensions/git-bridge/bridge.ts`
 - `workspace/extensions/git-bridge/upstream.ts`
-- `workspace/packages/runtime/src/shared/git.ts`
+- `packages/runtime/src/shared/git.ts`
 - `docs/git-upstream.md`
 
 Run focused verification:

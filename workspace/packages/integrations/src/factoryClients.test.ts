@@ -2,7 +2,7 @@ import type { RpcCaller } from "@vibestudio/rpc";
 import {
   createCredentialClient,
   type StoredCredentialSummary,
-} from "@workspace/runtime/credentials";
+} from "@vibestudio/runtime/credentials";
 import { createGitHubClient, resolveGitHubPublishOperation } from "./github.js";
 import { createGmailClient } from "@workspace/gmail";
 import { createCalendarClient } from "./calendar.js";
@@ -212,6 +212,116 @@ describe("createGitHubClient", () => {
         body: JSON.stringify({ name: "demo", private: true }),
       },
     ]);
+  });
+
+  it("resolves an existing repository without attempting creation", async () => {
+    const { credentials, stats } = makeMockEnv((url) => {
+      if (url.endsWith("/repos/acme/demo")) {
+        return jsonResponse({
+          id: 2,
+          name: "demo",
+          full_name: "acme/demo",
+          private: true,
+          html_url: "https://github.com/acme/demo",
+          clone_url: "https://github.com/acme/demo.git",
+          owner: { id: 2, login: "acme", type: "Organization" },
+        });
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+
+    await expect(
+      createGitHubClient(credentials).resolveOrCreateRepo({
+        owner: "acme",
+        name: "demo",
+        private: true,
+      })
+    ).resolves.toEqual({
+      cloneUrl: "https://github.com/acme/demo.git",
+      webUrl: "https://github.com/acme/demo",
+      owner: "acme",
+      name: "demo",
+      created: false,
+    });
+    expect(stats.fetchCalls.map(({ method }) => method)).toEqual(["GET"]);
+  });
+
+  it("creates an absent repository under the explicit owner", async () => {
+    const { credentials, stats } = makeMockEnv((url, init) => {
+      if (url.endsWith("/repos/acme/demo")) return jsonResponse({}, { status: 404 });
+      if (url.endsWith("/user")) return jsonResponse({ login: "acme", id: 1 });
+      if (url.endsWith("/user/repos") && init?.method === "POST") {
+        return jsonResponse({
+          id: 3,
+          name: "demo",
+          full_name: "acme/demo",
+          private: false,
+          html_url: "https://github.com/acme/demo",
+          clone_url: "https://github.com/acme/demo.git",
+          owner: { id: 1, login: "acme", type: "User" },
+        });
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+
+    await expect(
+      createGitHubClient(credentials).resolveOrCreateRepo({
+        owner: "acme",
+        name: "demo",
+        private: false,
+        description: "Demo",
+      })
+    ).resolves.toMatchObject({ owner: "acme", name: "demo", created: true });
+    expect(stats.fetchCalls).toEqual([
+      {
+        url: "https://api.github.com/repos/acme/demo",
+        method: "GET",
+      },
+      {
+        url: "https://api.github.com/user",
+        method: "GET",
+      },
+      {
+        url: "https://api.github.com/user/repos",
+        method: "POST",
+        body: JSON.stringify({ name: "demo", private: false, description: "Demo" }),
+      },
+    ]);
+  });
+
+  it("resolves the winner of a concurrent repository-creation race", async () => {
+    let reads = 0;
+    const { credentials } = makeMockEnv((url, init) => {
+      if (url.endsWith("/repos/acme/demo")) {
+        reads += 1;
+        if (reads === 1) return jsonResponse({}, { status: 404 });
+        return jsonResponse({
+          id: 4,
+          name: "demo",
+          full_name: "acme/demo",
+          private: true,
+          html_url: "https://github.com/acme/demo",
+          clone_url: "https://github.com/acme/demo.git",
+          owner: { id: 1, login: "acme", type: "User" },
+        });
+      }
+      if (url.endsWith("/user")) return jsonResponse({ login: "acme", id: 1 });
+      if (url.endsWith("/user/repos") && init?.method === "POST") {
+        return jsonResponse(
+          { message: "already exists" },
+          { status: 422, statusText: "Unprocessable Content" }
+        );
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+
+    await expect(
+      createGitHubClient(credentials).resolveOrCreateRepo({
+        owner: "acme",
+        name: "demo",
+        private: true,
+      })
+    ).resolves.toMatchObject({ created: false, owner: "acme", name: "demo" });
   });
 
   it("routes repository creation through the explicitly selected credential", async () => {

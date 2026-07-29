@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import type { WorkspaceConfig } from "@workspace/runtime/worker";
+import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
+import type { WorkspaceConfig } from "@vibestudio/runtime/worker";
 import { DEFAULT_AGENT_MODEL_REF, type ModelCatalog } from "@workspace/model-catalog/catalog";
 import type { LocalModelEntry } from "@workspace/model-catalog/localModels";
 import { makeTestCatalogEntry } from "@workspace/model-catalog/testing";

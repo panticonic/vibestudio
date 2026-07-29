@@ -7,8 +7,8 @@
  * workers. Per-source DO services are precise. listWorkerdTargets() shows
  * what workerd actually exposes — match on title/id rather than guessing.
  */
-import { CdpConnection } from "@workspace/cdp-client";
-import { rpc, workers } from "@workspace/runtime";
+import { CdpConnection } from "@vibestudio/cdp-client";
+import { rpc, workers } from "@vibestudio/runtime";
 import { cpuProfileRef, type ProfileRef, type V8Profile } from "./profile-core.js";
 import { saveProfile } from "./profiles-store.js";
 

@@ -32,7 +32,7 @@ perspective:
   and pass that handle's id as `parentId` when opening the child:
 
   ```ts
-  import { openPanel } from "@workspace/runtime";
+  import { openPanel } from "@vibestudio/runtime";
 
   const inherited = await getParent();
   const root = inherited ?? (await openPanel("about/new", { parentId: null }));
@@ -207,8 +207,8 @@ workspace BuildStore root set.
 These are available in eval code. `services`, `hosts`, `ctx`, `scope`, `scopes`, `db`,
 `help`, `chat`, and `agent` are eval-only ambient variables. `rpc` and `fs` are
 the same portable bindings used by panels/workers; use them ambiently or import
-them from `@workspace/runtime`. Eval also accepts importing an available ambient
-helper from `@workspace/runtime` as a compatibility form; it resolves to the
+them from `@vibestudio/runtime`. Eval also accepts importing an available ambient
+helper from `@vibestudio/runtime` as a compatibility form; it resolves to the
 same live binding rather than shadowing it.
 
 | Variable                           | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -409,20 +409,20 @@ Do NOT import the **ambient-only** globals (`services`, `hosts`, `scope`, `scope
 and the eval engine rejects importing them.
 
 `rpc` and `fs` are the exception: they are injected ambiently (the table above)
-**and** re-exported by `@workspace/runtime`, so importing them is allowed and
-gives the full portable client. `import { rpc } from "@workspace/runtime"` is the
+**and** re-exported by `@vibestudio/runtime`, so importing them is allowed and
+gives the full portable client. `import { rpc } from "@vibestudio/runtime"` is the
 3-arg `rpc.call(targetId, method, args)` client (the ambient `rpc` is 2-arg sugar
-over the server); `import { fs } from "@workspace/runtime"` is the same
+over the server); `import { fs } from "@vibestudio/runtime"` is the same
 context-scoped fs.
 
 ### Importing the runtime surface
 
-`@workspace/runtime` is importable in eval and exposes the **same portable
+`@vibestudio/runtime` is importable in eval and exposes the **same portable
 surface** as panels and workers — so the same code runs on any target:
 
 ```
 eval({ code: `
-  import { vcs, workspace, gad, credentials, openPanel, panelTree } from "@workspace/runtime";
+  import { vcs, workspace, gad, credentials, openPanel, panelTree } from "@vibestudio/runtime";
   const status = await vcs.status({ contextId: ctx.contextId });
   console.log("Exact working state:", status.workingHead);
 ` })
@@ -439,11 +439,11 @@ only** — use `credentials.fetch` for external requests.)
 
 Drive a live panel's browser target over CDP — full commands **and** events —
 from eval. Get an endpoint from a panel handle, then connect with
-`CdpConnection` from `@workspace/cdp-client`:
+`CdpConnection` from `@vibestudio/cdp-client`:
 
 ```
 eval({ code: `
-  import { CdpConnection } from "@workspace/cdp-client";
+  import { CdpConnection } from "@vibestudio/cdp-client";
   const handle = getPanelHandle("<panelSlotId>");
   const { wsEndpoint, token } = await handle.cdp.getCdpEndpoint();
   const cdp = await CdpConnection.connect(wsEndpoint, token);
@@ -703,7 +703,7 @@ worker Durable Object and use its `this.sql`, then declare it as a userland
 service and call it over RPC:
 
 ```ts
-import { rpc, workers } from "@workspace/runtime";
+import { rpc, workers } from "@vibestudio/runtime";
 
 const store = await workers.resolveService("example.todos.v1", "project-123");
 if (store.kind !== "durable-object") throw new Error("Expected DO service");
@@ -976,7 +976,7 @@ return its digest, byte count, and a small head sample. Keep full objects in
 `scope` only for short-lived interactive follow-up.
 
 The blobstore is a curated runtime binding — reach it as `services.blobstore`
-(equivalently `import { blobstore } from "@workspace/runtime"`, or a raw
+(equivalently `import { blobstore } from "@vibestudio/runtime"`, or a raw
 `rpc.call("main", "blobstore.<method>", [...])`). Read/write methods
 (`putText`/`putBase64`/`getText`/`readText`/`getRange`/`grep`/…) work from agent eval; the
 admin methods (`delete`/`list`) are server-only. Raw calls

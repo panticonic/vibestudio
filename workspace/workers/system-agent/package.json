@@ -18,7 +18,7 @@
       "icon": "✦"
     },
     "exposeModules": [
-      "@workspace/runtime",
+      "@vibestudio/runtime",
       "@workspace/pubsub",
       "zod"
     ],
@@ -140,7 +140,7 @@
     "@workspace/harness": "workspace:*",
     "@workspace/pi-core": "workspace:*",
     "@workspace/pubsub": "workspace:*",
-    "@workspace/runtime": "workspace:*",
+    "@vibestudio/runtime": "workspace:*",
     "zod": "^3.24.0"
   },
   "devDependencies": {

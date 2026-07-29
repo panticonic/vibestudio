@@ -1,7 +1,7 @@
-import { credentials } from "@workspace/runtime";
+import { credentials } from "@vibestudio/runtime";
 import type {
   StoredCredentialSummary,
-} from "@workspace/runtime";
+} from "@vibestudio/runtime";
 import {
   bearerTokenInjection,
   GOOGLE_WORKSPACE_BROAD_SCOPES,
@@ -82,7 +82,7 @@ function getCredentialRuntime(): RuntimeCredentials {
   const api = credentials as Partial<RuntimeCredentials> | undefined;
   if (!api) {
     throw new Error(
-      "Vibestudio credential runtime is unavailable: @workspace/runtime did not export credentials."
+      "Vibestudio credential runtime is unavailable: @vibestudio/runtime did not export credentials."
     );
   }
   for (const method of [

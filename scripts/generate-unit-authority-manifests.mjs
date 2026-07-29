@@ -521,7 +521,7 @@ function reachablePackageModules(pkg) {
 }
 
 const EFFECT_IMPLEMENTATION_PACKAGES = new Set([
-  "@workspace/runtime",
+  "@vibestudio/runtime",
   "@vibestudio/rpc",
   "@vibestudio/service-schemas",
   "@vibestudio/shared",

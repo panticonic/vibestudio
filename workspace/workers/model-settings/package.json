@@ -113,7 +113,7 @@
     "@earendil-works/pi-ai": "^0.82.0",
     "@vibestudio/credential-client": "workspace:*",
     "@workspace/model-catalog": "workspace:*",
-    "@workspace/runtime": "workspace:*"
+    "@vibestudio/runtime": "workspace:*"
   },
   "devDependencies": {
     "@vibestudio/shared": "workspace:*",

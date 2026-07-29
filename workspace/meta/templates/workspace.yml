@@ -8,9 +8,9 @@ providers:
   evalEngine:
     source: "@workspace/eval"
   evalRuntime:
-    source: "@workspace/runtime"
+    source: "@vibestudio/runtime"
   cdpClient:
-    source: "@workspace/cdp-client"
+    source: "@vibestudio/cdp-client"
   browserData:
     extension: extensions/browser-data
   gitInterop:

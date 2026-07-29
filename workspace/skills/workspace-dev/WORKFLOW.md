@@ -99,7 +99,7 @@ canonical path.
 4. Compare with current main before committing or publishing:
 
 ```ts
-import { vcs } from "@workspace/runtime";
+import { vcs } from "@vibestudio/runtime";
 
 const status = await vcs.status();
 const comparison = await vcs.compare({
@@ -154,7 +154,7 @@ new command ID. Follow the typed discriminant, not prose.
    context build when the API supports it:
 
 ```ts
-import { openPanel } from "@workspace/runtime";
+import { openPanel } from "@vibestudio/runtime";
 
 const myApp = await openPanel("panels/my-app", { focus: true });
 scope.myAppPanel = myApp;
@@ -188,7 +188,7 @@ ref-capable launch/navigation path.
 8. Iterate visually with the same panel identity:
 
 ```ts
-import { getPanelHandle } from "@workspace/runtime";
+import { getPanelHandle } from "@vibestudio/runtime";
 
 const myApp = scope.myAppPanel ?? getPanelHandle(scope.myAppPanelId);
 scope.myAppPanel = myApp;
@@ -250,7 +250,7 @@ Use `listPanels()` from agent eval to inspect the current tree. Use
 `handle.children()` for a fresh child list and close stale children explicitly.
 
 ```ts
-import { listPanels } from "@workspace/runtime";
+import { listPanels } from "@vibestudio/runtime";
 
 const roots = await listPanels();
 for (const panel of roots) {
@@ -273,7 +273,7 @@ inspection, browser, diagnostic, and child panels in `finally`.
 URLs also use `openPanel`:
 
 ```ts
-import { openPanel } from "@workspace/runtime";
+import { openPanel } from "@vibestudio/runtime";
 
 const sitePanel = await openPanel("https://example.com", { focus: true });
 try {

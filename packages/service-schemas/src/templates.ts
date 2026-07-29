@@ -4,7 +4,12 @@ import {
   defineServiceMethods,
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
-import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
+import {
+  WorkspaceGitCommitSchema,
+  WorkspaceGitSnapshotSchema,
+  WorkspaceLogicalCredentialNameSchema,
+  WorkspaceTemplatePinSchema,
+} from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 
 const READ_ACCESS: MethodAccessDescriptor = { sensitivity: "read" };
 const WRITE_ACCESS: MethodAccessDescriptor = { sensitivity: "write" };
@@ -164,12 +169,23 @@ export const templateOperationSchema = z
 
 const choicesSchema = z.record(z.enum(["keep", "take", "skip"]));
 const buildFailureModeSchema = z.enum(["discard-context", "retain-context"]);
+const templateAuthoringParentSchema = z
+  .object({
+    alias: z.string(),
+    direct: z.boolean(),
+    url: z.string().trim().min(1),
+    credential: WorkspaceLogicalCredentialNameSchema.optional(),
+    ref: z.string().trim().min(1),
+    commit: WorkspaceGitCommitSchema,
+    snapshot: WorkspaceGitSnapshotSchema,
+  })
+  .strict();
 const templateAuthoringRequestSchema = z
   .object({
     name: z.string().trim().min(1),
     description: z.string().trim().min(1),
     parts: z.array(z.string()).min(1),
-    parents: z.array(z.string().trim().min(1)).optional(),
+    parents: z.array(WorkspaceTemplatePinSchema).optional(),
   })
   .strict();
 export const templateAuthoringInspectionSchema = z
@@ -181,15 +197,8 @@ export const templateAuthoringInspectionSchema = z
     includedParts: z.array(z.string()).min(1),
     requiredParts: z.array(z.string()),
     inheritedParts: z.array(z.string()),
-    parents: z.array(
-      z
-        .object({
-          alias: z.string(),
-          url: z.string(),
-          credential: z.string().optional(),
-        })
-        .strict()
-    ),
+    parents: z.array(templateAuthoringParentSchema),
+    parentClosureFingerprint: digest.nullable(),
     manifest: z.string().min(1),
     manifestDigest: digest,
     fingerprint: digest,
@@ -197,18 +206,22 @@ export const templateAuthoringInspectionSchema = z
   .strict();
 const templateAuthoringDestinationSchema = z
   .object({
-    provider: z.string().optional(),
-    name: z.string().trim().min(1).optional(),
-    organization: z.string().trim().min(1).optional(),
+    provider: z.string().trim().min(1),
+    owner: z.string().trim().min(1),
+    name: z.string().trim().min(1),
+  })
+  .strict();
+const templateAuthoringCreationSchema = z
+  .object({
     private: z.boolean().optional(),
     description: z.string().optional(),
-    credentialId: z.string().trim().min(1).optional(),
   })
   .strict();
 export const templatePublicationSchema = z
   .object({
     operationId: z.string(),
-    provider: z.string(),
+    destination: templateAuthoringDestinationSchema,
+    created: z.boolean(),
     remoteUrl: z.string().url(),
     webUrl: z.string().url(),
     templateUrl: z.string(),
@@ -311,14 +324,14 @@ export const templatesMethods = defineServiceMethods({
   },
   inspectAuthoring: {
     description:
-      "Prepare a content-addressed template authoring receipt from selected protected-main repositories, adding required workspace dependencies and projecting one portable manifest.",
+      "Prepare a content-addressed template authoring receipt from selected protected-main repositories and exact parent pins, verifying the ordinary parent closure, adding required workspace dependencies, and projecting one portable URL-only manifest.",
     args: z.tuple([templateAuthoringRequestSchema]),
     returns: templateAuthoringInspectionSchema,
     access: READ_ACCESS,
   },
   authoringParts: {
     description:
-      "List protected-main repositories available for template authoring with package and installed-template ownership hints.",
+      "List protected-main repositories available for template authoring with package hints and exact pins for installed template owners.",
     args: z.tuple([]),
     returns: z.array(
       z
@@ -326,6 +339,7 @@ export const templatesMethods = defineServiceMethods({
           repoPath: z.string(),
           packageName: z.string().optional(),
           templateAlias: z.string().optional(),
+          templatePin: WorkspaceTemplatePinSchema.optional(),
         })
         .strict()
     ),
@@ -341,6 +355,8 @@ export const templatesMethods = defineServiceMethods({
           plan: templateAuthoringInspectionSchema,
           version: z.string().regex(/^v?[0-9]+(?:\.[0-9]+){0,2}(?:[-.][A-Za-z0-9]+)*$/u),
           destination: templateAuthoringDestinationSchema,
+          credentialId: z.string().trim().min(1).optional(),
+          creation: templateAuthoringCreationSchema.optional(),
         })
         .strict(),
     ]),
@@ -491,5 +507,6 @@ export type TemplateOperation = z.infer<typeof templateOperationSchema>;
 export type TemplateReviewHandle = z.infer<typeof templateReviewHandleSchema>;
 export type TemplateLocator = z.infer<typeof templateLocatorSchema>;
 export type TemplateExactPin = z.infer<typeof WorkspaceTemplatePinSchema>;
+export type TemplateAuthoringRequest = z.infer<typeof templateAuthoringRequestSchema>;
 export type TemplateAuthoringInspection = z.infer<typeof templateAuthoringInspectionSchema>;
 export type TemplatePublication = z.infer<typeof templatePublicationSchema>;

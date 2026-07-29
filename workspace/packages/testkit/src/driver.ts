@@ -7,8 +7,8 @@
  * session protocol as a RawCdpSession and registers itself as the routing
  * fallback in cdp.ts — importing "@workspace/testkit" activates it.
  */
-import { createDurableObjectServiceClient } from "@workspace/runtime";
-import type { PanelHandle } from "@workspace/runtime";
+import { createDurableObjectServiceClient } from "@vibestudio/runtime";
+import type { PanelHandle } from "@vibestudio/runtime";
 import { _registerDriverRoute, type RawCdpSession } from "./cdp.js";
 import type { ProfileRef } from "./profile-core.js";
 

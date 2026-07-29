@@ -7,8 +7,8 @@
  * Usage: `<Theme appearance={appearance} {...useAppTheme()}>`
  */
 import { useEffect, useState } from "react";
-import * as runtime from "@workspace/runtime";
-import type { ThemeConfig } from "@workspace/runtime";
+import * as runtime from "@vibestudio/runtime";
+import type { ThemeConfig } from "@vibestudio/runtime";
 import { APP_THEME, type AppTheme } from "./theme.config";
 
 function toAppTheme(cfg: ThemeConfig): AppTheme {

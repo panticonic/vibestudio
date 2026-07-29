@@ -3,7 +3,7 @@
  * panel · worker · eval, i.e. exactly what `createHostedRuntime` returns. This is
  * the single source of truth for cross-target parity:
  *   - `runtimeSurface.eval.ts` IS this surface (what `import {…} from
- *     "@workspace/runtime"` resolves to inside eval).
+ *     "@vibestudio/runtime"` resolves to inside eval).
  *   - `runtimeSurface.core.ts` is this surface minus the few entries whose
  *     description differs per target (workspace / openPanel / … / panelTree),
  *     which panel & worker then re-add with their own wording.
@@ -345,7 +345,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   openExternal: callableEntry(
     "externalOpen",
     "openExternal",
-    "Call `await openExternal(url, options?)` from `@workspace/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides."
+    "Call `await openExternal(url, options?)` from `@vibestudio/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides."
   ),
   openPanel: valueEntry(
     "Create a workspace or browser panel and return its handle after application boot-ready. The slot commits before readiness; on PanelOperationError, inspect failure.provenance.panelId instead of blindly repeating creation. " +

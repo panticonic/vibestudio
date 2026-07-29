@@ -110,6 +110,7 @@ describe("template authoring contracts", () => {
     requiredParts: ["packages/shared"],
     inheritedParts: [],
     parents: [],
+    parentClosureFingerprint: null,
     manifest: "systemEpoch: 57\n",
     manifestDigest: `v1-sha256:${"a".repeat(64)}`,
     fingerprint: `v1-sha256:${"b".repeat(64)}`,
@@ -123,7 +124,8 @@ describe("template authoring contracts", () => {
           commandId: "publish-demo",
           plan,
           version: "1.0.0",
-          destination: { provider: "github", name: "template-demo", private: true },
+          destination: { provider: "github", owner: "acme", name: "template-demo" },
+          creation: { private: true },
         },
       ]).success
     ).toBe(true);
@@ -134,6 +136,35 @@ describe("template authoring contracts", () => {
           fingerprint: plan.fingerprint,
           version: "1.0.0",
           destination: { name: "template-demo" },
+        },
+      ]).success
+    ).toBe(false);
+  });
+
+  it("binds authoring parents to exact coordinates and rejects alias shortcuts", () => {
+    const parent = {
+      url: "git+https://example.test/base.git",
+      ref: "refs/tags/v1",
+      commit: "c".repeat(40),
+      snapshot: `v1-sha256:${"d".repeat(64)}`,
+    };
+    expect(
+      templatesMethods.inspectAuthoring.args.safeParse([
+        {
+          name: "Child",
+          description: "A child template",
+          parts: ["extensions/child"],
+          parents: [parent],
+        },
+      ]).success
+    ).toBe(true);
+    expect(
+      templatesMethods.inspectAuthoring.args.safeParse([
+        {
+          name: "Child",
+          description: "A child template",
+          parts: ["extensions/child"],
+          parents: ["base"],
         },
       ]).success
     ).toBe(false);

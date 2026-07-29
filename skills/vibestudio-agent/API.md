@@ -707,8 +707,8 @@ Authority principals: `code`, `host`, `user`
 | Method | Description |
 |--------|-------------|
 | `workers.listSources` | List launchable worker sources with their manifest entry point and durable object classes (empty for regular workers) |
-| `workers.listServices` | List product-owned and workspace-authored services visible in the caller's live context; workspace rows include the live docs catalog id. In eval import the top-level workers API from @workspace/runtime. Inside an installed worker, call runtime.workers.listServices() on the createWorkerRuntime(env) result; never construct a worker runtime from eval. |
-| `workers.resolveService` | Resolve a live workspace service by name or protocol. In eval use the top-level workers import from @workspace/runtime; inside an installed worker use runtime.workers on the createWorkerRuntime(env) result. The returned target is called through the matching top-level or worker-runtime rpc API. |
+| `workers.listServices` | List product-owned and workspace-authored services visible in the caller's live context; workspace rows include the live docs catalog id. In eval import the top-level workers API from @vibestudio/runtime. Inside an installed worker, call runtime.workers.listServices() on the createWorkerRuntime(env) result; never construct a worker runtime from eval. |
+| `workers.resolveService` | Resolve a live workspace service by name or protocol. In eval use the top-level workers import from @vibestudio/runtime; inside an installed worker use runtime.workers on the createWorkerRuntime(env) result. The returned target is called through the matching top-level or worker-runtime rpc API. |
 | `workers.resolveDurableObject` | Resolve and activate a concrete Durable Object RPC target by source/class/key when no declared workspace service fits. The returned target is a lifecycle handle as well as an RPC address: when the caller owns a disposable object, clear any test data and pass that same target to workers.destroy(...) so its durable storage is retired. |
 
 ## `workspace`

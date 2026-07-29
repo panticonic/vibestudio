@@ -343,7 +343,7 @@ describe("buildUnit app builds", () => {
     fs.writeFileSync(
       path.join(runtimeDir, "package.json"),
       JSON.stringify({
-        name: "@workspace/runtime",
+        name: "@vibestudio/runtime",
         version: "0.1.0",
         private: true,
         type: "module",
@@ -377,7 +377,7 @@ describe("buildUnit app builds", () => {
           entry: "index.ts",
         },
         dependencies: {
-          "@workspace/runtime": "workspace:*",
+          "@vibestudio/runtime": "workspace:*",
         },
       })
     );

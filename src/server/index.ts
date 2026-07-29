@@ -1398,10 +1398,6 @@ async function main() {
                   ...(trigger === "startup" ? { maxConcurrentApplies: 1 } : {}),
                 })
                 .then(() => extensionHost.whenReconciled())
-                .then(() => import("@vibestudio/workspace/extensionRegistry"))
-                .then(({ writeExtensionRegistry }) => {
-                  writeExtensionRegistry(workspacePath);
-                })
             );
           if (trigger === "startup") {
             console.info(

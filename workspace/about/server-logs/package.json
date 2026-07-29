@@ -96,7 +96,7 @@
   "dependencies": {
     "@workspace/about-shared": "workspace:*",
     "@workspace/react": "workspace:*",
-    "@workspace/runtime": "workspace:*"
+    "@vibestudio/runtime": "workspace:*"
   },
   "type": "module"
 }

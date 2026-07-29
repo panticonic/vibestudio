@@ -46,8 +46,8 @@ the "user"-shaped slots that do exist mean something _different_ from an account
 
 - GAD (the durable knowledge/trajectory ledger) stamps `actor: ActorRef` on **every** log
   event, and its `ActorKind` union includes `"user"`
-  (`workspace/packages/semantic-control-plane/src/index.ts:186-200`;
-  `workspace/packages/agentic-protocol/src/events.ts:22-41`).
+  (`packages/semantic-control-plane/src/index.ts:186-200`;
+  `packages/agentic-protocol/src/events.ts:22-41`).
 - The channel/messaging layer likewise has `"user"` as a first-class
   `ParticipantKind` / `SemanticParticipantKind` (`events.ts:32`), and a human is a
   legitimate roster participant today.
@@ -167,7 +167,7 @@ invariants:
 | **Approvals**              | Single shared in-memory queue (`approvalQueue`), one global instance. Grants keyed by **code identity** `(callerId, repoPath, effectiveVersion)`. **No resolver identity captured** — only an in-memory metric counter of decision×kind.                | `approvalQueue.ts`, `shellApprovalService.ts`, `capabilityGrantStore.ts`                                           |
 | **Channels / handles**     | `PubSubChannel` DO: durable log (in GAD) + roster + calls. `"user"` is a valid participant kind, but every human panel joins hardcoded as handle `"user"`, name `"Chat Panel"`. Handles are **client-asserted** (spoofable). No channel membership/ACL. | `workspace/workers/pubsub-channel/channel-do.ts`, `agentic-chat/hooks/useAgenticChat.ts:224`, `useChatCore.ts:267` |
 | **Presence**               | Channel join/leave/update envelopes, typing signals, account aggregation, domain-activity status, and retained last-seen. Each live session is owned by its subscription response; there is no timeout-based eviction.                                  | `workspace/workers/pubsub-channel/channel-do.ts`                                                                   |
-| **GAD / provenance**       | Append-only, workspace-scoped, forkable, integrity-checked ledger. **Already stamps `actor: ActorRef` on every event, with `"user"` a valid actor kind.** Channel logs live here.                                                                       | `workspace/packages/semantic-control-plane/src/index.ts:186-200,404-445`                                           |
+| **GAD / provenance**       | Append-only, workspace-scoped, forkable, integrity-checked ledger. **Already stamps `actor: ActorRef` on every event, with `"user"` a valid actor kind.** Channel logs live here.                                                                       | `packages/semantic-control-plane/src/index.ts:186-200,404-445`                                           |
 
 ---
 
@@ -493,7 +493,7 @@ systems, and only one is journaled today.**
   **They are not journaled into GAD or anywhere queryable.** This is the gap.
 
 **Boundary & ownership (decided in the spirit of the host-boundary rule).** GAD
-(`workspace/packages/semantic-control-plane`) is product-sealed internal bundle
+(`packages/semantic-control-plane`) is product-sealed internal bundle
 source; the host approval queue remains host-side.
 Making the host write its security-decision audit into a userland-owned, userland-forkable
 store would be a boundary inversion — the same class of concern as host-knows-channels. So
@@ -851,7 +851,7 @@ Every claim above is grounded in a seven-track code investigation. Primary ancho
 - **Channels/handles/presence:** `workspace/workers/pubsub-channel/channel-do.ts`,
   `agentic-protocol/src/events.ts:32`, `participant-ref.ts:17-26,227`,
   `agentic-chat/hooks/useAgenticChat.ts:224`, `agent-loop/src/policies/index.ts:33,172`.
-- **GAD/provenance:** `workspace/packages/semantic-control-plane/src/index.ts` (`ACTOR_KINDS` 186-200,
+- **GAD/provenance:** `packages/semantic-control-plane/src/index.ts` (`ACTOR_KINDS` 186-200,
   `log_events` 1655-1676, `trajectory_approvals` 1833-1846, `projectApproval` 4008-4056),
   `docs/stage0-unified-log-spec.md` (append/fork/replay contract),
   `docs/provenance-aware-diff-merge-plan.md` (semantic graph + on-behalf-of), `packages/shared/src/approvals.ts`

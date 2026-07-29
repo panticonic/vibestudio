@@ -6,7 +6,7 @@ In eval and runtime code, import the goal-shaped client instead of assembling
 raw RPC transport calls:
 
 ```ts
-import { contextId, vcs } from "@workspace/runtime";
+import { contextId, vcs } from "@vibestudio/runtime";
 
 const status = await vcs.status({ contextId });
 const repository = await vcs.resolveRepository({

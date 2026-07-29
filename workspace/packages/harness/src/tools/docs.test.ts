@@ -129,7 +129,7 @@ describe("renderEntry (readable docs_open text)", () => {
     };
 
     const text = renderEntry(entry);
-    expect(text).toContain('import { webhooks } from "@workspace/runtime"');
+    expect(text).toContain('import { webhooks } from "@vibestudio/runtime"');
     expect(text).toContain("await webhooks.createSubscription(...)");
     expect(text).not.toContain("rpc.call");
   });
@@ -155,7 +155,7 @@ describe("renderEntry (readable docs_open text)", () => {
     expect(text).toContain('tier "gated"');
     expect(text).toContain('RPC tier "open" is a separate receiver policy');
     expect(text).toContain('workers.resolveService("example.notes.v1")');
-    expect(text).toContain('import { workers, rpc } from "@workspace/runtime"');
+    expect(text).toContain('import { workers, rpc } from "@vibestudio/runtime"');
     expect(text).toContain('runtime.workers.resolveService("example.notes.v1")');
     expect(text).toContain("Do not pass it to `host_authority_next_action`");
   });

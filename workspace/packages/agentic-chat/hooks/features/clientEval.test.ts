@@ -148,7 +148,7 @@ describe("client_eval", () => {
     expect(result.content).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          text: expect.stringContaining('import { callMain } from "@workspace/runtime"'),
+          text: expect.stringContaining('import { callMain } from "@vibestudio/runtime"'),
         }),
       ])
     );

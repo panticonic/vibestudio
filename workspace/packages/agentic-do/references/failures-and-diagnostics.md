@@ -23,7 +23,7 @@ not separate error channels. Render human guidance with
 Normalize errors at the boundary that first knows the operation and stage:
 
 ```ts
-import { agentToolFailureFromUnknown } from "@workspace/agentic-protocol";
+import { agentToolFailureFromUnknown } from "@vibestudio/agentic-protocol";
 
 const failure = agentToolFailureFromUnknown(error, {
   operation: "fs.readdir",
@@ -41,7 +41,7 @@ Use the public runtime GAD client to join one invocation to its durable turn,
 events, semantic commands, effect intents, and receipts:
 
 ```ts
-import { gad } from "@workspace/runtime";
+import { gad } from "@vibestudio/runtime";
 
 const packet = await gad.diagnoseInvocation({
   trajectoryId,

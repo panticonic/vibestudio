@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@workspace/runtime", () => ({
+vi.mock("@vibestudio/runtime", () => ({
   callMain: vi.fn(),
 }));
 

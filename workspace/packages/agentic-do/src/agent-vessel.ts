@@ -20,12 +20,12 @@ import {
   type LifecyclePrepareResult,
   type LifecycleResumeInput,
   assertExactSqlTableSchema,
-} from "@workspace/runtime/worker";
+} from "@vibestudio/runtime/worker";
 import { withCausalParent, type RpcClient } from "@vibestudio/rpc";
 import {
   createGadServiceClient,
   type DurableObjectServiceClient,
-} from "@workspace/runtime/workerd-client";
+} from "@vibestudio/runtime/workerd-client";
 import type {
   ChannelReplayEnvelope,
   RegisterMessageTypeInput,
@@ -55,7 +55,7 @@ import {
   type CustomMessageDisplayMode,
   type ParticipantRef,
   type SubagentProgressUpdate,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import { sha256HexSyncText, stableSha256Hex } from "@vibestudio/content-addressing";
 import {
   createDeferredEvalExecutor,
@@ -133,7 +133,7 @@ export interface AgentToolExecutionContext {
 import type {
   ConnectCredentialRequest,
   StoredCredentialSummary as ModelCredentialSummary,
-} from "@workspace/runtime/credentials";
+} from "@vibestudio/runtime/credentials";
 import { DOIdentity } from "./identity.js";
 import { SubscriptionManager } from "./subscription-manager.js";
 import {

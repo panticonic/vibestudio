@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
-import { inspectTemplateAuthoring } from "./authoring.js";
+import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
+import { inspectTemplateAuthoring, listTemplateAuthoringParts } from "./authoring.js";
 
 function packageFile(value: unknown) {
   return {
@@ -8,8 +9,36 @@ function packageFile(value: unknown) {
   };
 }
 
+function pin(name: string, commitCharacter: string): WorkspaceTemplatePin {
+  return {
+    url: `git+https://example.test/${name}.git`,
+    ref: "refs/tags/v1",
+    commit: commitCharacter.repeat(40),
+    snapshot: `v1-sha256:${commitCharacter.repeat(64)}`,
+  };
+}
+
+function snapshot(exact: WorkspaceTemplatePin, files: Record<string, string>) {
+  const entries = Object.entries(files);
+  return {
+    commit: exact.commit,
+    snapshot: exact.snapshot,
+    files: entries.map(([path, content], index) => ({
+      path,
+      contentHash: String(index + 1).padStart(64, "0"),
+      size: Buffer.byteLength(content),
+      mode: 0o644 as const,
+    })),
+    readFile(path: string) {
+      const content = files[path];
+      return content === undefined ? null : Buffer.from(content);
+    },
+  };
+}
+
 describe("template authoring inspection", () => {
-  it("adds workspace package dependencies and lets an installed parent satisfy its parts", async () => {
+  it("adds workspace dependencies and resolves an exact newly published parent", async () => {
+    const base = pin("base", "a");
     const packages: Record<string, unknown> = {
       "extensions/demo": {
         name: "@workspace/demo",
@@ -37,24 +66,7 @@ describe("template authoring inspection", () => {
       },
     };
     const observation = {
-      localRepoPaths: new Set(["extensions/demo", "packages/shared"]),
-      lock: {
-        nodes: [
-          {
-            nodeId: "t-base",
-            alias: "base",
-            pin: {
-              url: "git+https://example.test/base.git",
-              ref: "refs/tags/v1",
-              commit: "a".repeat(40),
-              snapshot: `v1-sha256:${"b".repeat(64)}`,
-            },
-          },
-        ],
-        repositories: {
-          "packages/base-runtime": { nodeId: "t-base" },
-        },
-      },
+      localRepoPaths: new Set(["extensions/demo", "packages/shared", "packages/base-runtime"]),
       runtimeTop: {
         systemEpoch: 57,
         extensions: [{ source: "extensions/demo" }],
@@ -62,6 +74,7 @@ describe("template authoring inspection", () => {
       },
       mainEventId: "event:main",
       mainState: { kind: "event", eventId: "event:main" },
+      expectedSystemEpoch: 57,
     };
     const plan = await inspectTemplateAuthoring(
       ctx as never,
@@ -70,7 +83,17 @@ describe("template authoring inspection", () => {
         name: "Demo",
         description: "A focused demo",
         parts: ["extensions/demo"],
-        parents: ["base"],
+        parents: [base],
+      },
+      {
+        resolvePromoted: async () => {
+          throw new Error("The exact direct parent must not consult promotion");
+        },
+        acquire: async () =>
+          snapshot(base, {
+            "meta/template.yml": "systemEpoch: 57\ntemplates:\n  use: []\n",
+            "packages/base-runtime/package.json": JSON.stringify(packages["packages/base-runtime"]),
+          }),
       }
     );
 
@@ -84,6 +107,17 @@ describe("template authoring inspection", () => {
       extensions: [{ source: "extensions/demo" }],
       providers: { gitInterop: { extension: "extensions/demo" } },
     });
+    expect(plan.request.parents).toEqual([base]);
+    expect(plan.parents).toEqual([
+      expect.objectContaining({
+        alias: expect.stringMatching(/^base-/u),
+        direct: true,
+        url: base.url,
+        commit: base.commit,
+        snapshot: base.snapshot,
+      }),
+    ]);
+    expect(plan.parentClosureFingerprint).toMatch(/^v1-sha256:[0-9a-f]{64}$/u);
     expect(plan.fingerprint).toMatch(/^v1-sha256:[0-9a-f]{64}$/u);
   });
 
@@ -109,6 +143,7 @@ describe("template authoring inspection", () => {
       runtimeTop: { systemEpoch: 57 },
       mainEventId: "event:main",
       mainState: { kind: "event", eventId: "event:main" },
+      expectedSystemEpoch: 57,
     };
 
     await expect(
@@ -117,34 +152,141 @@ describe("template authoring inspection", () => {
         description: "A focused demo",
         parts: ["extensions/demo"],
       })
-    ).rejects.toThrow(
-      "extensions/demo depends on missing workspace package @workspace/missing"
-    );
+    ).rejects.toThrow("extensions/demo depends on missing workspace package @workspace/missing");
   });
 
-  it("refuses to vendor a repository also supplied by a selected parent", async () => {
-    const observation = {
-      localRepoPaths: new Set(),
-      lock: {
-        nodes: [
-          {
-            nodeId: "t-base",
-            alias: "base",
-            pin: { url: "git+https://example.test/base.git" },
-          },
-        ],
-        repositories: { "packages/base-runtime": { nodeId: "t-base" } },
+  it("verifies a parent's URL-only transitive closure and inherits every contribution", async () => {
+    const feature = pin("feature", "c");
+    const base = pin("base", "d");
+    const packages: Record<string, unknown> = {
+      "extensions/demo": {
+        name: "@workspace/demo",
+        dependencies: { "@workspace/base-runtime": "workspace:*" },
       },
+    };
+    const ctx = {
+      rpc: {
+        async call(_target: string, method: string, input: Record<string, unknown>) {
+          if (method === "vcs.resolveRepository") {
+            return { repositoryId: `repo:${String(input["repoPath"])}` };
+          }
+          if (method === "vcs.readFile") {
+            const repoPath = String(input["repositoryId"]).slice("repo:".length);
+            return packageFile(packages[repoPath]);
+          }
+          throw new Error(`Unexpected method ${method}`);
+        },
+      },
+    };
+    const plan = await inspectTemplateAuthoring(
+      ctx as never,
+      {
+        localRepoPaths: new Set(["extensions/demo"]),
+        runtimeTop: { systemEpoch: 57, extensions: [{ source: "extensions/demo" }] },
+        mainEventId: "event:main",
+        mainState: { kind: "event", eventId: "event:main" },
+        expectedSystemEpoch: 57,
+      } as never,
+      {
+        name: "Demo",
+        description: "A focused demo",
+        parts: ["extensions/demo"],
+        parents: [feature],
+      },
+      {
+        resolvePromoted: async (declaration) => {
+          expect(declaration.url).toBe(base.url);
+          return base;
+        },
+        acquire: async (exact) =>
+          exact.url === feature.url
+            ? snapshot(feature, {
+                "meta/template.yml": `systemEpoch: 57\ntemplates:\n  use:\n    - url: ${base.url}\n`,
+                "packages/feature-runtime/package.json": JSON.stringify({
+                  name: "@workspace/feature-runtime",
+                }),
+              })
+            : snapshot(base, {
+                "meta/template.yml": "systemEpoch: 57\ntemplates:\n  use: []\n",
+                "packages/base-runtime/package.json": JSON.stringify({
+                  name: "@workspace/base-runtime",
+                }),
+              }),
+      }
+    );
+
+    expect(plan.inheritedParts).toEqual(["packages/base-runtime", "packages/feature-runtime"]);
+    expect(plan.parents.map(({ url, direct }) => ({ url, direct }))).toEqual([
+      { url: base.url, direct: false },
+      { url: feature.url, direct: true },
+    ]);
+    expect(YAML.parse(plan.manifest).templates.use).toEqual([{ url: feature.url }]);
+  });
+
+  it("refuses to vendor a repository also supplied by an exact parent", async () => {
+    const base = pin("base", "e");
+    const observation = {
+      localRepoPaths: new Set(["packages/base-runtime"]),
       runtimeTop: { systemEpoch: 57 },
       mainEventId: "event:main",
+      expectedSystemEpoch: 57,
     };
     await expect(
-      inspectTemplateAuthoring({} as never, observation as never, {
-        name: "Duplicate",
-        description: "Invalid duplicate",
-        parts: ["packages/base-runtime"],
-        parents: ["base"],
-      })
-    ).rejects.toThrow("already supplied by a selected parent");
+      inspectTemplateAuthoring(
+        {} as never,
+        observation as never,
+        {
+          name: "Duplicate",
+          description: "Invalid duplicate",
+          parts: ["packages/base-runtime"],
+          parents: [base],
+        },
+        {
+          resolvePromoted: async () => {
+            throw new Error("unexpected promotion");
+          },
+          acquire: async () =>
+            snapshot(base, {
+              "meta/template.yml": "systemEpoch: 57\ntemplates:\n  use: []\n",
+              "packages/base-runtime/package.json": JSON.stringify({
+                name: "@workspace/base-runtime",
+              }),
+            }),
+        }
+      )
+    ).rejects.toThrow("already supplied by an exact parent");
+  });
+
+  it("exposes installed parents as exact pins rather than alias-only shortcuts", async () => {
+    const base = pin("base", "f");
+    const parts = await listTemplateAuthoringParts(
+      {
+        rpc: {
+          async call(_target: string, method: string, input: Record<string, unknown>) {
+            if (method === "vcs.resolveRepository") {
+              return { repositoryId: `repo:${String(input["repoPath"])}` };
+            }
+            if (method === "vcs.readFile") return null;
+            throw new Error(`Unexpected method ${method}`);
+          },
+        },
+      } as never,
+      {
+        localRepoPaths: new Set(),
+        lock: {
+          nodes: [{ nodeId: "t-base", alias: "base", pin: base }],
+          repositories: { "packages/base-runtime": { nodeId: "t-base" } },
+        },
+        mainState: { kind: "event", eventId: "event:main" },
+      } as never
+    );
+
+    expect(parts).toEqual([
+      {
+        repoPath: "packages/base-runtime",
+        templateAlias: "base",
+        templatePin: base,
+      },
+    ]);
   });
 });

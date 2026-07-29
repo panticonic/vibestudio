@@ -17,6 +17,12 @@ describe("remote provider registry", () => {
         webUrl: "https://git.example.com/acme/demo",
         owner: "acme",
       }),
+      resolveOrCreateRepo: async (_credentials, params) => ({
+        destination: params.destination,
+        cloneUrl: "https://git.example.com/acme/demo.git",
+        webUrl: "https://git.example.com/acme/demo",
+        created: false,
+      }),
       webUrls: () => ({
         webUrl: "https://git.example.com/acme/demo",
         ownerUrl: "https://git.example.com/acme",

@@ -23,7 +23,7 @@
     },
     "exposeModules": [
       "@earendil-works/pi-ai",
-      "@workspace/runtime",
+      "@vibestudio/runtime",
       "@workspace/pubsub",
       "@workspace/gmail",
       "zod"
@@ -145,9 +145,9 @@
     "@earendil-works/pi-ai": "^0.82.0",
     "@vibestudio/shared": "workspace:*",
     "@vibestudio/trajectory-identity": "workspace:*",
-    "@workspace/runtime": "workspace:*",
+    "@vibestudio/runtime": "workspace:*",
     "@workspace/agentic-do": "workspace:*",
-    "@workspace/agentic-protocol": "workspace:*",
+    "@vibestudio/agentic-protocol": "workspace:*",
     "@workspace/gmail": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@workspace/harness": "workspace:*",

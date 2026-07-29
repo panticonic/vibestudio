@@ -107,7 +107,7 @@ function updateDoc(relativePath, replacements, checkOnly) {
 }
 
 async function updateGadRuntimeCatalog(checkOnly) {
-  const schemaPath = path.join(repoRoot, "workspace/packages/runtime/src/shared/gad-schema.ts");
+  const schemaPath = path.join(repoRoot, "packages/runtime/src/shared/gad-schema.ts");
   const module = await tsImport(schemaPath, import.meta.url);
   const methods = module.gadMethods;
   if (!methods || typeof methods !== "object") {

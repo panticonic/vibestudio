@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   runtimeOpenPanel: vi.fn(),
 }));
 
-vi.mock("@workspace/runtime", () => ({
+vi.mock("@vibestudio/runtime", () => ({
   openPanel: mocks.runtimeOpenPanel,
   panelTree: {
     self() {

@@ -253,7 +253,7 @@ describe("@workspace-extensions/typecheck-service", () => {
     fs.writeFileSync(
       path.join(sourceRuntime, "package.json"),
       JSON.stringify({
-        name: "@workspace/runtime",
+        name: "@vibestudio/runtime",
         version: "0.0.0",
         exports: { ".": "./index.ts" },
       })
@@ -264,7 +264,7 @@ describe("@workspace-extensions/typecheck-service", () => {
     fs.writeFileSync(
       path.join(contextRuntime, "package.json"),
       JSON.stringify({
-        name: "@workspace/runtime",
+        name: "@vibestudio/runtime",
         version: "0.0.0",
         exports: { ".": "./index.ts" },
       })
@@ -290,13 +290,13 @@ describe("@workspace-extensions/typecheck-service", () => {
         version: "0.0.0",
         dependencies: {
           "@workspace/context-only": "workspace:*",
-          "@workspace/runtime": "workspace:*",
+          "@vibestudio/runtime": "workspace:*",
         },
       })
     );
     fs.writeFileSync(
       path.join(panelPath, "index.ts"),
-      "import { helper } from '@workspace/context-only';\nimport { contextId } from '@workspace/runtime';\nconst value: string = contextId + helper;\n"
+      "import { helper } from '@workspace/context-only';\nimport { contextId } from '@vibestudio/runtime';\nconst value: string = contextId + helper;\n"
     );
 
     const service = await activate({
@@ -434,7 +434,7 @@ describe("@workspace-extensions/typecheck-service", () => {
     fs.writeFileSync(
       path.join(runtimePackage, "package.json"),
       JSON.stringify({
-        name: "@workspace/runtime",
+        name: "@vibestudio/runtime",
         version: "0.0.0",
         exports: { ".": "./index.ts" },
       })
@@ -447,12 +447,12 @@ describe("@workspace-extensions/typecheck-service", () => {
       JSON.stringify({
         name: "@workspace-panels/my-app",
         version: "0.0.0",
-        dependencies: { "@workspace/runtime": "workspace:*" },
+        dependencies: { "@vibestudio/runtime": "workspace:*" },
       })
     );
     fs.writeFileSync(
       path.join(panelPath, "index.ts"),
-      "import { contextId } from '@workspace/runtime';\nconst value: string = contextId;\n"
+      "import { contextId } from '@vibestudio/runtime';\nconst value: string = contextId;\n"
     );
 
     const service = await api(

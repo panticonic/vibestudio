@@ -15,8 +15,8 @@ import {
   panel,
   rpc,
   type DurableObjectServiceClient,
-} from "@workspace/runtime";
-import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
+} from "@vibestudio/runtime";
+import { recoveryCoordinator } from "@vibestudio/runtime/internal/diagnostics";
 import { usePaletteCommands, usePanelTheme, useStateArgs } from "@workspace/react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {

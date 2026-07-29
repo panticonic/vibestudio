@@ -8,7 +8,7 @@ application surfaces: inspect them when that app is the target, but do not use
 them as disposable web pages.
 
 ```ts
-import { openPanel, openExternal } from "@workspace/runtime";
+import { openPanel, openExternal } from "@vibestudio/runtime";
 
 const handle = await openPanel("https://example.com", { focus: true });
 const page = await handle.cdp.page();
@@ -28,10 +28,10 @@ await openExternal("https://docs.example.com");
 ```
 
 `handle.cdp.page()` returns the canonical Playwright-style page driven by our
-workerd-native CDP client (`@workspace/cdp-client`). It is the single
+workerd-native CDP client (`@vibestudio/cdp-client`). It is the single
 browser-automation surface; there is no second browser client or compatibility
 tier to choose. Do not import or install any `playwright*` package;
-load the page through `handle.cdp.page()` and do not import `@workspace/cdp-client`
+load the page through `handle.cdp.page()` and do not import `@vibestudio/cdp-client`
 directly for ordinary page work.
 
 Navigation belongs to browser panels. On a workspace app panel, `page.goto()`,
@@ -96,7 +96,7 @@ The CDP client is workerd-native: it works in panels **and** in
 worker/DO/server-side-eval contexts. It runs over a WebSocket to the panel's CDP
 endpoint, so any context that holds a panel handle can drive the page —
 including server-side `eval`. `openPanel`/`panelTree`/`getPanelHandle` are part
-of the portable runtime surface from `@workspace/runtime`, so server-side eval
+of the portable runtime surface from `@vibestudio/runtime`, so server-side eval
 can create or acquire a panel handle directly before driving CDP automation.
 
 ## Page surface
@@ -264,7 +264,7 @@ For raw CDP, open a connection to the panel's CDP endpoint and drive the
 protocol directly:
 
 ```ts
-import { CdpConnection } from "@workspace/cdp-client";
+import { CdpConnection } from "@vibestudio/cdp-client";
 
 const endpoint = await handle.cdp.getCdpEndpoint(); // { wsEndpoint, token }
 const c = await CdpConnection.connect(endpoint.wsEndpoint, endpoint.token);
@@ -329,7 +329,7 @@ Tree relationships do not bypass approval. To drive a parent or sibling, obtain
 that target's handle and use the same `handle.cdp` namespace:
 
 ```ts
-import { panelTree } from "@workspace/runtime";
+import { panelTree } from "@vibestudio/runtime";
 
 const parent = panelTree.self().parent();
 if (parent) await parent.cdp.page();

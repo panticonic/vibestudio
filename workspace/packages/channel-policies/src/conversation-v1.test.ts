@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AGENTIC_EVENT_PAYLOAD_KIND, AGENTIC_PROTOCOL_VERSION } from "@workspace/agentic-protocol";
+import { AGENTIC_EVENT_PAYLOAD_KIND, AGENTIC_PROTOCOL_VERSION } from "@vibestudio/agentic-protocol";
 import {
   conversationV1Policy,
   resolveChannelPolicies,

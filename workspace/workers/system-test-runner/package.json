@@ -103,7 +103,7 @@
   "dependencies": {
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
-    "@workspace/runtime": "workspace:*"
+    "@vibestudio/runtime": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^3.2.2"

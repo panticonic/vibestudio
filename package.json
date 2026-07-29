@@ -177,6 +177,7 @@
     "@vibestudio/process-adapter": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
+    "@vibestudio/semantic-control-plane": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "@vibestudio/shell-core": "workspace:*",
     "@vibestudio/sqlite": "workspace:*",

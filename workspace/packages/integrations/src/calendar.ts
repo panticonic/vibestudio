@@ -7,7 +7,7 @@ import {
 import type {
   CredentialClient,
   UrlCredentialHandle,
-} from "@workspace/runtime/credentials";
+} from "@vibestudio/runtime/credentials";
 
 const GOOGLE_CALENDAR_BASE_URL = "https://www.googleapis.com/calendar/v3";
 const DEFAULT_PUSH_QUIET_WINDOW_MS = 5 * 60_000;

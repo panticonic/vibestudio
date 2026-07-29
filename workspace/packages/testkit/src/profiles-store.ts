@@ -11,7 +11,7 @@ import {
   profilePath,
   type ProfileRef,
 } from "./profile-core.js";
-import { fs } from "@workspace/runtime";
+import { fs } from "@vibestudio/runtime";
 
 export { profilePath };
 export type { ProfileRef };

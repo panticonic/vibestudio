@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createInMemorySql } from "@workspace/runtime/worker/test-utils";
-import type { SqlStorage } from "@workspace/runtime/worker";
+import { createInMemorySql } from "@vibestudio/runtime/worker/test-utils";
+import type { SqlStorage } from "@vibestudio/runtime/worker";
 import type { ChannelClient } from "./channel-client.js";
 import { DOIdentity } from "./identity.js";
 import { SubscriptionManager } from "./subscription-manager.js";

@@ -415,7 +415,7 @@ export interface WorkspaceProvidersDecl {
   evalEngine?: WorkspaceUnitProviderDecl;
   /**
    * The portable runtime package backing the eval sandbox's
-   * `@workspace/runtime` surface. Contract: the unit MUST expose `./hosted`,
+   * `@vibestudio/runtime` surface. Contract: the unit MUST expose `./hosted`,
    * `./panel-runtime`, and `./portable` package-export subpaths (the hosted
    * runtime factories, panel-runtime factories, and portable helpers).
    */

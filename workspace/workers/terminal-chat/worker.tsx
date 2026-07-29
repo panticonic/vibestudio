@@ -1,6 +1,6 @@
 import React from "react";
 import { render, Box, Text, type Instance } from "ink";
-import { rpc, DurableObjectBase } from "@workspace/runtime/worker";
+import { rpc, DurableObjectBase } from "@vibestudio/runtime/worker";
 import type { DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
 import { HeadlessSession } from "@workspace/agentic-session";
 import { createInkTerminalSession, type InkTerminalSession } from "@workspace/terminal-shim";

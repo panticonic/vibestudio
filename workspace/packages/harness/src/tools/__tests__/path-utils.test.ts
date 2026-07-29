@@ -10,11 +10,11 @@ describe("path-utils", () => {
   it("resolveToCwd: absolute-looking paths are scoped to the virtual workspace", () => {
     expect(resolveToCwd("/abs/path.md", "/work/ctx")).toBe("/work/ctx/abs/path.md");
     expect(resolveToCwd("/workspace", "/work/ctx")).toBe("/work/ctx");
-    expect(resolveToCwd("/workspace/packages/runtime", "/work/ctx")).toBe(
+    expect(resolveToCwd("/packages/runtime", "/work/ctx")).toBe(
       "/work/ctx/packages/runtime",
     );
     expect(resolveToCwd("workspace", "/work/ctx")).toBe("/work/ctx");
-    expect(resolveToCwd("workspace/packages/runtime", "/work/ctx")).toBe(
+    expect(resolveToCwd("packages/runtime", "/work/ctx")).toBe(
       "/work/ctx/packages/runtime",
     );
     expect(resolveToCwd("/work/ctx/already-resolved", "/work/ctx")).toBe(

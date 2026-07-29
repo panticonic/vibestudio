@@ -1,4 +1,4 @@
-import type { VcsClient } from "@workspace/runtime";
+import type { VcsClient } from "@vibestudio/runtime";
 import { sha256HexSyncText } from "@vibestudio/content-addressing";
 import { serializeSystemTestError } from "./structured-error.js";
 
@@ -765,7 +765,7 @@ function repositorySeedFiles(
               authority: { requests: [] },
               durable: { classes: [{ className: "FixtureWorkerDO" }] },
             },
-            dependencies: { "@workspace/runtime": "workspace:*" },
+            dependencies: { "@vibestudio/runtime": "workspace:*" },
           },
           null,
           2
@@ -774,7 +774,7 @@ function repositorySeedFiles(
       {
         path: "index.ts",
         content: [
-          'import { DurableObjectBase, rpc } from "@workspace/runtime/worker";',
+          'import { DurableObjectBase, rpc } from "@vibestudio/runtime/worker";',
           "",
           "export class FixtureWorkerDO extends DurableObjectBase {",
           "  protected createTables(): void {}",
@@ -808,7 +808,7 @@ function repositorySeedFiles(
               entry: "index.ts",
               authority: { requests: [] },
             },
-            dependencies: { "@workspace/runtime": "workspace:*" },
+            dependencies: { "@vibestudio/runtime": "workspace:*" },
           },
           null,
           2
@@ -817,7 +817,7 @@ function repositorySeedFiles(
       {
         path: "index.ts",
         content: [
-          'import { createWorkerRuntime, handleWorkerRpc, type ExecutionContext, type WorkerEnv } from "@workspace/runtime/worker";',
+          'import { createWorkerRuntime, handleWorkerRpc, type ExecutionContext, type WorkerEnv } from "@vibestudio/runtime/worker";',
           "",
           "let exposedFor: string | null = null;",
           "",

@@ -20,7 +20,7 @@ import {
 } from "@vibestudio/service-schemas/templates";
 import { vcsMethods } from "@vibestudio/service-schemas/vcs";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import { credentials, extensions, rpc } from "@workspace/runtime";
+import { credentials, extensions, rpc } from "@vibestudio/runtime";
 import type { TemplateCatalogSnapshot } from "@workspace/template-registry";
 import { AboutPage, AboutThemeRoot, Section } from "../../packages/about-shared/ui";
 import {

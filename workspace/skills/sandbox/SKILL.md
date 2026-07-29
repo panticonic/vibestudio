@@ -73,7 +73,7 @@ and components render in the panel:
 
 - **`eval`** (server-side): `rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`,
   `db`, and `help` are injected as free variables — use them directly, do NOT
-  `import` them, and do NOT `import` them from `@workspace/runtime` (the eval
+  `import` them, and do NOT `import` them from `@vibestudio/runtime` (the eval
   engine rejects importing the pre-injected names). See
   [EVAL.md](EVAL.md#injected-variables). When eval runs as an **agent** (bound
   to a channel), `chat` is injected too (see [EVAL.md](EVAL.md#chat-agent-eval));
@@ -132,7 +132,7 @@ an unavailable `hubControl` service from agent eval.
 ## Credential Lookups
 
 Use the operation that answers the user's question directly. To call an
-external API, import `credentials` from `@workspace/runtime` and call
+external API, import `credentials` from `@vibestudio/runtime` and call
 `credentials.fetch(...)` once. Do not preflight it with
 `resolveCredential(...)`: the fetch already returns the canonical
 missing-credential outcome without exposing credential material.
@@ -142,7 +142,7 @@ credential routing without making a network request. A quiet URL lookup is one
 read-only call and returns a secret-free summary or `null`:
 
 ```ts
-import { credentials } from "@workspace/runtime";
+import { credentials } from "@vibestudio/runtime";
 
 const credential = await credentials.resolveCredential({ url });
 return { hasCredential: credential !== null };
@@ -201,8 +201,8 @@ component code:
 
 | Module                                  | What it provides                                                                                                                 |
 | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `@workspace/runtime`                    | rpc, fs, git, workers, workspace, contextId, panel navigation, credentials, GAD, `approvals.request` for custom shared resources |
-| `browserData` from `@workspace/runtime` | Browser data import/export (cookies, passwords, bookmarks, history)                                                              |
+| `@vibestudio/runtime`                    | rpc, fs, git, workers, workspace, contextId, panel navigation, credentials, GAD, `approvals.request` for custom shared resources |
+| `browserData` from `@vibestudio/runtime` | Browser data import/export (cookies, passwords, bookmarks, history)                                                              |
 | `react`, `react/jsx-runtime`            | React hooks and component APIs                                                                                                   |
 | `@radix-ui/themes`                      | UI components (Button, Flex, Card, Table, etc.)                                                                                  |
 | `@radix-ui/react-icons`                 | Icon components                                                                                                                  |
@@ -213,9 +213,9 @@ For browser automation, use `handle.cdp.page()` — it returns the canonical
 Playwright-style page driven by our workerd-native CDP client
 and is the single browser-automation surface (there is no separate "full
 Playwright" tier; do not import or install any `playwright*` package). It loads
-the standalone `@workspace/cdp-client` internally, so eval code should not import
+the standalone `@vibestudio/cdp-client` internally, so eval code should not import
 that package directly for ordinary page work. For protocol-level CDP, you may
-`import { CdpConnection } from "@workspace/cdp-client"` and connect via
+`import { CdpConnection } from "@vibestudio/cdp-client"` and connect via
 `handle.cdp.getCdpEndpoint()`. See [BROWSER_AUTOMATION.md](BROWSER_AUTOMATION.md).
 
 These are built on first use. Pass them in the tool's `imports` parameter:
@@ -244,12 +244,12 @@ build into a source operation.
 
 In eval, injected ambient globals like `services`, `ctx`, `scope`, `scopes`,
 `db`, `chat`, `agent`, and `help` are free variables, not runtime exports. For
-portable client code, `@workspace/runtime` is importable in eval and exports
+portable client code, `@vibestudio/runtime` is importable in eval and exports
 namespaces such as `vcs`, `fs`, `workspace`, `credentials`, and `panelTree`:
 
 ```
 eval({ code: `
-  import { contextId, vcs } from "@workspace/runtime";
+  import { contextId, vcs } from "@vibestudio/runtime";
   import { createProject } from "@workspace-skills/workspace-dev";
   const status = await vcs.status({ contextId });
   // workspace packages: just import, auto-resolved
@@ -288,7 +288,7 @@ or `feedback_custom` rather than hand-written raw channel records.
 
 ## Critical Rules
 
-1. **Do NOT import eval-only ambient variables** — `services`, `ctx`, `scope`, `scopes`, `db`, `help`, `chat`, and `agent` are injected free variables in eval and are not importable. `rpc` and `fs` are the same portable bindings exposed by panels/workers, so either use them ambiently or import them from `@workspace/runtime`. For _packages_, both static `import` and dynamic `await import(...)` work in eval. File-loaded relative imports must be static/literal.
+1. **Do NOT import eval-only ambient variables** — `services`, `ctx`, `scope`, `scopes`, `db`, `help`, `chat`, and `agent` are injected free variables in eval and are not importable. `rpc` and `fs` are the same portable bindings exposed by panels/workers, so either use them ambiently or import them from `@vibestudio/runtime`. For _packages_, both static `import` and dynamic `await import(...)` work in eval. File-loaded relative imports must be static/literal.
 2. **Workspace packages are auto-resolved** — just write `import { createProject } from "@workspace-skills/workspace-dev"` and it builds on first use; npm packages require `imports: { "lodash": "npm:^4.17.21" }`. (For raw services, use `rpc.call("main", "<svc>.<method>", [...])`.)
 3. **Components must `export default`** — named exports alone won't work for inline_ui/load_action_bar/feedback_custom components
 4. **Inline UI / action-bar components receive `{ props, chat }`** (NOT `scope`/`scopes` — the eval REPL scope is server-side and is not shared into rendered components) — always default `props` (`{ props = {}, chat }`) and guard property access (`props?.items ?? []`). For maximum portability, prefer embedding small constant data in the component source.

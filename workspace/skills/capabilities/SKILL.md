@@ -46,7 +46,7 @@ the current panel, worker, DO, extension, or admitted agent eval. The ordinary
 request/verify/forget lifecycle is one eval:
 
 ```ts
-import { approvals } from "@workspace/runtime";
+import { approvals } from "@vibestudio/runtime";
 
 const subject = {
   id: "example-service:harmless-resource",
@@ -100,7 +100,7 @@ order after editing a provider:
 4. Inside eval, use only the documented runtime exports:
 
 ```ts
-import { workers, rpc } from "@workspace/runtime";
+import { workers, rpc } from "@vibestudio/runtime";
 const service = await workers.resolveService("example.protocol.v1");
 if (service.kind !== "durable-object") throw new Error("Expected a Durable Object service");
 return rpc.call(service.targetId, "methodName", []);
@@ -108,7 +108,7 @@ return rpc.call(service.targetId, "methodName", []);
 
 Import only runtime values that the eval actually uses. TypeScript's `type`
 keyword is a modifier for a real imported type name, not an export named
-`type`; never write `import { workers, type } from "@workspace/runtime"`.
+`type`; never write `import { workers, type } from "@vibestudio/runtime"`.
 
 There is no polling delay in this sequence. A docs result is the read-after-edit
 proof that the current semantic context can build and describe the declaration;
@@ -118,7 +118,7 @@ absence is a concrete authoring diagnostic, not eventual success to wait for.
   source, user-facing title/action/description, principals, and transport.
 - Use the agent tools `docs_search` / `docs_open` to inspect the live
   caller-visible contract before starting an eval. These are tool names, not
-  `@workspace/runtime` exports. Inside eval, consume the result through the
+  `@vibestudio/runtime` exports. Inside eval, consume the result through the
   documented `workers.*` and `rpc.*` runtime APIs. Service and API docs are
   generated from the same exact declaration set used for resolution. Never
   reference `docs` from eval code.
@@ -188,7 +188,7 @@ or edit `meta/vibestudio.yml` merely to demonstrate consumption.
 Provider receiver (`workers/local-greeting/index.ts`):
 
 ```ts
-import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
+import { DurableObjectBase, rpc } from "@vibestudio/runtime/worker";
 
 export class LocalGreetingDO extends DurableObjectBase {
   protected createTables(): void {}
@@ -256,7 +256,7 @@ import {
   handleWorkerRpc,
   type ExecutionContext,
   type WorkerEnv,
-} from "@workspace/runtime/worker";
+} from "@vibestudio/runtime/worker";
 
 let exposedFor: string | null = null;
 
@@ -289,7 +289,7 @@ normal typed lifecycle. This complete eval shape keeps the build selector,
 runtime context, RPC target, and cleanup aligned:
 
 ```ts
-import { contextId, rpc, workers } from "@workspace/runtime";
+import { contextId, rpc, workers } from "@vibestudio/runtime";
 
 const source = "workers/local-consumer";
 const report = await services.build.getBuildReport(source, `ctx:${contextId}`);

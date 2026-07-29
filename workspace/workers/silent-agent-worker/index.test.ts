@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
 import { defaultPolicies, type AgentState } from "@workspace/agent-loop";
 
 import { SilentAgentWorker } from "./index.js";

@@ -25,7 +25,7 @@ import {
   createInitialChannelViewState,
   reduceChannelView,
   type ChannelEnvelope,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import { messageTypeDefinitionsFromChannelView } from "./channel-chat-merge.js";
 import { compileMessageTypeModule } from "./custom-message-types.js";
 import { DEFAULT_HOST_MODULES, lintRendererSource } from "./renderer-lint.js";

@@ -1,4 +1,4 @@
-import { notifications, openExternal, openPanel } from "@workspace/runtime";
+import { notifications, openExternal, openPanel } from "@vibestudio/runtime";
 import { normalizeLocalhostUrl } from "./urlUtils.js";
 
 export async function openPort(port: number, urls: string[] = []): Promise<void> {

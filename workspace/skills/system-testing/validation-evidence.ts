@@ -2,7 +2,7 @@ import {
   collectStoredValueRefs,
   hydrateStoredValueRefs,
   type BlobReader,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import type { TestExecutionResult } from "./types.js";
 
 /**

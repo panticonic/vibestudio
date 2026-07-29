@@ -186,7 +186,7 @@ export interface PubSubClient<T extends ParticipantMetadata = ParticipantMetadat
       metadata?: Record<string, unknown>;
       idempotencyKey?: string;
       /** Salience tier stamped onto the outgoing message; absent ⇒ "primary". */
-      tier?: import("@workspace/agentic-protocol").MessageTier;
+      tier?: import("@vibestudio/agentic-protocol").MessageTier;
     }
   ): Promise<{ messageId: string; pubsubId: number | undefined }>;
 
@@ -196,7 +196,7 @@ export interface PubSubClient<T extends ParticipantMetadata = ParticipantMetadat
    */
   editMessage(
     messageId: string,
-    blocks: import("@workspace/agentic-protocol").MessageBlockInput[],
+    blocks: import("@vibestudio/agentic-protocol").MessageBlockInput[],
     options?: { idempotencyKey?: string; revision?: number }
   ): Promise<{ pubsubId: number | undefined }>;
 

@@ -14,7 +14,7 @@ import {
   type ActorRef,
   type AgenticEvent,
   type CustomMessageDisplayMode,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import { lintRendererSource } from "@workspace/agentic-core";
 import type { ChannelClient } from "./channel-client.js";
 import type { CardManager } from "./custom-cards.js";

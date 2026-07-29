@@ -23,7 +23,7 @@ import {
   StopIcon,
   TrashIcon,
 } from "@radix-ui/react-icons";
-import { contextId, openPanel, rpc, vcs } from "@workspace/runtime";
+import { contextId, openPanel, rpc, vcs } from "@vibestudio/runtime";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {

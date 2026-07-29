@@ -131,32 +131,44 @@ workspace files with shell commands or create a temporary repository inside the
 workspace.
 
 1. Invoke `authoringParts` to discover protected-main repositories and their
-   package/template ownership hints. Help the user choose parts around one outcome, then invoke
-   `inspectAuthoring` with `{ name, description, parts, parents? }`. `parents`
-   are installed template aliases whose parts should be inherited rather than
-   copied. For a feature intended to sit on the official base, include the
-   installed base alias. Return the selected inventory rows and complete plan
+   package/template ownership hints. An installed owner includes its exact
+   `templatePin`; a fresh `publishAuthoring` receipt becomes a parent pin as
+   `{ url: templateUrl, ref, commit, snapshot }`. Help the user choose parts
+   around one outcome, then invoke `inspectAuthoring` with
+   `{ name, description, parts, parents?: exactPins[] }`. Never pass aliases or
+   moving URLs as parents. Return the selected inventory rows and complete plan
    from eval; returning the entire inventory can exceed the result limit, and
    console output alone is not a durable inspection receipt.
 2. Review `requestedParts`, `requiredParts`, `inheritedParts`, and `parents`.
-   Required parts are deterministic `workspace:*` or runtime dependencies; do
-   not remove them. If the closure is broader than the intended outcome,
-   explain the dependency and revisit the selection or code design instead of
-   forcing a partial export.
-3. Show the generated manifest and `fingerprint` in a technical details view.
-   The receipt is bound to `mainEventId`; any intervening workspace publication
-   requires a fresh inspection.
+   The composer reacquires and verifies each exact parent and its ordinary
+   URL-declared closure; `inheritedParts` is the full repository contribution,
+   including parts not owned by a template in this live workspace. Required
+   parts are deterministic `workspace:*` or runtime dependencies; do not remove
+   them.
+3. Show the generated manifest, `parentClosureFingerprint`, and `fingerprint`
+   in a technical details view. The manifest deliberately declares only the
+   direct parent URLs (plus logical credential names); exact coordinates remain
+   in the receipt and later workspace lock. The receipt is bound to
+   `mainEventId`; any intervening workspace publication requires a fresh
+   inspection.
 4. Ask where and how the user wants it published. Then invoke
    `publishAuthoring` with a fresh `commandId`, the complete unchanged `plan`,
-   a version such as `1.0.0`, and `{ destination: { provider: "github", name,
-   organization?, private?, credentialId? } }`. Do not reconstruct or trim the
-   plan.
+   a version such as `1.0.0`, and
+   `{ destination: { provider: "github", owner, name }, credentialId?,
+creation?: { private?, description? } }`. The owner is always explicit;
+   credentials and create-time policy are not repository identity. Do not
+   reconstruct or trim the plan.
 5. The invocation itself crosses the exact Git publication authority boundary.
    Confirm success only from its returned `webUrl`, `ref`, `commit`, and
    `snapshot`. The returned `templateUrl` can immediately be passed to ordinary
    `inspect` and `add` in a scratch workspace.
 
 Publishing makes an exact installable template; it does not recommend it.
+Publishing a later version to the same destination fetches its complete
+history, advances `main` normally with one new commit, and creates a new
+immutable version tag. A retry never overwrites a tag: it either returns the
+same exact publication, completes a missing tag after `main` was pushed, or
+rejects a divergent command.
 Submitting the returned coordinates to a registry is a separate reviewed Git
 change. The default workspace intentionally does not imply registry governance
 or silently edit a catalog.

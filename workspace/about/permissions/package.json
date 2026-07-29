@@ -121,7 +121,7 @@
     }
   },
   "dependencies": {
-    "@workspace/runtime": "workspace:*",
+    "@vibestudio/runtime": "workspace:*",
     "@workspace/about-shared": "workspace:*"
   },
   "type": "module"

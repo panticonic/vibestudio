@@ -14,8 +14,8 @@
  * durably and presence shows the agent offline.
  */
 
-import type { DurableObjectContext } from "@workspace/runtime/worker";
-import { rpc } from "@workspace/runtime/worker";
+import type { DurableObjectContext } from "@vibestudio/runtime/worker";
+import { rpc } from "@vibestudio/runtime/worker";
 import { AgentWorkerBase } from "@workspace/agentic-do";
 import type { ChannelEvent, ParticipantDescriptor } from "@workspace/harness";
 import {
@@ -25,7 +25,7 @@ import {
   invocationCompletedPayload,
   invocationFailedPayload,
   type AgenticEvent,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import { ids } from "@workspace/agent-loop";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { AgentTool } from "@workspace/pi-core";

@@ -307,7 +307,7 @@ export interface HealthDetail {
 /**
  * Catch-all RPC client shape for host services not yet typed in this package.
  * Authors who want richer types can cast to the matching client interface
- * from `@workspace/runtime` (e.g. `WorkspaceClient`, `CredentialClient`,
+ * from `@vibestudio/runtime` (e.g. `WorkspaceClient`, `CredentialClient`,
  * `WebhookIngressClient`, `NotificationClient`).
  */
 export type ExtensionRpcSurface = Record<string, (...args: unknown[]) => Promise<unknown>>;

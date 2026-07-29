@@ -1,4 +1,4 @@
-import type { SqlStorage } from "@workspace/runtime/worker";
+import type { SqlStorage } from "@vibestudio/runtime/worker";
 import type { ParsedAddress } from "./address.js";
 
 export interface PersonCandidate {

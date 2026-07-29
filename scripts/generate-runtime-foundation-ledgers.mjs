@@ -215,6 +215,8 @@ for (const [service, entry] of Object.entries(serviceAuthority).sort(([a], [b]) 
 
 const directRoots = [
   path.join(root, "src", "server", "internalDOs"),
+  path.join(root, "packages", "runtime"),
+  path.join(root, "packages", "semantic-control-plane"),
   path.join(root, "workspace", "workers"),
   path.join(root, "workspace", "packages"),
 ];
@@ -227,6 +229,17 @@ const internalDirectSources = new Map([
 const directSource = (file) => {
   if (file.startsWith(path.join(root, "src/server/internalDOs"))) {
     return internalDirectSources.get(path.basename(file)) ?? "product/bootstrap";
+  }
+  const sealedPackagesRoot = path.join(root, "packages");
+  if (file.startsWith(sealedPackagesRoot)) {
+    let directory = path.dirname(file);
+    while (directory.startsWith(sealedPackagesRoot)) {
+      if (fs.existsSync(path.join(directory, "package.json"))) {
+        return path.relative(root, directory).replaceAll(path.sep, "/");
+      }
+      if (directory === sealedPackagesRoot) break;
+      directory = path.dirname(directory);
+    }
   }
   let directory = path.dirname(file);
   const workspaceRoot = path.join(root, "workspace");

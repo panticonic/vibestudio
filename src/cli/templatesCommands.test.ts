@@ -5,6 +5,9 @@ import { templatesCommands } from "./templatesCommands.js";
 describe("templates CLI commands", () => {
   it("exposes the full current templates service family", () => {
     expect(templatesCommands.map((command) => command.name)).toEqual([
+      "author-parts",
+      "author-inspect",
+      "author-publish",
       "status",
       "catalog",
       "check",
@@ -18,6 +21,37 @@ describe("templates CLI commands", () => {
       "cancel",
       "decide-suggestion",
     ]);
+  });
+
+  it("keeps authoring selection and publication receipts explicit", () => {
+    const inspect = templatesCommands.find((command) => command.name === "author-inspect")!;
+    const inspection = parseInvocation(inspect, [
+      "--name",
+      "News",
+      "--description",
+      "Focused news workspace",
+      "--part",
+      "panels/news",
+      "--part=workers/news-agent",
+      "--parent",
+      "base",
+    ]);
+    expect(inspection.flagsMulti("part")).toEqual(["panels/news", "workers/news-agent"]);
+    expect(inspection.flagsMulti("parent")).toEqual(["base"]);
+
+    const publish = templatesCommands.find((command) => command.name === "author-publish")!;
+    const publication = parseInvocation(publish, [
+      "news-receipt.json",
+      "--version",
+      "1.0.0",
+      "--repository",
+      "vibestudio-template-news",
+      "--owner",
+      "panticonic",
+    ]);
+    expect(publication.positionals).toEqual(["news-receipt.json"]);
+    expect(publication.flags["owner"]).toBe("panticonic");
+    expect(publication.flags["private"]).toBeUndefined();
   });
 
   it("keeps conflict choices and part selections explicit", () => {

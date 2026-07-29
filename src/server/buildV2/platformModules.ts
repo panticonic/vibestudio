@@ -12,12 +12,9 @@
  * platform-contract change: update the constant here and every builder use
  * follows.
  *
- * Related contracts that live elsewhere by necessity:
- *   - `packages/workspace/src/extensionRegistry.ts` — the host-generated
- *     extensions-registry barrel delivered into the runtime SDK package
- *     ({@link RUNTIME_MODULE}). It lives in `@vibestudio/shared` because the
- *     generator is called from the server outside the build system; the sink
- *     is discovered by an in-file directive, not a hardcoded path.
+ * Extension API typing is ordinary userland module augmentation: a consumer
+ * imports the extension package it uses. The host never rewrites the runtime
+ * SDK with workspace-specific types.
  */
 
 // ---------------------------------------------------------------------------
@@ -25,7 +22,7 @@
 // ---------------------------------------------------------------------------
 
 /**
- * `@workspace/runtime` — the workspace-side SDK that panels, workers, and
+ * `@vibestudio/runtime` — the workspace-side SDK that panels, workers, and
  * eval'd code import to talk to the host.
  *
  * Why the host requires it:
@@ -47,19 +44,19 @@
  *   - Its panel entry (condition `vibestudio-panel`) self-initializes on load; its
  *     worker entry (conditions `worker`/`workerd`) must NOT self-initialize.
  */
-export const RUNTIME_MODULE = "@workspace/runtime";
+export const RUNTIME_MODULE = "@vibestudio/runtime";
 
 /**
- * `@workspace/cdp-client` — Chrome-DevTools-Protocol client used by agent
+ * `@vibestudio/cdp-client` — Chrome-DevTools-Protocol client used by agent
  * tooling inside the eval sandbox.
  *
  * Why the host requires it: worker builds that expose {@link RUNTIME_MODULE}
  * force this module onto `__vibestudioModuleMap__` too, so sandboxed eval code can
- * `require("@workspace/cdp-client")` without declaring it in the worker's own
+ * `require("@vibestudio/cdp-client")` without declaring it in the worker's own
  * manifest. The host registers the whole module namespace; no specific named
  * export is consumed by host code itself.
  */
-export const CDP_CLIENT_MODULE = "@workspace/cdp-client";
+export const CDP_CLIENT_MODULE = "@vibestudio/cdp-client";
 
 /**
  * Companion modules the host force-exposes on the worker module map whenever a

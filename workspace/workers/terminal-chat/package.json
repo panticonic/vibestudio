@@ -17,7 +17,7 @@
     },
     "persistent": true,
     "exposeModules": [
-      "@workspace/runtime"
+      "@vibestudio/runtime"
     ],
     "authority": {
       "requests": [
@@ -117,7 +117,7 @@
   "dependencies": {
     "@vibestudio/shared": "workspace:*",
     "@workspace/model-catalog": "workspace:*",
-    "@workspace/runtime": "workspace:*",
+    "@vibestudio/runtime": "workspace:*",
     "@workspace/agentic-session": "workspace:*",
     "@workspace/terminal-shim": "workspace:*",
     "@workspace/terminal-host-protocol": "workspace:*",

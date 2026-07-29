@@ -15,8 +15,8 @@ import {
   openPanel,
   notifications,
   extensions,
-} from "@workspace/runtime";
-import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
+} from "@vibestudio/runtime";
+import { recoveryCoordinator } from "@vibestudio/runtime/internal/diagnostics";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Callout, Flex, Spinner, Text, Theme } from "@radix-ui/themes";
@@ -48,7 +48,7 @@ import {
   type ModelSettingsSnapshot,
 } from "@workspace/model-catalog/catalog";
 import type { LocalModelsCapabilities, ServerKind } from "@workspace/model-catalog/localModels";
-import type { DurableObjectServiceClient } from "@workspace/runtime";
+import type { DurableObjectServiceClient } from "@vibestudio/runtime";
 import {
   appendInstalledAgent,
   buildAgentSubscriptionConfig,

@@ -1,4 +1,4 @@
-import { rpc, workers, workspace } from "@workspace/runtime";
+import { rpc, workers, workspace } from "@vibestudio/runtime";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import { summarizeEntry, summarizeFailures, type DiagnosticLimits } from "./diagnostics.js";
 import { HeadlessRunner } from "./runner.js";

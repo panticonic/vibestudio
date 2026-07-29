@@ -1,11 +1,18 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import {
+  templateAuthoringInspectionSchema,
+  templatePublicationSchema,
+  type TemplateAuthoringInspection,
   type TemplateInspection,
   type TemplateLocator,
   type TemplateOperation,
+  type TemplatePublication,
   type TemplateStatusRow,
   type TemplatesClient,
 } from "@vibestudio/service-schemas/templates";
+import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
+import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import {
   JSON_FLAG,
   type CliCommand,
@@ -46,6 +53,57 @@ const PART: FlagSpec = {
   takesValue: true,
   multiple: true,
   description: "Workspace part to include (repeatable)",
+};
+const PARENT: FlagSpec = {
+  name: "parent",
+  takesValue: true,
+  multiple: true,
+  description: "Exact parent pin or publication receipt JSON file (repeatable)",
+};
+const NAME: FlagSpec = {
+  name: "name",
+  takesValue: true,
+  description: "Human-readable template name",
+};
+const DESCRIPTION: FlagSpec = {
+  name: "description",
+  takesValue: true,
+  description: "Template or repository description",
+};
+const VERSION: FlagSpec = {
+  name: "version",
+  takesValue: true,
+  description: "Immutable release version",
+};
+const PROVIDER: FlagSpec = {
+  name: "provider",
+  takesValue: true,
+  description: "Connected Git publication provider (defaults to github)",
+};
+const REPOSITORY: FlagSpec = {
+  name: "repository",
+  takesValue: true,
+  description: "Destination repository name",
+};
+const OWNER: FlagSpec = {
+  name: "owner",
+  takesValue: true,
+  description: "Exact destination account or organization",
+};
+const PRIVATE: FlagSpec = {
+  name: "private",
+  takesValue: false,
+  description: "Create a private repository (public by default)",
+};
+const CREDENTIAL_ID: FlagSpec = {
+  name: "credential-id",
+  takesValue: true,
+  description: "Explicit connected-account credential id",
+};
+const RECEIPT: FlagSpec = {
+  name: "receipt",
+  takesValue: true,
+  description: "Save the exact JSON receipt to a new local file",
 };
 const SECTION: FlagSpec = {
   name: "section",
@@ -165,9 +223,95 @@ function choices(inv: ParsedInvocation): Record<string, "keep" | "take" | "skip"
   return Object.keys(result).length ? result : undefined;
 }
 
+function requiredFlag(inv: ParsedInvocation, name: string): string {
+  const value = inv.flags[name];
+  if (typeof value !== "string" || !value.trim()) throw new UsageError(`--${name} is required`);
+  return value.trim();
+}
+
+function authoringPlan(inv: ParsedInvocation): TemplateAuthoringInspection {
+  const path = inv.positionals[0]?.trim();
+  if (!path) throw new UsageError("pass the authoring receipt JSON file");
+  if (inv.positionals.length > 1)
+    throw new UsageError("pass exactly one authoring receipt JSON file");
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    throw new UsageError(
+      `Could not read authoring receipt ${path}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  const parsed = templateAuthoringInspectionSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new UsageError(`Invalid authoring receipt ${path}: ${parsed.error.message}`);
+  }
+  return parsed.data;
+}
+
+function parentPin(path: string): WorkspaceTemplatePin {
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    throw new UsageError(
+      `Could not read parent receipt ${path}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  const pin = WorkspaceTemplatePinSchema.safeParse(value);
+  if (pin.success) return pin.data;
+  const publication = templatePublicationSchema.safeParse(value);
+  if (publication.success) {
+    return WorkspaceTemplatePinSchema.parse({
+      url: publication.data.templateUrl,
+      ref: publication.data.ref,
+      commit: publication.data.commit,
+      snapshot: publication.data.snapshot,
+    });
+  }
+  throw new UsageError(
+    `Invalid parent receipt ${path}: expected an exact template pin or publication result`
+  );
+}
+
 function version(ref: string): string {
   const value = ref.split("/").filter(Boolean).at(-1);
   return value || ref;
+}
+
+function renderAuthoringPlan(plan: TemplateAuthoringInspection): void {
+  console.log(`${plan.request.name} authoring receipt ${plan.fingerprint}`);
+  console.log(`  protected main: ${plan.mainEventId}`);
+  console.log(`  requested: ${plan.requestedParts.join(", ")}`);
+  console.log(`  included: ${plan.includedParts.join(", ")}`);
+  if (plan.requiredParts.length) console.log(`  required: ${plan.requiredParts.join(", ")}`);
+  if (plan.inheritedParts.length) console.log(`  inherited: ${plan.inheritedParts.join(", ")}`);
+  console.log(`  manifest: ${plan.manifestDigest}`);
+}
+
+function renderPublication(publication: TemplatePublication): void {
+  console.log(`${publication.templateUrl} @ ${version(publication.ref)}`);
+  console.log(`  commit: ${publication.commit}`);
+  console.log(`  snapshot: ${publication.snapshot}`);
+  console.log(`  parts: ${publication.parts.join(", ")}`);
+}
+
+function saveAuthoringPlan(inv: ParsedInvocation, plan: TemplateAuthoringInspection): void {
+  const path = inv.flags["receipt"];
+  if (typeof path !== "string") return;
+  if (!path.trim()) throw new UsageError("--receipt requires a file path");
+  try {
+    writeFileSync(path, `${JSON.stringify(plan, null, 2)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+  } catch (error) {
+    throw new UsageError(
+      `Could not save authoring receipt ${path}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  console.error(`[vibestudio] authoring receipt: ${path}`);
 }
 
 function renderStatus(rows: TemplateStatusRow[]): void {
@@ -309,6 +453,107 @@ function run<T>(
 }
 
 export const templatesCommands: CliCommand[] = [
+  {
+    group: "templates",
+    name: "author-parts",
+    summary: "List protected-main parts available for template authoring",
+    flags: [JSON_FLAG],
+    run: (inv) =>
+      run(
+        inv,
+        (templates) => templates.authoringParts(),
+        (parts) => {
+          for (const part of parts) {
+            const metadata = [part.packageName, part.templateAlias && `from ${part.templateAlias}`]
+              .filter(Boolean)
+              .join(" · ");
+            console.log(`  ${part.repoPath}${metadata ? ` — ${metadata}` : ""}`);
+          }
+        }
+      ),
+  },
+  {
+    group: "templates",
+    name: "author-inspect",
+    summary: "Create an exact template authoring receipt without publishing",
+    usage:
+      "vibestudio templates author-inspect --name NAME --description TEXT --part PATH [--part PATH] [--parent RECEIPT.json] [--receipt FILE] [--json]",
+    flags: [NAME, DESCRIPTION, PART, PARENT, RECEIPT, JSON_FLAG],
+    run: (inv) =>
+      run(
+        inv,
+        async (templates) => {
+          if (inv.positionals.length) {
+            throw new UsageError(
+              "author-inspect accepts selections through flags, not positionals"
+            );
+          }
+          const parts = inv
+            .flagsMulti("part")
+            .map((part) => part.trim())
+            .filter(Boolean);
+          if (!parts.length) throw new UsageError("pass at least one --part");
+          const parents = inv
+            .flagsMulti("parent")
+            .map((parent) => parent.trim())
+            .filter(Boolean)
+            .map(parentPin);
+          const plan = await templates.inspectAuthoring({
+            name: requiredFlag(inv, "name"),
+            description: requiredFlag(inv, "description"),
+            parts,
+            ...(parents.length ? { parents } : {}),
+          });
+          saveAuthoringPlan(inv, plan);
+          return plan;
+        },
+        renderAuthoringPlan
+      ),
+  },
+  {
+    group: "templates",
+    name: "author-publish",
+    summary: "Publish an unchanged authoring receipt as an immutable Git template",
+    usage:
+      "vibestudio templates author-publish RECEIPT.json --version VERSION --owner OWNER --repository NAME [--private] [--credential-id ID]",
+    flags: [
+      VERSION,
+      OWNER,
+      REPOSITORY,
+      PROVIDER,
+      PRIVATE,
+      DESCRIPTION,
+      CREDENTIAL_ID,
+      COMMAND_ID,
+      JSON_FLAG,
+    ],
+    run: (inv) =>
+      run(
+        inv,
+        (templates) =>
+          templates.publishAuthoring({
+            commandId: commandId(inv),
+            plan: authoringPlan(inv),
+            version: requiredFlag(inv, "version"),
+            destination: {
+              provider:
+                typeof inv.flags["provider"] === "string" ? inv.flags["provider"].trim() : "github",
+              owner: requiredFlag(inv, "owner"),
+              name: requiredFlag(inv, "repository"),
+            },
+            creation: {
+              private: inv.flags["private"] === true,
+              ...(typeof inv.flags["description"] === "string"
+                ? { description: inv.flags["description"] }
+                : {}),
+            },
+            ...(typeof inv.flags["credential-id"] === "string"
+              ? { credentialId: inv.flags["credential-id"].trim() }
+              : {}),
+          }),
+        renderPublication
+      ),
+  },
   {
     group: "templates",
     name: "status",

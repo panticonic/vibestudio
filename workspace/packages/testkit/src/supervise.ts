@@ -7,12 +7,12 @@
  * filtered to the watch window — deterministic and poll-free. Health probes
  * run on an interval until stop().
  */
-import type { PanelHandle } from "@workspace/runtime";
+import type { PanelHandle } from "@vibestudio/runtime";
 import { TestAssertionError } from "./expect.js";
 
 // Lazy: keeps run.ts/supervise.ts importable outside a live runtime (vitest).
 async function getWorkspace() {
-  const runtime = await import("@workspace/runtime");
+  const runtime = await import("@vibestudio/runtime");
   return runtime.workspace;
 }
 

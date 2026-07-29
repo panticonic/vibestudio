@@ -5,7 +5,7 @@
  * Owns the `subscriptions` table.
  */
 
-import type { SqlStorage } from "@workspace/runtime/worker";
+import type { SqlStorage } from "@vibestudio/runtime/worker";
 import type { ChannelSubscriptionConfig } from "@workspace/agentic-core";
 import type { ParticipantDescriptor } from "@workspace/harness";
 import type { ChannelReplayEnvelope } from "@workspace/pubsub";

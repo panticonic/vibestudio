@@ -362,7 +362,7 @@ describe("BuildSystemV2 library package subpaths", () => {
       APP_NODE_MODULES
     );
 
-    const result = await buildSystem.getBuild("@workspace/runtime/hosted", undefined, {
+    const result = await buildSystem.getBuild("@vibestudio/runtime/hosted", undefined, {
       library: true,
       libraryTarget: "worker",
     });

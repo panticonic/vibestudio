@@ -15,7 +15,7 @@ source/
     chat/               ← Default chat panel
     my-panel/           ← User-created panel
   packages/             ← Shared libraries
-    runtime/            ← @workspace/runtime
+    runtime/            ← @vibestudio/runtime
     my-lib/
       SKILL.md          ← Repo-specific agent guidance for this package
   skills/               ← Cross-repo agent skill packages

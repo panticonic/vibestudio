@@ -1,15 +1,15 @@
 /**
  * Minimal `RuntimeFs` type local to the file-tools package.
  *
- * The full `RuntimeFs` interface lives in `@workspace/runtime`'s
+ * The full `RuntimeFs` interface lives in `@vibestudio/runtime`'s
  * `types.ts`, but `@workspace/harness` is a workspace package and
  * deliberately does not depend on the `workspace/` runtime package.
  * Instead we define the slice of `RuntimeFs` the file tools touch and
  * leave it structurally compatible with the upstream interface — any
- * caller that has a real `RuntimeFs` from `@workspace/runtime` can
+ * caller that has a real `RuntimeFs` from `@vibestudio/runtime` can
  * pass it directly because TypeScript checks structural assignability.
  *
- * Mirrors the shape in `workspace/packages/runtime/src/types.ts`.
+ * Mirrors the shape in `packages/runtime/src/types.ts`.
  */
 
 import type { Buffer } from "node:buffer";

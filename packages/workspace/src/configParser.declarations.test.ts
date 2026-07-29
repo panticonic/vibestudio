@@ -29,9 +29,9 @@ providers:
   evalEngine:
     source: "@workspace/eval"
   evalRuntime:
-    source: "@workspace/runtime"
+    source: "@vibestudio/runtime"
   cdpClient:
-    source: "@workspace/cdp-client"
+    source: "@vibestudio/cdp-client"
   browserData:
     extension: extensions/browser-data
   gitInterop:
@@ -109,7 +109,7 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
   it("parses a full declaration set", () => {
     const config = parse(FULL_MANIFEST);
     expect(config.providers?.evalEngine?.source).toBe("@workspace/eval");
-    expect(config.providers?.cdpClient?.source).toBe("@workspace/cdp-client");
+    expect(config.providers?.cdpClient?.source).toBe("@vibestudio/cdp-client");
     expect(config.trust?.chromeApps).toHaveLength(2);
   });
 

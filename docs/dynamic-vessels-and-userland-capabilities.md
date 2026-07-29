@@ -292,7 +292,7 @@ remains confined for its entire incarnation:
   the port and session are bound.
 
 The confinement membrane does not impose a fixed capability list. The iframe receives
-the same portable `@workspace/runtime` surface as panels through an iframe-specific
+the same portable `@vibestudio/runtime` surface as panels through an iframe-specific
 `RuntimeHost` adapter over its logical RPC session. Capability and receiver discovery,
 preflight, acquisition, invocation, opaque handles, streams, subscriptions, package
 builds, brokered network access, filesystem operations, terminal control, panel
@@ -308,7 +308,7 @@ unaccounted authority channel.
 The existing target-neutral runtime assembly is reused rather than copying the panel
 runtime. An iframe supplies its own transport, RPC-backed filesystem, workers, panel
 facade, gateway/fetch adapter, external-open adapter, and verified parent relationship
-to `createHostedRuntime`. Authored imports remain `@workspace/runtime`. The panel's
+to `createHostedRuntime`. Authored imports remain `@vibestudio/runtime`. The panel's
 singleton bootstrap, injected gateway credential, and Electron-local transport are
 not loaded into the iframe.
 

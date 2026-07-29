@@ -31,7 +31,7 @@ import {
   type ActorKind,
   type AgenticEvent,
   type SandboxSourcePayload,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import { useChatCore } from "./core/useChatCore";
 import { useForkLineage } from "./useForkLineage";
 import { useDeferredAgent } from "./useDeferredAgent";

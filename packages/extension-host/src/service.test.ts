@@ -94,7 +94,7 @@ function makeHost(
     relativePath: "extensions/git-tools",
     path: path.join(statePath, "source", "extensions", "git-tools"),
     dependencies: overrides.candidateExternalDeps ?? {},
-    internalDeps: ["@workspace/runtime"],
+    internalDeps: ["@vibestudio/runtime"],
     manifest: {
       displayName: "Git Tools",
       extension: {
@@ -229,14 +229,14 @@ function makeHost(
     ),
     getEffectiveVersion: vi.fn((name: string) => {
       if (name === extensionNode.name) return overrides.activeEv ?? "ev-current";
-      if (name === "@workspace/runtime") return overrides.depEv ?? "ev-runtime";
+      if (name === "@vibestudio/runtime") return overrides.depEv ?? "ev-runtime";
       return null;
     }),
     resolveBuildUnitIdentity: vi.fn(async () => ({
       unitPath: extensionNode.relativePath,
       unitName: extensionNode.name,
       effectiveVersion: overrides.activeEv ?? "ev-current",
-      dependencyEvs: { "@workspace/runtime": overrides.depEv ?? "ev-runtime" },
+      dependencyEvs: { "@vibestudio/runtime": overrides.depEv ?? "ev-runtime" },
       externalDeps: overrides.candidateExternalDeps ?? {},
     })),
     getExternalDeps: vi.fn((name: string) => {
@@ -284,7 +284,7 @@ function makeHost(
       activeBundleKey:
         overrides.activeBundleKey === undefined ? "bundle-key" : overrides.activeBundleKey,
       activeDependencyEvs: {
-        "@workspace/runtime": overrides.activeDepEv ?? overrides.depEv ?? "ev-runtime",
+        "@vibestudio/runtime": overrides.activeDepEv ?? overrides.depEv ?? "ev-runtime",
       },
       activeExternalDeps: overrides.activeExternalDeps ?? {},
       activeRuntimeDepsKey:

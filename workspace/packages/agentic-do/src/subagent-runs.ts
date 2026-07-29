@@ -10,9 +10,9 @@
  * deterministically.
  */
 
-import type { SqlStorage } from "@workspace/runtime/worker";
-import type { AgenticEvent } from "@workspace/agentic-protocol";
-import { assertExactSqlTableSchema } from "@workspace/runtime/worker";
+import type { SqlStorage } from "@vibestudio/runtime/worker";
+import type { AgenticEvent } from "@vibestudio/agentic-protocol";
+import { assertExactSqlTableSchema } from "@vibestudio/runtime/worker";
 
 export type SubagentRunStatus =
   | "starting"

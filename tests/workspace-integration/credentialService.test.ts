@@ -17,7 +17,7 @@ import {
   type EnvelopeId,
   type MessageId,
   type TurnId,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 
 import type {
   AuditEntry,

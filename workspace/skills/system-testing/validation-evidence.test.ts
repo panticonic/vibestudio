@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { STORED_VALUE_REF_PROTOCOL } from "@workspace/agentic-protocol";
+import { STORED_VALUE_REF_PROTOCOL } from "@vibestudio/agentic-protocol";
 import type { TestExecutionResult } from "./types.js";
 import { materializeValidationEvidence } from "./validation-evidence.js";
 

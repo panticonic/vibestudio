@@ -8,7 +8,7 @@
  * decisions, commit seals the complete local chain, and push publishes it.
  */
 
-import { vcs, type VcsClient } from "@workspace/runtime";
+import { vcs, type VcsClient } from "@vibestudio/runtime";
 import type {
   VcsReadFileResult,
   VcsStateNodeRef,

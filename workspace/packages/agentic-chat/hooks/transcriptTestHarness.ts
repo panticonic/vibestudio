@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
@@ -10,9 +10,9 @@ import {
   type BlockId,
   type InvocationId,
   type MessageId,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import { connectViaRpc, type PubSubClient } from "@workspace/pubsub";
-import { GadWorkspaceDO } from "../../semantic-control-plane/src/index.js";
+import { GadWorkspaceDO } from "@vibestudio/semantic-control-plane";
 import { PubSubChannel } from "../../../workers/pubsub-channel/channel-do.js";
 
 export const TRANSCRIPT_TEST_CHANNEL_ID = "transcript-pipeline";

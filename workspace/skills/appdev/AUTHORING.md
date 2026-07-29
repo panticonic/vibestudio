@@ -124,7 +124,7 @@ through `this.sql`. The app resolves the service through the runtime and calls
 narrow RPC methods:
 
 ```ts
-import { rpc, workers } from "@workspace/runtime";
+import { rpc, workers } from "@vibestudio/runtime";
 
 const store = await workers.resolveService("example.todos.v1", "project-123");
 if (store.kind !== "durable-object") throw new Error("Expected DO service");

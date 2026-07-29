@@ -85,7 +85,7 @@ describe("composeSystemPrompt", () => {
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("Keep discovery bounded");
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("instead of continuing broad source searches");
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
-      "not eval globals or `@workspace/runtime` exports"
+      "not eval globals or `@vibestudio/runtime` exports"
     );
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
       "never emit `docs.search` or `docs.open` inside eval code"

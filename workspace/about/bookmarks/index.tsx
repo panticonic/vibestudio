@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Card, Flex, Heading, Spinner, Text, TextField } from "@radix-ui/themes";
 import { BookmarkIcon, Pencil1Icon, ReloadIcon, TrashIcon } from "@radix-ui/react-icons";
 import type { StoredBookmark } from "@vibestudio/browser-data";
-import { browserData, openPanel } from "@workspace/runtime";
+import { browserData, openPanel } from "@vibestudio/runtime";
 import { AboutPage, AboutThemeRoot, Section } from "../../packages/about-shared/ui";
 
 function BookmarksPage() {

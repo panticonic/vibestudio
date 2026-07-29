@@ -1270,7 +1270,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     };
     Object.defineProperty(instance, "rpc", { get: () => fakeRpc, configurable: true });
     (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
-      "@workspace/runtime";
+      "@vibestudio/runtime";
     setPriv(instance, "ensureRuntimeSupport", () =>
       Promise.resolve({
         createHostedRuntime: (host: Record<string, unknown>) => ({
@@ -1429,7 +1429,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     };
     Object.defineProperty(instance, "rpc", { get: () => fakeRpc, configurable: true });
     (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
-      "@workspace/runtime";
+      "@vibestudio/runtime";
     setPriv(instance, "ensureRuntimeSupport", () =>
       Promise.resolve({
         createHostedRuntime: (host: Record<string, unknown>) => ({
@@ -1629,7 +1629,7 @@ describe("EvalDO cancellation + forced recovery", () => {
     // the env and stub the loaded module with minimal factories — the rt's
     // `rpc` is the host's option-threading proxy, which is what this test pins.
     (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
-      "@workspace/runtime";
+      "@vibestudio/runtime";
     setPriv(instance, "ensureRuntimeSupport", () =>
       Promise.resolve({
         createHostedRuntime: (host: Record<string, unknown>) => ({

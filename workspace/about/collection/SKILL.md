@@ -13,7 +13,7 @@ the scope; a list of panel ids in chat does not. Always read a fresh recursive
 snapshot before acting:
 
 ```ts
-import { panelTree } from "@workspace/runtime";
+import { panelTree } from "@vibestudio/runtime";
 
 const scope = await panelTree.subtree(rootPanelId);
 console.log({
@@ -75,7 +75,7 @@ Create a nested collection only for a stable, useful concept—not merely
 because several URLs share a hostname:
 
 ```ts
-import { openPanel } from "@workspace/runtime";
+import { openPanel } from "@vibestudio/runtime";
 
 const group = await openPanel("about/collection", {
   parentId: rootPanelId,

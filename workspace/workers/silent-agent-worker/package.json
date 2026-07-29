@@ -13,7 +13,7 @@
       ]
     },
     "exposeModules": [
-      "@workspace/runtime",
+      "@vibestudio/runtime",
       "@workspace/pubsub",
       "zod"
     ],
@@ -140,7 +140,7 @@
     }
   },
   "dependencies": {
-    "@workspace/runtime": "workspace:*",
+    "@vibestudio/runtime": "workspace:*",
     "@workspace/agentic-do": "workspace:*",
     "@workspace/pi-core": "workspace:*",
     "@workspace/pubsub": "workspace:*",

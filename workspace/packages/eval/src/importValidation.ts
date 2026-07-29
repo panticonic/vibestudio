@@ -4,7 +4,7 @@
  * Turns two silent footguns into clear, actionable errors:
  *  1. Importing an ambient-only global (the `EVAL_AMBIENT_ONLY` set:
  *     `services`/`scope`/`scopes`/`db`/`ctx`/`help`/`chat`) from
- *     `@workspace/runtime` — these are injected free variables, not exports, so
+ *     `@vibestudio/runtime` — these are injected free variables, not exports, so
  *     importing them shadows the working binding with `undefined`. (`rpc`/`fs`
  *     are NOT in this set — they are genuinely importable.)
  *  2. Importing a name a workspace module does not export — a CJS destructure
@@ -15,12 +15,12 @@ import { EVAL_AMBIENT_ONLY } from "@vibestudio/service-schemas/runtime/runtimeSu
 import { analyzeModuleImports } from "@vibestudio/shared/moduleImports";
 
 /**
- * Eval globals that are injected ambiently, NOT exported by `@workspace/runtime`
+ * Eval globals that are injected ambiently, NOT exported by `@vibestudio/runtime`
  * — importing them shadows the working binding with `undefined`. Single source:
  * `EVAL_AMBIENT_ONLY` (so this can't drift from the EvalDO's actual injection).
  */
 const PRE_INJECTED = new Set<string>(EVAL_AMBIENT_ONLY);
-const RUNTIME_SPECIFIER = "@workspace/runtime";
+const RUNTIME_SPECIFIER = "@vibestudio/runtime";
 /** Workspace-controlled namespaces with stable, statically-known named exports. */
 const WORKSPACE_NAMESPACE = /^@(?:workspace|workspace-skills|vibestudio)\//;
 
@@ -48,7 +48,7 @@ export function parseStaticImports(code: string): ParsedImport[] {
 }
 
 /**
- * Throw if eval code imports a pre-injected global from `@workspace/runtime`.
+ * Throw if eval code imports a pre-injected global from `@vibestudio/runtime`.
  * (#1) These are ambient — importing them shadows the binding with `undefined`.
  */
 export function assertNoPreInjectedImports(

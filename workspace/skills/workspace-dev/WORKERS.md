@@ -22,7 +22,7 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `createDurableObjectServiceClient` | value |  | Resolve a Durable Object-backed service and call it through unified RPC. |
 | `gatewayConfig` | value |  | Gateway base URL and bearer token for Vibestudio service routes. |
 | `gatewayFetch` | value |  | Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer. |
-| `openExternal` | callable |  | Call `await openExternal(url, options?)` from `@workspace/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides. |
+| `openExternal` | callable |  | Call `await openExternal(url, options?)` from `@vibestudio/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides. |
 | `workers` | namespace | `listSources`, `create`, `list`, `destroy`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService` | Worker discovery, lifecycle, and manifest-declared service resolution. Use create/list/destroy for regular worker instances; listSources() returns every launchable source with its real manifest entry point and Durable Object classes. |
 | `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `summarizeStoredCredentials`, `inspectStoredCredentials`, `revokeCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` | Typed credential lifecycle and credentialed network access. Use store(input) to persist a URL-bound credential, fetch(url, init?, { credentialId? }?) for credentialed HTTP and a standard Response, hookForUrl(url, { credentialId? }?) for a bound fetch function, gitHttp({ credentialId?, gitIntent? }) for smart-HTTP, and forAudience(descriptor) for a credential-bound handle. The underlying RPC transport is internal. |
 | `browserData` | namespace | `getBrowserEnvironment`, `listImportHosts`, `listImportSources`, `previewImport`, `startImport`, `cancelImport`, `getImportJob`, `listImportJobs`, `listOpenTabs`, `openTabsAsPanels`, `getSitePreferences`, `setSiteZoom`, `getBookmarks`, `addBookmark`, `updateBookmark`, `deleteBookmark`, `moveBookmark`, `searchBookmarks`, `getHistory`, `deleteHistoryEntry`, `deleteHistoryRange`, `clearAllHistory`, `searchHistory`, `searchHistoryForAutocomplete`, `recordHistoryVisit`, `updateHistoryTitle`, `getPasswords`, `getPasswordForSite`, `addPassword`, `updatePassword`, `deletePassword`, `updatePasswordLastUsed`, `addNeverSavePassword`, `isNeverSavePassword`, `getNeverSavePasswordOrigins`, `removeNeverSavePassword`, `getFormFillSuggestions`, `addFormFillValue`, `updateFormFillValue`, `markFormFillValueUsed`, `deleteFormFillValue`, `clearFormFillValues`, `getSearchEngines`, `setDefaultEngine`, `applyCookieMutations`, `getCookieSnapshot`, `getCookiesForOrigin`, `clearCookiesForOrigin`, `clearAllCookies`, `endBrowserSession`, `getCookieSiteSummary`, `flushCookieProjection`, `getCookieProjectionDiagnostics`, `listDownloads`, `listDownloadRecords`, `upsertDownloadRecord`, `pauseDownload`, `resumeDownload`, `cancelDownload`, `openDownload`, `revealDownload`, `putPageFavicon`, `getPageFavicon`, `exportBookmarks`, `exportPasswords`, `exportCookies` | Typed access to the manifest-declared browser-data provider: detection, import, secret-free summaries, approved sensitive reads, mutation, and export. |
@@ -114,7 +114,7 @@ import {
   handleWorkerRpc,
   type ExecutionContext,
   type WorkerEnv,
-} from "@workspace/runtime/worker";
+} from "@vibestudio/runtime/worker";
 
 let exposedForWorker: string | null = null;
 
@@ -160,7 +160,7 @@ Workspace-level singletons, services, and HTTP routes live in
 `workers.resolveService(...)`; do not hardcode `workers/foo`, DO class names,
 or `/_r/w/...` paths in callers. Before starting an eval, use the agent tools
 `docs_search`/`docs_open` when the live contract is not already known. They are not
-exports from `@workspace/runtime`; inside eval, use the documented `workers.*` and
+exports from `@vibestudio/runtime`; inside eval, use the documented `workers.*` and
 `rpc.*` runtime APIs. `workers.listServices()` rows for workspace-owned services
 include a `docsId` for that same live catalog; pass that id to the agent's
 `docs_open` tool instead of scanning the provider source for methods. A declaration
@@ -276,7 +276,7 @@ Canonical shape:
 Minimal store:
 
 ```ts
-import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
+import { DurableObjectBase, rpc } from "@vibestudio/runtime/worker";
 
 type TodoRow = {
   id: string;
@@ -372,7 +372,7 @@ Call it from eval, a panel, an inline UI component, an app, a worker, or
 another DO:
 
 ```ts
-import { rpc, workers } from "@workspace/runtime";
+import { rpc, workers } from "@vibestudio/runtime";
 
 const svc = await workers.resolveService("example.todos.v1");
 if (svc.kind !== "durable-object") throw new Error("Expected DO service");
@@ -487,7 +487,7 @@ constant or factory because live docs are extracted from the exact source build
 without executing that source.
 
 ```ts
-import { rpc } from "@workspace/runtime/worker";
+import { rpc } from "@vibestudio/runtime/worker";
 
 export class MyStoreDO extends DurableObjectBase {
   @rpc({ principals: ["user", "code"], effect: { kind: "workspace-service" }, tier: "gated", sensitivity: "write" })
@@ -612,7 +612,7 @@ use are protected by the outer Vibestudio permission model where approval is
 required.
 
 ```ts
-import { createWorkerRuntime } from "@workspace/runtime/worker";
+import { createWorkerRuntime } from "@vibestudio/runtime/worker";
 
 export default {
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext) {

@@ -9,7 +9,7 @@ layers: `panel.slotId` is the stable visible panel slot and is the correct
 identity for panel-tree operations and PubSub/channel clients;
 `panel.entityId`/`rpc.selfId` identify the current live runtime entity and can
 change when the panel navigates or reopens. `panel` is not a portable export
-from `@workspace/runtime` and must not be imported in server-side eval. Eval,
+from `@vibestudio/runtime` and must not be imported in server-side eval. Eval,
 workers, and Durable Objects operate on visible panels through `getParent()`,
 `openPanel()`, `getPanelHandle()`, and the `PanelHandle` values returned by
 `panelTree`.
@@ -32,7 +32,7 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `createDurableObjectServiceClient` | value |  | Resolve a Durable Object-backed service and call it through unified RPC. |
 | `gatewayConfig` | value |  | Gateway base URL and bearer token for Vibestudio service routes. |
 | `gatewayFetch` | value |  | Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer. |
-| `openExternal` | callable |  | Call `await openExternal(url, options?)` from `@workspace/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides. |
+| `openExternal` | callable |  | Call `await openExternal(url, options?)` from `@vibestudio/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides. |
 | `workers` | namespace | `listSources`, `create`, `list`, `destroy`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService` | Worker discovery, lifecycle, and manifest-declared service resolution. Use create/list/destroy for regular worker instances; listSources() returns every launchable source with its real manifest entry point and Durable Object classes. |
 | `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `summarizeStoredCredentials`, `inspectStoredCredentials`, `revokeCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` | Typed credential lifecycle and credentialed network access. Use store(input) to persist a URL-bound credential, fetch(url, init?, { credentialId? }?) for credentialed HTTP and a standard Response, hookForUrl(url, { credentialId? }?) for a bound fetch function, gitHttp({ credentialId?, gitIntent? }) for smart-HTTP, and forAudience(descriptor) for a credential-bound handle. The underlying RPC transport is internal. |
 | `browserData` | namespace | `getBrowserEnvironment`, `listImportHosts`, `listImportSources`, `previewImport`, `startImport`, `cancelImport`, `getImportJob`, `listImportJobs`, `listOpenTabs`, `openTabsAsPanels`, `getSitePreferences`, `setSiteZoom`, `getBookmarks`, `addBookmark`, `updateBookmark`, `deleteBookmark`, `moveBookmark`, `searchBookmarks`, `getHistory`, `deleteHistoryEntry`, `deleteHistoryRange`, `clearAllHistory`, `searchHistory`, `searchHistoryForAutocomplete`, `recordHistoryVisit`, `updateHistoryTitle`, `getPasswords`, `getPasswordForSite`, `addPassword`, `updatePassword`, `deletePassword`, `updatePasswordLastUsed`, `addNeverSavePassword`, `isNeverSavePassword`, `getNeverSavePasswordOrigins`, `removeNeverSavePassword`, `getFormFillSuggestions`, `addFormFillValue`, `updateFormFillValue`, `markFormFillValueUsed`, `deleteFormFillValue`, `clearFormFillValues`, `getSearchEngines`, `setDefaultEngine`, `applyCookieMutations`, `getCookieSnapshot`, `getCookiesForOrigin`, `clearCookiesForOrigin`, `clearAllCookies`, `endBrowserSession`, `getCookieSiteSummary`, `flushCookieProjection`, `getCookieProjectionDiagnostics`, `listDownloads`, `listDownloadRecords`, `upsertDownloadRecord`, `pauseDownload`, `resumeDownload`, `cancelDownload`, `openDownload`, `revealDownload`, `putPageFavicon`, `getPageFavicon`, `exportBookmarks`, `exportPasswords`, `exportCookies` | Typed access to the manifest-declared browser-data provider: detection, import, secret-free summaries, approved sensitive reads, mutation, and export. |
@@ -89,7 +89,7 @@ approvals, and private repo retries, see
 
 The context filesystem surface is the same from eval, panels, workers, and
 Durable Objects. In eval, `fs` is injected; portable code imports `fs` from
-`@workspace/runtime`. Use `await help("fs")` for the authoritative live method
+`@vibestudio/runtime`. Use `await help("fs")` for the authoritative live method
 list and `await help("fs.<method>")` for its arguments and examples.
 
 `lstat()`, `readlink()`, and `realpath()` inspect symbolic links.
@@ -102,11 +102,11 @@ absent; use `copyFile()` when the destination must be tracked workspace source.
 
 ## Current Workspace
 
-Import `workspace` from `@workspace/runtime` to inspect the current workspace
+Import `workspace` from `@vibestudio/runtime` to inspect the current workspace
 and its registered runtime units:
 
 ```ts
-import { contextId, workspace } from "@workspace/runtime";
+import { contextId, workspace } from "@vibestudio/runtime";
 
 const active = await workspace.getActive();
 const units = await workspace.units.list();
@@ -125,7 +125,7 @@ the human shell or CLI's stable hub session and are intentionally absent from
 runtime eval; the current-workspace APIs above remain available.
 
 Workspace host logs are exposed through the service catalog, not as an
-`@workspace/runtime` namespace. Use `services.serverLog.tail/query/stats` in
+`@vibestudio/runtime` namespace. Use `services.serverLog.tail/query/stats` in
 eval, or raw RPC calls such as
 `rpc.call("main", "serverLog.query", [{ level: "warn", limit: 100 }])`.
 Live following uses
@@ -171,7 +171,7 @@ for discovering other workspaces from eval.
 Use `notifications.show()` for host chrome notifications:
 
 ```ts
-import { notifications } from "@workspace/runtime";
+import { notifications } from "@vibestudio/runtime";
 
 const id = await notifications.show({
   type: "info",
@@ -190,7 +190,7 @@ The portable `webhooks` namespace is the ergonomic lifecycle API in panel,
 worker, DO, and agent eval environments:
 
 ```ts
-import { webhooks } from "@workspace/runtime";
+import { webhooks } from "@vibestudio/runtime";
 
 const self = await agent.describe();
 const created = await webhooks.createSubscription({
@@ -324,7 +324,7 @@ Resolve the service by protocol or name, optionally pass an object key for a
 partitioned database, then call the DO target:
 
 ```ts
-import { rpc, workers } from "@workspace/runtime";
+import { rpc, workers } from "@vibestudio/runtime";
 
 const store = await workers.resolveService("example.todos.v1", "project-123");
 if (store.kind !== "durable-object") throw new Error("Expected DO service");
@@ -341,7 +341,7 @@ for the schema, declaration, partition-key, and testing recipe.
 ## Unified Panel Handles
 
 Use `panelTree` and `PanelHandle` from panels, workers, and DOs. In panel
-code, `panelTree` is imported directly from `@workspace/runtime`; it is not
+code, `panelTree` is imported directly from `@vibestudio/runtime`; it is not
 `workspace.panelTree`:
 
 > **Headless tree root:** a genuinely headless eval has a tree but no initial
@@ -353,7 +353,7 @@ code, `panelTree` is imported directly from `@workspace/runtime`; it is not
 > null, and do not use the truthiness of the compatibility `parent` handle.
 
 ```ts
-import { panelTree, openPanel } from "@workspace/runtime";
+import { panelTree, openPanel } from "@vibestudio/runtime";
 
 const created = await openPanel("https://example.com", { focus: true });
 const same = panelTree.get(created.id);
@@ -394,7 +394,7 @@ For the complete root/child verification and cleanup pattern, see
 `EVAL.md#eval-perspective`.
 
 ```ts
-import { gad, panelTree, rpc, workers } from "@workspace/runtime";
+import { gad, panelTree, rpc, workers } from "@vibestudio/runtime";
 
 const panels = await panelTree.list();
 const target = panels.find((panel) => panel.id === "panel-slot-id");
@@ -456,18 +456,18 @@ the sole positive readiness answer. `snapshot()` returns
 `{ panelId, attemptId, runtimeEntityId, buildKey, capturedAt, document }`.
 
 `same.cdp.page()` returns the canonical Playwright-style page driven by our
-workerd-native CDP client (`@workspace/cdp-client`). It is the single
+workerd-native CDP client (`@vibestudio/cdp-client`). It is the single
 browser-automation surface — there is no separate compatibility tier,
 and you do not import or install any `playwright*` package. The page exposes
 locators (`page.locator`, `page.getByRole`, `page.getByText`, `page.getByLabel`,
 …), auto-waiting actions (`click`, `fill`, `check`, `selectOption`, …), reads
 (`innerText`, `count`, `isVisible`, `getAttribute`, …), and page-level methods
 (`goto`, `screenshot`, `waitForSelector`, `evaluate`, …). For protocol-level
-work, `import { CdpConnection } from "@workspace/cdp-client"` and connect with
+work, `import { CdpConnection } from "@vibestudio/cdp-client"` and connect with
 `(await same.cdp.getCdpEndpoint())`. There is no second page-acquisition API.
 
 `openPanel`/`panelTree`/`PanelHandle` are part of the portable runtime surface
-from `@workspace/runtime`; they work from server-side eval, panels, workers, and
+from `@vibestudio/runtime`; they work from server-side eval, panels, workers, and
 DOs. The `handle.cdp.*` automation is workerd-native and runs over a WebSocket
 to the panel's CDP endpoint, so eval can open or discover a panel and drive its
 browser target directly.
@@ -495,7 +495,7 @@ host-mediated capabilities are already protected by Vibestudio's outer permissio
 systems where needed.
 
 ```ts
-import { approvals } from "@workspace/runtime";
+import { approvals } from "@vibestudio/runtime";
 
 const result = await approvals.request({
   subject: {

@@ -21,17 +21,21 @@
     },
     "inspectAuthoring": {
       "tier": "read",
-      "arguments": ["{ name, description, parts, parents? }"],
+      "arguments": [
+        "{ name, description, parts, parents?: [{ url, credential?, ref, commit, snapshot }] }"
+      ],
       "returns": "TemplateAuthoringInspection"
     },
     "authoringParts": {
       "tier": "read",
       "arguments": [],
-      "returns": "{ repoPath, packageName?, templateAlias? }[]"
+      "returns": "{ repoPath, packageName?, templateAlias?, templatePin? }[]"
     },
     "publishAuthoring": {
       "tier": "write",
-      "arguments": ["{ commandId, plan, version, destination }"],
+      "arguments": [
+        "{ commandId, plan, version, destination: { provider, owner, name }, credentialId?, creation?: { private?, description? } }"
+      ],
       "returns": "TemplatePublication"
     },
     "add": {
@@ -78,8 +82,8 @@
   "types": {
     "PendingTemplateOperation": "{ operationId, state: pending|applied|local-changes|waiting-for-credential|conflict|error, review?: { operationId, contextId, approvalGranted, items: [{ repoPath, deltaId }] }, contribution?: { branch, url? }, blocker?, addedParts, orphanedParts }",
     "TemplateStatusRow": "{ nodeId, alias, url, ref, commit, direct, state: current|update-available|local-changes|reviewing|waiting-for-credential|conflict|error, verification: verified|deferred, review?, suggestions: [{ section: trust|providers, value }], blocker?, ownedParts, pendingReviews, error? }",
-    "TemplateAuthoringInspection": "{ request, mainEventId, selectableParts, requestedParts, includedParts, requiredParts, inheritedParts, parents, manifest, manifestDigest, fingerprint }",
-    "TemplatePublication": "{ operationId, provider, remoteUrl, webUrl, templateUrl, ref, commit, snapshot, parts }",
+    "TemplateAuthoringInspection": "{ request, mainEventId, selectableParts, requestedParts, includedParts, requiredParts, inheritedParts, parents: [{ alias, direct, url, credential?, ref, commit, snapshot }], parentClosureFingerprint, manifest, manifestDigest, fingerprint }",
+    "TemplatePublication": "{ operationId, destination: { provider, owner, name }, created, remoteUrl, webUrl, templateUrl, ref, commit, snapshot, parts }",
     "TemplateInspection": "{ pin: { url, credential?, ref, commit, snapshot }, fingerprint, roots, templates, addedParts, retainedParts, orphanedParts, conflicts, excludedSuggestions: [{ alias, section, value }] }",
     "TemplateSuggestionDecision": "{ operationId, state: accepted|declined, section, publicationEventId? }",
     "ResumableTemplateOperation": "{ operationId, kind: add|pull|remove|recompose|adopt-bootstrap, contextId, state: pending|reviewing, fingerprint, review? }",
@@ -97,7 +101,8 @@
     "status is a local projection of the committed lock and content-addressed suggestion evidence; it never acquires or fetches template sources",
     "a direct URL may name a logical credential; that name is preserved in inspect.pin and durable operation intent",
     "the userland composer resolves every URL or revision-bound catalog id to an exact version before inspection or approval; there is no host fallback",
-    "authoring receipts bind the selected and automatically required repositories, inherited parents, generated manifest, and exact protected-main event; publication re-derives and rejects stale receipts",
+    "authoring parent requests contain exact pins; the composer verifies their ordinary URL-declared closure and full repository contribution without consulting current workspace ownership, while the generated portable manifest emits URL-only direct declarations",
+    "authoring receipts bind the selected and automatically required repositories, exact verified parent closure, generated manifest, and exact protected-main event; publication re-derives and rejects stale receipts",
     "template publication creates one external repository with main and the immutable version tag at the same commit; it does not mutate workspace ownership or imply registry promotion"
   ]
 }

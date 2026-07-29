@@ -76,7 +76,7 @@ vibestudio eval run --imports '{"lodash":"npm:4","@workspace/gad":"latest"}' -e 
 
 ## Importing the workspace runtime
 
-`import { … } from "@workspace/runtime"` resolves to the SAME portable surface a
+`import { … } from "@vibestudio/runtime"` resolves to the SAME portable surface a
 panel or worker gets — no imports map entry needed. The full list is in
 `await help()`; the portable members are:
 
@@ -109,7 +109,7 @@ import {
   fs,
   id,
   contextId,
-} from "@workspace/runtime";
+} from "@vibestudio/runtime";
 ```
 
 - `callMain("svc.method", ...args)` is sugar for `rpc.call("main", "svc.method", args)`.

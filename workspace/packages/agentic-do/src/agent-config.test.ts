@@ -4,7 +4,7 @@
  * when config changes (config is per-AGENT, so a change applies to every channel).
  */
 import { describe, expect, it, vi } from "vitest";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
 import type { ParticipantDescriptor } from "@workspace/harness";
 import {
   AgentVesselBase,

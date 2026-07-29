@@ -63,7 +63,7 @@
     },
     {
       "file": "scripts/generate-unit-authority-manifests.mjs",
-      "specifier": "@workspace/runtime",
+      "specifier": "@vibestudio/runtime",
       "category": "workspace-reference",
       "reason": "authority generator classifies reviewed public workspace implementation packages by package id"
     },
@@ -81,7 +81,7 @@
     },
     {
       "file": "src/server/buildV2/platformModules.ts",
-      "specifier": "@workspace/cdp-client",
+      "specifier": "@vibestudio/cdp-client",
       "category": "workspace-reference",
       "reason": "host-owned contract definition: canonical workspace scope/module names live here by design"
     },
@@ -99,7 +99,7 @@
     },
     {
       "file": "src/server/buildV2/platformModules.ts",
-      "specifier": "@workspace/runtime",
+      "specifier": "@vibestudio/runtime",
       "category": "workspace-reference",
       "reason": "host-owned contract definition: canonical workspace scope/module names live here by design"
     },

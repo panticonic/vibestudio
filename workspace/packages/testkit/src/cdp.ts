@@ -6,8 +6,8 @@
  * the testkit-driver DO once registered (see driver.ts); until then the
  * server's policy error propagates with its own remediation hint.
  */
-import { CdpConnection } from "@workspace/cdp-client";
-import type { PanelHandle } from "@workspace/runtime";
+import { CdpConnection } from "@vibestudio/cdp-client";
+import type { PanelHandle } from "@vibestudio/runtime";
 
 export interface RawCdpSession {
   send(method: string, params?: Record<string, unknown>): Promise<unknown>;

@@ -81,7 +81,7 @@ database.
 
 ### Runtime APIs
 
-All panels and sandbox code can import from `@workspace/runtime`:
+All panels and sandbox code can import from `@vibestudio/runtime`:
 
 | API         | What it provides                                     |
 | ----------- | ---------------------------------------------------- |
@@ -91,7 +91,7 @@ All panels and sandbox code can import from `@workspace/runtime`:
 | `workspace` | List, create, configure, switch workspaces           |
 | `rpc`       | Call services on the main process or other panels    |
 
-Additional surfaces: `browserData` from `@workspace/runtime` (browser data import/export), and `@workspace/cdp-client` (the workerd-native CDP client used by `handle.cdp.page()` — the single Playwright-style browser-automation surface; reach it through the handle, and use its exported `CdpConnection` only for protocol-level work).
+Additional surfaces: `browserData` from `@vibestudio/runtime` (browser data import/export), and `@vibestudio/cdp-client` (the workerd-native CDP client used by `handle.cdp.page()` — the single Playwright-style browser-automation surface; reach it through the handle, and use its exported `CdpConnection` only for protocol-level work).
 
 ### Build System
 

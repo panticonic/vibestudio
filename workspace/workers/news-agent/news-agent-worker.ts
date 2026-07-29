@@ -6,9 +6,9 @@ import {
   type AgentToolExecutionContext,
   type RespondPolicy,
 } from "@workspace/agentic-do";
-import { rpc } from "@workspace/runtime/worker";
-import type { DurableObjectContext } from "@workspace/runtime/worker";
-import type { ActorRef } from "@workspace/agentic-protocol";
+import { rpc } from "@vibestudio/runtime/worker";
+import type { DurableObjectContext } from "@vibestudio/runtime/worker";
+import type { ActorRef } from "@vibestudio/agentic-protocol";
 import type { DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
 import type { ParticipantDescriptor } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";

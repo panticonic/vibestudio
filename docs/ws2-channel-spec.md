@@ -299,7 +299,7 @@ behavior as today (`encodeChannelPayloadStoredValues` /
 
 ```ts
 // log-store.ts
-import { CHANNEL_LOG_HEAD } from "@workspace/agentic-protocol"; // "main", Stage 0
+import { CHANNEL_LOG_HEAD } from "@vibestudio/agentic-protocol"; // "main", Stage 0
 
 export interface ChannelAppendInput {
   payloadKind: string; // "agentic.trajectory.v1/event" | "presence" | "error" | "config-update" | ...
@@ -385,7 +385,7 @@ log-store only does blob encoding.
 
 **Registry mutation moves to a GAD projection (WS2-owned delta to the semantic control plane,
 layered on Stage 0):** add a projection applier `projectMessageTypeEvent` in
-`workspace/packages/semantic-control-plane/src/index.ts` — when a channel-log append has
+`packages/semantic-control-plane/src/index.ts` — when a channel-log append has
 `payloadKind === AGENTIC_EVENT_PAYLOAD_KIND` and `payload.kind ===
 "messageType.registered" | "messageType.cleared"`, upsert/clear
 `channel_message_types` in the same txn (identical SQL semantics to today's
@@ -491,7 +491,7 @@ ids scoped to log lineage):
 ### 4.1 Package API (`workspace/packages/channel-policies/src/index.ts`)
 
 ```ts
-import type { ParticipantRef, AgenticEvent, InvocationOutcome } from "@workspace/agentic-protocol";
+import type { ParticipantRef, AgenticEvent, InvocationOutcome } from "@vibestudio/agentic-protocol";
 
 /** Minimal durable-envelope view a policy folds over. Pure data. */
 export interface PolicyEnvelopeView {
@@ -725,7 +725,7 @@ The `invocation.started` payload already carries everything needed to rebuild
 a pending row except the deadline. Additions:
 
 - `InvocationTransport` channel variant
-  (`workspace/packages/agentic-protocol/src/events.ts:211`) gains
+  (`packages/agentic-protocol/src/events.ts:211`) gains
   `deadlineAt?: number` (epoch ms); `invocationTransportSchema`
   (`schemas.ts:138`) gains `deadlineAt: z.number().int().positive().optional()`.
 - `callEventPayload.started` writes it when `opts.timeoutMs` was given.

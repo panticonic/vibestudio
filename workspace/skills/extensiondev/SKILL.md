@@ -92,7 +92,7 @@ extensions:
 Saving that change (a gated meta write) raises one **elevated, joint approval** listing every newly-declared extension, because they run as native code. Once approved and running, call it:
 
 ```ts
-import { extensions } from "@workspace/runtime";
+import { extensions } from "@vibestudio/runtime";
 const hello = extensions.use<{ greet(name: string): Promise<string> }>(
   "@workspace-extensions/hello"
 );

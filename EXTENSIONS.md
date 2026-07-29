@@ -88,7 +88,7 @@ A `BUILD_CACHE_VERSION` bump in buildV2 may change the cache **build key**, but 
     }
   },
   "dependencies": {
-    "@workspace/runtime": "workspace:*"
+    "@vibestudio/runtime": "workspace:*"
   }
 }
 ```
@@ -351,7 +351,7 @@ Clients on `ctx` are bound through the extension process's WebSocket connection 
 
 `ctx.approvals.requestForCaller(...)` is the extension-specific approval path. It reuses the existing userland approval request system, including the same subject/options model, grant storage, pending queue, and shell UI. The key difference is principal and issuer derivation: panels and workers still call `userlandApproval.request` directly and the service derives both the principal and default issuer from `ServiceContext`; extensions call through the extension host, and the host derives the principal from the current `ExtensionInvocation.userlandCaller` and the issuer from the extension identity. The extension never sends `repoPath`, `effectiveVersion`, `callerKind`, or issuer identity as trusted input.
 
-**Parity now, narrower later.** The starting set above mirrors what `@workspace/runtime` already exposes to panels and workers, so an extension has feature parity with the rest of userland from day one and no consumer of the runtime has to learn a new shape. The longer-term target is narrower: only host _substrate_ (`fs`, `workspace`, `workers`, `credentials`, `approvals`, `notifications`, `extensions`) genuinely belongs on `ctx.*`. The capability clients (`ai`, the user-facing portion of `git`, the `webhooks` subscription surface) are migration candidates that should become extensions in their own right and be reached via `ctx.extensions.use(...)` once that work lands. Each capability migration drops its entry from `ctx.*` across all three runtimes (panel, worker, extension) in the same change. The principle: `ctx.*` is what the host _has to_ provide; anything that's a discrete capability — even one shipped by default — eventually moves out.
+**Parity now, narrower later.** The starting set above mirrors what `@vibestudio/runtime` already exposes to panels and workers, so an extension has feature parity with the rest of userland from day one and no consumer of the runtime has to learn a new shape. The longer-term target is narrower: only host _substrate_ (`fs`, `workspace`, `workers`, `credentials`, `approvals`, `notifications`, `extensions`) genuinely belongs on `ctx.*`. The capability clients (`ai`, the user-facing portion of `git`, the `webhooks` subscription surface) are migration candidates that should become extensions in their own right and be reached via `ctx.extensions.use(...)` once that work lands. Each capability migration drops its entry from `ctx.*` across all three runtimes (panel, worker, extension) in the same change. The principle: `ctx.*` is what the host _has to_ provide; anything that's a discrete capability — even one shipped by default — eventually moves out.
 
 ### Git upstream boundary
 
@@ -430,10 +430,10 @@ There is exactly one RPC entry point: the dispatcher service named `extensions`.
 
 `invoke`, non-host-owned `invokeProvider`, `list`, and `on` are not host approval-gated — they're userland code talking to userland code. Both invocation paths are caller-aware: the host stamps the immediate caller and, when available, the original panel/worker principal into the invocation envelope delivered to the extension. The extension decides whether the requested method needs an approval and calls `ctx.approvals.requestForCaller(...)` when it does. Host-owned provider contracts such as `gitInterop` are reachable only through their typed host service, not public `extensions.invokeProvider`. There are no imperative management methods: extensions are installed/enabled by declaring them in `meta/vibestudio.yml`, and the reconciler grants newly declared extensions through the joint approval flow. `reload` is approval-gated, and extension main/master push acceptance uses the extension-specific approval treatment described below.
 
-Consumers — panels, workers, and other extensions — use the same thin client from `@workspace/runtime`:
+Consumers — panels, workers, and other extensions — use the same thin client from `@vibestudio/runtime`:
 
 ```ts
-import { extensions } from "@workspace/runtime";
+import { extensions } from "@vibestudio/runtime";
 import type { GitToolsApi } from "@workspace-extensions/git-tools";
 
 const git = extensions.use<GitToolsApi>("@workspace-extensions/git-tools");
@@ -459,7 +459,7 @@ Extensions activate independently. There is no coordination API in v1: calls to 
 
 ### `ExtensionsClient` surface
 
-The same client is exposed to panels and workers via `@workspace/runtime`, and to extensions via `ctx.extensions`:
+The same client is exposed to panels and workers via `@vibestudio/runtime`, and to extensions via `ctx.extensions`:
 
 ```ts
 interface ExtensionsClient {
@@ -520,7 +520,7 @@ Implementation note: the current `RouteRegistry` only owns `/_r/` worker/service
 
 - an `extension-auto` route kind under `/_r/ext/<encoded-name>/*`, with caller-token auth.
 
-Consumers reach the auto-prefix HTTP surface the same way they reach any internal route, using the existing `@workspace/runtime` fetch helpers.
+Consumers reach the auto-prefix HTTP surface the same way they reach any internal route, using the existing `@vibestudio/runtime` fetch helpers.
 
 ## Extension approvals — informed-consent UX
 
@@ -591,7 +591,7 @@ await approvals.request({
       push: null,
     },
     workspaceDepChanges: [           // populated only for explicit dependency update
-      { name: "@workspace/runtime", fromEv: "ev_a1...", toEv: "ev_b2...",
+      { name: "@vibestudio/runtime", fromEv: "ev_a1...", toEv: "ev_b2...",
         sha: "...", previousSha: "...",
         stat: { filesChanged: 3, insertions: 18, deletions: 4 },
         commit: { author: {...}, committer: {...}, message: "...", timestamp: 1715000000 },
@@ -630,7 +630,7 @@ The user just initiated this. The prompt is informational and forward-looking.
 `extension.update` is only for explicit dependency refreshes. Source updates use the git push approval flow.
 
 - **Title and lead**: "**@acme/git-tools** dependency update." Then on a second line: "This will rebuild the extension against newer approved workspace or external dependencies."
-- **Dependency changes** are the primary content. A push to `@workspace/runtime` does not automatically enqueue extension approvals; the extension manager can show that `@acme/git-tools` has an available dependency update, and the user chooses whether to run it.
+- **Dependency changes** are the primary content. A push to `@vibestudio/runtime` does not automatically enqueue extension approvals; the extension manager can show that `@acme/git-tools` has an available dependency update, and the user chooses whether to run it.
 - **Diff sections** show workspace and external dependency diffs.
 - **Verb pair**: "Update and run" / "Cancel".
 
@@ -691,7 +691,7 @@ The server **reconciles** the registry against the declared set at two moments:
 The remaining userland surface is read/diagnostic only:
 
 ```ts
-import { extensions } from "@workspace/runtime";
+import { extensions } from "@vibestudio/runtime";
 
 await extensions.list(); // No approval — registry metadata
 await extensions.reload("@workspace-extensions/git-tools"); // Approval-gated; restarts active build

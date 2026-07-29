@@ -9,7 +9,7 @@ import {
   type AgenticEvent,
   type InvocationId,
   type TurnId,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import type {
   ChannelCallDescriptor,
   ChannelCallEventBuilders,

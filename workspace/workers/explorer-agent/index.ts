@@ -4,7 +4,7 @@ import type { ParticipantDescriptor } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";
 import { defaultPolicies } from "@workspace/agent-loop";
 import type { RespondPolicy, StepPolicy } from "@workspace/agent-loop";
-import { rpc } from "@workspace/runtime/worker";
+import { rpc } from "@vibestudio/runtime/worker";
 import { rpcErrorDataOf } from "@vibestudio/rpc";
 import type {
   VcsCompareResult,

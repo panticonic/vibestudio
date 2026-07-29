@@ -6,7 +6,7 @@
  * agent method roster.
  */
 
-import { createRpcFs, type DurableObjectContext } from "@workspace/runtime/worker";
+import { createRpcFs, type DurableObjectContext } from "@vibestudio/runtime/worker";
 import {
   createEditTool,
   createFindTool,
@@ -751,7 +751,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
 
   protected override getModelCredentialTokenClaims(
     providerId: string,
-    credential: import("@workspace/runtime/credentials").StoredCredentialSummary
+    credential: import("@vibestudio/runtime/credentials").StoredCredentialSummary
   ): Record<string, unknown> {
     if (providerId !== "openai-codex") return {};
     const accountId =

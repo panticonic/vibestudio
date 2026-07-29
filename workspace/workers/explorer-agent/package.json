@@ -13,7 +13,7 @@
       ]
     },
     "exposeModules": [
-      "@workspace/runtime",
+      "@vibestudio/runtime",
       "@workspace/pubsub",
       "zod"
     ],
@@ -135,7 +135,7 @@
     "@radix-ui/themes": "^3.2.1",
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
-    "@workspace/runtime": "workspace:*",
+    "@vibestudio/runtime": "workspace:*",
     "@workspace/agentic-do": "workspace:*",
     "@workspace/agent-loop": "workspace:*",
     "@workspace/pubsub": "workspace:*",

@@ -13,7 +13,7 @@ Use the template composer rather than reading host paths or assembling a Git
 checkout:
 
 ```js
-import { extensions } from "@workspace/runtime";
+import { extensions } from "@vibestudio/runtime";
 
 const available = await extensions.invoke(
   "@workspace-extensions/template-composer",
@@ -23,24 +23,35 @@ const available = await extensions.invoke(
 const candidates = available.filter(({ repoPath }) =>
   ["panels/news", "workers/news"].includes(repoPath)
 );
+const officialBase = {
+  url: "git+https://github.com/panticonic/vibestudio-workspace-base.git",
+  ref: "refs/heads/main",
+  commit: "38ee17d33b9f16d275b122bd4f7b71ed5ed40abb",
+  snapshot: "v1-sha256:a1d5c274041470a18c491d50bdc291b11128df2c4eed1e939365b1498ed6aec2",
+};
 const plan = await extensions.invoke(
   "@workspace-extensions/template-composer",
   "inspectAuthoring",
-  [{
-    name: "News",
-    description: "A focused news-reading and digest workspace",
-    parts: ["panels/news", "workers/news"]
-  }]
+  [
+    {
+      name: "News",
+      description: "A focused news-reading and digest workspace",
+      parts: ["panels/news", "workers/news"],
+      parents: [officialBase],
+    },
+  ]
 );
 return { candidates, plan };
 ```
 
 The plan names optional parts available at protected main, selected parts,
-automatically required parts, parts supplied by the parents, exact parent URLs,
-the generated manifest, source event, and fingerprint. Review that boundary
-with the user. In eval, return the selected candidate rows and complete plan as
-structured evidence; returning the entire inventory can exceed the eval result
-limit, and printing only to the console is not a durable inspection receipt.
+automatically required parts, the full repository contribution supplied by the
+verified parent closure, every closure node's exact coordinates, the generated
+URL-only manifest, source event, parent closure fingerprint, and receipt
+fingerprint. Review that boundary with the user. In eval, return the selected
+candidate rows and complete plan as structured evidence; returning the entire
+inventory can exceed the eval result limit, and printing only to the console is
+not a durable inspection receipt.
 
 Publish the unchanged receipt:
 
@@ -48,17 +59,22 @@ Publish the unchanged receipt:
 const published = await extensions.invoke(
   "@workspace-extensions/template-composer",
   "publishAuthoring",
-  [{
-    commandId: crypto.randomUUID(),
-    plan,
-    version: "1.0.0",
-    destination: {
-      provider: "github",
-      name: "vibestudio-template-news",
-      private: true,
-      credentialId: "the-explicit-connected-account"
-    }
-  }]
+  [
+    {
+      commandId: crypto.randomUUID(),
+      plan,
+      version: "1.0.0",
+      destination: {
+        provider: "github",
+        owner: "panticonic",
+        name: "vibestudio-template-news",
+      },
+      creation: {
+        private: true,
+      },
+      credentialId: "the-explicit-connected-account",
+    },
+  ]
 );
 ```
 
@@ -67,11 +83,29 @@ main, the dependency closure, or manifest changed, inspect again. On success,
 `published.templateUrl`, `published.ref`, `published.commit`, and
 `published.snapshot` are the exact install coordinates.
 
+The destination is a credential-free repository identity. Reuse the same
+`provider`, `owner`, and `name` with a new version to publish another immutable
+tag into that repository. Publication fetches the existing history and refuses
+tag replacement, operation-id reuse with different inputs, and non-fast-forward
+updates to `main`. Retrying the same command is safe, including after `main`
+was pushed but the tag push was interrupted.
+
 `parts` are outcome-owned unit repositories, not arbitrary directories.
 Workspace package dependencies and runtime companion units are included
-automatically. Use `parents` when a dependency should come from an installed
-template instead of being copied into the new repository. Only pass aliases
-that are present in the current installed-template inventory.
+automatically. Use `parents` when a dependency should come from another
+template instead of being copied into the new repository. Each parent is an
+exact pin: `{ url, ref, commit, snapshot, credential? }`. A fresh publication
+receipt supplies `url` as `templateUrl`; an installed owner returned by
+`authoringParts` supplies `templatePin`. Both enter the same acquisition and
+resolver path. Alias-only and moving parent declarations are rejected.
+
+The composer reacquires every direct parent, verifies its exact commit and
+snapshot, resolves its URL-declared dependency closure through the normal
+registry/lock rules, and derives all inherited repositories from that verified
+source. The live workspace's current ownership lock is not evidence for the
+parent's contents. `meta/template.yml` remains portable: it emits only direct
+parent URLs and logical credential labels, while exact pins belong to the
+authoring receipt and the consuming workspace's generated lock.
 
 ## Put the right things in the repository
 

@@ -5,7 +5,7 @@ import { renderHook } from "@testing-library/react";
 
 // In-memory stand-in mirroring runtime agentApi's state-provider registry, so we
 // can assert what a debugging agent would observe via handle.state() without
-// importing the full @workspace/runtime panel entry (which has side effects).
+// importing the full @vibestudio/runtime panel entry (which has side effects).
 const { agentApi, providers } = vi.hoisted(() => {
   const providers = new Map<string, () => unknown>();
   const agentApi = {
@@ -20,7 +20,7 @@ const { agentApi, providers } = vi.hoisted(() => {
   return { agentApi, providers };
 });
 
-vi.mock("@workspace/runtime", () => ({ agentApi, Rpc: {} }));
+vi.mock("@vibestudio/runtime", () => ({ agentApi, Rpc: {} }));
 
 import { useAgentState } from "../hooks";
 

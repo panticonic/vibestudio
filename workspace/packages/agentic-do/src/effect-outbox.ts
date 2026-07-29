@@ -5,7 +5,7 @@
  * directions.
  */
 
-import { assertExactSqlTableSchema, type SqlStorage } from "@workspace/runtime/worker";
+import { assertExactSqlTableSchema, type SqlStorage } from "@vibestudio/runtime/worker";
 import type { EffectDescriptor, EffectKind } from "@workspace/agent-loop";
 
 export interface OutboxRow {

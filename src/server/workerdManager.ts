@@ -136,7 +136,7 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
-/** DO reference — matches DORef from @workspace/runtime/worker. */
+/** DO reference — matches DORef from @vibestudio/runtime/worker. */
 interface DORef {
   source: string;
   className: string;

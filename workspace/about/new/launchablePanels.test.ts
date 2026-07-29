@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { WorkspaceNode } from "@workspace/runtime";
+import type { WorkspaceNode } from "@vibestudio/runtime";
 import { collectLaunchablePanels } from "./launchablePanels";
 
 function node(

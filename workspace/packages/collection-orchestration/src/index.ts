@@ -61,7 +61,7 @@ export function buildCollectionAgentSystemPrompt(args: {
     "At the start of every task, and again after structural mutations, call:",
     "",
     "```ts",
-    'import { panelTree } from "@workspace/runtime";',
+    'import { panelTree } from "@vibestudio/runtime";',
     `const scope = await panelTree.subtree(${JSON.stringify(args.rootPanelId)});`,
     "```",
     "",

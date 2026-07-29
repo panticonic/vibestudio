@@ -134,9 +134,7 @@ function templateOverviewChecked(result: TestExecutionResult) {
     .filter((output): output is string => output !== null)
     .join("\n");
   const observedConsoleStatusCount = consoleStatusCount(consoleOutput);
-  const consoleCatalogUnavailable = /no verified template registry is cached/iu.test(
-    consoleOutput
-  );
+  const consoleCatalogUnavailable = /no verified template registry is cached/iu.test(consoleOutput);
   const countsAreSupported =
     statusCount !== undefined &&
     (catalogCount !== undefined || catalogUnavailable) &&
@@ -193,10 +191,7 @@ function templateAuthoringPrepared(result: TestExecutionResult) {
   >();
   for (const record of records) {
     const fingerprint = record["fingerprint"];
-    if (
-      typeof fingerprint !== "string" ||
-      !/^v1-sha256:[0-9a-f]{64}$/u.test(fingerprint)
-    ) {
+    if (typeof fingerprint !== "string" || !/^v1-sha256:[0-9a-f]{64}$/u.test(fingerprint)) {
       continue;
     }
     const receipt = receipts.get(fingerprint) ?? { requestedParts: new Set<string>() };
@@ -217,8 +212,7 @@ function templateAuthoringPrepared(result: TestExecutionResult) {
     receipts.set(fingerprint, receipt);
   }
   const exactReceipts = [...receipts].filter(
-    ([, receipt]) =>
-      receipt.manifest !== undefined && receipt.requestedParts.size > 0
+    ([, receipt]) => receipt.manifest !== undefined && receipt.requestedParts.size > 0
   );
   if (!exactReceipts.length) {
     return {
@@ -237,10 +231,8 @@ function templateAuthoringPrepared(result: TestExecutionResult) {
   }
   const final = findLastAgentMessage(result);
   const reportedExactPlan = composerReceipts.some(([fingerprint]) => final.includes(fingerprint));
-  return (
-    reportedExactPlan &&
+  return reportedExactPlan &&
     /not publish|not published|nothing (?:was )?published|without publishing|prepared/iu.test(final)
-  )
     ? { passed: true, reason: undefined }
     : {
         passed: false,

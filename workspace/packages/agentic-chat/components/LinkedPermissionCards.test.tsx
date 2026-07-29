@@ -4,7 +4,7 @@ import { Theme } from "@radix-ui/themes";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PubSubClient } from "@workspace/pubsub";
-import { AGENTIC_EVENT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
+import { AGENTIC_EVENT_PAYLOAD_KIND } from "@vibestudio/agentic-protocol";
 
 import { LinkedPermissionCards } from "./LinkedPermissionCards";
 

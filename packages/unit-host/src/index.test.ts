@@ -88,7 +88,7 @@ describe("UnitRegistry", () => {
       statePath: root,
       unitKind: "extension",
     });
-    registry.upsert(entry({ activeDependencyEvs: { "@workspace/runtime": "ev" } }));
+    registry.upsert(entry({ activeDependencyEvs: { "@vibestudio/runtime": "ev" } }));
 
     const reloaded = new UnitRegistry<UnitRegistryEntryBase>({
       statePath: root,
@@ -97,7 +97,7 @@ describe("UnitRegistry", () => {
 
     expect(reloaded.get("@workspace-extensions/a")).toMatchObject({
       unitKind: "extension",
-      activeDependencyEvs: { "@workspace/runtime": "ev" },
+      activeDependencyEvs: { "@vibestudio/runtime": "ev" },
     });
     expect(
       JSON.parse(fs.readFileSync(path.join(root, "units", "extension", "registry.json"), "utf8"))
@@ -149,7 +149,7 @@ describe("UnitRegistry", () => {
         sourceRepo: "/workspace/apps/shell",
         ref: "main",
         effectiveVersion: "ev-app",
-        dependencyEvs: { "@workspace/runtime": "ev-runtime" },
+        dependencyEvs: { "@vibestudio/runtime": "ev-runtime" },
         externalDeps: { react: "19.0.0" },
       })
     ).toEqual({
@@ -159,7 +159,7 @@ describe("UnitRegistry", () => {
       version: "1.0.0",
       source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
       ev: "ev-app",
-      dependencyEvs: { "@workspace/runtime": "ev-runtime" },
+      dependencyEvs: { "@vibestudio/runtime": "ev-runtime" },
       externalDeps: { react: "19.0.0" },
     });
   });
@@ -172,7 +172,7 @@ describe("UnitRegistry", () => {
         sourceRepo: "/workspace/apps/shell",
         ref: "main",
         effectiveVersion: "ev-app",
-        dependencyEvs: { "@workspace/runtime": "ev-runtime" },
+        dependencyEvs: { "@vibestudio/runtime": "ev-runtime" },
         externalDeps: { react: "19.0.0" },
         capabilities: ["z", "a"],
       })
@@ -181,7 +181,7 @@ describe("UnitRegistry", () => {
       name: "@workspace-apps/shell",
       source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
       effectiveVersion: "ev-app",
-      dependencyEvs: { "@workspace/runtime": "ev-runtime" },
+      dependencyEvs: { "@vibestudio/runtime": "ev-runtime" },
       externalDeps: { react: "19.0.0" },
       capabilities: ["a", "z"],
     });
@@ -195,7 +195,7 @@ describe("UnitRegistry", () => {
           name: "@workspace-apps/shell",
           source: { kind: "workspace-repo", repo: "/workspace/apps/shell", ref: "main" },
           activeEv: "ev-app",
-          activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
+          activeDependencyEvs: { "@vibestudio/runtime": "ev-runtime" },
           activeExternalDeps: { react: "19.0.0" },
         }),
         ["z", "a"]
@@ -205,7 +205,7 @@ describe("UnitRegistry", () => {
       name: "@workspace-apps/shell",
       source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
       effectiveVersion: "ev-app",
-      dependencyEvs: { "@workspace/runtime": "ev-runtime" },
+      dependencyEvs: { "@vibestudio/runtime": "ev-runtime" },
       externalDeps: { react: "19.0.0" },
       capabilities: ["a", "z"],
     });
@@ -341,7 +341,7 @@ describe("UnitTrustResolver", () => {
       name: "@workspace-extensions/a",
       source: { kind: "workspace-repo", repo: "extensions/a", ref: "main" },
       effectiveVersion: "ev",
-      dependencyEvs: { "@workspace/runtime": "ev-runtime" },
+      dependencyEvs: { "@vibestudio/runtime": "ev-runtime" },
       externalDeps: { leftpad: "1.0.0" },
       ...overrides,
     };
@@ -370,7 +370,7 @@ describe("UnitTrustResolver", () => {
         entry: entry({
           activeBundleKey: "bundle",
           activeEv: "ev",
-          activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
+          activeDependencyEvs: { "@vibestudio/runtime": "ev-runtime" },
           activeExternalDeps: { leftpad: "1.0.0" },
           status: "running",
         }),
@@ -382,7 +382,7 @@ describe("UnitTrustResolver", () => {
         entry: entry({
           activeBundleKey: "bundle",
           activeEv: "ev-old",
-          activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
+          activeDependencyEvs: { "@vibestudio/runtime": "ev-runtime" },
           activeExternalDeps: { leftpad: "1.0.0" },
           status: "running",
         }),
@@ -394,7 +394,7 @@ describe("UnitTrustResolver", () => {
         entry: entry({
           activeBundleKey: null,
           activeEv: "ev",
-          activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
+          activeDependencyEvs: { "@vibestudio/runtime": "ev-runtime" },
           activeExternalDeps: { leftpad: "1.0.0" },
           status: "pending-approval",
         }),
@@ -412,7 +412,7 @@ describe("UnitTrustResolver", () => {
         entry: entry({
           activeBundleKey: "bundle",
           activeEv: "ev",
-          activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
+          activeDependencyEvs: { "@vibestudio/runtime": "ev-runtime" },
           activeExternalDeps: { leftpad: "1.0.0" },
           status: "running",
         }),
@@ -431,7 +431,7 @@ describe("UnitTrustResolver", () => {
         entry: entry({
           activeBundleKey: "bundle",
           activeEv: "ev",
-          activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
+          activeDependencyEvs: { "@vibestudio/runtime": "ev-runtime" },
           activeExternalDeps: { leftpad: "1.0.0" },
           status: "running",
         }),

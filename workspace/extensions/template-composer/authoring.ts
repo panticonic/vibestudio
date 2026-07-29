@@ -6,14 +6,25 @@ import {
   sha256HexSyncText,
   sortForCanonicalJson,
 } from "@vibestudio/content-addressing";
-import type { VcsReadFileResult, VcsResolveRepositoryResult } from "@vibestudio/service-schemas/vcs";
+import type {
+  VcsReadFileResult,
+  VcsResolveRepositoryResult,
+} from "@vibestudio/service-schemas/vcs";
+import type {
+  TemplateAuthoringInspection,
+  TemplateAuthoringRequest,
+} from "@vibestudio/service-schemas/templates";
+import type { ExactGitSnapshot } from "@vibestudio/git";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/workspace/remotes";
+import { normalizeTemplateGitUrl } from "@vibestudio/workspace/templateCoordinates";
 import {
   WorkspaceConfigTopLayerSchema,
   WorkspaceTemplateDeclarationSchema,
+  WorkspaceTemplatePinSchema,
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { WORKSPACE_PACKAGE_SCOPES } from "@vibestudio/workspace-contracts/sourceDirs";
-import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
+import type { WorkspaceConfig, WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
+import { resolveTemplateComposition, type TemplateSourcePorts } from "@workspace/template-composer";
 import type { ExtensionContextLike } from "./context.js";
 import type { SemanticWorkspaceObservation } from "./workspace.js";
 
@@ -24,31 +35,11 @@ function isAuthoredWorkspacePackage(name: string): boolean {
   return WORKSPACE_PACKAGE_SCOPES.some((scope) => name.startsWith(scope));
 }
 
-export interface TemplateAuthoringRequest {
-  name: string;
-  description: string;
-  parts: string[];
-  parents?: string[];
-}
-
-export interface TemplateAuthoringInspection {
-  request: TemplateAuthoringRequest;
-  mainEventId: string;
-  selectableParts: string[];
-  requestedParts: string[];
-  includedParts: string[];
-  requiredParts: string[];
-  inheritedParts: string[];
-  parents: Array<{ alias: string; url: string; credential?: string }>;
-  manifest: string;
-  manifestDigest: `v1-sha256:${string}`;
-  fingerprint: `v1-sha256:${string}`;
-}
-
 export interface TemplateAuthoringPart {
   repoPath: string;
   packageName?: string;
   templateAlias?: string;
+  templatePin?: WorkspaceTemplatePin;
 }
 
 function text(file: NonNullable<VcsReadFileResult>): string {
@@ -149,24 +140,30 @@ function projectManifest(
     : undefined;
   const hostTargets = config.hostTargets
     ? Object.fromEntries(
-        Object.entries(config.hostTargets).filter(([, target]) => target && selected.has(target.app))
+        Object.entries(config.hostTargets).filter(
+          ([, target]) => target && selected.has(target.app)
+        )
       )
     : undefined;
   return canonicalYaml(
     WorkspaceConfigTopLayerSchema.parse({
       systemEpoch: config.systemEpoch,
       templates: {
-        use: parents.map(({ url, credential }) =>
-          WorkspaceTemplateDeclarationSchema.parse({
-            url,
-            ...(credential ? { credential } : {}),
-          })
-        ),
+        use: parents
+          .filter((parent) => parent.direct)
+          .map(({ url, credential }) =>
+            WorkspaceTemplateDeclarationSchema.parse({
+              url,
+              ...(credential ? { credential } : {}),
+            })
+          ),
       },
       ...(config.defaultRepo && selected.has(config.defaultRepo)
         ? { defaultRepo: config.defaultRepo }
         : {}),
-      ...(selectedRecords(config.initPanels, selected) ? { initPanels: selectedRecords(config.initPanels, selected) } : {}),
+      ...(selectedRecords(config.initPanels, selected)
+        ? { initPanels: selectedRecords(config.initPanels, selected) }
+        : {}),
       ...(selectedRecords(config.singletonObjects, selected)
         ? { singletonObjects: selectedRecords(config.singletonObjects, selected) }
         : {}),
@@ -236,6 +233,13 @@ async function packageMetadata(
     file: { kind: "path", path: "package.json" },
   });
   if (!file) return { dependencies: [] };
+  return parsePackageMetadata(repoPath, text(file));
+}
+
+function parsePackageMetadata(
+  repoPath: string,
+  source: string
+): { name?: string; dependencies: string[] } {
   let parsed: {
     name?: unknown;
     dependencies?: Record<string, unknown>;
@@ -244,7 +248,7 @@ async function packageMetadata(
     optionalDependencies?: Record<string, unknown>;
   };
   try {
-    parsed = JSON.parse(text(file)) as typeof parsed;
+    parsed = JSON.parse(source) as typeof parsed;
   } catch {
     throw new Error(`${repoPath}/package.json is not valid JSON`);
   }
@@ -264,6 +268,94 @@ async function packageMetadata(
   return {
     ...(typeof parsed.name === "string" ? { name: parsed.name } : {}),
     dependencies: [...new Set(dependencies)].sort(compareUtf16CodeUnits),
+  };
+}
+
+interface ResolvedAuthoringParents {
+  parents: TemplateAuthoringInspection["parents"];
+  inheritedParts: string[];
+  metadata: Map<string, { name?: string; dependencies: string[] }>;
+  fingerprint: TemplateAuthoringInspection["parentClosureFingerprint"];
+}
+
+async function resolveAuthoringParents(
+  request: TemplateAuthoringRequest,
+  expectedSystemEpoch: number,
+  sources: TemplateSourcePorts | undefined
+): Promise<ResolvedAuthoringParents> {
+  if (!request.parents?.length) {
+    return {
+      parents: [],
+      inheritedParts: [],
+      metadata: new Map(),
+      fingerprint: null,
+    };
+  }
+  if (!sources) {
+    throw new Error("Exact parent template resolution requires template source ports");
+  }
+
+  const directPins = request.parents.map((value) => {
+    const pin = WorkspaceTemplatePinSchema.parse(value);
+    return { ...pin, url: normalizeTemplateGitUrl(pin.url) };
+  });
+  const pinsByUrl = new Map<string, (typeof directPins)[number]>();
+  for (const pin of directPins) {
+    const prior = pinsByUrl.get(pin.url);
+    if (prior && canonicalJson(prior) !== canonicalJson(pin)) {
+      throw new Error(`Parent template ${pin.url} was supplied with conflicting exact pins`);
+    }
+    pinsByUrl.set(pin.url, pin);
+  }
+
+  const snapshots = new Map<string, ExactGitSnapshot>();
+  const plan = await resolveTemplateComposition({
+    roots: [...pinsByUrl.values()].map(({ url, credential }) => ({
+      url,
+      ...(credential ? { credential } : {}),
+    })),
+    pinOverrides: Object.fromEntries([...pinsByUrl].map(([url, pin]) => [url, pin])),
+    localRepoPaths: new Set(),
+    externallyOwnedRepoPaths: new Set(),
+    expectedSystemEpoch,
+    ports: {
+      resolvePromoted: sources.resolvePromoted,
+      async acquire(pin, nodeId) {
+        const snapshot = await sources.acquire(pin, nodeId);
+        snapshots.set(nodeId, snapshot);
+        return snapshot;
+      },
+    },
+  });
+
+  const directUrls = new Set(pinsByUrl.keys());
+  const parents = plan.nodes.map((node) => ({
+    alias: node.alias,
+    direct: directUrls.has(normalizeTemplateGitUrl(node.pin.url)),
+    ...node.pin,
+  }));
+  const inheritedParts = Object.keys(plan.repositories).sort(compareUtf16CodeUnits);
+  const metadata = new Map<string, { name?: string; dependencies: string[] }>();
+  for (const repoPath of inheritedParts) {
+    const contribution = plan.repositories[repoPath];
+    if (!contribution) throw new Error(`Parent closure lost repository ${repoPath}`);
+    const snapshot = snapshots.get(contribution.nodeId);
+    if (!snapshot) {
+      throw new Error(`Parent closure lost acquired snapshot ${contribution.nodeId}`);
+    }
+    const bytes = snapshot.readFile(`${contribution.subdir}/package.json`);
+    metadata.set(
+      repoPath,
+      bytes
+        ? parsePackageMetadata(repoPath, new TextDecoder("utf-8", { fatal: true }).decode(bytes))
+        : { dependencies: [] }
+    );
+  }
+  return {
+    parents,
+    inheritedParts,
+    metadata,
+    fingerprint: plan.fingerprint,
   };
 }
 
@@ -288,13 +380,23 @@ function runtimeReferences(config: WorkspaceConfig): Array<[owner: string, targe
 export async function inspectTemplateAuthoring(
   ctx: ExtensionContextLike,
   observation: SemanticWorkspaceObservation,
-  rawRequest: TemplateAuthoringRequest
+  rawRequest: TemplateAuthoringRequest,
+  sources?: TemplateSourcePorts
 ): Promise<TemplateAuthoringInspection> {
   const name = rawRequest.name.trim();
   const description = rawRequest.description.trim();
   if (!name) throw new Error("Template name is required");
   if (!description) throw new Error("Template description is required");
-  const selectableParts = [...observation.localRepoPaths, ...Object.keys(observation.lock?.repositories ?? {})]
+  const resolvedParents = await resolveAuthoringParents(
+    rawRequest,
+    observation.expectedSystemEpoch,
+    sources
+  );
+  const inherited = new Set(resolvedParents.inheritedParts);
+  const selectableParts = [
+    ...observation.localRepoPaths,
+    ...Object.keys(observation.lock?.repositories ?? {}),
+  ]
     .filter((repoPath) => repoPath !== META_REPOSITORY)
     .map(normalizeWorkspaceRepoPath)
     .sort(compareUtf16CodeUnits);
@@ -305,59 +407,35 @@ export async function inspectTemplateAuthoring(
   if (!requestedParts.length) throw new Error("Choose at least one workspace part");
   for (const repoPath of requestedParts) {
     if (!selectable.has(repoPath)) throw new Error(`Unknown workspace repository ${repoPath}`);
-  }
-  const parentAliases = [...new Set(rawRequest.parents ?? [])].sort(compareUtf16CodeUnits);
-  const parentNodes = parentAliases.map((alias) => {
-    const node = observation.lock?.nodes.find((candidate) => candidate.alias === alias);
-    if (!node) throw new Error(`Unknown installed parent template ${alias}`);
-    return node;
-  });
-  const parentNodeIds = new Set(parentNodes.map((node) => node.nodeId));
-  let addedParent = true;
-  while (addedParent) {
-    addedParent = false;
-    for (const nodeId of [...parentNodeIds]) {
-      const node = observation.lock?.nodes.find((candidate) => candidate.nodeId === nodeId);
-      for (const parentNodeId of node?.parents ?? []) {
-        if (parentNodeIds.has(parentNodeId)) continue;
-        parentNodeIds.add(parentNodeId);
-        addedParent = true;
-      }
-    }
-  }
-  const inherited = new Set(
-    Object.entries(observation.lock?.repositories ?? {})
-      .filter(([, ownership]) => parentNodeIds.has(ownership.nodeId))
-      .map(([repoPath]) => repoPath)
-  );
-  for (const repoPath of requestedParts) {
     if (inherited.has(repoPath)) {
       throw new Error(
-        `${repoPath} is already supplied by a selected parent; remove it from parts or remove that parent`
+        `${repoPath} is already supplied by an exact parent; remove it from parts or remove that parent`
       );
     }
   }
 
-  const metadata = new Map(
+  const metadata = new Map<string, { name?: string; dependencies: string[] }>(
     await Promise.all(
       selectableParts.map(
         async (repoPath) => [repoPath, await packageMetadata(ctx, observation, repoPath)] as const
       )
     )
   );
+  for (const [repoPath, value] of resolvedParents.metadata) metadata.set(repoPath, value);
   const packageOwners = new Map<string, string>();
   for (const [repoPath, value] of metadata) {
     if (!value.name) continue;
     const existing = packageOwners.get(value.name);
     if (existing && existing !== repoPath) {
-      throw new Error(`Workspace package name ${value.name} is claimed by ${existing} and ${repoPath}`);
+      throw new Error(
+        `Workspace package name ${value.name} is claimed by ${existing} and ${repoPath}`
+      );
     }
     packageOwners.set(value.name, repoPath);
   }
 
   const included = new Set(requestedParts);
   const required = new Set<string>();
-  const inheritedRequired = new Set<string>();
   const runtime = runtimeReferences(observation.runtimeTop as WorkspaceConfig);
   let changed = true;
   while (changed) {
@@ -368,9 +446,7 @@ export async function inspectTemplateAuthoring(
         if (!owner) {
           throw new Error(`${repoPath} depends on missing workspace package ${dependency}`);
         }
-        if (inherited.has(owner)) {
-          inheritedRequired.add(owner);
-        } else if (!included.has(owner)) {
+        if (!inherited.has(owner) && !included.has(owner)) {
           included.add(owner);
           required.add(owner);
           changed = true;
@@ -378,9 +454,9 @@ export async function inspectTemplateAuthoring(
       }
       for (const [owner, target] of runtime) {
         if (owner !== repoPath || included.has(target)) continue;
-        if (!selectable.has(target)) throw new Error(`${repoPath} references missing workspace part ${target}`);
-        if (inherited.has(target)) inheritedRequired.add(target);
-        else {
+        if (!selectable.has(target) && !inherited.has(target))
+          throw new Error(`${repoPath} references missing workspace part ${target}`);
+        if (!inherited.has(target)) {
           included.add(target);
           required.add(target);
           changed = true;
@@ -389,32 +465,36 @@ export async function inspectTemplateAuthoring(
     }
   }
 
-  const parents = parentNodes.map((node) => ({
-    alias: node.alias,
-    url: node.pin.url,
-    ...(node.pin.credential ? { credential: node.pin.credential } : {}),
-  }));
+  const parents = resolvedParents.parents;
   const includedParts = [...included].sort(compareUtf16CodeUnits);
   const manifest = projectManifest(
     observation.runtimeTop as WorkspaceConfig,
     new Set(includedParts),
     parents,
-    includedParts.length + inherited.size === selectableParts.length
+    selectableParts.every((repoPath) => included.has(repoPath) || inherited.has(repoPath))
   );
   const manifestDigest = `v1-sha256:${sha256HexSyncText(manifest)}` as const;
   const request: TemplateAuthoringRequest = {
     name,
     description,
     parts: requestedParts,
-    ...(parentAliases.length ? { parents: parentAliases } : {}),
+    ...(parents.some((parent) => parent.direct)
+      ? {
+          parents: parents
+            .filter((parent) => parent.direct)
+            .map(({ alias: _alias, direct: _direct, ...pin }) => pin)
+            .sort((left, right) => compareUtf16CodeUnits(left.url, right.url)),
+        }
+      : {}),
   };
   const body = {
     protocol: "vibestudio-template-authoring-plan-v1",
     request,
     mainEventId: observation.mainEventId,
     includedParts,
-    inheritedParts: [...inheritedRequired].sort(compareUtf16CodeUnits),
+    inheritedParts: resolvedParents.inheritedParts,
     parents,
+    parentClosureFingerprint: resolvedParents.fingerprint,
     manifestDigest,
   };
   return {
@@ -424,8 +504,9 @@ export async function inspectTemplateAuthoring(
     requestedParts,
     includedParts,
     requiredParts: [...required].sort(compareUtf16CodeUnits),
-    inheritedParts: [...inheritedRequired].sort(compareUtf16CodeUnits),
+    inheritedParts: resolvedParents.inheritedParts,
     parents,
+    parentClosureFingerprint: resolvedParents.fingerprint,
     manifest,
     manifestDigest,
     fingerprint: `v1-sha256:${sha256HexSyncText(canonicalJson(body))}`,
@@ -443,18 +524,19 @@ export async function listTemplateAuthoringParts(
     .filter((repoPath) => repoPath !== META_REPOSITORY)
     .map(normalizeWorkspaceRepoPath)
     .sort(compareUtf16CodeUnits);
-  const aliases = new Map(
-    (observation.lock?.nodes ?? []).map((node) => [node.nodeId, node.alias])
-  );
+  const aliases = new Map((observation.lock?.nodes ?? []).map((node) => [node.nodeId, node.alias]));
+  const pins = new Map((observation.lock?.nodes ?? []).map((node) => [node.nodeId, node.pin]));
   return Promise.all(
     repoPaths.map(async (repoPath) => {
       const metadata = await packageMetadata(ctx, observation, repoPath);
       const owner = observation.lock?.repositories?.[repoPath];
       const templateAlias = owner ? aliases.get(owner.nodeId) : undefined;
+      const templatePin = owner ? pins.get(owner.nodeId) : undefined;
       return {
         repoPath,
         ...(metadata.name ? { packageName: metadata.name } : {}),
         ...(templateAlias ? { templateAlias } : {}),
+        ...(templatePin ? { templatePin } : {}),
       };
     })
   );

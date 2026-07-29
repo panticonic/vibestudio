@@ -22,7 +22,7 @@ export {
 
 /**
  * Type definitions for the fs shim.
- * Maps to @workspace/runtime's RuntimeFs interface.
+ * Maps to @vibestudio/runtime's RuntimeFs interface.
  *
  * Uses shared interfaces from shared-types.ts to avoid duplication.
  */

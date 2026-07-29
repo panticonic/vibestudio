@@ -27,7 +27,7 @@ import {
   AGENTIC_PROTOCOL_VERSION,
   hydrateStoredValueRefs,
   type AgenticEvent,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import { buildRawThinkingOptions, type RawThinkingModel } from "./pi-raw-thinking-options.js";
 import {
   CredentialApprovalDeferredError,

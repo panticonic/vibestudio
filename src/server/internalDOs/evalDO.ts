@@ -76,7 +76,7 @@ import { createPrivateGuestGlobal } from "@vibestudio/shared/evalConfinement";
  * `rpc`/`services`/`fs`/`ctx` + `scope`/`scopes`/`help` + `db`, plus a `chat`
  * binding when the owner is an agent DO bound to a channel (a pure forwarding
  * proxy to the agent — the EvalDO carries ZERO channel logic). (Panel-style
- * `import { fs } from "@workspace/runtime"` does not initialize in a DO isolate.)
+ * `import { fs } from "@vibestudio/runtime"` does not initialize in a DO isolate.)
  */
 
 /** Reserved tables the user `db` may not DROP/DELETE/ALTER — base state, scope, sqlite internals. */
@@ -2026,7 +2026,7 @@ export class EvalDO extends DurableObjectBase {
       scopes: hardenBoundary(scopeManager.api),
       db: hardenBoundary(this.dbBinding(scopeGeneration)),
       // `help()` → discovery for an agent driving eval: the importable runtime
-      // surface (what `import {…} from "@workspace/runtime"` gives), the ambient
+      // surface (what `import {…} from "@vibestudio/runtime"` gives), the ambient
       // pre-injected globals (do NOT import these), available raw services, and where to look next.
       // `help("<service>")` → that service's methods.
       help: async (serviceName?: string) => {
@@ -2166,7 +2166,7 @@ export class EvalDO extends DurableObjectBase {
 
     // Lazily build the cdp-client bundle ONLY when this run references CDP. Most
     // evals (fs/vcs/git) never touch it, and the build is a cold-path round-trip
-    // that dominated first-run latency. Direct `import "@workspace/cdp-client"`
+    // that dominated first-run latency. Direct `import "@vibestudio/cdp-client"`
     // self-heals via the engine's loadImport; this pre-seed is for the
     // `handle.cdp` → loadCdpClient sync-require path. The check is
     // conservative — every route to the client (the import specifier,

@@ -167,13 +167,13 @@ export function createWorkerService(deps: {
     },
     listServices: {
       description:
-        "List product-owned and workspace-authored services visible in the caller's live context; workspace rows include the live docs catalog id. In eval import the top-level workers API from @workspace/runtime. Inside an installed worker, call runtime.workers.listServices() on the createWorkerRuntime(env) result; never construct a worker runtime from eval.",
+        "List product-owned and workspace-authored services visible in the caller's live context; workspace rows include the live docs catalog id. In eval import the top-level workers API from @vibestudio/runtime. Inside an installed worker, call runtime.workers.listServices() on the createWorkerRuntime(env) result; never construct a worker runtime from eval.",
       args: z.tuple([]),
       access: { sensitivity: "read" as const },
     },
     resolveService: {
       description:
-        "Resolve a live workspace service by name or protocol. In eval use the top-level workers import from @workspace/runtime; inside an installed worker use runtime.workers on the createWorkerRuntime(env) result. The returned target is called through the matching top-level or worker-runtime rpc API.",
+        "Resolve a live workspace service by name or protocol. In eval use the top-level workers import from @vibestudio/runtime; inside an installed worker use runtime.workers on the createWorkerRuntime(env) result. The returned target is called through the matching top-level or worker-runtime rpc API.",
       args: z.tuple([z.string(), z.string().nullable().optional()]),
       access: { sensitivity: "read" as const },
       authority: preparedResolutionAuthority("resolveService"),

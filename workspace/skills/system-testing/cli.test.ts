@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
   listUnits: vi.fn(),
 }));
 
-vi.mock("@workspace/runtime", () => ({
+vi.mock("@vibestudio/runtime", () => ({
   rpc: { call: mocks.rpcCall },
   workers: { resolveService: mocks.resolveService },
   workspace: { units: { list: mocks.listUnits } },

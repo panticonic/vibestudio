@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Card, Flex, Heading, Progress, Text, Theme } from "@radix-ui/themes";
 import type { BrowserDownloadRecord } from "@vibestudio/browser-data/client";
 import { usePanelTheme } from "@workspace/react";
-import { browserData } from "@workspace/runtime";
+import { browserData } from "@vibestudio/runtime";
 import "@radix-ui/themes/styles.css";
 import "@workspace/ui/tokens.css";
 

@@ -105,7 +105,7 @@
   },
   "dependencies": {
     "@workspace/react": "workspace:*",
-    "@workspace/runtime": "workspace:*",
+    "@vibestudio/runtime": "workspace:*",
     "@workspace/agentic-chat": "workspace:*",
     "@workspace/agentic-core": "workspace:*",
     "@workspace/collection-orchestration": "workspace:*",

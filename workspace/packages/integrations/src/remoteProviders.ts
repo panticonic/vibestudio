@@ -16,6 +16,29 @@ export interface RemoteCreateRepoResult {
   owner: string;
 }
 
+export interface RemoteRepositoryIdentity {
+  provider: string;
+  owner: string;
+  name: string;
+}
+
+export interface RemoteResolveOrCreateRepoParams {
+  destination: RemoteRepositoryIdentity;
+  creation: {
+    private: boolean;
+    description?: string;
+  };
+  /** Credential selected by the caller; never part of repository identity. */
+  credentialId?: string;
+}
+
+export interface RemoteResolveOrCreateRepoResult {
+  destination: RemoteRepositoryIdentity;
+  cloneUrl: string;
+  webUrl: string;
+  created: boolean;
+}
+
 export interface RemoteWebUrls {
   webUrl: string;
   ownerUrl: string;
@@ -32,6 +55,10 @@ export interface RemoteProvider {
     credentials: CredentialClient,
     params: RemoteCreateRepoParams
   ): Promise<RemoteCreateRepoResult>;
+  resolveOrCreateRepo(
+    credentials: CredentialClient,
+    params: RemoteResolveOrCreateRepoParams
+  ): Promise<RemoteResolveOrCreateRepoResult>;
   webUrls(remoteUrl: string): RemoteWebUrls | null;
 }
 
@@ -73,6 +100,30 @@ export const githubRemoteProvider: RemoteProvider = {
   createRepo: (credentials, params) => {
     const { credentialId, ...repoParams } = params;
     return createGitHubClient(credentials, { credentialId }).createRepo(repoParams);
+  },
+  resolveOrCreateRepo: async (credentials, params) => {
+    if (params.destination.provider !== "github") {
+      throw new Error(
+        `GitHub provider cannot resolve destination provider ${params.destination.provider}`
+      );
+    }
+    const github = createGitHubClient(credentials, { credentialId: params.credentialId });
+    const resolved = await github.resolveOrCreateRepo({
+      owner: params.destination.owner,
+      name: params.destination.name,
+      private: params.creation.private,
+      description: params.creation.description,
+    });
+    return {
+      destination: {
+        provider: "github",
+        owner: resolved.owner,
+        name: resolved.name,
+      },
+      cloneUrl: resolved.cloneUrl,
+      webUrl: resolved.webUrl,
+      created: resolved.created,
+    };
   },
   webUrls(remoteUrl) {
     const parsed = parseGitHubHttpsRemote(remoteUrl);

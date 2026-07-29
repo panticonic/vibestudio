@@ -4,7 +4,7 @@
  * Channel envelopes carry typed invocation events. The chat projection derives
  * this card payload for the React transcript; it is not a channel protocol.
  */
-import type { InvocationOutcome, SubagentProgressUpdate } from "@workspace/agentic-protocol";
+import type { InvocationOutcome, SubagentProgressUpdate } from "@vibestudio/agentic-protocol";
 
 /** One timestamped subagent progress entry, ready for card rendering. */
 export type SubagentProgressEntry = SubagentProgressUpdate & { at: string };

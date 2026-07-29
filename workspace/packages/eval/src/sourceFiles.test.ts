@@ -163,7 +163,7 @@ describe("source file bundles", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('Node built-in module "node:child_process" is not available');
-    expect(result.error).toContain("@workspace/runtime");
+    expect(result.error).toContain("@vibestudio/runtime");
     expect(result.error).not.toContain("npm:latest");
   });
 

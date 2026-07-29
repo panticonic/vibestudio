@@ -9,7 +9,6 @@ import {
   collectWorkspaceFindings,
   defaultReason,
   isAllowlisted,
-  isProductSealedWorkspaceImport,
   isTestContext,
   isWorkspaceImportScope,
   looksPathLike,
@@ -140,16 +139,10 @@ describe("collectFindings — import-violation category", () => {
     expect(result.every((f) => f.category === "import-violation")).toBe(true);
   });
 
-  it("allows only the product-sealed internal bundle entry to import the control plane", () => {
-    expect(
-      isProductSealedWorkspaceImport(
-        "src/server/internalDOs/index.ts",
-        "@workspace/semantic-control-plane"
-      )
-    ).toBe(true);
+  it("needs no exception for product-sealed root packages", () => {
     expect(
       collectFindings({
-        text: `export { GadWorkspaceDO } from "@workspace/semantic-control-plane";`,
+        text: `export { GadWorkspaceDO } from "@vibestudio/semantic-control-plane";`,
         absFile: "/repo/src/server/internalDOs/index.ts",
         root: ROOT,
       })
@@ -226,7 +219,7 @@ describe("collectWorkspaceFindings — workspace-host-import category", () => {
   it("allows shared package imports and workspace-local imports", () => {
     const text = [
       `import { x } from "@vibestudio/shared/foo";`,
-      `import { y } from "@workspace/runtime";`,
+      `import { y } from "@vibestudio/runtime";`,
       `import { z } from "../packages/runtime/src/shared/vcsClient.js";`,
     ].join("\n");
     expect(collectWorkspaceFindings({ text, absFile: WORKSPACE_FILE, root: ROOT })).toHaveLength(
@@ -367,7 +360,7 @@ describe("CLI (child process against a temp fixture dir)", () => {
       fs.writeFileSync(path.join(dir, "src", "bad.ts"), `export const ok = true;\n`);
       fs.writeFileSync(
         path.join(dir, "tests", "workspace-integration", "mixed.test.ts"),
-        `import x from "@workspace/runtime/worker/test-utils";\n`
+        `import x from "@vibestudio/runtime/worker/test-utils";\n`
       );
       expect(run(dir).code).toBe(0);
     } finally {

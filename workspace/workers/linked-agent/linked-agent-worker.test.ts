@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import { AGENTIC_EVENT_PAYLOAD_KIND, AGENTIC_PROTOCOL_VERSION } from "@workspace/agentic-protocol";
+import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
+import { AGENTIC_EVENT_PAYLOAD_KIND, AGENTIC_PROTOCOL_VERSION } from "@vibestudio/agentic-protocol";
 import { readChannelSubscriptionRecords } from "@workspace/pubsub";
 
 import { LinkedAgentWorker, LINKED_PERMISSION_TIMEOUT_MS } from "./linked-agent-worker.js";

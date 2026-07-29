@@ -1,6 +1,6 @@
 import type { CardManager, CustomMessageHandle } from "@workspace/agentic-do";
-import type { SqlStorage } from "@workspace/runtime/worker";
-import type { CustomMessageDisplayMode } from "@workspace/agentic-protocol";
+import type { SqlStorage } from "@vibestudio/runtime/worker";
+import type { CustomMessageDisplayMode } from "@vibestudio/agentic-protocol";
 import {
   GMAIL_COMPOSE_STATE_SCHEMA,
   GMAIL_COMPOSE_UPDATE_SCHEMA,

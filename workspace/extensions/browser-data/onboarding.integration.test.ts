@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@workspace/runtime", () => ({
+vi.mock("@vibestudio/runtime", () => ({
   browserData: {},
   callMain: vi.fn(),
   createDurableObjectServiceClient: vi.fn(() => ({ call: vi.fn() })),

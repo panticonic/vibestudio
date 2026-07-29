@@ -14,8 +14,8 @@ import {
   type EventKind,
   type LogEventCausality,
   type ParticipantRef,
-} from "@workspace/agentic-protocol";
-import type { AgentToolFailure } from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
+import type { AgentToolFailure } from "@vibestudio/agentic-protocol";
 import { ids } from "./ids.js";
 import { classifyModelFailure, type ModelFailureInfo } from "./model-errors.js";
 import type {

@@ -160,7 +160,7 @@ Two build strategies, selected by unit kind:
 - `jsx: "automatic"` (React 17+ transform)
 - Code splitting enabled
 - Plugins: workspace resolve, `.js` → `.ts` rewrite, `fs` shim, `path` shim, React/react-dom dedupe
-- `fs` shim imports `{ fs as _fs }` from `@workspace/runtime` and re-exports individual methods as wrapper functions
+- `fs` shim imports `{ fs as _fs }` from `@vibestudio/runtime` and re-exports individual methods as wrapper functions
 - `path` shim delegates to `pathe` (browser-compatible)
 - Eager panel dependencies stay in the primary artifact; chunks are reserved for genuine dynamic imports so remote clients do not waterfall through synthetic startup dependencies
 - Manifest `externals` produce an import map in the generated HTML

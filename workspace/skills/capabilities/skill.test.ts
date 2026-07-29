@@ -35,7 +35,7 @@ describe("capabilities skill", () => {
         "capabilities skill installed-consumer recipe"
       )
     ).not.toThrow();
-    expect(section).toContain('import { contextId, rpc, workers } from "@workspace/runtime"');
+    expect(section).toContain('import { contextId, rpc, workers } from "@vibestudio/runtime"');
     expect(section).toContain("services.build.getBuildReport(source, `ctx:${contextId}`)");
     expect(section).toContain('report.status !== "ok"');
     expect(section).toContain("workers.create(source");

@@ -511,29 +511,29 @@ function templateContributionAuthoritySelection(input: GitTemplateContributionIn
 }
 
 function templatePublishAuthoritySelection(input: GitTemplatePublishInput) {
-  const provider = input.destination.provider?.trim() || "github";
+  const provider = input.destination.provider.trim();
   const providerName = providerDisplayName(provider);
-  const repoName = input.destination.name?.trim() || input.templateName;
+  const repoName = input.destination.name.trim();
   if (repoName.includes("/")) {
     throw new Error(`Repository name "${repoName}" must not contain "/"`);
   }
-  const credential = input.destination.credentialId?.trim() || "default";
+  const owner = input.destination.owner.trim();
+  const credential = input.credentialId?.trim() || "default";
   const parts = input.parts
     .map(({ repoPath, subdir }) => ({
       repoPath: normalizeWorkspaceRepoPath(repoPath),
       subdir: normalizeWorkspaceRepoPath(subdir),
     }))
     .sort((left, right) => compareUtf16CodeUnits(left.repoPath, right.repoPath));
-  const destination = `${providerName} / ${repoName}`;
+  const destination = `${providerName} / ${owner}/${repoName}`;
   const requestDigest = sha256HexSyncText(
     canonicalJson({
       protocol: "vibestudio-template-publish-authority-v1",
       operationId: input.operationId,
       provider,
-      credential,
       repository: repoName,
-      organization: input.destination.organization ?? null,
-      private: input.destination.private ?? true,
+      owner,
+      private: input.creation?.private ?? true,
       version: input.version,
       mainEventId: input.expectedMainEventId,
       manifestDigest: input.manifestDigest,
@@ -544,10 +544,11 @@ function templatePublishAuthoritySelection(input: GitTemplatePublishInput) {
     capability: GIT_PUBLISH_CAPABILITY,
     resourceKey: `template-publication:${requestDigest}`,
     challenge: {
-      title: `Create and publish ${repoName}`,
+      title: `Publish ${input.version} to ${repoName}`,
       description:
-        `Creates a ${(input.destination.private ?? true) ? "private" : "public"} template ` +
-        `repository on ${providerName} from ${parts.length} exact protected-main parts.`,
+        `Publishes a new immutable version to ${destination}, creating a ` +
+        `${(input.creation?.private ?? true) ? "private" : "public"} repository only when absent, ` +
+        `from ${parts.length} exact protected-main parts.`,
       deniedReason: `Publishing ${input.templateName} to ${destination} was not allowed`,
       dedupKey: `template-publication:${requestDigest}`,
       resource: {
@@ -557,13 +558,13 @@ function templatePublishAuthoritySelection(input: GitTemplatePublishInput) {
       },
       operation: {
         kind: "git" as const,
-        verb: "create and publish a versioned template repository",
+        verb: "publish an immutable template version",
         object: {
           type: "external-repository",
           label: "Repository",
           value: destination,
         },
-        groupKey: `template-publication:${credential}:${provider}:${repoName}`,
+        groupKey: `template-publication:${credential}:${provider}:${owner}/${repoName}`,
       },
       substance: {
         kind: "change-set" as const,

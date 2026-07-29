@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:e6d565cce3d34987ea607b86209f59f9b99800ffaa2774ab5b886f0fba343d7e",
+  "censusDigest": "sha256:ea07163bf31d904e76f8a4c4868fabebe1de2bfeceb91e1eba03ac4c3233a198",
   "decisions": {
     "host:vcs.finalizeExternalDelta": {
       "review": "context-bound-complete-external-delta-finalization",
@@ -42,7 +42,7 @@
       "review": "host-only-active-entity-execution-root-census",
       "change": "Adds a host-only bounded read of exact execution identities held by active workspace entities for the mandatory retention provider. It exposes no entity payload and performs no lifecycle mutation."
     },
-    "direct:workspace/packages/semantic-control-plane/src/index.ts:vcsIsStateDescendant": {
+    "direct:packages/semantic-control-plane/src/index.ts:vcsIsStateDescendant": {
       "review": "bounded-semantic-state-ancestry-read",
       "change": "Adds an open read-only causal ancestry check between two exact semantic state references. The receiver traverses bounded semantic history and performs no source mutation or filesystem projection."
     },
@@ -306,7 +306,7 @@
       "review": "bounded-agent-settings-read",
       "change": "Restores the reviewed open read used by child-agent launch verification and agent settings UI. It returns only effective model routing, effort, approval level, and response policy for the exact addressed agent; it exposes no credential, prompt content, transcript, or mutation path."
     },
-    "direct:workspace/packages/semantic-control-plane/src/index.ts:diagnoseInvocation": {
+    "direct:packages/semantic-control-plane/src/index.ts:diagnoseInvocation": {
       "review": "bounded-read-only-causal-diagnostics",
       "change": "Adds an open, read-only exact-coordinate projection over existing trajectory, semantic command, effect-intent, and receipt authorities; every collection is bounded and reports truncation, and the method performs no mutation."
     },
@@ -362,7 +362,7 @@
       "review": "host-only-durable-owner-registration",
       "change": "Adds idempotent host registration of an exact active Durable Object and its enumerated work queues for recovery scanning."
     },
-    "direct:workspace/packages/runtime/src/worker/durable-base.ts:durableWorkCapabilities": {
+    "direct:packages/runtime/src/worker/durable-base.ts:durableWorkCapabilities": {
       "review": "host-only-static-work-capability-read",
       "change": "Exposes only the receiver's fixed supported durable-work queue names to the host activation hook; it reads no semantic or user data."
     },

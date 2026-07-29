@@ -90,7 +90,7 @@ function runtimeHelp(topic?: string): unknown {
     preInjected: ["chat", "scope", "scopes", "help"],
     loadedModules: Object.keys(moduleMap).sort(),
     runtimeUsage:
-      'Import panel/runtime APIs statically, for example: import { callMain, panel } from "@workspace/runtime".',
+      'Import panel/runtime APIs statically, for example: import { callMain, panel } from "@vibestudio/runtime".',
   };
 }
 
@@ -135,7 +135,7 @@ function errorHint(error: string): string {
   ]);
   const name = missingRuntimeBinding?.[1];
   if (name && runtimeExports.has(name)) {
-    return `${error}\nHint: import { ${name} } from "@workspace/runtime";`;
+    return `${error}\nHint: import { ${name} } from "@vibestudio/runtime";`;
   }
   return error;
 }

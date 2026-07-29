@@ -1,6 +1,6 @@
 import type { ComponentType, ReactNode } from "react";
 import type { Root } from "react-dom/client";
-import { panel } from "@workspace/runtime";
+import { panel } from "@vibestudio/runtime";
 
 interface PanelRenderErrorDiagnosticRequest {
   surfaceName?: string;

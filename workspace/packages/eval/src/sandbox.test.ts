@@ -448,7 +448,7 @@ return fs.readFileSync("/tmp/a");`,
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('Node built-in module "node:child_process" is not available');
-    expect(result.error).toContain("@workspace/runtime");
+    expect(result.error).toContain("@vibestudio/runtime");
     expect(result.error).not.toContain("npm:latest");
     expect(result).toMatchObject({
       failureKind: "infrastructure",
@@ -557,15 +557,15 @@ return fs.readFileSync("/tmp/a");`,
 
   it("keeps a structured invalid package subpath correctable", async () => {
     const result = await executeSandbox(
-      'import panel from "@workspace/runtime/panel"; return panel;',
+      'import panel from "@vibestudio/runtime/panel"; return panel;',
       {
         syntax: "typescript",
-        imports: { "@workspace/runtime/panel": "workspace:*" },
+        imports: { "@vibestudio/runtime/panel": "workspace:*" },
         loadImport: async () => {
-          throw Object.assign(new Error("No export ./panel found for @workspace/runtime"), {
+          throw Object.assign(new Error("No export ./panel found for @vibestudio/runtime"), {
             errorData: {
               code: "package_export_not_found",
-              packageName: "@workspace/runtime",
+              packageName: "@vibestudio/runtime",
               subpath: "./panel",
               conditions: ["worker", "workerd", "default"],
             },
@@ -576,7 +576,7 @@ return fs.readFileSync("/tmp/a");`,
 
     expect(result).toMatchObject({
       success: false,
-      error: "No export ./panel found for @workspace/runtime",
+      error: "No export ./panel found for @vibestudio/runtime",
       failureKind: "user-code",
       failureCode: "package_export_not_found",
     });
@@ -683,7 +683,7 @@ return fs.readFileSync("/tmp/a");`,
 
   it("maps a flat workspace alias to an already preloaded canonical module", async () => {
     const canonical = { answer: 42 };
-    const moduleMap = { "@workspace/runtime": canonical };
+    const moduleMap = { "@vibestudio/runtime": canonical };
     const loadImport = vi.fn();
 
     const result = await executeSandbox(

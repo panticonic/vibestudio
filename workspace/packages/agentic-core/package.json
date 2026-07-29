@@ -10,7 +10,7 @@
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shell-core": "workspace:*",
     "@vibestudio/shared": "workspace:*",
-    "@workspace/agentic-protocol": "workspace:*",
+    "@vibestudio/agentic-protocol": "workspace:*",
     "@workspace/eval": "workspace:*",
     "@workspace/model-catalog": "workspace:*",
     "@workspace/pubsub": "workspace:*"

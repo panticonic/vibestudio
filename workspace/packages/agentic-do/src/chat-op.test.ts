@@ -11,8 +11,8 @@
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import type { LifecyclePrepareInput, LifecycleResumeInput } from "@workspace/runtime/worker";
+import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
+import type { LifecyclePrepareInput, LifecycleResumeInput } from "@vibestudio/runtime/worker";
 import { ids } from "@workspace/agent-loop";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import { rpc, type RpcClient } from "@vibestudio/rpc";
@@ -20,7 +20,7 @@ import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   type AgenticEvent,
   type ParticipantRef,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import { sha256HexSyncText } from "@vibestudio/content-addressing";
 import type { ChannelEvent, ParticipantDescriptor } from "@workspace/harness";
 import type { RpcChannelMessage } from "@workspace/pubsub";

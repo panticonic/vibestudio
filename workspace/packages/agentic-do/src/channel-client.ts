@@ -16,7 +16,7 @@ import {
   AGENTIC_PROTOCOL_VERSION,
   type AgenticEvent,
   type MessageTier,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 /** Binary payload riding on a message — base64 for the DO wire, stored by the
  *  channel DO alongside the envelope and rendered by the chat panel. */
 export interface ChannelAttachment {
@@ -309,14 +309,14 @@ export class ChannelClient {
   async getParticipants(): Promise<
     Array<{
       participantId: string;
-      ref: import("@workspace/agentic-protocol").ParticipantRef;
+      ref: import("@vibestudio/agentic-protocol").ParticipantRef;
       metadata: Record<string, unknown>;
     }>
   > {
     return this.call("getParticipants") as Promise<
       Array<{
         participantId: string;
-        ref: import("@workspace/agentic-protocol").ParticipantRef;
+        ref: import("@vibestudio/agentic-protocol").ParticipantRef;
         metadata: Record<string, unknown>;
       }>
     >;

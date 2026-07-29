@@ -14,7 +14,7 @@ function identity(
     kind: "panel",
     stateHash: previousState,
     effectiveVersion: "ev-old",
-    dependencyEvs: { "@workspace/runtime": "runtime-old" },
+    dependencyEvs: { "@vibestudio/runtime": "runtime-old" },
     externalDeps: {},
     ...overrides,
   };
@@ -57,7 +57,7 @@ describe("createBuildUnitChangeApprovalProvider", () => {
               identity({
                 stateHash: state,
                 effectiveVersion: "ev-new",
-                dependencyEvs: { "@workspace/runtime": "runtime-new" },
+                dependencyEvs: { "@vibestudio/runtime": "runtime-new" },
               }),
             ]
           : [identity()]

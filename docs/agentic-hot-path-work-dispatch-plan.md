@@ -1171,7 +1171,7 @@ Host/runtime:
   scan
 - `src/server/doDispatch.ts` — consume work-ready receipts; `dispatchHeld` is the
   existing held-execution precedent
-- `workspace/packages/runtime/src/worker/durable-base.ts` — work-ready receipt on
+- `packages/runtime/src/worker/durable-base.ts` — work-ready receipt on
   the method, `__alarm`, and lifecycle-resume response paths
 - a shared durable-work contract package extracted from `effect-outbox.ts`
 

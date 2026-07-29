@@ -79,7 +79,7 @@
   "dependencies": {
     "@vibestudio/browser-data": "workspace:*",
     "@workspace/react": "workspace:*",
-    "@workspace/runtime": "workspace:*",
+    "@vibestudio/runtime": "workspace:*",
     "@workspace/ui": "workspace:*",
     "@radix-ui/themes": "^3.2.1",
     "react": "^19.1.1"

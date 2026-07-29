@@ -7,7 +7,7 @@
  * app restarts" outside test is intentionally NOT ported — it restarts the
  * host this suite runs in.
  */
-import { panelTree } from "@workspace/runtime";
+import { panelTree } from "@vibestudio/runtime";
 import { suite } from "../run.js";
 import { expect } from "../expect.js";
 import { openPanel, panelText, waitFor } from "../panels.js";

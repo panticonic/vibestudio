@@ -5,7 +5,7 @@ import {
   credentials,
   extensions,
   type StoredCredentialSummary,
-} from "@workspace/runtime";
+} from "@vibestudio/runtime";
 import {
   MODEL_SETTINGS_SERVICE_PROTOCOL,
   type ModelSettingsSnapshot,

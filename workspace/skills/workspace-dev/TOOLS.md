@@ -246,7 +246,7 @@ lost scope keys. In eval, `rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`,
 raw service catalog methods through `rpc.call("<svc>.<method>", [args])`. Use
 rich runtime bindings (`workers`, `vcs`, `fs`, etc.) directly for normal
 workspace operations; `services.<svc>` is convenience sugar for non-colliding
-service names. Do **not** import the injected names from `@workspace/runtime`.
+service names. Do **not** import the injected names from `@vibestudio/runtime`.
 
 **IMPORTANT:**
 
@@ -267,7 +267,7 @@ to import `./index.ts`, use its directory or a distinct filename such as
 
 ### Panel APIs
 
-`openPanel`/`listPanels`/`getPanelHandle`/`panelTree` are part of the **portable runtime surface** — importable from `@workspace/runtime` (and injected ambiently) in panel, worker, **and server-side eval**. They are host-mediated over RPC: in eval they create/inspect panels via the server. A handful of panel-only extras (`panel.focusPanel`, `buildPanelLink`, `panel.reopen`, `panel.stateArgs`, `adblock`, `journal.Journal`, `agentApi`) are NOT in the eval surface — those need a real panel host:
+`openPanel`/`listPanels`/`getPanelHandle`/`panelTree` are part of the **portable runtime surface** — importable from `@vibestudio/runtime` (and injected ambiently) in panel, worker, **and server-side eval**. They are host-mediated over RPC: in eval they create/inspect panels via the server. A handful of panel-only extras (`panel.focusPanel`, `buildPanelLink`, `panel.reopen`, `panel.stateArgs`, `adblock`, `journal.Journal`, `agentApi`) are NOT in the eval surface — those need a real panel host:
 
 | API                              | Description                                                                                           |
 | -------------------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -317,7 +317,7 @@ extension that isn't declared yet, edit `meta/vibestudio.yml`.
 Extension methods normally use unary RPC and must return JSON-serializable values. If an extension method returns a `Response` or `ReadableStream`, declare it when creating the client so the runtime uses streaming RPC end-to-end. Streaming `Response`/`ReadableStream` methods need the panel-runtime typed client (`extensions.use`), so this runs in panel/component code, not server-side eval:
 
 ```tsx
-import { extensions } from "@workspace/runtime";
+import { extensions } from "@vibestudio/runtime";
 
 type ShellApi = {
   attach(sessionId: string): Promise<Response>;
@@ -585,7 +585,7 @@ await services.extensions.invoke("@workspace-extensions/test-runner", "run", [{
 ### Browser Data
 
 ```typescript
-import { browserData } from "@workspace/runtime";
+import { browserData } from "@vibestudio/runtime";
 ```
 
 Core method groups:
@@ -616,7 +616,7 @@ browser window; pass `destination: "caller"` to attach it to the invoking panel.
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/runtime";
+  import { browserData } from "@vibestudio/runtime";
   const hosts = await browserData.listImportHosts();
   for (const host of hosts) {
     console.log(host.displayName, await browserData.listImportSources(host.hostId));
@@ -629,7 +629,7 @@ eval({ code: `
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/runtime";
+  import { browserData } from "@vibestudio/runtime";
   const hosts = await browserData.listImportHosts();
   const host = hosts.find(h => h.connected);
   if (!host) { console.log("No import host connected"); return; }
@@ -650,7 +650,7 @@ eval({ code: `
 
 ```
 eval({ code: `
-  import { browserData } from "@workspace/runtime";
+  import { browserData } from "@vibestudio/runtime";
   const bookmarks = await browserData.searchBookmarks("github");
   console.log("Found", bookmarks.length, "bookmarks");
   const html = await browserData.exportBookmarks("html");
@@ -669,7 +669,7 @@ You can drive panel lifecycle from eval, panel code, or an
 #### First launch
 
 ```tsx
-import { openPanel } from "@workspace/runtime";
+import { openPanel } from "@vibestudio/runtime";
 // Opens the main/pushed build. Plain openPanel() does not infer code provenance
 // from your contextId; pass { ref: `ctx:${contextId}` } when intended.
 const handle = await openPanel("panels/my-app");
@@ -686,7 +686,7 @@ content for the same `panelId`, `attemptId`, `runtimeEntityId`, and `buildKey`.
 #### Rebuild after edits
 
 ```tsx
-import { openPanel } from "@workspace/runtime";
+import { openPanel } from "@vibestudio/runtime";
 // Rebuilds the panel's current build ref: explicit ref if the panel was pinned,
 // otherwise main. It does not infer ctx:<contextId> from the panel context.
 const handle = await openPanel("panels/my-app");

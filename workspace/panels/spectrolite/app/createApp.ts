@@ -13,7 +13,7 @@
  * the only writers.
  */
 
-import { panel, contextId as runtimeContextId, rpc } from "@workspace/runtime";
+import { panel, contextId as runtimeContextId, rpc } from "@vibestudio/runtime";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { createPanelSandboxConfig } from "@workspace/agentic-core";
 import { createStore, type Store } from "./store";

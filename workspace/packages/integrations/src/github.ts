@@ -137,6 +137,18 @@ export interface CreateRepoResult {
   owner: string;
 }
 
+export interface ResolveOrCreateRepoParams {
+  owner: string;
+  name: string;
+  private: boolean;
+  description?: string;
+}
+
+export interface ResolveOrCreateRepoResult extends CreateRepoResult {
+  name: string;
+  created: boolean;
+}
+
 export type GitHubPublishOwnerSource = "explicit" | "credential-target" | "authenticated-user";
 
 export interface GitHubPublishOperationResolution {
@@ -204,9 +216,12 @@ export function validateGitHubPublishCredential(credential: StoredCredentialSumm
 
 export async function resolveGitHubPublishOperation(
   credentials: CredentialClient,
-  opts: { credentialId?: string; organization?: string } = {}
+  opts: { credentialId?: string; organization?: string; owner?: string } = {}
 ): Promise<GitHubPublishOperationResolution> {
-  const requestedOrganization = opts.organization?.trim() || undefined;
+  if (opts.organization && opts.owner) {
+    throw new Error("Choose one explicit GitHub owner field");
+  }
+  const requestedOwner = opts.owner?.trim() || opts.organization?.trim() || undefined;
   const candidates = (await credentials.listStoredCredentials()).filter(isGitHubStoredCredential);
   const activeCandidates = candidates.filter((candidate) => candidate.lifecycle.state === "active");
   const credential = opts.credentialId
@@ -230,11 +245,11 @@ export async function resolveGitHubPublishOperation(
   }
   validateGitHubPublishCredential(credential);
   const targetName = targetNameForCredential(credential);
-  if (requestedOrganization && targetName && requestedOrganization !== targetName) {
+  if (requestedOwner && targetName && requestedOwner !== targetName) {
     throw new Error(
-      `GitHub organization "${requestedOrganization}" does not match the connected token owner ` +
+      `GitHub owner "${requestedOwner}" does not match the connected token owner ` +
         `"${targetName}" for credential "${credential.label}". ` +
-        "Use the matching organization or reconnect with a token targeted to it."
+        "Use the matching owner or reconnect with a token targeted to it."
     );
   }
   const github = createGitHubClient(credentials, { credentialId: credential.id });
@@ -255,12 +270,12 @@ export async function resolveGitHubPublishOperation(
         "Reconnect GitHub and retry."
     );
   }
-  const ownerSource: GitHubPublishOwnerSource = requestedOrganization
+  const ownerSource: GitHubPublishOwnerSource = requestedOwner
     ? "explicit"
     : targetName
       ? "credential-target"
       : "authenticated-user";
-  const destinationOwner = requestedOrganization ?? targetName ?? user.login;
+  const destinationOwner = requestedOwner ?? targetName ?? user.login;
   return {
     credentialId: credential.id,
     credentialLabel: credential.label,
@@ -268,7 +283,9 @@ export async function resolveGitHubPublishOperation(
     destinationOwner,
     ownerSource,
     ...(targetName ? { targetName } : {}),
-    ...(ownerSource !== "authenticated-user" ? { organization: destinationOwner } : {}),
+    ...(destinationOwner.toLowerCase() !== user.login.toLowerCase()
+      ? { organization: destinationOwner }
+      : {}),
     requiredCapabilities: ["github-api", "github-repository-create", "github-git-push"],
   };
 }
@@ -336,6 +353,7 @@ export interface GitHubClient {
   getUser(): Promise<GitHubUser>;
   listRepos(opts?: ListReposOptions): Promise<GitHubRepo[]>;
   createRepo(params: CreateRepoParams): Promise<CreateRepoResult>;
+  resolveOrCreateRepo(params: ResolveOrCreateRepoParams): Promise<ResolveOrCreateRepoResult>;
   getRepo(owner: string, repo: string): Promise<GitHubRepo>;
   listIssues(owner: string, repo: string, opts?: ListIssuesOptions): Promise<GitHubIssue[]>;
   createIssue(owner: string, repo: string, params: CreateIssueParams): Promise<GitHubIssue>;
@@ -434,6 +452,35 @@ export function createGitHubClient(
   };
 
   const enc = encodeURIComponent;
+  const resolvedRepository = (
+    repo: GitHubRepo,
+    expected: { owner: string; name: string },
+    created: boolean
+  ): ResolveOrCreateRepoResult => {
+    const owner = repo.owner.login?.trim();
+    const name = repo.name?.trim();
+    if (
+      !owner ||
+      !name ||
+      owner.toLowerCase() !== expected.owner.toLowerCase() ||
+      name.toLowerCase() !== expected.name.toLowerCase()
+    ) {
+      throw new Error(
+        `GitHub resolved ${repo.full_name || "<unknown repository>"} while ` +
+          `${expected.owner}/${expected.name} was requested`
+      );
+    }
+    if (!repo.clone_url || !repo.html_url) {
+      throw new Error(`GitHub repository ${owner}/${name} has no canonical HTTPS URLs`);
+    }
+    return {
+      cloneUrl: repo.clone_url,
+      webUrl: repo.html_url,
+      owner,
+      name,
+      created,
+    };
+  };
 
   return {
     handle,
@@ -481,6 +528,61 @@ export function createGitHubClient(
         webUrl: repo.html_url,
         owner: repo.owner.login,
       };
+    },
+    resolveOrCreateRepo: async (params) => {
+      const owner = params.owner.trim();
+      const name = params.name.trim();
+      if (!owner || !name || owner.includes("/") || name.includes("/")) {
+        throw new Error("GitHub repository owner and name must be single non-empty path segments");
+      }
+      try {
+        const existing = await apiFetch<GitHubRepo>(`/repos/${enc(owner)}/${enc(name)}`);
+        return resolvedRepository(existing, { owner, name }, false);
+      } catch (error) {
+        if (!(error instanceof GitHubApiError) || error.status !== 404) throw error;
+      }
+
+      const user = await apiFetch<GitHubUser>("/user", undefined, userHandle);
+      const endpoint =
+        user.login.toLowerCase() === owner.toLowerCase()
+          ? "/user/repos"
+          : `/orgs/${enc(owner)}/repos`;
+      let created: GitHubRepo;
+      try {
+        created = await apiFetch<GitHubCreatedRepo>(
+          endpoint,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              name,
+              private: params.private,
+              ...(params.description === undefined ? {} : { description: params.description }),
+            }),
+          },
+          userHandle
+        );
+      } catch (error) {
+        // A concurrent publisher may win the create race. Resolve the identity
+        // again; every other creation failure remains visible.
+        if (error instanceof GitHubApiError && error.status === 422) {
+          try {
+            const existing = await apiFetch<GitHubRepo>(`/repos/${enc(owner)}/${enc(name)}`);
+            return resolvedRepository(existing, { owner, name }, false);
+          } catch {
+            // Preserve the original create failure below.
+          }
+        }
+        if (error instanceof GitHubApiError) {
+          throw new Error(
+            `GitHub repository creation failed (${error.status} ${error.statusText})` +
+              `${error.detail ? `: ${error.detail}` : "."} ` +
+              "Review the connected credential and any GitHub account or organization restrictions, then retry.",
+            { cause: error }
+          );
+        }
+        throw error;
+      }
+      return resolvedRepository(created, { owner, name }, true);
     },
     getIssue: (owner, repo, number) =>
       apiFetch<GitHubIssue>(`/repos/${enc(owner)}/${enc(repo)}/issues/${number}`),

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Button, Card, Flex, Heading, Select, Spinner, Text, TextField } from "@radix-ui/themes";
 import { ClockIcon, ReloadIcon, TrashIcon } from "@radix-ui/react-icons";
 import type { StoredHistory } from "@vibestudio/browser-data";
-import { browserData, openPanel } from "@workspace/runtime";
+import { browserData, openPanel } from "@vibestudio/runtime";
 import { AboutPage, AboutThemeRoot, Section } from "../../packages/about-shared/ui";
 
 function HistoryPage() {

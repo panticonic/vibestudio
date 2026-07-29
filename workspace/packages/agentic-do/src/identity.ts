@@ -5,7 +5,7 @@
  * Detects workerd restarts by comparing session IDs.
  */
 
-import type { SqlStorage, DORef } from "@workspace/runtime/worker";
+import type { SqlStorage, DORef } from "@vibestudio/runtime/worker";
 
 export class DOIdentity {
   private _ref: DORef | null = null;

@@ -179,19 +179,15 @@ describe("template agentic validator", () => {
     };
     expect(
       test.validate(
-        execution(
-          undefined,
-          `The exact fingerprint is ${fingerprint}. Nothing was published.`,
-          {
-            code: [
-              "const composer = '@workspace-extensions/template-composer';",
-              "const available = await rpc.call('main', 'extensions.invoke', [composer, 'authoringParts', []]);",
-              "const plan = await rpc.call('main', 'extensions.invoke', [composer, 'inspectAuthoring', [{ name: 'Composer', description: 'Template composer', parts: ['packages/template-composer'] }]]);",
-              "console.log(JSON.stringify(plan));",
-            ].join("\n"),
-            console: JSON.stringify(plan),
-          }
-        )
+        execution(undefined, `The exact fingerprint is ${fingerprint}. Nothing was published.`, {
+          code: [
+            "const composer = '@workspace-extensions/template-composer';",
+            "const available = await rpc.call('main', 'extensions.invoke', [composer, 'authoringParts', []]);",
+            "const plan = await rpc.call('main', 'extensions.invoke', [composer, 'inspectAuthoring', [{ name: 'Composer', description: 'Template composer', parts: ['packages/template-composer'] }]]);",
+            "console.log(JSON.stringify(plan));",
+          ].join("\n"),
+          console: JSON.stringify(plan),
+        })
       )
     ).toEqual({ passed: true, reason: undefined });
   });

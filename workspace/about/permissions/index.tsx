@@ -17,7 +17,7 @@ import {
   ResetIcon,
   TrashIcon,
 } from "@radix-ui/react-icons";
-import { panel, rpc } from "../../packages/runtime/src/panel/index";
+import { panel, rpc } from "@vibestudio/runtime";
 import { AboutPage, AboutThemeRoot, Section } from "../../packages/about-shared/ui";
 
 export interface SavedPermissionGrant {

@@ -37,10 +37,10 @@ import {
   type LogEnvelope,
   type MessageModelPayload,
   type ParticipantRef,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import { channelTrajectoryFor, logIdForChannel } from "@vibestudio/trajectory-identity";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
-import type { SqlStorage } from "@workspace/runtime/worker";
+import type { SqlStorage } from "@vibestudio/runtime/worker";
 import {
   EffectOutbox,
   maxAttempts,

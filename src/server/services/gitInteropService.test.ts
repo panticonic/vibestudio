@@ -255,7 +255,8 @@ describe("gitInteropService", () => {
         manifest: "systemEpoch: 57\n",
         manifestDigest: `v1-sha256:${"a".repeat(64)}`,
         parts: [{ repoPath: "panels/news", subdir: "panels/news" }],
-        destination: { provider: "github", name: "template-news", private: false },
+        destination: { provider: "github", owner: "acme", name: "template-news" },
+        creation: { private: false },
       },
     ]);
     expect(prepared).toEqual({
@@ -264,11 +265,11 @@ describe("gitInteropService", () => {
           capability: "git.publish",
           resourceKey: expect.stringMatching(/^template-publication:[0-9a-f]{64}$/u),
           challenge: expect.objectContaining({
-            title: "Create and publish template-news",
+            title: "Publish 1.0.0 to template-news",
             resource: {
               type: "external-repository",
               label: "Destination",
-              value: "GitHub / template-news",
+              value: "GitHub / acme/template-news",
             },
             substance: expect.objectContaining({
               summary: "Publish News 1.0.0 from exact protected main",

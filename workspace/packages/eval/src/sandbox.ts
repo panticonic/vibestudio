@@ -1237,7 +1237,7 @@ export async function executeSandbox(
     throwIfAborted(signal);
     let normalizedCode = normalizeAgentEvalCode(code);
     // (#1) Fail loudly if pre-injected globals are imported from the runtime.
-    const ambientCompatModule = moduleMap["@workspace/runtime"];
+    const ambientCompatModule = moduleMap["@vibestudio/runtime"];
     const ambientCompatExports =
       ambientCompatModule && typeof ambientCompatModule === "object"
         ? (ambientCompatModule as Record<string, unknown>)
@@ -1455,7 +1455,7 @@ export async function executeSandbox(
       tracking.enter(trackingContext);
     }
 
-    const runtimeModule = transformed.requires.includes("@workspace/runtime")
+    const runtimeModule = transformed.requires.includes("@vibestudio/runtime")
       ? tryRequireRuntimeModule(requireFn)
       : null;
     const journal = createRuntimeJournal(runtimeModule);
@@ -1548,7 +1548,7 @@ export async function executeSandbox(
 
 function tryRequireRuntimeModule(requireFn: (id: string) => unknown): any | null {
   try {
-    return requireFn("@workspace/runtime") as any;
+    return requireFn("@vibestudio/runtime") as any;
   } catch {
     return null;
   }

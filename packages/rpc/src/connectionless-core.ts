@@ -4,7 +4,7 @@
  * `createRpcClient` core over the envelope-native `httpClientTransport`.
  *
  * There is intentionally ONE builder so the two DurableObjectBase codebases
- * (`@vibestudio/durable` and `@workspace/runtime`) cannot drift their RPC wiring
+ * (`@vibestudio/durable` and `@vibestudio/runtime`) cannot drift their RPC wiring
  * again. The base feeds inbound POSTs to `respond`/`deliver` and dispatches via
  * the core's `handleEnvelope` (method calls flow through `rpc.exposeAll(...)`).
  */

@@ -5,8 +5,8 @@
  * lastSeq/lastHash advance.
  */
 
-import type { ActorRef, LogEnvelope, ParticipantRef } from "@workspace/agentic-protocol";
-import { participantKey, participantRefFromActor } from "@workspace/agentic-protocol";
+import type { ActorRef, LogEnvelope, ParticipantRef } from "@vibestudio/agentic-protocol";
+import { participantKey, participantRefFromActor } from "@vibestudio/agentic-protocol";
 import type {
   AgentState,
   AgentTurnMetadata,

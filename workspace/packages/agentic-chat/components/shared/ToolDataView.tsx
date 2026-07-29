@@ -1,6 +1,6 @@
 import React, { useMemo } from "react";
 import { Box, Flex, Text } from "@radix-ui/themes";
-import { isStoredValueRef, type StoredValueRef } from "@workspace/agentic-protocol";
+import { isStoredValueRef, type StoredValueRef } from "@vibestudio/agentic-protocol";
 import type { ChatSandboxValue } from "@workspace/agentic-core";
 import { CodePreview, type CodePreviewLanguage } from "./CodePreview";
 

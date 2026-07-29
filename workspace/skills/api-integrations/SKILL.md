@@ -29,7 +29,7 @@ keep the eval result bounded. Convert only the canonical
 other error:
 
 ```ts
-import { credentials } from "@workspace/runtime";
+import { credentials } from "@vibestudio/runtime";
 
 try {
   await credentials.fetch(url, undefined, { credentialId });
@@ -41,7 +41,7 @@ try {
 ```
 
 Do not return the raw error object, credential metadata, or request details.
-In eval, `credentials` is imported from `@workspace/runtime`; it is not an
+In eval, `credentials` is imported from `@vibestudio/runtime`; it is not an
 ambient global and there is no raw host-service equivalent to
 `credentials.fetch`.
 
@@ -53,7 +53,7 @@ client ids, tokens, or secrets. Do not retry the prompt, inspect application
 source looking for a secret, switch to raw credential-service RPC methods, or
 ask the user to paste the value into chat.
 
-Use the `credentials` namespace exported by `@workspace/runtime`. Its public
+Use the `credentials` namespace exported by `@vibestudio/runtime`. Its public
 methods include `store`, `requestCredentialInput`, `connect`, `fetch`,
 `hookForUrl`, `gitHttp`, and `forAudience`; lower-level wire transports are not
 an alternative public API. When working as a direct service/RPC caller instead
@@ -217,7 +217,7 @@ packfiles through `credentials.fetch()`, and do not expose PATs to userland
 `onAuth` callbacks:
 
 ```ts
-import { credentials, fs } from "@workspace/runtime";
+import { credentials, fs } from "@vibestudio/runtime";
 import { GitClient } from "@vibestudio/git";
 
 const client = new GitClient(fs, { http: credentials.gitHttp() });
@@ -234,7 +234,7 @@ To share a git remote across future contexts, use the runtime git remote API
 instead of editing only the current `.git/config`:
 
 ```ts
-import { git } from "@workspace/runtime";
+import { git } from "@vibestudio/runtime";
 
 await git.setSharedRemote("panels/my-panel", {
   name: "origin",
@@ -301,7 +301,7 @@ were rolled back or remain `not-materialized`. For the full model, see
 import { useState } from "react";
 import { Button, Checkbox, Flex, Text } from "@radix-ui/themes";
 import { GlobeIcon, OpenInNewWindowIcon } from "@radix-ui/react-icons";
-import { openPanel, openExternal } from "@workspace/runtime";
+import { openPanel, openExternal } from "@vibestudio/runtime";
 
 export default function ProviderSetup({ onSubmit, onCancel }) {
   const [done, setDone] = useState(false);

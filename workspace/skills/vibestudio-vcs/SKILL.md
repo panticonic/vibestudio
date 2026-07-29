@@ -147,7 +147,7 @@ Use `await help("vcs")` for a compact live method index, then
 `await help("vcs.edit")` (or the exact method needed) for its full schema. The generated
 [public contract](references/public-contract.md). Do not guess methods or copy
 request schemas into operational prose. In eval or runtime code, import
-`{ contextId, vcs }` from `@workspace/runtime` and call
+`{ contextId, vcs }` from `@vibestudio/runtime` and call
 `vcs.status({ contextId })`, `vcs.edit(request)`, and the other methods directly.
 Do not drop to raw `rpc.call("main", "vcs.*", [request])` when this client is
 available. The public surface is:

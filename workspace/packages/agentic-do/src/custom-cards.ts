@@ -26,8 +26,8 @@ import {
   type AgenticEvent,
   type CustomMessageDisplayMode,
   type MessageId,
-} from "@workspace/agentic-protocol";
-import type { SqlStorage } from "@workspace/runtime/worker";
+} from "@vibestudio/agentic-protocol";
+import type { SqlStorage } from "@vibestudio/runtime/worker";
 import type { ChannelClient } from "./channel-client.js";
 
 export class CardValidationError extends Error {

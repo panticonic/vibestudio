@@ -23,7 +23,7 @@ import {
   type DurableObjectContext,
   type DurableObjectServiceClient,
   type UserlandApprovalChoice,
-} from "@workspace/runtime/worker";
+} from "@vibestudio/runtime/worker";
 import { canonicalJson } from "@vibestudio/content-addressing";
 import type { ChannelEvent } from "@workspace/harness";
 import {
@@ -71,7 +71,7 @@ import {
   type LogEnvelope,
   type MessageBlockInput,
   type ParticipantRef,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import {
   participantMetadataSchema,
   participantIsAgentVessel,

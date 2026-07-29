@@ -29,7 +29,7 @@ function addFile(p: string, content: string | Uint8Array): void {
   mocks.files.set(normalized, content);
 }
 
-vi.mock("@workspace/runtime", () => ({
+vi.mock("@vibestudio/runtime", () => ({
   vcs: {
     status: mocks.status,
     edit: mocks.edit,

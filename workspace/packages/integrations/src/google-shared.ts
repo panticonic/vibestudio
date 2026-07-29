@@ -1,7 +1,7 @@
 import type {
   CredentialClient,
   UrlCredentialHandle,
-} from "@workspace/runtime/credentials";
+} from "@vibestudio/runtime/credentials";
 import {
   bindingAudience,
   googleWorkspaceCredential,

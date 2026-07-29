@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { StoredCredentialSummary } from "@workspace/runtime";
+import type { StoredCredentialSummary } from "@vibestudio/runtime";
 
 const runtimeMock = vi.hoisted(() => ({
   credentials: {
@@ -18,7 +18,7 @@ const runtimeMock = vi.hoisted(() => ({
   openExternal: vi.fn(),
 }));
 
-vi.mock("@workspace/runtime", () => runtimeMock);
+vi.mock("@vibestudio/runtime", () => runtimeMock);
 
 import {
   buildGitHubTokenSettingsUrl,

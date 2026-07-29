@@ -11,8 +11,8 @@
  *   the note into it instead.
  */
 
-import type { SqlStorage } from "@workspace/runtime/worker";
-import type { UiFeedbackPayload } from "@workspace/agentic-protocol";
+import type { SqlStorage } from "@vibestudio/runtime/worker";
+import type { UiFeedbackPayload } from "@vibestudio/agentic-protocol";
 
 const DEDUPE_TTL_MS = 10 * 60 * 1000;
 const MAX_PENDING_PER_CHANNEL = 20;

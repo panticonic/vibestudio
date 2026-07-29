@@ -5,6 +5,6 @@
   "exports": { ".": "./index.ts" },
   "dependencies": {
     "@workspace/agentic-core": "workspace:*",
-    "@workspace/runtime": "workspace:*"
+    "@vibestudio/runtime": "workspace:*"
   }
 }

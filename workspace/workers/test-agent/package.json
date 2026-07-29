@@ -126,8 +126,8 @@
     }
   },
   "dependencies": {
-    "@workspace/runtime": "workspace:*",
-    "@workspace/agentic-protocol": "workspace:*",
+    "@vibestudio/runtime": "workspace:*",
+    "@vibestudio/agentic-protocol": "workspace:*",
     "@workspace/agentic-do": "workspace:*",
     "@workspace/harness": "workspace:*"
   },

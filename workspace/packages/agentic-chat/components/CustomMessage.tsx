@@ -10,7 +10,7 @@ import {
   AGENTIC_PROTOCOL_VERSION,
   type AgenticEvent,
   type UiFeedbackCategory,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import type { MessageTypeComponentEntry } from "../types";
 
 interface CustomRenderProps {

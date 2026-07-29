@@ -3,7 +3,7 @@
 import { act, render, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { PubSubClient } from "@workspace/pubsub";
-import { AGENTIC_EVENT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
+import { AGENTIC_EVENT_PAYLOAD_KIND } from "@vibestudio/agentic-protocol";
 import { useChannelMessages, type UseChannelMessagesResult } from "./useChannelMessages.js";
 import {
   agenticPublication,

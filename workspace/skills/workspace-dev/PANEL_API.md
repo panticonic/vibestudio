@@ -1,6 +1,6 @@
 # Panel API
 
-Import panel APIs from `@workspace/runtime`. The same portable surface works in
+Import panel APIs from `@vibestudio/runtime`. The same portable surface works in
 panels, workers, Durable Objects, and server-side eval.
 
 ## The completion contract
@@ -34,7 +34,7 @@ unhandled rejections, missing assets, and incomplete runtime configuration as
 failures.
 
 ```ts
-import { openPanel, PanelOperationError } from "@workspace/runtime";
+import { openPanel, PanelOperationError } from "@vibestudio/runtime";
 
 try {
   const panel = await openPanel("panels/my-app", {
@@ -298,7 +298,7 @@ shows the failure is below the lifecycle boundary.
 Inside a panel:
 
 ```ts
-import { panel } from "@workspace/runtime";
+import { panel } from "@vibestudio/runtime";
 
 const initial = panel.stateArgs.get();
 await panel.stateArgs.set({ theme: "dark" });

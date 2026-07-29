@@ -42,7 +42,7 @@ import {
   type CredentialAccessGrantSummary,
   type CredentialAccessSubjectSummary,
   type ManagedCredentialSummary,
-} from "@workspace/runtime";
+} from "@vibestudio/runtime";
 import { AboutThemeRoot, AboutPage, Section } from "@workspace/about-shared/ui";
 
 type CredentialStatus = {

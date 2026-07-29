@@ -10,7 +10,6 @@
     "./configParser": "./src/configParser.ts",
     "./configComposition": "./src/configComposition.ts",
     "./contextProjections": "./src/contextProjections.ts",
-    "./extensionRegistry": "./src/extensionRegistry.ts",
     "./gitCheckouts": "./src/gitCheckouts.ts",
     "./loader": "./src/loader.ts",
     "./pathPolicy": "./src/pathPolicy.ts",

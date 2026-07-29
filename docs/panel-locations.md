@@ -48,7 +48,7 @@ An explicit `disposition` overrides that default.
 Use the runtime builders rather than assembling query strings:
 
 ```ts
-import { buildPanelLink, buildPanelDeepLink, buildPanelShareLink } from "@workspace/runtime";
+import { buildPanelLink, buildPanelDeepLink, buildPanelShareLink } from "@vibestudio/runtime";
 
 const inApp = buildPanelLink("panels/chat", {
   ref: "state:abc123",

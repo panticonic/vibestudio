@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestDO, createTestDirectAuthority } from "@workspace/runtime/worker/test-utils";
+import { createTestDO, createTestDirectAuthority } from "@vibestudio/runtime/worker/test-utils";
 import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
@@ -8,8 +8,8 @@ import {
   invocationCompletedPayload,
   type AgenticEvent,
   type BlockId,
-} from "@workspace/agentic-protocol";
-import { GadWorkspaceDO } from "../../packages/semantic-control-plane/src/index.js";
+} from "@vibestudio/agentic-protocol";
+import { GadWorkspaceDO } from "@vibestudio/semantic-control-plane";
 import { PubSubChannel } from "./channel-do.js";
 
 type TestDO<T> = Awaited<ReturnType<typeof createTestDO<T>>>;

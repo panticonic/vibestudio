@@ -11,7 +11,7 @@
  * semantic workspace context. A vault is a repository, not another context.
  */
 
-import { panel } from "@workspace/runtime";
+import { panel } from "@vibestudio/runtime";
 import type { Store } from "./store";
 import type { SpectroliteState } from "./state";
 import { createQueuedRefresh } from "./queuedRefresh";

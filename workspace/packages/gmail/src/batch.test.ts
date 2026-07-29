@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { CredentialClient, UrlCredentialHandle } from "@workspace/runtime/credentials";
+import type { CredentialClient, UrlCredentialHandle } from "@vibestudio/runtime/credentials";
 
 import { BATCH_CHUNK_SIZE, executeBatch, parseBatchResponse, type BatchPart } from "./batch.js";
 import { GmailApiError, createGmailClient } from "./gmail-client.js";

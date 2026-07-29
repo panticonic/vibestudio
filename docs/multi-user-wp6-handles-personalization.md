@@ -37,7 +37,7 @@ itself (WP0).
 
 ## 2. The core issue (investigation)
 
-- The channel `"user"` `ParticipantKind` (`workspace/packages/agentic-protocol/events.ts:22-41`)
+- The channel `"user"` `ParticipantKind` (`packages/agentic-protocol/events.ts:22-41`)
   and GAD `"user"` actor kind are **semantic roles** — "a human authored this" — **not
   accounts**. Account identity is a **distinct field** carried alongside; never conflate.
 - Every human panel today joins **hardcoded** as `{name:"Chat Panel", type:"panel",
@@ -156,7 +156,7 @@ mirroring what `sendAsCaller` already does for authenticated callers
 | File | Change |
 |---|---|
 | `workspace/workers/pubsub-channel/channel-do.ts` | `subscribe` stamps human `id:user:<userId>`/`kind:user` from the verified `AuthenticatedCaller.userId` (WP4 §2.4); mutable `handle`/`displayName`/`color`/`avatar` render from the live host-projected identity read (WP0 §3.7), not the roster row; ignore client-asserted identity for humans |
-| `workspace/packages/agentic-protocol/participant-ref.ts` | `user:` id-prefix → `user` kind (`:227`); `status`/`avatar`/`color` whitelist prep (shared w/ WP8, `:17-26`) |
+| `packages/agentic-protocol/participant-ref.ts` | `user:` id-prefix → `user` kind (`:227`); `status`/`avatar`/`color` whitelist prep (shared w/ WP8, `:17-26`) |
 | `workspace/packages/agentic-chat/hooks/useAgenticChat.ts`, `hooks/core/useChatCore.ts` | retire hardcoded `@user`/"Chat Panel"; pass account subject |
 | `workspace/packages/agentic-core/src/connection.ts` | stop asserting human handle; rely on host-verified subject |
 | `workspace/packages/pubsub/src/rpc-client.ts` | human participant id = `user:<userId>` |

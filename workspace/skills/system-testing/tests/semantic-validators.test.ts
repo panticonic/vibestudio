@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@workspace/runtime", () => ({
+vi.mock("@vibestudio/runtime", () => ({
   browserData: {
     listImportJobs: vi.fn(async () => []),
   },
@@ -500,7 +500,7 @@ describe("semantic system-test validators", () => {
             name: "eval",
             arguments: {
               code: [
-                'import { extensions } from "@workspace/runtime";',
+                'import { extensions } from "@vibestudio/runtime";',
                 'return extensions.invoke("@workspace-extensions/test-runner", "run", [{',
                 '  target: "extensions/test-runner",',
                 '  fileFilter: "index.test.ts",',

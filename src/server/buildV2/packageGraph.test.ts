@@ -202,7 +202,7 @@ describe("discoverPackageGraph extension units", () => {
       fs.writeFileSync(
         path.join(runtimeDir, "package.json"),
         JSON.stringify({
-          name: "@workspace/runtime",
+          name: "@vibestudio/runtime",
           version: "0.0.0",
           vibestudio: {},
         })
@@ -213,7 +213,7 @@ describe("discoverPackageGraph extension units", () => {
           name: "@workspace-panels/chat",
           version: "1.0.0",
           dependencies: {
-            "@workspace/runtime": "workspace:main",
+            "@vibestudio/runtime": "workspace:main",
           },
           vibestudio: {
             entry: "index.tsx",
@@ -224,7 +224,7 @@ describe("discoverPackageGraph extension units", () => {
 
       const graph = discoverPackageGraph(root);
       const node = graph.get("@workspace-panels/chat");
-      expect(node.internalDeps).toContain("@workspace/runtime");
+      expect(node.internalDeps).toContain("@vibestudio/runtime");
       expect(node.dependencyErrors).toEqual([expect.stringContaining("must use workspace:*")]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
@@ -241,7 +241,7 @@ describe("discoverPackageGraph extension units", () => {
       fs.writeFileSync(
         path.join(runtimeDir, "package.json"),
         JSON.stringify({
-          name: "@workspace/runtime",
+          name: "@vibestudio/runtime",
           version: "0.0.0",
           vibestudio: {},
         })
@@ -252,7 +252,7 @@ describe("discoverPackageGraph extension units", () => {
           name: "@workspace-extensions/git-tools",
           version: "1.0.0",
           dependencies: {
-            "@workspace/runtime": "workspace:*",
+            "@vibestudio/runtime": "workspace:*",
           },
           vibestudio: {
             entry: "index.ts",
@@ -265,7 +265,7 @@ describe("discoverPackageGraph extension units", () => {
       const node = graph.get("@workspace-extensions/git-tools");
       expect(node.kind).toBe("extension");
       expect(node.relativePath).toBe("extensions/git-tools");
-      expect(node.internalDeps).toContain("@workspace/runtime");
+      expect(node.internalDeps).toContain("@vibestudio/runtime");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -309,7 +309,7 @@ describe("discoverPackageGraph app units", () => {
       fs.writeFileSync(
         path.join(runtimeDir, "package.json"),
         JSON.stringify({
-          name: "@workspace/runtime",
+          name: "@vibestudio/runtime",
           version: "0.0.0",
           vibestudio: {},
         })
@@ -320,7 +320,7 @@ describe("discoverPackageGraph app units", () => {
           name: "@workspace-apps/shell",
           version: "1.0.0",
           dependencies: {
-            "@workspace/runtime": "workspace:*",
+            "@vibestudio/runtime": "workspace:*",
           },
           vibestudio: {
             app: {
@@ -336,7 +336,7 @@ describe("discoverPackageGraph app units", () => {
       const node = graph.get("@workspace-apps/shell");
       expect(node.kind).toBe("app");
       expect(node.relativePath).toBe("apps/shell");
-      expect(node.internalDeps).toContain("@workspace/runtime");
+      expect(node.internalDeps).toContain("@vibestudio/runtime");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

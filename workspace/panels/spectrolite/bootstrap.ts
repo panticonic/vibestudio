@@ -6,8 +6,8 @@
  * only the system prompt and channel-name prefix differ.
  */
 
-import { rpc } from "@workspace/runtime";
-import { parseDoTargetId } from "@workspace/runtime/workerd-client";
+import { rpc } from "@vibestudio/runtime";
+import { parseDoTargetId } from "@vibestudio/runtime/workerd-client";
 import {
   launchAgentIntoChannel,
   retireAgentEntity,
@@ -99,7 +99,7 @@ export async function getChannelDOParticipants(channelId: string): Promise<Chann
     "getParticipants",
     []
   );
-  // Delegate to the canonical parser in `@workspace/runtime/workerd-client`
+  // Delegate to the canonical parser in `@vibestudio/runtime/workerd-client`
   // rather than maintaining a local copy. If upstream evolves the
   // do-target format (e.g. to handle no-slash sources), Spectrolite
   // benefits automatically.

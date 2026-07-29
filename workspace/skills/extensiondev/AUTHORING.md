@@ -31,7 +31,7 @@ External extensions clone into the same tree at install time. There is no per-us
     }
   },
   "dependencies": {
-    "@workspace/runtime": "workspace:*"
+    "@vibestudio/runtime": "workspace:*"
   },
   "pnpm": {
     "overrides": {

@@ -5,6 +5,7 @@ import type {
 } from "@vibestudio/workspace-contracts/types";
 import type {
   TemplateAuthoringInspection,
+  TemplateAuthoringRequest,
   TemplateLocator,
 } from "@vibestudio/service-schemas/templates";
 import {
@@ -64,11 +65,7 @@ import {
   readBootstrapDescriptor,
   type SemanticWorkspaceObservation,
 } from "./workspace.js";
-import {
-  inspectTemplateAuthoring,
-  listTemplateAuthoringParts,
-  type TemplateAuthoringRequest,
-} from "./authoring.js";
+import { inspectTemplateAuthoring, listTemplateAuthoringParts } from "./authoring.js";
 
 interface Environment {
   info: Awaited<ReturnType<ExtensionContextLike["workspace"]["getInfo"]>>;
@@ -974,7 +971,13 @@ export async function activate(ctx: ExtensionContextLike) {
     },
 
     async inspectAuthoring(input: TemplateAuthoringRequest) {
-      return inspectTemplateAuthoring(ctx, await observeWorkspace(ctx), input);
+      const env = await environment(ctx);
+      return inspectTemplateAuthoring(
+        ctx,
+        env.observation,
+        input,
+        sourcePortsForEnvironment(ctx, env)
+      );
     },
 
     async authoringParts() {
@@ -986,18 +989,22 @@ export async function activate(ctx: ExtensionContextLike) {
       plan: TemplateAuthoringInspection;
       version: string;
       destination: {
-        provider?: string;
-        name?: string;
-        organization?: string;
+        provider: string;
+        owner: string;
+        name: string;
+      };
+      credentialId?: string;
+      creation?: {
         private?: boolean;
         description?: string;
-        credentialId?: string;
       };
     }) {
+      const env = await environment(ctx);
       const current = await inspectTemplateAuthoring(
         ctx,
-        await observeWorkspace(ctx),
-        input.plan.request
+        env.observation,
+        input.plan.request,
+        sourcePortsForEnvironment(ctx, env)
       );
       if (canonicalJson(current) !== canonicalJson(input.plan)) {
         throw new Error(
@@ -1012,9 +1019,11 @@ export async function activate(ctx: ExtensionContextLike) {
         manifest: current.manifest,
         manifestDigest: current.manifestDigest,
         parts: current.includedParts.map((repoPath) => ({ repoPath, subdir: repoPath })),
-        destination: {
-          ...input.destination,
-          description: input.destination.description ?? current.request.description,
+        destination: input.destination,
+        ...(input.credentialId ? { credentialId: input.credentialId } : {}),
+        creation: {
+          ...input.creation,
+          description: input.creation?.description ?? current.request.description,
         },
       });
     },

@@ -1466,9 +1466,7 @@ export class GitClient {
    */
   async resolveCommit(dir: string, ref: string): Promise<string | null> {
     try {
-      const oid = FULL_OBJECT_ID.test(ref)
-        ? ref
-        : await git.resolveRef({ fs: this.fs, dir, ref });
+      const oid = FULL_OBJECT_ID.test(ref) ? ref : await git.resolveRef({ fs: this.fs, dir, ref });
       const resolved = await git.readCommit({ fs: this.fs, dir, oid });
       return resolved.oid;
     } catch {
@@ -1688,6 +1686,20 @@ export class GitClient {
   /** List fetched tag names without the refs/tags/ prefix. */
   async listTags(dir: string): Promise<string[]> {
     return (await git.listTags({ fs: this.fs, dir })).sort();
+  }
+
+  /** Create one lightweight local tag at an exact commit. */
+  async createTag(dir: string, name: string, commit: string): Promise<void> {
+    if (!name || !isFullOid(commit)) {
+      throw new TypeError("git.createTag: expected a non-empty name and full commit object id");
+    }
+    await git.tag({
+      fs: this.fs,
+      dir,
+      ref: name,
+      object: commit,
+      force: false,
+    });
   }
 
   /**

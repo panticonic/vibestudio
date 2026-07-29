@@ -76,7 +76,7 @@ Additions (all userland, in the channel DO / `agentic-core`):
   so an offline user still renders "last seen 5m ago." Add a `last_seen` column / retained
   presence row.
 - **Whitelist.** Add `status`, `avatar`, `color` to the public-metadata whitelist
-  (`workspace/packages/agentic-protocol/participant-ref.ts:17-26`) so presence status +
+  (`packages/agentic-protocol/participant-ref.ts:17-26`) so presence status +
   personalization (WP6) surface without leaking private metadata.
 
 ---
@@ -172,7 +172,7 @@ deferred). Children report their live sessions up to the hub for this aggregate 
 | File                                                       | Change                                                                                                 |
 | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `workspace/workers/pubsub-channel/channel-do.ts`           | account-aggregated channel presence keyed `user:<id>`; status model; last-seen persistence             |
-| `workspace/packages/agentic-protocol/participant-ref.ts`   | `status`/`avatar`/`color` in public whitelist (`:17-26`)                                               |
+| `packages/agentic-protocol/participant-ref.ts`   | `status`/`avatar`/`color` in public whitelist (`:17-26`)                                               |
 | `workspace/packages/agentic-core/*`                        | roster→account presence projection                                                                     |
 | `src/server/services/workspacePresenceService.ts`          | **new** host service + `workspace-presence-changed` event, session-registry fed, zero channel coupling |
 | `src/server/rpcServer.ts` / `rpcServer/sessionRegistry.ts` | consume WP4 `listUsersWithLiveConnections()`; drive presence on connect/drop                           |

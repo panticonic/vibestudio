@@ -18,7 +18,7 @@
       "react/jsx-dev-runtime",
       "@radix-ui/themes",
       "@radix-ui/react-icons",
-      "@workspace/runtime",
+      "@vibestudio/runtime",
       "@workspace/agentic-chat",
       "@workspace/ui"
     ],
@@ -146,12 +146,12 @@
   },
   "dependencies": {
     "@vibestudio/service-schemas": "workspace:*",
-    "@workspace/runtime": "workspace:*",
+    "@vibestudio/runtime": "workspace:*",
     "@workspace/react": "workspace:*",
     "@workspace/agentic-chat": "workspace:*",
     "@workspace/ui": "workspace:*",
     "@workspace/agentic-core": "workspace:*",
-    "@workspace/agentic-protocol": "workspace:*",
+    "@vibestudio/agentic-protocol": "workspace:*",
     "@workspace/eval": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@workspace/mdx-editor-core": "workspace:*",

@@ -73,7 +73,7 @@ See the sandbox skill's [INTERACTION_PATTERNS.md](../sandbox/INTERACTION_PATTERN
    edit. Treat that as completion, not as a reason to manufacture a different
    change.
 4. **Use eval only for runtime operations** — project creation, typecheck, tests, launching panels
-5. **Eval injected globals + package imports** — in eval, the **ambient-only** globals `services`, `scope`, `scopes`, `db`, `ctx`, `help`, and (in agent eval) `chat` are injected free variables; do **not** `import` them (the engine rejects it). `rpc` and `fs` are injected ambiently **and** importable from `@workspace/runtime`. `@workspace/runtime` is importable in eval and exposes the same portable surface as panels — including `openPanel`/`listPanels`/`getPanelHandle`/`panelTree`, `vcs`/`workspace`/`gad`/`credentials`/`git`. Both static `import` and dynamic `await import(...)` work. See `sandbox/EVAL.md` for the full surface.
+5. **Eval injected globals + package imports** — in eval, the **ambient-only** globals `services`, `scope`, `scopes`, `db`, `ctx`, `help`, and (in agent eval) `chat` are injected free variables; do **not** `import` them (the engine rejects it). `rpc` and `fs` are injected ambiently **and** importable from `@vibestudio/runtime`. `@vibestudio/runtime` is importable in eval and exposes the same portable surface as panels — including `openPanel`/`listPanels`/`getPanelHandle`/`panelTree`, `vcs`/`workspace`/`gad`/`credentials`/`git`. Both static `import` and dynamic `await import(...)` work. See `sandbox/EVAL.md` for the full surface.
 6. **Close panels you open for temporary work** — keep the one development panel the user is reviewing, but close duplicate, browser, child, and diagnostic panels with `await handle.close()` when done. Use `listPanels()` to reuse existing panels instead of opening another copy.
 7. **Read the capabilities skill before adding authority** — workspace services are resolved from the caller's live semantic context; manifests request but never grant; generated catalogs are not authoring surfaces.
 8. **Eval is a notebook kernel** — `scope` retains live objects across cells while
@@ -181,7 +181,7 @@ an explicit `ref`; use plain launch for main/pushed code and pin context-local
 code deliberately:
 
 ```tsx
-import { openPanel } from "@workspace/runtime";
+import { openPanel } from "@vibestudio/runtime";
 const myApp = await openPanel("panels/my-app");
 const local = await openPanel("panels/my-app", {
   contextId: ctx.contextId,
@@ -228,7 +228,7 @@ key as lost should you reconstruct it with `getPanelHandle(scope.panelId)`.
 | Import an external snapshot | Use `vcs.importSnapshot` with a canonical credential-free source URI, exact source revision, and complete repository/file descriptors; the semantic workspace verifies host-observed CAS descriptors, derives the snapshot digest, and atomically returns the committed event/application/work-unit/repository/snapshot evidence                                     |
 
 (`extensions` is a runtime client — the same surface bare, as
-`services.extensions`, or imported from `@workspace/runtime`.
+`services.extensions`, or imported from `@vibestudio/runtime`.
 `use(name).method(...)` is typed sugar; `extensions.invoke(name, method,
 [args])` is the untyped equivalent. Invocation preserves the admitted caller
 and execution-session context in panels, workers, and server-side eval.)

@@ -35,6 +35,22 @@ importers:
         specifier: ^3.2.2
         version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
+  ../packages/agentic-protocol:
+    dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../content-addressing
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
+
   ../packages/browser-data:
     dependencies:
       '@vibestudio/service-schemas':
@@ -78,6 +94,12 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
+
+  ../packages/cdp-client:
+    dependencies:
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
 
   ../packages/content-addressing: {}
 
@@ -274,6 +296,83 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  ../packages/runtime:
+    dependencies:
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../agentic-protocol
+      '@vibestudio/browser-data':
+        specifier: workspace:*
+        version: link:../browser-data
+      '@vibestudio/cdp-client':
+        specifier: workspace:*
+        version: link:../cdp-client
+      '@vibestudio/credential-client':
+        specifier: workspace:*
+        version: link:../credential-client
+      '@vibestudio/durable':
+        specifier: workspace:*
+        version: link:../durable
+      '@vibestudio/extension':
+        specifier: workspace:*
+        version: link:../extension
+      '@vibestudio/git':
+        specifier: workspace:*
+        version: link:../git
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../service-schemas
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@vibestudio/shell-core':
+        specifier: workspace:*
+        version: link:../shell-core
+      '@vibestudio/types':
+        specifier: workspace:*
+        version: link:../types
+      buffer:
+        specifier: ^6.0.3
+        version: 6.0.3
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
+    devDependencies:
+      sql.js:
+        specifier: ^1.14.0
+        version: 1.14.1
+
+  ../packages/semantic-control-plane:
+    dependencies:
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../agentic-protocol
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../content-addressing
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../service-schemas
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@vibestudio/vcs-engine':
+        specifier: workspace:*
+        version: link:../vcs-engine
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
+
   ../packages/service-schemas:
     dependencies:
       '@vibestudio/content-addressing':
@@ -415,6 +514,15 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  ../packages/vcs-engine:
+    dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../content-addressing
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
+
   ../packages/vcs-path-policy: {}
 
   ../packages/workspace:
@@ -460,27 +568,27 @@ importers:
 
   about/about:
     dependencies:
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/about-shared':
         specifier: workspace:*
         version: link:../../packages/about-shared
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
 
   about/adblock:
     dependencies:
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/about-shared':
         specifier: workspace:*
         version: link:../../packages/about-shared
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
 
   about/bookmarks:
     dependencies:
@@ -493,12 +601,12 @@ importers:
       '@vibestudio/browser-data':
         specifier: workspace:*
         version: link:../../../packages/browser-data
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/about-shared':
         specifier: workspace:*
         version: link:../../packages/about-shared
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       react:
         specifier: 19.0.0
         version: 19.0.0
@@ -514,12 +622,12 @@ importers:
       '@vibestudio/browser-data':
         specifier: workspace:*
         version: link:../../../packages/browser-data
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       '@workspace/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -536,6 +644,9 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/agentic-chat':
         specifier: workspace:*
         version: link:../../packages/agentic-chat
@@ -548,9 +659,6 @@ importers:
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       '@workspace/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -564,15 +672,15 @@ importers:
 
   about/credentials:
     dependencies:
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/about-shared':
         specifier: workspace:*
         version: link:../../packages/about-shared
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
 
   about/downloads:
     dependencies:
@@ -582,12 +690,12 @@ importers:
       '@vibestudio/browser-data':
         specifier: workspace:*
         version: link:../../../packages/browser-data
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       '@workspace/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -597,15 +705,15 @@ importers:
 
   about/help:
     dependencies:
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/about-shared':
         specifier: workspace:*
         version: link:../../packages/about-shared
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
 
   about/history:
     dependencies:
@@ -618,60 +726,60 @@ importers:
       '@vibestudio/browser-data':
         specifier: workspace:*
         version: link:../../../packages/browser-data
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/about-shared':
         specifier: workspace:*
         version: link:../../packages/about-shared
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       react:
         specifier: 19.0.0
         version: 19.0.0
 
   about/keyboard-shortcuts:
     dependencies:
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/about-shared':
         specifier: workspace:*
         version: link:../../packages/about-shared
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
 
   about/new:
     dependencies:
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/about-shared':
         specifier: workspace:*
         version: link:../../packages/about-shared
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
 
   about/permissions:
     dependencies:
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/about-shared':
         specifier: workspace:*
         version: link:../../packages/about-shared
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
 
   about/server-logs:
     dependencies:
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/about-shared':
         specifier: workspace:*
         version: link:../../packages/about-shared
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
 
   about/templates:
     dependencies:
@@ -681,6 +789,9 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
@@ -690,9 +801,6 @@ importers:
       '@workspace/about-shared':
         specifier: workspace:*
         version: link:../../packages/about-shared
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       '@workspace/template-registry':
         specifier: workspace:*
         version: link:../../packages/template-registry
@@ -1086,12 +1194,12 @@ importers:
 
   packages/agent-loop:
     dependencies:
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../../../packages/agentic-protocol
       '@vibestudio/trajectory-identity':
         specifier: workspace:*
         version: link:../../../packages/trajectory-identity
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../agentic-protocol
       '@workspace/pi-core':
         specifier: workspace:*
         version: link:../pi-core
@@ -1107,6 +1215,9 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../../../packages/agentic-protocol
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
@@ -1116,9 +1227,6 @@ importers:
       '@workspace/agentic-core':
         specifier: workspace:*
         version: link:../agentic-core
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../agentic-protocol
       '@workspace/channel-fork':
         specifier: workspace:*
         version: link:../channel-fork
@@ -1155,6 +1263,9 @@ importers:
 
   packages/agentic-core:
     dependencies:
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../../../packages/agentic-protocol
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
@@ -1164,9 +1275,6 @@ importers:
       '@vibestudio/shell-core':
         specifier: workspace:*
         version: link:../../../packages/shell-core
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../agentic-protocol
       '@workspace/eval':
         specifier: workspace:*
         version: link:../eval
@@ -1185,12 +1293,18 @@ importers:
       '@sinclair/typebox':
         specifier: ^0.27.8
         version: 0.27.10
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../../../packages/agentic-protocol
       '@vibestudio/content-addressing':
         specifier: workspace:*
         version: link:../../../packages/content-addressing
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
@@ -1206,9 +1320,6 @@ importers:
       '@workspace/agentic-core':
         specifier: workspace:*
         version: link:../agentic-core
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../agentic-protocol
       '@workspace/harness':
         specifier: workspace:*
         version: link:../harness
@@ -1221,25 +1332,6 @@ importers:
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../pubsub
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../runtime
-
-  packages/agentic-protocol:
-    dependencies:
-      '@vibestudio/content-addressing':
-        specifier: workspace:*
-        version: link:../../../packages/content-addressing
-      zod:
-        specifier: ^3.24.1
-        version: 3.25.76
-    devDependencies:
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
 
   packages/agentic-session:
     dependencies:
@@ -1259,20 +1351,14 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
 
-  packages/cdp-client:
-    dependencies:
-      '@vibestudio/rpc':
-        specifier: workspace:*
-        version: link:../../../packages/rpc
-
   packages/channel-fork:
     dependencies:
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../../../packages/agentic-protocol
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../agentic-protocol
     devDependencies:
       vitest:
         specifier: ^3.2.2
@@ -1280,9 +1366,9 @@ importers:
 
   packages/channel-policies:
     dependencies:
-      '@workspace/agentic-protocol':
+      '@vibestudio/agentic-protocol':
         specifier: workspace:*
-        version: link:../agentic-protocol
+        version: link:../../../packages/agentic-protocol
 
   packages/collection-orchestration:
     dependencies:
@@ -1337,6 +1423,9 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace-skills/agents':
         specifier: workspace:*
         version: link:../../skills/agents
@@ -1346,9 +1435,6 @@ importers:
       '@workspace/integrations':
         specifier: workspace:*
         version: link:../integrations
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../runtime
       react:
         specifier: 19.0.0
         version: 19.0.0
@@ -1368,6 +1454,9 @@ importers:
       '@sinclair/typebox':
         specifier: ^0.27.8
         version: 0.27.10
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../../../packages/agentic-protocol
       '@vibestudio/extension':
         specifier: workspace:*
         version: link:../../../packages/extension
@@ -1380,9 +1469,6 @@ importers:
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../agentic-protocol
       '@workspace/pi-core':
         specifier: workspace:*
         version: link:../pi-core
@@ -1415,9 +1501,9 @@ importers:
       '@vibestudio/credential-client':
         specifier: workspace:*
         version: link:../../../packages/credential-client
-      '@workspace/runtime':
+      '@vibestudio/runtime':
         specifier: workspace:*
-        version: link:../runtime
+        version: link:../../../packages/runtime
 
   packages/mdx-editor-core:
     dependencies:
@@ -1556,6 +1642,9 @@ importers:
       '@cfworker/json-schema':
         specifier: ^4.1.1
         version: 4.1.1
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../../../packages/agentic-protocol
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
@@ -1568,9 +1657,6 @@ importers:
       '@vibestudio/types':
         specifier: workspace:*
         version: link:../../../packages/types
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../agentic-protocol
       zod:
         specifier: ^3.24.1
         version: 3.25.76
@@ -1599,12 +1685,12 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/types':
         specifier: workspace:*
         version: link:../../../packages/types
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../runtime
       '@workspace/ui':
         specifier: workspace:*
         version: link:../ui
@@ -1628,91 +1714,11 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
-  packages/runtime:
-    dependencies:
-      '@vibestudio/browser-data':
-        specifier: workspace:*
-        version: link:../../../packages/browser-data
-      '@vibestudio/credential-client':
-        specifier: workspace:*
-        version: link:../../../packages/credential-client
-      '@vibestudio/durable':
-        specifier: workspace:*
-        version: link:../../../packages/durable
-      '@vibestudio/extension':
-        specifier: workspace:*
-        version: link:../../../packages/extension
-      '@vibestudio/git':
-        specifier: workspace:*
-        version: link:../../../packages/git
-      '@vibestudio/rpc':
-        specifier: workspace:*
-        version: link:../../../packages/rpc
-      '@vibestudio/service-schemas':
-        specifier: workspace:*
-        version: link:../../../packages/service-schemas
-      '@vibestudio/shared':
-        specifier: workspace:*
-        version: link:../../../packages/shared
-      '@vibestudio/shell-core':
-        specifier: workspace:*
-        version: link:../../../packages/shell-core
-      '@vibestudio/types':
-        specifier: workspace:*
-        version: link:../../../packages/types
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../agentic-protocol
-      '@workspace/cdp-client':
-        specifier: workspace:*
-        version: link:../cdp-client
-      '@workspace/harness':
-        specifier: workspace:*
-        version: link:../harness
-      buffer:
-        specifier: ^6.0.3
-        version: 6.0.3
-      zod:
-        specifier: ^3.24.0
-        version: 3.25.76
-    devDependencies:
-      sql.js:
-        specifier: ^1.14.0
-        version: 1.14.1
-
-  packages/semantic-control-plane:
-    dependencies:
-      '@vibestudio/content-addressing':
-        specifier: workspace:*
-        version: link:../../../packages/content-addressing
-      '@vibestudio/service-schemas':
-        specifier: workspace:*
-        version: link:../../../packages/service-schemas
-      '@vibestudio/shared':
-        specifier: workspace:*
-        version: link:../../../packages/shared
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../agentic-protocol
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../runtime
-      '@workspace/vcs-engine':
-        specifier: workspace:*
-        version: link:../vcs-engine
-    devDependencies:
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
-
   packages/svelte:
     dependencies:
-      '@workspace/runtime':
+      '@vibestudio/runtime':
         specifier: workspace:*
-        version: link:../runtime
+        version: link:../../../packages/runtime
     devDependencies:
       svelte:
         specifier: ^5.0.0
@@ -1782,12 +1788,12 @@ importers:
 
   packages/testkit:
     dependencies:
-      '@workspace/cdp-client':
+      '@vibestudio/cdp-client':
         specifier: workspace:*
-        version: link:../cdp-client
-      '@workspace/runtime':
+        version: link:../../../packages/cdp-client
+      '@vibestudio/runtime':
         specifier: workspace:*
-        version: link:../runtime
+        version: link:../../../packages/runtime
 
   packages/tool-ui:
     dependencies:
@@ -1797,6 +1803,9 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/types':
         specifier: workspace:*
         version: link:../../../packages/types
@@ -1806,9 +1815,6 @@ importers:
       '@workspace/react':
         specifier: workspace:*
         version: link:../react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../runtime
       react-markdown:
         specifier: ^9.0.1
         version: 9.1.0(@types/react@19.2.17)(react@19.0.0)
@@ -1837,24 +1843,15 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
-      '@workspace/runtime':
+      '@vibestudio/runtime':
         specifier: workspace:*
-        version: link:../runtime
+        version: link:../../../packages/runtime
       react:
         specifier: 19.0.0
         version: 19.0.0
       shiki:
         specifier: ^3.23.0
         version: 3.23.0
-
-  packages/vcs-engine:
-    dependencies:
-      '@vibestudio/content-addressing':
-        specifier: workspace:*
-        version: link:../../../packages/content-addressing
-      '@vibestudio/shared':
-        specifier: workspace:*
-        version: link:../../../packages/shared
 
   panels/chat:
     dependencies:
@@ -1864,6 +1861,9 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
@@ -1885,9 +1885,6 @@ importers:
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       '@workspace/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -1910,6 +1907,9 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
@@ -1919,9 +1919,6 @@ importers:
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       '@workspace/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -1944,15 +1941,15 @@ importers:
       '@vibestudio/git':
         specifier: workspace:*
         version: link:../../../packages/git
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       '@workspace/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -1969,9 +1966,9 @@ importers:
 
   panels/hello-svelte:
     dependencies:
-      '@workspace/runtime':
+      '@vibestudio/runtime':
         specifier: workspace:*
-        version: link:../../packages/runtime
+        version: link:../../../packages/runtime
       '@workspace/svelte':
         specifier: workspace:*
         version: link:../../packages/svelte
@@ -1988,12 +1985,12 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       '@workspace/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -2012,6 +2009,9 @@ importers:
       '@vibestudio/credential-client':
         specifier: workspace:*
         version: link:../../../packages/credential-client
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
@@ -2036,9 +2036,6 @@ importers:
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       '@workspace/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -2091,6 +2088,12 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../../../packages/agentic-protocol
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
@@ -2100,9 +2103,6 @@ importers:
       '@workspace/agentic-core':
         specifier: workspace:*
         version: link:../../packages/agentic-core
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../../packages/agentic-protocol
       '@workspace/eval':
         specifier: workspace:*
         version: link:../../packages/eval
@@ -2115,9 +2115,6 @@ importers:
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       '@workspace/testkit':
         specifier: workspace:*
         version: link:../../packages/testkit
@@ -2167,15 +2164,15 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace-extensions/shell':
         specifier: workspace:*
         version: link:../../extensions/shell
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       '@workspace/testkit':
         specifier: workspace:*
         version: link:../../packages/testkit
@@ -2240,12 +2237,12 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       '@workspace/testkit':
         specifier: workspace:*
         version: link:../../packages/testkit
@@ -2261,12 +2258,12 @@ importers:
 
   skills/agents:
     dependencies:
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/agentic-core':
         specifier: workspace:*
         version: link:../../packages/agentic-core
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
 
   skills/api-integrations: {}
 
@@ -2280,27 +2277,27 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/integrations':
         specifier: workspace:*
         version: link:../../packages/integrations
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       react:
         specifier: 19.0.0
         version: 19.0.0
 
   skills/google-drive:
     dependencies:
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace-skills/google-workspace':
         specifier: workspace:*
         version: link:../google-workspace
       '@workspace/integrations':
         specifier: workspace:*
         version: link:../../packages/integrations
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
 
   skills/google-workspace:
     dependencies:
@@ -2310,12 +2307,12 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/integrations':
         specifier: workspace:*
         version: link:../../packages/integrations
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       react:
         specifier: 19.0.0
         version: 19.0.0
@@ -2336,15 +2333,15 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
       '@workspace/model-catalog':
         specifier: workspace:*
         version: link:../../packages/model-catalog
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       '@workspace/template-registry':
         specifier: workspace:*
         version: link:../../packages/template-registry
@@ -2356,24 +2353,24 @@ importers:
 
   skills/system-testing:
     dependencies:
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../../../packages/agentic-protocol
       '@vibestudio/content-addressing':
         specifier: workspace:*
         version: link:../../../packages/content-addressing
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace-skills/vibestudio-vcs':
         specifier: workspace:*
         version: link:../vibestudio-vcs
       '@workspace/agentic-core':
         specifier: workspace:*
         version: link:../../packages/agentic-core
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../../packages/agentic-protocol
       '@workspace/agentic-session':
         specifier: workspace:*
         version: link:../../packages/agentic-session
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       '@workspace/testkit':
         specifier: workspace:*
         version: link:../../packages/testkit
@@ -2390,9 +2387,9 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
-      '@workspace/runtime':
+      '@vibestudio/runtime':
         specifier: workspace:*
-        version: link:../../packages/runtime
+        version: link:../../../packages/runtime
       react:
         specifier: 19.0.0
         version: 19.0.0
@@ -2402,18 +2399,21 @@ importers:
       '@vibestudio/git':
         specifier: workspace:*
         version: link:../../../packages/git
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       svelte:
         specifier: ^5.55.0
         version: 5.56.4
 
   workers/agent-worker:
     dependencies:
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/agentic-do':
         specifier: workspace:*
         version: link:../../packages/agentic-do
@@ -2423,16 +2423,13 @@ importers:
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../../packages/pubsub
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       zod:
         specifier: ^3.24.0
         version: 3.25.76
     devDependencies:
-      '@workspace/agentic-protocol':
+      '@vibestudio/agentic-protocol':
         specifier: workspace:*
-        version: link:../../packages/agentic-protocol
+        version: link:../../../packages/agentic-protocol
       vitest:
         specifier: ^3.2.2
         version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
@@ -2448,6 +2445,9 @@ importers:
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
@@ -2472,9 +2472,6 @@ importers:
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../../packages/pubsub
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       zod:
         specifier: ^3.24.0
         version: 3.25.76
@@ -2488,6 +2485,12 @@ importers:
       '@earendil-works/pi-ai':
         specifier: 0.82.0
         version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(ws@8.21.1)(zod@3.25.76)
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../../../packages/agentic-protocol
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
@@ -2497,9 +2500,6 @@ importers:
       '@workspace/agentic-do':
         specifier: workspace:*
         version: link:../../packages/agentic-do
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../../packages/agentic-protocol
       '@workspace/gmail':
         specifier: workspace:*
         version: link:../../packages/gmail
@@ -2512,9 +2512,6 @@ importers:
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../../packages/pubsub
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       zod:
         specifier: ^3.24.0
         version: 3.25.76
@@ -2528,6 +2525,12 @@ importers:
 
   workers/linked-agent:
     dependencies:
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../../../packages/agentic-protocol
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/trajectory-identity':
         specifier: workspace:*
         version: link:../../../packages/trajectory-identity
@@ -2537,9 +2540,6 @@ importers:
       '@workspace/agentic-do':
         specifier: workspace:*
         version: link:../../packages/agentic-do
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../../packages/agentic-protocol
       '@workspace/harness':
         specifier: workspace:*
         version: link:../../packages/harness
@@ -2549,9 +2549,6 @@ importers:
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../../packages/pubsub
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       zod:
         specifier: ^3.24.0
         version: 3.25.76
@@ -2568,12 +2565,12 @@ importers:
       '@vibestudio/credential-client':
         specifier: workspace:*
         version: link:../../../packages/credential-client
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/model-catalog':
         specifier: workspace:*
         version: link:../../packages/model-catalog
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
     devDependencies:
       '@vibestudio/shared':
         specifier: workspace:*
@@ -2584,15 +2581,18 @@ importers:
 
   workers/news-agent:
     dependencies:
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../../../packages/agentic-protocol
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       '@workspace/agentic-do':
         specifier: workspace:*
         version: link:../../packages/agentic-do
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../../packages/agentic-protocol
       '@workspace/feeds':
         specifier: workspace:*
         version: link:../../packages/feeds
@@ -2605,9 +2605,6 @@ importers:
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../../packages/pubsub
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
     devDependencies:
       '@vibestudio/rpc':
         specifier: workspace:*
@@ -2618,18 +2615,21 @@ importers:
 
   workers/pubsub-channel:
     dependencies:
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../../../packages/agentic-protocol
       '@vibestudio/content-addressing':
         specifier: workspace:*
         version: link:../../../packages/content-addressing
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../../packages/agentic-protocol
       '@workspace/channel-policies':
         specifier: workspace:*
         version: link:../../packages/channel-policies
@@ -2639,9 +2639,6 @@ importers:
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../../packages/pubsub
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       zod:
         specifier: ^3.24.1
         version: 3.25.76
@@ -2652,6 +2649,9 @@ importers:
 
   workers/silent-agent-worker:
     dependencies:
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace-workers/agent-worker':
         specifier: workspace:*
         version: link:../agent-worker
@@ -2667,9 +2667,6 @@ importers:
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../../packages/pubsub
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       zod:
         specifier: ^3.24.0
         version: 3.25.76
@@ -2683,6 +2680,9 @@ importers:
 
   workers/system-agent:
     dependencies:
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/agentic-do':
         specifier: workspace:*
         version: link:../../packages/agentic-do
@@ -2695,9 +2695,6 @@ importers:
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../../packages/pubsub
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       zod:
         specifier: ^3.24.0
         version: 3.25.76
@@ -2708,15 +2705,15 @@ importers:
 
   workers/system-test-runner:
     dependencies:
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
     devDependencies:
       vitest:
         specifier: ^3.2.2
@@ -2724,6 +2721,9 @@ importers:
 
   workers/terminal-chat:
     dependencies:
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
@@ -2733,9 +2733,6 @@ importers:
       '@workspace/model-catalog':
         specifier: workspace:*
         version: link:../../packages/model-catalog
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       '@workspace/terminal-host-protocol':
         specifier: workspace:*
         version: link:../../packages/terminal-host-protocol
@@ -2755,18 +2752,18 @@ importers:
 
   workers/test-agent:
     dependencies:
+      '@vibestudio/agentic-protocol':
+        specifier: workspace:*
+        version: link:../../../packages/agentic-protocol
+      '@vibestudio/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       '@workspace/agentic-do':
         specifier: workspace:*
         version: link:../../packages/agentic-do
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../../packages/agentic-protocol
       '@workspace/harness':
         specifier: workspace:*
         version: link:../../packages/harness
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
     devDependencies:
       vitest:
         specifier: ^3.2.2
@@ -2774,12 +2771,12 @@ importers:
 
   workers/testkit-driver:
     dependencies:
-      '@workspace/cdp-client':
+      '@vibestudio/cdp-client':
         specifier: workspace:*
-        version: link:../../packages/cdp-client
-      '@workspace/runtime':
+        version: link:../../../packages/cdp-client
+      '@vibestudio/runtime':
         specifier: workspace:*
-        version: link:../../packages/runtime
+        version: link:../../../packages/runtime
       '@workspace/testkit':
         specifier: workspace:*
         version: link:../../packages/testkit

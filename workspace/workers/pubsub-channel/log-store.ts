@@ -19,7 +19,7 @@ import {
 import {
   createGadServiceClient,
   type DurableObjectServiceClient,
-} from "@workspace/runtime/workerd-client";
+} from "@vibestudio/runtime/workerd-client";
 import {
   DEFAULT_CHANNEL_REPLAY_PAGE_LIMIT,
   MAX_CHANNEL_REPLAY_PAGE_LIMIT,
@@ -35,7 +35,7 @@ import {
   publicParticipantMetadata,
   type AppendIdempotency,
   type LogEnvelope,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import type { StoredAttachment } from "./types.js";
 import { buildChannelEvent } from "./broadcast.js";
 

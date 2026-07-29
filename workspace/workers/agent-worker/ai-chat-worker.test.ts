@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
 import { PROVIDER_CREDENTIAL_SETUPS, DEFAULT_MODEL } from "@workspace/agentic-do";
-import { AGENTIC_EVENT_PAYLOAD_KIND, AGENTIC_PROTOCOL_VERSION } from "@workspace/agentic-protocol";
+import { AGENTIC_EVENT_PAYLOAD_KIND, AGENTIC_PROTOCOL_VERSION } from "@vibestudio/agentic-protocol";
 import type { ChannelReplayEnvelope } from "@workspace/pubsub";
 
 import { AiChatWorker } from "./ai-chat-worker.js";

@@ -76,7 +76,7 @@
     }
   },
   "dependencies": {
-    "@workspace/runtime": "workspace:*",
+    "@vibestudio/runtime": "workspace:*",
     "@workspace/svelte": "workspace:*"
   },
   "devDependencies": {

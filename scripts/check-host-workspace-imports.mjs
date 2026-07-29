@@ -5,8 +5,8 @@
 //
 //   - HOST code (src/, packages/, apps/, scripts/, tests/, build.mjs) must never
 //     depend on or assume WORKSPACE (userland, workspace/) code beyond defined
-//     interfaces. The one product-sealed exception is the internal-DO bundle
-//     entry importing the semantic control-plane package.
+//     interfaces. Product-sealed code lives in root @vibestudio packages and
+//     therefore needs no exception to this rule.
 //   - WORKSPACE code must never import host-private implementation roots
 //     (`src/`, `apps/`, `scripts/`, or root `tests/`). Shared public packages
 //     such as `@vibestudio/shared` are intentionally not host-private.
@@ -69,11 +69,6 @@ const SELF_FILES = new Set([
 ]);
 
 const ALLOWLIST_PATH = "scripts/host-boundary-allowlist.json";
-const PRODUCT_SEALED_CONTROL_PLANE_IMPORT = Object.freeze({
-  file: "src/server/internalDOs/index.ts",
-  specifier: "@workspace/semantic-control-plane",
-});
-
 // ---------------------------------------------------------------------------
 // Pure matching helpers (exported for unit testing).
 // ---------------------------------------------------------------------------
@@ -96,14 +91,6 @@ export function isWorkspaceImportScope(specifier) {
 /** True if a raw string literal begins with a workspace scope. */
 export function startsWithWorkspaceScope(specifier) {
   return WORKSPACE_SCOPE_LITERAL_RE.test(specifier);
-}
-
-/** The sole host→workspace-source import, bundled as sealed product topology. */
-export function isProductSealedWorkspaceImport(relFile, specifier) {
-  return (
-    relFile === PRODUCT_SEALED_CONTROL_PLANE_IMPORT.file &&
-    specifier === PRODUCT_SEALED_CONTROL_PLANE_IMPORT.specifier
-  );
 }
 
 /**
@@ -205,10 +192,7 @@ export function collectFindings({ text, absFile, root = DEFAULT_ROOT }) {
       const crossesWorkspaceBoundary =
         isWorkspaceImportScope(specifier) ||
         (specifier.startsWith(".") && resolvesIntoWorkspace(absFile, specifier, workspaceRoot));
-      if (
-        crossesWorkspaceBoundary &&
-        !isProductSealedWorkspaceImport(relFile, specifier)
-      ) {
+      if (crossesWorkspaceBoundary) {
         findings.push({
           file: relFile,
           line: lineOf(node),

@@ -335,7 +335,7 @@ function createWorkspaceResolvePlugin(
   // which runs AFTER plugins — so a workspace specifier this plugin resolves to
   // source would be bundled even when listed in `external`. Honor the externals
   // here (exact match) so caller-provided externals actually win. Used by eval
-  // library builds to keep `@workspace/runtime` (and other host-provided modules)
+  // library builds to keep `@vibestudio/runtime` (and other host-provided modules)
   // OUT of the bundle: they must resolve at runtime to the EvalDO's hosted `rt`,
   // not the panel entry (whose top-level `initRuntime()` crashes in a DO isolate).
   const externalSet = new Set(externalSpecifiers);
@@ -2233,7 +2233,7 @@ const EXTENSION_CONDITIONS = ["import", "default"] as const;
  * Map a library bundle's execution target to esbuild/package-export resolution
  * conditions. This is what lets a workerd-hosted import (incl. the eval sandbox)
  * pick up a package's worker entry instead of its panel entry — the panel entry
- * of `@workspace/runtime` runs `initRuntime()` at module load, which throws
+ * of `@vibestudio/runtime` runs `initRuntime()` at module load, which throws
  * outside a panel. No default: the caller MUST state the host.
  */
 function conditionsForLibraryTarget(target: LibraryBuildTarget): readonly string[] {

@@ -10,7 +10,7 @@ guess from an `extensions.list()` display label; list entries use canonical
 package names such as `@workspace-extensions/test-runner`.
 
 ```ts
-import { extensions } from "@workspace/runtime";
+import { extensions } from "@vibestudio/runtime";
 
 const result = await extensions.invoke("@workspace-extensions/test-runner", "run", [
   {

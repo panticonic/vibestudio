@@ -45,7 +45,7 @@ import type { ActiveFeedback, ToolApprovalProps } from "@workspace/tool-ui";
 import type { PendingImage } from "./utils/imageUtils";
 import type { ComponentType, RefObject } from "react";
 import type { ScopeManager, ScopesApi } from "@workspace/eval";
-import type { MessageTier } from "@workspace/agentic-protocol";
+import type { MessageTier } from "@vibestudio/agentic-protocol";
 import type { DefaultAgentConfig } from "@workspace/model-catalog/catalog";
 import type { AgentConfigDraft } from "./components/AgentConfigForm";
 import type {

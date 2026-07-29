@@ -33,12 +33,12 @@ The canary migrations all follow the same shape:
 2. **Delete the in-host service**:
    - Remove `src/server/services/<service>.ts` and its test file.
    - Remove the registration in `src/server/index.ts` (or `panelRuntimeRegistration.ts`).
-   - Remove any `ctx.<name>` exposure from `workspace/packages/runtime/`.
+   - Remove any `ctx.<name>` exposure from `packages/runtime/`.
 
-3. **Codemod the consumers** — every `ctx.<name>.<method>(...)` (or `import { <name> } from "@workspace/runtime"`) becomes:
+3. **Codemod the consumers** — every `ctx.<name>.<method>(...)` (or `import { <name> } from "@vibestudio/runtime"`) becomes:
 
    ```ts
-   import { extensions } from "@workspace/runtime";
+   import { extensions } from "@vibestudio/runtime";
    const svc = extensions.use<ApiType>("@workspace-extensions/<service>");
    await svc.<method>(...);
    ```

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
 import type { AgentTool, ParticipantDescriptor } from "@workspace/harness";
 import { SystemAgentWorker } from "./system-agent-worker.js";
 

@@ -3,7 +3,7 @@ import {
   type GitHubClient,
   type GitHubIssue as ApiGitHubIssue,
 } from "./github.js";
-import type { CredentialClient } from "@workspace/runtime/credentials";
+import type { CredentialClient } from "@vibestudio/runtime/credentials";
 
 export const manifest = {
   scopes: {

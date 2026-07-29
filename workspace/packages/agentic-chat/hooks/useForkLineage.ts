@@ -21,7 +21,7 @@ import type {
   ForkProjection,
   MessageBlockInput,
   ParticipantRef,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import type { PubSubClient } from "@workspace/pubsub";
 import type {
   ChannelProvenance,

@@ -11,10 +11,10 @@ import {
   PaperPlaneIcon,
   ChevronRightIcon,
 } from "@radix-ui/react-icons";
-import { buildPanelLink, panel, workspace } from "@workspace/runtime";
+import { buildPanelLink, panel, workspace } from "@vibestudio/runtime";
 import { useIsMobile } from "@workspace/react/responsive";
 import { AboutThemeRoot, AboutPage, Section } from "@workspace/about-shared/ui";
-import type { WorkspaceTree, WorkspaceNode } from "@workspace/runtime";
+import type { WorkspaceTree, WorkspaceNode } from "@vibestudio/runtime";
 import { collectLaunchablePanels } from "./launchablePanels";
 
 function PanelCard({

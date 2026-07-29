@@ -92,10 +92,10 @@ describe("TypeCheckService workspace resolution", () => {
   it("resolves a workspace package from its source via the workspace context map", () => {
     // Build a minimal pnpm-workspace-style monorepo:
     //   <root>/pnpm-workspace.yaml           (packages: ["packages/*"])
-    //   <root>/packages/runtime/package.json (name: "@workspace/runtime", exports: ./src/index.ts)
+    //   <root>/packages/runtime/package.json (name: "@vibestudio/runtime", exports: ./src/index.ts)
     //   <root>/packages/runtime/src/index.ts (exports RuntimeThing)
     //   <root>/packages/consumer/package.json
-    //   <root>/packages/consumer/index.ts    (imports @workspace/runtime)
+    //   <root>/packages/consumer/index.ts    (imports @vibestudio/runtime)
     const root = createTempDir("typecheck-service-workspace-");
 
     writeFile(path.join(root, "pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n");
@@ -105,7 +105,7 @@ describe("TypeCheckService workspace resolution", () => {
       path.join(root, "packages", "runtime", "package.json"),
       JSON.stringify(
         {
-          name: "@workspace/runtime",
+          name: "@vibestudio/runtime",
           type: "module",
           exports: { ".": "./src/index.ts" },
         },
@@ -127,7 +127,7 @@ describe("TypeCheckService workspace resolution", () => {
     writeFile(
       consumerFile,
       [
-        'import type { RuntimeThing } from "@workspace/runtime";',
+        'import type { RuntimeThing } from "@vibestudio/runtime";',
         "const value: RuntimeThing = { ok: true };",
         "void value;",
       ].join("\n")
@@ -297,14 +297,12 @@ describe("TypeCheckService workspace resolution", () => {
   });
 });
 
-describe("TypeCheckService extension registry propagation", () => {
-  // Mirrors the real chain: a panel imports `@workspace/runtime`, whose
-  // extensions surface re-exports the generated registry barrel, which
-  // type-only re-exports each extension's `Api`. That pulls the extension's
-  // `declare module "@vibestudio/extension"` augmentation into the panel's
-  // program, so `extensions.use("...")` resolves — without the panel importing
-  // the extension directly.
-  function buildRuntimeWorkspace(opts: { withBarrel: boolean }): {
+describe("TypeCheckService extension augmentation", () => {
+  // Extension types follow the same dependency boundary as extension code: a
+  // consumer imports the package it uses, activating that package's ordinary
+  // `@vibestudio/extension` module augmentation. The sealed runtime stays
+  // workspace-independent.
+  function buildRuntimeWorkspace(opts: { importExtension: boolean }): {
     root: string;
     panelFile: string;
   } {
@@ -349,28 +347,21 @@ describe("TypeCheckService extension registry propagation", () => {
       ].join("\n")
     );
 
-    // @workspace/runtime: re-exports use(), and (optionally) the barrel.
+    // @vibestudio/runtime: generic extension client only.
     writeFile(
       path.join(root, "packages", "runtime", "package.json"),
       JSON.stringify({
-        name: "@workspace/runtime",
+        name: "@vibestudio/runtime",
         type: "module",
         exports: { ".": "./src/index.ts" },
       })
     );
     writeFile(
-      path.join(root, "packages", "runtime", "src", "registry.ts"),
-      'export type { Api as Foo } from "@ext/foo";\n'
-    );
-    writeFile(
       path.join(root, "packages", "runtime", "src", "index.ts"),
-      [
-        'export { use } from "@vibestudio/extension";',
-        ...(opts.withBarrel ? ['export type * from "./registry.js";'] : []),
-      ].join("\n")
+      'export { use } from "@vibestudio/extension";\n'
     );
 
-    // The panel: uses the registry without importing the extension.
+    // The panel explicitly imports the extension declaration it consumes.
     writeFile(
       path.join(root, "packages", "panel", "package.json"),
       JSON.stringify({ name: "@workspace/panel", type: "module" })
@@ -379,7 +370,8 @@ describe("TypeCheckService extension registry propagation", () => {
     writeFile(
       panelFile,
       [
-        'import { use } from "@workspace/runtime";',
+        'import { use } from "@vibestudio/runtime";',
+        ...(opts.importExtension ? ['import type {} from "@ext/foo";'] : []),
         'const greeting: string = use("@ext/foo").greet();',
         "void greeting;",
       ].join("\n")
@@ -387,8 +379,8 @@ describe("TypeCheckService extension registry propagation", () => {
     return { root, panelFile };
   }
 
-  it("resolves use() through the runtime barrel without importing the extension", () => {
-    const { root, panelFile } = buildRuntimeWorkspace({ withBarrel: true });
+  it("resolves use() through the consumer's extension import", () => {
+    const { root, panelFile } = buildRuntimeWorkspace({ importExtension: true });
     const service = new TypeCheckService({
       panelPath: path.join(root, "packages", "panel"),
       skipSuggestions: true,
@@ -400,8 +392,8 @@ describe("TypeCheckService extension registry propagation", () => {
     expect(result.diagnostics.filter((d) => d.severity === "error")).toHaveLength(0);
   });
 
-  it("without the barrel the registry is empty and use() is rejected", () => {
-    const { root, panelFile } = buildRuntimeWorkspace({ withBarrel: false });
+  it("rejects an extension name whose declaration was not imported", () => {
+    const { root, panelFile } = buildRuntimeWorkspace({ importExtension: false });
     const service = new TypeCheckService({
       panelPath: path.join(root, "packages", "panel"),
       skipSuggestions: true,

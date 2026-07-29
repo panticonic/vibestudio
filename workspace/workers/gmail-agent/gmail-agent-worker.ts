@@ -5,13 +5,13 @@ import {
   type RespondPolicy,
 } from "@workspace/agentic-do";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { rpc } from "@workspace/runtime/worker";
-import type { DurableObjectContext, WebhookDeliveryEvent } from "@workspace/runtime/worker";
+import { rpc } from "@vibestudio/runtime/worker";
+import type { DurableObjectContext, WebhookDeliveryEvent } from "@vibestudio/runtime/worker";
 import {
   AGENTIC_PROTOCOL_VERSION,
   type ActorRef,
   type AgenticEvent,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import { createGmailClient, type GmailClient, type GmailThread } from "@workspace/gmail";
 import type { GmailAttentionPrefs, GmailSetupState } from "@workspace/gmail/card-types";
 import {

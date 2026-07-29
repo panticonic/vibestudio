@@ -227,7 +227,7 @@ below. Every row names the test that fails if the asserted boundary regresses.
 | Intentional stop wins the child-exit race; a foreign process generation is never signalled or unregistered | `src/server/services/isolatedDevelopmentHostExecutor.test.ts` — “makes intentional stop own the exit race and refuses a foreign generation”; `src/dev/devInstanceSupervisor.test.ts` — exact process-group termination |
 | A foreign or escaped execution root is never executed or deleted | `src/server/services/developmentExecutor.test.ts` — “refuses path escapes and foreign owner markers before execution or deletion” |
 | Cleanup failure preserves the original failure plus exact retained run/artifact identities | `src/server/services/developmentService.test.ts` — “preserves the primary failure and exact retained ids when force-retire cleanup fails”; unproven process ownership remains `requires-repair` rather than claiming retirement |
-| Production exposes the promised owner-scoped ordinary child-service surface | `src/server/services/attachedHostController.test.ts` — owner validation and generic child invocation; `workspace/packages/runtime/src/shared/hostedRuntime.test.ts` — `hosts.attach(...).services.<service>.<method>`; `src/server/index.ts` is the production controller/service/runtime-route composition |
+| Production exposes the promised owner-scoped ordinary child-service surface | `src/server/services/attachedHostController.test.ts` — owner validation and generic child invocation; `packages/runtime/src/shared/hostedRuntime.test.ts` — `hosts.attach(...).services.<service>.<method>`; `src/server/index.ts` is the production controller/service/runtime-route composition |
 
 Acceptance command boundary:
 
@@ -244,5 +244,5 @@ pnpm vitest run \
   src/server/services/isolatedDevelopmentHostExecutor.test.ts \
   src/dev/devInstanceSupervisor.test.ts \
   src/server/internalDOs/evalDO.cancel.test.ts \
-  workspace/packages/runtime/src/shared/hostedRuntime.test.ts
+  packages/runtime/src/shared/hostedRuntime.test.ts
 ```

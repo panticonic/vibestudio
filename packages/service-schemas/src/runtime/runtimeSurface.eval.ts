@@ -2,7 +2,7 @@
  * The eval surface: what an agent `eval` session sees from the EvalDO.
  *
  * `evalImportableSurface` is the portable runtime-instance surface — exactly what
- * `createHostedRuntime` returns and what `import { … } from "@workspace/runtime"`
+ * `createHostedRuntime` returns and what `import { … } from "@vibestudio/runtime"`
  * resolves to inside eval. It is now LITERALLY `portableRuntimeSurface` (the
  * single source of truth shared with panel/worker), so eval has the full portable
  * surface including `callMain` and `parent`/`getParent`/`getParentWithContract`.
@@ -37,10 +37,10 @@ export type EvalAmbientOnlyName = (typeof EVAL_AMBIENT_ONLY)[number];
 
 export const evalImportableSurface: RuntimeSurface & { exports: typeof portableExports } = {
   // Reuse the panel target tag for the meta/contract schema union (eval imports
-  // the same @workspace/runtime module shape a panel does).
+  // the same @vibestudio/runtime module shape a panel does).
   target: "panel",
   description:
-    "Named exports importable from @workspace/runtime inside an agent eval session (the portable WorkspaceRuntime surface).",
+    "Named exports importable from @vibestudio/runtime inside an agent eval session (the portable WorkspaceRuntime surface).",
   exports: portableExports,
 };
 

@@ -214,14 +214,14 @@ every sender type.
   another panel, durable object, or worker.
 - `packages/rpc/src/types.ts:447-454` supplies exposed handlers with an authenticated
   `RpcRequestContext`, including `caller` and `origin`.
-- `workspace/packages/runtime/src/setup/createBaseRuntime.ts:237-239` discards that context
+- `packages/runtime/src/setup/createBaseRuntime.ts:237-239` discards that context
   and invokes portable handlers with only spread arguments.
 - `workspace/panels/terminal/TerminalApp.tsx:14-17` repeats the same caller-discarding
   wrapper locally.
 - `workspace/panels/terminal/TerminalApp.tsx:639-683` exposes powerful methods including
   `terminal.sendText`, `terminal.getScrollback`, `terminal.runCommand`, and
   `terminal.listSessions`.
-- `workspace/packages/runtime/src/panel/agentApi.ts:28-72` exposes DOM snapshots, panel
+- `packages/runtime/src/panel/agentApi.ts:28-72` exposes DOM snapshots, panel
   structure/state/routes, and `setMode` through the same receiver model.
 
 ### Exploit preconditions

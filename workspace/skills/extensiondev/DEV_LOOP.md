@@ -93,7 +93,7 @@ await extensions.reload("@workspace-extensions/hello");
 
 Approval-gated. Restarts the _currently active approved build_ — does not pull dependency changes. Use this after editing in-process state (env vars, on-disk config) that the extension reads at `activate()` time.
 
-To adopt dependency changes (a `@workspace/runtime` push, an `npm` version bump), the extension must rebuild — and rebuilds happen only on reconcile, at workspace startup or when `meta/vibestudio.yml` is pushed into its `main`. `extensions.reload(name)` restarts the _active approved build_ and does **not** rebuild, so it won't pick up dependency changes on its own, and dependency pushes don't auto-reload a running extension either.
+To adopt dependency changes (a `@vibestudio/runtime` push, an `npm` version bump), the extension must rebuild — and rebuilds happen only on reconcile, at workspace startup or when `meta/vibestudio.yml` is pushed into its `main`. `extensions.reload(name)` restarts the _active approved build_ and does **not** rebuild, so it won't pick up dependency changes on its own, and dependency pushes don't auto-reload a running extension either.
 
 ## Common failure shapes
 

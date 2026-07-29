@@ -1,8 +1,8 @@
 /**
  * Worker/DO orchestration and state inspection helpers.
  */
-import { contextId, createDurableObjectServiceClient, rpc, workspace } from "@workspace/runtime";
-import type { WorkspaceUnitStatus } from "@workspace/runtime";
+import { contextId, createDurableObjectServiceClient, rpc, workspace } from "@vibestudio/runtime";
+import type { WorkspaceUnitStatus } from "@vibestudio/runtime";
 
 export type UnitDiagnostics = Awaited<ReturnType<typeof workspace.units.diagnostics>>;
 import { activeTestContext } from "./run.js";

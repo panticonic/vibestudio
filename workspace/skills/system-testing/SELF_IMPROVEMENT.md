@@ -425,14 +425,14 @@ For each failure, determine the root cause category and act accordingly:
 
 | Symptom                       | Likely files                                                                                                                                                                                   |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| fs operation failed           | `src/server/services/fsService.ts`, `workspace/packages/runtime/src/panel/fs.ts`                                                                                                               |
-| DO storage operation failed   | `src/server/internalDOs/*`, `workspace/packages/runtime/src/worker/durable-base.ts`                                                                                                            |
-| Semantic VCS operation failed | `packages/service-schemas/src/vcs.ts`, `src/server/services/vcsService.ts`, `workspace/packages/semantic-control-plane/src/semanticVcs*`, `workspace/packages/runtime/src/shared/vcsClient.ts` |
+| fs operation failed           | `src/server/services/fsService.ts`, `packages/runtime/src/panel/fs.ts`                                                                                                               |
+| DO storage operation failed   | `src/server/internalDOs/*`, `packages/runtime/src/worker/durable-base.ts`                                                                                                            |
+| Semantic VCS operation failed | `packages/service-schemas/src/vcs.ts`, `src/server/services/vcsService.ts`, `packages/semantic-control-plane/src/semanticVcs*`, `packages/runtime/src/shared/vcsClient.ts` |
 | external Git operation failed | `packages/git/src/client.ts`, `src/server/services/gitInteropService.ts`                                                                                                                       |
 | Build failed                  | `src/server/buildV2/`, `build.mjs`                                                                                                                                                             |
-| Worker/DO issue               | `src/server/services/workerService.ts`, `workspace/packages/runtime/src/worker/`                                                                                                               |
+| Worker/DO issue               | `src/server/services/workerService.ts`, `packages/runtime/src/worker/`                                                                                                               |
 | Panel lifecycle               | `src/main/panelOrchestrator.ts`, `src/server/services/bridgeService.ts`                                                                                                                        |
-| Credential/OAuth error        | `src/server/services/credentialService.ts`, `workspace/packages/runtime/src/shared/credentials.ts`                                                                                             |
+| Credential/OAuth error        | `src/server/services/credentialService.ts`, `packages/runtime/src/shared/credentials.ts`                                                                                             |
 | Harness crash                 | `workspace/packages/harness/src/entry.ts`, `src/server/harnessManager.ts`                                                                                                                      |
 | PubSub issue                  | `workspace/packages/pubsub/src/`, `workspace/workers/pubsub-channel/`                                                                                                                          |
 | Skill import                  | `src/server/buildV2/`, package.json exports                                                                                                                                                    |
@@ -562,7 +562,7 @@ eval({
 ```typescript
 const branchName = `fix/system-test-${failedTestName}`;
 import { GitClient } from "@vibestudio/git";
-import { credentials, fs } from "@workspace/runtime";
+import { credentials, fs } from "@vibestudio/runtime";
 const externalGit = new GitClient(fs, { http: credentials.gitHttp() });
 await externalGit.createBranch({ dir: scope.checkoutDir, name: branchName });
 await externalGit.checkout(scope.checkoutDir, branchName);

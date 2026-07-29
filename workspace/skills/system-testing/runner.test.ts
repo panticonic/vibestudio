@@ -34,7 +34,7 @@ vi.mock("@workspace/agentic-session", () => ({
   HeadlessSession: { createWithAgent: mocks.createWithAgent },
 }));
 
-vi.mock("@workspace/runtime", () => ({
+vi.mock("@vibestudio/runtime", () => ({
   gad: mocks.gad,
   blobstore: mocks.blobstore,
   rpc: mocks.rpc,

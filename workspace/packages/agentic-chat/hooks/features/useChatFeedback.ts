@@ -22,7 +22,7 @@ import {
 } from "@workspace/tool-ui";
 import type { SandboxOptions } from "@workspace/eval";
 import type { FeedbackComponentProps } from "@workspace/tool-ui";
-import { AGENTIC_EVENT_PAYLOAD_KIND, type AgenticEvent } from "@workspace/agentic-protocol";
+import { AGENTIC_EVENT_PAYLOAD_KIND, type AgenticEvent } from "@vibestudio/agentic-protocol";
 import { type ChatSandboxValue } from "@workspace/agentic-core";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { fsMethods } from "@vibestudio/service-schemas/fs";

@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { render, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { IncomingEvent, MethodDefinition } from "@workspace/pubsub";
-import { AGENTIC_EVENT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
+import { AGENTIC_EVENT_PAYLOAD_KIND } from "@vibestudio/agentic-protocol";
 
 import { useChatCore, type ChatCoreState } from "./useChatCore.js";
 import { createTranscriptHarness } from "../transcriptTestHarness.js";

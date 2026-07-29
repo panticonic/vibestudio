@@ -39,7 +39,7 @@ import {
   workspace,
   type VcsSemanticNodeRef,
   type VcsStateNodeRef,
-} from "@workspace/runtime";
+} from "@vibestudio/runtime";
 import type {
   GitPullUpstreamResult,
   GitUpstreamState,

@@ -85,16 +85,21 @@ export const gitTemplatePublishInputSchema = z
     manifest: z.string().min(1),
     manifestDigest: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/u),
     parts: z.array(z.object({ repoPath: z.string(), subdir: z.string() }).strict()).min(1),
+    credentialId: z.string().trim().min(1).optional(),
     destination: z
       .object({
-        provider: z.string().optional(),
-        name: z.string().trim().min(1).optional(),
-        organization: z.string().trim().min(1).optional(),
-        private: z.boolean().optional(),
-        description: z.string().optional(),
-        credentialId: z.string().trim().min(1).optional(),
+        provider: z.string().trim().min(1),
+        owner: z.string().trim().min(1),
+        name: z.string().trim().min(1),
       })
       .strict(),
+    creation: z
+      .object({
+        private: z.boolean().optional(),
+        description: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type GitTemplatePublishInput = z.infer<typeof gitTemplatePublishInputSchema>;
@@ -102,7 +107,14 @@ export type GitTemplatePublishInput = z.infer<typeof gitTemplatePublishInputSche
 export const gitTemplatePublishResultSchema = z
   .object({
     operationId: z.string(),
-    provider: z.string(),
+    destination: z
+      .object({
+        provider: z.string(),
+        owner: z.string(),
+        name: z.string(),
+      })
+      .strict(),
+    created: z.boolean(),
     remoteUrl: z.string().url(),
     webUrl: z.string().url(),
     templateUrl: z.string(),
@@ -782,8 +794,7 @@ export const gitInteropProviderMethods = defineServiceMethods({
     returns: gitTemplateContributionResultSchema,
   },
   publishTemplate: {
-    description:
-      "Create and publish one exact multi-repository template tree and version tag.",
+    description: "Create and publish one exact multi-repository template tree and version tag.",
     args: z.tuple([gitTemplatePublishInputSchema]),
     returns: gitTemplatePublishResultSchema,
   },

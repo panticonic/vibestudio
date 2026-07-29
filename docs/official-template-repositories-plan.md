@@ -46,7 +46,7 @@ implemented. Each records the mechanism that forces it.
 ### D1. Templates name their dependencies; the build proves compatibility
 
 **Feature templates declare base as a dependency, by URL only.** The edge is
-real — a feature importing `@workspace/runtime` depends on the unit base
+real — a feature importing `@vibestudio/runtime` depends on the unit base
 provides — so it must be visible to the resolver. But the edge carries no
 version and no commit. Compatibility is not predicted; it is **measured, by
 building the result before it is published**.

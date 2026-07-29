@@ -1,6 +1,6 @@
 /**
  * Panel-rpc harness: drives createAndSubscribeAgent against a mocked
- * `@workspace/runtime` rpc and asserts the per-agent config seeds into the
+ * `@vibestudio/runtime` rpc and asserts the per-agent config seeds into the
  * entity's creation stateArgs while the subscription stays presentation-only.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("@workspace/runtime", () => ({ rpc: { call: mocks.call } }));
+vi.mock("@vibestudio/runtime", () => ({ rpc: { call: mocks.call } }));
 
 import {
   ProvisionalAgentLifecycle,

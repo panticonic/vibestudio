@@ -12,8 +12,8 @@ import type {
   EffectKind,
   EffectOutcome,
 } from "@workspace/agent-loop";
-import type { AgenticEvent, ParticipantRef } from "@workspace/agentic-protocol";
-import type { AgentToolFailure } from "@workspace/agentic-protocol";
+import type { AgenticEvent, ParticipantRef } from "@vibestudio/agentic-protocol";
+import type { AgentToolFailure } from "@vibestudio/agentic-protocol";
 
 export type EphemeralEmit =
   | {

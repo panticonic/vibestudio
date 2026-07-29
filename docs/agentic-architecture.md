@@ -51,7 +51,7 @@ is represented as `agentic.trajectory.v1` events:
 
 The chat UI consumes persisted channel envelopes with
 `payloadKind: "agentic.trajectory.v1/event"` and reduces them through
-`@workspace/agentic-protocol` into the rendered transcript. Signal messages are
+`@vibestudio/agentic-protocol` into the rendered transcript. Signal messages are
 still used for transient extension/status UI, but not as the authoritative chat
 transcript.
 
@@ -70,7 +70,7 @@ transcript.
 ## DO Base Classes
 
 **DurableObjectBase** — generic DO foundation (~150 lines).
-Location: `workspace/packages/runtime/src/worker/durable-base.ts`
+Location: `packages/runtime/src/worker/durable-base.ts`
 
 **AgentVesselBase** — event-sourced Pi-native agent base extending
 DurableObjectBase.
@@ -210,7 +210,7 @@ Vibestudio-bound.
 | ---------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------- |
 | Workspace agent runtime      | `workspace/packages/harness/`         | `PiRunner`, `VibestudioExtensionUIContext`, three extension factories, channel boundary types |
 | Channel client package       | workspace package                     | Panel-side channel client and protocol types                                                  |
-| `@workspace/runtime`         | `workspace/packages/runtime/`         | DurableObjectBase, HttpRpcBridge                                                              |
+| `@vibestudio/runtime`         | `packages/runtime/`         | DurableObjectBase, HttpRpcBridge                                                              |
 | `@workspace/agentic-do`      | `workspace/packages/agentic-do/`      | AgentWorkerBase, ChannelClient, ContinuationStore, SubscriptionManager                        |
 | `@workspace/agentic-core`    | `workspace/packages/agentic-core/`    | Derived UI types, channel-view to chat projection, ConnectionManager                          |
 | `@workspace/agentic-chat`    | `workspace/packages/agentic-chat/`    | useChannelMessages, useChatCore, useAgenticChat                                               |

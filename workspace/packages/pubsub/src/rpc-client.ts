@@ -57,7 +57,7 @@ import {
   type MessageId,
   type MessageTier,
   type ParticipantRef,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import { AgenticError } from "./protocol-types.js";
 import { ErrorMessageSchema, SignalMessageSchema } from "./protocol.js";
 import { createFanout } from "./async-queue.js";

@@ -1,7 +1,7 @@
 /** Focused React bindings for panel appearance and theme configuration. */
 import { useEffect, useState } from "react";
-import { panel } from "@workspace/runtime";
-import type { ThemeAppearance, ThemeConfig } from "@workspace/runtime";
+import { panel } from "@vibestudio/runtime";
+import type { ThemeAppearance, ThemeConfig } from "@vibestudio/runtime";
 
 /** Get the current panel appearance and subscribe to live changes. */
 export function usePanelTheme(): ThemeAppearance {

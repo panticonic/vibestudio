@@ -10,7 +10,7 @@ import {
   Text,
 } from "@radix-ui/themes";
 import { GlobeIcon, OpenInNewWindowIcon } from "@radix-ui/react-icons";
-import { openExternal, openPanel } from "@workspace/runtime";
+import { openExternal, openPanel } from "@vibestudio/runtime";
 import {
   configureGoogleOAuthClient,
   connectGoogle,

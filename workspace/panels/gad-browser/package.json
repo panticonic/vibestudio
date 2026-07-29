@@ -12,7 +12,7 @@
       "react/jsx-dev-runtime",
       "@radix-ui/themes",
       "@radix-ui/react-icons",
-      "@workspace/runtime",
+      "@vibestudio/runtime",
       "@workspace/react",
       "@workspace/ui"
     ],
@@ -132,7 +132,7 @@
   "dependencies": {
     "@vibestudio/git": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
-    "@workspace/runtime": "workspace:*",
+    "@vibestudio/runtime": "workspace:*",
     "@workspace/react": "workspace:*",
     "@workspace/ui": "workspace:*",
     "@radix-ui/themes": "^3.2.1",

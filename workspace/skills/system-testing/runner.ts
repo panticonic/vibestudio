@@ -4,7 +4,7 @@ import {
   type SessionSnapshot,
 } from "@workspace/agentic-session";
 import type { ConnectionConfig } from "@workspace/agentic-core";
-import { blobstore, gad, rpc, vcs } from "@workspace/runtime";
+import { blobstore, gad, rpc, vcs } from "@vibestudio/runtime";
 import { SYSTEM_TEST_AGENT_MODEL, systemTestModelRoute } from "./config.js";
 import { systemTestFailure } from "./structured-error.js";
 import {
@@ -17,7 +17,7 @@ import type { AgentExecutionTestPolicySpec } from "@vibestudio/shared/authority/
 import { vcsStateNodeRefSchema, type VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
 import type { AttachedHostApprovalAuditEvent } from "@vibestudio/service-schemas/attachedHosts";
 import type { TestAuthorityPolicy } from "./types.js";
-import type { BlobReader } from "@workspace/agentic-protocol";
+import type { BlobReader } from "@vibestudio/agentic-protocol";
 
 // This runner is eval'd server-side (in the orchestrating agent's EvalDO), so it
 // uses the portable client surface — NOT panel-only `getStateArgs`/`slotId`.

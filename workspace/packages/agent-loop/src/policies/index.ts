@@ -4,7 +4,7 @@
  * (consumer extras) → compaction.
  */
 
-import { AGENTIC_PROTOCOL_VERSION, type ParticipantRef } from "@workspace/agentic-protocol";
+import { AGENTIC_PROTOCOL_VERSION, type ParticipantRef } from "@vibestudio/agentic-protocol";
 import { ids } from "../ids.js";
 import {
   askUserFanoutCallId,

@@ -31,7 +31,7 @@ import type {
   ProjectedMessage,
   ProjectedSystemNotice,
   ProjectedTurn,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import {
   assertNoStoredValueRefs,
   isLifecycleMessageReasonCode,
@@ -40,7 +40,7 @@ import {
   messageDisplayText,
   readDiagnosticMetadata,
   summarizeMessageBlocks,
-} from "@workspace/agentic-protocol";
+} from "@vibestudio/agentic-protocol";
 import type { InvocationCardPayload, SubagentProgressEntry } from "./invocation-card-payload.js";
 
 type StoredValueRefPreview = { preview?: string };

@@ -75,7 +75,7 @@ const SliderNotchSchema = z.object({
 
 /**
  * Schema for field definition (formerly AgentParameterDefinition).
- * Matches FieldDefinition from @workspace/runtime.
+ * Matches FieldDefinition from @vibestudio/runtime.
  */
 export const FieldDefinitionSchema = z.object({
   key: z.string().min(1),

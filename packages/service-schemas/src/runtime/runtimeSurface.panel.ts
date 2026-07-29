@@ -32,7 +32,7 @@ const PANEL_MEMBERS = [
 
 export const panelRuntimeSurface: RuntimeSurface = {
   target: "panel",
-  description: "Top-level value exports available from @workspace/runtime in panel eval contexts.",
+  description: "Top-level value exports available from @vibestudio/runtime in panel eval contexts.",
   exports: {
     ...coreRuntimeSurface,
     // Entries whose description is panel-specific (member arrays shared with core).

@@ -386,7 +386,7 @@ workspace manifest's configured `providers.gitInterop` extension rather than a
 host-hardcoded workspace package.
 
 Use `git.setSharedRemote()` and `git.setUpstream()` from
-`@workspace/runtime` to declare a remote and opt a workspace repo into upstream
+`@vibestudio/runtime` to declare a remote and opt a workspace repo into upstream
 tracking. The runtime `git.*` methods use the same host `gitInterop.*` service as
 the CLI, and that service dispatches transport work through the configured
 `providers.gitInterop` extension. Runtime code does not invoke the extension by

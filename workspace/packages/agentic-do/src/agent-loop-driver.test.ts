@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import { GadWorkspaceDO } from "../../semantic-control-plane/src/index.js";
+import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
+import { GadWorkspaceDO } from "@vibestudio/semantic-control-plane";
 import {
   ids,
   askUserPolicy,
@@ -12,7 +12,7 @@ import {
 } from "@workspace/agent-loop";
 import { AgentLoopDriver, type DriverDeps } from "./agent-loop-driver.js";
 import type { ChannelCallPort, EffectExecutor, EphemeralEmit } from "./effect-executors/index.js";
-import { CREDENTIAL_CONNECT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
+import { CREDENTIAL_CONNECT_PAYLOAD_KIND } from "@vibestudio/agentic-protocol";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import { summarizeTurn } from "./agent-vessel.js";
 

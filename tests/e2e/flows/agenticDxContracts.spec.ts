@@ -48,7 +48,7 @@ test.describe("agentic DX contracts", () => {
         testApp.app,
         panel!.id,
         `(async () => {
-          const { fs, gad } = await globalThis.__vibestudioRequireAsync__("@workspace/runtime");
+          const { fs, gad } = await globalThis.__vibestudioRequireAsync__("@vibestudio/runtime");
           const entries = await fs.readdir("panels");
           const diagnostic = await gad.diagnoseInvocation({
             trajectoryId: "electron-diagnostic-missing",
@@ -128,7 +128,7 @@ test.describe("agentic DX contracts", () => {
         panel!.id,
         `(async () => {
           const { blobstore, openPanel } =
-            await globalThis.__vibestudioRequireAsync__("@workspace/runtime");
+            await globalThis.__vibestudioRequireAsync__("@vibestudio/runtime");
           const handle = await openPanel("panels/hello-vanilla");
           try {
             const observation = await handle.observe();

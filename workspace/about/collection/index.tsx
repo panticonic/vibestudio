@@ -36,8 +36,8 @@ import {
   rpc,
   type PanelSubtreeNode,
   type PanelSubtreeSnapshot,
-} from "@workspace/runtime";
-import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
+} from "@vibestudio/runtime";
+import { recoveryCoordinator } from "@vibestudio/runtime/internal/diagnostics";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { createPanelSandboxConfig, launchAgentIntoChannel } from "@workspace/agentic-core";
 import type { AgenticChatHandle } from "@workspace/agentic-chat";

@@ -9,8 +9,8 @@
  * instance memory: they die if the DO hibernates or restarts, which is fine
  * for test-scoped use — callers reopen on "unknown session" errors.
  */
-import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
-import { CdpConnection } from "@workspace/cdp-client";
+import { DurableObjectBase, rpc } from "@vibestudio/runtime/worker";
+import { CdpConnection } from "@vibestudio/cdp-client";
 import {
   cpuProfileRef,
   persistProfile,

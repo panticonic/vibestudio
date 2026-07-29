@@ -31,14 +31,14 @@ vi.mock("@workspace/pubsub", () => ({
   connectViaRpc: pubsubMocks.connectViaRpc,
 }));
 
-vi.mock("@workspace/runtime", () => ({
+vi.mock("@vibestudio/runtime", () => ({
   rpc: {},
   panel: {
     slotId: "panel:slot-test",
     stateArgs: { set: vi.fn() },
   },
 }));
-vi.mock("@workspace/runtime/internal/diagnostics", () => ({
+vi.mock("@vibestudio/runtime/internal/diagnostics", () => ({
   recoveryCoordinator: {},
 }));
 

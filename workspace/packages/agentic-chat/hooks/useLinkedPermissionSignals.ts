@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ParticipantMetadata, PubSubClient } from "@workspace/pubsub";
-import { AGENTIC_EVENT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
+import { AGENTIC_EVENT_PAYLOAD_KIND } from "@vibestudio/agentic-protocol";
 import { parseSignalEvent } from "@workspace/agentic-core";
 
 /**
