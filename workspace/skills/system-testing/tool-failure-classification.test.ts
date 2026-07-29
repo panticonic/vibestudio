@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isEvalGuestCodeFailure,
   isPreExecutionArgumentRejection,
+  isReadOnlyInputRejection,
   isSafeEvalDomainRejection,
   isSafeProvenanceDomainRejection,
   isSafeSubagentDomainRejection,
@@ -27,6 +28,20 @@ describe("tool failure classification", () => {
       isPreExecutionArgumentRejection("The user wrote: Invalid arguments for tool vcs")
     ).toBe(false);
     expect(isPreExecutionArgumentRejection("[vcs.push] publication failed")).toBe(false);
+  });
+
+  it("recognizes typed no-effect path rejection from read-only runtime tools", () => {
+    const failure = {
+      details: {
+        failure: {
+          protocol: "agent-tool-failure.v1",
+          kind: "invalid-input",
+          retry: { policy: "correct-input" },
+        },
+      },
+    };
+    expect(isReadOnlyInputRejection("read", failure)).toBe(true);
+    expect(isReadOnlyInputRejection("write", failure)).toBe(false);
   });
 
   it("keeps an exact-root provenance miss diagnostic-only", () => {

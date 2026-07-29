@@ -51,6 +51,7 @@ import { describeCapability } from "@vibestudio/shared/authorityPresentation";
 import { connect as netConnect, isIP } from "node:net";
 import type { ResolvedCodeIdentity } from "./principalIdentity.js";
 import { testPolicyAllowsGatedInvocation } from "./authorityRuntime.js";
+import { resolveCredentialByLabel } from "./credentialSelection.js";
 import { bridgeDuplexSockets } from "../socketBridge.js";
 import { CDP_INTERNAL_GRANT_HEADER } from "@vibestudio/shared/cdpGrants";
 
@@ -109,6 +110,28 @@ interface GitIntentMetadata {
       };
 }
 
+export interface HostGitHttpOperation {
+  service: "workspace-initialization" | "hubControl";
+  method: string;
+  workspaceId?: string;
+  resourceKey: string;
+  preparedStateDigest: string;
+}
+
+export type GitHttpAuthority =
+  | { kind: "runtime"; caller: VerifiedCaller }
+  | {
+      kind: "host-operation";
+      caller: VerifiedCaller;
+      operation: HostGitHttpOperation;
+    };
+
+export type GitCredentialSelection =
+  | { kind: "automatic" }
+  | { kind: "anonymous" }
+  | { kind: "named"; label: string }
+  | { kind: "credential"; credentialId: string };
+
 export interface CredentialStore {
   loadUrlBound(id: string): Promise<Credential | null> | Credential | null;
   listUrlBound?(): Promise<Credential[]> | Credential[];
@@ -155,11 +178,22 @@ export interface EgressProxyDeps {
   }) => boolean | Promise<boolean>;
 }
 
-interface RequestAttribution extends ResolvedCodeIdentity {
+interface CodeRequestAttribution extends ResolvedCodeIdentity {
+  kind: "code";
   policyKey: string;
   /** Stable owner of an eval-authored request; absent for installed code. */
   agentId?: string;
 }
+
+interface HostRequestAttribution {
+  kind: "host-operation";
+  callerId: string;
+  workerId: string;
+  policyKey: string;
+  operation: HostGitHttpOperation;
+}
+
+type RequestAttribution = CodeRequestAttribution | HostRequestAttribution;
 
 interface Authorization {
   attribution: RequestAttribution | null;
@@ -191,7 +225,8 @@ class ForwardRejection extends Error {
     public readonly statusCode: number,
     message: string,
     public readonly capabilityViolation?: string,
-    public readonly code: string | undefined = capabilityViolation
+    public readonly code: string | undefined = capabilityViolation,
+    public readonly errorData?: import("@vibestudio/rpc").RpcErrorData
   ) {
     super(message);
   }
@@ -439,11 +474,11 @@ export class EgressProxy {
     const bytesOut =
       body === undefined ? 0 : typeof body === "string" ? Buffer.byteLength(body) : body.byteLength;
     return this.executeAuthorizedRequest({
-      caller: params.caller,
+      authority: { kind: "runtime", caller: params.caller },
       method: params.method.toUpperCase(),
       targetUrl: new URL(params.url),
       inputHeaders: params.headers ?? {},
-      credentialId: params.credentialId,
+      credential: credentialSelection(params.credentialId),
       credentialUse: "fetch",
       initialBytesOut: bytesOut,
       replaySafe: true,
@@ -528,11 +563,11 @@ export class EgressProxy {
     let bytesInTotal = 0;
 
     const result = await this.executeAuthorizedRequest({
-      caller: params.caller,
+      authority: { kind: "runtime", caller: params.caller },
       method: params.method.toUpperCase(),
       targetUrl: new URL(params.url),
       inputHeaders: params.headers ?? {},
-      credentialId: params.credentialId,
+      credential: credentialSelection(params.credentialId),
       credentialUse: "fetch",
       initialBytesOut: bytesOut,
       // Retries are unsafe once the head frame has been emitted (the
@@ -638,12 +673,12 @@ export class EgressProxy {
   }
 
   async forwardGitHttp(params: {
-    caller: VerifiedCaller;
+    authority: GitHttpAuthority;
     url: string;
     method: string;
     headers?: Record<string, string>;
     body?: Uint8Array;
-    credentialId?: string | null;
+    credential: GitCredentialSelection;
     gitIntent?: GitIntentMetadata;
   }): Promise<{
     url: string;
@@ -656,22 +691,33 @@ export class EgressProxy {
     const body = params.body;
     const bytesOut = body?.byteLength ?? 0;
     return this.executeAuthorizedRequest({
-      caller: params.caller,
+      authority: params.authority,
       method: params.method.toUpperCase(),
       targetUrl: new URL(params.url),
       inputHeaders: params.headers ?? {},
-      credentialId: params.credentialId,
+      credential: params.credential,
       credentialUse: "git-http",
       gitIntent: params.gitIntent,
       initialBytesOut: bytesOut,
       replaySafe: false,
-      execute: async (targetUrl, headers, _authorization, manualRedirects) => {
+      // Unlike ordinary fetch, Git HTTP never follows redirects: a redirected
+      // smart-HTTP exchange would move credentialed requests to an origin the
+      // caller never declared. The redirect is surfaced as a rejection so the
+      // caller fixes the remote URL instead of silently following it.
+      execute: async (targetUrl, headers) => {
         const response = await fetch(targetUrl.toString(), {
           method: params.method,
           headers: headers as HeadersInit,
           body: body as BodyInit | undefined,
-          redirect: manualRedirects ? "manual" : "follow",
+          redirect: "manual",
         });
+        if (isRedirectStatus(response.status)) {
+          throw new ForwardRejection(
+            403,
+            "Git HTTP redirects are not allowed; use the canonical remote URL",
+            "git-http-redirect"
+          );
+        }
         const responseBody = new Uint8Array(await response.arrayBuffer());
         return {
           statusCode: response.status,
@@ -839,7 +885,7 @@ export class EgressProxy {
 
     try {
       await this.executeAuthorizedRequest({
-        caller,
+        authority: { kind: "runtime", caller },
         method: (req.method ?? "GET").toUpperCase(),
         targetUrl,
         inputHeaders: req.headers,
@@ -914,11 +960,11 @@ export class EgressProxy {
   }
 
   private async executeAuthorizedRequest<T>(params: {
-    caller: VerifiedCaller | null;
+    authority: GitHttpAuthority;
     method: string;
     targetUrl: URL;
     inputHeaders: IncomingHttpHeaders | Headers | Record<string, string | string[] | undefined>;
-    credentialId?: string | null;
+    credential?: GitCredentialSelection;
     credentialUse?: CredentialBindingUse;
     gitIntent?: GitIntentMetadata;
     initialBytesOut?: number;
@@ -934,6 +980,13 @@ export class EgressProxy {
     ) => Promise<RequestExecutionResult<T>>;
   }): Promise<T> {
     const startedAt = Date.now();
+    const attemptedHostAttribution =
+      params.authority.kind === "host-operation"
+        ? {
+            workerId: hostOperationAuditId(params.authority.operation),
+            callerId: params.authority.caller.subject?.userId ?? params.authority.caller.runtime.id,
+          }
+        : null;
     let authorization: Authorization | null = null;
     let targetUrl = params.targetUrl;
     let statusCode = 500;
@@ -944,15 +997,16 @@ export class EgressProxy {
     let breakerState: AuditEntry["breakerState"] = "closed";
 
     try {
-      let manualRedirects = params.caller
-        ? await this.missionRequiresManualRedirects(params.caller, targetUrl)
-        : false;
+      let manualRedirects = await this.missionRequiresManualRedirects(
+        params.authority.caller,
+        targetUrl
+      );
       authorization = await this.authorizeRequest({
-        caller: params.caller,
+        authority: params.authority,
         targetUrl,
         method: params.method,
         inputHeaders: params.inputHeaders,
-        credentialId: params.credentialId,
+        credential: params.credential ?? { kind: "automatic" },
         credentialUse: params.credentialUse ?? "fetch",
         gitIntent: params.gitIntent,
       });
@@ -984,11 +1038,9 @@ export class EgressProxy {
           prepared.headers[name.toLowerCase()] = value;
         }
         targetUrl = prepared.targetUrl;
-        if (params.caller) {
-          manualRedirects =
-            (await this.missionRequiresManualRedirects(params.caller, targetUrl)) ||
-            manualRedirects === true;
-        }
+        manualRedirects =
+          (await this.missionRequiresManualRedirects(params.authority.caller, targetUrl)) ||
+          manualRedirects === true;
         let result: RequestExecutionResult<T> | undefined;
         try {
           result = await params.execute(
@@ -1062,8 +1114,14 @@ export class EgressProxy {
     } finally {
       await this.appendAuditEntry({
         ts: startedAt,
-        workerId: authorization?.attribution?.repoPath ?? "unknown",
-        callerId: authorization?.attribution?.callerId ?? params.caller?.runtime.id ?? "unknown",
+        workerId: authorization?.attribution
+          ? attributionWorkerId(authorization.attribution)
+          : (attemptedHostAttribution?.workerId ?? "unknown"),
+        callerId:
+          authorization?.attribution?.callerId ??
+          attemptedHostAttribution?.callerId ??
+          params.authority.caller.runtime.id ??
+          "unknown",
         providerId: authorization?.credential?.providerId ?? PASSTHROUGH_PROVIDER_ID,
         connectionId: authorization?.connectionId ?? PASSTHROUGH_CONNECTION_ID,
         method: params.method,
@@ -1080,39 +1138,168 @@ export class EgressProxy {
     }
   }
 
+  private async authorizeHostGitHttp(
+    caller: VerifiedCaller,
+    operation: HostGitHttpOperation,
+    targetUrl: URL,
+    method: string,
+    credentialId: string | null
+  ): Promise<void> {
+    if (!this.deps.authorizeEffect) {
+      throw new ForwardRejection(403, "Host Git HTTP authority is unavailable");
+    }
+    const origin = targetUrl.origin;
+    await this.deps.authorizeEffect(
+      { caller, authorityAcquisition: "wait" },
+      {
+        service: operation.service,
+        method: operation.method,
+        capability: RAW_EGRESS_CAPABILITY,
+        resourceKey: `${operation.resourceKey}:${origin}`,
+        requirement: requirementForPrincipals(["host"], RAW_EGRESS_CAPABILITY),
+        tier: "open",
+        sessionAdmission: "family",
+        args: [operation.workspaceId, method, targetUrl.toString()],
+        preparedStateDigest: sha256Canonical({
+          operation: operation.preparedStateDigest,
+          origin,
+          method,
+        }),
+        sensitivity: "read",
+      }
+    );
+    if (credentialId === null) return;
+    await this.deps.authorizeEffect(
+      { caller, authorityAcquisition: "wait" },
+      {
+        service: operation.service,
+        method: operation.method,
+        capability: "credential.use",
+        resourceKey: `${operation.resourceKey}:credential:${credentialId}`,
+        requirement: requirementForPrincipals(["host", "user"], "credential.use"),
+        tier: "gated",
+        sessionAdmission: "family",
+        args: [operation.workspaceId, credentialId, method, targetUrl.toString()],
+        preparedStateDigest: sha256Canonical({
+          operation: operation.preparedStateDigest,
+          credentialId,
+          origin,
+          method,
+        }),
+        sensitivity: "read",
+        challenge: {
+          dedupKey: `host-git:${operation.service}:${operation.resourceKey}:${credentialId}:${origin}`,
+          resource: { type: "url-origin", label: "Git remote", value: origin },
+          operation: {
+            kind: "credential",
+            verb: "use a credential for Git",
+            object: { type: "url-origin", label: "Git remote", value: origin },
+            groupKey: `host-git:${operation.service}:${operation.resourceKey}`,
+          },
+          title: `Use a credential for ${origin}`,
+          description: "Vibestudio needs this credential for the selected Git repository.",
+          details: [
+            { label: "Git remote", value: origin },
+            { label: "Operation", value: `${operation.service}.${operation.method}` },
+          ],
+          deniedReason: "Git credential use denied",
+        },
+      }
+    );
+  }
+
   private async authorizeRequest(params: {
-    caller: VerifiedCaller | null;
+    authority: GitHttpAuthority;
     targetUrl: URL;
     method: string;
     inputHeaders: IncomingHttpHeaders | Headers | Record<string, string | string[] | undefined>;
-    credentialId?: string | null;
+    credential: GitCredentialSelection;
     credentialUse: CredentialBindingUse;
     gitIntent?: GitIntentMetadata;
   }): Promise<Authorization> {
-    const caller = params.caller;
-    const attribution = caller
-      ? this.resolveAttribution(caller, params.credentialId ?? undefined)
-      : null;
-    const testPolicyApproved = caller
-      ? testPolicyAllowsGatedInvocation(caller, undefined, {
-          capability: "credential.use",
-          resourceKey: "credential.use",
-        })
-      : false;
-    if (params.credentialId === undefined || params.credentialId === null) {
+    const caller = params.authority.caller;
+    let codeAttribution: CodeRequestAttribution | null = null;
+    let attribution: RequestAttribution;
+    if (params.authority.kind === "host-operation") {
+      if (caller.hostOriginated !== true) {
+        throw new ForwardRejection(
+          403,
+          "Host Git HTTP requires an attested host operation",
+          "unknown-caller"
+        );
+      }
+      attribution = {
+        kind: "host-operation",
+        callerId: caller.subject?.userId ?? caller.runtime.id,
+        workerId: hostOperationAuditId(params.authority.operation),
+        policyKey: `host:${params.authority.operation.service}:${params.authority.operation.resourceKey}`,
+        operation: params.authority.operation,
+      };
+    } else {
+      codeAttribution = this.resolveAttribution(
+        caller,
+        params.credential.kind === "credential" ? params.credential.credentialId : undefined
+      );
+      if (!codeAttribution) {
+        throw new ForwardRejection(
+          403,
+          `Unknown caller identity: ${caller.runtime.id}`,
+          "unknown-caller"
+        );
+      }
+      attribution = codeAttribution;
+    }
+    const testPolicyApproved = testPolicyAllowsGatedInvocation(caller, undefined, {
+      capability: "credential.use",
+      resourceKey: "credential.use",
+    });
+    if (params.credential.kind !== "credential") {
       const credential =
-        params.credentialId === undefined && attribution
-          ? await this.resolveCredentialForRequest(
-              params.targetUrl,
-              attribution,
-              params.credentialUse,
-              params.method,
-              params.gitIntent,
-              caller?.subject?.userId,
-              testPolicyApproved
-            )
-          : null;
-      if (caller && attribution && !credential) {
+        params.credential.kind === "automatic"
+          ? codeAttribution
+            ? await this.resolveCredentialForRequest(
+                params.targetUrl,
+                codeAttribution,
+                params.credentialUse,
+                params.method,
+                params.gitIntent,
+                caller.subject?.userId,
+                testPolicyApproved
+              )
+            : await this.resolveHostCredentialForRequest(params.targetUrl, params.credentialUse)
+          : params.credential.kind === "named"
+            ? codeAttribution
+              ? await this.resolveCredentialForRequest(
+                  params.targetUrl,
+                  codeAttribution,
+                  params.credentialUse,
+                  params.method,
+                  params.gitIntent,
+                  caller.subject?.userId,
+                  testPolicyApproved,
+                  params.credential.label
+                )
+              : await this.resolveHostCredentialForRequest(
+                  params.targetUrl,
+                  params.credentialUse,
+                  params.credential.label
+                )
+            : null;
+      if (params.credential.kind === "named" && !credential) {
+        throw new ForwardRejection(
+          409,
+          `No stored credential named ${JSON.stringify(params.credential.label)} can access ${params.targetUrl.origin}`,
+          "credential-requirement-unsatisfied",
+          "credential-requirement-unsatisfied",
+          {
+            code: "CredentialRequirementUnsatisfied",
+            name: params.credential.label,
+            use: params.credentialUse,
+            url: params.targetUrl.href,
+          }
+        );
+      }
+      if (params.authority.kind === "runtime" && !credential) {
         const internalAuthorization = await this.deps.authorizeInternalRequest?.({
           caller,
           targetUrl: params.targetUrl,
@@ -1120,7 +1307,7 @@ export class EgressProxy {
           headers: params.inputHeaders,
         });
         if (!internalAuthorization) {
-          await this.authorizeRawEgress(caller, attribution, params.targetUrl, params.method);
+          await this.authorizeRawEgress(caller, codeAttribution!, params.targetUrl, params.method);
         }
         return {
           attribution,
@@ -1130,6 +1317,15 @@ export class EgressProxy {
           scopes: [],
           trustedForwardHeaders: internalAuthorization?.trustedForwardHeaders ?? {},
         };
+      }
+      if (params.authority.kind === "host-operation") {
+        await this.authorizeHostGitHttp(
+          caller,
+          params.authority.operation,
+          params.targetUrl,
+          params.method,
+          credential?.id ?? null
+        );
       }
       return {
         attribution,
@@ -1144,7 +1340,7 @@ export class EgressProxy {
     }
 
     let credential = await Promise.resolve(
-      this.deps.credentialStore.loadUrlBound(params.credentialId)
+      this.deps.credentialStore.loadUrlBound(params.credential.credentialId)
     );
     if (!credential || !credential.bindings?.length || credential.revokedAt) {
       throw new ForwardRejection(403, "credential-unavailable", "credential-unavailable");
@@ -1163,7 +1359,16 @@ export class EgressProxy {
       );
     }
     const usage = credentialUseResource(binding, params.targetUrl, params.method);
-    const callerId = params.caller?.runtime.id;
+    if (params.authority.kind === "host-operation") {
+      await this.authorizeHostGitHttp(
+        caller,
+        params.authority.operation,
+        params.targetUrl,
+        params.method,
+        params.credential.credentialId
+      );
+    }
+    const callerId = caller.runtime.id;
     // Force-push detection trusts the git-bridge's SELF-LABELED gitIntent.force
     // (trusted-extension model): the proxy cannot infer a force push from
     // packfile contents, so an unlabeled force push from a hostile caller would
@@ -1171,20 +1376,21 @@ export class EgressProxy {
     if (
       callerId &&
       !testPolicyApproved &&
+      params.authority.kind === "runtime" &&
       (params.gitIntent?.force ||
-        !this.isCallerAllowed(credential, attribution, usage.sessionResource))
+        !this.isCallerAllowed(credential, codeAttribution, usage.sessionResource))
     ) {
       await this.requestCredentialUseGrant(
         credential,
         binding,
         callerId,
-        attribution,
+        codeAttribution,
         {
           targetUrl: params.targetUrl,
           method: params.method,
           gitIntent: params.gitIntent,
         },
-        params.caller?.subject?.userId
+        caller.subject?.userId
       );
     }
 
@@ -1200,7 +1406,7 @@ export class EgressProxy {
 
   private async authorizeRawEgress(
     caller: VerifiedCaller,
-    attribution: RequestAttribution,
+    attribution: CodeRequestAttribution,
     targetUrl: URL,
     method: string
   ): Promise<void> {
@@ -1266,12 +1472,13 @@ export class EgressProxy {
 
   private async resolveCredentialForRequest(
     targetUrl: URL,
-    attribution: RequestAttribution,
+    attribution: CodeRequestAttribution,
     use: CredentialBindingUse = "fetch",
     method = "GET",
     gitIntent?: GitIntentMetadata,
     requestedByUserId?: string,
-    testPolicyApproved = false
+    testPolicyApproved = false,
+    label?: string
   ): Promise<Credential | null> {
     const listUrlBound = this.deps.credentialStore.listUrlBound;
     if (!listUrlBound) {
@@ -1284,7 +1491,9 @@ export class EgressProxy {
     );
     const matchingCredentials = credentials.filter(
       (credential) =>
-        !credential.revokedAt && !!this.findCredentialBinding(credential, targetUrl, use)
+        !credential.revokedAt &&
+        (label === undefined || credential.label === label) &&
+        !!this.findCredentialBinding(credential, targetUrl, use)
     );
     if (matchingCredentials.length === 1) {
       const credential = matchingCredentials[0] ?? null;
@@ -1327,6 +1536,40 @@ export class EgressProxy {
       );
     }
     return null;
+  }
+
+  private async resolveHostCredentialForRequest(
+    targetUrl: URL,
+    use: CredentialBindingUse,
+    label?: string
+  ): Promise<Credential | null> {
+    const listUrlBound = this.deps.credentialStore.listUrlBound;
+    if (!listUrlBound) return null;
+    if (label !== undefined) {
+      const selected = await resolveCredentialByLabel(
+        { listUrlBound: () => listUrlBound.call(this.deps.credentialStore) },
+        { label, url: targetUrl, use }
+      );
+      return selected ? this.refreshCredentialForUse(selected) : null;
+    }
+    const credentials = await Promise.all(
+      (await Promise.resolve(listUrlBound.call(this.deps.credentialStore))).map((credential) =>
+        this.upgradeBindingCatalog(credential)
+      )
+    );
+    const matching = credentials.filter(
+      (credential) =>
+        !credential.revokedAt && !!this.findCredentialBinding(credential, targetUrl, use)
+    );
+    if (matching.length > 1) {
+      throw new ForwardRejection(
+        409,
+        "credential-selection-required",
+        "credential-selection-required"
+      );
+    }
+    const selected = matching[0] ?? null;
+    return selected ? this.refreshCredentialForUse(selected) : null;
   }
 
   private async refreshCredentialForUse(credential: Credential): Promise<Credential> {
@@ -1388,7 +1631,7 @@ export class EgressProxy {
     credential: Credential,
     binding: CredentialBinding,
     callerId: string,
-    attribution: RequestAttribution | null,
+    attribution: CodeRequestAttribution | null,
     operation: { targetUrl: URL; method: string; gitIntent?: GitIntentMetadata },
     requestedByUserId?: string
   ): Promise<void> {
@@ -1459,7 +1702,7 @@ export class EgressProxy {
 
   private resolvePendingCredentialUseGrants(
     credentialId: string,
-    attribution: RequestAttribution,
+    attribution: CodeRequestAttribution,
     decision: Exclude<GrantedDecision, "deny" | "once">,
     usage: ReturnType<typeof credentialUseResource>
   ): void {
@@ -1486,7 +1729,7 @@ export class EgressProxy {
   private resolveAttribution(
     caller: VerifiedCaller,
     credentialId?: string
-  ): RequestAttribution | null {
+  ): CodeRequestAttribution | null {
     const callerId = caller.runtime.id;
     const identity = caller.code;
     if (!identity && credentialId) {
@@ -1503,6 +1746,7 @@ export class EgressProxy {
       );
     }
     return {
+      kind: "code",
       callerId: identity.callerId,
       callerKind: identity.callerKind,
       repoPath: identity.repoPath,
@@ -1518,7 +1762,7 @@ export class EgressProxy {
 
   private isCallerAllowed(
     credential: Credential,
-    attribution: RequestAttribution | null,
+    attribution: CodeRequestAttribution | null,
     resource: CredentialSessionGrantResource
   ): boolean {
     const credentialId = credential.id ?? credential.connectionId;
@@ -1651,7 +1895,9 @@ export class EgressProxy {
       settled = true;
       await this.appendAuditEntry({
         ts: startedAt,
-        workerId: authorization?.attribution?.repoPath ?? "unknown",
+        workerId: authorization?.attribution
+          ? attributionWorkerId(authorization.attribution)
+          : "unknown",
         callerId: authorization?.attribution?.callerId ?? caller?.runtime.id ?? "unknown",
         providerId: PASSTHROUGH_PROVIDER_ID,
         connectionId: PASSTHROUGH_CONNECTION_ID,
@@ -1679,10 +1925,11 @@ export class EgressProxy {
 
     try {
       authorization = await this.authorizeRequest({
-        caller,
+        authority: { kind: "runtime", caller },
         targetUrl,
         method: "CONNECT",
         inputHeaders: req.headers,
+        credential: { kind: "automatic" },
         credentialUse: "fetch",
       });
     } catch (error) {
@@ -1784,7 +2031,7 @@ export class EgressProxy {
 
     try {
       await this.executeAuthorizedRequest({
-        caller,
+        authority: { kind: "runtime", caller },
         method: "GET",
         targetUrl: policyUrl,
         inputHeaders,
@@ -2258,7 +2505,7 @@ export function createEgressProxy(deps: EgressProxyDeps): EgressProxy {
 
 function isCallerAllowed(
   credential: Credential,
-  attribution: RequestAttribution | null,
+  attribution: CodeRequestAttribution | null,
   resource: CredentialSessionGrantResource,
   grants = credential.grants ?? []
 ): boolean {
@@ -2695,12 +2942,30 @@ function executionPolicyKey(authorization: Authorization | null, targetUrl: URL)
   return `${caller}:${credential}`;
 }
 
+function attributionWorkerId(attribution: RequestAttribution): string {
+  return attribution.kind === "code" ? attribution.repoPath : attribution.workerId;
+}
+
+function hostOperationAuditId(operation: HostGitHttpOperation): string {
+  return `host:${operation.service}.${operation.method}:${operation.preparedStateDigest.slice(0, 16)}`;
+}
+
+function credentialSelection(credentialId: string | null | undefined): GitCredentialSelection {
+  if (credentialId === undefined) return { kind: "automatic" };
+  if (credentialId === null) return { kind: "anonymous" };
+  return { kind: "credential", credentialId };
+}
+
 function shouldRetryRequest(method: string, replaySafe = false): boolean {
   return replaySafe || ["GET", "HEAD", "OPTIONS", "TRACE"].includes(method.toUpperCase());
 }
 
 function isRetryableStatus(statusCode: number): boolean {
   return statusCode === 429 || statusCode === 502 || statusCode === 503 || statusCode === 504;
+}
+
+function isRedirectStatus(statusCode: number): boolean {
+  return statusCode >= 300 && statusCode < 400;
 }
 
 function backoffDelayMs(attempt: number): number {
@@ -2893,7 +3158,7 @@ function isLoopbackHostname(hostname: string): boolean {
 }
 
 function grantForDecision(
-  attribution: RequestAttribution,
+  attribution: CodeRequestAttribution,
   decision: Extract<GrantedDecision, "agent" | "version">,
   grantedAt: number,
   binding: CredentialBinding,

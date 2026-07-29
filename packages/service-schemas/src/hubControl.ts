@@ -12,6 +12,7 @@ import {
 import { SERVER_BOOT_ID_PATTERN, SERVER_ID_PATTERN } from "@vibestudio/shared/deviceCredentials";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { RevokedUserCleanupResultSchema } from "@vibestudio/identity/revocationCleanup";
+import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 
 const readAccess = { sensitivity: "read" as const };
 const writeAccess = { sensitivity: "write" as const };
@@ -27,6 +28,7 @@ export const HubWorkspaceEntrySchema = z
     ephemeral: z.boolean().optional(),
   })
   .strict();
+export type HubWorkspaceEntry = z.infer<typeof HubWorkspaceEntrySchema>;
 
 export const HubReachSchema = z
   .object({
@@ -207,12 +209,22 @@ export const hubControlMethods = defineServiceMethods({
       "Route one exact workspaceId and return only that child's workspaceReach; the caller keeps its existing hub control reach.",
     args: z.tuple([z.object({ workspaceId: z.string().min(1) }).strict()]),
     returns: HubWorkspaceRouteSchema,
-    access: writeAccess,
+    access: readAccess,
   },
   createWorkspace: {
-    description: "Create and register a workspace through the hub control plane.",
+    description:
+      "Create and register a workspace from the packaged default, a fork, or one exact external root template.",
     args: z.tuple([
-      z.object({ workspace: z.string().min(1), forkFrom: z.string().min(1).optional() }).strict(),
+      z
+        .object({
+          workspace: z.string().min(1),
+          forkFrom: z.string().min(1).optional(),
+          rootTemplate: WorkspaceTemplatePinSchema.optional(),
+        })
+        .strict()
+        .refine((value) => !(value.forkFrom && value.rootTemplate), {
+          message: "forkFrom and rootTemplate are mutually exclusive",
+        }),
     ]),
     returns: HubWorkspaceEntrySchema,
     access: writeAccess,

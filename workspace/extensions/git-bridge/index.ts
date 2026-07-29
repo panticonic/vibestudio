@@ -18,6 +18,7 @@ import type {
   GitPublishRepoInput,
   GitPullUpstreamOptions,
   GitPushUpstreamOptions,
+  GitTemplatePublishInput,
   GitUpstreamStatusOptions,
 } from "@vibestudio/service-schemas/gitInterop";
 import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
@@ -27,6 +28,9 @@ import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient"
 import { gitCheckoutsPath } from "@vibestudio/workspace/gitCheckouts";
 import { GitBridge, type BridgeHost } from "./bridge.js";
 import { UpstreamEngine } from "./upstream.js";
+import { TemplatePushEngine } from "./templatePush.js";
+import { TemplatePublishEngine } from "./templatePublish.js";
+import type { TemplatePushInput } from "./templatePush.js";
 import type { ExtensionContextLike } from "./context.js";
 
 function createBridgeHost(ctx: ExtensionContextLike): BridgeHost {
@@ -59,6 +63,8 @@ type GitBridgeApi = {
   retryUpstreamPush(repoPath: string): Promise<unknown>;
   pauseAutoPush(repoPath: string): Promise<unknown>;
   openGitTab(repoPath?: string): ReturnType<UpstreamEngine["openGitTab"]>;
+  /** Userland template composer entry; deliberately outside the host provider namespace. */
+  suggestTemplateContribution(input: TemplatePushInput): ReturnType<TemplatePushEngine["push"]>;
 };
 
 /** Internal provider surface exposed to the extension host. */
@@ -70,6 +76,8 @@ export async function activate(ctx: ExtensionContextLike) {
   ctx.log.info("git-bridge activating");
   const bridge = new GitBridge(createBridgeHost(ctx));
   const upstream = new UpstreamEngine(ctx, bridge);
+  const templatePush = new TemplatePushEngine(ctx, bridge);
+  const templatePublish = new TemplatePublishEngine(ctx, bridge);
   await upstream.activate();
   const gitInterop = {
     upstreamStatus(repoPaths: string[], options: GitUpstreamStatusOptions = {}) {
@@ -87,18 +95,23 @@ export async function activate(ctx: ExtensionContextLike) {
     commitMapping(repoPath: string, options: GitCommitMappingOptions = {}) {
       return upstream.commitMapping(repoPath, options);
     },
-    pushDisposableRemote(input: { repoPath: string; url: string; branch: string }) {
-      return upstream.pushDisposableRemote(input);
+    pushTemplateContribution(input) {
+      return templatePush.push(input);
     },
-    cloneRepo(input: { repoPath: string }) {
+    publishTemplate(input: GitTemplatePublishInput) {
+      return templatePublish.publish(input);
+    },
+    cloneRepo(input: { repoPath: string; credentialIdOverride?: string | null }) {
       return upstream.cloneRepo(input);
     },
-    remoteDefaultBranch(input: { url: string; credentialId?: string | null }) {
+    remoteDefaultBranch(input: { url: string; credentialIdOverride?: string | null }) {
       return upstream.remoteDefaultBranch(input);
     },
-    async reconcileUpstreams(repoPaths: string[]) {
-      upstream.reconcileUpstreams(repoPaths);
-      return { queued: repoPaths.length };
+    async reconcileUpstreams(
+      entries: Array<{ repoPath: string; credentialIdOverride?: string | null }>
+    ) {
+      upstream.reconcileUpstreams(entries);
+      return { queued: entries.length };
     },
   } satisfies GitInteropProvider;
   const api = {
@@ -111,6 +124,9 @@ export async function activate(ctx: ExtensionContextLike) {
     },
     openGitTab(repoPath?: string) {
       return upstream.openGitTab(repoPath);
+    },
+    suggestTemplateContribution(input: TemplatePushInput) {
+      return templatePush.push(input);
     },
   } satisfies GitBridgeApi;
   return api;

@@ -34,8 +34,8 @@ import {
   gitInteropProviderMethods,
   GIT_PUBLISH_CAPABILITY,
   GIT_PUBLISH_REPO_AUTHORITY_RESOLVER,
-  type GitCompleteWorkspaceDependenciesOptions,
-  type GitCompleteWorkspaceDependenciesResult,
+  GIT_TEMPLATE_CONTRIBUTION_AUTHORITY_RESOLVER,
+  GIT_TEMPLATE_PUBLISH_AUTHORITY_RESOLVER,
   type GitDetachUpstreamOptions,
   type GitDetachUpstreamResult,
   type GitImportedWorkspaceRepo,
@@ -46,12 +46,23 @@ import {
   type GitInteropProviderOperation,
   type GitInteropProviderResult,
   type GitPublishRepoInput,
+  type GitTemplateContributionInput,
+  type GitTemplatePublishInput,
 } from "@vibestudio/service-schemas/gitInterop";
-import type { DisposableGitRemoteManager } from "./disposableGitRemoteManager.js";
 import { deleteDynamicProperty } from "../../lintHelpers";
 import { fixedPreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
+import {
+  canonicalJson,
+  compareUtf16CodeUnits,
+  sha256HexSyncText,
+} from "@vibestudio/content-addressing";
+import {
+  normalizeTemplateGitUrl,
+  templateGitTransportUrl,
+} from "@vibestudio/workspace/templateCoordinates";
 
-type GitInteropServiceDeps = {
+export type GitInteropServiceDeps = {
+  workspaceId?: string;
   workspacePath?: string;
   workspaceConfig?: WorkspaceConfig;
   persistWorkspaceConfigMutation?: (input: {
@@ -67,7 +78,12 @@ type GitInteropServiceDeps = {
   ) => Promise<GitInteropProviderResult<M>>;
   /** Queue provider reconciliation without making a config write depend on provider readiness. */
   requestGitReconciliation?: (repoPaths: string[]) => void;
-  disposableRemotes?: Pick<DisposableGitRemoteManager, "create" | "inspect" | "remove">;
+  /** Resolve a portable workspace credential name to a profile-local concrete id. */
+  resolveCredential?: (input: {
+    workspaceId: string;
+    name: string;
+    url: string;
+  }) => string | null | Promise<string | null>;
 };
 
 type WorkspaceConfigMutation = (currentConfig: WorkspaceConfig) => WorkspaceConfig;
@@ -120,6 +136,24 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
           return { selections: [], payload: null };
         return {
           selections: [publishRepoAuthoritySelection(rawInput as GitPublishRepoInput)],
+          payload: null,
+        };
+      },
+      [GIT_TEMPLATE_CONTRIBUTION_AUTHORITY_RESOLVER]: (ctx, [rawInput]) => {
+        if (!ctx.caller.code && !ctx.caller.executionSession)
+          return { selections: [], payload: null };
+        return {
+          selections: [
+            templateContributionAuthoritySelection(rawInput as GitTemplateContributionInput),
+          ],
+          payload: null,
+        };
+      },
+      [GIT_TEMPLATE_PUBLISH_AUTHORITY_RESOLVER]: (ctx, [rawInput]) => {
+        if (!ctx.caller.code && !ctx.caller.executionSession)
+          return { selections: [], payload: null };
+        return {
+          selections: [templatePublishAuthoritySelection(rawInput as GitTemplatePublishInput)],
           payload: null,
         };
       },
@@ -241,7 +275,7 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
           remote: existing.remote,
           ...(existing.branch ? { branch: existing.branch } : {}),
           autoPush: enabled,
-          ...(existing.credentialId !== undefined ? { credentialId: existing.credentialId } : {}),
+          ...(existing.credential !== undefined ? { credential: existing.credential } : {}),
           ...(existing.authorEmail ? { authorEmail: existing.authorEmail } : {}),
           ...(existing.authorName ? { authorName: existing.authorName } : {}),
         };
@@ -256,8 +290,8 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
               remote: currentUpstream.remote,
               branch: currentUpstream.branch,
               autoPush: enabled,
-              ...(currentUpstream.credentialId !== undefined
-                ? { credentialId: currentUpstream.credentialId }
+              ...(currentUpstream.credential !== undefined
+                ? { credential: currentUpstream.credential }
                 : {}),
               ...(currentUpstream.authorEmail ? { authorEmail: currentUpstream.authorEmail } : {}),
               ...(currentUpstream.authorName ? { authorName: currentUpstream.authorName } : {}),
@@ -270,88 +304,66 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
         return persisted.nextConfig.git?.upstreams ?? {};
       },
 
-      upstreamStatus: (ctx, args) => invokeGitProviderOperation(deps, ctx, "upstreamStatus", args),
-      pushUpstream: (ctx, args) => invokeGitProviderOperation(deps, ctx, "pushUpstream", args),
-      pullUpstream: (ctx, args) => invokeGitProviderOperation(deps, ctx, "pullUpstream", args),
+      upstreamStatus: async (ctx, [repoPaths, options]) => {
+        if (!deps.invokeGitProvider) throw new Error("Git upstream provider is unavailable");
+        const repos =
+          repoPaths.length > 0
+            ? repoPaths
+            : deps.workspaceConfig
+              ? getDeclaredUpstreams(deps.workspaceConfig).map((entry) => entry.repoPath)
+              : [];
+        const rows = await Promise.all(
+          repos.map(async (repoPath) => {
+            const credentialIdOverride = await resolveConfiguredCredential(deps, repoPath, options);
+            const providerOptions = {
+              ...options,
+              ...(credentialIdOverride !== undefined ? { credentialIdOverride } : {}),
+            };
+            return invokeGitProviderOperation(
+              deps,
+              ctx,
+              "upstreamStatus",
+              Object.keys(providerOptions).length > 0 ? [[repoPath], providerOptions] : [[repoPath]]
+            );
+          })
+        );
+        return rows.flat();
+      },
+      pushUpstream: async (ctx, [repoPath, options]) => {
+        const credentialIdOverride = await resolveConfiguredCredential(deps, repoPath, options);
+        const providerOptions = {
+          ...options,
+          ...(credentialIdOverride !== undefined ? { credentialIdOverride } : {}),
+        };
+        return invokeGitProviderOperation(
+          deps,
+          ctx,
+          "pushUpstream",
+          Object.keys(providerOptions).length > 0 ? [repoPath, providerOptions] : [repoPath]
+        );
+      },
+      pullUpstream: async (ctx, [repoPath, options]) => {
+        const credentialIdOverride = await resolveConfiguredCredential(deps, repoPath, options);
+        const providerOptions = {
+          ...options,
+          ...(credentialIdOverride !== undefined ? { credentialIdOverride } : {}),
+        };
+        return invokeGitProviderOperation(
+          deps,
+          ctx,
+          "pullUpstream",
+          Object.keys(providerOptions).length > 0 ? [repoPath, providerOptions] : [repoPath]
+        );
+      },
       publishRepo: (ctx, args) => invokeGitProviderOperation(deps, ctx, "publishRepo", args),
 
-      createDisposableRemote: (ctx, [options]) => {
-        if (!deps.disposableRemotes) {
-          throw new Error("Disposable Git remotes are unavailable on this host");
-        }
-        return deps.disposableRemotes.create(options);
-      },
-
-      publishToDisposableRemote: async (ctx, [repoPath, options]) => {
-        if (!deps.disposableRemotes) {
-          throw new Error("Disposable Git remotes are unavailable on this host");
-        }
-        const remote = await deps.disposableRemotes.create({
-          name: "publish-check",
-          ...(options?.branch ? { branch: options.branch } : {}),
-        });
-        try {
-          const pushed = (await invokeGitProviderOperation(deps, ctx, "pushDisposableRemote", [
-            { repoPath, url: remote.url, branch: remote.branch },
-          ])) as { exported: number; pushed: boolean; headCommit: string | null };
-          const received = await deps.disposableRemotes.inspect(remote.url);
-          return {
-            repoPath: normalizeWorkspaceRepoPath(repoPath),
-            branch: remote.branch,
-            exported: pushed.exported,
-            pushed: pushed.pushed,
-            commitCount: received.commitCount,
-            headCommit: received.headCommit,
-          };
-        } finally {
-          await deps.disposableRemotes.remove(remote.url).catch(() => undefined);
-        }
-      },
-
-      pushDisposableRemote: async (ctx, [repoPath, url, branch]) => {
-        if (!deps.disposableRemotes) {
-          throw new Error("Disposable Git remotes are unavailable on this host");
-        }
-        const remote = await deps.disposableRemotes.inspect(url);
-        if (remote.branch !== branch) {
-          throw new Error(
-            `Disposable Git remote branch mismatch: requested ${branch}, remote uses ${remote.branch}`
-          );
-        }
-        const validRepoPath = normalizeWorkspaceRepoPath(repoPath);
-        const pushed = (await invokeGitProviderOperation(deps, ctx, "pushDisposableRemote", [
-          { repoPath: validRepoPath, url: remote.url, branch: remote.branch },
-        ])) as { exported: number; pushed: boolean; headCommit: string | null };
-        const received = await deps.disposableRemotes.inspect(remote.url);
-        return {
-          repoPath: validRepoPath,
-          branch: remote.branch,
-          exported: pushed.exported,
-          pushed: pushed.pushed,
-          commitCount: received.commitCount,
-          headCommit: received.headCommit,
-        };
-      },
-
-      inspectDisposableRemote: (_ctx, [url]) => {
-        if (!deps.disposableRemotes) {
-          throw new Error("Disposable Git remotes are unavailable on this host");
-        }
-        return deps.disposableRemotes.inspect(url);
-      },
-
-      removeDisposableRemote: (_ctx, [url]) => {
-        if (!deps.disposableRemotes) {
-          throw new Error("Disposable Git remotes are unavailable on this host");
-        }
-        return deps.disposableRemotes.remove(url);
-      },
-
       commitMapping: (ctx, args) => invokeGitProviderOperation(deps, ctx, "commitMapping", args),
+      pushTemplateContribution: (ctx, args) =>
+        invokeGitProviderOperation(deps, ctx, "pushTemplateContribution", args),
+      publishTemplate: (ctx, args) =>
+        invokeGitProviderOperation(deps, ctx, "publishTemplate", args),
       detachUpstream: (ctx, [repoPath, options]) => detachUpstream(ctx, deps, repoPath, options),
       importProject: (ctx, [request]) => importWorkspaceRepo(ctx, deps, request),
-      completeWorkspaceDependencies: (ctx, [options]) =>
-        completeWorkspaceDependencies(ctx, deps, options),
     }),
   };
 }
@@ -427,11 +439,193 @@ function publishRepoAuthoritySelection(input: GitPublishRepoInput) {
   });
 }
 
+function templateContributionAuthoritySelection(input: GitTemplateContributionInput) {
+  const normalizedUrl = normalizeTemplateGitUrl(input.url);
+  const destination = templateGitTransportUrl(normalizedUrl);
+  const credential = input.credential?.trim() || "anonymous";
+  const parts = input.parts
+    .map(({ repoPath, subdir }) => ({
+      repoPath: normalizeWorkspaceRepoPath(repoPath),
+      subdir: normalizeWorkspaceRepoPath(subdir),
+    }))
+    .sort((left, right) =>
+      left.repoPath === right.repoPath
+        ? compareUtf16CodeUnits(left.subdir, right.subdir)
+        : compareUtf16CodeUnits(left.repoPath, right.repoPath)
+    );
+  const partSummary = parts.map(({ repoPath, subdir }) => `${repoPath} → ${subdir}`).join(", ");
+  const requestDigest = sha256HexSyncText(
+    canonicalJson({
+      protocol: "vibestudio-template-contribution-authority-v1",
+      operationId: input.operationId,
+      destination: normalizedUrl,
+      credential,
+      baseCommit: input.baseCommit,
+      mainEventId: input.expectedMainEventId,
+      parts,
+    })
+  );
+
+  return fixedPreparedAuthoritySelection({
+    capability: GIT_PUBLISH_CAPABILITY,
+    resourceKey: `template-contribution:${requestDigest}`,
+    challenge: {
+      title: `Push a contribution to ${input.alias}`,
+      description:
+        `Exports ${parts.length} workspace ${parts.length === 1 ? "repository" : "repositories"} ` +
+        `from protected main ${input.expectedMainEventId} and pushes a contribution branch to ${destination}.`,
+      deniedReason: `Publishing a template contribution to ${destination} was not allowed`,
+      dedupKey: `template-contribution:${requestDigest}`,
+      resource: {
+        type: "external-repository",
+        label: "Destination",
+        value: destination,
+      },
+      operation: {
+        kind: "git" as const,
+        verb: "push a template contribution branch",
+        object: {
+          type: "external-repository",
+          label: "Repository",
+          value: destination,
+        },
+        groupKey: `template-contribution:${credential}:${normalizedUrl}`,
+      },
+      substance: {
+        kind: "change-set" as const,
+        summary: `Publish ${parts.length} exact protected-main ${parts.length === 1 ? "part" : "parts"} to ${input.alias}`,
+        facts: [
+          { label: "Protected main", value: input.expectedMainEventId },
+          { label: "Template base", value: input.baseCommit },
+          { label: "Parts", value: partSummary },
+        ],
+      },
+      details: [
+        { label: "Template", value: input.alias },
+        { label: "Destination", value: destination },
+        { label: "Credential", value: credential },
+        { label: "Operation", value: input.operationId },
+      ],
+    },
+  });
+}
+
+function templatePublishAuthoritySelection(input: GitTemplatePublishInput) {
+  const provider = input.destination.provider?.trim() || "github";
+  const providerName = providerDisplayName(provider);
+  const repoName = input.destination.name?.trim() || input.templateName;
+  if (repoName.includes("/")) {
+    throw new Error(`Repository name "${repoName}" must not contain "/"`);
+  }
+  const credential = input.destination.credentialId?.trim() || "default";
+  const parts = input.parts
+    .map(({ repoPath, subdir }) => ({
+      repoPath: normalizeWorkspaceRepoPath(repoPath),
+      subdir: normalizeWorkspaceRepoPath(subdir),
+    }))
+    .sort((left, right) => compareUtf16CodeUnits(left.repoPath, right.repoPath));
+  const destination = `${providerName} / ${repoName}`;
+  const requestDigest = sha256HexSyncText(
+    canonicalJson({
+      protocol: "vibestudio-template-publish-authority-v1",
+      operationId: input.operationId,
+      provider,
+      credential,
+      repository: repoName,
+      organization: input.destination.organization ?? null,
+      private: input.destination.private ?? true,
+      version: input.version,
+      mainEventId: input.expectedMainEventId,
+      manifestDigest: input.manifestDigest,
+      parts,
+    })
+  );
+  return fixedPreparedAuthoritySelection({
+    capability: GIT_PUBLISH_CAPABILITY,
+    resourceKey: `template-publication:${requestDigest}`,
+    challenge: {
+      title: `Create and publish ${repoName}`,
+      description:
+        `Creates a ${(input.destination.private ?? true) ? "private" : "public"} template ` +
+        `repository on ${providerName} from ${parts.length} exact protected-main parts.`,
+      deniedReason: `Publishing ${input.templateName} to ${destination} was not allowed`,
+      dedupKey: `template-publication:${requestDigest}`,
+      resource: {
+        type: "external-repository",
+        label: "Destination",
+        value: destination,
+      },
+      operation: {
+        kind: "git" as const,
+        verb: "create and publish a versioned template repository",
+        object: {
+          type: "external-repository",
+          label: "Repository",
+          value: destination,
+        },
+        groupKey: `template-publication:${credential}:${provider}:${repoName}`,
+      },
+      substance: {
+        kind: "change-set" as const,
+        summary: `Publish ${input.templateName} ${input.version} from exact protected main`,
+        facts: [
+          { label: "Protected main", value: input.expectedMainEventId },
+          { label: "Version", value: input.version },
+          { label: "Manifest", value: input.manifestDigest },
+          {
+            label: "Parts",
+            value: parts.map(({ repoPath, subdir }) => `${repoPath} → ${subdir}`).join(", "),
+          },
+        ],
+      },
+      details: [
+        { label: "Template", value: input.templateName },
+        { label: "Destination", value: destination },
+        { label: "Operation", value: input.operationId },
+      ],
+    },
+  });
+}
+
 function providerDisplayName(provider: string): string {
   if (provider.toLowerCase() === "github") return "GitHub";
   return provider
     .replace(/[-_]+/gu, " ")
     .replace(/\b\p{L}/gu, (character) => character.toUpperCase());
+}
+
+async function resolveConfiguredCredential(
+  deps: Pick<GitInteropServiceDeps, "workspaceId" | "workspaceConfig" | "resolveCredential">,
+  repoPathInput: string,
+  options?: {
+    remote?: string;
+    credentialIdOverride?: string | null;
+  }
+): Promise<string | null | undefined> {
+  if (options?.credentialIdOverride !== undefined) return options.credentialIdOverride;
+  if (!deps.workspaceConfig) return undefined;
+  const repoPath = normalizeWorkspaceRepoPath(repoPathInput);
+  const upstream = getDeclaredUpstreamForRepo(deps.workspaceConfig, repoPath);
+  if (!upstream?.credential) return null;
+  const remoteName = options?.remote ?? upstream.remote;
+  const remote = getDeclaredRemoteForRepo(deps.workspaceConfig, repoPath, remoteName);
+  if (!remote) throw new Error(`No approved remote ${remoteName} is declared for ${repoPath}`);
+  if (!deps.workspaceId || !deps.resolveCredential) {
+    throw new Error(
+      `Git credential "${upstream.credential}" cannot be resolved because profile credential selection is unavailable`
+    );
+  }
+  const credentialId = await deps.resolveCredential({
+    workspaceId: deps.workspaceId,
+    name: upstream.credential,
+    url: remote.url,
+  });
+  if (!credentialId) {
+    throw new Error(
+      `No active profile credential named "${upstream.credential}" authorizes Git HTTP access to ${remote.url}`
+    );
+  }
+  return credentialId;
 }
 
 async function invokeGitProviderOperation<M extends GitInteropProviderOperation>(
@@ -525,133 +719,6 @@ async function detachUpstream(
   };
 }
 
-async function completeWorkspaceDependencies(
-  ctx: ServiceContext,
-  deps: GitInteropServiceDeps,
-  options: GitCompleteWorkspaceDependenciesOptions | undefined
-): Promise<GitCompleteWorkspaceDependenciesResult> {
-  if (!deps.workspacePath) throw new Error("No workspace path configured");
-  if (!deps.workspaceConfig) throw new Error("Workspace config is unavailable");
-
-  const configuredRemotes = listConfiguredWorkspaceRemotes(deps.workspaceConfig);
-  const result: GitCompleteWorkspaceDependenciesResult = {
-    imported: [],
-    skipped: [],
-    failed: [],
-  };
-
-  const supported = configuredRemotes.filter((dependency) =>
-    isSupportedImportRepoPath(dependency.path)
-  );
-  const statusRows =
-    deps.invokeGitProvider && supported.length > 0
-      ? await invokeConfiguredGitProvider(deps, ctx, "upstreamStatus", [
-          supported.map((dependency) => dependency.path),
-        ])
-      : [];
-  const statusByRepo = new Map(statusRows.map((row) => [row.repoPath, row]));
-
-  for (const dependency of configuredRemotes) {
-    if (!isSupportedImportRepoPath(dependency.path)) {
-      result.skipped.push({ path: dependency.path, reason: "unsupported-path" });
-      continue;
-    }
-    const status = statusByRepo.get(dependency.path);
-    if (!status) {
-      result.failed.push({
-        path: dependency.path,
-        error: "Git provider did not report checkout materialization state",
-      });
-      continue;
-    }
-    if (status.state !== "not-materialized") {
-      result.skipped.push({ path: dependency.path, reason: "already-materialized" });
-      continue;
-    }
-    try {
-      const transaction = await updateConfiguredDependencyCredential(
-        ctx,
-        deps,
-        dependency.path,
-        options?.credentialId
-      );
-      const imported = await cloneWorkspaceRepo(ctx, deps, {
-        operation: "git.completeWorkspaceDependencies",
-        repoPath: dependency.path,
-        remote: dependency.remote,
-        transaction,
-      });
-      result.imported.push(imported);
-    } catch (err) {
-      result.failed.push({
-        path: dependency.path,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  return result;
-}
-
-function listConfiguredWorkspaceRemotes(config: WorkspaceConfig): Array<{
-  path: string;
-  remote: WorkspaceGitRemoteConfig;
-}> {
-  return getDeclaredUpstreams(config).map((upstream) => {
-    const remote = getDeclaredRemoteForRepo(config, upstream.repoPath, upstream.remote);
-    if (!remote) {
-      throw new Error(`Upstream remote "${upstream.remote}" disappeared for ${upstream.repoPath}`);
-    }
-    return {
-      path: upstream.repoPath,
-      remote: {
-        name: remote.name,
-        url: remote.url,
-        ...(remote.branch ? { branch: remote.branch } : {}),
-      },
-    };
-  });
-}
-
-async function updateConfiguredDependencyCredential(
-  ctx: ServiceContext,
-  deps: GitInteropServiceDeps,
-  repoPath: string,
-  credentialId: string | null | undefined
-): Promise<WorkspaceRepoConfigTransaction | undefined> {
-  if (credentialId === undefined) return undefined;
-
-  let previousUpstream: WorkspaceGitUpstreamConfig | undefined;
-  const persisted = await persistWorkspaceConfigMutation(ctx, deps, {
-    mutate: (currentConfig) => {
-      const currentUpstream = getDeclaredUpstreamConfig(currentConfig, repoPath);
-      previousUpstream = currentUpstream;
-      return setDeclaredUpstreamInConfig(currentConfig, repoPath, {
-        ...currentUpstream,
-        credentialId,
-      });
-    },
-    summary:
-      credentialId === null
-        ? `meta/vibestudio.yml requires anonymous Git HTTP for ${repoPath}`
-        : `meta/vibestudio.yml selects credential ${credentialId} for ${repoPath}`,
-  });
-  if (!previousUpstream) {
-    throw new Error(`No upstream tracking is declared for ${repoPath}`);
-  }
-  const upstreamBeforeOverride = previousUpstream;
-  const writtenUpstream = getDeclaredUpstreamConfig(persisted.nextConfig, repoPath);
-  return {
-    changed: persisted.changed,
-    rollbackIfCurrent: (currentConfig) =>
-      isDeepStrictEqual(getDeclaredUpstreamConfigOrNull(currentConfig, repoPath), writtenUpstream)
-        ? setDeclaredUpstreamInConfig(currentConfig, repoPath, upstreamBeforeOverride)
-        : currentConfig,
-    matchesPrevious: (config) =>
-      isDeepStrictEqual(getDeclaredUpstreamConfigOrNull(config, repoPath), upstreamBeforeOverride),
-  };
-}
-
 async function importWorkspaceRepo(
   ctx: ServiceContext,
   deps: GitInteropServiceDeps,
@@ -667,32 +734,105 @@ async function importWorkspaceRepo(
     throw new Error(`Imports must target one of: ${WORKSPACE_IMPORT_PARENT_DIRS.join(", ")}`);
   }
   let normalizedRemote = validateWorkspaceGitRemote(request.remote);
-  if (!normalizedRemote.branch) {
+  const requestedBranch = normalizedRemote.branch;
+  const existingRemote = getDeclaredRemoteForRepo(
+    deps.workspaceConfig,
+    validRepoPath,
+    normalizedRemote.name
+  );
+  const existingUpstream = getDeclaredUpstreamConfigOrNull(deps.workspaceConfig, validRepoPath);
+  const declarationConflicts: string[] = [];
+  if (existingRemote && existingRemote.url !== normalizedRemote.url) {
+    declarationConflicts.push(
+      `remote ${normalizedRemote.name} URL is ${existingRemote.url}, requested ${normalizedRemote.url}`
+    );
+  }
+  if (existingUpstream && existingUpstream.remote !== normalizedRemote.name) {
+    declarationConflicts.push(
+      `upstream selects ${existingUpstream.remote}, requested ${normalizedRemote.name}`
+    );
+  }
+  if (normalizedRemote.branch && existingRemote?.branch !== undefined) {
+    if (existingRemote.branch !== normalizedRemote.branch) {
+      declarationConflicts.push(
+        `remote ${normalizedRemote.name} branch is ${existingRemote.branch}, requested ${normalizedRemote.branch}`
+      );
+    }
+  }
+  const resolvedExistingUpstream =
+    existingRemote && existingUpstream?.remote === normalizedRemote.name
+      ? getDeclaredUpstreamForRepo(deps.workspaceConfig, validRepoPath)
+      : null;
+  if (
+    requestedBranch &&
+    resolvedExistingUpstream &&
+    resolvedExistingUpstream.branch !== requestedBranch
+  ) {
+    declarationConflicts.push(
+      `upstream branch is ${resolvedExistingUpstream.branch}, requested ${requestedBranch}`
+    );
+  }
+  if (!existingRemote && existingUpstream) {
+    declarationConflicts.push(`upstream selects missing remote ${existingUpstream.remote}`);
+  }
+  if (declarationConflicts.length > 0) {
+    throw new Error(
+      `Import declaration for ${validRepoPath} conflicts with meta/vibestudio.yml: ` +
+        `${declarationConflicts.join("; ")}. Edit the remote/upstream declaration explicitly before importing.`
+    );
+  }
+
+  if (existingRemote) {
+    normalizedRemote = {
+      name: existingRemote.name,
+      url: existingRemote.url,
+      ...(existingRemote.branch !== undefined
+        ? { branch: existingRemote.branch }
+        : existingUpstream?.branch !== undefined
+          ? { branch: existingUpstream.branch }
+          : {}),
+    };
+  } else if (!normalizedRemote.branch) {
     // No branch declared: resolve the remote's ACTUAL default (ls-remote
     // symref HEAD) instead of assuming `main`, and bake it into the declared
     // config so every later clone/push/pull tracks the real branch.
     const discovered = await invokeConfiguredGitProvider(deps, ctx, "remoteDefaultBranch", [
       {
         url: normalizedRemote.url,
-        ...(request.credentialId !== undefined ? { credentialId: request.credentialId } : {}),
+        ...(request.credentialIdOverride !== undefined
+          ? { credentialIdOverride: request.credentialIdOverride }
+          : {}),
       },
-    ]).catch(() => ({ branch: null }));
-    if (discovered.branch) {
-      normalizedRemote = { ...normalizedRemote, branch: discovered.branch };
+    ]);
+    if (!discovered.branch) {
+      throw new Error(
+        `Remote ${normalizedRemote.url} does not advertise a default branch; specify remote.branch explicitly`
+      );
     }
+    normalizedRemote = { ...normalizedRemote, branch: discovered.branch };
   }
+  if (existingRemote && existingUpstream && existingUpstream.remote === normalizedRemote.name) {
+    return cloneWorkspaceRepo(ctx, deps, {
+      operation: "git.importProject",
+      repoPath: validRepoPath,
+      remote: normalizedRemote,
+      credentialIdOverride: request.credentialIdOverride,
+    });
+  }
+
   const mutateConfig: WorkspaceConfigMutation = (currentConfig) => {
     previousDeclaration = snapshotWorkspaceRepoGitDeclaration(
       currentConfig,
       validRepoPath,
       normalizedRemote.name
     );
-    const withRemote = setDeclaredRemoteInConfig(currentConfig, validRepoPath, normalizedRemote);
+    const withRemote = previousDeclaration.remote
+      ? currentConfig
+      : setDeclaredRemoteInConfig(currentConfig, validRepoPath, normalizedRemote);
     return setDeclaredUpstreamInConfig(withRemote, validRepoPath, {
       remote: normalizedRemote.name,
       branch: normalizedRemote.branch,
       autoPush: false,
-      ...(request.credentialId !== undefined ? { credentialId: request.credentialId } : {}),
     });
   };
   let previousDeclaration: WorkspaceRepoGitDeclarationSnapshot | undefined;
@@ -714,6 +854,7 @@ async function importWorkspaceRepo(
     operation: "git.importProject",
     repoPath: validRepoPath,
     remote: normalizedRemote,
+    credentialIdOverride: request.credentialIdOverride,
     transaction: {
       changed: persisted.changed,
       rollbackIfCurrent: (currentConfig) =>
@@ -741,16 +882,22 @@ async function cloneWorkspaceRepo(
   ctx: ServiceContext,
   deps: GitInteropServiceDeps,
   input: {
-    operation: "git.importProject" | "git.completeWorkspaceDependencies";
+    operation: "git.importProject";
     repoPath: string;
     remote: WorkspaceGitRemoteConfig;
+    credentialIdOverride?: string | null;
     transaction?: WorkspaceRepoConfigTransaction;
   }
 ): Promise<GitImportedWorkspaceRepo> {
   let candidate: GitImportResult;
   try {
     candidate = await invokeConfiguredGitProvider(deps, ctx, "cloneRepo", [
-      { repoPath: input.repoPath },
+      {
+        repoPath: input.repoPath,
+        ...(input.credentialIdOverride !== undefined
+          ? { credentialIdOverride: input.credentialIdOverride }
+          : {}),
+      },
     ]);
   } catch (err) {
     // Restore the declaration this operation replaced only while the values it
@@ -845,19 +992,6 @@ function restoreWorkspaceRepoGitDeclaration(
     : setDeclaredUpstreamInConfig(withRemote, repoPath, snapshot.upstream);
 }
 
-function getDeclaredUpstreamConfig(
-  config: WorkspaceConfig,
-  repoPathInput: string
-): WorkspaceGitUpstreamConfig {
-  const upstream = getDeclaredUpstreamConfigOrNull(config, repoPathInput);
-  if (!upstream) {
-    throw new Error(
-      `No upstream tracking is declared for ${normalizeWorkspaceRepoPath(repoPathInput)}`
-    );
-  }
-  return upstream;
-}
-
 function getDeclaredUpstreamConfigOrNull(
   config: WorkspaceConfig,
   repoPathInput: string
@@ -943,7 +1077,7 @@ function workspaceConfigUpstreamSummary(
   unitPath: string,
   upstream: Pick<
     WorkspaceGitUpstreamConfig,
-    "remote" | "branch" | "autoPush" | "credentialId"
+    "remote" | "branch" | "autoPush" | "credential"
   > | null,
   operation: "set" | "remove"
 ): string {
@@ -952,12 +1086,9 @@ function workspaceConfigUpstreamSummary(
   }
   const branch = upstream?.branch ? ` ${upstream.branch}` : "";
   const autoPush = upstream?.autoPush ? "auto-push on" : "auto-push off";
-  const credentials =
-    upstream?.credentialId === null
-      ? "anonymous"
-      : upstream?.credentialId
-        ? `credential ${upstream.credentialId}`
-        : "credential auto-resolution";
+  const credentials = upstream?.credential
+    ? `logical credential ${upstream.credential}`
+    : "anonymous Git HTTP";
   return (
     `meta/vibestudio.yml tracks ${unitPath} on ${upstream?.remote ?? "origin"}${branch} ` +
     `(${autoPush}, ${credentials})`

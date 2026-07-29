@@ -45,9 +45,10 @@ eval({
 })
 ```
 
-Built-in suites (ports of the former outside Playwright E2E tests):
-`panel-lifecycle`, `panel-viewport`, `chat-transcript`, `spectrolite`,
-`terminal`. Filter with `runSuites(suites, { filter: { suite: "spectrolite" } })`.
+Built-in suites exercise the bootable base: `panel-lifecycle`,
+`panel-viewport`, and `chat-transcript`. Feature templates own their suites;
+import one explicitly from that feature package when testing it. For example,
+the Spectrolite template exports `@workspace-panels/spectrolite/testkit-suite`.
 
 ## Writing ad-hoc tests in eval
 
@@ -73,8 +74,8 @@ Key facts:
 - `suite(name, { timeoutMs?, failOnSupervision? })`; default test timeout 30s.
 - Tests fail automatically if supervision sees console errors or crashes in
   panels the test opened (`failOnSupervision: false` or
-  `t.supervisor.unwatchPanel(id)` to opt out — see the spectrolite broken-MDX
-  test for the pattern).
+  `t.supervisor.unwatchPanel(id)` to opt out when a case intentionally exercises
+  a failing panel).
 - Assertions throw serializable errors: `expect(x, "label").toEqual(...)`,
   `.toContain`, `.toMatch`, `.not.*`, etc.
 - Suites are instance-scoped — re-running an eval block never double-registers.

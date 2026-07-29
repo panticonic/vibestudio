@@ -77,7 +77,7 @@ import {
 import { assertPresent } from "../../lintHelpers";
 import { testPolicyAllowsGatedInvocation } from "./authorityRuntime.js";
 import { serializeGitHttpResponse } from "./gitHttpRpc.js";
-import type { DisposableGitRemoteManager } from "./disposableGitRemoteManager.js";
+import { normalizeRemoteUrl } from "@vibestudio/workspace/remotes";
 import { throwIfAborted } from "./credentialMechanisms/async.js";
 import { OAuthConnectionError } from "./credentialMechanisms/errors.js";
 import { basicAuthHeader } from "./credentialMechanisms/oauth2.js";
@@ -98,6 +98,7 @@ import {
   canonicalCredentialUrl as canonicalUrl,
   validateCredentialClientConfigUrls as validateClientConfigUrls,
 } from "./credentialClientConfig.js";
+import { assertCredentialLabelAvailable } from "./credentialSelection.js";
 
 interface CredentialUseContext {
   binding: CredentialBinding;
@@ -140,7 +141,7 @@ export interface CredentialServiceDeps {
     } | null;
   };
   egressProxy?: Pick<EgressProxy, "forwardProxyFetch" | "forwardGitHttp">;
-  disposableGitHttp?: Pick<DisposableGitRemoteManager, "matches" | "handle">;
+  workspaceId?: string;
   approvalQueue?: ApprovalQueue;
   sessionGrantStore?: CredentialSessionGrantStore;
   credentialUseGrantStore?: CredentialUseGrantStoreLike;
@@ -246,6 +247,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (opts.replaceCredentialId && !replaced) {
       throw new Error("Credential selected for replacement no longer exists; retry the connection");
     }
+    await assertCredentialLabelAvailable(credentialStore, {
+      label: request.label,
+      ...(replaced?.id ? { replacingCredentialId: replaced.id } : {}),
+    });
     const id = replaced?.id ?? randomUUID();
     const audience = normalizeUrlAudiences(request.audience);
     const injection = normalizeCredentialInjection(request.injection);
@@ -798,7 +803,11 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         usage = matched;
       }
     } else if (request.url) {
-      const found = await findUrlBoundCredentialForUrl(new URL(request.url), use);
+      const found = await findUrlBoundCredentialForUrl(
+        new URL(request.url),
+        use,
+        request.credentialLabel
+      );
       if (!found) return null;
       credential = found.credential;
       usage = found.usage;
@@ -865,26 +874,26 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     params: ProxyGitHttpParams
   ): Promise<ProxyGitHttpResponse> {
     const request = params as ProxyGitHttpRequest;
-    if (deps.disposableGitHttp?.matches(request.url)) {
-      return serializeGitHttpResponse(
-        await deps.disposableGitHttp.handle({
-          url: request.url,
-          method: request.method ?? "GET",
-          headers: request.headers ?? {},
-          body: request.bodyBase64 ? Buffer.from(request.bodyBase64, "base64") : undefined,
-        })
-      );
+    const credentialId = request.credentialId;
+    if (request.logicalCredential) {
+      assertGitRequestBelongsToRemote(request.url, request.logicalCredential.remoteUrl);
     }
     if (!egressProxy) {
       throw new Error("Egress proxy is unavailable");
     }
     const result = await egressProxy.forwardGitHttp({
-      caller: ctx.caller,
+      authority: { kind: "runtime", caller: ctx.caller },
       url: request.url,
       method: request.method ?? "GET",
       headers: request.headers ?? {},
       body: request.bodyBase64 ? Buffer.from(request.bodyBase64, "base64") : undefined,
-      credentialId: request.credentialId,
+      credential: request.logicalCredential
+        ? { kind: "named", label: request.logicalCredential.name }
+        : credentialId === undefined
+          ? { kind: "automatic" }
+          : credentialId === null
+            ? { kind: "anonymous" }
+            : { kind: "credential", credentialId },
       gitIntent: request.gitIntent,
     });
     return serializeGitHttpResponse(result);
@@ -1037,10 +1046,14 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
    */
   async function findUrlBoundCredentialForUrl(
     targetUrl: URL,
-    use: CredentialBindingUse = "fetch"
+    use: CredentialBindingUse = "fetch",
+    label?: string
   ): Promise<{ credential: Credential; usage: CredentialUseContext } | null> {
     const credentials = (await credentialStore.listUrlBound()).filter(
-      (credential) => !credential.revokedAt && !!findCredentialBinding(credential, targetUrl, use)
+      (credential) =>
+        !credential.revokedAt &&
+        (label === undefined || credential.label === label) &&
+        !!findCredentialBinding(credential, targetUrl, use)
     );
     if (credentials.length > 1) {
       throw new Error("Multiple credentials match requested URL; choose an explicit credential");
@@ -1435,6 +1448,21 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     routes,
     resolveRelayOAuthCallback: connectionCoordinator.resolveRelayOAuthCallback,
   });
+}
+
+function assertGitRequestBelongsToRemote(requestUrl: string, declaredRemoteUrl: string): void {
+  const remote = new URL(normalizeRemoteUrl(declaredRemoteUrl));
+  const request = new URL(requestUrl);
+  const basePath = remote.pathname.replace(/\/+$/, "");
+  const requestPath = request.pathname.replace(/\/+$/, "");
+  if (
+    request.origin !== remote.origin ||
+    (requestPath !== basePath && !requestPath.startsWith(`${basePath}/`))
+  ) {
+    throw new Error(
+      `Git request URL ${requestUrl} does not belong to declared remote ${declaredRemoteUrl}`
+    );
+  }
 }
 
 function summarizeUrlBoundCredential(credential: Credential): StoredCredentialSummary {

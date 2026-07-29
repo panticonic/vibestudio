@@ -13,6 +13,7 @@ import {
   recoverStagedWorkspaceDeletions,
 } from "@vibestudio/workspace/loader";
 import { EPHEMERAL_DEV_WORKSPACE_NAME } from "@vibestudio/workspace-contracts/ephemeral";
+import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { getCentralDataPath, getWorkspaceDir } from "@vibestudio/env-paths";
 import { TokenManager, type TokenEntry } from "@vibestudio/shared/tokenManager";
@@ -638,13 +639,15 @@ function listHubWorkspaces(
     viewer.role === "root"
       ? registered
       : registered.filter((entry) => state.membershipStore.has(viewer.userId, entry.workspaceId));
-  const entries: Array<Record<string, unknown>> = visible.map((entry) => ({
-    name: entry.name,
-    workspaceId: entry.workspaceId,
-    lastOpened: entry.lastOpened,
-    running: isRuntimeRunning(state, entry.name),
-    ...(isWorkspaceEphemeral(state, entry.name) ? { ephemeral: true } : {}),
-  }));
+  const entries: Array<Record<string, unknown>> = visible.map((entry) => {
+    return {
+      name: entry.name,
+      workspaceId: entry.workspaceId,
+      lastOpened: entry.lastOpened,
+      running: isRuntimeRunning(state, entry.name),
+      ...(isWorkspaceEphemeral(state, entry.name) ? { ephemeral: true } : {}),
+    };
+  });
   return entries;
 }
 
@@ -1301,8 +1304,12 @@ async function executeHubControl(
     requireRole(subject, "admin");
     const opts = asRecord(args[0]) ?? {};
     const name = normalizeWorkspaceName(opts["workspace"]);
+    const rootTemplate = opts["rootTemplate"]
+      ? WorkspaceTemplatePinSchema.parse(opts["rootTemplate"])
+      : undefined;
     const entry = createAndRegisterWorkspace(name, state.centralData, {
       ...(typeof opts["forkFrom"] === "string" ? { forkFrom: opts["forkFrom"] } : {}),
+      ...(rootTemplate ? { rootTemplate } : {}),
     });
     try {
       if (subject.role !== "root") {

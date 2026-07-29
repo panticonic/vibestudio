@@ -4,9 +4,8 @@
  * The public `git` namespace is the typed `gitInterop` service contract
  * without aliases, adapters, provider names, or target-specific behavior.
  * Provider selection and policy enforcement happen behind `gitInterop.*` on
- * the host. Omitted, string, and null `credentialId` values mean automatic
- * URL-bound resolution, one exact stored credential, and explicitly anonymous
- * Git HTTP respectively; callers must preserve that distinction.
+ * the host. Workspace declarations contain portable logical credential names;
+ * concrete credential ids are host-resolved, call-scoped transport details.
  */
 
 import type { RpcCaller } from "@vibestudio/rpc";
@@ -15,13 +14,6 @@ import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient"
 
 export type GitClient = GitInteropClient;
 export type {
-  GitCompleteWorkspaceDependenciesOptions,
-  GitCompleteWorkspaceDependenciesResult,
-  GitCreateDisposableRemoteOptions,
-  GitDisposableRemote,
-  GitDisposableRemoteInspection,
-  GitPublishToDisposableRemoteResult,
-  GitPushDisposableRemoteResult,
   GitImportedWorkspaceRepo,
   GitImportResult,
   GitImportProjectRequest,

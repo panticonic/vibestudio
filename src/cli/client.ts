@@ -7,6 +7,8 @@ import * as path from "node:path";
 import * as readline from "node:readline/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isSelectedWorkspaceUrl } from "@vibestudio/shared/connect";
+import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
+import { normalizeTemplateGitUrl } from "@vibestudio/workspace/templateCoordinates";
 import {
   assertCliProfileIsUnpaired,
   clearCliCredentials,
@@ -16,6 +18,7 @@ import {
 } from "./credentialStore.js";
 import {
   addRemoteWorkspaceMember,
+  createRemoteWorkspace,
   inviteRemoteUser,
   listRemoteDevices,
   listRemoteWorkspaceMembers,
@@ -40,6 +43,7 @@ import { connectModelProvider } from "./modelConnect.js";
 import { createModelCommands } from "./modelCommands.js";
 import { panelCommands } from "./panelCommands.js";
 import { systemTestCommands } from "./systemTestCommands.js";
+import { templatesCommands } from "./templatesCommands.js";
 import { remoteHost } from "./remoteHeadlessHost.js";
 import { NOT_PAIRED_GUIDANCE } from "./pairingGuidance.js";
 import { runClaudeGroup } from "./claude/index.js";
@@ -328,6 +332,64 @@ async function remoteWorkspaceList(inv: ParsedInvocation): Promise<number> {
         },
       }
     );
+    return 0;
+  } catch (error) {
+    return printError(error, { json });
+  }
+}
+
+async function remoteWorkspaceCreate(inv: ParsedInvocation): Promise<number> {
+  const json = jsonMode(inv.flags["json"] === true);
+  try {
+    const workspace = inv.positionals[0]?.trim() ?? "";
+    if (!workspace) throw new UsageError("workspace name is required");
+    const templateUrl =
+      typeof inv.flags["template"] === "string" ? inv.flags["template"].trim() : undefined;
+    const templateRef =
+      typeof inv.flags["template-ref"] === "string" ? inv.flags["template-ref"].trim() : undefined;
+    const templateCommit =
+      typeof inv.flags["template-commit"] === "string"
+        ? inv.flags["template-commit"].trim()
+        : undefined;
+    const templateSnapshot =
+      typeof inv.flags["template-snapshot"] === "string"
+        ? inv.flags["template-snapshot"].trim()
+        : undefined;
+    const templateCredential =
+      typeof inv.flags["template-credential"] === "string"
+        ? inv.flags["template-credential"].trim()
+        : undefined;
+    const templateValues = [templateUrl, templateRef, templateCommit, templateSnapshot];
+    const hasTemplateInput = templateValues.some(Boolean) || Boolean(templateCredential);
+    if (hasTemplateInput && templateValues.some((value) => !value)) {
+      throw new UsageError(
+        "an external root requires --template, --template-ref, --template-commit, and --template-snapshot"
+      );
+    }
+    const rootTemplate = hasTemplateInput
+      ? WorkspaceTemplatePinSchema.parse({
+          url: normalizeTemplateGitUrl(templateUrl!),
+          ref: templateRef,
+          commit: templateCommit,
+          snapshot: templateSnapshot,
+          ...(templateCredential ? { credential: templateCredential } : {}),
+        })
+      : undefined;
+    const credentials = loadCliCredentials();
+    if (!credentials) throw new AuthError(NOT_PAIRED_GUIDANCE);
+    const created = await createRemoteWorkspace(credentials, {
+      workspace,
+      ...(rootTemplate ? { rootTemplate } : {}),
+    });
+    printResult(created, {
+      json,
+      human: () => {
+        console.log(`created workspace: ${created.name}`);
+        if (rootTemplate) {
+          console.log(`root template: ${rootTemplate.url}@${rootTemplate.commit}`);
+        }
+      },
+    });
     return 0;
   } catch (error) {
     return printError(error, { json });
@@ -708,6 +770,38 @@ const remoteCommands: CliCommand[] = [
   },
   {
     group: "remote",
+    name: "create-workspace",
+    summary: "Create a workspace from the standard setup or one exact external root",
+    usage:
+      "vibestudio remote create-workspace NAME [--template URL --template-ref REF --template-commit SHA --template-snapshot DIGEST]",
+    flags: [
+      { name: "template", takesValue: true, description: "External root-template Git URL" },
+      {
+        name: "template-ref",
+        takesValue: true,
+        description: "Canonical branch or tag ref used to acquire the exact commit",
+      },
+      {
+        name: "template-commit",
+        takesValue: true,
+        description: "Full lowercase commit id of the exact root snapshot",
+      },
+      {
+        name: "template-snapshot",
+        takesValue: true,
+        description: "Canonical v1-sha256 digest of the admitted root tree",
+      },
+      {
+        name: "template-credential",
+        takesValue: true,
+        description: "Optional portable logical credential name",
+      },
+      JSON_FLAG,
+    ],
+    run: remoteWorkspaceCreate,
+  },
+  {
+    group: "remote",
     name: "select",
     summary: "Select a workspace on the paired server",
     usage: "vibestudio remote select <workspace>",
@@ -885,6 +979,7 @@ const commandRegistry: CliCommand[] = [
   ...agentCommands,
   ...fsCommands,
   ...vcsCommands,
+  ...templatesCommands,
   ...evalCommands,
   ...channelCommands,
   ...contextCommands,
@@ -900,6 +995,8 @@ const GROUP_ORDER = [
   "agent",
   "fs",
   "vcs",
+  "templates",
+  "workspace",
   "eval",
   "channel",
   "context",
@@ -1074,6 +1171,8 @@ const GROUP_DESCRIPTIONS: Record<string, string> = {
   agent: "sessions, diagnostics, services, and workspace skills",
   fs: "read and edit files in the active agent context",
   vcs: "inspect, commit, merge, and push workspace repositories",
+  templates: "inspect, add, update, remove, and suggest workspace templates",
+  workspace: "maintain checked-in workspace source declarations",
   eval: "run sandboxed code in the active agent context",
   channel: "list, read, send, and follow conversation channels",
   context: "materialize and watch remote context folders",

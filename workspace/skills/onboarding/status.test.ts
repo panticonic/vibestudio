@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@workspace/runtime", () => ({
   browserData: {},
+  callMain: vi.fn(),
   createDurableObjectServiceClient: vi.fn(() => ({ call: vi.fn() })),
   credentials: {},
   extensions: {},
@@ -61,6 +62,7 @@ function dependencies(
     localModelsList: vi.fn(async () => []),
     browserImportJobs: vi.fn(async () => []),
     activeSearchProvider: vi.fn(async () => "duckduckgo" as const),
+    hasSkill: vi.fn(async () => true),
     ...overrides,
   };
 }
@@ -128,5 +130,20 @@ describe("onboarding status adapters", () => {
         attention: "blocking",
       })
     );
+  });
+
+  it("discovers optional owner skills before calling their status code", async () => {
+    const google = vi.fn();
+    const deps = dependencies({
+      google,
+      hasSkill: vi.fn(async (path) => path !== "skills/google-workspace/SKILL.md"),
+    });
+    await expect(createStatusAdapters(deps)["google-workspace"]!()).resolves.toEqual({
+      state: "unavailable",
+      summary: "Google Workspace is not installed in this workspace.",
+      attention: "none",
+      rawStage: "not-installed",
+    });
+    expect(google).not.toHaveBeenCalled();
   });
 });

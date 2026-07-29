@@ -87,11 +87,11 @@ export class AgentToolFailureError extends Error {
 const CODE_KIND: ReadonlyArray<[RegExp, AgentToolFailureKind]> = [
   [/cancel|abort|deadline|timeout/i, "cancelled"],
   [/integrity|corrupt|digest|mismatch/i, "integrity"],
+  [/invalid|malformed|schema|argument|input/i, "invalid-input"],
   [/unauthor|access|acquire|approval|credential|permission|grant/i, "authority"],
   [/external.?effect|network|egress|fetch|clone|push/i, "external-effect"],
   [/revision|conflict|occupied|working.?changes|dependency.?blocked/i, "conflict"],
   [/not.?found|missing|invalid.?reference/i, "not-found"],
-  [/invalid|malformed|schema|argument|input/i, "invalid-input"],
   [/infrastructure|runtime|dispatch|transport|unavailable|restarted/i, "infrastructure"],
 ];
 

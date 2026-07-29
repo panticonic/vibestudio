@@ -7,8 +7,10 @@ import {
 import {
   hubControlMethods,
   type HubPairingInvite,
+  type HubWorkspaceEntry,
   type HubWorkspaceRoute,
 } from "@vibestudio/service-schemas/hubControl";
+import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import type { CliStoredPairing } from "./credentialStore.js";
 import { canonicalStoredPairing } from "./credentialStore.js";
 import { AuthError, UsageError } from "./output.js";
@@ -25,13 +27,7 @@ export interface PairOptions {
   platform?: string;
 }
 
-export interface RemoteWorkspaceEntry {
-  workspaceId: string;
-  name: string;
-  lastOpened: number;
-  running: boolean;
-  ephemeral?: boolean;
-}
+export type RemoteWorkspaceEntry = HubWorkspaceEntry;
 
 export interface InviteUserOptions {
   handle: string;
@@ -39,6 +35,11 @@ export interface InviteUserOptions {
   role?: "admin" | "member";
   workspaces: string[];
   ttlMs?: number;
+}
+
+export interface CreateRemoteWorkspaceOptions {
+  workspace: string;
+  rootTemplate?: WorkspaceTemplatePin;
 }
 
 function controlClient(rpc: RpcClient) {
@@ -140,6 +141,18 @@ export async function listRemoteWorkspaces(
   creds: DeviceCredential
 ): Promise<RemoteWorkspaceEntry[]> {
   return await withControl(creds, (client) => client.listWorkspaces());
+}
+
+export async function createRemoteWorkspace(
+  creds: DeviceCredential,
+  options: CreateRemoteWorkspaceOptions
+): Promise<RemoteWorkspaceEntry> {
+  return await withControl(creds, (client) =>
+    client.createWorkspace({
+      workspace: options.workspace,
+      ...(options.rootTemplate ? { rootTemplate: options.rootTemplate } : {}),
+    })
+  );
 }
 
 export async function selectRemoteWorkspace(

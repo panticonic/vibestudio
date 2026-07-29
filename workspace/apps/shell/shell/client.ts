@@ -36,8 +36,21 @@ import {
 } from "@vibestudio/service-schemas/systemAgent";
 import { autofillMethods } from "@vibestudio/service-schemas/autofill";
 import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
+import { credentialsMethods } from "@vibestudio/service-schemas/credentials";
 import { viewMethods } from "@vibestudio/service-schemas/view";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
+import type {
+  TemplateExactPin,
+  TemplateInspection,
+  TemplateLocator,
+  TemplateOperation,
+  TemplateStatusRow,
+} from "@vibestudio/service-schemas/templates";
+import {
+  vcsMethods,
+  type VcsCompareResult,
+  type VcsIntegrationChoice,
+} from "@vibestudio/service-schemas/vcs";
 import {
   hubControlMethods,
   type HubDevice,
@@ -62,6 +75,8 @@ import {
 import type { ConnectPairing } from "@vibestudio/shared/connect";
 import type { PanelLocation } from "@vibestudio/shared/panelLocation";
 import type { PanelPlacementHint } from "@vibestudio/shared/types";
+import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
+import type { TemplateCatalogSnapshot } from "@workspace/template-registry";
 // Type for the shell transport bridge injected by the preload script
 type ShellTransportBridge = {
   send: (envelope: RpcEnvelope) => Promise<void>;
@@ -173,6 +188,9 @@ const workspaceClient = createTypedServiceClient(
   workspaceMethods,
   (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
+const vcsClient = createTypedServiceClient("vcs", vcsMethods, (service, method, args) =>
+  rpc.call("main", `${service}.${method}`, args)
+);
 const hubControlClient = createTypedServiceClient(
   "hubControl",
   hubControlMethods,
@@ -181,6 +199,11 @@ const hubControlClient = createTypedServiceClient(
 const blobstoreClient = createTypedServiceClient(
   "blobstore",
   blobstoreMethods,
+  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+);
+const credentialsClient = createTypedServiceClient(
+  "credentials",
+  credentialsMethods,
   (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
 const workspacePresenceClient = createTypedServiceClient(
@@ -564,11 +587,13 @@ export const workspace = {
     name: string,
     opts?: {
       forkFrom?: string;
+      rootTemplate?: WorkspaceTemplatePin;
     }
   ) =>
     hubControlClient.createWorkspace({
       workspace: name,
       ...(opts?.forkFrom ? { forkFrom: opts.forkFrom } : {}),
+      ...(opts?.rootTemplate ? { rootTemplate: opts.rootTemplate } : {}),
     }),
   select: async (name: string) => {
     const entry = (await hubControlClient.listWorkspaces()).find(
@@ -581,6 +606,7 @@ export const workspace = {
     await hubControlClient.deleteWorkspace({ workspace: name });
   },
   getActive: () => workspaceClient.getActive(),
+  getConfig: () => workspaceClient.getConfig(),
   hostTargets: {
     list: (target: HostTarget) => workspaceClient.hostTargets.list(target),
     getSelection: (target: HostTarget) => workspaceClient.hostTargets.getSelection(target),
@@ -600,6 +626,114 @@ export const workspace = {
     cancelLaunchSession: (sessionId: string) =>
       workspaceClient.hostTargets.cancelLaunchSession(sessionId),
   },
+};
+
+// =============================================================================
+// Templates Service
+// =============================================================================
+// Template mutations return immediately after asking through the normal
+// approval surface. The shell intentionally renders that state as a human
+// message rather than exposing the approval record identity.
+export const templates = {
+  status: () =>
+    extensionsClient.invoke("@workspace-extensions/template-composer", "status", []) as Promise<
+      TemplateStatusRow[]
+    >,
+  catalog: (input?: { refresh?: boolean }) =>
+    extensionsClient.invoke(
+      "@workspace-extensions/template-composer",
+      "catalog",
+      input ? [input] : []
+    ) as unknown as Promise<TemplateCatalogSnapshot>,
+  check: (input?: { alias?: string }) =>
+    extensionsClient.invoke(
+      "@workspace-extensions/template-composer",
+      "check",
+      input ? [input] : []
+    ) as Promise<Array<{ alias: string }>>,
+  inspect: (input: TemplateLocator) =>
+    extensionsClient.invoke("@workspace-extensions/template-composer", "inspect", [
+      input,
+    ]) as unknown as Promise<TemplateInspection>,
+  add: (input: {
+    commandId: string;
+    pin: TemplateExactPin;
+    choices?: Record<string, "keep" | "take" | "skip">;
+  }) =>
+    extensionsClient.invoke("@workspace-extensions/template-composer", "add", [
+      input,
+    ]) as Promise<TemplateOperation>,
+  pull: (input: { commandId: string; alias: string; toRef?: string }) =>
+    extensionsClient.invoke("@workspace-extensions/template-composer", "pull", [
+      input,
+    ]) as Promise<TemplateOperation>,
+  remove: (input: { commandId: string; alias: string }) =>
+    extensionsClient.invoke("@workspace-extensions/template-composer", "remove", [
+      input,
+    ]) as Promise<TemplateOperation>,
+  operations: () =>
+    extensionsClient.invoke("@workspace-extensions/template-composer", "operations", []) as Promise<
+      Array<{
+        operationId: string;
+        kind: "add" | "pull" | "remove" | "recompose" | "adopt-bootstrap";
+        contextId: string;
+        state: "pending" | "reviewing";
+        fingerprint: string;
+        review?: NonNullable<TemplateOperation["review"]>;
+      }>
+    >,
+  resume: (input: { operationId: string; onBuildFailure?: "discard-context" | "retain-context" }) =>
+    extensionsClient.invoke("@workspace-extensions/template-composer", "resume", [
+      input,
+    ]) as Promise<TemplateOperation>,
+  cancel: (input: { operationId: string }) =>
+    extensionsClient.invoke("@workspace-extensions/template-composer", "cancel", [
+      input,
+    ]) as Promise<{ operationId: string; state: "cancelled" }>,
+  decideSuggestion: (input: {
+    commandId: string;
+    alias: string;
+    section: "trust" | "providers";
+    decision: "accept" | "decline";
+  }) =>
+    extensionsClient.invoke("@workspace-extensions/template-composer", "decideSuggestion", [
+      input,
+    ]) as Promise<{
+      operationId: string;
+      state: "accepted" | "declined";
+      section: "trust" | "providers";
+      publicationEventId?: string;
+    }>,
+};
+export const credentials = {
+  requestCredentialInput: (input: Parameters<typeof credentialsClient.requestCredentialInput>[0]) =>
+    credentialsClient.requestCredentialInput(input),
+};
+/** Standard semantic VCS review flow, including coordinator-owned external deltas. */
+export const vcs = {
+  status: (contextId: string) => vcsClient.status({ contextId }),
+  compareDelta: async (contextId: string, sourceDeltaId: string) => {
+    const status = await vcsClient.status({ contextId });
+    return vcsClient.compare({
+      target: status.workingHead,
+      sourceDeltaId,
+      view: "changes",
+      limit: 200,
+    });
+  },
+  integrateDelta: (
+    contextId: string,
+    expectedWorkingHead: VcsCompareResult["target"],
+    sourceDeltaId: string,
+    decision: VcsIntegrationChoice
+  ) =>
+    vcsClient.integrate({
+      commandId: crypto.randomUUID(),
+      contextId,
+      expectedWorkingHead,
+      sourceDeltaId,
+      decision,
+    }),
 };
 // =============================================================================
 // Settings Service

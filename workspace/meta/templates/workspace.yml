@@ -1,0 +1,23 @@
+systemEpoch: 57
+templates:
+  use: []
+  registry:
+    url: git+https://github.com/panticonic/vibestudio-template-registry.git
+    ref: refs/heads/main
+providers:
+  evalEngine:
+    source: "@workspace/eval"
+  evalRuntime:
+    source: "@workspace/runtime"
+  cdpClient:
+    source: "@workspace/cdp-client"
+  browserData:
+    extension: extensions/browser-data
+  gitInterop:
+    extension: extensions/git-bridge
+  claudeCode:
+    extension: extensions/claude-code
+trust:
+  chromeApps:
+    - apps/shell
+    - apps/mobile

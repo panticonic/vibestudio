@@ -104,6 +104,8 @@ export interface CommonDeps {
   container: ServiceContainer;
   dispatcher: ServiceDispatcher;
   workspace: Workspace;
+  /** Opaque host-owned identity, including for ephemeral workspaces. */
+  workspaceId: string;
   /** User-facing hub catalog name; may differ from an ephemeral child's disk name. */
   activeWorkspaceName: string;
   workspacePath: string;
@@ -320,6 +322,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     container.registerRpc(
       createWorkspaceService({
         workspace,
+        workspaceId: deps.workspaceId,
         activeWorkspaceName: deps.activeWorkspaceName,
         treeScanner: deps.treeScanner,
         getConfig: deps.getWorkspaceConfig ?? (() => workspaceConfig),

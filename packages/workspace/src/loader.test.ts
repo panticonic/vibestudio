@@ -3,6 +3,7 @@ import fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import YAML from "yaml";
 import {
   createAndRegisterWorkspace,
   createWorkspace,
@@ -75,14 +76,14 @@ describe("loadWorkspaceConfig", () => {
     expect(loadWorkspaceConfig(sourceRoot).id).toBe(workspaceRoot);
   });
 
-  it("ignores an explicit workspace id when one is configured", () => {
+  it("rejects an explicit workspace id in source", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);
     const workspaceRoot = path.join(root, "workspace");
     const sourceRoot = path.join(workspaceRoot, "source");
     writeConfig(sourceRoot, "id: explicit\ninitPanels: []\n");
 
-    expect(loadWorkspaceConfig(sourceRoot).id).toBe(workspaceRoot);
+    expect(() => loadWorkspaceConfig(sourceRoot)).toThrow("`id` is resolved by the host");
   });
 
   it("loads a canonical default repo and rejects paths that name files or sections", () => {
@@ -277,6 +278,49 @@ describe("resolveDeclaredApps", () => {
 });
 
 describe("initWorkspace", () => {
+  it("creates an external-root bootstrap with only deterministic host-owned artifacts", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
+    tempRoots.push(root);
+    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
+    const pin = {
+      url: "https://example.com/news-template.git",
+      ref: "refs/tags/v1",
+      commit: "a".repeat(40),
+      snapshot: `v1-sha256:${"b".repeat(64)}` as const,
+      credential: "github-main",
+    };
+
+    initWorkspace("external-root", {
+      rootTemplate: pin,
+      workspaceId: "ws_external",
+    });
+
+    const workspaceDir = path.join(
+      process.env["XDG_CONFIG_HOME"],
+      "vibestudio",
+      "workspaces",
+      "external-root"
+    );
+    const config = YAML.parse(
+      fs.readFileSync(path.join(workspaceDir, "source/meta/vibestudio.yml"), "utf-8")
+    ) as Record<string, unknown>;
+    const descriptorPath = path.join(workspaceDir, "state/workspace-creation/v1.json");
+    const descriptor = JSON.parse(fs.readFileSync(descriptorPath, "utf-8")) as {
+      workspaceId: string;
+      rootTemplate: { commit: string };
+    };
+    expect(config).toMatchObject({
+      systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+    });
+    expect(config).not.toHaveProperty("templates");
+    expect(descriptor).toMatchObject({
+      workspaceId: "ws_external",
+      rootTemplate: { commit: "a".repeat(40) },
+    });
+    expect(fs.statSync(descriptorPath).mode & 0o777).toBe(0o600);
+    expect(fs.readdirSync(path.join(workspaceDir, "source/panels"))).toEqual([]);
+  });
+
   (process.platform === "linux" ? it : it.skip)(
     "copies canonical app units from the workspace template",
     () => {

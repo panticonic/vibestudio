@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     "./types": "./types.ts",
-    "./ui": "./ui.tsx"
+    "./ui": "./ui.tsx",
+    "./templates": "./templates.ts",
+    "./template-review": "./templateReview.tsx"
   },
   "dependencies": {
     "@radix-ui/themes": "^3.2.1",

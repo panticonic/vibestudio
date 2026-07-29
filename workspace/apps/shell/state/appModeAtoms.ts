@@ -200,7 +200,10 @@ export const wizardErrorAtom = atom<string | null>(null);
  * Reset wizard state
  */
 export const resetWizardAtom = atom(null, (_get, set) => {
-  set(wizardFormDataAtom, { workspaceName: "", forkFrom: "" });
+  set(wizardFormDataAtom, {
+    workspaceName: "",
+    forkFrom: "",
+  });
   set(wizardCreatingAtom, false);
   set(wizardErrorAtom, null);
 });

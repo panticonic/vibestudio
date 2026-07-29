@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import ts from "typescript";
 import {
   settleSystemTestDoctor,
+  settleSystemTestStartup,
   settleStartupUnitBatches,
   systemTestJsonPageExpression,
   systemTestRunCode,
@@ -72,6 +73,62 @@ describe("system-test startup preparation", () => {
         pollMs: 0,
       })
     ).resolves.toMatchObject({ ok: true });
+  });
+
+  it("keeps approving startup batches and waits while their extensions reconcile", async () => {
+    const pending: Array<{
+      kind: "unit-batch";
+      trigger: "startup";
+      approvalId: string;
+      units: Array<{ unitName: string }>;
+    }> = [];
+    const resolved: string[] = [];
+    let reads = 0;
+    const prepared = await settleSystemTestStartup(
+      async () => {
+        reads += 1;
+        if (reads === 1) {
+          pending.push({
+            kind: "unit-batch",
+            trigger: "startup",
+            approvalId: "approval:late",
+            units: [{ unitName: "extensions/git-bridge" }],
+          });
+        }
+        return reads < 3
+          ? {
+              ok: false,
+              checks: [
+                {
+                  name: "required-extensions",
+                  ok: false,
+                  detail:
+                    reads === 1
+                      ? "required extensions: git-bridge=pending-approval"
+                      : "required extensions: git-bridge=missing",
+                },
+              ],
+            }
+          : {
+              ok: true,
+              checks: [{ name: "required-extensions", ok: true, detail: "ready" }],
+            };
+      },
+      {
+        listPending: async () => pending.splice(0) as never,
+        resolve: async (approvalId) => {
+          resolved.push(approvalId);
+        },
+      },
+      { deadlineMs: 1_000, pollMs: 0 }
+    );
+
+    expect(prepared.doctor.ok).toBe(true);
+    expect(prepared.startupApprovals).toEqual({
+      approvedBatchIds: ["approval:late"],
+      approvedUnitCount: 1,
+    });
+    expect(resolved).toEqual(["approval:late"]);
   });
 
   it("returns terminal doctor failures without masking them as startup settling", async () => {

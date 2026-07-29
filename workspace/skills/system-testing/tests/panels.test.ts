@@ -23,7 +23,7 @@ describe("create-panel validation", () => {
   it("rejects a success marker when the documented panel operations did not complete", () => {
     expect(
       createPanelTest.validate(
-        execution('const handle = await openPanel("panels/spectrolite");', "complete")
+        execution('const handle = await openPanel("panels/chat");', "complete")
       )
     ).toMatchObject({ passed: false, reason: expect.stringContaining(".cdp.page(") });
   });
@@ -31,7 +31,7 @@ describe("create-panel validation", () => {
   it("rejects screenshot evidence from a failed eval", () => {
     const result = execution(
       [
-        'const handle = await openPanel("panels/spectrolite");',
+        'const handle = await openPanel("panels/chat");',
         "const page = await handle.cdp.page();",
         'await handle.cdp.screenshot({ format: "png" });',
         "await handle.cdp.consoleHistory();",
@@ -44,7 +44,7 @@ describe("create-panel validation", () => {
   it("accepts successful open, page, screenshot, and console-history evidence", () => {
     const result = execution(
       [
-        'const handle = await openPanel("panels/spectrolite");',
+        'const handle = await openPanel("panels/chat");',
         "const page = await handle.cdp.page();",
         'await handle.cdp.screenshot({ format: "png" });',
         "await handle.cdp.consoleHistory();",
@@ -57,7 +57,7 @@ describe("create-panel validation", () => {
   it("accepts diagnose as the canonical bounded host-console packet", () => {
     const result = execution(
       [
-        'const handle = await openPanel("panels/spectrolite");',
+        'const handle = await openPanel("panels/chat");',
         "const page = await handle.cdp.page();",
         'await page.screenshot({ format: "png" });',
         "const diagnostics = await handle.diagnose();",

@@ -153,9 +153,10 @@ Do not drop to raw `rpc.call("main", "vcs.*", [request])` when this client is
 available. The public surface is:
 
 ```text
-edit  move  copy  integrate  revert  commit  discard  importSnapshot  push
-status  compare  inspect  neighbors  history  blame  readMemory
+edit  move  copy  integrate  revert  commit  discard  importSnapshot
+push  status  compare  inspect  neighbors  history  blame  readMemory
 resolveRepository  readFile  listDirectory  listFiles
+registerExternalDelta  supersedeExternalDelta  finalizeExternalDelta
 ```
 
 ## Load only the needed reference
@@ -179,6 +180,12 @@ resolveRepository  readFile  listDirectory  listFiles
   work unit; the successful import returns its event, application, work unit,
   repositories, and canonical snapshot atomically. There is no barrier change
   or post-commit evidence reconstruction to find.
+- Host coordinators may expose an exact external delta as a `compare` source.
+  Review it and record ordinary `integrate` decisions in the context returned
+  by that coordinator. `registerExternalDelta`, `supersedeExternalDelta`, and
+  `finalizeExternalDelta` are public protocol methods so userland coordinators
+  can own this lifecycle; ordinary task agents must not call them. Eventual
+  publication remains coordinator-owned.
 - Read [checks and publication](references/checks-and-publication.md) for
   advisory checks against the current context and the protected publication
   boundary.

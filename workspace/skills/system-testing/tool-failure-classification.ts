@@ -22,6 +22,28 @@ export function isPreExecutionArgumentRejection(...values: unknown[]): boolean {
 }
 
 /**
+ * Read-only discovery tools may reject a path after dispatch when the runtime
+ * path policy has the authoritative workspace view. The typed failure proves
+ * that no effect was attempted and directs the agent to correct its input.
+ */
+export function isReadOnlyInputRejection(toolName: string, ...values: unknown[]): boolean {
+  if (!new Set(["read", "ls", "grep", "find", "glob", "stat"]).has(toolName)) return false;
+  return values.some((value) => {
+    let rendered: string;
+    try {
+      rendered = typeof value === "string" ? value : JSON.stringify(value);
+    } catch {
+      return false;
+    }
+    return (
+      rendered.includes('"protocol":"agent-tool-failure.v1"') &&
+      rendered.includes('"kind":"invalid-input"') &&
+      rendered.includes('"policy":"correct-input"')
+    );
+  });
+}
+
+/**
  * These typed VCS refusals are optimistic-concurrency, reference, or state
  * preconditions. The service/tool adapter guarantees that they perform no
  * effect and the agent is expected to re-observe and correct its request. Keep
@@ -129,6 +151,9 @@ export function classifyBuiltInExpectedToolFailure(input: {
   description?: unknown;
 }): BuiltInExpectedToolFailureClassification | null {
   if (isPreExecutionArgumentRejection(input.error, input.result, input.description)) {
+    return "argument-rejection";
+  }
+  if (isReadOnlyInputRejection(input.name, input.error, input.result, input.description)) {
     return "argument-rejection";
   }
   if (

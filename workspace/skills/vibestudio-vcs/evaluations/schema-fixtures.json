@@ -143,8 +143,9 @@
           "expectedWorkingHead": { "kind": "event", "eventId": "event:base" },
           "source": {
             "kind": "git",
-            "uri": "https://example.invalid/project.git",
-            "snapshotRevision": "0123456789abcdef"
+            "url": "https://example.invalid/project.git",
+            "commit": "0123456789abcdef0123456789abcdef01234567",
+            "snapshot": "v1-sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
           },
           "repositories": [
             {
@@ -318,6 +319,75 @@
           "range": { "start": 12, "end": 44 },
           "episodeLimit": 4,
           "historyLimit": 3
+        }
+      ]
+    },
+    {
+      "name": "register-external-delta",
+      "method": "registerExternalDelta",
+      "valid": true,
+      "args": [
+        {
+          "commandId": "command:register-delta",
+          "contextId": "context:task",
+          "expectedWorkingHead": { "kind": "event", "eventId": "event:base" },
+          "intentSummary": "Register the exact upstream update",
+          "repositoryId": "repository:app",
+          "repoPath": "projects/app",
+          "oldSource": {
+            "kind": "git",
+            "url": "https://example.test/app.git",
+            "commit": "1111111111111111111111111111111111111111",
+            "snapshot": "v1-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "newSource": {
+            "kind": "git",
+            "url": "https://example.test/app.git",
+            "commit": "2222222222222222222222222222222222222222",
+            "snapshot": "v1-sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          "oldFiles": [
+            {
+              "path": "src/index.ts",
+              "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "mode": 420
+            }
+          ],
+          "newFiles": [
+            {
+              "path": "src/index.ts",
+              "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "mode": 420
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "supersede-external-delta",
+      "method": "supersedeExternalDelta",
+      "valid": true,
+      "args": [
+        {
+          "commandId": "command:supersede-delta",
+          "contextId": "context:task",
+          "expectedWorkingHead": { "kind": "event", "eventId": "event:base" },
+          "intentSummary": "Supersede the stale upstream update",
+          "deltaId": "delta:old"
+        }
+      ]
+    },
+    {
+      "name": "finalize-external-delta",
+      "method": "finalizeExternalDelta",
+      "valid": true,
+      "args": [
+        {
+          "commandId": "command:finalize-delta",
+          "contextId": "context:task",
+          "expectedWorkingHead": { "kind": "event", "eventId": "event:integrated" },
+          "intentSummary": "Finalize the fully reviewed upstream update",
+          "deltaId": "delta:reviewed"
         }
       ]
     },

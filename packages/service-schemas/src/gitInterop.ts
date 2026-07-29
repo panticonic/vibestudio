@@ -18,6 +18,10 @@ import { vcsExternalSnapshotSchema } from "./vcs.js";
 
 export const GIT_PUBLISH_CAPABILITY = "git.publish" as const;
 export const GIT_PUBLISH_REPO_AUTHORITY_RESOLVER = "gitInterop.publishRepo.destination" as const;
+export const GIT_TEMPLATE_CONTRIBUTION_AUTHORITY_RESOLVER =
+  "gitInterop.pushTemplateContribution.destination" as const;
+export const GIT_TEMPLATE_PUBLISH_AUTHORITY_RESOLVER =
+  "gitInterop.publishTemplate.destination" as const;
 
 // Access descriptors shared across the gitInterop method group. All four
 // methods mutate workspace config (`meta/vibestudio.yml`) and/or reach the
@@ -37,19 +41,78 @@ const UPSTREAM_REMOVE_ACCESS: MethodAccessDescriptor = {
 const IMPORT_PROJECT_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
-const COMPLETE_DEPENDENCIES_ACCESS: MethodAccessDescriptor = {
-  sensitivity: "write",
-};
 const UPSTREAM_STATUS_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };
 const UPSTREAM_OPERATION_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
-const DISPOSABLE_REMOTE_WRITE_ACCESS: MethodAccessDescriptor = {
-  sensitivity: "write",
-};
 const nonNegativeIntegerSchema = z.number().int().nonnegative();
+
+export const gitTemplateContributionInputSchema = z
+  .object({
+    operationId: z.string().trim().min(1),
+    nodeId: z.string().regex(/^t-[0-9a-f]+$/u),
+    alias: z.string().trim().min(1),
+    url: z.string().url(),
+    baseCommit: z.string().regex(/^[0-9a-f]{40}$/u),
+    expectedMainEventId: z.string().trim().min(1),
+    parts: z.array(z.object({ repoPath: z.string(), subdir: z.string() }).strict()).min(1),
+    credential: z.string().trim().min(1).optional(),
+  })
+  .strict();
+export type GitTemplateContributionInput = z.infer<typeof gitTemplateContributionInputSchema>;
+
+export const gitTemplateContributionResultSchema = z
+  .object({
+    outcome: z.enum(["pushed", "already-at-remote", "nothing-to-suggest"]),
+    operationId: z.string(),
+    branch: z.string().nullable(),
+    /** A forge-proven contribution URL. Generic Git transport has none. */
+    url: z.string().url().optional(),
+    headCommit: z.string().nullable(),
+    commits: nonNegativeIntegerSchema,
+    parts: z.array(z.string()),
+  })
+  .strict();
+
+export const gitTemplatePublishInputSchema = z
+  .object({
+    operationId: z.string().trim().min(1),
+    expectedMainEventId: z.string().trim().min(1),
+    templateName: z.string().trim().min(1),
+    version: z.string().regex(/^v?[0-9]+(?:\.[0-9]+){0,2}(?:[-.][A-Za-z0-9]+)*$/u),
+    manifest: z.string().min(1),
+    manifestDigest: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/u),
+    parts: z.array(z.object({ repoPath: z.string(), subdir: z.string() }).strict()).min(1),
+    destination: z
+      .object({
+        provider: z.string().optional(),
+        name: z.string().trim().min(1).optional(),
+        organization: z.string().trim().min(1).optional(),
+        private: z.boolean().optional(),
+        description: z.string().optional(),
+        credentialId: z.string().trim().min(1).optional(),
+      })
+      .strict(),
+  })
+  .strict();
+export type GitTemplatePublishInput = z.infer<typeof gitTemplatePublishInputSchema>;
+
+export const gitTemplatePublishResultSchema = z
+  .object({
+    operationId: z.string(),
+    provider: z.string(),
+    remoteUrl: z.string().url(),
+    webUrl: z.string().url(),
+    templateUrl: z.string(),
+    ref: z.string().startsWith("refs/tags/"),
+    commit: z.string().regex(/^[0-9a-f]{40}$/u),
+    snapshot: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/u),
+    parts: z.array(z.string()).min(1),
+  })
+  .strict();
+export type GitTemplatePublishResult = z.infer<typeof gitTemplatePublishResultSchema>;
 
 export const gitRemoteSchema = z
   .object({
@@ -80,18 +143,18 @@ export const gitUpstreamConfigSchema = z
       .describe(
         "Whether future exports of already-published protected main may push upstream automatically; never publishes import candidates."
       ),
-    credentialId: z
+    credential: z
       .string()
-      .nullable()
       .optional()
       .describe(
-        "Omit for URL-bound credential resolution, provide an id to select it, or use null for anonymous Git HTTP."
+        "Portable logical credential name resolved by the host for this workspace and remote URL; omit for anonymous Git HTTP."
       ),
     authorEmail: z.string().optional().describe("Exported git commit author email override."),
     authorName: z.string().optional().describe("Exported git commit author name override."),
   })
   .strict();
 export type GitUpstreamConfig = z.infer<typeof gitUpstreamConfigSchema>;
+const gitUpstreamWriteSchema = gitUpstreamConfigSchema;
 
 const gitRemoteDeclarationSchema = z
   .object({
@@ -114,12 +177,12 @@ export const gitImportProjectSchema = z
         'Workspace-relative target path for the imported repo; must sit under a supported import dir (e.g. "projects/<name>").'
       ),
     remote: gitRemoteSchema.describe("Remote to clone from and record as a shared remote."),
-    credentialId: z
+    credentialIdOverride: z
       .string()
       .nullable()
       .optional()
       .describe(
-        "Omit for URL-bound credential resolution, provide an id to select it, or use null for an anonymous clone."
+        "Call-scoped concrete credential override; omit to use the configured logical binding, or use null for an anonymous clone."
       ),
   })
   .strict();
@@ -150,21 +213,6 @@ export const gitImportResultSchema = gitSemanticCandidateSchema
   .strict();
 export type GitImportResult = z.infer<typeof gitImportResultSchema>;
 
-export const gitCompleteWorkspaceDependenciesSchema = z
-  .object({
-    credentialId: z
-      .string()
-      .nullable()
-      .optional()
-      .describe(
-        "Omit to use each URL's matching credential, provide an id to select one, or use null for anonymous clones."
-      ),
-  })
-  .strict();
-export type GitCompleteWorkspaceDependenciesOptions = z.infer<
-  typeof gitCompleteWorkspaceDependenciesSchema
->;
-
 export const gitImportedWorkspaceRepoSchema = z
   .object({
     path: z.string(),
@@ -175,31 +223,6 @@ export const gitImportedWorkspaceRepoSchema = z
   })
   .strict();
 export type GitImportedWorkspaceRepo = z.infer<typeof gitImportedWorkspaceRepoSchema>;
-
-export const gitCompleteWorkspaceDependenciesResultSchema = z
-  .object({
-    imported: z.array(gitImportedWorkspaceRepoSchema),
-    skipped: z.array(
-      z
-        .object({
-          path: z.string(),
-          reason: z.enum(["already-materialized", "unsupported-path"]),
-        })
-        .strict()
-    ),
-    failed: z.array(
-      z
-        .object({
-          path: z.string(),
-          error: z.string(),
-        })
-        .strict()
-    ),
-  })
-  .strict();
-export type GitCompleteWorkspaceDependenciesResult = z.infer<
-  typeof gitCompleteWorkspaceDependenciesResultSchema
->;
 
 export const gitUpstreamStateSchema = z.enum([
   "in-sync",
@@ -223,26 +246,19 @@ export const gitUpstreamStateSchema = z.enum([
 ]);
 export type GitUpstreamState = z.infer<typeof gitUpstreamStateSchema>;
 
+export const gitUpstreamRelationshipSchema = z.enum(["in-sync", "ahead", "behind", "diverged"]);
+export type GitUpstreamRelationship = z.infer<typeof gitUpstreamRelationshipSchema>;
+
 export const gitUpstreamStatusOptionsSchema = z
   .object({
     remote: z.string().optional(),
     branch: z.string().optional(),
-    credentialId: z
+    credentialIdOverride: z
       .string()
       .nullable()
       .optional()
       .describe(
-        "Override credential selection for this observation: omit for the configured mode, provide an id to pin it, or use null for anonymous Git HTTP."
-      ),
-    fetch: z.boolean().optional(),
-    ttlMs: z
-      .number()
-      .int()
-      .nonnegative()
-      .max(24 * 60 * 60 * 1000)
-      .optional()
-      .describe(
-        "When fetch is true, reuse a successful fetch of the same remote target this many milliseconds before fetching again; 0 always fetches."
+        "Call-scoped concrete credential override for this observation; omit to use the configured logical binding, or use null for anonymous Git HTTP."
       ),
   })
   .strict();
@@ -255,17 +271,38 @@ export const gitUpstreamStatusRowSchema = z
     branch: z.string().optional(),
     autoPush: z.boolean(),
     state: gitUpstreamStateSchema,
-    aheadBy: nonNegativeIntegerSchema,
-    behindBy: nonNegativeIntegerSchema,
+    relationship: gitUpstreamRelationshipSchema
+      .optional()
+      .describe("Relationship derived from the remote observation made by this call."),
+    aheadBy: nonNegativeIntegerSchema.optional(),
+    behindBy: nonNegativeIntegerSchema.optional(),
     remoteBranchExists: z
       .boolean()
       .optional()
       .describe(
         "Present after a successful remote observation; false means the configured branch is absent, not that the fetch failed."
       ),
-    lastPushedSha: z.string().optional(),
-    lastPushedAt: nonNegativeIntegerSchema.optional(),
-    lastError: z.string().optional(),
+    observedAt: nonNegativeIntegerSchema
+      .optional()
+      .describe("When this call successfully observed the declared remote."),
+    error: z
+      .string()
+      .optional()
+      .describe("Failure from this observation attempt; never a persisted prior failure."),
+    lastSuccessfulObservationAt: nonNegativeIntegerSchema
+      .optional()
+      .describe("Historical telemetry from the most recent successful remote observation."),
+    lastSuccessfulPushCommit: z
+      .string()
+      .optional()
+      .describe("Historical telemetry from the most recent successful wire push."),
+    lastSuccessfulPushAt: nonNegativeIntegerSchema
+      .optional()
+      .describe("Historical telemetry from the most recent successful wire push."),
+    lastFailureReason: z
+      .string()
+      .optional()
+      .describe("Historical telemetry from the most recent failed background operation."),
     candidate: gitSemanticCandidateSchema
       .optional()
       .describe("Unpublished external snapshot awaiting ordinary semantic VCS integration."),
@@ -317,22 +354,45 @@ export const gitPushUpstreamOptionsSchema = z
       .describe(
         "Allow replacement of remote history after explicit approval; the result describes related or unrelated overwritten history."
       ),
+    credentialIdOverride: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "Host-resolved, call-scoped concrete credential; omitted by callers using the configured logical binding."
+      ),
   })
   .strict();
 export type GitPushUpstreamOptions = z.infer<typeof gitPushUpstreamOptionsSchema>;
 
-export const gitPushUpstreamResultSchema = z
+const gitPushUpstreamResultBaseSchema = z
   .object({
     exported: nonNegativeIntegerSchema,
     headCommit: z.string().nullable(),
-    pushed: z.boolean(),
-    status: gitUpstreamStateSchema,
     overwrites: gitOverwritePreviewSchema.optional(),
     /** Checkout paths whose local (untracked-by-gad) edits the export
      *  overwrote from the content store. Empty/absent when nothing was lost. */
     clobberedLocalEdits: z.array(z.string()).optional(),
   })
   .strict();
+
+export const gitPushUpstreamResultSchema = z.discriminatedUnion("outcome", [
+  gitPushUpstreamResultBaseSchema.extend({ outcome: z.literal("pushed") }).strict(),
+  gitPushUpstreamResultBaseSchema.extend({ outcome: z.literal("already-at-remote") }).strict(),
+  gitPushUpstreamResultBaseSchema.extend({ outcome: z.literal("remote-missing-created") }).strict(),
+  gitPushUpstreamResultBaseSchema
+    .extend({
+      outcome: z.literal("remote-advanced"),
+      remoteHead: z.string(),
+      relationship: z.enum(["behind", "diverged", "unrelated"]),
+      aheadBy: nonNegativeIntegerSchema.optional(),
+      behindBy: nonNegativeIntegerSchema.optional(),
+    })
+    .strict(),
+  gitPushUpstreamResultBaseSchema
+    .extend({ outcome: z.literal("empty"), headCommit: z.null() })
+    .strict(),
+]);
 export type GitPushUpstreamResult = z.infer<typeof gitPushUpstreamResultSchema>;
 
 export const gitPullUpstreamOptionsSchema = z
@@ -341,7 +401,14 @@ export const gitPullUpstreamOptionsSchema = z
       .boolean()
       .optional()
       .describe(
-        "Preview using a disposable checkout; do not mutate the managed checkout, bridge state, semantic state, or remote."
+        "Preview using an isolated temporary checkout; do not mutate the managed checkout, bridge state, semantic state, or remote."
+      ),
+    credentialIdOverride: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "Host-resolved, call-scoped concrete credential; omitted by callers using the configured logical binding."
       ),
   })
   .strict();
@@ -349,6 +416,15 @@ export type GitPullUpstreamOptions = z.infer<typeof gitPullUpstreamOptionsSchema
 
 export const gitPullUpstreamResultSchema = z
   .object({
+    remote: z.string().describe("Observed declared remote name."),
+    branch: z.string().describe("Observed declared remote branch."),
+    observedCommit: z
+      .string()
+      .nullable()
+      .describe("Exact observed remote branch head, or null when the branch is absent."),
+    changed: z
+      .boolean()
+      .describe("Whether this pull authored a changed semantic snapshot candidate."),
     behindBy: nonNegativeIntegerSchema,
     aheadBy: nonNegativeIntegerSchema,
     remoteBranchExists: z
@@ -402,7 +478,7 @@ export type GitDetachUpstreamResult = z.infer<typeof gitDetachUpstreamResultSche
 export const gitRemoteDefaultBranchInputSchema = z
   .object({
     url: z.string(),
-    credentialId: z.string().nullable().optional(),
+    credentialIdOverride: z.string().nullable().optional(),
   })
   .strict();
 export type GitRemoteDefaultBranchInput = z.infer<typeof gitRemoteDefaultBranchInputSchema>;
@@ -448,66 +524,6 @@ export const gitPublishRepoResultSchema = z
   .strict();
 export type GitPublishRepoResult = z.infer<typeof gitPublishRepoResultSchema>;
 
-export const gitCreateDisposableRemoteOptionsSchema = z
-  .object({
-    name: z
-      .string()
-      .optional()
-      .describe("Short display/repository name; defaults to workspace-test."),
-    branch: z.string().optional().describe("Initial branch; defaults to main."),
-    ttlMs: z
-      .number()
-      .int()
-      .positive()
-      .max(24 * 60 * 60 * 1000)
-      .optional()
-      .describe("Lifetime in milliseconds, capped at 24 hours."),
-  })
-  .strict();
-export type GitCreateDisposableRemoteOptions = z.infer<
-  typeof gitCreateDisposableRemoteOptionsSchema
->;
-
-export const gitDisposableRemoteSchema = z
-  .object({
-    id: z.string(),
-    name: z.string(),
-    url: z.string(),
-    branch: z.string(),
-    expiresAt: nonNegativeIntegerSchema,
-  })
-  .strict();
-export type GitDisposableRemote = z.infer<typeof gitDisposableRemoteSchema>;
-
-export const gitDisposableRemoteInspectionSchema = z
-  .object({
-    id: z.string(),
-    url: z.string(),
-    branch: z.string(),
-    commitCount: nonNegativeIntegerSchema,
-    headCommit: z.string().nullable(),
-    expiresAt: nonNegativeIntegerSchema,
-  })
-  .strict();
-export type GitDisposableRemoteInspection = z.infer<typeof gitDisposableRemoteInspectionSchema>;
-
-export const gitPublishToDisposableRemoteResultSchema = z
-  .object({
-    repoPath: z.string(),
-    branch: z.string(),
-    exported: nonNegativeIntegerSchema,
-    pushed: z.boolean(),
-    commitCount: nonNegativeIntegerSchema,
-    headCommit: z.string().nullable(),
-  })
-  .strict();
-export type GitPublishToDisposableRemoteResult = z.infer<
-  typeof gitPublishToDisposableRemoteResultSchema
->;
-
-export const gitPushDisposableRemoteResultSchema = gitPublishToDisposableRemoteResultSchema;
-export type GitPushDisposableRemoteResult = z.infer<typeof gitPushDisposableRemoteResultSchema>;
-
 export const gitInteropMethods = defineServiceMethods({
   setSharedRemote: {
     description:
@@ -540,10 +556,10 @@ export const gitInteropMethods = defineServiceMethods({
   },
   setUpstream: {
     description:
-      "Declare or update upstream tracking for a workspace repo, persisting it to meta/vibestudio.yml and queueing immediate provider reconciliation; may prompt for capability approval. The config write does not wait for provider readiness or perform network egress. Omitted credentialId enables URL-bound resolution, a string pins that credential, and null requires anonymous Git HTTP.",
+      "Declare or update upstream tracking for a workspace repo, persisting it to meta/vibestudio.yml and queueing immediate provider reconciliation; may prompt for capability approval. The config write does not wait for provider readiness or perform network egress. The optional credential is a portable logical name resolved by the host for this workspace and remote URL.",
     args: z.tuple([
       z.string().describe("Workspace-relative repo/unit path the upstream applies to."),
-      gitUpstreamConfigSchema,
+      gitUpstreamWriteSchema,
     ]),
     returns: gitUpstreamsSchema,
     access: UPSTREAM_WRITE_ACCESS,
@@ -551,7 +567,7 @@ export const gitInteropMethods = defineServiceMethods({
       {
         args: [
           "projects/bgkit",
-          { remote: "origin", branch: "main", autoPush: false, credentialId: "github" },
+          { remote: "origin", branch: "main", autoPush: false, credential: "github" },
         ],
       },
     ],
@@ -593,7 +609,7 @@ export const gitInteropMethods = defineServiceMethods({
   },
   upstreamStatus: {
     description:
-      "Return external Git upstream status for tracked repos, including integration-required candidate coordinates and remoteBranchExists after a successful fetch. A false branch-existence result means the configured branch is absent, not that the fetch failed. Arguments are positional: call `git.upstreamStatus([imported.path], { fetch: false })`, not `git.upstreamStatus([[imported.path], { fetch: false }])`. The configured gitInterop provider performs any Git/network work.",
+      "Observe the declared remote and return external Git upstream status for tracked repos, including integration-required candidate coordinates. Relationship, counts, remoteBranchExists, and observedAt describe only the observation made by this call and are absent when it fails. Arguments are positional: call `git.upstreamStatus([imported.path])`, not `git.upstreamStatus([[imported.path]])`. The configured gitInterop provider performs all Git/network work.",
     args: z.union([
       z.tuple([
         z
@@ -609,11 +625,11 @@ export const gitInteropMethods = defineServiceMethods({
     ]),
     returns: z.array(gitUpstreamStatusRowSchema),
     access: UPSTREAM_STATUS_ACCESS,
-    examples: [{ args: [["projects/bgkit"], { fetch: true }] }],
+    examples: [{ args: [["projects/bgkit"]] }],
   },
   pushUpstream: {
     description:
-      "Export protected main and push it to the repo's declared upstream through the configured gitInterop provider; refuse while an external snapshot candidate requires semantic integration. A forced update returns bounded overwrite evidence: related history has an exact count, while unrelated history has count null because no relative commit count exists.",
+      "Export protected main, observe the declared remote, and return a typed push outcome through the configured gitInterop provider; refuse while an external snapshot candidate requires semantic integration. A forced update returns bounded overwrite evidence: related history has an exact count, while unrelated history has count null because no relative commit count exists.",
     args: z.union([
       z.tuple([z.string().describe("Workspace-relative repo/unit path to push.")]),
       z.tuple([
@@ -627,7 +643,7 @@ export const gitInteropMethods = defineServiceMethods({
   },
   pullUpstream: {
     description:
-      "Fetch a declared upstream and import its exact snapshot as a semantic candidate. With dryRun true, export and fetch only inside a disposable checkout and mutate no managed Git, bridge, semantic, or remote state. A missing configured remote branch is reported explicitly as remoteBranchExists false with zero counts. Reconcile and publish an imported candidate only through vcs.compare, incremental vcs.integrate, vcs.commit, and vcs.push.",
+      "Fetch a declared upstream and import its exact snapshot as a semantic candidate. With dryRun true, export and fetch only inside an isolated temporary checkout and mutate no managed Git, bridge, semantic, or remote state. A missing configured remote branch is reported explicitly as remoteBranchExists false with zero counts. Reconcile and publish an imported candidate only through vcs.compare, incremental vcs.integrate, vcs.commit, and vcs.push.",
     args: z.union([
       z.tuple([z.string().describe("Workspace-relative repo/unit path to pull.")]),
       z.tuple([
@@ -663,63 +679,6 @@ export const gitInteropMethods = defineServiceMethods({
     access: UPSTREAM_OPERATION_ACCESS,
     examples: [{ args: [{ repoPath: "projects/bgkit", private: true }] }],
   },
-  createDisposableRemote: {
-    description:
-      "Create a short-lived, credential-free smart-HTTP Git remote that survives across calls. This method does not publish anything. For a tracked stepwise flow, declare this exact URL with setSharedRemote, select it with setUpstream, call pushUpstream, then inspect or remove it. publishToDisposableRemote creates and deletes a separate remote, so do not use that one-call helper when this created remote must persist.",
-    args: z.union([z.tuple([]), z.tuple([gitCreateDisposableRemoteOptionsSchema])]),
-    returns: gitDisposableRemoteSchema,
-    access: DISPOSABLE_REMOTE_WRITE_ACCESS,
-    examples: [{ args: [{ name: "publish-check", branch: "main" }] }],
-  },
-  publishToDisposableRemote: {
-    description:
-      "Export one workspace repo, push it to a fresh credential-free host-managed smart-HTTP remote, verify the received commit count, and clean the remote up. This is the one-call development/system-verification path and does not replace or mutate the repo's declared upstream.",
-    args: z.union([
-      z.tuple([z.string().describe("Workspace-relative repo/unit path to export and verify.")]),
-      z.tuple([
-        z.string().describe("Workspace-relative repo/unit path to export and verify."),
-        z.object({ branch: z.string().optional() }).strict(),
-      ]),
-    ]),
-    returns: gitPublishToDisposableRemoteResultSchema,
-    access: UPSTREAM_OPERATION_ACCESS,
-    examples: [{ args: ["projects/example"] }],
-  },
-  pushDisposableRemote: {
-    description:
-      "Export one workspace repo and push it to an existing host-managed disposable Git remote. The host verifies that the URL is an active disposable remote and returns the received commit count without removing it.",
-    args: z.tuple([
-      z.string().describe("Workspace-relative repo/unit path to export."),
-      z.string().describe("URL returned by createDisposableRemote."),
-      z.string().describe("Branch returned by createDisposableRemote."),
-    ]),
-    returns: gitPushDisposableRemoteResultSchema,
-    access: UPSTREAM_OPERATION_ACCESS,
-    examples: [
-      {
-        args: [
-          "projects/example",
-          "http://vibestudio.local/_disposable-git/<id>/publish-check.git",
-          "main",
-        ],
-      },
-    ],
-  },
-  inspectDisposableRemote: {
-    description:
-      "Verify a host-managed disposable Git remote and return its branch head and total received commit count.",
-    args: z.tuple([z.string().describe("URL returned by createDisposableRemote.")]),
-    returns: gitDisposableRemoteInspectionSchema,
-    access: UPSTREAM_STATUS_ACCESS,
-    examples: [{ args: ["http://vibestudio.local/_disposable-git/<id>/publish-check.git"] }],
-  },
-  removeDisposableRemote: {
-    description: "Delete a host-managed disposable Git remote before its automatic expiry.",
-    args: z.tuple([z.string().describe("URL returned by createDisposableRemote.")]),
-    returns: z.object({ removed: z.boolean() }).strict(),
-    access: DISPOSABLE_REMOTE_WRITE_ACCESS,
-    examples: [{ args: ["http://vibestudio.local/_disposable-git/<id>/publish-check.git"] }],
-  },
   commitMapping: {
     description:
       "Return the semantic-event↔Git commit mapping for a repo's checkout, read from Vibestudio-Event trailers (newest first).",
@@ -736,7 +695,7 @@ export const gitInteropMethods = defineServiceMethods({
   },
   importProject: {
     description:
-      "Clone an external Git project, record its remote/upstream config, and return the semantic candidate plus identity-joined evidence from the same atomic semantic import. The import does not publish protected main. The returned semanticEvidence includes the external snapshot source URI, revision, digest, and target repository IDs; the provenance tool can independently inspect the same returned IDs. Check the same repo with the positional call `git.upstreamStatus([imported.path], { fetch: false })` to distinguish the unpublished integration-required candidate from protected main and outgoing Git publication, and report that same candidate event ID with the path and publication state. Use the ordinary VCS integration path when publication is intended.",
+      "Clone an external Git project, record its remote/upstream config, and return the semantic candidate plus identity-joined evidence from the same atomic semantic import. The import does not publish protected main. The returned semanticEvidence includes the external snapshot source URI, revision, digest, and target repository IDs; the provenance tool can independently inspect the same returned IDs. Check the same repo with the positional call `git.upstreamStatus([imported.path])` to distinguish the unpublished integration-required candidate from protected main and outgoing Git publication, and report that same candidate event ID with the path and publication state. Use the ordinary VCS integration path when publication is intended.",
     args: z.tuple([gitImportProjectSchema]),
     returns: gitImportedWorkspaceRepoSchema,
     access: IMPORT_PROJECT_ACCESS,
@@ -755,13 +714,51 @@ export const gitInteropMethods = defineServiceMethods({
       },
     ],
   },
-  completeWorkspaceDependencies: {
+  pushTemplateContribution: {
     description:
-      "Ask the configured provider for upstream status, clone each supported declaration reported as not-materialized, and return one unpublished semantic candidate with required atomic semanticEvidence per successful import. Other reported states are skipped as already-materialized; candidates require ordinary VCS integration and explicit publication. Omit credentialId for each URL's configured/automatic mode, provide a string to pin one credential, or pass null to require anonymous Git HTTP.",
-    args: z.union([z.tuple([]), z.tuple([gitCompleteWorkspaceDependenciesSchema])]),
-    returns: gitCompleteWorkspaceDependenciesResultSchema,
-    access: COMPLETE_DEPENDENCIES_ACCESS,
-    examples: [{ args: [] }],
+      "Export selected repositories from one exact protected-main event and push one collision-safe template contribution branch through the configured gitInterop provider.",
+    args: z.tuple([gitTemplateContributionInputSchema]),
+    returns: gitTemplateContributionResultSchema,
+    authority: {
+      requirement: requirementForPrincipals(["user", "host", "code"], GIT_PUBLISH_CAPABILITY),
+      resource: { kind: "literal", key: GIT_PUBLISH_CAPABILITY },
+      prepared: {
+        resolver: GIT_TEMPLATE_CONTRIBUTION_AUTHORITY_RESOLVER,
+        leaves: [
+          {
+            capability: GIT_PUBLISH_CAPABILITY,
+            requirement: fixedPreparedAuthorityRequirement(
+              requirementForPrincipals(["code"], GIT_PUBLISH_CAPABILITY)
+            ),
+            tier: "gated",
+          },
+        ],
+      },
+    },
+    access: UPSTREAM_OPERATION_ACCESS,
+  },
+  publishTemplate: {
+    description:
+      "Create a provider repository and publish selected repositories from one exact protected-main event with one generated portable template manifest and immutable version tag.",
+    args: z.tuple([gitTemplatePublishInputSchema]),
+    returns: gitTemplatePublishResultSchema,
+    authority: {
+      requirement: requirementForPrincipals(["user", "host", "code"], GIT_PUBLISH_CAPABILITY),
+      resource: { kind: "literal", key: GIT_PUBLISH_CAPABILITY },
+      prepared: {
+        resolver: GIT_TEMPLATE_PUBLISH_AUTHORITY_RESOLVER,
+        leaves: [
+          {
+            capability: GIT_PUBLISH_CAPABILITY,
+            requirement: fixedPreparedAuthorityRequirement(
+              requirementForPrincipals(["code"], GIT_PUBLISH_CAPABILITY)
+            ),
+            tier: "gated",
+          },
+        ],
+      },
+    },
+    access: UPSTREAM_OPERATION_ACCESS,
   },
 });
 export type GitInteropMethods = typeof gitInteropMethods;
@@ -778,22 +775,28 @@ export const gitInteropProviderMethods = defineServiceMethods({
   pullUpstream: gitInteropMethods.pullUpstream,
   publishRepo: gitInteropMethods.publishRepo,
   commitMapping: gitInteropMethods.commitMapping,
-  pushDisposableRemote: {
-    description: "Export and push one repo to an explicit host-managed disposable remote URL.",
-    args: z.tuple([
-      z.object({ repoPath: z.string(), url: z.string(), branch: z.string() }).strict(),
-    ]),
-    returns: z
-      .object({
-        exported: nonNegativeIntegerSchema,
-        pushed: z.boolean(),
-        headCommit: z.string().nullable(),
-      })
-      .strict(),
+  pushTemplateContribution: {
+    description:
+      "Export selected protected-main repositories as one commit per template subtree and push one collision-safe contribution branch after observing remote truth.",
+    args: z.tuple([gitTemplateContributionInputSchema]),
+    returns: gitTemplateContributionResultSchema,
+  },
+  publishTemplate: {
+    description:
+      "Create and publish one exact multi-repository template tree and version tag.",
+    args: z.tuple([gitTemplatePublishInputSchema]),
+    returns: gitTemplatePublishResultSchema,
   },
   cloneRepo: {
     description: "Clone one declared workspace dependency and return its semantic candidate.",
-    args: z.tuple([z.object({ repoPath: z.string() }).strict()]),
+    args: z.tuple([
+      z
+        .object({
+          repoPath: z.string(),
+          credentialIdOverride: z.string().nullable().optional(),
+        })
+        .strict(),
+    ]),
     returns: gitImportResultSchema,
   },
   remoteDefaultBranch: {
@@ -805,7 +808,16 @@ export const gitInteropProviderMethods = defineServiceMethods({
   reconcileUpstreams: {
     description:
       "Queue current-config reconciliation for repositories after protected main or Git tracking configuration changes.",
-    args: z.tuple([z.array(z.string())]),
+    args: z.tuple([
+      z.array(
+        z
+          .object({
+            repoPath: z.string(),
+            credentialIdOverride: z.string().nullable().optional(),
+          })
+          .strict()
+      ),
+    ]),
     returns: z.object({ queued: nonNegativeIntegerSchema }).strict(),
   },
 });
@@ -829,6 +841,7 @@ export const GIT_INTEROP_PROVIDER_OPERATIONS = [
   "pullUpstream",
   "publishRepo",
   "commitMapping",
-  "pushDisposableRemote",
+  "pushTemplateContribution",
+  "publishTemplate",
 ] as const satisfies readonly GitInteropProviderMethod[];
 export type GitInteropProviderOperation = (typeof GIT_INTEROP_PROVIDER_OPERATIONS)[number];

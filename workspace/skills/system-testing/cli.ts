@@ -121,18 +121,6 @@ const LIVE_COMPLETED_PROBLEM_LIMIT = 4;
 const LIVE_MESSAGE_LIMIT = 20;
 const LIVE_INVOCATION_LIMIT = 30;
 const LIVE_DEBUG_EVENT_LIMIT = 40;
-const REQUIRED_SYSTEM_TEST_EXTENSIONS = [
-  "@workspace-extensions/browser-data",
-  "@workspace-extensions/claude-code",
-  "@workspace-extensions/file-tools",
-  "@workspace-extensions/git-bridge",
-  "@workspace-extensions/image-service",
-  "@workspace-extensions/mobile-debug",
-  "@workspace-extensions/shell",
-  "@workspace-extensions/test-runner",
-  "@workspace-extensions/typecheck-service",
-] as const;
-
 export function listSystemTests(): SystemTestDescriptor[] {
   return allTests().map((test) => ({
     name: test.name,
@@ -481,12 +469,39 @@ export async function systemTestDoctor(expectedModel?: string): Promise<SystemTe
   await capture(
     "required-extensions",
     async () => {
-      const extensions = (await rpc.call("main", "extensions.list", [])) as Array<{
+      type ExtensionStatus = {
         name?: string;
         status?: string;
         lastError?: string | null;
-      }>;
-      const unready = REQUIRED_SYSTEM_TEST_EXTENSIONS.flatMap((name) => {
+      };
+      type SourceTreeNode = {
+        path: string;
+        packageInfo?: { name?: string };
+        children?: SourceTreeNode[];
+      };
+      const [extensions, config, tree] = await Promise.all([
+        rpc.call("main", "extensions.list", []) as Promise<ExtensionStatus[]>,
+        rpc.call("main", "workspace.getConfig", []) as Promise<{
+          extensions?: Array<{ source: string }>;
+        }>,
+        rpc.call("main", "workspace.sourceTree", []) as Promise<{
+          children?: SourceTreeNode[];
+        }>,
+      ]);
+      const units = new Map<string, SourceTreeNode>();
+      const visit = (nodes: readonly SourceTreeNode[]): void => {
+        for (const node of nodes) {
+          units.set(node.path, node);
+          visit(node.children ?? []);
+        }
+      };
+      visit(tree.children ?? []);
+      const declared = (config.extensions ?? []).map(({ source }) => ({
+        source,
+        name: units.get(source)?.packageInfo?.name,
+      }));
+      const unready = declared.flatMap(({ source, name }) => {
+        if (!name) return [`${source}=missing`];
         const extension = extensions.find((candidate) => candidate.name === name);
         return extension?.status === "running" || extension?.status === "available"
           ? []
@@ -498,18 +513,18 @@ export async function systemTestDoctor(expectedModel?: string): Promise<SystemTe
       });
       if (unready.length > 0) {
         throw new Error(
-          `required system-test extensions are not ready: ${unready.join(
+          `declared workspace extensions are not ready: ${unready.join(
             ", "
           )}. Complete the startup unit review before running agentic tests.`
         );
       }
-      return extensions.filter((extension) =>
-        REQUIRED_SYSTEM_TEST_EXTENSIONS.includes(
-          extension.name as (typeof REQUIRED_SYSTEM_TEST_EXTENSIONS)[number]
-        )
-      );
+      return declared.map(({ source, name }) => ({
+        source,
+        name,
+        status: extensions.find((extension) => extension.name === name)?.status,
+      }));
     },
-    "required system-test extensions are approved and build-ready"
+    "declared workspace extensions are approved and build-ready"
   );
   await capture(
     "model",

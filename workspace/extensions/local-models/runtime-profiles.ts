@@ -1,4 +1,4 @@
-import type { ModelRecord } from "./types.js";
+import type { ModelRecord } from "@workspace/model-catalog/localModels";
 
 /**
  * Runtime context is model-owned unless the user explicitly overrides it.

@@ -27,6 +27,7 @@ export const SEMANTIC_VCS_REQUIRED_TABLES = [
   "gad_workspace_event_parents",
   "gad_workspace_event_applications",
   "gad_work_units",
+  "gad_external_deltas",
   "gad_work_unit_applications",
   "gad_changes",
   "gad_change_coordinates",
@@ -36,6 +37,7 @@ export const SEMANTIC_VCS_REQUIRED_TABLES = [
   "gad_content_edges",
   "gad_content_edge_mappings",
   "gad_integration_decisions",
+  "gad_workspace_event_external_sources",
   "gad_decision_source_changes",
   "vcs_command_journal",
   "gad_effect_intents",
@@ -226,7 +228,8 @@ export function createSemanticVcsSchema(sql: SqlStorage): void {
       work_unit_id TEXT PRIMARY KEY,
       command_id TEXT NOT NULL,
       kind TEXT NOT NULL CHECK (
-        kind IN ('edit', 'file-transfer', 'lifecycle', 'integrate', 'revert', 'import')
+        kind IN ('edit', 'file-transfer', 'lifecycle', 'integrate', 'revert', 'import',
+                 'external-unapplied')
       ),
       intent_summary TEXT,
       external_snapshot_json TEXT,
@@ -249,6 +252,26 @@ export function createSemanticVcsSchema(sql: SqlStorage): void {
     );
     CREATE INDEX IF NOT EXISTS idx_gad_work_units_command
       ON gad_work_units(command_id, work_unit_id);
+
+    CREATE TABLE IF NOT EXISTS gad_external_deltas (
+      delta_id TEXT PRIMARY KEY,
+      work_unit_id TEXT NOT NULL UNIQUE,
+      owner_context_id TEXT NOT NULL,
+      repository_id TEXT NOT NULL,
+      repo_path TEXT NOT NULL,
+      target_state_kind TEXT NOT NULL CHECK (target_state_kind IN ('event', 'application')),
+      target_state_id TEXT NOT NULL,
+      old_source_json TEXT NOT NULL CHECK (json_valid(old_source_json) = 1),
+      new_source_json TEXT NOT NULL CHECK (json_valid(new_source_json) = 1),
+      old_snapshot TEXT NOT NULL,
+      new_snapshot TEXT NOT NULL,
+      input_digest TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('active', 'superseded', 'finalized')),
+      superseded_by_delta_id TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_gad_external_deltas_repository
+      ON gad_external_deltas(repository_id, status, delta_id);
 
     -- A mutation authors one work unit and realizes it once on one exact basis.
     CREATE TABLE IF NOT EXISTS gad_work_unit_applications (
@@ -392,15 +415,19 @@ export function createSemanticVcsSchema(sql: SqlStorage): void {
       kind TEXT NOT NULL CHECK (kind IN ('adopted', 'reconciled', 'declined')),
       target_state_kind TEXT NOT NULL CHECK (target_state_kind IN ('event', 'application')),
       target_state_id TEXT NOT NULL,
-      source_event_id TEXT NOT NULL,
+      source_event_id TEXT,
+      source_delta_id TEXT,
       work_unit_id TEXT NOT NULL,
       rationale TEXT,
       evidence_predicates_json TEXT,
       created_at TEXT NOT NULL,
-      UNIQUE (work_unit_id)
+      UNIQUE (work_unit_id),
+      CHECK ((source_event_id IS NULL) <> (source_delta_id IS NULL))
     );
     CREATE INDEX IF NOT EXISTS idx_gad_decisions_source
       ON gad_integration_decisions(source_event_id, decision_id);
+    CREATE INDEX IF NOT EXISTS idx_gad_decisions_delta
+      ON gad_integration_decisions(source_delta_id, decision_id);
     CREATE INDEX IF NOT EXISTS idx_gad_decisions_target
       ON gad_integration_decisions(target_state_kind, target_state_id, decision_id);
     CREATE TABLE IF NOT EXISTS gad_decision_source_changes (
@@ -410,6 +437,14 @@ export function createSemanticVcsSchema(sql: SqlStorage): void {
     );
     CREATE INDEX IF NOT EXISTS idx_gad_decision_source_changes_change
       ON gad_decision_source_changes(change_id, decision_id);
+
+    CREATE TABLE IF NOT EXISTS gad_workspace_event_external_sources (
+      event_id TEXT NOT NULL,
+      ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+      delta_id TEXT NOT NULL,
+      PRIMARY KEY (event_id, ordinal),
+      UNIQUE (event_id, delta_id)
+    );
 
     -- The journal owns idempotency and one optional exact tool-invocation edge.
     -- Direct host commands terminate here; caller/user/request snapshots are

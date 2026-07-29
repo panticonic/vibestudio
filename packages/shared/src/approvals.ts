@@ -648,7 +648,10 @@ export interface PendingCapabilityApproval extends PendingApprovalBase {
     format?: ApprovalDetailFormat;
   }>;
   snapshot?: InvocationSnapshot;
-  cardType?: "permission.gated" | "permission.outside" | "confirm.critical";
+  cardType?:
+    | "permission.gated"
+    | "permission.outside"
+    | "confirm.critical";
   /** Host-derived decisions this exact authority request can meaningfully mint. */
   allowedDecisions?: ApprovalDecision[];
   /** Canonical server-side projection used by every authority surface. */

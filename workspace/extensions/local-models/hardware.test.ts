@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHardwareProfiler, pickBackend, pickTier } from "./hardware.js";
-import type { GpuInfo } from "./types.js";
+import type { GpuInfo } from "@workspace/model-catalog/localModels";
 import type { HardwareProfilerDeps } from "./hardware.js";
 
 type CommandOutput = { ok: boolean; stdout: string; stderr: string };
@@ -144,9 +144,9 @@ describe("HardwareProfiler", () => {
         "x64"
       )
     ).toBe("vulkan");
-    expect(pickBackend([gpu({ vendor: "intel", backend: "vulkan", discrete: false })], "linux", "x64")).toBe(
-      "cpu"
-    );
+    expect(
+      pickBackend([gpu({ vendor: "intel", backend: "vulkan", discrete: false })], "linux", "x64")
+    ).toBe("cpu");
   });
 });
 

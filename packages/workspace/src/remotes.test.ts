@@ -8,12 +8,14 @@ import {
   getDeclaredRemotesForRepo,
   getDeclaredUpstreamForRepo,
   isDeclaredRemoteRepoPath,
+  listDeclaredUpstreams,
   normalizeWorkspaceRepoPath,
   removeDeclaredRemoteFromConfig,
   removeDeclaredUpstreamFromConfig,
   setDeclaredRemoteInConfig,
   setDeclaredUpstreamInConfig,
   syncDeclaredRemoteForRepo,
+  validateWorkspaceGitConfig,
 } from "./remotes.js";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
@@ -116,21 +118,85 @@ describe("workspace remotes", () => {
     });
   });
 
-  it("preserves explicit anonymous credential selection distinctly from automatic resolution", () => {
+  it("preserves the logical credential requirement distinctly from anonymous resolution", () => {
     const withRemote = setDeclaredRemoteInConfig(BASE_CONFIG, "projects/bgkit", {
       name: "origin",
       url: "https://github.com/werg/bgkit.git",
     });
-    const anonymous = setDeclaredUpstreamInConfig(withRemote, "projects/bgkit", {
+    const bound = setDeclaredUpstreamInConfig(withRemote, "projects/bgkit", {
       remote: "origin",
-      credentialId: null,
+      credential: "github-main",
     });
-    const automatic = setDeclaredUpstreamInConfig(withRemote, "projects/bgkit", {
+    const anonymous = setDeclaredUpstreamInConfig(withRemote, "projects/bgkit", {
       remote: "origin",
     });
 
-    expect(getDeclaredUpstreamForRepo(anonymous, "projects/bgkit")?.credentialId).toBeNull();
-    expect(getDeclaredUpstreamForRepo(automatic, "projects/bgkit")?.credentialId).toBeUndefined();
+    expect(getDeclaredUpstreamForRepo(bound, "projects/bgkit")?.credential).toBe("github-main");
+    expect(getDeclaredUpstreamForRepo(anonymous, "projects/bgkit")?.credential).toBeUndefined();
+  });
+
+  it("preserves every ordinary upstream setting during tolerant enumeration", () => {
+    const withRemote = setDeclaredRemoteInConfig(BASE_CONFIG, "panels/news", {
+      name: "origin",
+      url: "https://github.com/acme/news.git",
+      branch: "main",
+    });
+    const config = setDeclaredUpstreamInConfig(withRemote, "panels/news", {
+      remote: "origin",
+      branch: "release",
+      autoPush: false,
+      credential: "github-panels",
+      authorEmail: "workspace@example.com",
+      authorName: "Workspace Export",
+    });
+
+    expect(listDeclaredUpstreams(config)).toEqual([
+      {
+        repoPath: "panels/news",
+        upstream: {
+          repoPath: "panels/news",
+          section: "panels",
+          repoKey: "news",
+          remote: "origin",
+          branch: "release",
+          autoPush: false,
+          credential: "github-panels",
+          authorEmail: "workspace@example.com",
+          authorName: "Workspace Export",
+        },
+      },
+    ]);
+  });
+
+  it("rejects the removed host-owned seed acquisition declaration", () => {
+    const config = setDeclaredRemoteInConfig(BASE_CONFIG, "panels/news", {
+      name: "origin",
+      url: "https://github.com/acme/news.git",
+    });
+    expect(() =>
+      setDeclaredUpstreamInConfig(config, "panels/news", {
+        remote: "origin",
+        seed: {
+          ref: "refs/tags/v1",
+          commit: "7a6f4c9d7d9d5d1b3b7a4cf97f046dd05f6b0d92",
+          snapshot: `v1-sha256:${"d".repeat(64)}`,
+        },
+      } as never)
+    ).toThrow(
+      "Upstream declaration may contain only remote, branch, autoPush, credential, authorEmail, and authorName"
+    );
+  });
+
+  it("rejects an upstream whose named remote is absent from the final declaration map", () => {
+    expect(() =>
+      validateWorkspaceGitConfig({
+        upstreams: {
+          panels: {
+            news: { remote: "origin" },
+          },
+        },
+      })
+    ).toThrow('Upstream remote "origin" is not declared for panels/news');
   });
 
   it("removes a named remote without removing the repo declaration", () => {

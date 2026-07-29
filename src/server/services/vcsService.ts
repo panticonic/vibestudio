@@ -44,6 +44,15 @@ export interface VcsServiceDeps {
   testPolicyForContext?: (
     contextId: string
   ) => import("@vibestudio/rpc").AgentExecutionTestPolicy | null;
+  /**
+   * Host coordinators may observe a durable external-delta decision after the
+   * ordinary public integration succeeds. They do not receive registration or
+   * lifecycle authority through this callback.
+   */
+  onExternalDeltaIntegrated?: (
+    ctx: ServiceContext,
+    input: { contextId: string; sourceDeltaId: string }
+  ) => Promise<void>;
 }
 
 type CausalRequest<T> = {
@@ -333,7 +342,10 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     );
 
     const exactRoots = parsed.references
-      .filter(({ kind }) => kind === "state-node" || kind === "event" || kind === "node")
+      .filter(
+        ({ kind }) =>
+          kind === "state-node" || kind === "event" || kind === "external-delta" || kind === "node"
+      )
       .map(({ kind, value }) => ({ kind, value }));
     const guardedRoots = exactRoots.filter(
       (reference) => !isCallerTrajectoryRoot(ctx, deps, reference)
@@ -358,7 +370,18 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
       method === "push" && primaryContextId !== null
         ? callerForContext(ctx, deps, primaryContextId)
         : ctx.caller;
-    return invoke(ctx, dispatchMethod, parsed.input, effectCaller);
+    const result = await invoke(ctx, dispatchMethod, parsed.input, effectCaller);
+    if (
+      method === "integrate" &&
+      typeof (parsed.input as { sourceDeltaId?: unknown }).sourceDeltaId === "string"
+    ) {
+      const integration = parsed.input as { contextId: string; sourceDeltaId: string };
+      await deps.onExternalDeltaIntegrated?.(ctx, {
+        contextId: integration.contextId,
+        sourceDeltaId: integration.sourceDeltaId,
+      });
+    }
+    return result;
   };
 
   const handlers = mapServiceHandlers(vcsMethods, (method, ctx, args) =>

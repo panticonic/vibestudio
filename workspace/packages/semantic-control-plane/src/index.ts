@@ -133,7 +133,7 @@ type SqlBinding = null | string | number | boolean | Uint8Array;
 
 /** First supported production schema for the semantic workspace authority. */
 const GAD_WORKSPACE_SCHEMA_BASELINE = 56;
-const GAD_WORKSPACE_SCHEMA_VERSION = 57;
+const GAD_WORKSPACE_SCHEMA_VERSION = 59;
 
 const utf8Bytes = (value: string): number => new TextEncoder().encode(value).byteLength;
 
@@ -749,6 +749,150 @@ export class GadWorkspaceDO extends DurableObjectBase {
             ON gad_work_units(command_id, work_unit_id)`);
         },
       },
+      {
+        version: 58,
+        name: "external-unapplied-deltas",
+        validateSource: (sql) => {
+          const columns = sql
+            .exec(`PRAGMA table_info(gad_work_units)`)
+            .toArray()
+            .map((row) => String(row["name"]));
+          if (!columns.includes("content_class") || columns.includes("external_delta_id")) {
+            throw new Error(`GadWorkspaceDO v57 schema is unknown: ${JSON.stringify(columns)}`);
+          }
+        },
+        migrate: (sql) => {
+          sql.exec(`ALTER TABLE gad_work_units RENAME TO gad_work_units_v57`);
+          sql.exec(`CREATE TABLE gad_work_units (
+            work_unit_id TEXT PRIMARY KEY,
+            command_id TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (
+              kind IN ('edit', 'file-transfer', 'lifecycle', 'integrate', 'revert', 'import',
+                       'external-unapplied')
+            ),
+            intent_summary TEXT,
+            external_snapshot_json TEXT,
+            content_class TEXT NOT NULL CHECK (content_class IN ('internal', 'external')),
+            external_lineage_json TEXT NOT NULL CHECK (
+              json_valid(external_lineage_json) = 1 AND json_type(external_lineage_json) IS 'array'
+              AND (content_class = 'external' OR json_array_length(external_lineage_json) = 0)
+            ),
+            normalization_protocol TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            CHECK (
+              (kind = 'import' AND external_snapshot_json IS NOT NULL
+                AND json_valid(external_snapshot_json) = 1
+                AND json_type(external_snapshot_json, '$.targetRepositoryIds') IS 'array'
+                AND json_array_length(external_snapshot_json, '$.targetRepositoryIds') >= 1)
+              OR (kind <> 'import' AND external_snapshot_json IS NULL)
+            )
+          )`);
+          sql.exec(`INSERT INTO gad_work_units SELECT * FROM gad_work_units_v57`);
+          sql.exec(`DROP TABLE gad_work_units_v57`);
+          sql.exec(`CREATE INDEX idx_gad_work_units_command
+            ON gad_work_units(command_id, work_unit_id)`);
+          sql.exec(`ALTER TABLE gad_integration_decisions RENAME TO gad_integration_decisions_v57`);
+          sql.exec(`CREATE TABLE gad_integration_decisions (
+            decision_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL CHECK (kind IN ('adopted', 'reconciled', 'declined')),
+            target_state_kind TEXT NOT NULL CHECK (target_state_kind IN ('event', 'application')),
+            target_state_id TEXT NOT NULL, source_event_id TEXT, work_unit_id TEXT NOT NULL,
+            rationale TEXT, evidence_predicates_json TEXT, created_at TEXT NOT NULL,
+            source_delta_id TEXT, UNIQUE (work_unit_id),
+            CHECK ((source_event_id IS NULL) <> (source_delta_id IS NULL))
+          )`);
+          sql.exec(`INSERT INTO gad_integration_decisions
+            (decision_id, kind, target_state_kind, target_state_id, source_event_id,
+             work_unit_id, rationale, evidence_predicates_json, created_at, source_delta_id)
+            SELECT decision_id, kind, target_state_kind, target_state_id, source_event_id,
+                   work_unit_id, rationale, evidence_predicates_json, created_at, NULL
+              FROM gad_integration_decisions_v57`);
+          sql.exec(`DROP TABLE gad_integration_decisions_v57`);
+          sql.exec(`CREATE INDEX idx_gad_decisions_source
+            ON gad_integration_decisions(source_event_id, decision_id)`);
+          sql.exec(`CREATE INDEX idx_gad_decisions_delta
+            ON gad_integration_decisions(source_delta_id, decision_id)`);
+          sql.exec(`CREATE INDEX idx_gad_decisions_target
+            ON gad_integration_decisions(target_state_kind, target_state_id, decision_id)`);
+          sql.exec(`CREATE TABLE gad_external_deltas (
+            delta_id TEXT PRIMARY KEY, work_unit_id TEXT NOT NULL UNIQUE,
+            repository_id TEXT NOT NULL, repo_path TEXT NOT NULL,
+            target_state_kind TEXT NOT NULL CHECK (target_state_kind IN ('event', 'application')),
+            target_state_id TEXT NOT NULL, old_source_json TEXT NOT NULL,
+            new_source_json TEXT NOT NULL, old_snapshot TEXT NOT NULL, new_snapshot TEXT NOT NULL,
+            input_digest TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('active', 'superseded', 'finalized')),
+            superseded_by_delta_id TEXT, created_at TEXT NOT NULL
+          )`);
+          sql.exec(`CREATE INDEX idx_gad_external_deltas_repository
+            ON gad_external_deltas(repository_id, status, delta_id)`);
+          sql.exec(`CREATE TABLE gad_workspace_event_external_sources (
+            event_id TEXT NOT NULL, ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+            delta_id TEXT NOT NULL, PRIMARY KEY (event_id, ordinal), UNIQUE (event_id, delta_id)
+          )`);
+        },
+      },
+      {
+        version: 59,
+        name: "external-delta-context-ownership",
+        validateSource: (sql) => {
+          const columns = sql
+            .exec(`PRAGMA table_info(gad_external_deltas)`)
+            .toArray()
+            .map((row) => String(row["name"]));
+          if (!columns.includes("work_unit_id") || columns.includes("owner_context_id")) {
+            throw new Error(
+              `GadWorkspaceDO v58 external-delta schema is unknown: ${JSON.stringify(columns)}`
+            );
+          }
+        },
+        migrate: (sql) => {
+          sql.exec(`ALTER TABLE gad_external_deltas RENAME TO gad_external_deltas_v58`);
+          sql.exec(`CREATE TABLE gad_external_deltas (
+            delta_id TEXT PRIMARY KEY, work_unit_id TEXT NOT NULL UNIQUE,
+            owner_context_id TEXT NOT NULL,
+            repository_id TEXT NOT NULL, repo_path TEXT NOT NULL,
+            target_state_kind TEXT NOT NULL CHECK (target_state_kind IN ('event', 'application')),
+            target_state_id TEXT NOT NULL, old_source_json TEXT NOT NULL,
+            new_source_json TEXT NOT NULL, old_snapshot TEXT NOT NULL, new_snapshot TEXT NOT NULL,
+            input_digest TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('active', 'superseded', 'finalized')),
+            superseded_by_delta_id TEXT, created_at TEXT NOT NULL
+          )`);
+          sql.exec(`INSERT INTO gad_external_deltas
+            (delta_id, work_unit_id, owner_context_id, repository_id, repo_path,
+             target_state_kind, target_state_id, old_source_json, new_source_json,
+             old_snapshot, new_snapshot, input_digest, status, superseded_by_delta_id, created_at)
+            SELECT delta.delta_id, delta.work_unit_id, command.scope_id,
+                   delta.repository_id, delta.repo_path, delta.target_state_kind,
+                   delta.target_state_id, delta.old_source_json, delta.new_source_json,
+                   delta.old_snapshot, delta.new_snapshot, delta.input_digest,
+                   delta.status, delta.superseded_by_delta_id, delta.created_at
+              FROM gad_external_deltas_v58 delta
+              JOIN gad_work_units work ON work.work_unit_id = delta.work_unit_id
+              JOIN vcs_command_journal command ON command.command_id = work.command_id
+             WHERE command.scope_kind = 'context'`);
+          const copied = Number(
+            (
+              sql.exec(`SELECT COUNT(*) AS n FROM gad_external_deltas`).toArray()[0] as {
+                n: number;
+              }
+            ).n
+          );
+          const source = Number(
+            (
+              sql.exec(`SELECT COUNT(*) AS n FROM gad_external_deltas_v58`).toArray()[0] as {
+                n: number;
+              }
+            ).n
+          );
+          if (copied !== source)
+            throw new Error("Cannot recover owner context for an external delta");
+          sql.exec(`DROP TABLE gad_external_deltas_v58`);
+          sql.exec(`CREATE INDEX idx_gad_external_deltas_repository
+            ON gad_external_deltas(repository_id, status, delta_id)`);
+        },
+      },
     ];
   }
 
@@ -770,7 +914,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       "created_at",
     ];
     if (JSON.stringify(columns) !== JSON.stringify(expected)) {
-      throw new Error(`GadWorkspaceDO v57 work-unit schema drift: ${JSON.stringify(columns)}`);
+      throw new Error(`GadWorkspaceDO v58 work-unit schema drift: ${JSON.stringify(columns)}`);
     }
   }
 
@@ -1195,6 +1339,17 @@ export class GadWorkspaceDO extends DurableObjectBase {
   vcsContentGcRoots(): unknown {
     this.ensureReady();
     return this.semanticWorkspace().contentGcRoots();
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "workspace-service" },
+    tier: "open",
+    sensitivity: "read",
+  })
+  vcsListContexts(input: { prefix?: string }): string[] {
+    this.ensureReady();
+    return this.semanticWorkspace().listContexts(input.prefix);
   }
 
   @rpc({

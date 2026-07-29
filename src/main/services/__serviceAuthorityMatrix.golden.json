@@ -1438,7 +1438,7 @@
           "inherits": true
         },
         "access": {
-          "sensitivity": "write"
+          "sensitivity": "read"
         }
       },
       "setRole": {

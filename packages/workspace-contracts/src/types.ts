@@ -120,6 +120,97 @@ export interface GitConfig {
   upstreams?: WorkspaceGitUpstreamsConfig;
 }
 
+/**
+ * A dependency declaration authored in `meta/vibestudio.yml`.
+ *
+ * Source manifests intentionally name only the repository they depend on and
+ * the logical credential needed to reach it. Exact source coordinates belong
+ * to the generated lock.
+ */
+export interface WorkspaceTemplateDeclaration {
+  /** Credential-free canonical Git URL. */
+  url: string;
+  /** Unique profile credential label, never concrete credential material. */
+  credential?: string;
+}
+
+/** One exact, reproducible template source coordinate. */
+export interface WorkspaceTemplatePin extends WorkspaceTemplateDeclaration {
+  /** Human-readable source ref used to resolve the exact commit. */
+  ref: string;
+  /** Full 40-character lowercase Git SHA-1 object id. */
+  commit: string;
+  /** Canonical digest of the complete admitted template tree. */
+  snapshot: `v1-sha256:${string}`;
+}
+
+/** Reviewed moving pointer used only by an explicit registry refresh. */
+export interface WorkspaceTemplateRegistryDeclaration {
+  url: string;
+  /** Canonical promotion branch or tag ref. */
+  ref: string;
+  credential?: string;
+}
+
+export interface WorkspaceTemplatesConfig {
+  /** Direct URL-only roots. Transitive relationships are read from their manifests. */
+  use: WorkspaceTemplateDeclaration[];
+  /** Exact root-level resolution overrides keyed by normalized template URL. */
+  overrides?: Record<string, WorkspaceTemplatePin>;
+  /** Durable per-repository ownership choices. */
+  conflicts?: Record<string, string>;
+  /** Presentation/promotion registry source; never part of an installed template lock. */
+  registry?: WorkspaceTemplateRegistryDeclaration;
+  /** Exact bootstrap root already adopted into the ordinary template graph. */
+  bootstrapAdopted?: WorkspaceTemplatePin;
+  /** Reviewed exact excluded-section decisions keyed by `<nodeId>:<section>`. */
+  suggestionDecisions?: Record<
+    string,
+    { digest: `v1-sha256:${string}`; decision: "accepted" | "declined" }
+  >;
+}
+
+export interface WorkspaceTemplateLockNode {
+  nodeId: string;
+  alias: string;
+  pin: WorkspaceTemplatePin;
+  /** Direct parent node ids. Parents precede children in `nodes`. */
+  parents: string[];
+  fragmentDigest: `v1-sha256:${string}`;
+  /** Exact excluded authority suggestions proven by this node's pinned manifest. */
+  suggestions: {
+    trust?: { digest: `v1-sha256:${string}`; value: unknown };
+    providers?: { digest: `v1-sha256:${string}`; value: unknown };
+  };
+}
+
+export interface WorkspaceTemplateLockRepository {
+  nodeId: string;
+  subtreeDigest: `v1-sha256:${string}`;
+}
+
+/** Checked projection committed in `meta/templates.lock.yml`. */
+export interface WorkspaceTemplateLock {
+  version: 1;
+  fingerprint: `v1-sha256:${string}`;
+  /** Normalized URL-only roots from the top layer that generated this closure. */
+  roots: WorkspaceTemplateDeclaration[];
+  /** Normalized top-layer pin overrides that generated this closure. */
+  overrides: Record<string, WorkspaceTemplatePin>;
+  /** Normalized top-layer repository ownership decisions for this closure. */
+  conflicts: Record<string, string>;
+  nodes: WorkspaceTemplateLockNode[];
+  repositories: Record<string, WorkspaceTemplateLockRepository>;
+  verification: "verified" | "deferred";
+}
+
+/** Host-owned bootstrap intent for a workspace created from an external root. */
+export interface WorkspaceCreationDescriptor {
+  version: 1;
+  workspaceId: string;
+  rootTemplate: WorkspaceTemplatePin;
+}
+
 export interface WorkspaceGitRemoteConfig {
   name: string;
   url: string;
@@ -144,10 +235,10 @@ export interface WorkspaceGitUpstreamConfig {
   /** Push automatically after protected main advances. */
   autoPush?: boolean;
   /**
-   * Omit to resolve a URL-bound credential automatically, provide an id to
-   * select it exactly, or use null to require anonymous Git HTTP.
+   * Logical credential requirement resolved through the profile-local binding
+   * table. Concrete credential identities never enter workspace configuration.
    */
-  credentialId?: string | null;
+  credential?: string;
   /** Optional exported-commit author email override. */
   authorEmail?: string;
   /** Optional exported-commit author name override. Suppresses per-actor names. */
@@ -471,6 +562,18 @@ export interface WorkspaceConfig {
   /** Preferred app (and startup-ordering constraints) per host target. */
   hostTargets?: WorkspaceHostTargetsDecl;
 }
+
+/**
+ * Userland-owned source layer for workspace composition. The template
+ * composer stores this separately from the flattened WorkspaceConfig consumed
+ * by the host.
+ */
+export type WorkspaceConfigTopLayer = Omit<WorkspaceConfig, "id"> & {
+  /** Direct template relationships and repository conflict choices. */
+  templates?: WorkspaceTemplatesConfig;
+  /** Canonical inherited declaration keys disabled by the workspace layer. */
+  disable?: string[];
+};
 
 /**
  * Resolved workspace with computed paths.

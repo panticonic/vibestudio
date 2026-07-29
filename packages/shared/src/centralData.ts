@@ -52,7 +52,7 @@ export interface EphemeralWorkspaceRemovalRecord {
   cleanup: EphemeralWorkspaceCleanupRecord | null;
 }
 
-function mintWorkspaceId(): string {
+export function createWorkspaceId(): string {
   return `ws_${randomBytes(18).toString("base64url")}`;
 }
 
@@ -167,7 +167,7 @@ export class CentralDataManager {
   }
 
   /** Reserve/register a name exactly once; re-registering preserves its opaque id. */
-  addWorkspace(name: string): WorkspaceEntry {
+  addWorkspace(name: string, workspaceId = createWorkspaceId()): WorkspaceEntry {
     const normalized = name.trim();
     if (!normalized) throw new Error("Workspace name is required");
     const row = this.stmt(
@@ -175,7 +175,7 @@ export class CentralDataManager {
        VALUES (?, ?, ?)
        ON CONFLICT(name) DO UPDATE SET last_opened = excluded.last_opened
        RETURNING *`
-    ).get(mintWorkspaceId(), normalized, this.now());
+    ).get(workspaceId, normalized, this.now());
     if (!row) {
       throw new Error(`Workspace registration did not return a row: ${normalized}`);
     }
@@ -200,7 +200,7 @@ export class CentralDataManager {
       if (this.stmt("SELECT 1 AS one FROM workspaces WHERE name = ?").get(normalized)) {
         throw new Error(`Cannot shadow persistent workspace \"${normalized}\" with ephemeral dev`);
       }
-      const workspaceId = mintWorkspaceId();
+      const workspaceId = createWorkspaceId();
       const row = this.stmt(
         `INSERT INTO workspaces (workspace_id, name, last_opened)
          VALUES (?, ?, ?) RETURNING *`

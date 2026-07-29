@@ -58,6 +58,10 @@ function service(options?: {
   testPolicyForContext?: (
     contextId: string
   ) => import("@vibestudio/rpc").AgentExecutionTestPolicy | null;
+  onExternalDeltaIntegrated?: (
+    ctx: ServiceContext,
+    input: { contextId: string; sourceDeltaId: string }
+  ) => Promise<void>;
 }) {
   const semanticCall = vi.fn(async (method: string, request: { input: unknown }) => {
     if (options && "failure" in options) throw options.failure;
@@ -90,6 +94,9 @@ function service(options?: {
     ...(options?.testPolicyForContext
       ? { testPolicyForContext: options.testPolicyForContext }
       : {}),
+    ...(options?.onExternalDeltaIntegrated
+      ? { onExternalDeltaIntegrated: options.onExternalDeltaIntegrated }
+      : {}),
   });
   return { definition, semanticCall, semanticPublishCall };
 }
@@ -98,7 +105,7 @@ describe("canonical vcsService", () => {
   it("exposes exactly the canonical public semantic methods", () => {
     const { definition } = service();
     expect(Object.keys(definition.methods).sort()).toEqual(Object.keys(vcsMethods).sort());
-    expect(Object.keys(definition.methods)).toHaveLength(20);
+    expect(Object.keys(definition.methods)).toHaveLength(23);
   });
 
   it("forwards only input and the exact per-call causal edge", async () => {
@@ -110,6 +117,29 @@ describe("canonical vcsService", () => {
         causalParent: null,
         contextIntegrity: { class: "internal", externalKeys: [] },
       },
+    });
+  });
+
+  it("notifies the owning host coordinator after an ordinary delta integration", async () => {
+    const onExternalDeltaIntegrated = vi.fn(async () => undefined);
+    const { definition } = service({ onExternalDeltaIntegrated });
+    const ctx = shellContext();
+    await definition.handler(ctx, "integrate", [
+      {
+        contextId: "template-composer-operation-pull-base",
+        commandId: "command:integrate-template",
+        expectedWorkingHead: EVENT,
+        sourceDeltaId: "delta:template",
+        decision: {
+          kind: "declined",
+          sourceChangeIds: ["change:one"],
+          rationale: "Keep the workspace version",
+        },
+      },
+    ]);
+    expect(onExternalDeltaIntegrated).toHaveBeenCalledWith(ctx, {
+      contextId: "template-composer-operation-pull-base",
+      sourceDeltaId: "delta:template",
     });
   });
 
@@ -413,6 +443,37 @@ describe("canonical vcsService", () => {
         {
           target: EVENT,
           sourceEventId: "event:foreign",
+          view: "changes",
+          limit: 20,
+        },
+      ])
+    ).rejects.toMatchObject({
+      code: "EINVAL",
+      errorData: {
+        code: "InvalidReference",
+        referenceKind: "state-node",
+        reference: EVENT,
+      },
+    });
+    expect(semanticCall).not.toHaveBeenCalled();
+  });
+
+  it("guards external delta sources by the caller's reachable context graph", async () => {
+    const { definition, semanticCall } = service({
+      context: "context:own",
+      referencesReachable: (_contextIds, references) => {
+        expect(references).toContainEqual({
+          kind: "external-delta",
+          value: "delta:foreign",
+        });
+        return false;
+      },
+    });
+    await expect(
+      definition.handler(workerContext(), "compare", [
+        {
+          target: EVENT,
+          sourceDeltaId: "delta:foreign",
           view: "changes",
           limit: 20,
         },

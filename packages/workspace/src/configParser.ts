@@ -22,6 +22,28 @@ import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
 export { WORKSPACE_APP_PACKAGE_SCOPE, WORKSPACE_EXTENSION_PACKAGE_SCOPE };
 
+export const WORKSPACE_CONFIG_PATH = "meta/vibestudio.yml";
+
+export interface WorkspaceConfigReader {
+  readText(path: string): Promise<string | null>;
+}
+
+/**
+ * Read the single runtime manifest published at one immutable workspace state.
+ *
+ * Template declarations, locks, and fragments are userland composition state.
+ * The host deliberately neither discovers nor interprets them; the userland
+ * composer publishes their flattened result to WORKSPACE_CONFIG_PATH.
+ */
+export async function readWorkspaceConfig(
+  reader: WorkspaceConfigReader,
+  id: string
+): Promise<WorkspaceConfig> {
+  const content = await reader.readText(WORKSPACE_CONFIG_PATH);
+  if (content === null) throw new Error(`${WORKSPACE_CONFIG_PATH} is missing`);
+  return parseWorkspaceConfigContentWithId(content, id);
+}
+
 function workspaceConfigIssueMessage(issue: ZodIssue): string {
   const path = issue.path.join(".");
   if (
@@ -46,6 +68,11 @@ export function parseWorkspaceConfigContentWithId(content: string, id: string): 
   if (yamlValue === null || typeof yamlValue !== "object" || Array.isArray(yamlValue)) {
     throw new Error("meta/vibestudio.yml must contain a configuration mapping");
   }
+  if (Object.prototype.hasOwnProperty.call(yamlValue, "id")) {
+    throw new Error(
+      "meta/vibestudio.yml: `id` is resolved by the host and must not be declared in workspace source"
+    );
+  }
   let config: WorkspaceConfig;
   try {
     config = WorkspaceConfigSchema.parse({
@@ -57,6 +84,10 @@ export function parseWorkspaceConfigContentWithId(content: string, id: string): 
     const issue = error.issues[0];
     throw new Error(issue ? workspaceConfigIssueMessage(issue) : "Invalid meta/vibestudio.yml");
   }
+  return validateResolvedWorkspaceConfig(config);
+}
+
+export function validateResolvedWorkspaceConfig(config: WorkspaceConfig): WorkspaceConfig {
   if (config.systemEpoch !== WORKSPACE_SYSTEM_EPOCH) {
     throw new Error(
       `meta/vibestudio.yml: systemEpoch ${config.systemEpoch} is incompatible with host runtime ABI ${WORKSPACE_SYSTEM_EPOCH}; a supported workspace-source upgrade is required`

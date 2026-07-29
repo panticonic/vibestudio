@@ -110,6 +110,7 @@ export interface WorkspaceEventRecord {
   commandId: string;
   kind: "genesis" | "commit" | "integration-commit";
   parentEventIds: readonly string[];
+  externalDeltaIds?: readonly string[];
   applicationIds: readonly string[];
   resultWorkspaceFactRootId: string;
   message: string | null;
@@ -119,7 +120,14 @@ export interface WorkspaceEventRecord {
 export interface WorkUnitRecord {
   workUnitId: string;
   commandId: string;
-  kind: "edit" | "file-transfer" | "lifecycle" | "integrate" | "revert" | "import";
+  kind:
+    | "edit"
+    | "file-transfer"
+    | "lifecycle"
+    | "integrate"
+    | "revert"
+    | "import"
+    | "external-unapplied";
   authoredChangeIds: readonly string[];
   intentSummary: string | null;
   externalSnapshot: ExternalSnapshotRecord | null;
@@ -133,6 +141,8 @@ export interface ExternalSnapshotRecord {
   sourceKind: VcsExternalSnapshot["sourceKind"];
   sourceUri: string;
   snapshotRevision: string;
+  sourceSubdir?: string | null;
+  canonicalSnapshot?: string;
   snapshotDigest: string;
   targetRepositoryIds: readonly string[];
 }
@@ -202,13 +212,31 @@ export type IntegrationDecisionRecord = {
   decisionId: string;
   kind: "adopted" | "reconciled" | "declined";
   targetState: StateNodeRef;
-  sourceEventId: string;
+  sourceEventId: string | null;
+  sourceDeltaId: string | null;
   sourceChangeIds: readonly string[];
   workUnitId: string;
   evidencePredicates: readonly StatePredicateRecord[];
   rationale: string | null;
   createdAt: string;
 };
+
+export interface ExternalDeltaRecord {
+  deltaId: string;
+  workUnitId: string;
+  ownerContextId: string;
+  repositoryId: string;
+  repoPath: string;
+  targetState: StateNodeRef;
+  oldSource: Row;
+  newSource: Row;
+  oldSnapshot: string;
+  newSnapshot: string;
+  inputDigest: string;
+  status: "active" | "superseded" | "finalized";
+  supersededByDeltaId: string | null;
+  createdAt: string;
+}
 
 export interface ApplicationPersistencePlan {
   contextId: string;
@@ -466,6 +494,21 @@ export class SemanticVcsStore {
     };
   }
 
+  listContexts(prefix?: string): string[] {
+    const rows = prefix === undefined
+      ? this.sql.exec(`SELECT context_id FROM vcs_contexts ORDER BY context_id`).toArray()
+      : this.sql
+          .exec(
+            `SELECT context_id FROM vcs_contexts
+              WHERE substr(context_id, 1, ?) = ?
+              ORDER BY context_id`,
+            prefix.length,
+            prefix
+          )
+          .toArray();
+    return (rows as Row[]).map((row) => text(row, "context_id"));
+  }
+
   contextRequired(contextId: string): ContextRecord {
     const context = this.context(contextId);
     if (!context) {
@@ -538,6 +581,15 @@ export class SemanticVcsStore {
           )
           .toArray() as Row[]
       ).map((parent) => text(parent, "parent_event_id")),
+      externalDeltaIds: (
+        this.sql
+          .exec(
+            `SELECT delta_id FROM gad_workspace_event_external_sources
+             WHERE event_id = ? ORDER BY ordinal`,
+            eventId
+          )
+          .toArray() as Row[]
+      ).map((source) => text(source, "delta_id")),
       applicationIds: (
         this.sql
           .exec(
@@ -551,6 +603,93 @@ export class SemanticVcsStore {
       message: nullableText(row, "message"),
       createdAt: text(row, "created_at"),
     };
+  }
+
+  externalDelta(deltaId: string): ExternalDeltaRecord | null {
+    const row = this.sql
+      .exec(`SELECT * FROM gad_external_deltas WHERE delta_id = ?`, deltaId)
+      .toArray()[0] as Row | undefined;
+    if (!row) return null;
+    return {
+      deltaId,
+      workUnitId: text(row, "work_unit_id"),
+      ownerContextId: text(row, "owner_context_id"),
+      repositoryId: text(row, "repository_id"),
+      repoPath: text(row, "repo_path"),
+      targetState: stateRef(row["target_state_kind"], row["target_state_id"]),
+      oldSource: parse<Row>(row["old_source_json"]),
+      newSource: parse<Row>(row["new_source_json"]),
+      oldSnapshot: text(row, "old_snapshot"),
+      newSnapshot: text(row, "new_snapshot"),
+      inputDigest: text(row, "input_digest"),
+      status: text(row, "status") as ExternalDeltaRecord["status"],
+      supersededByDeltaId: nullableText(row, "superseded_by_delta_id"),
+      createdAt: text(row, "created_at"),
+    };
+  }
+
+  registerExternalDelta(
+    delta: ExternalDeltaRecord,
+    workUnit: WorkUnitRecord,
+    changes: readonly ChangeRecord[]
+  ): ExternalDeltaRecord {
+    const existing = this.externalDelta(delta.deltaId);
+    if (existing) {
+      if (existing.inputDigest !== delta.inputDigest) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `External delta ${delta.deltaId} was re-registered with different evidence`
+        );
+      }
+      return existing;
+    }
+    this.persistWorkUnit(workUnit);
+    this.persistChanges(changes);
+    const [targetKind, targetId] = stateKindAndId(delta.targetState);
+    this.sql.exec(
+      `INSERT INTO gad_external_deltas
+       (delta_id, work_unit_id, owner_context_id, repository_id, repo_path, target_state_kind, target_state_id,
+        old_source_json, new_source_json, old_snapshot, new_snapshot, input_digest, status,
+        superseded_by_delta_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      delta.deltaId,
+      delta.workUnitId,
+      delta.ownerContextId,
+      delta.repositoryId,
+      delta.repoPath,
+      targetKind,
+      targetId,
+      canonicalJson(delta.oldSource),
+      canonicalJson(delta.newSource),
+      delta.oldSnapshot,
+      delta.newSnapshot,
+      delta.inputDigest,
+      delta.status,
+      delta.supersededByDeltaId,
+      delta.createdAt
+    );
+    return this.externalDelta(delta.deltaId)!;
+  }
+
+  setExternalDeltaStatus(
+    deltaId: string,
+    expected: ExternalDeltaRecord["status"],
+    status: ExternalDeltaRecord["status"],
+    supersededByDeltaId: string | null = null
+  ): ExternalDeltaRecord {
+    this.sql.exec(
+      `UPDATE gad_external_deltas
+          SET status = ?, superseded_by_delta_id = ?
+        WHERE delta_id = ? AND status = ?`,
+      status,
+      supersededByDeltaId,
+      deltaId,
+      expected
+    );
+    if (Number((this.sql.exec(`SELECT changes() AS n`).toArray()[0] as Row)["n"]) !== 1) {
+      throw new SemanticVcsError("RevisionChanged", `External delta ${deltaId} is not ${expected}`);
+    }
+    return this.externalDelta(deltaId)!;
   }
 
   application(applicationId: string): ApplicationRecord | null {
@@ -679,6 +818,7 @@ export class SemanticVcsStore {
     commandId: string;
     message: string | null;
     integratesEventIds: readonly string[];
+    integratesDeltaIds?: readonly string[];
     maxApplications: number;
   }): { context: ContextRecord; event: WorkspaceEventRecord } {
     const context = this.assertExpectedWorking(input.contextId, input.expectedWorkingHead);
@@ -694,8 +834,12 @@ export class SemanticVcsStore {
     const createdAt = this.now();
     const eventInput = {
       commandId: input.commandId,
-      kind: input.integratesEventIds.length ? ("integration-commit" as const) : ("commit" as const),
+      kind:
+        input.integratesEventIds.length || (input.integratesDeltaIds?.length ?? 0)
+          ? ("integration-commit" as const)
+          : ("commit" as const),
       parentEventIds: [context.committed.ref.eventId, ...input.integratesEventIds],
+      externalDeltaIds: input.integratesDeltaIds ?? [],
       applicationIds: chain.applicationIds,
       resultWorkspaceFactRootId: context.working.workspaceFactRootId,
       message: input.message,
@@ -720,6 +864,15 @@ export class SemanticVcsStore {
         eventId,
         ordinal,
         parentEventId
+      )
+    );
+    (input.integratesDeltaIds ?? []).forEach((deltaId, ordinal) =>
+      this.sql.exec(
+        `INSERT INTO gad_workspace_event_external_sources (event_id, ordinal, delta_id)
+         VALUES (?, ?, ?)`,
+        eventId,
+        ordinal,
+        deltaId
       )
     );
     chain.applicationIds.forEach((applicationId, ordinal) =>
@@ -1234,6 +1387,21 @@ export class SemanticVcsStore {
     }
   }
 
+  finishEffectPendingCommand(input: {
+    scopeKind: "context" | "workspace";
+    scopeId: string;
+    commandId: string;
+  }): void {
+    this.sql.exec(
+      `UPDATE vcs_command_journal SET status = 'complete', completed_at = ?
+        WHERE scope_kind = ? AND scope_id = ? AND command_id = ? AND status = 'effect-pending'`,
+      this.now(),
+      input.scopeKind,
+      input.scopeId,
+      input.commandId
+    );
+  }
+
   /** Drop admitted observation descriptors while retaining the exact effect and receipt digests.
    *
    * The command, work unit, changes, and content-addressed blobs own the durable facts after
@@ -1509,8 +1677,9 @@ export class SemanticVcsStore {
     this.sql.exec(
       `INSERT INTO gad_integration_decisions
        (decision_id, kind, target_state_kind, target_state_id,
-        source_event_id, work_unit_id, rationale, evidence_predicates_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        source_event_id, work_unit_id, rationale, evidence_predicates_json, created_at,
+        source_delta_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       value.decisionId,
       value.kind,
       targetKind,
@@ -1519,7 +1688,8 @@ export class SemanticVcsStore {
       value.workUnitId,
       value.rationale,
       value.evidencePredicates.length ? canonicalJson(value.evidencePredicates) : null,
-      value.createdAt
+      value.createdAt,
+      value.sourceDeltaId
     );
     value.sourceChangeIds.forEach((changeId) =>
       this.sql.exec(

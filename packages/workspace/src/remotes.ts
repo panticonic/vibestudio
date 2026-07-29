@@ -10,6 +10,10 @@ import type {
   WorkspaceGitRemoteDeclaration,
   WorkspaceGitUpstreamConfig,
 } from "@vibestudio/workspace-contracts/types";
+import { WorkspaceLogicalCredentialNameSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
+import { normalizeRemoteUrl } from "./remoteUrl.js";
+
+export { normalizeRemoteUrl } from "./remoteUrl.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -51,7 +55,7 @@ export interface ResolvedWorkspaceGitUpstream {
   remote: string;
   branch: string;
   autoPush: boolean;
-  credentialId?: string | null;
+  credential?: string;
   authorEmail?: string;
   authorName?: string;
 }
@@ -150,13 +154,13 @@ export function validateWorkspaceGitUpstream(
       "remote",
       "branch",
       "autoPush",
-      "credentialId",
+      "credential",
       "authorEmail",
       "authorName",
     ])
   ) {
     throw new Error(
-      "Upstream declaration may contain only remote, branch, autoPush, credentialId, authorEmail, and authorName"
+      "Upstream declaration may contain only remote, branch, autoPush, credential, authorEmail, and authorName"
     );
   }
   if (typeof upstream.remote !== "string") throw new Error("Upstream remote must be a string");
@@ -170,24 +174,17 @@ export function validateWorkspaceGitUpstream(
   const branch =
     upstream.branch === undefined ? undefined : validateWorkspaceGitRemoteBranch(upstream.branch);
   const autoPush = upstream.autoPush;
-  if (
-    upstream.credentialId !== undefined &&
-    upstream.credentialId !== null &&
-    typeof upstream.credentialId !== "string"
-  ) {
-    throw new Error("Upstream credentialId must be a string, null, or omitted");
-  }
-  const credentialId =
-    upstream.credentialId === null
-      ? null
-      : normalizeOptionalNonEmpty("credentialId", upstream.credentialId);
+  const credential =
+    upstream.credential === undefined
+      ? undefined
+      : WorkspaceLogicalCredentialNameSchema.parse(upstream.credential);
   const authorEmail = normalizeOptionalNonEmpty("authorEmail", upstream.authorEmail);
   const authorName = normalizeOptionalNonEmpty("authorName", upstream.authorName);
   return {
     remote,
     ...(branch !== undefined ? { branch } : {}),
     ...(autoPush !== undefined ? { autoPush } : {}),
-    ...(credentialId !== undefined ? { credentialId } : {}),
+    ...(credential !== undefined ? { credential } : {}),
     ...(authorEmail !== undefined ? { authorEmail } : {}),
     ...(authorName !== undefined ? { authorName } : {}),
   };
@@ -222,7 +219,7 @@ export function getDeclaredUpstreamForRepo(
     remote: upstream.remote,
     branch: upstream.branch ?? remote.branch ?? "main",
     autoPush: upstream.autoPush ?? false,
-    ...(upstream.credentialId !== undefined ? { credentialId: upstream.credentialId } : {}),
+    ...(upstream.credential !== undefined ? { credential: upstream.credential } : {}),
     ...(upstream.authorEmail !== undefined ? { authorEmail: upstream.authorEmail } : {}),
     ...(upstream.authorName !== undefined ? { authorName: upstream.authorName } : {}),
   };
@@ -344,35 +341,20 @@ export function validateWorkspaceGitConfig(gitValue: unknown): void {
     for (const [section, repoValue] of Object.entries(sections)) {
       const repos = requireMapping(repoValue, `git.upstreams.${section}`);
       for (const [repoKey, declaration] of Object.entries(repos)) {
-        normalizeWorkspaceRepoPath(repoKey ? `${section}/${repoKey}` : section);
-        validateWorkspaceGitUpstream(declaration as WorkspaceGitUpstreamConfig);
+        const repoPath = normalizeWorkspaceRepoPath(repoKey ? `${section}/${repoKey}` : section);
+        const upstream = validateWorkspaceGitUpstream(declaration as WorkspaceGitUpstreamConfig);
+        const remoteDeclaration = (
+          git["remotes"] as
+            | Record<string, Record<string, Record<string, WorkspaceGitRemoteDeclaration>>>
+            | undefined
+        )?.[section]?.[repoKey]?.[upstream.remote];
+        if (!remoteDeclaration) {
+          throw new Error(`Upstream remote "${upstream.remote}" is not declared for ${repoPath}`);
+        }
+        normalizeRemoteDeclaration(remoteDeclaration);
       }
     }
   }
-}
-
-export function normalizeRemoteUrl(value: string): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error("Remote URL is required");
-  }
-  let url: URL;
-  try {
-    url = new URL(value.trim());
-  } catch {
-    throw new Error(`Invalid remote URL: ${value}`);
-  }
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error(`Remote URL must use http or https: ${value}`);
-  }
-  if (url.username || url.password) {
-    throw new Error("Remote URL must not contain embedded credentials");
-  }
-  if (url.search || url.hash) {
-    throw new Error(
-      "Remote URL must not contain query parameters or fragments; use the credential system for authentication"
-    );
-  }
-  return url.href;
 }
 
 export function setDeclaredRemoteInConfig(

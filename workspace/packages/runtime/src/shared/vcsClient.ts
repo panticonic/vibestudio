@@ -27,8 +27,11 @@ type ContextBoundMethodName = {
     ? never
     : Method;
 }[keyof typeof vcsMethods];
+type DistributiveOmit<Value, Key extends PropertyKey> = Value extends unknown
+  ? Omit<Value, Key>
+  : never;
 type ContextOptionalMethod<Method> = Method extends (input: infer Input) => Promise<infer Result>
-  ? (input: Omit<Input, "contextId"> & { contextId?: string }) => Promise<Result>
+  ? (input: DistributiveOmit<Input, "contextId"> & { contextId?: string }) => Promise<Result>
   : Method;
 type ContextBoundStatusInput = Omit<VcsStatusInput, "contextId"> & { contextId?: string };
 

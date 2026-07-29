@@ -1,4 +1,9 @@
-import { canonicalJson, compareUtf16CodeUnits, sha256Hex } from "@vibestudio/content-addressing";
+import {
+  canonicalJson,
+  canonicalSnapshotDigest,
+  compareUtf16CodeUnits,
+  sha256Hex,
+} from "@vibestudio/content-addressing";
 import {
   VCS_IMPORT_MAX_DESCRIPTOR_BYTES,
   parseVcsSemanticRequest,
@@ -16,10 +21,12 @@ import {
   type VcsImportSnapshotInput,
   type VcsInspectInput,
   type VcsIntegrateInput,
+  type VcsRegisterExternalDeltaInput,
+  type VcsExternalDeltaLifecycleInput,
   type VcsListDirectoryInput,
   type VcsListDirectoryResult,
   type VcsListFilesInput,
-  type VcsMethodName,
+  type VcsSemanticMethodName,
   type VcsMoveInput,
   type VcsNeighborsInput,
   type VcsPushInput,
@@ -83,6 +90,7 @@ import {
   type SemanticVcsStore,
   type StatePredicateRecord,
   type WorkUnitRecord,
+  type ExternalDeltaRecord,
 } from "./semanticVcsStore.js";
 import { contentMappingFromRow } from "./semanticVcsContentMappingCodec.js";
 
@@ -195,6 +203,8 @@ interface MutationDraft {
     sourceKind: VcsImportSnapshotInput["source"]["kind"];
     sourceUri: string;
     snapshotRevision: string;
+    sourceSubdir?: string | null;
+    canonicalSnapshot?: string;
     snapshotDigest: string;
     targetRepositoryIds: readonly string[];
   };
@@ -250,7 +260,8 @@ interface ComparedSourceChange {
 
 interface IntegrationComparison {
   targetState: StateNodeRef;
-  sourceEventId: string;
+  sourceEventId: string | null;
+  sourceDeltaId: string | null;
   changes: ComparedSourceChange[];
   unaccountedChangeIds: string[];
 }
@@ -766,6 +777,10 @@ const persistedEffectIntegrity = (
 export class SemanticWorkspace {
   constructor(private readonly deps: SemanticWorkspaceDeps) {}
 
+  listContexts(prefix?: string): string[] {
+    return this.deps.store.listContexts(prefix);
+  }
+
   isStateDescendant(ancestor: StateNodeRef, descendant: StateNodeRef, maxEdges: number): boolean {
     return this.deps.store.isStateAncestor(ancestor, descendant, maxEdges);
   }
@@ -786,6 +801,22 @@ export class SemanticWorkspace {
       .exec(`SELECT DISTINCT content_hash FROM vcs_file_states WHERE content_hash IS NOT NULL`)
       .toArray() as Row[]) {
       contentHashes.add(String(row["content_hash"]));
+    }
+    for (const row of this.deps.sql
+      .exec(
+        `SELECT change.base_json, change.result_json
+           FROM gad_external_deltas delta
+           JOIN gad_changes change ON change.work_unit_id = delta.work_unit_id
+          WHERE delta.status = 'active'`
+      )
+      .toArray() as Row[]) {
+      for (const column of ["base_json", "result_json"] as const) {
+        if (row[column] == null) continue;
+        const endpoint = JSON.parse(String(row[column])) as Row;
+        if (typeof endpoint["contentHash"] === "string") {
+          contentHashes.add(endpoint["contentHash"]);
+        }
+      }
     }
     // Pending effects are durable semantic roots too. Their self-contained
     // payloads may name content before the corresponding state is receipted.
@@ -820,6 +851,10 @@ export class SemanticWorkspace {
           kind: "event",
           eventId: reference.value,
         });
+      }
+      if (reference.kind === "external-delta" && typeof reference.value === "string") {
+        const delta = this.deps.store.externalDelta(reference.value);
+        return delta !== null && this.referenceStateReachable(contextIds, delta.targetState);
       }
       if (reference.kind === "node" && reference.value && typeof reference.value === "object") {
         const node = reference.value as Row;
@@ -1097,7 +1132,7 @@ export class SemanticWorkspace {
     if (!(canonical in this.publicMethods())) {
       throw new SemanticVcsError("InvalidReference", `Unsupported VCS method ${method}`);
     }
-    const name = canonical as VcsMethodName;
+    const name = canonical as VcsSemanticMethodName;
     const parsed = parseVcsSemanticRequest(name, request.input).input;
     switch (name) {
       case "edit":
@@ -1119,6 +1154,20 @@ export class SemanticWorkspace {
         return this.discard(parsed as VcsDiscardInput, request);
       case "importSnapshot":
         return this.importSnapshot(parsed as VcsImportSnapshotInput, request);
+      case "registerExternalDelta":
+        return this.registerExternalDelta(parsed as VcsRegisterExternalDeltaInput, request);
+      case "supersedeExternalDelta":
+        return this.externalDeltaLifecycle(
+          "supersedeExternalDelta",
+          parsed as VcsExternalDeltaLifecycleInput,
+          request
+        );
+      case "finalizeExternalDelta":
+        return this.externalDeltaLifecycle(
+          "finalizeExternalDelta",
+          parsed as VcsExternalDeltaLifecycleInput,
+          request
+        );
       case "push":
         return this.push(parsed as VcsPushInput, request);
       case "status":
@@ -1184,7 +1233,13 @@ export class SemanticWorkspace {
             contextId: importInput.contextId,
             expectedWorkingHead: working.workingHead,
             commandId: pending.commandId,
-            message: importInput.message ?? `Import ${importInput.source.snapshotRevision}`,
+            message:
+              importInput.message ??
+              `Import ${
+                importInput.source.kind === "git"
+                  ? importInput.source.commit
+                  : importInput.source.snapshotRevision
+              }`,
             integratesEventIds: [],
             maxApplications: MAX_WORKING_APPLICATIONS,
           });
@@ -1212,6 +1267,24 @@ export class SemanticWorkspace {
           });
           this.deps.store.compactAppliedObservation(pending.effectId);
           return { kind: "effects-pending", result, effects: [projection] };
+        }
+        if (method === "registerExternalDelta") {
+          const deltaInput = parseVcsSemanticRequest("registerExternalDelta", commandInput)
+            .input as VcsRegisterExternalDeltaInput;
+          const result = this.persistExternalDelta(deltaInput, input.receipt);
+          this.deps.store.updatePendingCommandResult({
+            scopeKind: "context",
+            scopeId: deltaInput.contextId,
+            commandId: pending.commandId,
+            result,
+          });
+          this.deps.store.compactAppliedObservation(pending.effectId);
+          this.deps.store.finishEffectPendingCommand({
+            scopeKind: "context",
+            scopeId: deltaInput.contextId,
+            commandId: pending.commandId,
+          });
+          return { kind: "complete", result };
         }
         const draft =
           method === "edit"
@@ -1438,7 +1511,7 @@ export class SemanticWorkspace {
     });
   }
 
-  private publicMethods(): Record<VcsMethodName, true> {
+  private publicMethods(): Record<VcsSemanticMethodName, true> {
     return {
       edit: true,
       move: true,
@@ -1448,6 +1521,9 @@ export class SemanticWorkspace {
       commit: true,
       discard: true,
       importSnapshot: true,
+      registerExternalDelta: true,
+      supersedeExternalDelta: true,
+      finalizeExternalDelta: true,
       push: true,
       status: true,
       compare: true,
@@ -2123,16 +2199,24 @@ export class SemanticWorkspace {
     request: SemanticDispatchRequest
   ): SemanticDispatchResult {
     return this.runMutation("integrate", input, request, () => {
-      if (!this.deps.store.event(input.sourceEventId)) {
+      const sourceEventId = "sourceEventId" in input ? input.sourceEventId : null;
+      const sourceDeltaId = "sourceDeltaId" in input ? input.sourceDeltaId : null;
+      const delta = sourceDeltaId ? this.deps.store.externalDelta(sourceDeltaId) : null;
+      if (sourceDeltaId && (!delta || delta.status !== "active")) {
         throw new SemanticVcsError(
           "InvalidReference",
-          `Unknown source event ${input.sourceEventId}`
+          `External delta ${sourceDeltaId} is not active`
         );
       }
-      const comparison = this.integrationComparison(
-        asState(input.expectedWorkingHead),
-        input.sourceEventId
-      );
+      if (delta && delta.ownerContextId !== input.contextId) {
+        throw new SemanticVcsError(
+          "InvalidReference",
+          `External delta ${sourceDeltaId} belongs to context ${delta.ownerContextId}`
+        );
+      }
+      const comparison = sourceEventId
+        ? this.integrationComparison(asState(input.expectedWorkingHead), sourceEventId)
+        : this.integrationComparisonForDelta(asState(input.expectedWorkingHead), delta!);
       const comparable = new Map(
         comparison.changes.map((entry) => [entry.change.changeId, entry] as const)
       );
@@ -2141,7 +2225,7 @@ export class SemanticWorkspace {
         if (!entry) {
           throw new SemanticVcsError(
             "InvalidReference",
-            `Change ${changeId} is not effective in source event ${input.sourceEventId}`
+            `Change ${changeId} is not effective in the selected integration source`
           );
         }
         if (
@@ -2240,7 +2324,11 @@ export class SemanticWorkspace {
                 mode: Number(result["mode"]),
                 ...contentDescriptorFromEndpoint(result),
               },
-              newFile: false,
+              newFile:
+                current == null &&
+                this.deps.sql
+                  .exec(`SELECT 1 FROM vcs_files WHERE file_id = ?`, String(result["fileId"]))
+                  .toArray().length === 0,
               changeRef: { kind: "existing", changeId: change.changeId },
             });
             continue;
@@ -2293,7 +2381,8 @@ export class SemanticWorkspace {
       > = {
         kind: input.decision.kind,
         targetState: asState(input.expectedWorkingHead),
-        sourceEventId: input.sourceEventId,
+        sourceEventId,
+        sourceDeltaId,
         sourceChangeIds: sourceChanges.map((change) => change.changeId),
         evidencePredicates:
           input.decision.kind === "reconciled"
@@ -2693,6 +2782,7 @@ export class SemanticWorkspace {
     return this.runMutation("commit", input, request, () => {
       const before = this.deps.store.workingChain(input.contextId, MAX_WORKING_APPLICATIONS);
       const derivedSources = this.integrationSourceEventIds(before.applicationIds);
+      const derivedDeltaSources = this.integrationSourceDeltaIds(before.applicationIds);
       const explicitSources = [...new Set(input.integratesEventIds ?? [])].sort(
         compareUtf16CodeUnits
       );
@@ -2725,12 +2815,30 @@ export class SemanticWorkspace {
           );
         }
       }
+      for (const deltaId of derivedDeltaSources) {
+        const delta = this.deps.store.externalDelta(deltaId);
+        if (!delta || delta.status !== "active") {
+          throw new SemanticVcsError("InvalidReference", `External delta ${deltaId} is not active`);
+        }
+        const comparison = this.integrationComparisonForDelta(
+          asState(input.expectedWorkingHead),
+          delta
+        );
+        if (comparison.unaccountedChangeIds.length) {
+          throw new SemanticVcsError(
+            "IntegrationIncomplete",
+            `Integration of external delta ${deltaId} is incomplete`,
+            { deltaId, unaccountedChangeIds: comparison.unaccountedChangeIds }
+          );
+        }
+      }
       const committed = this.deps.store.commit({
         contextId: input.contextId,
         expectedWorkingHead: asState(input.expectedWorkingHead),
         commandId: input.commandId,
         message: input.message ?? null,
         integratesEventIds: integrationSourceEventIds,
+        integratesDeltaIds: derivedDeltaSources,
         maxApplications: MAX_WORKING_APPLICATIONS,
       });
       const result = {
@@ -2738,6 +2846,7 @@ export class SemanticWorkspace {
         event: { kind: "event", eventId: committed.event.eventId },
         committedApplicationIds: before.applicationIds,
         integrationSourceEventIds,
+        integrationSourceDeltaIds: derivedDeltaSources,
       };
       const effect = this.queueMaterialization(
         input.contextId,
@@ -2836,6 +2945,111 @@ export class SemanticWorkspace {
     });
   }
 
+  private registerExternalDelta(
+    input: VcsRegisterExternalDeltaInput,
+    request: SemanticDispatchRequest
+  ): SemanticDispatchResult {
+    return this.runMutation("registerExternalDelta", input, request, () => {
+      this.deps.store.assertExpectedWorking(input.contextId, asState(input.expectedWorkingHead));
+      const root = this.deps.store.stateRoot(asState(input.expectedWorkingHead));
+      const repository = this.deps.store.facts.member(root, input.repositoryId);
+      if (repository?.presence !== "present" || repository.repoPath !== input.repoPath) {
+        throw new SemanticVcsError(
+          "InvalidReference",
+          `External delta target ${input.repositoryId} is not ${input.repoPath}`
+        );
+      }
+      for (const file of [...input.oldFiles, ...input.newFiles]) {
+        assertSemanticVcsPathAdmissible(file.path);
+      }
+      const hashes = [
+        ...new Set([...input.oldFiles, ...input.newFiles].map((file) => file.contentHash)),
+      ].sort(compareUtf16CodeUnits);
+      const effect = this.deps.store.queueEffect({
+        scopeKind: "context",
+        scopeId: input.contextId,
+        commandId: input.commandId,
+        kind: "observe-content",
+        payload: {
+          method: "registerExternalDelta",
+          representation: "descriptor",
+          input: input as unknown as Row,
+          contextIntegrity: request.ingress.contextIntegrity as unknown as Row,
+          files: hashes.map((contentHash) => ({ contentHash })),
+        },
+      });
+      const result = { contextId: input.contextId };
+      this.deps.store.finishCommand({
+        scopeKind: "context",
+        scopeId: input.contextId,
+        commandId: input.commandId,
+        result,
+        effectPending: true,
+      });
+      return { kind: "effects-pending", result, effects: [effect] };
+    });
+  }
+
+  private externalDeltaLifecycle(
+    method: "supersedeExternalDelta" | "finalizeExternalDelta",
+    input: VcsExternalDeltaLifecycleInput,
+    request: SemanticDispatchRequest
+  ): SemanticDispatchResult {
+    return this.runMutation(method, input, request, () => {
+      this.deps.store.assertExpectedWorking(input.contextId, asState(input.expectedWorkingHead));
+      const delta = this.deps.store.externalDelta(input.deltaId);
+      if (!delta) throw new SemanticVcsError("InvalidReference", `Unknown delta ${input.deltaId}`);
+      if (delta.ownerContextId !== input.contextId) {
+        throw new SemanticVcsError(
+          "InvalidReference",
+          `External delta ${input.deltaId} belongs to context ${delta.ownerContextId}`
+        );
+      }
+      const targetStatus =
+        method === "finalizeExternalDelta" ? ("finalized" as const) : ("superseded" as const);
+      if (delta.status === targetStatus) {
+        const result = this.publicExternalDelta(delta);
+        this.deps.store.finishCommand({
+          scopeKind: "context",
+          scopeId: input.contextId,
+          commandId: input.commandId,
+          result,
+          effectPending: false,
+        });
+        return { kind: "complete", result };
+      }
+      if (delta.status !== "active") {
+        throw new SemanticVcsError(
+          "InvalidReference",
+          `External delta ${input.deltaId} is already ${delta.status}`
+        );
+      }
+      if (method === "finalizeExternalDelta") {
+        const comparison = this.integrationComparisonForDelta(
+          asState(input.expectedWorkingHead),
+          delta
+        );
+        if (comparison.unaccountedChangeIds.length) {
+          throw new SemanticVcsError(
+            "IntegrationIncomplete",
+            `External delta ${input.deltaId} still has undecided changes`,
+            { unaccountedChangeIds: comparison.unaccountedChangeIds }
+          );
+        }
+      }
+      const updated = this.deps.store.setExternalDeltaStatus(input.deltaId, "active", targetStatus);
+      const result = this.publicExternalDelta(updated);
+      this.deps.store.finishCommand({
+        scopeKind: "context",
+        scopeId: input.contextId,
+        commandId: input.commandId,
+        result,
+        effectPending: false,
+      });
+      return { kind: "complete", result };
+    });
+  }
+
   private planImportSnapshot(
     input: VcsImportSnapshotInput,
     receipt: Row
@@ -2901,6 +3115,44 @@ export class SemanticWorkspace {
         "Content observation is incomplete",
         { contract: "import-observation" }
       );
+    }
+    const declaredCanonicalSnapshot = input.source.snapshot;
+    if (declaredCanonicalSnapshot) {
+      const repository = input.repositories[0];
+      if (!repository || input.repositories.length !== 1) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          "Canonical external snapshot verification requires exactly one repository"
+        );
+      }
+      const computedCanonicalSnapshot = canonicalSnapshotDigest(
+        repository.files.map((file) => {
+          const descriptor = observed.get(file.contentHash);
+          if (!descriptor) {
+            throw internalSemanticIntegrityFailure(
+              "EffectMismatch",
+              `Content observation lacks ${file.contentHash}`,
+              { contentHash: file.contentHash, contract: "import-observation" }
+            );
+          }
+          return {
+            path: file.path,
+            mode: file.mode === 0o755 ? 0o100755 : 0o100644,
+            size: descriptor.byteLength,
+            contentHash: file.contentHash,
+          };
+        })
+      );
+      if (computedCanonicalSnapshot !== declaredCanonicalSnapshot) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          "Imported descriptors do not match the declared canonical snapshot",
+          {
+            declaredCanonicalSnapshot,
+            computedCanonicalSnapshot,
+          }
+        );
+      }
     }
     const root = this.deps.store.stateRoot(asState(input.expectedWorkingHead));
     const changes: MutationDraft["changes"] = [];
@@ -3046,8 +3298,17 @@ export class SemanticWorkspace {
     }
     const externalSnapshot: VcsExternalSnapshot = {
       sourceKind: input.source.kind,
-      sourceUri: input.source.uri,
-      snapshotRevision: input.source.snapshotRevision,
+      sourceUri: input.source.kind === "git" ? input.source.url : input.source.uri,
+      snapshotRevision:
+        input.source.kind === "git" ? input.source.commit : input.source.snapshotRevision,
+      ...(input.source.kind === "git"
+        ? {
+            sourceSubdir: input.source.subdir ?? null,
+            canonicalSnapshot: input.source.snapshot,
+          }
+        : input.source.snapshot
+          ? { canonicalSnapshot: input.source.snapshot }
+          : {}),
       snapshotDigest,
       targetRepositoryIds: [...new Set(importedRepositoryIds)].sort(compareUtf16CodeUnits),
     };
@@ -3061,6 +3322,235 @@ export class SemanticWorkspace {
       repositoryResults,
     };
     return { draft, importedRepositoryIds, externalSnapshot };
+  }
+
+  private persistExternalDelta(input: VcsRegisterExternalDeltaInput, receipt: Row): Row {
+    const rows = receipt["files"];
+    if (!Array.isArray(rows)) {
+      throw internalSemanticIntegrityFailure("EffectMismatch", "Delta observation lacks files");
+    }
+    const observed = new Map<string, ObservedContentDescriptor>();
+    for (const value of rows) {
+      const row = value as Row;
+      const contentHash = String(row["contentHash"] ?? "");
+      observed.set(contentHash, {
+        contentKind: row["contentKind"] as "text" | "bytes",
+        byteLength: Number(row["byteLength"]),
+        coordinateExtent: Number(row["coordinateExtent"]),
+      });
+    }
+    const digestFor = (files: typeof input.oldFiles) =>
+      canonicalSnapshotDigest(
+        files.map((file) => {
+          const descriptor = observed.get(file.contentHash);
+          if (!descriptor) {
+            throw internalSemanticIntegrityFailure(
+              "EffectMismatch",
+              `Delta observation lacks ${file.contentHash}`
+            );
+          }
+          return {
+            path: file.path,
+            mode: file.mode === 0o755 ? 0o100755 : 0o100644,
+            size: descriptor.byteLength,
+            contentHash: file.contentHash,
+          };
+        })
+      );
+    const oldSnapshot = digestFor(input.oldFiles);
+    const newSnapshot = digestFor(input.newFiles);
+    if (oldSnapshot !== input.oldSource.snapshot || newSnapshot !== input.newSource.snapshot) {
+      throw new SemanticVcsError(
+        "IntegrityFailure",
+        "External delta descriptors do not match their declared snapshots"
+      );
+    }
+    const deltaId = compactId("external-delta:v1", {
+      ownerContextId: input.contextId,
+      repositoryId: input.repositoryId,
+      oldSnapshot,
+      newSnapshot,
+    });
+    const workUnitIdValue = compactId("work-unit", {
+      kind: "external-unapplied",
+      deltaId,
+    });
+    const oldByPath = new Map(input.oldFiles.map((file) => [file.path, file]));
+    const newByPath = new Map(input.newFiles.map((file) => [file.path, file]));
+    const paths = [...new Set([...oldByPath.keys(), ...newByPath.keys()])].sort(
+      compareUtf16CodeUnits
+    );
+    const root = this.deps.store.stateRoot(asState(input.expectedWorkingHead));
+    const changes: ChangeRecord[] = [];
+    for (const [operation, path] of paths.entries()) {
+      const oldFile = oldByPath.get(path);
+      const newFile = newByPath.get(path);
+      if (
+        oldFile &&
+        newFile &&
+        oldFile.contentHash === newFile.contentHash &&
+        oldFile.mode === newFile.mode
+      ) {
+        continue;
+      }
+      const point = this.deps.store.facts.fileAtPath(root, input.repositoryId, path);
+      const fileId =
+        point?.state.fileId ??
+        compactId("external-file", { deltaId, repositoryId: input.repositoryId, path });
+      const endpoint = (file: typeof oldFile): Row | null => {
+        if (!file) return null;
+        const descriptor = observed.get(file.contentHash)!;
+        return {
+          kind: "file",
+          fileId,
+          repositoryId: input.repositoryId,
+          repoPath: input.repoPath,
+          path,
+          contentHash: file.contentHash,
+          mode: file.mode,
+          ...descriptor,
+        };
+      };
+      const base = oldFile
+        ? endpoint(oldFile)
+        : {
+            kind: "missing",
+            fileId,
+            repositoryId: input.repositoryId,
+            repoPath: input.repoPath,
+            path,
+          };
+      const result = newFile
+        ? endpoint(newFile)
+        : {
+            kind: "missing",
+            fileId,
+            repositoryId: input.repositoryId,
+            repoPath: input.repoPath,
+            path,
+          };
+      const kind = !oldFile
+        ? "file-create"
+        : !newFile
+          ? "file-delete"
+          : oldFile.contentHash === newFile.contentHash
+            ? "file-mode"
+            : "content-replace";
+      const withoutIdentity = {
+        workUnitId: workUnitIdValue,
+        operation,
+        ordinal: 0,
+        kind,
+        source: null,
+        base,
+        result,
+        payload: kind === "file-mode" ? { mode: newFile!.mode } : {},
+      };
+      const changeId = changeIdentity(withoutIdentity);
+      changes.push({
+        ...withoutIdentity,
+        changeId,
+        effectDigest: compactId("change-effect", {
+          kind,
+          base,
+          result,
+          payload: withoutIdentity.payload,
+        }),
+      });
+    }
+    const createdAt = this.deps.now();
+    const workUnit: WorkUnitRecord = {
+      workUnitId: workUnitIdValue,
+      commandId: input.commandId,
+      kind: "external-unapplied",
+      authoredChangeIds: changes.map((change) => change.changeId),
+      intentSummary: input.intentSummary ?? null,
+      externalSnapshot: null,
+      contentClass: "external",
+      externalKeys: [
+        `repo:${this.externalSourceIdentity(input.oldSource)}`,
+        `repo:${this.externalSourceIdentity(input.newSource)}`,
+      ].sort(compareUtf16CodeUnits),
+      normalizationProtocol: NORMALIZATION_PROTOCOL,
+      createdAt,
+    };
+    const record: ExternalDeltaRecord = {
+      deltaId,
+      workUnitId: workUnitIdValue,
+      ownerContextId: input.contextId,
+      repositoryId: input.repositoryId,
+      repoPath: input.repoPath,
+      targetState: asState(input.expectedWorkingHead),
+      oldSource: input.oldSource as unknown as Row,
+      newSource: input.newSource as unknown as Row,
+      oldSnapshot,
+      newSnapshot,
+      inputDigest: compactId("external-delta-input", {
+        repositoryId: input.repositoryId,
+        repoPath: input.repoPath,
+        oldSource: input.oldSource,
+        newSource: input.newSource,
+        oldFiles: input.oldFiles,
+        newFiles: input.newFiles,
+        supersedesDeltaId: input.supersedesDeltaId ?? null,
+      }),
+      status: "active",
+      supersededByDeltaId: null,
+      createdAt,
+    };
+    const existing = this.deps.store.externalDelta(deltaId);
+    if (existing) {
+      return this.publicExternalDelta(
+        this.deps.store.registerExternalDelta(record, workUnit, changes)
+      );
+    }
+    if (input.supersedesDeltaId) {
+      const superseded = this.deps.store.externalDelta(input.supersedesDeltaId);
+      if (!superseded || superseded.ownerContextId !== input.contextId) {
+        throw new SemanticVcsError(
+          "InvalidReference",
+          `External delta ${input.supersedesDeltaId} is not owned by context ${input.contextId}`
+        );
+      }
+      this.deps.store.setExternalDeltaStatus(
+        input.supersedesDeltaId,
+        "active",
+        "superseded",
+        deltaId
+      );
+    }
+    return this.publicExternalDelta(
+      this.deps.store.registerExternalDelta(record, workUnit, changes)
+    );
+  }
+
+  private externalSourceIdentity(source: VcsRegisterExternalDeltaInput["oldSource"]): string {
+    return source.kind === "git"
+      ? `${source.url}@${source.commit}${source.subdir ? `:${source.subdir}` : ""}`
+      : `${source.uri}@${source.snapshotRevision}`;
+  }
+
+  private publicExternalDelta(delta: ExternalDeltaRecord): Row {
+    const changeIds = (
+      this.deps.sql
+        .exec(
+          `SELECT change_id FROM gad_changes WHERE work_unit_id = ?
+           ORDER BY operation, ordinal`,
+          delta.workUnitId
+        )
+        .toArray() as Row[]
+    ).map((row) => String(row["change_id"]));
+    return {
+      deltaId: delta.deltaId,
+      workUnitId: delta.workUnitId,
+      repositoryId: delta.repositoryId,
+      repoPath: delta.repoPath,
+      oldSnapshot: delta.oldSnapshot,
+      newSnapshot: delta.newSnapshot,
+      changeCount: changeIds.length,
+      changeIds: changeIds.slice(0, 200),
+      status: delta.status,
+    };
   }
 
   private assertImportRepositoryTargets(input: VcsImportSnapshotInput): void {
@@ -3244,7 +3734,15 @@ export class SemanticWorkspace {
   }
 
   private compare(input: VcsCompareInput, request: SemanticDispatchRequest): Row {
-    const comparison = this.integrationComparison(asState(input.target), input.sourceEventId);
+    const sourceEventId = "sourceEventId" in input ? input.sourceEventId : null;
+    const sourceDeltaId = "sourceDeltaId" in input ? input.sourceDeltaId : null;
+    const delta = sourceDeltaId ? this.deps.store.externalDelta(sourceDeltaId) : null;
+    if (sourceDeltaId && !delta) {
+      throw new SemanticVcsError("InvalidReference", `Unknown external delta ${sourceDeltaId}`);
+    }
+    const comparison = sourceEventId
+      ? this.integrationComparison(asState(input.target), sourceEventId)
+      : this.integrationComparisonForDelta(asState(input.target), delta!);
     const selected = input.disposition
       ? comparison.changes.filter(({ disposition }) => disposition.status === input.disposition)
       : comparison.changes;
@@ -3276,13 +3774,13 @@ export class SemanticWorkspace {
     };
     const cursorBasis = {
       target: input.target,
-      sourceEventId: input.sourceEventId,
+      ...(sourceEventId ? { sourceEventId } : { sourceDeltaId }),
       view: input.view,
     };
     const offset = cursorOffset(input.cursor, cursorBasis);
     return {
       target: input.target,
-      sourceEventId: input.sourceEventId,
+      ...(sourceEventId ? { sourceEventId } : { sourceDeltaId }),
       resolution: {
         complete: comparison.unaccountedChangeIds.length === 0,
         remainingChangeCount: comparison.unaccountedChangeIds.length,
@@ -5092,7 +5590,10 @@ export class SemanticWorkspace {
     );
     const base = {
       decisionId,
-      sourceState: { kind: "event", eventId: String(row["source_event_id"]) },
+      sourceState:
+        row["source_delta_id"] == null
+          ? { kind: "event", eventId: String(row["source_event_id"]) }
+          : { kind: "external-delta", deltaId: String(row["source_delta_id"]) },
       targetBasis:
         row["target_state_kind"] === "event"
           ? { kind: "event", eventId: String(row["target_state_id"]) }
@@ -5244,6 +5745,61 @@ export class SemanticWorkspace {
     return {
       targetState,
       sourceEventId,
+      sourceDeltaId: null,
+      changes,
+      unaccountedChangeIds: changes
+        .filter(
+          ({ disposition }) =>
+            disposition.status === "actionable" || disposition.status === "already-satisfied"
+        )
+        .map(({ change }) => change.changeId),
+    };
+  }
+
+  private integrationComparisonForDelta(
+    targetState: StateNodeRef,
+    delta: ExternalDeltaRecord
+  ): IntegrationComparison {
+    const sourceChanges = (
+      this.deps.sql
+        .exec(
+          `SELECT change_id FROM gad_changes WHERE work_unit_id = ?
+           ORDER BY operation, ordinal`,
+          delta.workUnitId
+        )
+        .toArray() as Row[]
+    ).map((row) => this.changeRequired(String(row["change_id"])));
+    const target = this.firstParentLineage(targetState);
+    const targetChanges = this.changesInApplications(target.applicationIds);
+    const targetActiveChangeIds = this.activeChangeIds(targetChanges);
+    const decisions = this.reachableDecisionsBySourceChange(target.applicationIds);
+    const changes = sourceChanges.map((change): ComparedSourceChange => {
+      let disposition: ComparedDisposition;
+      if ((decisions.get(change.changeId)?.length ?? 0) > 0) {
+        disposition = { status: "accounted", decisionIds: decisions.get(change.changeId)! };
+      } else {
+        const evidence = this.resultEvidence(change).filter((predicate) =>
+          this.predicateHolds(targetState, predicate)
+        );
+        if (this.changeResultHolds(targetState, change) && evidence.length > 0) {
+          disposition = { status: "already-satisfied", evidence };
+        } else {
+          const unmet = this.changePrerequisites(change).filter(
+            (condition) => !this.prerequisiteHolds(targetState, condition)
+          );
+          disposition =
+            unmet.length === 0
+              ? { status: "actionable", applicability: "applicable" }
+              : { status: "actionable", applicability: "conflicting" };
+        }
+      }
+      if (targetActiveChangeIds.has(change.changeId)) disposition = { status: "shared" };
+      return { change, disposition };
+    });
+    return {
+      targetState,
+      sourceEventId: null,
+      sourceDeltaId: delta.deltaId,
       changes,
       unaccountedChangeIds: changes
         .filter(
@@ -5266,10 +5822,11 @@ export class SemanticWorkspace {
       if (!event) throw new SemanticVcsError("IntegrityFailure", `Missing event ${eventId}`);
       if (event.kind === "integration-commit") {
         const sourceEventIds = event.parentEventIds.slice(1);
-        if (sourceEventIds.length === 0) {
+        const sourceDeltaIds = event.externalDeltaIds ?? [];
+        if (sourceEventIds.length === 0 && sourceDeltaIds.length === 0) {
           throw new SemanticVcsError(
             "IntegrityFailure",
-            `Integration event ${eventId} has no source parent`
+            `Integration event ${eventId} has no source`
           );
         }
         for (const sourceEventId of sourceEventIds) {
@@ -5280,6 +5837,26 @@ export class SemanticWorkspace {
               `Integration event ${eventId} no longer validates source ${sourceEventId}`,
               {
                 sourceEventId,
+                unaccountedChangeIds: comparison.unaccountedChangeIds,
+              }
+            );
+          }
+        }
+        for (const sourceDeltaId of sourceDeltaIds) {
+          const delta = this.deps.store.externalDelta(sourceDeltaId);
+          if (!delta) {
+            throw new SemanticVcsError(
+              "IntegrityFailure",
+              `Integration event ${eventId} references missing external delta ${sourceDeltaId}`
+            );
+          }
+          const comparison = this.integrationComparisonForDelta({ kind: "event", eventId }, delta);
+          if (comparison.unaccountedChangeIds.length > 0) {
+            throw new SemanticVcsError(
+              "IntegrationIncomplete",
+              `Integration event ${eventId} no longer validates external delta ${sourceDeltaId}`,
+              {
+                sourceDeltaId,
                 unaccountedChangeIds: comparison.unaccountedChangeIds,
               }
             );
@@ -5426,11 +6003,31 @@ export class SemanticWorkspace {
                ON application.work_unit_id = decision.work_unit_id
              JOIN json_each(?) selected
                ON application.application_id = CAST(selected.value AS TEXT)
+            WHERE decision.source_event_id IS NOT NULL
             ORDER BY decision.source_event_id`,
           canonicalJson(applicationIds)
         )
         .toArray() as Row[]
     ).map((row) => String(row["source_event_id"]));
+  }
+
+  private integrationSourceDeltaIds(applicationIds: readonly string[]): string[] {
+    if (applicationIds.length === 0) return [];
+    return (
+      this.deps.sql
+        .exec(
+          `SELECT DISTINCT decision.source_delta_id
+             FROM gad_integration_decisions decision
+             JOIN gad_work_unit_applications application
+               ON application.work_unit_id = decision.work_unit_id
+             JOIN json_each(?) selected
+               ON application.application_id = CAST(selected.value AS TEXT)
+            WHERE decision.source_delta_id IS NOT NULL
+            ORDER BY decision.source_delta_id`,
+          canonicalJson(applicationIds)
+        )
+        .toArray() as Row[]
+    ).map((row) => String(row["source_delta_id"]));
   }
 
   private counteractedChangeIds(change: ChangeRecord): string[] {
@@ -5773,6 +6370,7 @@ export class SemanticWorkspace {
             kind: event.kind,
             workspaceFactRootId: event.resultWorkspaceFactRootId,
             parentEventIds: event.parentEventIds,
+            externalDeltaIds: event.externalDeltaIds ?? [],
             applicationIds: event.applicationIds,
             decisionIds: this.decisionIdsInApplications(event.applicationIds),
             message: event.message,
@@ -5780,6 +6378,11 @@ export class SemanticWorkspace {
             createdAt: event.createdAt,
           },
         };
+      }
+      case "external-delta": {
+        const delta = this.deps.store.externalDelta(String(node["deltaId"]));
+        if (!delta) throw new SemanticVcsError("InvalidReference", "Unknown external delta");
+        return { kind: "external-delta", value: this.publicExternalDelta(delta) };
       }
       case "application": {
         const application = this.deps.store.application(String(node["applicationId"]));
@@ -5894,6 +6497,13 @@ export class SemanticWorkspace {
                     sourceKind: storedExternalSnapshot["sourceKind"],
                     sourceUri: storedExternalSnapshot["sourceUri"],
                     snapshotRevision: storedExternalSnapshot["snapshotRevision"],
+                    ...(typeof storedExternalSnapshot["sourceSubdir"] === "string" ||
+                    storedExternalSnapshot["sourceSubdir"] === null
+                      ? { sourceSubdir: storedExternalSnapshot["sourceSubdir"] }
+                      : {}),
+                    ...(typeof storedExternalSnapshot["canonicalSnapshot"] === "string"
+                      ? { canonicalSnapshot: storedExternalSnapshot["canonicalSnapshot"] }
+                      : {}),
                     snapshotDigest: storedExternalSnapshot["snapshotDigest"],
                     targetRepositoryIds,
                   },
@@ -6533,6 +7143,11 @@ export class SemanticWorkspace {
   ): PositionedNeighborEdge[] {
     const kind = String(node["kind"]);
     const after = parseNeighborCursor(cursor, { root: node });
+    if (kind === "external-delta") {
+      const delta = this.deps.store.externalDelta(String(node["deltaId"]));
+      if (!delta) throw new SemanticVcsError("InvalidReference", "Unknown external delta");
+      return [];
+    }
     if (kind === "event") return this.eventNeighborEdges(node, after, limit);
     if (kind === "application") return this.applicationNeighborEdges(node, after, limit);
     if (kind === "applied-change") return this.appliedChangeNeighborEdges(node, after, limit);

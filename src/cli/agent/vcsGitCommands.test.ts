@@ -124,18 +124,86 @@ describe("vcs git CLI", () => {
     ).resolves.toBe(0);
 
     const output = logLines(log).join("\n");
+    expect(output).toContain("observed commit: abc123");
+    expect(output).toContain("semantic snapshot changed: yes");
     expect(output).toContain("semantic candidate: event:import in context context:import");
     expect(output).toContain("compare and incrementally integrate this candidate");
+    expect(output).toContain("run checks");
     expect(output).toContain("publish protected main with `vibestudio vcs push`");
+    expect(output).toContain("protected main is unchanged");
     expect(output).not.toContain("vibestudio vcs git push --repo");
+  });
+
+  it("renders integration-required status with exact candidate coordinates", async () => {
+    fixture.result = [
+      {
+        repoPath: "projects/demo",
+        remote: "origin",
+        branch: "main",
+        autoPush: false,
+        state: "integration-required",
+        candidate: { contextId: "context:import", eventId: "event:import" },
+      },
+    ];
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await expect(run("status", "--repo", "projects/demo")).resolves.toBe(1);
+
+    const output = logLines(log).join("\n");
+    expect(output).toContain("INTEGRATION REQUIRED");
+    expect(output).toContain("candidate event:import in context:import");
+    expect(output).toContain("protected main unchanged");
+    expect(output).toContain("compare, integrate, check, commit");
+  });
+
+  it("reports exact pull observation and the complete candidate workflow", async () => {
+    fixture.result = {
+      remote: "origin",
+      branch: "release",
+      observedCommit: "abcdef0123456789",
+      changed: true,
+      behindBy: 1,
+      aheadBy: 0,
+      remoteBranchExists: true,
+      incoming: [{ sha: "abcdef0123456789", summary: "Incoming change" }],
+      imported: {
+        contextId: "context:pull",
+        eventId: "event:pull",
+        changed: true,
+        semanticEvidence: {
+          applicationId: "application:pull",
+          workUnitId: "work:pull",
+          externalSnapshot: {
+            sourceKind: "git",
+            sourceUri: "https://example.test/demo.git",
+            snapshotRevision: "abcdef0123456789",
+            snapshotDigest: "snapshot:pull",
+            targetRepositoryIds: ["repository:demo"],
+          },
+        },
+      },
+    };
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await expect(run("pull", "--repo", "projects/demo")).resolves.toBe(0);
+
+    const output = logLines(log).join("\n");
+    expect(output).toContain("observed origin/release at abcdef0123456789");
+    expect(output).toContain("semantic snapshot changed: yes");
+    expect(output).toContain("candidate event:pull in context context:pull");
+    expect(output).toContain("protected main is unchanged");
+    expect(output).toContain("compare and incrementally integrate");
+    expect(output).toContain("run checks");
+    expect(output).toContain("commit the integration");
+    expect(output).toContain("vibestudio vcs push");
   });
 
   it.each([
     {
       args: ["enable", "--repo", "projects/demo", "--anonymous"],
       method: "gitInterop.setUpstream",
-      expected: ["projects/demo", { remote: "origin", autoPush: false, credentialId: null }],
-      result: { projects: { demo: { remote: "origin", credentialId: null } } },
+      expected: ["projects/demo", { remote: "origin", autoPush: false }],
+      result: { projects: { demo: { remote: "origin" } } },
     },
     {
       args: ["import", "https://example.test/demo.git", "--path", "projects/demo", "--anonymous"],
@@ -144,7 +212,7 @@ describe("vcs git CLI", () => {
         {
           path: "projects/demo",
           remote: { name: "origin", url: "https://example.test/demo.git" },
-          credentialId: null,
+          credentialIdOverride: null,
         },
       ],
       result: {
@@ -191,8 +259,7 @@ describe("vcs git CLI", () => {
     fixture.result = {
       exported: 0,
       headCommit: null,
-      pushed: false,
-      status: "empty",
+      outcome: "empty",
     };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
@@ -206,8 +273,7 @@ describe("vcs git CLI", () => {
     fixture.result = {
       exported: 1,
       headCommit: "abcdef012345",
-      pushed: true,
-      status: "in-sync",
+      outcome: "pushed",
       overwrites: {
         relationship: "unrelated",
         count: null,
@@ -232,8 +298,7 @@ describe("vcs git CLI", () => {
       result: {
         exported: 1,
         headCommit: "abcdef012345",
-        pushed: true,
-        status: "in-sync",
+        outcome: "pushed",
         clobberedLocalEdits: ["src/local.ts"],
       },
     },
@@ -263,8 +328,7 @@ describe("vcs git CLI", () => {
     fixture.result = {
       exported: 1,
       headCommit: "abcdef012345",
-      pushed: true,
-      status: "in-sync",
+      outcome: "pushed",
       clobberedLocalEdits: ["src/local.ts"],
     };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);

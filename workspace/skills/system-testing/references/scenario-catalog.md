@@ -20,7 +20,7 @@ should not be copied into prompts or maintained as parallel prose constants.
   counteractions, causal/blame walks, honest import boundaries (including mixed
   native-edited and untouched imported spans), freshness, and idempotency.
 - `git-interop`: fresh external status, credential selection, canonical
-  imports, commit mappings, and disposable-remote lifecycles that require
+  imports and commit mappings that require
   managed edit → semantic commit → protected publication → Git export/push;
   this is separate from workspace VCS.
 - `panels`, `interaction-surfaces`, `cdp-gad-diagnostics`: panel lifecycle,
@@ -30,12 +30,6 @@ should not be copied into prompts or maintained as parallel prose constants.
   services, RPC, state, and agent runtime behavior.
 - `build`, `extensions-surface`, `project-lifecycle`: build provenance,
   extension invocation, scaffolding, fork/lifecycle work, and real unit launch.
-- `mobile`: full onboarding-to-Electron-provider installation and immediate
-  pairing through the adb-shell-only trusted provisioning entry point, sandboxed
-  mobile-debug extension discovery, scoped installation approval, installation
-  onto a real Android device/emulator, launch, post-install compatibility, and
-  paired-hub-device verification. Run the separate full mobile smoke for OTA
-  activation, panel rendering, restart, and recovery.
 - `approvals-permissions`, `credentials`, `oauth`, `webhooks`: authority and
   external-integration lifecycles, with synthetic/revoked fixtures.
 - `workspace`, `multi-user`, `notifications`: workspace state, identity,

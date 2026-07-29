@@ -65,6 +65,8 @@ export type { SkillEntry } from "../vcsHost/workspaceSkills.js";
 
 export interface WorkspaceServiceDeps {
   workspace: Workspace;
+  /** Opaque host-owned workspace identity; unlike config.id this exists for every workspace. */
+  workspaceId?: string;
   /** User-facing catalog name. Falls back to config.id for standalone tests/hosts. */
   activeWorkspaceName?: string;
   treeScanner?: WorkspaceTreeScanner;
@@ -540,18 +542,24 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       // Reads
       // -----------------------------------------------------------------
 
-      getInfo: () => ({
-        path: workspace.path,
-        statePath: workspace.statePath,
-        contextProjectionsPath: workspace.contextProjectionsPath,
-        config: deps.getConfig(),
-      }),
+      getInfo: () => {
+        const config = deps.getConfig();
+        const name = activeWorkspaceName();
+        return {
+          id: deps.workspaceId ?? config.id ?? name,
+          name,
+          path: workspace.path,
+          statePath: workspace.statePath,
+          contextProjectionsPath: workspace.contextProjectionsPath,
+          config,
+        };
+      },
 
       getActive: () => activeWorkspaceName(),
 
       getConfig: () => deps.getConfig(),
 
-      validateConfig: (_ctx, [content]) => {
+      validateConfig: async (_ctx, [content]) => {
         parseWorkspaceConfigContentWithId(content, deps.getConfig().id);
         return { valid: true as const };
       },

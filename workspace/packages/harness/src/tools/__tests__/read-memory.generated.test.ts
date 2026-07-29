@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type {
-  VcsReadMemoryEpisode,
-  VcsReadMemoryResult,
-} from "@vibestudio/service-schemas/vcs";
+import type { VcsReadMemoryEpisode, VcsReadMemoryResult } from "@vibestudio/service-schemas/vcs";
 import { renderReadMemoryBlock } from "../read-memory.js";
 
 const HASH = "a".repeat(64);
 
-function episode(index: number, overrides: Partial<VcsReadMemoryEpisode> = {}): VcsReadMemoryEpisode {
+function episode(
+  index: number,
+  overrides: Partial<VcsReadMemoryEpisode> = {}
+): VcsReadMemoryEpisode {
   const start = index * 17;
   return {
     ranges: [{ start, end: start + 9 }],
@@ -125,6 +125,8 @@ describe("generated read-memory renderer corpus", () => {
                 sourceKind: "git",
                 sourceUri: `https://example.test/library-${index}.git`,
                 snapshotRevision: `revision-${index}`,
+                sourceSubdir: null,
+                canonicalSnapshot: `v1-sha256:${"c".repeat(64)}`,
                 snapshotDigest: `snapshot:${index}`,
                 targetRepositoryIds: ["repository:fixture"],
               }
@@ -154,9 +156,7 @@ describe("generated read-memory renderer corpus", () => {
     expect(first).toContain('original request "User requested invariant 1"');
     expect(first).toContain('committed as "Commit preserves invariant 0"');
     expect(first).toContain("decision reconciled");
-    expect(first).toContain(
-      "external source git https://example.test/library-0.git @ revision-0"
-    );
+    expect(first).toContain("external source git https://example.test/library-0.git @ revision-0");
     expect(first).toContain("earlier file history");
     expect(first).toContain(
       "more history exists; continue from an exact target above with provenance"

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runtimeContextLengthFor } from "./runtime-profiles.js";
-import type { ModelRecord } from "./types.js";
+import type { ModelRecord } from "@workspace/model-catalog/localModels";
 
 describe("local model runtime profiles", () => {
   it("uses the context window declared by the model", () => {

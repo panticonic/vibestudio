@@ -20,6 +20,7 @@ const repositoryRef = {
   state: mainState,
   repositoryId: "repository:meta",
 };
+const withProtectedMainMutation = <T>(operation: () => Promise<T>): Promise<T> => operation();
 
 function configReader(initialYaml: string) {
   return vi.fn<(method: string, input: unknown) => Promise<unknown>>(
@@ -129,6 +130,7 @@ describe("workspaceConfigWriter", () => {
     }));
     const ensureContext = vi.fn(async (_contextId: string) => mainState);
     const vcs = {
+      withProtectedMainMutation,
       ensureContext,
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,
@@ -202,6 +204,7 @@ describe("workspaceConfigWriter", () => {
     }));
     const ensureContext = vi.fn(async () => mainState);
     const vcs = {
+      withProtectedMainMutation,
       ensureContext,
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,
@@ -253,6 +256,7 @@ describe("workspaceConfigWriter", () => {
       appliedAt: "2026-07-15T12:00:00.000Z",
     }));
     const vcs = {
+      withProtectedMainMutation,
       ensureContext: vi.fn(async () => mainState),
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,
@@ -306,6 +310,7 @@ describe("workspaceConfigWriter", () => {
     }));
     const ensureContext = vi.fn(async (_contextId: string) => mainState);
     const vcs = {
+      withProtectedMainMutation,
       ensureContext,
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,
@@ -352,6 +357,7 @@ describe("workspaceConfigWriter", () => {
   it("does not author content when rendering is unchanged", async () => {
     const semanticCausalCall = configReader(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`);
     const vcs = {
+      withProtectedMainMutation,
       ensureContext: vi.fn(async () => mainState),
       dropContext: vi.fn(async () => undefined),
       semanticCausalCall,
@@ -383,6 +389,7 @@ describe("workspaceConfigWriter", () => {
     });
     const semanticCausalCall = configReader(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`);
     const vcs = {
+      withProtectedMainMutation,
       ensureContext: vi.fn(async () => mainState),
       dropContext: vi.fn(async () => {
         throw cleanupFailure;
@@ -428,9 +435,23 @@ describe("workspaceConfigWriter", () => {
     });
   });
 
-  it("keeps the hub identity out of persisted manifest content", () => {
+  it("rejects a persisted host identity instead of repairing legacy content", () => {
+    expect(() =>
+      renderWorkspaceConfigYaml(
+        `id: stale-checkout-name\nsystemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`,
+        {
+          id: WORKSPACE_ID,
+          systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+          defaultRepo: "projects/new",
+        },
+        WORKSPACE_ID
+      )
+    ).toThrow("`id` is resolved by the host");
+  });
+
+  it("keeps the resolved hub identity out of valid manifest content", () => {
     const rendered = renderWorkspaceConfigYaml(
-      `id: stale-checkout-name\nsystemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`,
+      `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`,
       {
         id: WORKSPACE_ID,
         systemEpoch: WORKSPACE_SYSTEM_EPOCH,

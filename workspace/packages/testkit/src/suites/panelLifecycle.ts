@@ -12,7 +12,9 @@ import { suite } from "../run.js";
 import { expect } from "../expect.js";
 import { openPanel, panelText, waitFor } from "../panels.js";
 
-export const TARGET_PANEL_SOURCE = "panels/spectrolite";
+// Chat is part of the bootable base contract. Feature panels own their own
+// lifecycle suites instead of becoming an implicit testkit dependency.
+export const TARGET_PANEL_SOURCE = "panels/chat";
 
 export const panelLifecycle = suite("panel-lifecycle", { timeoutMs: 60_000 })
   .test("panel tree is queryable and entries carry ids and titles", async () => {

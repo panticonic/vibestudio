@@ -463,9 +463,9 @@ function GitTab({
                     <Text size="1" style={{ fontFamily: "monospace", whiteSpace: "nowrap" }}>
                       {row.repoPath}
                     </Text>
-                    {row.lastError ? (
+                    {row.error ?? row.lastFailureReason ? (
                       <Text size="1" color="red" truncate as="div">
-                        {row.lastError}
+                        {row.error ?? row.lastFailureReason}
                       </Text>
                     ) : null}
                     {row.candidate ? (
@@ -482,9 +482,9 @@ function GitTab({
                       {row.remote && row.branch ? `${row.remote}/${row.branch}` : "-"}
                     </Text>
                   </Table.Cell>
-                  <Table.Cell>{row.aheadBy}</Table.Cell>
-                  <Table.Cell>{row.behindBy}</Table.Cell>
-                  <Table.Cell>{formatRelativeTime(row.lastPushedAt)}</Table.Cell>
+                  <Table.Cell>{row.aheadBy ?? "-"}</Table.Cell>
+                  <Table.Cell>{row.behindBy ?? "-"}</Table.Cell>
+                  <Table.Cell>{formatRelativeTime(row.lastSuccessfulPushAt)}</Table.Cell>
                   <Table.Cell>
                     <Switch
                       size="1"
@@ -1027,14 +1027,10 @@ function App() {
     setGovLoading(false);
   }
 
-  // fetchRemote only for the explicit Refresh action — after a push/pull the
-  // remote state is already known, and background reloads must stay local.
-  async function refreshGitStatus(showLoading = false, fetchRemote = false) {
+  async function refreshGitStatus(showLoading = false) {
     if (showLoading) setGitLoading(true);
     try {
-      const rows = await git.upstreamStatus(stateArgs.gitRepo ? [stateArgs.gitRepo] : [], {
-        fetch: fetchRemote,
-      });
+      const rows = await git.upstreamStatus(stateArgs.gitRepo ? [stateArgs.gitRepo] : []);
       setGitRows(rows);
     } catch (err) {
       setOperationFailed(true);
@@ -1193,7 +1189,7 @@ function App() {
   );
   usePaletteCommands(paletteCommands, (id) => {
     if (id === "gad-refresh") void refresh();
-    else if (id === "gad-git-refresh") void refreshGitStatus(true, true);
+    else if (id === "gad-git-refresh") void refreshGitStatus(true);
     else if (id === "gad-check-integrity") void checkIntegrity();
     else if (id === "gad-validate-hashes") void validateHashes();
     else if (id === "gad-replay-events") void replayEvents();
@@ -1219,14 +1215,10 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    // Fetch the remote once when the tab opens; the 10s poll stays local-only
-    // so an open panel never turns into steady network traffic.
-    const load = async (showLoading = false, fetchRemote = false) => {
+    const load = async (showLoading = false) => {
       if (showLoading) setGitLoading(true);
       try {
-        const rows = await git.upstreamStatus(stateArgs.gitRepo ? [stateArgs.gitRepo] : [], {
-          fetch: fetchRemote,
-        });
+        const rows = await git.upstreamStatus(stateArgs.gitRepo ? [stateArgs.gitRepo] : []);
         if (!cancelled) {
           setGitRows(rows);
           setGitPollError(null);
@@ -1239,7 +1231,7 @@ function App() {
         if (showLoading && !cancelled) setGitLoading(false);
       }
     };
-    void load(true, true);
+    void load(true);
     const timer = window.setInterval(() => void load(false), 10_000);
     return () => {
       cancelled = true;
@@ -1496,7 +1488,7 @@ function App() {
                         loading={gitLoading}
                         pendingRepo={gitPendingRepo}
                         pullPreview={gitPullPreview}
-                        onRefresh={() => void refreshGitStatus(true, true)}
+                        onRefresh={() => void refreshGitStatus(true)}
                         onPush={pushGit}
                         onForcePush={forcePushGit}
                         onPullPreview={previewPullGit}

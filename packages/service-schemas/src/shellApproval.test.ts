@@ -1,54 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { authorityRow } from "@vibestudio/shared/authority/authorityRows";
+import { shellApprovalMethods } from "./shellApproval.js";
 
-import { pendingUnitBatchApprovalSchema } from "./shellApproval.js";
-
-describe("shellApproval wire schema", () => {
-  it("round-trips reviewed unit authority metadata", () => {
-    const row = authorityRow({
-      capability: "notifications",
-      resource: { kind: "exact", key: "workspace" },
-      tier: "gated",
-      statement: "declared",
-      provenance: { source: "manifest" },
-    });
-    const parsed = pendingUnitBatchApprovalSchema.parse({
-      approvalId: "approval-1",
-      callerId: "system:workspace",
-      callerKind: "system",
-      repoPath: "workers/example",
-      effectiveVersion: "ev-1",
-      requestedAt: 1,
-      kind: "unit-batch",
-      trigger: "startup",
-      title: "Review workspace code",
-      description: "One unit needs approval.",
-      units: [
+describe("shellApproval service contract", () => {
+  it("accepts tree-formatted approval details exposed by host approvals", () => {
+    expect(
+      shellApprovalMethods.listPending.returns.parse([
         {
-          unitKind: "worker",
-          unitName: "@workspace-workers/example",
-          displayName: "Example",
-          source: { kind: "workspace-repo", repo: "workers/example", ref: "main" },
-          capabilities: [],
-          authority: {
-            requests: [
-              {
-                capability: "notifications",
-                resource: { kind: "exact", key: "workspace" },
-                tier: "gated",
-                evidence: "exact",
-              },
-            ],
-            rows: [row],
-            diff: { added: [row], removed: [], unchanged: [], retiered: [] },
-          },
+          approvalId: "approval-1",
+          callerId: "system:templates",
+          callerKind: "system",
+          repoPath: "meta",
+          effectiveVersion: "template:test",
+          requestedAt: 0,
+          kind: "userland",
+          subject: { id: "template:test" },
+          title: "Review template",
+          details: [{ label: "Affected parts", value: "projects/example", format: "tree" }],
+          promptOptions: "choices",
+          options: [{ value: "allow", label: "Allow" }],
         },
-      ],
-    });
-
-    expect(parsed.units[0]?.authority?.requests[0]).toMatchObject({
-      tier: "gated",
-      evidence: "exact",
-    });
+      ])
+    ).toHaveLength(1);
   });
 });

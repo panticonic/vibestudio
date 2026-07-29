@@ -28,7 +28,7 @@ import type {
 import type { PendingUnitBatchApproval, UnitBatchEntry } from "@vibestudio/shared/approvals";
 import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
 import {
-  parseWorkspaceConfigContentWithId,
+  readWorkspaceConfig,
   resolveDeclaredExtensions,
 } from "@vibestudio/workspace/configParser";
 import {
@@ -1624,12 +1624,19 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
 
   private async readDeclaredExtensionsFromCommit(commit: string): Promise<UnitDeclaration[]> {
     try {
-      const content = await this.deps.readWorkspaceFileAtState(commit, "meta/vibestudio.yml");
-      if (!content) return [];
       return resolveDeclaredExtensions(
-        parseWorkspaceConfigContentWithId(content, this.deps.workspaceId)
+        await readWorkspaceConfig(
+          {
+            readText: (filePath) => this.deps.readWorkspaceFileAtState(commit, filePath),
+          },
+          this.deps.workspaceId
+        )
       );
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[ExtensionHost] Cannot read declared extensions from workspace commit ${commit}; treating declarations as empty: ${message}`
+      );
       return [];
     }
   }

@@ -48,7 +48,10 @@ type PreflightResult = {
   decision: "allowed" | "acquirable" | "denied";
   leaves: PreflightLeaf[];
   wouldPrompt?: {
-    cardType: "permission.gated" | "permission.outside" | "confirm.critical";
+    cardType:
+      | "permission.gated"
+      | "permission.outside"
+      | "confirm.critical";
     renderedAction: string;
   };
 };

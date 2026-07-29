@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./index.tsx",
+    "./testkit-suite": "./testkit-suite.ts"
+  },
   "vibestudio": {
     "title": "Terminal",
     "entry": "index.tsx",
@@ -28,6 +32,15 @@
           "evidence": "intentional-broad"
         },
         {
+          "capability": "clipboard",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
           "capability": "context.boundary",
           "resource": {
             "kind": "prefix",
@@ -38,15 +51,6 @@
         },
         {
           "capability": "context.materialize",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "clipboard",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -115,6 +119,7 @@
     "@workspace-extensions/shell": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/react": "workspace:*",
+    "@workspace/testkit": "workspace:*",
     "@workspace/ui": "workspace:*",
     "@radix-ui/themes": "^3.2.1",
     "@radix-ui/react-icons": "^1.3.2",

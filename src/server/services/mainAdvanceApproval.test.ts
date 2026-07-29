@@ -65,6 +65,15 @@ function panelCaller() {
   });
 }
 
+function extensionCaller() {
+  return createVerifiedCaller("@workspace-extensions/template-composer", "extension", {
+    callerId: "@workspace-extensions/template-composer",
+    callerKind: "extension",
+    repoPath: "extensions/template-composer",
+    effectiveVersion: "ev-composer",
+  });
+}
+
 function gateDeps(opts: { decision?: "once" | "session" | "version" | "deny" } = {}) {
   const authorizeEffect = vi.fn(async (_ctx: ServiceContext, effect: HostAuthorityEffect) => {
     if ((opts.decision ?? "once") === "deny") {
@@ -78,6 +87,28 @@ function gateDeps(opts: { decision?: "once" | "session" | "version" | "deny" } =
 }
 
 describe("createMainAdvanceApprovalGate", () => {
+  it("gates extension-authored main advances as ordinary verified userland code", async () => {
+    const deps = gateDeps();
+    const gate = createMainAdvanceApprovalGate(deps);
+
+    await gate.approve(candidate({ caller: extensionCaller() }));
+
+    expect(deps.authorizeEffect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caller: expect.objectContaining({
+          runtime: {
+            id: "@workspace-extensions/template-composer",
+            kind: "extension",
+          },
+        }),
+      }),
+      expect.objectContaining({
+        capability: "workspace-main-advance",
+        resourceKey: "workspace-source-change:meta:main",
+      })
+    );
+  });
+
   it("approves main meta advances with the semantic unit-batch prompt", async () => {
     const deps = gateDeps({ decision: "session" });
     const provider: UnitChangeApprovalProvider<UnitBatchEntry> = {

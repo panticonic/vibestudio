@@ -332,14 +332,27 @@ async function call(inv: ParsedInvocation): Promise<number> {
     // names; only direct server calls require the SERVICE.METHOD form.
     if (!method || (!target && !method.includes("."))) {
       throw new UsageError(
-        "usage: vibestudio agent call SERVICE.METHOD [ARGS_JSON] [--target ID] (plain METHOD with --target)"
+        "usage: vibestudio agent call SERVICE.METHOD [ARGS_JSON | --input] [--target ID] (plain METHOD with --target)"
       );
     }
+    const readsStdin = inv.flags["input"] === true;
+    if (readsStdin && inv.positionals[1] !== undefined) {
+      throw new UsageError("choose positional ARGS_JSON or --input, not both");
+    }
     let args: unknown[] = [];
-    if (inv.positionals[1] !== undefined) {
+    const rawArgs = readsStdin
+      ? await (async () => {
+          const chunks: Buffer[] = [];
+          for await (const chunk of process.stdin) {
+            chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer));
+          }
+          return Buffer.concat(chunks).toString("utf8").trim();
+        })()
+      : inv.positionals[1];
+    if (rawArgs !== undefined && rawArgs !== "") {
       let parsed: unknown;
       try {
-        parsed = JSON.parse(inv.positionals[1]);
+        parsed = JSON.parse(rawArgs);
       } catch {
         throw new UsageError("ARGS_JSON must be valid JSON");
       }
@@ -581,8 +594,16 @@ export const agentCommands: CliCommand[] = [
     name: "call",
     summary: "Invoke an RPC method (optionally relayed to a runtime target)",
     usage:
-      "vibestudio agent call SERVICE.METHOD [ARGS_JSON] [--target ID] (plain METHOD with --target)",
-    flags: [{ name: "target", takesValue: true, description: "Relay target id" }, JSON_FLAG],
+      "vibestudio agent call SERVICE.METHOD [ARGS_JSON | --input] [--target ID] (plain METHOD with --target)",
+    flags: [
+      { name: "target", takesValue: true, description: "Relay target id" },
+      {
+        name: "input",
+        takesValue: false,
+        description: "Read the JSON argument array from stdin",
+      },
+      JSON_FLAG,
+    ],
     run: call,
   },
   {

@@ -22,7 +22,7 @@ describe("wireCredentialService", () => {
       clientConfigStore: inert as CredentialBootstrapDeps["clientConfigStore"],
       auditLog: inert as CredentialBootstrapDeps["auditLog"],
       egressProxy: inert as CredentialBootstrapDeps["egressProxy"],
-      disposableGitHttp: inert as CredentialBootstrapDeps["disposableGitHttp"],
+      workspaceId: "workspace-test",
       approvalQueue: inert as CredentialBootstrapDeps["approvalQueue"],
       sessionGrantStore: inert as CredentialBootstrapDeps["sessionGrantStore"],
       credentialUseGrantStore: inert as CredentialBootstrapDeps["credentialUseGrantStore"],

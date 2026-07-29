@@ -17,32 +17,28 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import type {
+  CuratedModel,
+  DownloadJob,
+  EnginePin,
+  EngineState,
+  HardwareProfile,
+  LocalModelEntry,
+  LocalModelsCapabilities,
+  LocalModelsEvent,
+  LocalModelsStatus,
+  ModelRecord,
+  ModelRuntimeConfig,
+  ServerKind,
+  ServerState,
+} from "@workspace/model-catalog/localModels";
 import { createHardwareProfiler } from "./hardware.js";
 import { createEngineInstaller } from "./engine.js";
-import {
-  createModelLibrary,
-  estimateFit,
-  isCurrentFallbackRecord,
-} from "./library.js";
+import { createModelLibrary, estimateFit, isCurrentFallbackRecord } from "./library.js";
 import { createServerSupervisor } from "./supervisor.js";
 import { runtimeContextLengthFor } from "./runtime-profiles.js";
 import { runModelBenchmark } from "./benchmark.js";
-import {
-  FALLBACK_MODEL,
-  ROOT_LAYOUT,
-  type CuratedModel,
-  type DownloadJob,
-  type EnginePin,
-  type EngineState,
-  type HardwareProfile,
-  type LocalModelEntry,
-  type LocalModelsEvent,
-  type LocalModelsStatus,
-  type ModelRecord,
-  type ModelRuntimeConfig,
-  type ServerKind,
-  type ServerState,
-} from "./types.js";
+import { FALLBACK_MODEL, ROOT_LAYOUT } from "./constants.js";
 
 /**
  * Pinned llama.cpp build (design §4.2, risk #3): bumped with extension
@@ -765,10 +761,7 @@ export async function activate(ctx: Ctx) {
     const servers = supervisor.status();
     const downloads = library.listDownloads();
     const entries = records
-      .filter(
-        (record) =>
-          record.slug !== FALLBACK_MODEL.slug || isCurrentFallbackRecord(record)
-      )
+      .filter((record) => record.slug !== FALLBACK_MODEL.slug || isCurrentFallbackRecord(record))
       .map((record) => {
         const kind = serverForRecord(record);
         const status = recordState(record, servers, downloads);
@@ -846,9 +839,7 @@ export async function activate(ctx: Ctx) {
   async function status(): Promise<LocalModelsStatus> {
     const servers = supervisor.status();
     const storedFallback = await library.get(FALLBACK_MODEL.slug);
-    const fallbackRecord = isCurrentFallbackRecord(storedFallback)
-      ? storedFallback
-      : null;
+    const fallbackRecord = isCurrentFallbackRecord(storedFallback) ? storedFallback : null;
     const utilityRunning = servers.utility.state === "running";
     let diskFreeBytes = 0;
     try {
@@ -1110,13 +1101,19 @@ export async function activate(ctx: Ctx) {
       });
     },
 
-    async openConfigPanel(): Promise<{
-      opened: boolean;
-      openPanel: { source: string; name: string };
-    }> {
+    async capabilities(): Promise<LocalModelsCapabilities> {
       return {
-        opened: false,
-        openPanel: { source: "panels/local-models", name: "Local Models" },
+        managementPanel: { source: "panels/local-models" },
+        serverLogs: {
+          utility: {
+            source: "panels/local-models",
+            stateArgs: { openLog: "utility" },
+          },
+          main: {
+            source: "panels/local-models",
+            stateArgs: { openLog: "main" },
+          },
+        },
       };
     },
   };

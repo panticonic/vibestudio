@@ -6,6 +6,7 @@
   "description": "Workspace model catalog types, recommendations, and provider connect presets",
   "exports": {
     "./catalog": "./src/catalog.ts",
+    "./localModels": "./src/localModels.ts",
     "./modelRecommendations": "./src/modelRecommendations.ts",
     "./providerConnect": "./src/providerConnect.ts",
     "./testing": "./src/testing.ts"

@@ -86,6 +86,7 @@ const expectedMethods = [
   "copy",
   "discard",
   "edit",
+  "finalizeExternalDelta",
   "history",
   "importSnapshot",
   "inspect",
@@ -97,9 +98,11 @@ const expectedMethods = [
   "push",
   "readFile",
   "readMemory",
+  "registerExternalDelta",
   "resolveRepository",
   "revert",
   "status",
+  "supersedeExternalDelta",
 ] as const;
 
 describe("minimal semantic VCS surface", () => {
@@ -444,8 +447,9 @@ describe("honest external snapshot imports", () => {
     ...commonMutation,
     source: {
       kind: "git",
-      uri: "https://example.invalid/repository.git",
-      snapshotRevision: "abc123",
+      url: "https://example.invalid/repository.git",
+      commit: "b".repeat(40),
+      snapshot: `v1-sha256:${"c".repeat(64)}`,
     },
     repositories: [
       {
@@ -463,6 +467,32 @@ describe("honest external snapshot imports", () => {
 
   it("accepts only source-level file facts, not caller-authored roots or intrinsic descriptors", () => {
     expect(vcsImportSnapshotInputSchema.parse(snapshot)).toEqual(snapshot);
+    expect(
+      vcsImportSnapshotInputSchema.safeParse({
+        ...snapshot,
+        source: { kind: "git", url: snapshot.source.url, commit: snapshot.source.commit },
+      }).success
+    ).toBe(false);
+    expect(
+      vcsImportSnapshotInputSchema.safeParse({
+        ...snapshot,
+        source: {
+          ...snapshot.source,
+          subdir: "packages/application",
+        },
+      }).success
+    ).toBe(true);
+    expect(
+      vcsImportSnapshotInputSchema.safeParse({
+        ...snapshot,
+        source: {
+          kind: "git",
+          uri: snapshot.source.url,
+          snapshotRevision: snapshot.source.commit,
+          snapshot: snapshot.source.snapshot,
+        },
+      }).success
+    ).toBe(false);
     expect(
       vcsImportSnapshotInputSchema.safeParse({
         ...snapshot,
@@ -514,7 +544,7 @@ describe("honest external snapshot imports", () => {
       expect(
         vcsImportSnapshotInputSchema.safeParse({
           ...snapshot,
-          source: { ...snapshot.source, uri },
+          source: { ...snapshot.source, url: uri },
         }).success,
         uri
       ).toBe(false);
@@ -565,7 +595,11 @@ describe("honest external snapshot imports", () => {
     }));
     const input = {
       ...snapshot,
-      source: { ...snapshot.source, kind: "filesystem" as const },
+      source: {
+        kind: "filesystem" as const,
+        uri: "fixture://bounded-import",
+        snapshotRevision: "fixture:v1",
+      },
       repositories,
     };
     expect(new TextEncoder().encode(JSON.stringify(input)).byteLength).toBeLessThan(
@@ -642,8 +676,10 @@ describe("honest external snapshot imports", () => {
       intentSummary: "Import the requested external snapshot",
       externalSnapshot: {
         sourceKind: "git",
-        sourceUri: snapshot.source.uri,
-        snapshotRevision: snapshot.source.snapshotRevision,
+        sourceUri: snapshot.source.url,
+        snapshotRevision: snapshot.source.commit,
+        sourceSubdir: null,
+        canonicalSnapshot: snapshot.source.snapshot,
         snapshotDigest: `snapshot:${"d".repeat(64)}`,
         targetRepositoryIds: ["repository:imported"],
       },
@@ -1153,6 +1189,7 @@ describe("explicit reference metadata", () => {
         "event",
         "application",
         "work-unit",
+        "external-delta",
         "change",
         "decision",
         "command",

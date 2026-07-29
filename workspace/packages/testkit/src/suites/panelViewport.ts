@@ -15,18 +15,13 @@ import { audit, clearViewport, setViewport, withPanel } from "../panels.js";
 
 const MOBILE_VIEWPORT = { width: 390, height: 844, mobile: true };
 
-const SHIPPED_PANELS: Array<{ source: string; stateArgs?: Record<string, unknown> }> = [
-  { source: "about/about" },
-  { source: "about/new" },
-  { source: "about/help" },
-  { source: "about/keyboard-shortcuts" },
-  { source: "about/adblock" },
-  { source: "panels/gad-browser" },
+const BASE_PANELS: Array<{ source: string; stateArgs?: Record<string, unknown> }> = [
+  { source: "panels/chat" },
 ];
 
 export const panelViewport = suite("panel-viewport", { timeoutMs: 90_000 });
 
-for (const { source, stateArgs } of SHIPPED_PANELS) {
+for (const { source, stateArgs } of BASE_PANELS) {
   panelViewport.test(`${source} fits a phone-sized viewport`, async (t) =>
     withPanel(
       source,

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { contextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceProjection";
-import { EMPTY_STATE_HASH } from "@vibestudio/content-addressing";
+import { EMPTY_STATE_HASH, sha256Hex } from "@vibestudio/content-addressing";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import {
   blobPath,
@@ -222,7 +222,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       fsp.mkdir(path.join(workspaceRoot, "projects", "coordinates"), { recursive: true }),
     ]);
     await Promise.all([
-      fsp.writeFile(path.join(workspaceRoot, "meta", "vibestudio.yml"), "version: 1\n"),
+      fsp.writeFile(path.join(workspaceRoot, "meta", "vibestudio.yml"), "systemEpoch: 57\n"),
       fsp.writeFile(
         path.join(workspaceRoot, "projects", "coordinates", "unicode.txt"),
         unicodeText
@@ -301,6 +301,159 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         mode: 0o644,
       });
     }
+  });
+
+  it("imports one exact external root as per-repo Git snapshots and publishes once", async () => {
+    const { root, deps } = await harness();
+    const workspaceRoot = path.join(root, "source");
+    await fsp.mkdir(path.join(workspaceRoot, "meta"), { recursive: true });
+    await fsp.writeFile(path.join(workspaceRoot, "meta", "vibestudio.yml"), "systemEpoch: 57\n");
+    const encoder = new TextEncoder();
+    const subtreeDigest = `v1-sha256:${"b".repeat(64)}` as const;
+    const pin = {
+      url: "https://example.test/news.git",
+      ref: "refs/tags/v1",
+      commit: "1".repeat(40),
+      snapshot: `v1-sha256:${"c".repeat(64)}` as const,
+    };
+    const templateBytes = encoder.encode("export const news = true;\n");
+    const templateHash = sha256Hex(templateBytes);
+    const prepared = {
+      pin,
+      config: {
+        id: "workspace:test",
+        systemEpoch: 57,
+      },
+      repositories: [
+        {
+          repoPath: "panels/news",
+          subdir: "panels/news",
+          snapshot: subtreeDigest,
+          files: [
+            {
+              path: "index.ts",
+              contentHash: templateHash,
+              size: templateBytes.byteLength,
+              mode: 0o644 as const,
+            },
+          ],
+        },
+      ],
+    };
+    const rootTemplateBootstrap = {
+      prepareInitialization: vi.fn(async () => prepared),
+    };
+    const templateVcs = new WorkspaceVcs({ ...deps, rootTemplateBootstrap });
+    let head = "event:genesis";
+    const imports: Array<Record<string, unknown>> = [];
+    const events = new Map<
+      string,
+      { parent: string | null; applicationId?: string; source?: Record<string, unknown> }
+    >([["event:genesis", { parent: null }]]);
+    vi.spyOn(templateVcs, "ensureContext").mockImplementation(async () => ({
+      kind: "event",
+      eventId: head,
+    }));
+    vi.spyOn(templateVcs, "ensureFresh").mockResolvedValue({ stateHash: EMPTY_STATE_HASH });
+    vi.spyOn(templateVcs, "semanticDirectCall").mockImplementation(
+      async (method: string, input: unknown) => {
+        if (method === "vcsImportSnapshot") {
+          const request = input as {
+            commandId: string;
+            source: Record<string, unknown>;
+            repositories: unknown;
+          };
+          imports.push(request);
+          const eventId = request.source["kind"] === "git" ? "event:template" : "event:local";
+          const applicationId = `${eventId}:application`;
+          events.set(eventId, {
+            parent: head,
+            applicationId,
+            source: request.source,
+          });
+          head = eventId;
+          return { eventId } as never;
+        }
+        if (method !== "vcsInspect") throw new Error(`unexpected ${method}`);
+        const node = (
+          input as {
+            node: { kind: string; eventId?: string; applicationId?: string; workUnitId?: string };
+          }
+        ).node;
+        if (node.kind === "application") {
+          return {
+            node: {
+              kind: "application",
+              value: { workUnitId: `${node.applicationId}:work-unit` },
+            },
+          } as never;
+        }
+        if (node.kind === "work-unit") {
+          const eventId = String(node.workUnitId).replace(/:application:work-unit$/u, "");
+          const source = events.get(eventId)?.source;
+          const externalSnapshot =
+            source?.["kind"] === "git"
+              ? {
+                  sourceKind: "git",
+                  sourceUri: source["url"],
+                  snapshotRevision: source["commit"],
+                  sourceSubdir: source["subdir"],
+                  canonicalSnapshot: source["snapshot"],
+                  snapshotDigest: `snapshot:${"f".repeat(64)}`,
+                  targetRepositoryIds: [],
+                }
+              : {
+                  sourceKind: "filesystem",
+                  sourceUri: source?.["uri"],
+                  snapshotRevision: source?.["snapshotRevision"],
+                  snapshotDigest: `snapshot:${"f".repeat(64)}`,
+                  targetRepositoryIds: [],
+                };
+          return {
+            node: { kind: "work-unit", value: { externalSnapshot } },
+          } as never;
+        }
+        const eventId = node.eventId!;
+        const event = events.get(eventId)!;
+        return {
+          node: {
+            kind: "event",
+            value:
+              event.parent === null
+                ? { kind: "genesis", eventId }
+                : {
+                    kind: "commit",
+                    eventId,
+                    parentEventIds: [event.parent],
+                    applicationIds: [event.applicationId],
+                  },
+          },
+        } as never;
+      }
+    );
+    const push = vi.fn(async (_method: string, _input: unknown) => ({
+      kind: "complete",
+      result: { eventId: "event:template" },
+    }));
+    await templateVcs.attachGad({ call: push } as never);
+
+    await expect(templateVcs.activateWorkspaceFromSource()).resolves.toMatchObject({
+      initialized: true,
+    });
+
+    expect(imports).toHaveLength(1);
+    expect(imports[0]).toMatchObject({
+      commandId: expect.stringContaining(pin.commit),
+      source: {
+        kind: "git",
+        url: pin.url,
+        commit: pin.commit,
+        subdir: "panels/news",
+        snapshot: subtreeDigest,
+      },
+      repositories: [{ repoPath: "panels/news" }],
+    });
+    expect(push.mock.calls.filter(([method]) => method === "vcsSemanticDispatch")).toHaveLength(1);
   });
 
   it("recovers an interrupted initial publication and recognizes the initialized workspace", async () => {
@@ -626,7 +779,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     ).resolves.toEqual({ recovered: true });
   });
 
-  it("retries the exact initial publication only from the trusted lifecycle operation", async () => {
+  it("refuses to reconstruct an initial publication without its source plan", async () => {
     const { refs, vcs } = await harness();
     const imported = { kind: "event", eventId: "event:initial-import" } as const;
     vi.spyOn(vcs, "ensureContext").mockResolvedValue(imported);
@@ -690,16 +843,11 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     });
     await vcs.attachGad({ call: call as never });
 
-    await expect(vcs.activateWorkspaceFromSource()).resolves.toMatchObject({
-      initialized: false,
-    });
-    expect(semanticDirectCall).toHaveBeenCalledTimes(1);
-    expect(updateMains).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entries: [],
-        gateContext: { kind: "workspace-initialization" },
-      })
+    await expect(vcs.activateWorkspaceFromSource()).rejects.toThrow(
+      "meta/vibestudio.yml not found"
     );
+    expect(semanticDirectCall).toHaveBeenCalledTimes(1);
+    expect(updateMains).not.toHaveBeenCalled();
   });
 
   it("coalesces concurrent initialization of the same large context", async () => {

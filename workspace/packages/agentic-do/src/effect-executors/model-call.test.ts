@@ -132,12 +132,13 @@ describe("modelCallExecutor", () => {
     });
     const inputDeps = deps();
     inputDeps.credentials.getApiKey = getApiKey;
+    const signal = new AbortController().signal;
 
     await expect(
       modelCallExecutor.execute({
         descriptor: descriptor(),
         state: initialAgentState({ channelId: "channel-1", config }),
-        signal: new AbortController().signal,
+        signal,
         deps: inputDeps,
         onEphemeral: () => {},
       })
@@ -150,6 +151,7 @@ describe("modelCallExecutor", () => {
       modelBaseUrl: "https://api.test.example/v1",
       requestId: "model:msg-1",
       idempotencyKey: "attempt-1",
+      signal,
     });
     expect(mocks.stream).not.toHaveBeenCalled();
   });

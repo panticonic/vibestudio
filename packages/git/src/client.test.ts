@@ -7,6 +7,7 @@
 
 import type { HttpClient, StatusRow } from "isomorphic-git";
 import git from "isomorphic-git";
+import * as nodeFs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -94,6 +95,40 @@ describe("GitClient", () => {
       })
     );
     expect(checkout).toHaveBeenCalledWith(expect.objectContaining({ dir: "/repo", ref: "main" }));
+  });
+
+  it("configures a synchronization branch and its named remote tracking coordinate", async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "git-client-tracking-"));
+    try {
+      const client = new GitClient();
+      await client.init(dir, "main");
+      await fsp.writeFile(path.join(dir, "README.md"), "seed\n");
+      await client.add(dir, "README.md");
+      const seedCommit = await client.commit({
+        dir,
+        message: "Seed",
+        author: { name: "Test", email: "test@example.com" },
+      });
+      await client.addRemote(dir, "upstream", "https://example.com/repo.git");
+
+      await client.configureTrackingBranch({
+        dir,
+        branch: "release",
+        remote: "upstream",
+        remoteBranch: "release",
+        startPoint: seedCommit!,
+      });
+
+      await expect(client.getCurrentBranch(dir)).resolves.toBe("release");
+      await expect(git.getConfig({ fs: nodeFs, dir, path: "branch.release.remote" })).resolves.toBe(
+        "upstream"
+      );
+      await expect(git.getConfig({ fs: nodeFs, dir, path: "branch.release.merge" })).resolves.toBe(
+        "refs/heads/release"
+      );
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("exposes the raw isomorphic-git status matrix", async () => {

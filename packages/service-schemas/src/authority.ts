@@ -93,7 +93,11 @@ export const authorityMethods = defineServiceMethods({
         severityPreview: z.enum(["routine", "sensitive", "critical"]).optional(),
         wouldPrompt: z
           .object({
-            cardType: z.enum(["permission.gated", "permission.outside", "confirm.critical"]),
+            cardType: z.enum([
+              "permission.gated",
+              "permission.outside",
+              "confirm.critical",
+            ]),
             renderedAction: z.string(),
           })
           .strict()

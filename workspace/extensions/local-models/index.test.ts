@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FALLBACK_MODEL, type ModelRecord } from "./types.js";
+import type { ModelRecord } from "@workspace/model-catalog/localModels";
+import { FALLBACK_MODEL } from "./constants.js";
 
 interface TestDownloadJob {
   id: string;
@@ -196,6 +197,28 @@ describe("local-models extension", () => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
     if (tempRoot) rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  it("describes its navigation surfaces as capabilities", async () => {
+    const { activate } = await import("./index.js");
+    const api = await activate({
+      log: { info: vi.fn(), warn: vi.fn() },
+      emit: vi.fn(),
+    });
+
+    await expect(api.capabilities()).resolves.toEqual({
+      managementPanel: { source: "panels/local-models" },
+      serverLogs: {
+        utility: {
+          source: "panels/local-models",
+          stateArgs: { openLog: "utility" },
+        },
+        main: {
+          source: "panels/local-models",
+          stateArgs: { openLog: "main" },
+        },
+      },
+    });
   });
 
   it("streams active download progress before the download promise resolves", async () => {

@@ -1047,8 +1047,6 @@ async function cancel(inv: ParsedInvocation): Promise<number> {
 async function doctor(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const startupApprovals =
-      inv.flags["approve-startup"] === true ? await approveStartupUnitBatches() : undefined;
     const readDoctor = async (): Promise<SystemTestDoctorResult> => {
       const scope = await resolveSystemTestScope(inv);
       const runner = await systemTestRunnerFor(scope);
@@ -1056,8 +1054,12 @@ async function doctor(inv: ParsedInvocation): Promise<number> {
         typeof inv.flags["model"] === "string" ? inv.flags["model"] : undefined,
       ]);
     };
-    const value = startupApprovals ? await settleSystemTestDoctor(readDoctor) : await readDoctor();
-    const result = startupApprovals ? { ...value, startupApprovals } : value;
+    const prepared =
+      inv.flags["approve-startup"] === true
+        ? await settleSystemTestStartup(readDoctor, startupApprovalPort())
+        : null;
+    const value = prepared?.doctor ?? (await readDoctor());
+    const result = prepared ? { ...value, startupApprovals: prepared.startupApprovals } : value;
     printResult(result, {
       json,
       human: () => {
@@ -1069,6 +1071,62 @@ async function doctor(inv: ParsedInvocation): Promise<number> {
     return value.ok ? 0 : 1;
   } catch (error) {
     return printError(error, { json });
+  }
+}
+
+export async function settleSystemTestStartup(
+  readDoctor: () => Promise<SystemTestDoctorResult>,
+  approvals: {
+    listPending(): Promise<PendingApproval[]>;
+    resolve(approvalId: string, decision: "version"): Promise<void>;
+  },
+  options: { deadlineMs?: number; pollMs?: number } = {}
+): Promise<{
+  doctor: SystemTestDoctorResult;
+  startupApprovals: { approvedBatchIds: string[]; approvedUnitCount: number };
+}> {
+  const deadline =
+    Date.now() +
+    (options.deadlineMs ?? STARTUP_APPROVAL_DEADLINE_MS + STARTUP_READINESS_DEADLINE_MS);
+  const pollMs = options.pollMs ?? 250;
+  const approved = new Set<string>();
+  let approvedUnitCount = 0;
+
+  while (true) {
+    const pending = await approvals.listPending();
+    const unrelated = pending.filter(
+      (approval) => approval.kind !== "unit-batch" || approval.trigger !== "startup"
+    );
+    if (unrelated.length > 0) {
+      throw new CliError(
+        `system-test startup preparation found unrelated pending approval(s): ${unrelated
+          .map((approval) => `${approval.kind}:${approval.approvalId}`)
+          .join(", ")}`
+      );
+    }
+    for (const batch of pending) {
+      if (batch.kind !== "unit-batch" || batch.trigger !== "startup") continue;
+      if (approved.has(batch.approvalId)) continue;
+      await approvals.resolve(batch.approvalId, "version");
+      approved.add(batch.approvalId);
+      approvedUnitCount += batch.units.length;
+    }
+
+    const result = await readDoctor();
+    if (
+      result.ok ||
+      !doctorIsWaitingForApprovedBuilds(result, { allowMissing: true }) ||
+      Date.now() >= deadline
+    ) {
+      return {
+        doctor: result,
+        startupApprovals: {
+          approvedBatchIds: [...approved],
+          approvedUnitCount,
+        },
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
 }
 
@@ -1088,12 +1146,18 @@ export async function settleSystemTestDoctor(
   }
 }
 
-function doctorIsWaitingForApprovedBuilds(result: SystemTestDoctorResult): boolean {
+function doctorIsWaitingForApprovedBuilds(
+  result: SystemTestDoctorResult,
+  options: { allowMissing?: boolean } = {}
+): boolean {
   const failures = (result.checks ?? []).filter((check) => !check.ok);
+  const transientStates = options.allowMissing
+    ? /\b(?:missing|pending-approval|building)\b/
+    : /\b(?:pending-approval|building)\b/;
   return (
     failures.length === 1 &&
     failures[0]?.name === "required-extensions" &&
-    /\b(?:pending-approval|building)\b/.test(failures[0].detail)
+    transientStates.test(failures[0].detail)
   );
 }
 
@@ -1145,19 +1209,19 @@ export async function settleStartupUnitBatches(
   throw new CliError("timed out waiting for startup unit approvals to settle");
 }
 
-async function approveStartupUnitBatches(): Promise<{
-  approvedBatchIds: string[];
-  approvedUnitCount: number;
-}> {
+function startupApprovalPort(): {
+  listPending(): Promise<PendingApproval[]>;
+  resolve(approvalId: string, decision: "version"): Promise<void>;
+} {
   const credentials = loadCliCredentials();
   if (!credentials?.workspaceName) {
     throw new CliError("system-test startup preparation requires a selected workspace");
   }
   const client = typedClient("shellApproval", shellApprovalMethods, new RpcClient(credentials));
-  return settleStartupUnitBatches({
+  return {
     listPending: () => client.listPending(),
     resolve: (approvalId, decision) => client.resolve(approvalId, decision),
-  });
+  };
 }
 
 function outDir(inv: ParsedInvocation): string | undefined {

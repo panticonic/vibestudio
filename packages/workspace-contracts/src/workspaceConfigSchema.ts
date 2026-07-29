@@ -1,5 +1,11 @@
 import { z } from "zod";
-import type { WorkspaceConfig } from "./types.js";
+import type {
+  WorkspaceConfig,
+  WorkspaceTemplateDeclaration,
+  WorkspaceTemplatePin,
+  WorkspaceTemplateRegistryDeclaration,
+  WorkspaceCreationDescriptor,
+} from "./types.js";
 
 export type WorkspaceJsonValue =
   | null
@@ -27,12 +33,60 @@ const WorkspaceGitRemoteDeclarationSchema = z
   .object({ url: z.string(), branch: z.string().optional() })
   .strict();
 
-const WorkspaceGitUpstreamSchema = z
+function isCanonicalWorkspaceGitRef(value: string): boolean {
+  if (!value.startsWith("refs/heads/") && !value.startsWith("refs/tags/")) return false;
+  if (
+    value.endsWith("/") ||
+    value.endsWith(".") ||
+    value.includes("..") ||
+    value.includes("@{") ||
+    value.includes("//") ||
+    /[\u0000-\u0020\u007f~^:?*[\\]/u.test(value)
+  ) {
+    return false;
+  }
+  const prefix = value.startsWith("refs/heads/") ? "refs/heads/" : "refs/tags/";
+  const components = value.slice(prefix.length).split("/");
+  return components.every(
+    (component) =>
+      component.length > 0 &&
+      component !== "." &&
+      component !== ".." &&
+      !component.startsWith(".") &&
+      !component.endsWith(".lock")
+  );
+}
+
+/** Canonical, unambiguous remote ref accepted by exact Git source pins. */
+export const WorkspaceGitRefSchema = z
+  .string()
+  .refine(isCanonicalWorkspaceGitRef, "Expected a canonical refs/heads/* or refs/tags/* ref");
+
+/** Complete lowercase object id supported by the current Git transport. */
+export const WorkspaceGitCommitSchema = z
+  .string()
+  .regex(/^[0-9a-f]{40}$/u, "Expected a full lowercase Git SHA-1 object id");
+
+/** Versioned canonical digest of an admitted Git snapshot. */
+export const WorkspaceGitSnapshotSchema = z.custom<`v1-sha256:${string}`>(
+  (value) => typeof value === "string" && /^v1-sha256:[0-9a-f]{64}$/u.test(value),
+  "Expected a canonical v1-sha256 snapshot digest"
+);
+
+/** Portable credential requirement name; never a concrete credential id. */
+export const WorkspaceLogicalCredentialNameSchema = z
+  .string()
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9._-]*$/u,
+    "Expected a logical credential name using letters, digits, dot, underscore, or hyphen"
+  );
+
+export const WorkspaceGitUpstreamSchema = z
   .object({
     remote: z.string(),
     branch: z.string().optional(),
     autoPush: z.boolean().optional(),
-    credentialId: z.string().nullable().optional(),
+    credential: WorkspaceLogicalCredentialNameSchema.optional(),
     authorEmail: z.string().optional(),
     authorName: z.string().optional(),
   })
@@ -40,6 +94,52 @@ const WorkspaceGitUpstreamSchema = z
 
 const WorkspaceSourceRefSchema = z
   .object({ source: z.string(), ref: z.string().optional() })
+  .strict();
+
+const WorkspaceTemplateDeclarationObjectSchema = z
+  .object({
+    url: z.string().trim().min(1),
+    credential: WorkspaceLogicalCredentialNameSchema.optional(),
+  })
+  .strict();
+
+export const WorkspaceTemplateDeclarationSchema: z.ZodType<WorkspaceTemplateDeclaration> =
+  WorkspaceTemplateDeclarationObjectSchema;
+
+export const WorkspaceTemplatePinSchema: z.ZodType<WorkspaceTemplatePin> =
+  WorkspaceTemplateDeclarationObjectSchema.extend({
+    ref: z.string().trim().min(1),
+    commit: WorkspaceGitCommitSchema,
+    snapshot: WorkspaceGitSnapshotSchema,
+  }).strict();
+
+export const WorkspaceTemplateRegistryDeclarationSchema: z.ZodType<WorkspaceTemplateRegistryDeclaration> =
+  z
+    .object({
+      url: z.string().trim().min(1),
+      ref: WorkspaceGitRefSchema,
+      credential: WorkspaceLogicalCredentialNameSchema.optional(),
+    })
+    .strict();
+
+export const WorkspaceTemplatesConfigSchema = z
+  .object({
+    use: z.array(WorkspaceTemplateDeclarationSchema),
+    overrides: z.record(WorkspaceTemplatePinSchema).optional(),
+    conflicts: z.record(z.string().trim().min(1)).optional(),
+    registry: WorkspaceTemplateRegistryDeclarationSchema.optional(),
+    bootstrapAdopted: WorkspaceTemplatePinSchema.optional(),
+    suggestionDecisions: z
+      .record(
+        z
+          .object({
+            digest: WorkspaceGitSnapshotSchema,
+            decision: z.enum(["accepted", "declined"]),
+          })
+          .strict()
+      )
+      .optional(),
+  })
   .strict();
 
 const WorkspaceServicePrincipalSchema = z.enum(["host", "user", "code", "session", "mission"]);
@@ -260,3 +360,97 @@ export const WorkspaceConfigSchema = z
       .optional(),
   })
   .strict() satisfies z.ZodType<WorkspaceConfig>;
+
+const WorkspaceConfigManifestShape = WorkspaceConfigSchema.omit({ id: true });
+
+/** Userland-authored composition source stored in `meta/templates/workspace.yml`. */
+export const WorkspaceConfigTopLayerSchema = WorkspaceConfigManifestShape.extend({
+  templates: WorkspaceTemplatesConfigSchema.optional(),
+  disable: z.array(z.string().trim().min(1)).optional(),
+}).strict();
+
+/**
+ * Sanitized template-owned layer. Template relationships are resolver input,
+ * while trust/provider grants and concrete Git credentials are never accepted
+ * as inherited configuration.
+ */
+export const WorkspaceConfigFragmentSchema = WorkspaceConfigManifestShape.omit({
+  trust: true,
+  providers: true,
+})
+  .extend({
+    git: z
+      .object({
+        remotes: z.record(z.record(z.record(WorkspaceGitRemoteDeclarationSchema))).optional(),
+        upstreams: z
+          .record(
+            z.record(
+              WorkspaceGitUpstreamSchema.omit({
+                authorEmail: true,
+                authorName: true,
+              })
+            )
+          )
+          .optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+const WorkspaceTemplateLockNodeSchema = z
+  .object({
+    nodeId: z.string().regex(/^t-[0-9a-f]+$/),
+    alias: z.string().trim().min(1),
+    pin: WorkspaceTemplatePinSchema,
+    parents: z.array(z.string().regex(/^t-[0-9a-f]+$/)),
+    fragmentDigest: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/i),
+    suggestions: z
+      .object({
+        trust: z
+          .object({
+            digest: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/i),
+            value: z.unknown(),
+          })
+          .strict()
+          .optional(),
+        providers: z
+          .object({
+            digest: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/i),
+            value: z.unknown(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
+export const WorkspaceTemplateLockSchema = z
+  .object({
+    version: z.literal(1),
+    fingerprint: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/i),
+    /** The normalized top-layer declaration this generated lock realizes. */
+    roots: z.array(WorkspaceTemplateDeclarationSchema),
+    overrides: z.record(WorkspaceTemplatePinSchema),
+    conflicts: z.record(z.string().trim().min(1)),
+    nodes: z.array(WorkspaceTemplateLockNodeSchema),
+    repositories: z.record(
+      z
+        .object({
+          nodeId: z.string().regex(/^t-[0-9a-f]+$/),
+          subtreeDigest: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/i),
+        })
+        .strict()
+    ),
+    verification: z.enum(["verified", "deferred"]),
+  })
+  .strict();
+
+export const WorkspaceCreationDescriptorSchema: z.ZodType<WorkspaceCreationDescriptor> = z
+  .object({
+    version: z.literal(1),
+    workspaceId: z.string().trim().min(1),
+    rootTemplate: WorkspaceTemplatePinSchema,
+  })
+  .strict();

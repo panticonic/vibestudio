@@ -2,7 +2,14 @@ import { createHash } from "node:crypto";
 import { chmod, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
-import { ROOT_LAYOUT, type EngineBackend, type EnginePin, type EngineState, type HardwareProfile, type InstalledEngine } from "./types.js";
+import type {
+  EngineBackend,
+  EnginePin,
+  EngineState,
+  HardwareProfile,
+  InstalledEngine,
+} from "@workspace/model-catalog/localModels";
+import { ROOT_LAYOUT } from "./constants.js";
 
 export interface EngineInstallerDeps {
   rootDir: string;
@@ -26,8 +33,13 @@ export function resolveAssetNames(
   switch (profile.os) {
     case "win32": {
       const cpu = `llama-${buildTag}-bin-win-cpu-${profile.arch}.zip`;
-      const gpu = profile.chosenBackend === "cpu" ? null : `llama-${buildTag}-bin-win-${windowsBackendSegment(profile.chosenBackend)}.zip`;
-      const extra = isCuda(profile.chosenBackend) ? [`cudart-llama-bin-win-cuda-${cudaVersion(profile.chosenBackend)}-x64.zip`] : [];
+      const gpu =
+        profile.chosenBackend === "cpu"
+          ? null
+          : `llama-${buildTag}-bin-win-${windowsBackendSegment(profile.chosenBackend)}.zip`;
+      const extra = isCuda(profile.chosenBackend)
+        ? [`cudart-llama-bin-win-cuda-${cudaVersion(profile.chosenBackend)}-x64.zip`]
+        : [];
       return { cpu, gpu, extra };
     }
     case "darwin": {
@@ -144,7 +156,10 @@ function linuxBackendSegment(backend: EngineBackend): string {
   }
 }
 
-function effectiveBackendForInstall(profile: HardwareProfile, backend: EngineBackend): EngineBackend {
+function effectiveBackendForInstall(
+  profile: HardwareProfile,
+  backend: EngineBackend
+): EngineBackend {
   return profile.os === "linux" && isCuda(backend) ? "vulkan" : backend;
 }
 
@@ -196,7 +211,11 @@ async function installBackend(
   }
 }
 
-function assetsForBackend(profile: HardwareProfile, buildTag: string, backend: EngineBackend): string[] {
+function assetsForBackend(
+  profile: HardwareProfile,
+  buildTag: string,
+  backend: EngineBackend
+): string[] {
   const assetProfile: HardwareProfile = { ...profile, chosenBackend: backend };
   const resolved = resolveAssetNames(assetProfile, buildTag);
   const primary = backend === "cpu" ? resolved.cpu : resolved.gpu;
@@ -228,7 +247,11 @@ async function smokeExistingInstall(
   }
 }
 
-async function downloadAsset(deps: EngineInstallerDeps, pin: EnginePin, asset: string): Promise<string> {
+async function downloadAsset(
+  deps: EngineInstallerDeps,
+  pin: EnginePin,
+  asset: string
+): Promise<string> {
   const expectedChecksum = pin.checksums[asset];
   if (!expectedChecksum) {
     throw new Error(`Missing pinned checksum for llama.cpp asset ${asset} (${pin.buildTag})`);
@@ -243,19 +266,32 @@ async function downloadAsset(deps: EngineInstallerDeps, pin: EnginePin, asset: s
   const bytes = new Uint8Array(await response.arrayBuffer());
   const actualChecksum = sha256(bytes);
   if (actualChecksum.toLowerCase() !== expectedChecksum.toLowerCase()) {
-    throw new Error(`Checksum mismatch for ${asset}: expected ${expectedChecksum}, got ${actualChecksum}`);
+    throw new Error(
+      `Checksum mismatch for ${asset}: expected ${expectedChecksum}, got ${actualChecksum}`
+    );
   }
 
-  const archivePath = join(deps.rootDir, `.engine-${process.pid}-${Date.now()}-${safeFileName(asset)}`);
+  const archivePath = join(
+    deps.rootDir,
+    `.engine-${process.pid}-${Date.now()}-${safeFileName(asset)}`
+  );
   await writeFile(archivePath, bytes);
   return archivePath;
 }
 
-async function extractArchive(deps: EngineInstallerDeps, archivePath: string, destinationDir: string): Promise<void> {
+async function extractArchive(
+  deps: EngineInstallerDeps,
+  archivePath: string,
+  destinationDir: string
+): Promise<void> {
   const fileName = basename(archivePath);
   const result = fileName.endsWith(".zip")
-    ? await deps.exec("unzip", ["-q", archivePath, "-d", destinationDir], { timeoutMs: EXTRACT_TIMEOUT_MS })
-    : await deps.exec("tar", ["xzf", archivePath, "-C", destinationDir], { timeoutMs: EXTRACT_TIMEOUT_MS });
+    ? await deps.exec("unzip", ["-q", archivePath, "-d", destinationDir], {
+        timeoutMs: EXTRACT_TIMEOUT_MS,
+      })
+    : await deps.exec("tar", ["xzf", archivePath, "-C", destinationDir], {
+        timeoutMs: EXTRACT_TIMEOUT_MS,
+      });
 
   if (!result.ok) {
     throw new Error(`Failed to extract ${fileName}: ${execFailureSummary(result)}`);
@@ -281,7 +317,10 @@ async function findLlamaServer(root: string): Promise<string> {
           throw error;
         }
       }
-    } else if (entry.isFile() && (entry.name === "llama-server" || entry.name === "llama-server.exe")) {
+    } else if (
+      entry.isFile() &&
+      (entry.name === "llama-server" || entry.name === "llama-server.exe")
+    ) {
       return fullPath;
     }
   }
@@ -303,7 +342,9 @@ async function pruneOldBuilds(rootDir: string, currentBuildTag: string): Promise
   const previous = buildDirs
     .filter((entry) => entry.name !== currentBuildTag)
     .sort((left, right) => right.mtimeMs - left.mtimeMs || right.name.localeCompare(left.name))[0];
-  const keep = new Set([currentBuildTag, previous?.name].filter((value): value is string => Boolean(value)));
+  const keep = new Set(
+    [currentBuildTag, previous?.name].filter((value): value is string => Boolean(value))
+  );
 
   await Promise.all(
     buildDirs
@@ -347,7 +388,11 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function execFailureSummary(result: { stdout: string; stderr: string; code: number | null }): string {
+function execFailureSummary(result: {
+  stdout: string;
+  stderr: string;
+  code: number | null;
+}): string {
   return result.stderr || result.stdout || String(result.code ?? "unknown error");
 }
 

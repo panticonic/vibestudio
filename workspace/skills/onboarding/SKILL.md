@@ -73,6 +73,21 @@ Refresh, workflow success, failure, and cancellation likewise produce a new
 snapshot. Inline props must not contain credential material, browser samples,
 device IDs, pairing links, profile paths, or private topology.
 
+## Templates from the catalog
+
+When the user asks to add a template, render
+`skills/onboarding/TemplateCatalog.tsx` with `inline_ui`. Its cards send typed
+template interactions; route the complete interaction through
+`executeTemplateSelection` from `@workspace-skills/onboarding`. Never infer a
+template action from a button label or resolve a template in the client.
+
+Use the [templates skill](../templates/SKILL.md) for the userland composer flow:
+inspect first, explain what would change in plain language, and then call the
+template-composer extension so its approval card decides. The inline component
+must receive a `TemplateCatalogSnapshot` previously read from that extension;
+it never imports catalog data. After the card resolves, render a
+new catalog or status observation; do not mutate the earlier card.
+
 ## Product rules
 
 - Durable preparation is setup. Ordinary work and ready-on-demand capabilities

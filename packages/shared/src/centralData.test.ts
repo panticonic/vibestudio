@@ -22,6 +22,14 @@ describe("CentralDataManager SQLite control store", () => {
     return new CentralDataManager({ databasePath, ...(now ? { now } : {}) });
   }
 
+  it("registers a caller-allocated id used by an external creation descriptor", () => {
+    const central = manager();
+    expect(central.addWorkspace("external", "ws_preallocated").workspaceId).toBe(
+      "ws_preallocated"
+    );
+    central.close();
+  });
+
   it("registers a workspace once and preserves its opaque id", () => {
     const first = manager();
     first.addWorkspace("client");

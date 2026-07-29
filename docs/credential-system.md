@@ -295,14 +295,38 @@ expose narrow local bindings for API calls and Git HTTP transport. GitHub uses
 this pattern with `github-user`, `github-repos`, `github-uploads`, and
 `github-git-http`.
 
-`git.upstreams.<section>.<repo>.credentialId` has three exact states for
-push/pull: omit it for automatic URL-bound resolution, provide a string to pin
-one stored credential, or set it to `null` to require anonymous Git HTTP and
-forbid credential resolution. Config rewrites preserve this distinction. The
-credential material remains host-owned: runtime code passes the credential id,
-and the host injects it only for matching Git HTTP URLs through
-`credentials.gitHttp()` or the git-bridge upstream methods. Durable remote URLs
-must not contain usernames, passwords, tokens, query parameters, or fragments.
+`git.upstreams.<section>.<repo>.credential` is optional and, when present, is
+never a concrete credential id. It is a portable logical name (see
+`WorkspaceLogicalCredentialNameSchema` and `WorkspaceGitUpstreamSchema` in
+`packages/workspace-contracts/src/workspaceConfigSchema.ts`, and
+`WorkspaceGitUpstreamConfig` in `packages/workspace-contracts/src/types.ts`) —
+a short identifier such as `github-workspace` that carries no secret material
+and is safe to commit in `meta/vibestudio.yml`. The host resolves that name to
+a real credential id through a profile-local binding table,
+`GitCredentialBindingStore` in `src/server/gitCredentialBindings.ts`, keyed by
+`{ workspaceId, name, remoteUrl }`. Concrete credential identities never enter
+workspace configuration. When an upstream declares no `credential`, transport
+is anonymous-first; the host derives a stable, non-secret coordinate from the
+public remote URL instead (`implicitGitCredentialName` in
+`src/server/gitCredentialRequirements.ts`), so a later account selection still
+lands on the same logical binding.
+
+At request time, `proxyGitHttp` in `src/server/services/credentialService.ts`
+resolves a `request.logicalCredential` to a stored credential id through that
+binding table and calls `assertGitRequestBelongsToRemote`, which requires the
+request URL to be at or under the declared remote's origin and path before the
+host injects anything. Userland connects accounts through the ordinary
+credential APIs and supplies the portable logical name to Git operations. The
+credential material remains host-owned: userland never receives it, and the
+host injects it only for matching Git HTTP URLs through
+`credentials.gitHttp()` or the git-bridge upstream methods.
+Durable remote URLs must not contain usernames, passwords, tokens, query
+parameters, or fragments.
+
+The old `credentialId` field is gone; `WORKSPACE_SYSTEM_EPOCH` was bumped 56 →
+57 (`packages/shared/src/vcs/systemEpoch.ts`) so a manifest still written
+against it fails with an explicit workspace-source upgrade error instead of
+silently parsing as an anonymous or automatic upstream.
 
 Provider extensions should pair credential setup with repository verification:
 check the provider API or Git smart-HTTP discovery for the target repository,

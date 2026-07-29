@@ -288,6 +288,40 @@ describe("canonical VCS CLI", () => {
     });
   });
 
+  it("compares a coordinator-owned external delta through the same VCS command", async () => {
+    fixture.handler = (method, args) => {
+      if (method === "vcs.status") return semanticFixture(method, args);
+      if (method === "vcs.compare") {
+        const input = args[0] as Record<string, unknown>;
+        return {
+          target: input["target"],
+          sourceDeltaId: input["sourceDeltaId"],
+          resolution: { complete: false, remainingChangeCount: 1 },
+          counts: {
+            shared: 0,
+            alreadySatisfied: 0,
+            actionable: 1,
+            conflicting: 0,
+            blocked: 0,
+            accounted: 0,
+            historical: 0,
+          },
+          changes: [],
+          nextCursor: null,
+        };
+      }
+      throw new Error(`unexpected ${method}`);
+    };
+    const command = findCommand(vcsCommands, "vcs", "compare")!;
+    await expect(
+      command.run(parseInvocation(command, ["--delta", "delta:template", "--json"]), [])
+    ).resolves.toBe(0);
+    expect(fixture.calls.at(-1)).toMatchObject({
+      method: "vcs.compare",
+      args: [expect.objectContaining({ sourceDeltaId: "delta:template" })],
+    });
+  });
+
   it("resolves one working state and dry-runs without mutation", async () => {
     const command = findCommand(vcsCommands, "vcs", "copy-file")!;
     const invocation = parseInvocation(command, [

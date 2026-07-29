@@ -40,6 +40,26 @@ export {
   type GitLogEntry,
 } from "./client.js";
 export { initAndPush, type InitAndPushOptions } from "./convenience.js";
+export {
+  acquireExactGitSnapshot,
+  discoverDefaultGitSnapshot,
+  discoverExactGitSnapshot,
+  discoverTrackedGitSnapshot,
+  readExactGitSnapshot,
+  type SnapshotContentSink,
+  type ExactSnapshotFile,
+  type ExactGitSnapshot,
+  type ReservedPathPolicy,
+  type AcquireExactGitSnapshotOptions,
+  type DiscoverDefaultGitSnapshotOptions,
+  type DiscoverExactGitSnapshotOptions,
+  type DiscoverTrackedGitSnapshotOptions,
+} from "./exact-snapshot.js";
+export {
+  readThroughImmutableGitCheckout,
+  withTemporaryGitCheckout,
+  type AtomicCheckoutFilesystem,
+} from "./checkout-cache.js";
 
 export type {
   GitClientOptions,

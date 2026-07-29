@@ -65,6 +65,8 @@ describe("provenance formatting", () => {
             sourceKind: "git",
             sourceUri: "https://example.test/owner/project.git",
             snapshotRevision: "0123456789abcdef",
+            sourceSubdir: null,
+            canonicalSnapshot: `v1-sha256:${"c".repeat(64)}`,
             snapshotDigest: "snapshot:derived",
             targetRepositoryIds: ["repository:one", "repository:two"],
           },

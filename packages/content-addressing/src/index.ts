@@ -22,3 +22,11 @@ export {
   type WorktreeHashFile,
   type WorktreeManifest,
 } from "./worktree-hash.js";
+export {
+  CANONICAL_SNAPSHOT_DIGEST_PREFIX,
+  canonicalSnapshotDigest,
+  isCanonicalSnapshotDigest,
+  assertCanonicalSnapshotDigest,
+  type CanonicalSnapshotDigest,
+  type CanonicalSnapshotEntry,
+} from "./snapshot-digest.js";

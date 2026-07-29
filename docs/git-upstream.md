@@ -44,7 +44,7 @@ git:
         remote: origin
         branch: main
         autoPush: false
-        credentialId: cred_github_abc123
+        credential: github-workspace
         authorName: Vibestudio
         authorEmail: vibestudio@example.com
 ```
@@ -68,19 +68,14 @@ incoming import candidate. Both export and Git push stop while `upstreamStatus` 
 ordinary semantic integration. Auto-push does not bypass credential or push
 policy, and it pauses while the repo is `diverged` or `auth-failed`.
 
-Credential selection has three exact states:
-
-- omit `credentialId` to resolve a matching stored credential from the remote
-  URL;
-- provide a string to require that exact stored credential;
-- set `credentialId: null` to require anonymous Git HTTP and forbid credential
-  resolution.
-
-Configuration updates such as toggling auto-push preserve the selected state;
-they never collapse anonymous and automatic access into one behavior. Durable
-remote URLs must use HTTP(S) and must not contain embedded credentials, query
-parameters, or fragments. Authentication belongs in the credential system, not
-in a persisted URL.
+An upstream's optional `credential` is a portable logical name. The host resolves
+that name from the workspace and normalized remote URL through profile-local
+bindings; it never stores a concrete credential ID in workspace config. Without
+a logical name, transport is anonymous-first. A concrete
+`credentialIdOverride` is legal only for one call and is never persisted.
+Durable remote URLs must use HTTP(S) and must not contain embedded credentials,
+query parameters, or fragments. Authentication belongs in the credential system,
+not in a persisted URL.
 
 Each network operation captures the declared URL, branch, credential, and
 configuration fingerprint before checkout work begins. It uses that immutable
@@ -101,35 +96,26 @@ await git.setSharedRemote("projects/bgkit", {
 await git.setUpstream("projects/bgkit", {
   remote: "origin",
   branch: "main",
-  credentialId: "cred_github_abc123",
+  credential: "github-workspace",
   autoPush: false,
 });
 ```
 
-### Startup dependency completion
+An explicit `importProject` creates the remote/upstream declaration only when it
+is absent. An exact existing declaration is reused byte-for-byte, including its
+logical credential, authors, auto-push choice, and unrelated named
+remotes. A request that differs in URL, selected remote, or branch is rejected;
+edit the declaration explicitly before retrying.
 
-Startup does not decide that a declared upstream needs cloning by inspecting a
-workspace source path. It asks the configured `gitInterop` provider for
-`upstreamStatus` on every supported declaration. Only a
-`state: "not-materialized"` row starts clone/import. Every other reported state
-means the operational checkout already exists and is returned in `skipped` with
-`reason: "already-materialized"`; this includes a checkout whose semantic
-candidate is still `integration-required`. Unsupported repository sections use
-`reason: "unsupported-path"`, and an omitted provider row is an explicit
-failure rather than permission to guess from disk.
-
-Each successful clone imports its exact immutable HEAD tree as one committed
-candidate. Startup does not publish it, copy it into workspace source, or make
-the checkout a build input. `git.completeWorkspaceDependencies()` invokes this
-same flow explicitly for retry/backfill. Its credential argument follows the
-same omitted/string/null contract, including an explicitly anonymous retry for
-public remotes.
+External repositories are acquired after bootstrap through userland
+`git.importProject()` and the ordinary semantic review flow. The host does not
+interpret upstream declarations as initialization instructions.
 
 ### Build boundary
 
 Build V2 resolves exact semantic repository states and reads manifests and file
 content through the content-addressed store. It materializes only the requested
-unit's dependency closure as a disposable build source. Operational Git
+unit's dependency closure as an isolated temporary build source. Operational Git
 checkouts under `state/git-checkouts/` do not participate in graph discovery,
 source hashing, or compilation, even when they contain a fetched tree awaiting
 semantic integration.
@@ -205,7 +191,7 @@ snapshot revision, digest, and target repository IDs.
 4. When no candidate is pending and the remote branch is ahead or diverged,
    preview with `pullUpstream(repo, { dryRun: true })`, then pull once to create
    the exact semantic candidate. Dry-run exports and fetches only in a
-   disposable checkout: it changes neither the managed checkout nor bridge,
+   isolated temporary checkout: it changes neither the managed checkout nor bridge,
    semantic, or remote state. The result returns its context and event IDs.
 5. After semantic publication, run upstream status again. The bridge may resume
    outgoing export/push only after `integration-required` clears.

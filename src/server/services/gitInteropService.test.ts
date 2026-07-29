@@ -17,6 +17,8 @@ const SEMANTIC_EVIDENCE = {
     sourceKind: "git" as const,
     sourceUri: "https://github.com/example/project.git",
     snapshotRevision: "a".repeat(40),
+    sourceSubdir: null,
+    canonicalSnapshot: `v1-sha256:${"c".repeat(64)}`,
     snapshotDigest: `snapshot:${"b".repeat(64)}`,
     targetRepositoryIds: ["repository:import"],
   },
@@ -168,6 +170,121 @@ describe("gitInteropService", () => {
     });
   });
 
+  it("prepares template contribution authority for one destination and protected-main event", () => {
+    const service = createGitInteropService({});
+    const prepare =
+      service.authorityPreparation?.["gitInterop.pushTemplateContribution.destination"];
+    const caller = createVerifiedCaller("template-composer", "extension", {
+      callerId: "template-composer",
+      callerKind: "extension",
+      repoPath: "extensions/template-composer",
+      effectiveVersion: "ev-template-composer",
+      executionDigest: "b".repeat(64),
+      requested: [
+        {
+          capability: "git.publish",
+          resource: { kind: "prefix", prefix: "" },
+        },
+      ],
+    });
+
+    expect(
+      prepare?.({ caller }, [
+        {
+          operationId: "suggest-1",
+          nodeId: "t-abcdef",
+          alias: "news",
+          url: "https://github.com/acme/news.git",
+          baseCommit: "a".repeat(40),
+          expectedMainEventId: "event:main",
+          credential: "github-main",
+          parts: [
+            { repoPath: "workers/news", subdir: "workers/news" },
+            { repoPath: "panels/news", subdir: "panels/news" },
+          ],
+        },
+      ])
+    ).toEqual({
+      selections: [
+        expect.objectContaining({
+          capability: "git.publish",
+          resourceKey: expect.stringMatching(/^template-contribution:[0-9a-f]{64}$/u),
+          challenge: expect.objectContaining({
+            title: "Push a contribution to news",
+            resource: {
+              type: "external-repository",
+              label: "Destination",
+              value: "https://github.com/acme/news.git",
+            },
+            substance: {
+              kind: "change-set",
+              summary: "Publish 2 exact protected-main parts to news",
+              facts: [
+                { label: "Protected main", value: "event:main" },
+                { label: "Template base", value: "a".repeat(40) },
+                {
+                  label: "Parts",
+                  value: "panels/news → panels/news, workers/news → workers/news",
+                },
+              ],
+            },
+          }),
+        }),
+      ],
+      payload: null,
+    });
+  });
+
+  it("prepares template publication authority for the exact destination, event, and tree", () => {
+    const service = createGitInteropService({});
+    const prepare = service.authorityPreparation?.["gitInterop.publishTemplate.destination"];
+    const caller = createVerifiedCaller("template-composer", "extension", {
+      callerId: "template-composer",
+      callerKind: "extension",
+      repoPath: "extensions/template-composer",
+      effectiveVersion: "ev-template-composer",
+      executionDigest: "b".repeat(64),
+      requested: [{ capability: "git.publish", resource: { kind: "prefix", prefix: "" } }],
+    });
+    const prepared = prepare?.({ caller }, [
+      {
+        operationId: "publish-news",
+        expectedMainEventId: "event:main",
+        templateName: "News",
+        version: "1.0.0",
+        manifest: "systemEpoch: 57\n",
+        manifestDigest: `v1-sha256:${"a".repeat(64)}`,
+        parts: [{ repoPath: "panels/news", subdir: "panels/news" }],
+        destination: { provider: "github", name: "template-news", private: false },
+      },
+    ]);
+    expect(prepared).toEqual({
+      selections: [
+        expect.objectContaining({
+          capability: "git.publish",
+          resourceKey: expect.stringMatching(/^template-publication:[0-9a-f]{64}$/u),
+          challenge: expect.objectContaining({
+            title: "Create and publish template-news",
+            resource: {
+              type: "external-repository",
+              label: "Destination",
+              value: "GitHub / template-news",
+            },
+            substance: expect.objectContaining({
+              summary: "Publish News 1.0.0 from exact protected main",
+              facts: expect.arrayContaining([
+                { label: "Protected main", value: "event:main" },
+                { label: "Version", value: "1.0.0" },
+                { label: "Manifest", value: `v1-sha256:${"a".repeat(64)}` },
+              ]),
+            }),
+          }),
+        }),
+      ],
+      payload: null,
+    });
+  });
+
   it("imports a requested branch and persists it as a shared remote", async () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = { ...BASE_WORKSPACE_CONFIG };
@@ -192,7 +309,7 @@ describe("gitInteropService", () => {
           url: "https://github.com/werg/bgkit.git",
           branch: "vibestudio-bridge",
         },
-        credentialId: null,
+        credentialIdOverride: null,
       },
     ]);
 
@@ -216,7 +333,6 @@ describe("gitInteropService", () => {
       remote: "origin",
       branch: "vibestudio-bridge",
       autoPush: false,
-      credentialId: null,
     });
   });
 
@@ -266,6 +382,144 @@ describe("gitInteropService", () => {
     ]);
     expect(workspaceConfig.git?.remotes?.["projects"]?.["bgkit"]?.["origin"]?.branch).toBe("trunk");
     expect(workspaceConfig.git?.upstreams?.["projects"]?.["bgkit"]?.branch).toBe("trunk");
+  });
+
+  it("fails closed when an omitted branch cannot be discovered", async () => {
+    const workspacePath = tempWorkspace();
+    const workspaceConfig: WorkspaceConfig = { ...BASE_WORKSPACE_CONFIG };
+    fs.writeFileSync(
+      path.join(workspacePath, "meta", "vibestudio.yml"),
+      YAML.stringify(BASE_WORKSPACE_CONFIG),
+      "utf-8"
+    );
+    const invokeGitProvider = vi.fn(async () => {
+      throw new Error("remote unavailable");
+    }) as unknown as GitProviderInvoker;
+    const service = createGitInteropService({
+      workspacePath,
+      workspaceConfig,
+      invokeGitProvider,
+      ...diskConfigPersistence(workspacePath),
+    });
+
+    await expect(
+      service.handler(serviceContext(), "importProject", [
+        {
+          path: "projects/bgkit",
+          remote: {
+            name: "origin",
+            url: "https://github.com/werg/bgkit.git",
+          },
+        },
+      ])
+    ).rejects.toThrow("remote unavailable");
+    expect(workspaceConfig.git).toBeUndefined();
+  });
+
+  it("requires an explicit branch when the remote has no symbolic default", async () => {
+    const workspacePath = tempWorkspace();
+    const workspaceConfig: WorkspaceConfig = { ...BASE_WORKSPACE_CONFIG };
+    fs.writeFileSync(
+      path.join(workspacePath, "meta", "vibestudio.yml"),
+      YAML.stringify(BASE_WORKSPACE_CONFIG),
+      "utf-8"
+    );
+    const invokeGitProvider = vi.fn(async () => ({
+      branch: null,
+    })) as unknown as GitProviderInvoker;
+    const service = createGitInteropService({
+      workspacePath,
+      workspaceConfig,
+      invokeGitProvider,
+      ...diskConfigPersistence(workspacePath),
+    });
+
+    await expect(
+      service.handler(serviceContext(), "importProject", [
+        {
+          path: "projects/bgkit",
+          remote: {
+            name: "origin",
+            url: "https://github.com/werg/bgkit.git",
+          },
+        },
+      ])
+    ).rejects.toThrow("specify remote.branch explicitly");
+    expect(workspaceConfig.git).toBeUndefined();
+  });
+
+  it("reuses an exact declaration without rewriting repository-specific settings", async () => {
+    const workspacePath = tempWorkspace();
+    const workspaceConfig: WorkspaceConfig = {
+      ...BASE_WORKSPACE_CONFIG,
+      git: {
+        remotes: {
+          projects: {
+            bgkit: {
+              origin: {
+                url: "https://github.com/werg/bgkit.git",
+                branch: "release",
+              },
+              mirror: {
+                url: "https://example.test/bgkit-mirror.git",
+                branch: "release",
+              },
+            },
+          },
+        },
+        upstreams: {
+          projects: {
+            bgkit: {
+              remote: "origin",
+              branch: "release",
+              autoPush: true,
+              credential: "github-main",
+              authorEmail: "automation@example.com",
+              authorName: "Workspace Automation",
+            },
+          },
+        },
+      },
+    };
+    const cloneRepo = vi.fn(async () => undefined);
+    const persistWorkspaceConfigMutation = vi.fn();
+    const service = createGitInteropService({
+      workspacePath,
+      workspaceConfig,
+      invokeGitProvider: cloneProvider(cloneRepo),
+      persistWorkspaceConfigMutation,
+    });
+
+    await expect(
+      service.handler(panelServiceContext(), "importProject", [
+        {
+          path: "projects/bgkit",
+          remote: {
+            name: "origin",
+            url: "https://github.com/werg/bgkit.git",
+            branch: "release",
+          },
+        },
+      ])
+    ).resolves.toMatchObject({
+      path: "projects/bgkit",
+      remote: {
+        name: "origin",
+        url: "https://github.com/werg/bgkit.git",
+        branch: "release",
+      },
+      candidate: { changed: true },
+    });
+
+    expect(cloneRepo).toHaveBeenCalledOnce();
+    expect(persistWorkspaceConfigMutation).not.toHaveBeenCalled();
+    expect(workspaceConfig.git?.upstreams?.["projects"]?.["bgkit"]).toMatchObject({
+      autoPush: true,
+      credential: "github-main",
+      authorEmail: "automation@example.com",
+      authorName: "Workspace Automation",
+    });
+    expect(workspaceConfig.git?.remotes?.["projects"]?.["bgkit"]?.["mirror"]).toBeDefined();
   });
 
   it("publishes the protected config mutation before cloning an imported project", async () => {
@@ -395,7 +649,7 @@ describe("gitInteropService", () => {
     expect(fs.existsSync(path.join(workspacePath, "projects", "bgkit"))).toBe(false);
   });
 
-  it("restores a pre-existing declaration when an explicit re-import fails", async () => {
+  it("rejects a conflicting re-import without rewriting the existing declaration", async () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = {
       ...BASE_WORKSPACE_CONFIG,
@@ -416,7 +670,7 @@ describe("gitInteropService", () => {
               remote: "origin",
               branch: "release",
               autoPush: true,
-              credentialId: "github-original",
+              credential: "github-original",
               authorEmail: "automation@example.com",
               authorName: "Workspace Automation",
             },
@@ -448,10 +702,12 @@ describe("gitInteropService", () => {
             url: "https://github.com/werg/replacement.git",
             branch: "next",
           },
-          credentialId: "github-replacement",
+          credentialIdOverride: "github-replacement",
         },
       ])
-    ).rejects.toThrow(/failed during clone: network unavailable/);
+    ).rejects.toThrow(
+      /conflicts with meta\/vibestudio\.yml: remote origin URL.*upstream branch.*Edit the remote\/upstream declaration explicitly/s
+    );
 
     const persistedConfig = YAML.parse(
       fs.readFileSync(path.join(workspacePath, "meta", "vibestudio.yml"), "utf-8")
@@ -459,7 +715,7 @@ describe("gitInteropService", () => {
     expect(persistedConfig.git).toEqual(originalGit);
   });
 
-  it("does not roll a failed import back over a newer declaration edit", async () => {
+  it("rejects a conflicting declaration before clone or config persistence", async () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = {
       ...BASE_WORKSPACE_CONFIG,
@@ -480,7 +736,7 @@ describe("gitInteropService", () => {
               remote: "origin",
               branch: "release",
               autoPush: false,
-              credentialId: "github-original",
+              credential: "github-original",
             },
           },
         },
@@ -506,7 +762,7 @@ describe("gitInteropService", () => {
               remote: "origin",
               branch: "developer-branch",
               autoPush: true,
-              credentialId: "github-developer",
+              credential: "github-developer",
               authorName: "Concurrent Developer",
             },
           },
@@ -544,28 +800,16 @@ describe("gitInteropService", () => {
             url: "https://github.com/werg/replacement.git",
             branch: "next",
           },
-          credentialId: "github-replacement",
+          credentialIdOverride: "github-replacement",
         },
       ])
       .catch((error: unknown) => error);
 
-    expect(rejected).toMatchObject({
-      message: expect.stringMatching(
-        /configuration changed again.*rollback was skipped to preserve the newer edit/s
-      ),
-      errorData: {
-        operation: "git.importProject",
-        repoPath: "projects/bgkit",
-        stage: "clone",
-        config: {
-          changed: true,
-          rolledBack: false,
-          rollbackConflict: true,
-        },
-      },
-    });
-    expect(currentConfig.git).toEqual(concurrentConfig.git);
-    expect(persistWorkspaceConfigMutation).toHaveBeenCalledTimes(2);
+    expect(rejected).toBeInstanceOf(Error);
+    expect((rejected as Error).message).toMatch(/conflicts with meta\/vibestudio\.yml/);
+    expect(currentConfig.git).toEqual(workspaceConfig.git);
+    expect(cloneRepo).not.toHaveBeenCalled();
+    expect(persistWorkspaceConfigMutation).not.toHaveBeenCalled();
   });
 
   it("keeps clone failure primary and attaches a failed rollback as secondary data", async () => {
@@ -643,254 +887,6 @@ describe("gitInteropService", () => {
     });
   });
 
-  it("imports dependencies already present in protected workspace config", async () => {
-    const workspacePath = tempWorkspace();
-    const cloneRepo = vi.fn(async () => undefined);
-    const workspaceConfig: WorkspaceConfig = {
-      ...BASE_WORKSPACE_CONFIG,
-      git: {
-        remotes: {
-          projects: {
-            bgkit: {
-              origin: {
-                url: "https://github.com/werg/bgkit.git",
-                branch: "vibestudio-bridge",
-              },
-            },
-          },
-        },
-        upstreams: {
-          projects: {
-            bgkit: {
-              remote: "origin",
-              branch: "vibestudio-bridge",
-              autoPush: true,
-              credentialId: "github-primary",
-              authorEmail: "automation@example.com",
-              authorName: "Workspace Automation",
-            },
-          },
-        },
-      },
-    };
-    fs.writeFileSync(
-      path.join(workspacePath, "meta", "vibestudio.yml"),
-      YAML.stringify(workspaceConfig),
-      "utf-8"
-    );
-    const originalGit = structuredClone(workspaceConfig.git);
-    const persistence = diskConfigPersistence(workspacePath);
-    const service = createGitInteropService({
-      workspacePath,
-      workspaceConfig,
-      invokeGitProvider: cloneProvider(cloneRepo),
-      ...persistence,
-    });
-
-    const result = await service.handler(
-      panelServiceContext(),
-      "completeWorkspaceDependencies",
-      []
-    );
-
-    expect(result).toMatchObject({
-      imported: [
-        {
-          path: "projects/bgkit",
-          remote: {
-            name: "origin",
-            url: "https://github.com/werg/bgkit.git",
-            branch: "vibestudio-bridge",
-          },
-        },
-      ],
-      skipped: [],
-      failed: [],
-    });
-    expect(cloneRepo).toHaveBeenCalledWith(expect.anything(), "projects/bgkit");
-    const persistedConfig = YAML.parse(
-      fs.readFileSync(path.join(workspacePath, "meta", "vibestudio.yml"), "utf-8")
-    ) as WorkspaceConfig;
-    expect(persistedConfig.git).toEqual(originalGit);
-    expect(persistence.persistWorkspaceConfigMutation).not.toHaveBeenCalled();
-  });
-
-  it("updates only the credential when dependency completion receives an override", async () => {
-    const workspacePath = tempWorkspace();
-    const cloneRepo = vi.fn(async () => undefined);
-    const workspaceConfig: WorkspaceConfig = {
-      ...BASE_WORKSPACE_CONFIG,
-      git: {
-        remotes: {
-          projects: {
-            bgkit: {
-              origin: {
-                url: "https://github.com/werg/bgkit.git",
-                branch: "release",
-              },
-            },
-          },
-        },
-        upstreams: {
-          projects: {
-            bgkit: {
-              remote: "origin",
-              branch: "release",
-              autoPush: true,
-              credentialId: "github-old",
-              authorEmail: "automation@example.com",
-              authorName: "Workspace Automation",
-            },
-          },
-        },
-      },
-    };
-    fs.writeFileSync(
-      path.join(workspacePath, "meta", "vibestudio.yml"),
-      YAML.stringify(workspaceConfig),
-      "utf-8"
-    );
-    const originalGit = structuredClone(workspaceConfig.git);
-    const persistence = diskConfigPersistence(workspacePath);
-    const service = createGitInteropService({
-      workspacePath,
-      workspaceConfig,
-      invokeGitProvider: cloneProvider(cloneRepo),
-      ...persistence,
-    });
-
-    await expect(
-      service.handler(panelServiceContext(), "completeWorkspaceDependencies", [
-        { credentialId: "github-new" },
-      ])
-    ).resolves.toMatchObject({
-      imported: [{ path: "projects/bgkit" }],
-      skipped: [],
-      failed: [],
-    });
-
-    const persistedConfig = YAML.parse(
-      fs.readFileSync(path.join(workspacePath, "meta", "vibestudio.yml"), "utf-8")
-    ) as WorkspaceConfig;
-    expect(persistedConfig.git?.remotes).toEqual(originalGit?.remotes);
-    expect(persistedConfig.git?.upstreams?.["projects"]?.["bgkit"]).toEqual({
-      remote: "origin",
-      branch: "release",
-      autoPush: true,
-      credentialId: "github-new",
-      authorEmail: "automation@example.com",
-      authorName: "Workspace Automation",
-    });
-    expect(persistence.persistWorkspaceConfigMutation).toHaveBeenCalledTimes(1);
-  });
-
-  it("restores the exact configured dependency when clone fails", async () => {
-    const workspacePath = tempWorkspace();
-    const workspaceConfig: WorkspaceConfig = {
-      ...BASE_WORKSPACE_CONFIG,
-      git: {
-        remotes: {
-          projects: {
-            bgkit: {
-              origin: {
-                url: "https://github.com/werg/bgkit.git",
-                branch: "release",
-              },
-            },
-          },
-        },
-        upstreams: {
-          projects: {
-            bgkit: {
-              remote: "origin",
-              branch: "release",
-              autoPush: true,
-              credentialId: "github-old",
-              authorEmail: "automation@example.com",
-              authorName: "Workspace Automation",
-            },
-          },
-        },
-      },
-    };
-    fs.writeFileSync(
-      path.join(workspacePath, "meta", "vibestudio.yml"),
-      YAML.stringify(workspaceConfig),
-      "utf-8"
-    );
-    const originalGit = structuredClone(workspaceConfig.git);
-    const persistence = diskConfigPersistence(workspacePath);
-    const service = createGitInteropService({
-      workspacePath,
-      workspaceConfig,
-      invokeGitProvider: cloneProvider(
-        vi.fn().mockRejectedValueOnce(new Error("network unavailable"))
-      ),
-      ...persistence,
-    });
-
-    await expect(
-      service.handler(panelServiceContext(), "completeWorkspaceDependencies", [
-        { credentialId: "github-temporary" },
-      ])
-    ).resolves.toMatchObject({
-      imported: [],
-      skipped: [],
-      failed: [
-        {
-          path: "projects/bgkit",
-          error: expect.stringMatching(/failed during clone: network unavailable/),
-        },
-      ],
-    });
-
-    const persistedConfig = YAML.parse(
-      fs.readFileSync(path.join(workspacePath, "meta", "vibestudio.yml"), "utf-8")
-    ) as WorkspaceConfig;
-    expect(persistedConfig.git).toEqual(originalGit);
-    expect(persistence.persistWorkspaceConfigMutation).toHaveBeenCalledTimes(2);
-  });
-
-  it("skips configured dependencies whose provider checkout already holds a candidate", async () => {
-    const workspacePath = tempWorkspace();
-    const cloneRepo = vi.fn(async () => undefined);
-    const workspaceConfig: WorkspaceConfig = {
-      ...BASE_WORKSPACE_CONFIG,
-      git: {
-        remotes: {
-          projects: {
-            bgkit: {
-              origin: {
-                url: "https://github.com/werg/bgkit.git",
-                branch: "main",
-              },
-            },
-          },
-        },
-        upstreams: {
-          projects: {
-            bgkit: { remote: "origin", branch: "main", autoPush: false },
-          },
-        },
-      },
-    };
-    const service = createGitInteropService({
-      workspacePath,
-      workspaceConfig,
-      invokeGitProvider: cloneProvider(cloneRepo, "integration-required"),
-      ...diskConfigPersistence(workspacePath),
-    });
-
-    await expect(
-      service.handler(serviceContext(), "completeWorkspaceDependencies", [])
-    ).resolves.toEqual({
-      imported: [],
-      skipped: [{ path: "projects/bgkit", reason: "already-materialized" }],
-      failed: [],
-    });
-    expect(cloneRepo).not.toHaveBeenCalled();
-  });
-
   it("uses the injected config writer instead of reading the projected meta file", async () => {
     const workspacePath = tempWorkspace();
     const projectedConfigPath = path.join(workspacePath, "meta", "vibestudio.yml");
@@ -945,7 +941,6 @@ describe("gitInteropService", () => {
               remote: "origin",
               branch: "main",
               autoPush: false,
-              credentialId: null,
             },
           },
         },
@@ -977,7 +972,6 @@ describe("gitInteropService", () => {
       remote: "origin",
       branch: "main",
       autoPush: true,
-      credentialId: null,
     });
   });
 
@@ -986,7 +980,7 @@ describe("gitInteropService", () => {
     const cases: Array<{ method: string; args: unknown[]; result: unknown }> = [
       {
         method: "upstreamStatus",
-        args: [["projects/bgkit"], { fetch: true }],
+        args: [["projects/bgkit"]],
         result: [
           {
             repoPath: "projects/bgkit",
@@ -994,8 +988,11 @@ describe("gitInteropService", () => {
             branch: "main",
             autoPush: false,
             state: "in-sync",
+            relationship: "in-sync",
             aheadBy: 0,
             behindBy: 0,
+            remoteBranchExists: true,
+            observedAt: 1,
           },
         ],
       },
@@ -1005,14 +1002,17 @@ describe("gitInteropService", () => {
         result: {
           exported: 1,
           headCommit: "abc123",
-          pushed: true,
-          status: "in-sync",
+          outcome: "pushed",
         },
       },
       {
         method: "pullUpstream",
         args: ["projects/bgkit", { dryRun: true }],
         result: {
+          remote: "origin",
+          branch: "main",
+          observedCommit: "abc123",
+          changed: false,
           behindBy: 1,
           aheadBy: 0,
           remoteBranchExists: true,
@@ -1046,6 +1046,28 @@ describe("gitInteropService", () => {
           pushed: true,
         },
       },
+      {
+        method: "pushTemplateContribution",
+        args: [
+          {
+            operationId: "template-suggest-1",
+            nodeId: "t-abcdef",
+            alias: "news",
+            url: "https://github.com/acme/news.git",
+            baseCommit: "a".repeat(40),
+            expectedMainEventId: "event:main",
+            parts: [{ repoPath: "panels/news", subdir: "panels/news" }],
+          },
+        ],
+        result: {
+          outcome: "pushed",
+          operationId: "template-suggest-1",
+          branch: "vibestudio/workspace/request",
+          headCommit: "b".repeat(40),
+          commits: 1,
+          parts: ["panels/news"],
+        },
+      },
     ];
     for (const testCase of cases) {
       const invokeGitProviderMock = vi.fn(async () => testCase.result);
@@ -1063,105 +1085,58 @@ describe("gitInteropService", () => {
     }
   });
 
-  it("publishes, verifies, and cleans a disposable remote without config mutation", async () => {
-    const ctx = serviceContext();
-    const disposableRemotes = {
-      create: vi.fn(async () => ({
-        id: "remote-1",
-        name: "publish-check",
-        url: "http://vibestudio.local/_disposable-git/remote-1/publish-check.git",
-        branch: "main",
-        expiresAt: Date.now() + 60_000,
-      })),
-      inspect: vi.fn(async () => ({
-        id: "remote-1",
-        url: "http://vibestudio.local/_disposable-git/remote-1/publish-check.git",
-        branch: "main",
-        commitCount: 3,
-        headCommit: "abc123",
-        expiresAt: Date.now() + 60_000,
-      })),
-      remove: vi.fn(async () => ({ removed: true })),
-    };
-    const invokeGitProviderMock = vi.fn(async () => ({
-      exported: 3,
-      pushed: true,
-      headCommit: "abc123",
-    }));
-    const service = createGitInteropService({
-      disposableRemotes: disposableRemotes as never,
-      invokeGitProvider: invokeGitProviderMock as never,
-    });
-
-    await expect(
-      service.handler(ctx, "publishToDisposableRemote", ["projects/bgkit"])
-    ).resolves.toMatchObject({
-      repoPath: "projects/bgkit",
-      branch: "main",
-      exported: 3,
-      pushed: true,
-      commitCount: 3,
-      headCommit: "abc123",
-    });
-    expect(invokeGitProviderMock).toHaveBeenCalledWith(ctx, "pushDisposableRemote", [
-      {
-        repoPath: "projects/bgkit",
-        url: expect.stringContaining("publish-check.git"),
-        branch: "main",
+  it("resolves a logical workspace credential at the host boundary without persisting its id", async () => {
+    const workspaceConfig: WorkspaceConfig = {
+      ...BASE_WORKSPACE_CONFIG,
+      git: {
+        remotes: {
+          projects: {
+            bgkit: {
+              origin: { url: "https://github.com/werg/bgkit.git", branch: "main" },
+            },
+          },
+        },
+        upstreams: {
+          projects: {
+            bgkit: {
+              remote: "origin",
+              branch: "main",
+              autoPush: false,
+              credential: "github-main",
+            },
+          },
+        },
       },
-    ]);
-    expect(disposableRemotes.remove).toHaveBeenCalledOnce();
-  });
-
-  it("pushes to an existing active disposable remote without removing it", async () => {
-    const ctx = serviceContext();
-    const url = "http://vibestudio.local/_disposable-git/remote-1/publish-check.git";
-    const disposableRemotes = {
-      create: vi.fn(),
-      inspect: vi
-        .fn()
-        .mockResolvedValueOnce({
-          id: "remote-1",
-          url,
-          branch: "main",
-          commitCount: 0,
-          headCommit: null,
-          expiresAt: Date.now() + 60_000,
-        })
-        .mockResolvedValueOnce({
-          id: "remote-1",
-          url,
-          branch: "main",
-          commitCount: 3,
-          headCommit: "abc123",
-          expiresAt: Date.now() + 60_000,
-        }),
-      remove: vi.fn(),
     };
-    const invokeGitProviderMock = vi.fn(async () => ({
-      exported: 3,
-      pushed: true,
+    const resolveCredential = vi.fn(() => "credential-concrete");
+    const invokeGitProvider = vi.fn(async () => ({
+      exported: 1,
       headCommit: "abc123",
+      outcome: "pushed" as const,
     }));
     const service = createGitInteropService({
-      disposableRemotes: disposableRemotes as never,
-      invokeGitProvider: invokeGitProviderMock as never,
+      workspaceId: "workspace-1",
+      workspaceConfig,
+      resolveCredential,
+      invokeGitProvider: invokeGitProvider as NonNullable<
+        Parameters<typeof createGitInteropService>[0]["invokeGitProvider"]
+      >,
     });
 
-    await expect(
-      service.handler(ctx, "pushDisposableRemote", ["projects/bgkit", url, "main"])
-    ).resolves.toEqual({
-      repoPath: "projects/bgkit",
-      branch: "main",
-      exported: 3,
-      pushed: true,
-      commitCount: 3,
-      headCommit: "abc123",
+    await service.handler(serviceContext(), "pushUpstream", ["projects/bgkit"]);
+
+    expect(resolveCredential).toHaveBeenCalledWith({
+      workspaceId: "workspace-1",
+      name: "github-main",
+      url: "https://github.com/werg/bgkit.git",
     });
-    expect(invokeGitProviderMock).toHaveBeenCalledWith(ctx, "pushDisposableRemote", [
-      { repoPath: "projects/bgkit", url, branch: "main" },
+    expect(invokeGitProvider).toHaveBeenCalledWith(expect.anything(), "pushUpstream", [
+      "projects/bgkit",
+      { credentialIdOverride: "credential-concrete" },
     ]);
-    expect(disposableRemotes.remove).not.toHaveBeenCalled();
+    expect(workspaceConfig.git?.upstreams?.["projects"]?.["bgkit"]).toEqual(
+      expect.objectContaining({ credential: "github-main" })
+    );
   });
 
   it("fails provider operations when no gitInterop provider is available", async () => {
@@ -1212,7 +1187,11 @@ describe("gitInteropService", () => {
       service.handler(serviceContext(), "importProject", [
         {
           path: "projects/bgkit",
-          remote: { name: "origin", url: "https://github.com/werg/bgkit.git" },
+          remote: {
+            name: "origin",
+            url: "https://github.com/werg/bgkit.git",
+            branch: "main",
+          },
         },
       ])
     ).rejects.toThrow("Invalid gitInterop.cloneRepo provider result");

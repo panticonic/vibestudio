@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { assertAuthorityPromptRegistry, AUTHORITY_PROMPT_REGISTRY } from "./promptRegistry.js";
+import {
+  assertAuthorityPromptRegistry,
+  AUTHORITY_PROMPT_REGISTRY,
+} from "./promptRegistry.js";
 
 describe("authority prompt registry", () => {
   it("contains the complete acquisition card inventory with safe copy", () => {

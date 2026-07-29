@@ -700,8 +700,16 @@ function isMetaPath(filePath: string): boolean {
   return filePath === "meta" || filePath.startsWith("meta/");
 }
 
-function userlandCallerKind(kind: string): "panel" | "app" | "worker" | "do" | null {
-  if (kind === "panel" || kind === "app" || kind === "worker" || kind === "do") return kind;
+function userlandCallerKind(kind: string): "panel" | "app" | "worker" | "do" | "extension" | null {
+  if (
+    kind === "panel" ||
+    kind === "app" ||
+    kind === "worker" ||
+    kind === "do" ||
+    kind === "extension"
+  ) {
+    return kind;
+  }
   return null;
 }
 

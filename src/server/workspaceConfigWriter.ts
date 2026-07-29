@@ -138,8 +138,6 @@ export function createWorkspaceConfigMainWriter(deps: {
   workspaceId: string;
   vcs: WorkspaceVcs;
 }): WorkspaceConfigMainWriter {
-  let mutationQueue = Promise.resolve();
-
   const readConfig = async (
     contextId: string,
     causalParent: RpcCausalParent | null,
@@ -190,20 +188,20 @@ export function createWorkspaceConfigMainWriter(deps: {
       throw new Error(`Cannot persist workspace config: ${META_REPO_PATH} repository is absent`);
     }
 
-    let fileId: string | null = null;
+    const metaFiles = new Map<string, string>();
     cursor = undefined;
     do {
       const page: VcsListFilesResult = await call("vcsListFiles", {
         state,
         repositoryId,
-        prefix: WORKSPACE_CONFIG_FILE,
+        prefix: "",
         limit: PAGE_LIMIT,
         ...(cursor ? { cursor } : {}),
       });
-      fileId =
-        page.files.find((candidate) => candidate.path === WORKSPACE_CONFIG_FILE)?.fileId ?? null;
+      for (const file of page.files) metaFiles.set(file.path, file.fileId);
       cursor = page.nextCursor ?? undefined;
-    } while (!fileId && cursor);
+    } while (cursor);
+    const fileId = metaFiles.get(WORKSPACE_CONFIG_FILE) ?? null;
     if (!fileId) {
       throw new Error(
         `Cannot persist workspace config: ${META_REPO_PATH}/${WORKSPACE_CONFIG_FILE} is absent`
@@ -273,17 +271,15 @@ export function createWorkspaceConfigMainWriter(deps: {
     return withFreshContext((contextId) => operation(contextId, false));
   };
 
-  const render = (
-    currentContent: string,
-    current: WorkspaceConfig,
-    mutate: WorkspaceConfigMutation
-  ) => {
-    const nextConfig = mutate(current);
+  const render = (currentState: WorkspaceConfigAtState, mutate: WorkspaceConfigMutation) => {
+    const nextConfig = mutate(currentState.config);
+    const nextContent = renderWorkspaceConfigYaml(currentState.text, nextConfig, deps.workspaceId);
+    const parsed = parseWorkspaceConfigContentWithId(nextContent, deps.workspaceId);
     return {
-      nextConfig,
-      nextContent: isDeepStrictEqual(nextConfig, current)
-        ? currentContent
-        : renderWorkspaceConfigYaml(currentContent, nextConfig, deps.workspaceId),
+      nextConfig: parsed,
+      nextContent: isDeepStrictEqual(nextConfig, currentState.config)
+        ? currentState.text
+        : nextContent,
     };
   };
 
@@ -312,7 +308,7 @@ export function createWorkspaceConfigMainWriter(deps: {
       );
     }
     const current = await readConfig(contextId, causalParent, contextIntegrity, borrowedStatus);
-    const rendered = render(current.text, current.config, input.mutate);
+    const rendered = render(current, input.mutate);
     if (rendered.nextContent === current.text) {
       return { changed: false, nextConfig: rendered.nextConfig };
     }
@@ -385,27 +381,19 @@ export function createWorkspaceConfigMainWriter(deps: {
   const applyMutation = async (
     input: Parameters<WorkspaceConfigMainWriter["applyMutation"]>[0]
   ): Promise<WorkspaceConfigMutationResult> =>
-    withMutationContext(input.ctx, (contextId, borrowed) =>
-      applyMutationInContext(input, contextId, borrowed)
+    deps.vcs.withProtectedMainMutation(() =>
+      withMutationContext(input.ctx, (contextId, borrowed) =>
+        applyMutationInContext(input, contextId, borrowed)
+      )
     );
 
   return {
     wouldMutate: (mutate) =>
       withFreshContext(async (contextId) => {
         const current = await readConfig(contextId, SYSTEM_CAUSE, SYSTEM_INTEGRITY);
-        return render(current.text, current.config, mutate).nextContent !== current.text;
+        return render(current, mutate).nextContent !== current.text;
       }),
-    applyMutation(input) {
-      const run = mutationQueue.then(
-        () => applyMutation(input),
-        () => applyMutation(input)
-      );
-      mutationQueue = run.then(
-        () => undefined,
-        () => undefined
-      );
-      return run;
-    },
+    applyMutation,
   };
 }
 
@@ -414,13 +402,12 @@ export function renderWorkspaceConfigYaml(
   nextConfig: WorkspaceConfig,
   workspaceId: string
 ): string {
-  const beforeParsed = (YAML.parse(currentContent) as Record<string, unknown> | null) ?? {};
-  // `WorkspaceConfig.id` is resolved host state, not manifest content. Older
-  // writers could accidentally persist a checkout-derived id; omit it from
-  // both sides so every real mutation also repairs that stale projection.
-  const { id: _persistedId, ...beforeManifest } = beforeParsed;
+  // Parse the old file so malformed runtime state is never overwritten under
+  // cover of an unrelated mutation.
+  parseWorkspaceConfigContentWithId(currentContent, workspaceId);
+  // `WorkspaceConfig.id` is resolved host state, not manifest content.
   const { id: _resolvedId, ...nextManifest } = nextConfig;
-  const nextContent = YAML.stringify({ ...beforeManifest, ...nextManifest });
+  const nextContent = YAML.stringify(nextManifest);
   parseWorkspaceConfigContentWithId(nextContent, workspaceId);
   return nextContent;
 }

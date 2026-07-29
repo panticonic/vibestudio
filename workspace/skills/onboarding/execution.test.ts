@@ -5,8 +5,8 @@ vi.mock("@workspace/runtime", () => ({
   openPanel: vi.fn(),
 }));
 
-import { executeOnboardingSelection } from "./execution";
-import { onboardingInteraction } from "./routing";
+import { executeOnboardingSelection, executeTemplateSelection } from "./execution";
+import { onboardingInteraction, templateCatalogInteraction } from "./routing";
 
 function dependencies() {
   return {
@@ -49,5 +49,14 @@ describe("executeOnboardingSelection", () => {
     await expect(
       executeOnboardingSelection(onboardingInteraction("connection.retired", "setup"), deps)
     ).rejects.toThrow("Unknown or retired onboarding capability");
+  });
+
+  it("returns template selections to the userland composer workflow", () => {
+    const interaction = templateCatalogInteraction("base-dev-tools", "2026-07-29.3");
+    expect(executeTemplateSelection(interaction)).toEqual({
+      handled: false,
+      target: { via: "template-composer" },
+      interaction,
+    });
   });
 });

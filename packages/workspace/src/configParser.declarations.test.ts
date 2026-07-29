@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   parseWorkspaceConfigContentWithId,
+  readWorkspaceConfig,
   resolveHostTargetDecl,
   resolveHostTargetRequiredExtensions,
   resolveWorkspaceTrustGrants,
@@ -53,6 +54,46 @@ hostTargets:
 `;
 
 describe("manifest declarations: providers / trust / hostTargets", () => {
+  it("reads exactly one flattened runtime manifest", async () => {
+    const reads: string[] = [];
+    await expect(
+      readWorkspaceConfig(
+        {
+          readText: async (path) => {
+            reads.push(path);
+            return `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ndefaultRepo: panels/chat\n`;
+          },
+        },
+        "test-ws"
+      )
+    ).resolves.toMatchObject({ id: "test-ws", defaultRepo: "panels/chat" });
+    expect(reads).toEqual(["meta/vibestudio.yml"]);
+  });
+
+  it("rejects userland composition fields in the runtime manifest", () => {
+    expect(() =>
+      parseWorkspaceConfigContentWithId(
+        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntemplates:\n  use: []\n`,
+        "test-ws"
+      )
+    ).toThrow(/unknown .*templates/u);
+    expect(() =>
+      parseWorkspaceConfigContentWithId(
+        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ndisable:\n  - apps\/apps\/chat\n`,
+        "test-ws"
+      )
+    ).toThrow(/unknown .*disable/u);
+  });
+
+  it("rejects a persisted workspace id", () => {
+    expect(() =>
+      parseWorkspaceConfigContentWithId(
+        `id: checkout-name\nsystemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`,
+        "test-ws"
+      )
+    ).toThrow("`id` is resolved by the host");
+  });
+
   it("rejects a missing or mismatched workspace runtime ABI epoch", () => {
     expect(() => parseWorkspaceConfigContentWithId("initPanels: []\n", "test-ws")).toThrow(
       /systemEpoch.*Required/

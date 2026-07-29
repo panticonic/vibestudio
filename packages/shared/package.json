@@ -118,6 +118,7 @@
     "@vibestudio/credential-client": "workspace:*",
     "@vibestudio/dev-log": "workspace:*",
     "@vibestudio/env-paths": "workspace:*",
+    "@vibestudio/vcs-path-policy": "workspace:*",
     "@vibestudio/identity": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/sqlite": "workspace:*",

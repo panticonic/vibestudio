@@ -112,24 +112,8 @@ node-datachannel` or reinstall the published package on the remote box.
 ## Verification
 
 ```bash
-# With a booted Android phone/emulator and an attached CLI session:
-pnpm cli --instance <id> system-test run mobile-extension-install-android
-pnpm cli --instance <id> system-test run onboarding-desktop-mobile-install-android
 pnpm test:desktop-pairing-smoke
-pnpm smoke:full
 ```
-
-The first exact system test is the canonical developer-install check: the sandboxed
-agent invokes `@workspace-extensions/mobile-debug`, crosses the scoped approval
-boundary, installs and launches the internal client, and verifies the package
-and rendering process through that same extension surface. Do not replace it
-with direct `adb` installation.
-
-The onboarding test is the end-user composition check: a connected Electron
-desktop discovers the attached phone, performs atomic install-and-pair
-provisioning, and verifies that the mobile workspace and panel host become
-ready. Its readiness window covers a cold source build; process liveness or an
-installed APK alone is not sufficient.
 
 `pnpm smoke:full` is the composition check: branded Electron pairing, desktop
 Playwright e2e, and Android emulator/mobile pairing with OTA activation. The

@@ -1,4 +1,4 @@
-import type { ModelBenchmarkResult } from "./types.js";
+import type { ModelBenchmarkResult } from "@workspace/model-catalog/localModels";
 
 export interface ModelBenchmarkDeps {
   fetch: typeof fetch;

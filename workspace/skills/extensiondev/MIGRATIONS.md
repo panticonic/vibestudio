@@ -43,7 +43,7 @@ The canary migrations all follow the same shape:
    await svc.<method>(...);
    ```
 
-4. **Declare the extension** in the workspace template's `meta/vibestudio.yml` under `extensions:` so it is reconciled on first boot. It is not pre-approved — the startup reconcile raises a joint approval the user (or, headlessly, the shell via `shellApproval.resolve`) must grant before it runs.
+4. **Declare the extension** in the template repository's `meta/template.yml` under `extensions:` so it is composed on installation. It is not pre-approved — the startup reconcile raises a joint approval the user (or, headlessly, the shell via `shellApproval.resolve`) must grant before it runs.
 
 5. **Add an integration test** at `tests/extension-<name>.integration.test.ts` that boots a real server, approves the joint unit approval, calls a representative method, and asserts the response matches the old service's contract.
 
@@ -90,6 +90,6 @@ The canary migrations all follow the same shape:
 - [ ] Delete the in-host service and its registration.
 - [ ] Update every consumer (`ctx.<name>` → `extensions.use<ApiType>(name)`).
 - [ ] Add an integration test that boots a real server.
-- [ ] Declare the extension in the workspace template's `meta/vibestudio.yml` (`extensions:`).
+- [ ] Declare the extension in the template repository's `meta/template.yml` (`extensions:`).
 - [ ] Confirm `workspace.units.list()` shows the new extension and `lastError` is `null`.
 - [ ] Document the public API type (`export interface <Name>Api`) so consumers can `extensions.use<NameApi>(...)`.

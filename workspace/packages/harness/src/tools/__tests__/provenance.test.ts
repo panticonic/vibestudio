@@ -169,6 +169,24 @@ function fixture() {
     ): ReturnType<ProvenanceToolDeps["vcs"]["inspect"]> => {
       const common = { root: input.node, edges: [], hasMoreEdges: false };
       switch (input.node.kind) {
+        case "external-delta":
+          return {
+            ...common,
+            node: {
+              kind: "external-delta" as const,
+              value: {
+                deltaId: input.node.deltaId,
+                workUnitId: "work-unit:external",
+                repositoryId: "repository:foo",
+                repoPath: "packages/foo",
+                oldSnapshot: `snapshot:${"1".repeat(64)}`,
+                newSnapshot: `snapshot:${"2".repeat(64)}`,
+                changeCount: 1,
+                changeIds: ["change:external"],
+                status: "active" as const,
+              },
+            },
+          };
         case "repository":
           return {
             ...common,

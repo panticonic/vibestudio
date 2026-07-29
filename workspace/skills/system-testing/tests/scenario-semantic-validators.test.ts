@@ -5,7 +5,6 @@ import { evalLifecycleTests } from "./eval-lifecycle.js";
 import { extensionSurfaceTests } from "./extensions-surface.js";
 import { filesystemTests } from "./filesystem.js";
 import { multiUserTests } from "./multi-user.js";
-import { mobileTests } from "./mobile.js";
 import { workerTests } from "./workers.js";
 import { workspaceTests } from "./workspace.js";
 import { completedScenarioEvidence } from "./_scenario-evidence.js";
@@ -931,52 +930,6 @@ describe("extension semantic validators", () => {
   });
 });
 
-describe("mobile semantic validators", () => {
-  const validator = scenario(mobileTests, "mobile-extension-install-android");
-  const code =
-    'return services.extensions.invoke("@workspace-extensions/mobile-debug", "installAndroid", [{ reset: true, launch: true }]).then(async (installation) => ({ installation, verification: await services.extensions.invoke("@workspace-extensions/mobile-debug", "verify", [{ platform: "android" }]) }));';
-
-  it("requires extension-backed installation and rendering evidence", () => {
-    expect(
-      validator.validate(
-        execution(
-          "Installed app.vibestudio.mobile.internal on Android emulator-5554; installation succeeded and the process is rendering.",
-          [
-            {
-              code,
-              returnValue: {
-                installation: { packageName: "app.vibestudio.mobile.internal" },
-                verification: { installed: true, rendering: true, issues: [] },
-              },
-            },
-          ]
-        )
-      ).passed
-    ).toBe(true);
-
-    expect(
-      validator.validate(
-        execution(
-          "Installed app.vibestudio.mobile.internal on Android emulator-5554, but it did not render.",
-          [
-            {
-              code,
-              returnValue: {
-                installation: { packageName: "app.vibestudio.mobile.internal" },
-                verification: {
-                  installed: true,
-                  rendering: false,
-                  issues: ["process not rendering"],
-                },
-              },
-            },
-          ]
-        )
-      ).passed
-    ).toBe(false);
-  });
-});
-
 describe("scenario prompts", () => {
   it("use vague user goals without marker protocols or answer templates", () => {
     const tests = [
@@ -985,7 +938,6 @@ describe("scenario prompts", () => {
       ...workspaceTests,
       ...evalLifecycleTests,
       ...extensionSurfaceTests,
-      ...mobileTests,
       ...workerTests,
     ];
     for (const test of tests) {

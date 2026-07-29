@@ -146,7 +146,7 @@ Keep these out of initial setup:
   are active, pass `credentialId` explicitly.
 - Configure shared remotes with `git.setSharedRemote()`, tracking with
   `git.setUpstream()`, and inspect before push with
-  `git.upstreamStatus([repo], { fetch: true })`.
+  `git.upstreamStatus([repo])`. Status always observes the remote.
 - Import an external repository with `git.importProject()` and integrate its
   returned semantic candidate before publishing protected `main`.
 
@@ -157,7 +157,7 @@ Keep the two publication boundaries explicit:
 2. Call `git.pushUpstream(repo)` to export that protected-main snapshot and
    push it to GitHub.
 3. When GitHub is ahead or diverged, preview with
-   `git.pullUpstream(repo, { dryRun: true })`; this uses disposable Git state
+   `git.pullUpstream(repo, { dryRun: true })`; this uses isolated temporary Git state
    and mutates neither the managed checkout nor semantic state. Then call
    `git.pullUpstream(repo)` once. Retain the returned candidate event.
 4. Compare and incrementally integrate the candidate, check, commit, and
@@ -165,5 +165,5 @@ Keep the two publication boundaries explicit:
    `git.pushUpstream(repo)`.
 
 Load `skills/git-bridge/SKILL.md` for the complete remote/upstream model,
-credential tri-state, disposable remotes, and divergence recovery. Do not
+credential tri-state and divergence recovery. Do not
 duplicate that machinery inside GitHub onboarding.

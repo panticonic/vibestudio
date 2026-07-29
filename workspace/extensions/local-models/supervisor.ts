@@ -15,17 +15,16 @@ import { createServer as createHttpServer, type IncomingMessage } from "node:htt
 import { createServer as createNetServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
+import type {
+  EngineState,
+  ModelRecord,
+  OwnerInfo,
+  OwnershipRole,
+  ServerKind,
+  ServerState,
+} from "@workspace/model-catalog/localModels";
 import { runtimeContextLengthFor } from "./runtime-profiles.js";
-import {
-  FALLBACK_MODEL,
-  ROOT_LAYOUT,
-  type EngineState,
-  type ModelRecord,
-  type OwnerInfo,
-  type OwnershipRole,
-  type ServerKind,
-  type ServerState,
-} from "./types.js";
+import { FALLBACK_MODEL, ROOT_LAYOUT } from "./constants.js";
 
 export interface SupervisorDeps {
   rootDir: string;

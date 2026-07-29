@@ -52,4 +52,28 @@ describe("shipped first-run workspace", () => {
       expect(text).not.toContain("Preparing setup overview");
     }
   });
+
+  it("does not retain the retired Hello Vanilla seed declaration or local source", () => {
+    const source = fs.readFileSync(path.resolve("workspace/meta/vibestudio.yml"), "utf8");
+    const manifest = parse(source) as {
+      git?: {
+        remotes?: Record<string, Record<string, Record<string, { url?: string; branch?: string }>>>;
+        upstreams?: Record<
+          string,
+          Record<
+            string,
+            {
+              remote?: string;
+              branch?: string;
+              credential?: string;
+            }
+          >
+        >;
+      };
+    };
+
+    expect(fs.existsSync(path.resolve("workspace/panels/hello-vanilla"))).toBe(false);
+    expect(manifest.git?.remotes?.["panels"]?.["hello-vanilla"]).toBeUndefined();
+    expect(manifest.git?.upstreams?.["panels"]?.["hello-vanilla"]).toBeUndefined();
+  });
 });

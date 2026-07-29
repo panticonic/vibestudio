@@ -13,11 +13,13 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
+  canonicalSnapshotDigest,
   compareUtf16CodeUnits,
   sha256Hex,
   sha256HexSyncText,
+  type CanonicalSnapshotDigest,
 } from "@vibestudio/content-addressing";
-import { GitClient, type GitCommitTreeEntry } from "@vibestudio/git";
+import { GitClient, readExactGitSnapshot } from "@vibestudio/git";
 import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
 import {
   vcsMethods,
@@ -26,10 +28,6 @@ import {
   type VcsStateNodeRef,
 } from "@vibestudio/service-schemas/vcs";
 import type { TypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import {
-  assertSemanticVcsPathAdmissible,
-  semanticVcsPathAdmission,
-} from "@vibestudio/shared/vcs/pathAdmission";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/workspace/remotes";
 import { withRepoLock } from "./repoLocks.js";
 
@@ -37,7 +35,6 @@ type CanonicalVcs = TypedServiceClient<typeof vcsMethods>;
 type CanonicalBlobstore = TypedServiceClient<typeof blobstoreMethods>;
 
 const PAGE_LIMIT = 500;
-const CAS_WRITE_CONCURRENCY = 8;
 export interface BridgeHost {
   checkoutRoot(): Promise<string>;
   ensureContext(contextId: string): Promise<void>;
@@ -58,6 +55,20 @@ export interface ExportResult {
   exported: 0 | 1;
   headCommit: string | null;
   clobberedLocalEdits: string[];
+}
+
+export interface ProtectedRepositorySnapshot {
+  repositoryId: string;
+  repoPath: string;
+  eventId: string;
+  treeDigest: CanonicalSnapshotDigest;
+  files: Array<{
+    path: string;
+    contentHash: string;
+    size: number;
+    mode: number;
+    bytes: Uint8Array;
+  }>;
 }
 
 export interface ImportResult {
@@ -90,8 +101,8 @@ type CheckoutMap = Record<string, { contentHash: string; mode: number; regular: 
 
 interface ImportedFile {
   path: string;
-  bytes: Buffer;
   contentHash: string;
+  size: number;
   mode: number;
 }
 
@@ -203,6 +214,68 @@ export class GitBridge {
     opts: { authorName?: string; authorEmail?: string } = {}
   ): Promise<ExportResult> {
     return withRepoLock(repoPath, (repo) => this.exportLockedInner(repo, opts));
+  }
+
+  /**
+   * Read one repository from protected main for a non-per-repository Git
+   * projection, such as a workspace-template contribution branch. This is the
+   * sole semantic-to-Git snapshot reader: callers choose layout and commit
+   * granularity, but cannot observe a checkout as source truth.
+   */
+  async readProtectedRepository(
+    repoPath: string,
+    mainEventId: string
+  ): Promise<ProtectedRepositorySnapshot> {
+    const repo = normalizeWorkspaceRepoPath(repoPath);
+    const pending = await this.pendingImportCandidate(repo);
+    if (pending) throw new PendingImportCandidateError(pending);
+    const contextId = contextForRepository(repo);
+    await this.host.ensureContext(contextId);
+    const status = await this.host.vcs.status({ contextId });
+    if (status.mainEventId !== mainEventId) {
+      throw new Error(
+        `Protected main changed from ${mainEventId} to ${status.mainEventId} before template export`
+      );
+    }
+    const state = { kind: "event" as const, eventId: mainEventId };
+    const repository = await this.findRepository(state, repo);
+    if (!repository) throw new Error(`Cannot export absent repository '${repo}'`);
+    const listed = await this.listRepositoryFiles(state, repository.repositoryId);
+    const files: ProtectedRepositorySnapshot["files"] = [];
+    for (const file of listed) {
+      const content = await this.host.vcs.readFile({
+        state,
+        repositoryId: repository.repositoryId,
+        file: { kind: "id", fileId: file.fileId },
+      });
+      if (!content) throw new Error(`Semantic state lost ${file.path} during Git export`);
+      const bytes =
+        content.content.kind === "text"
+          ? Buffer.from(content.content.text, "utf8")
+          : Buffer.from(content.content.base64, "base64");
+      files.push({
+        path: file.path,
+        contentHash: file.contentHash,
+        size: bytes.byteLength,
+        mode: file.mode,
+        bytes,
+      });
+    }
+    files.sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
+    return {
+      repositoryId: repository.repositoryId,
+      repoPath: repo,
+      eventId: mainEventId,
+      treeDigest: canonicalSnapshotDigest(
+        files.map(({ path: filePath, contentHash, size, mode }) => ({
+          path: filePath,
+          contentHash,
+          size,
+          mode: mode === 0o755 ? 0o100755 : 0o100644,
+        }))
+      ),
+      files,
+    };
   }
 
   async exportLockedInner(
@@ -360,18 +433,20 @@ export class GitBridge {
     if (!gitCommit) {
       throw new Error(`Cannot import ${repo}: checkout has no exact Git HEAD revision`);
     }
-    const treeEntries = await this.git.readCommitTree(gitDir, gitCommit).catch((error) => {
+    const snapshot = await readExactGitSnapshot({
+      git: this.git,
+      dir: gitDir,
+      commit: gitCommit,
+      label: repo,
+      sink: {
+        put: async (bytes) => this.host.blobstore.putBase64(Buffer.from(bytes).toString("base64")),
+      },
+    }).catch((error) => {
       throw new Error(
         `Cannot import ${repo}: could not read exact Git commit ${gitCommit}: ${errorMessage(error)}`
       );
     });
-    const files = await this.importableCommitFiles(repo, treeEntries);
-    await this.assertCheckoutAdmission({
-      repoPath: repo,
-      gitDir,
-      gitCommit,
-      files,
-    });
+    const files: ImportedFile[] = snapshot.files;
     const currentRepo = await this.findRepository(status.workingHead, repo);
     const currentFiles = currentRepo
       ? await this.listRepositoryFiles(status.workingHead, currentRepo.repositoryId)
@@ -420,7 +495,6 @@ export class GitBridge {
     }
 
     const summary = opts.summary ?? `Import ${repo} @ ${gitCommit.slice(0, 7)}`;
-    await this.storeImportedContent(repo, files);
     const imported = await this.host.vcs.importSnapshot({
       commandId: commandId("import-snapshot"),
       contextId,
@@ -428,8 +502,9 @@ export class GitBridge {
       intentSummary: summary,
       source: {
         kind: "git",
-        uri: sourceUri,
-        snapshotRevision: gitCommit,
+        url: sourceUri,
+        commit: gitCommit,
+        snapshot: snapshot.snapshot,
       },
       repositories: [
         {
@@ -517,130 +592,6 @@ export class GitBridge {
       cursor = page.nextCursor ?? undefined;
     } while (cursor);
     return files;
-  }
-
-  private async importableCommitFiles(
-    repoPath: string,
-    entries: GitCommitTreeEntry[]
-  ): Promise<ImportedFile[]> {
-    const excluded: string[] = [];
-    const inadmissible: string[] = [];
-    const files: ImportedFile[] = [];
-    for (const entry of entries) {
-      const admission = semanticVcsPathAdmission(entry.path);
-      if (!admission.admissible && admission.reason !== "platform-reserved") {
-        inadmissible.push(`${entry.path} (invalid semantic path)`);
-        continue;
-      }
-      if (!admission.admissible) {
-        excluded.push(entry.path);
-        continue;
-      }
-      assertSemanticVcsPathAdmissible(entry.path);
-      if (entry.type !== "blob" || (entry.mode !== 0o100644 && entry.mode !== 0o100755)) {
-        inadmissible.push(`${entry.path} (${entry.type}, mode ${entry.mode.toString(8)})`);
-        continue;
-      }
-      const bytes = Buffer.from(entry.bytes);
-      files.push({
-        path: entry.path,
-        bytes,
-        contentHash: sha256Hex(bytes),
-        mode: entry.mode === 0o100755 ? 0o755 : 0o644,
-      });
-    }
-    if (excluded.length > 0) {
-      throw new Error(
-        `Cannot import ${repoPath}: Git commit tracks paths excluded from the semantic ` +
-          `snapshot (${excluded.sort(compareUtf16CodeUnits).join(", ")}); remove them from ` +
-          `the commit before import`
-      );
-    }
-    if (inadmissible.length > 0) {
-      throw new Error(
-        `Cannot import ${repoPath}: Git commit contains entries the semantic workspace cannot ` +
-          `represent (${inadmissible.sort(compareUtf16CodeUnits).join(", ")}); only regular ` +
-          `files and executable files are importable`
-      );
-    }
-    return files.sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
-  }
-
-  private async assertCheckoutAdmission(input: {
-    repoPath: string;
-    gitDir: string;
-    gitCommit: string;
-    files: ImportedFile[];
-  }): Promise<void> {
-    const isImportedPath = (filePath: string): boolean =>
-      semanticVcsPathAdmission(filePath).admissible;
-    const matrix = await this.git.statusMatrix(input.gitDir).catch((error) => {
-      throw new Error(
-        `Cannot import ${input.repoPath}: could not verify checkout against Git HEAD: ` +
-          errorMessage(error)
-      );
-    });
-    const observedHead = await this.git.getCurrentCommit(input.gitDir);
-    if (observedHead !== input.gitCommit) {
-      throw new Error(
-        `Cannot import ${input.repoPath}: Git HEAD advanced while resolving the snapshot ` +
-          `(expected ${input.gitCommit}, observed ${observedHead ?? "no commit"}); retry`
-      );
-    }
-    const headPaths = new Set(
-      matrix.filter(([, head]) => head === 1).map(([filePath]) => filePath)
-    );
-    const scannedPaths = new Set(input.files.map(({ path }) => path));
-    const mismatchedPaths = [
-      ...[...headPaths].filter((filePath) => !scannedPaths.has(filePath)),
-      ...[...scannedPaths].filter((filePath) => !headPaths.has(filePath)),
-      ...matrix
-        .filter(
-          ([filePath, head, workdir]) => isImportedPath(filePath) && (head !== 1 || workdir !== 1)
-        )
-        .map(([filePath]) => filePath),
-      ...matrix
-        .filter(
-          ([filePath, head, _workdir, stage]) =>
-            isImportedPath(filePath) && (head !== 1 || stage !== 1)
-        )
-        .map(([filePath]) => filePath),
-    ];
-    if (mismatchedPaths.length > 0) {
-      throw new Error(
-        `Cannot import ${input.repoPath}: checkout is not the exact Git HEAD tree ` +
-          `(mismatched paths: ${[...new Set(mismatchedPaths)].sort().join(", ")})`
-      );
-    }
-  }
-
-  private async storeImportedContent(repoPath: string, files: ImportedFile[]): Promise<void> {
-    const distinct = [...new Map(files.map((file) => [file.contentHash, file])).values()];
-    let nextIndex = 0;
-    const storeNext = async (): Promise<void> => {
-      for (;;) {
-        const file = distinct[nextIndex++];
-        if (!file) return;
-        const bytes = file.bytes;
-        const digest = sha256Hex(bytes);
-        if (digest !== file.contentHash) {
-          throw new Error(
-            `Cannot import ${repoPath}: immutable commit content failed local integrity for ${file.path}`
-          );
-        }
-        const stored = await this.host.blobstore.putBase64(bytes.toString("base64"));
-        if (stored.digest !== file.contentHash || stored.size !== bytes.byteLength) {
-          throw new Error(
-            `Cannot import ${repoPath}: content store integrity mismatch for ${file.path} ` +
-              `(returned ${stored.digest}/${stored.size}, expected ` +
-              `${file.contentHash}/${bytes.byteLength})`
-          );
-        }
-      }
-    };
-    await Promise.all(
-      Array.from({ length: Math.min(CAS_WRITE_CONCURRENCY, distinct.length) }, () => storeNext())
-    );
   }
 
   private async materializeState(

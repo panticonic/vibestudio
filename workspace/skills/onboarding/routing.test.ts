@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { onboardingInteraction, resolveOnboardingSelection } from "./routing.js";
+import {
+  onboardingInteraction,
+  resolveOnboardingSelection,
+  resolveTemplateSelection,
+  templateCatalogInteraction,
+  templateUrlInteraction,
+} from "./routing.js";
 
 describe("onboarding selection routing", () => {
   it("resolves a stable capability id to its owner workflow", () => {
@@ -56,5 +62,23 @@ describe("onboarding selection routing", () => {
         target: { via: "owner-skill" },
       })
     );
+  });
+
+  it("routes catalog and pasted addresses by typed template interactions", () => {
+    const catalog = templateCatalogInteraction("news-agent-and-panel", "2026-07-29.3");
+    expect(resolveTemplateSelection(catalog)).toEqual({
+      target: { via: "template-composer" },
+      interaction: catalog,
+    });
+    expect(resolveTemplateSelection(templateUrlInteraction("https://example.test/template.git"))).toEqual({
+      target: { via: "template-composer" },
+      interaction: templateUrlInteraction("https://example.test/template.git"),
+    });
+    expect(() =>
+      resolveTemplateSelection({
+        ...templateCatalogInteraction("retired", "2026-07-29.3"),
+        registryRevision: "",
+      })
+    ).toThrow("Template add selection is invalid");
   });
 });

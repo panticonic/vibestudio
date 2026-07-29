@@ -63,6 +63,11 @@ const LIMIT_FLAG: FlagSpec = {
   takesValue: true,
   description: "Maximum page size",
 };
+const DELTA_FLAG: FlagSpec = {
+  name: "delta",
+  takesValue: true,
+  description: "Coordinator-owned external delta to compare",
+};
 const DRY_RUN_FLAG: FlagSpec = {
   name: "dry-run",
   takesValue: false,
@@ -215,9 +220,15 @@ const compare = (inv: ParsedInvocation) =>
     if (view !== "overview" && view !== "changes") {
       throw new UsageError("--view must be overview or changes");
     }
+    const sourceDeltaId = typeof inv.flags["delta"] === "string" ? inv.flags["delta"] : undefined;
+    if (sourceDeltaId && inv.positionals[0]) {
+      throw new UsageError("pass either SOURCE_EVENT_ID or --delta DELTA_ID, not both");
+    }
     return vcs.compare({
       target: current.workingHead,
-      sourceEventId: inv.positionals[0] ?? current.mainEventId,
+      ...(sourceDeltaId
+        ? { sourceDeltaId }
+        : { sourceEventId: inv.positionals[0] ?? current.mainEventId }),
       view,
       limit: pageLimit(inv),
     });
@@ -467,9 +478,9 @@ export const vcsCommands: CliCommand[] = [
   {
     group: "vcs",
     name: "compare",
-    summary: "Compare the working state with a source event (main by default)",
-    usage: "vibestudio vcs compare [SOURCE_EVENT_ID]",
-    flags: [VIEW_FLAG, LIMIT_FLAG, ...common],
+    summary: "Compare the working state with an event or external delta",
+    usage: "vibestudio vcs compare [SOURCE_EVENT_ID] [--delta DELTA_ID]",
+    flags: [DELTA_FLAG, VIEW_FLAG, LIMIT_FLAG, ...common],
     run: compare,
   },
   {

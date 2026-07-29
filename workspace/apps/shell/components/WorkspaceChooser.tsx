@@ -29,6 +29,7 @@ import {
 } from "../state/appModeAtoms";
 import type { WorkspaceEntry } from "@vibestudio/shared/types";
 import { HostTargetsSection } from "./HostTargetsSection";
+import { TemplatesSection } from "./TemplatesSection";
 
 function formatRelativeTime(timestamp: number): string {
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
@@ -236,6 +237,7 @@ export function WorkspaceChooser() {
       )}
 
       {activeWorkspaceName ? <HostTargetsSection /> : null}
+      {activeWorkspaceName ? <TemplatesSection /> : null}
 
       {/* Delete confirmation dialog */}
       <AlertDialog.Root

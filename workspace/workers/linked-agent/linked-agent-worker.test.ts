@@ -247,6 +247,7 @@ const SUBAGENT_STATE_ARGS = {
     externalControllerCallerId: "@workspace-extensions/claude-code",
     subagent: {
       runId: "run-9",
+      task: "Audit the linked-agent supervision path.",
       parentRef: "do:parent-vessel",
       parentChannelId: "ch-parent",
       parentContextId: "ctx-parent",

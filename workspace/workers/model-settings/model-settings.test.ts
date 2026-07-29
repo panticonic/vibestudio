@@ -2,17 +2,37 @@ import { describe, expect, it } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import type { WorkspaceConfig } from "@workspace/runtime/worker";
 import { DEFAULT_AGENT_MODEL_REF, type ModelCatalog } from "@workspace/model-catalog/catalog";
+import type { LocalModelEntry } from "@workspace/model-catalog/localModels";
 import { makeTestCatalogEntry } from "@workspace/model-catalog/testing";
 import type { StoredCredentialSummary } from "@vibestudio/credential-client";
-import {
-  getModelCatalog,
-  localEntryToCatalogEntry,
-  ModelSettingsDO,
-  type LocalModelEntry,
-} from "./index.js";
+import { getModelCatalog, localEntryToCatalogEntry, ModelSettingsDO } from "./index.js";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
 const BASE_CONFIG = { id: "test", systemEpoch: WORKSPACE_SYSTEM_EPOCH } as const;
+
+function localEntry(fields: Partial<LocalModelEntry> = {}): LocalModelEntry {
+  return {
+    slug: "lfm2.5-1.2b",
+    displayName: "LFM2.5 1.2B Instruct",
+    baseUrl: "http://127.0.0.1:0/v1",
+    server: "utility",
+    contextWindow: 32_768,
+    maxTokens: 32_768,
+    measuredTokensPerSec: null,
+    toolsCapable: true,
+    fit: {
+      fit: "cpu-only",
+      estTokensPerSec: null,
+      contextLength: 32_768,
+      gpuLayers: 0,
+      notes: [],
+    },
+    state: "not-installed",
+    download: null,
+    errorMessage: null,
+    ...fields,
+  };
+}
 
 function storedCredential(
   id: string,
@@ -124,18 +144,11 @@ class OfflineModelSettingsDO extends TestModelSettingsDO {
 
   protected override fetchLocalModels() {
     return Promise.resolve([
-      {
-        slug: "lfm2.5-1.2b",
-        displayName: "LFM2.5 1.2B Instruct",
+      localEntry({
         baseUrl: "http://127.0.0.1:43117/v1",
-        contextWindow: 32_768,
-        maxTokens: 32_768,
         measuredTokensPerSec: 18.4,
-        toolsCapable: true,
         state: "ready" as const,
-        download: null,
-        errorMessage: null,
-      },
+      }),
     ]);
   }
 }
@@ -156,40 +169,27 @@ class ExpiredModelSettingsDO extends TestModelSettingsDO {
 describe("ModelSettingsDO", () => {
   it("treats an absent local model as setup-required", () => {
     expect(
-      localEntryToCatalogEntry({
-        slug: "lfm2.5-1.2b",
-        displayName: "LFM2.5 1.2B Instruct",
-        baseUrl: "http://127.0.0.1:0/v1",
-        contextWindow: 32_768,
-        maxTokens: 32_768,
-        measuredTokensPerSec: null,
-        toolsCapable: true,
-        state: "not-installed",
-        download: null,
-        errorMessage: null,
-      }).availability
+      localEntryToCatalogEntry(
+        localEntry({
+          state: "not-installed",
+        })
+      ).availability
     ).toEqual({ state: "needs-setup", detail: "not-installed" });
   });
 
   it("preserves local download phase and byte progress in the catalog", () => {
     expect(
-      localEntryToCatalogEntry({
-        slug: "lfm2.5-1.2b",
-        displayName: "LFM2.5 1.2B Instruct",
-        baseUrl: "http://127.0.0.1:0/v1",
-        contextWindow: 32_768,
-        maxTokens: 32_768,
-        measuredTokensPerSec: null,
-        toolsCapable: true,
-        state: "downloading",
-        download: {
-          progress: 0.4,
-          phase: "paused",
-          receivedBytes: 280_000_000,
-          totalBytes: 700_000_000,
-        },
-        errorMessage: null,
-      }).availability
+      localEntryToCatalogEntry(
+        localEntry({
+          state: "downloading",
+          download: {
+            progress: 0.4,
+            phase: "paused",
+            receivedBytes: 280_000_000,
+            totalBytes: 700_000_000,
+          },
+        })
+      ).availability
     ).toEqual({
       state: "downloading",
       progress: 0.4,
@@ -201,18 +201,11 @@ describe("ModelSettingsDO", () => {
 
   it("keeps local models unavailable while the runtime is being prepared", () => {
     expect(
-      localEntryToCatalogEntry({
-        slug: "lfm2.5-1.2b",
-        displayName: "LFM2.5 1.2B Instruct",
-        baseUrl: "http://127.0.0.1:0/v1",
-        contextWindow: 32_768,
-        maxTokens: 32_768,
-        measuredTokensPerSec: null,
-        toolsCapable: true,
-        state: "starting",
-        download: null,
-        errorMessage: null,
-      }).availability
+      localEntryToCatalogEntry(
+        localEntry({
+          state: "starting",
+        })
+      ).availability
     ).toEqual({ state: "starting" });
   });
 

@@ -642,6 +642,48 @@ describe("userlandApprovalService", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  it("attributes an authenticated CLI invocation to the extension code identity", async () => {
+    const { service, queued } = createDeps();
+    queued.mockResolvedValueOnce({ kind: "choice", choice: "allow" });
+    const extensionIdentity = {
+      callerId: "@workspace-extensions/template-composer",
+      callerKind: "extension" as const,
+      repoPath: "extensions/template-composer",
+      effectiveVersion: "composer-hash",
+      executionDigest: "c".repeat(64),
+      requested: [],
+    };
+    const ctx: ServiceContext = {
+      caller: createVerifiedCaller(
+        extensionIdentity.callerId,
+        "extension",
+        extensionIdentity,
+        null,
+        { userId: "system", handle: "system" }
+      ),
+      authorizingCaller: createVerifiedCaller("shell:cli", "shell", null, null, {
+        userId: "usr_cli",
+        handle: "cli",
+      }),
+    };
+
+    await expect(service.handler(ctx, "request", [validRequest])).resolves.toEqual({
+      kind: "choice",
+      choice: "allow",
+    });
+    expect(queued).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principal: {
+          callerId: extensionIdentity.callerId,
+          callerKind: "extension",
+          repoPath: extensionIdentity.repoPath,
+          effectiveVersion: extensionIdentity.effectiveVersion,
+        },
+        requestedByUserId: "usr_cli",
+      })
+    );
+  });
+
   it("scopes extension approvals by chain caller and extension issuer", async () => {
     const { service, lookup, queued, record, revoke, list } = createDeps();
     queued.mockResolvedValueOnce({ kind: "choice", choice: "allow" });

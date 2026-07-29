@@ -7,6 +7,7 @@ import {
   SEMANTIC_VCS_MAX_PATH_UTF8_BYTES,
   semanticVcsPathAdmission,
 } from "@vibestudio/shared/vcs/pathAdmission";
+import { VCS_ATOMIC_IMPORT_MAX_DESCRIPTOR_BYTES } from "@vibestudio/vcs-path-policy";
 import { DigestSchema } from "./blobstore.js";
 
 /**
@@ -61,10 +62,14 @@ const snapshotDigest = z
   .string()
   .regex(/^snapshot:[0-9a-f]{64}$/u)
   .describe("Semantic-workspace-derived commitment to the normalized imported descriptors.");
+const canonicalSnapshot = z
+  .string()
+  .regex(/^v1-sha256:[0-9a-f]{64}$/u)
+  .describe("Canonical commitment to the complete admitted external file set.");
 const cursor = z.string().min(1);
 const pageLimit = z.number().int().positive().max(500).default(100);
 /** One import is admitted and persisted atomically by one bounded descriptor. */
-export const VCS_IMPORT_MAX_DESCRIPTOR_BYTES = 512 * 1024;
+export const VCS_IMPORT_MAX_DESCRIPTOR_BYTES = VCS_ATOMIC_IMPORT_MAX_DESCRIPTOR_BYTES;
 
 export const vcsImportDescriptorByteLength = (input: unknown): number =>
   new TextEncoder().encode(JSON.stringify(input)).byteLength;
@@ -218,6 +223,10 @@ export const vcsWorkUnitNodeRefSchema = z
   .object({ kind: z.literal("work-unit"), workUnitId: id("Authored work unit.") })
   .strict();
 
+export const vcsExternalDeltaNodeRefSchema = z
+  .object({ kind: z.literal("external-delta"), deltaId: id("Unapplied external delta.") })
+  .strict();
+
 export const vcsChangeNodeRefSchema = z
   .object({ kind: z.literal("change"), changeId: id("Semantic change.") })
   .strict();
@@ -228,6 +237,7 @@ export const vcsCommandNodeRefSchema = z
 
 const vcsSemanticNodeSchemas = [
   vcsEventNodeRefSchema,
+  vcsExternalDeltaNodeRefSchema,
   z.object({ kind: z.literal("application"), applicationId: id("Work application.") }).strict(),
   vcsAppliedChangeNodeRefSchema,
   vcsWorkUnitNodeRefSchema,
@@ -402,6 +412,8 @@ export const vcsExternalSnapshotSchema = z
       "Canonical credential-free identity of the observed external source."
     ),
     snapshotRevision: nonEmptyText,
+    sourceSubdir: canonicalFilePath.nullable().optional(),
+    canonicalSnapshot: canonicalSnapshot.optional(),
     snapshotDigest,
     targetRepositoryIds: z
       .array(id("Exact native repositories admitted from this snapshot."))
@@ -409,6 +421,20 @@ export const vcsExternalSnapshotSchema = z
   })
   .strict()
   .superRefine((value, context) => {
+    if (value.sourceKind === "git" && value.canonicalSnapshot == null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["canonicalSnapshot"],
+        message: "Git snapshot evidence requires its canonical snapshot digest",
+      });
+    }
+    if (value.sourceKind !== "git" && value.sourceSubdir != null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sourceSubdir"],
+        message: "Only Git snapshot evidence may carry a source subdirectory",
+      });
+    }
     if (
       JSON.stringify(value.targetRepositoryIds) !==
       JSON.stringify([...new Set(value.targetRepositoryIds)].sort())
@@ -426,7 +452,15 @@ export const vcsWorkUnitSchema = z
   .object({
     workUnitId: id("Authored work unit."),
     commandId: id("Originating semantic command."),
-    kind: z.enum(["edit", "file-transfer", "lifecycle", "integrate", "revert", "import"]),
+    kind: z.enum([
+      "edit",
+      "file-transfer",
+      "lifecycle",
+      "integrate",
+      "revert",
+      "import",
+      "external-unapplied",
+    ]),
     authoredChangeCount: z.number().int().nonnegative(),
     authoredChangeIds: z.array(id("Bounded preview of changes authored here.")).max(200),
     incorporatedChangeCount: z.number().int().nonnegative(),
@@ -475,7 +509,7 @@ export type VcsWorkApplication = z.infer<typeof vcsWorkApplicationSchema>;
 
 const decisionBase = {
   decisionId: id("Integration decision."),
-  sourceState: vcsStateNodeRefSchema,
+  sourceState: z.union([vcsEventNodeRefSchema, vcsExternalDeltaNodeRefSchema]),
   targetBasis: vcsStateNodeRefSchema,
   sourceChangeIds: boundedIds("Source change accounted for by this decision."),
 };
@@ -514,6 +548,7 @@ export const vcsWorkspaceEventSchema = z
     kind: z.enum(["genesis", "commit", "integration-commit"]),
     workspaceFactRootId: id("Authenticated workspace-fact root."),
     parentEventIds: z.array(id("Parent event.")).max(201),
+    externalDeltaIds: z.array(id("Integrated external delta.")).max(200).optional(),
     applicationIds: z.array(id("Complete local application chain committed here.")).max(10_000),
     decisionIds: z.array(id("Reachable integration decision.")).max(10_000),
     message: nonEmptyText.nullable(),
@@ -709,13 +744,14 @@ export const vcsIntegrationChoiceSchema = z.discriminatedUnion("kind", [
 ]);
 export type VcsIntegrationChoice = z.infer<typeof vcsIntegrationChoiceSchema>;
 
-export const vcsIntegrateInputSchema = z
-  .object({
-    ...mutationEnvelope,
-    sourceEventId: id("Exact committed source event."),
-    decision: vcsIntegrationChoiceSchema,
-  })
-  .strict();
+const integrateInput = {
+  ...mutationEnvelope,
+  decision: vcsIntegrationChoiceSchema,
+};
+export const vcsIntegrateInputSchema = z.union([
+  z.object({ ...integrateInput, sourceEventId: id("Exact committed source event.") }).strict(),
+  z.object({ ...integrateInput, sourceDeltaId: id("Exact unapplied external delta.") }).strict(),
+]);
 export type VcsIntegrateInput = z.infer<typeof vcsIntegrateInputSchema>;
 
 export const vcsRevertInputSchema = z
@@ -753,18 +789,112 @@ export const vcsSnapshotRepositorySchema = z
   })
   .strict();
 
+const vcsGitImportSourceSchema = z
+  .object({
+    kind: z.literal("git"),
+    url: externalSourceUri.describe("Canonical credential-free Git remote URL."),
+    commit: z
+      .string()
+      .regex(/^[0-9a-f]{40}$/u)
+      .describe("Exact full lowercase Git commit object ID."),
+    subdir: canonicalFilePath.optional(),
+    snapshot: canonicalSnapshot,
+  })
+  .strict();
+
+const nonGitImportSource = <const Kind extends "archive" | "filesystem" | "upload" | "generated">(
+  kind: Kind
+) =>
+  z
+    .object({
+      kind: z.literal(kind),
+      uri: externalSourceUri.describe(
+        "Canonical credential-free external source identity; never a host checkout path."
+      ),
+      snapshotRevision: nonEmptyText.max(4_096),
+      snapshot: canonicalSnapshot.optional(),
+    })
+    .strict();
+
+export const vcsImportSourceSchema = z.discriminatedUnion("kind", [
+  vcsGitImportSourceSchema,
+  nonGitImportSource("archive"),
+  nonGitImportSource("filesystem"),
+  nonGitImportSource("upload"),
+  nonGitImportSource("generated"),
+]);
+export type VcsImportSource = z.infer<typeof vcsImportSourceSchema>;
+
+export const vcsRegisterExternalDeltaInputSchema = z
+  .object({
+    ...mutationEnvelope,
+    repositoryId: id("Existing target repository."),
+    repoPath: canonicalRepoPath,
+    oldSource: vcsImportSourceSchema,
+    newSource: vcsImportSourceSchema,
+    oldFiles: z.array(vcsSnapshotFileSchema),
+    newFiles: z.array(vcsSnapshotFileSchema),
+    supersedesDeltaId: id("Prior active delta superseded atomically.").optional(),
+  })
+  .strict()
+  .superRefine((input, context) => {
+    if (!input.oldSource.snapshot || !input.newSource.snapshot) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["oldSource"],
+        message: "Both external delta sides require canonical snapshot digests",
+      });
+    }
+    for (const [side, files] of [
+      ["oldFiles", input.oldFiles],
+      ["newFiles", input.newFiles],
+    ] as const) {
+      for (const [index, file] of files.entries()) {
+        if (index > 0 && files[index - 1]!.path >= file.path) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [side, index, "path"],
+            message: "External delta files must be strictly ordered by canonical path",
+          });
+        }
+      }
+    }
+    if (vcsImportDescriptorByteLength(input) > VCS_IMPORT_MAX_DESCRIPTOR_BYTES) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "External delta descriptor exceeds the atomic import byte limit",
+      });
+    }
+  });
+export type VcsRegisterExternalDeltaInput = z.infer<typeof vcsRegisterExternalDeltaInputSchema>;
+
+export const vcsExternalDeltaLifecycleInputSchema = z
+  .object({
+    ...mutationEnvelope,
+    deltaId: id("External delta."),
+  })
+  .strict();
+export type VcsExternalDeltaLifecycleInput = z.infer<typeof vcsExternalDeltaLifecycleInputSchema>;
+
+export const vcsExternalDeltaResultSchema = z
+  .object({
+    deltaId: id("External delta."),
+    workUnitId: id("Unapplied external work unit."),
+    repositoryId: id("Target repository."),
+    repoPath: canonicalRepoPath,
+    oldSnapshot: canonicalSnapshot,
+    newSnapshot: canonicalSnapshot,
+    changeCount: z.number().int().nonnegative(),
+    changeIds: z.array(id("Authored external change.")).max(200),
+    status: z.enum(["active", "superseded", "finalized"]),
+  })
+  .strict();
+export type VcsExternalDeltaResult = z.infer<typeof vcsExternalDeltaResultSchema>;
+
 export const vcsImportSnapshotInputSchema = z
   .object({
     ...mutationEnvelope,
-    source: z
-      .object({
-        kind: z.enum(["git", "archive", "filesystem", "upload", "generated"]),
-        uri: externalSourceUri.describe(
-          "Canonical credential-free external source identity; never a host checkout path."
-        ),
-        snapshotRevision: nonEmptyText.max(4_096),
-      })
-      .strict(),
+    source: vcsImportSourceSchema,
     repositories: z.array(vcsSnapshotRepositorySchema).min(1),
     message: nonEmptyText.optional(),
   })
@@ -776,6 +906,19 @@ export const vcsImportSnapshotInputSchema = z
         path: ["repositories"],
         message: "One Git import must describe exactly one external repository",
       });
+    }
+    if (input.source.kind === "git") {
+      for (const [repositoryIndex, repository] of input.repositories.entries()) {
+        for (const [fileIndex, file] of repository.files.entries()) {
+          if (file.mode !== 0o644 && file.mode !== 0o755) {
+            context.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["repositories", repositoryIndex, "files", fileIndex, "mode"],
+              message: "Git imports admit only regular-file mode 0644 or executable mode 0755",
+            });
+          }
+        }
+      }
     }
     const repositoryPaths = new Set<string>();
     const repositoryIds = new Set<string>();
@@ -886,6 +1029,7 @@ export const vcsCommitResultSchema = z
     }),
     committedApplicationIds: z.array(id("Committed application.")).max(10_000),
     integrationSourceEventIds: z.array(id("Integration parent event.")).max(200),
+    integrationSourceDeltaIds: z.array(id("Integrated external delta.")).max(200).optional(),
   })
   .strict();
 export type VcsCommitResult = z.infer<typeof vcsCommitResultSchema>;
@@ -995,24 +1139,26 @@ export const vcsComparedChangeSchema = z
   })
   .strict();
 
-export const vcsCompareInputSchema = z
-  .object({
-    target: vcsStateNodeRefSchema,
-    sourceEventId: id("Exact committed source event."),
-    view: z.enum(["overview", "changes"]).default("overview"),
-    disposition: z
-      .enum(["shared", "already-satisfied", "actionable", "accounted", "historical"])
-      .optional(),
-    cursor: cursor.optional(),
-    limit: pageLimit,
-  })
-  .strict();
+const compareInput = {
+  target: vcsStateNodeRefSchema,
+  view: z.enum(["overview", "changes"]).default("overview"),
+  disposition: z
+    .enum(["shared", "already-satisfied", "actionable", "accounted", "historical"])
+    .optional(),
+  cursor: cursor.optional(),
+  limit: pageLimit,
+};
+export const vcsCompareInputSchema = z.union([
+  z.object({ ...compareInput, sourceEventId: id("Exact committed source event.") }).strict(),
+  z.object({ ...compareInput, sourceDeltaId: id("Exact unapplied external delta.") }).strict(),
+]);
 export type VcsCompareInput = z.infer<typeof vcsCompareInputSchema>;
 
 export const vcsCompareResultSchema = z
   .object({
     target: vcsStateNodeRefSchema,
-    sourceEventId: id("Compared source event."),
+    sourceEventId: id("Compared source event.").optional(),
+    sourceDeltaId: id("Compared external delta.").optional(),
     resolution: z
       .object({
         complete: z
@@ -1044,6 +1190,14 @@ export const vcsCompareResultSchema = z
     nextCursor: cursor.nullable(),
   })
   .strict()
+  .superRefine((value, context) => {
+    if ((value.sourceEventId == null) === (value.sourceDeltaId == null)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Comparison requires exactly one source",
+      });
+    }
+  })
   .superRefine((value, context) => {
     if (value.resolution.complete !== (value.resolution.remainingChangeCount === 0)) {
       context.addIssue({
@@ -1197,6 +1351,7 @@ export type VcsInspectedTrajectoryMessage = z.infer<typeof vcsInspectedTrajector
 
 export const vcsInspectedNodeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("event"), value: vcsWorkspaceEventSchema }).strict(),
+  z.object({ kind: z.literal("external-delta"), value: vcsExternalDeltaResultSchema }).strict(),
   z.object({ kind: z.literal("application"), value: vcsWorkApplicationSchema }).strict(),
   z.object({ kind: z.literal("applied-change"), value: vcsAppliedChangeSchema }).strict(),
   z.object({ kind: z.literal("work-unit"), value: vcsWorkUnitSchema }).strict(),
@@ -1863,6 +2018,7 @@ export const vcsSemanticReferenceKinds = [
   "event",
   "application",
   "work-unit",
+  "external-delta",
   "change",
   "decision",
   "command",
@@ -1922,7 +2078,7 @@ const defineVcsMethods = <const M extends Record<string, VcsMethodSchema>>(metho
 // Sole exhaustive public method registry
 // ---------------------------------------------------------------------------
 
-export const vcsMethods = defineVcsMethods({
+const vcsSemanticMethods = defineVcsMethods({
   edit: {
     description:
       "Atomically create repositories with their initial files or author exact text, binary, file-create, delete, and mode changes on the working head.",
@@ -1972,7 +2128,8 @@ export const vcsMethods = defineVcsMethods({
     seeAlso: ["vcs.move", "vcs.blame"],
   },
   integrate: {
-    description: "Take one local adopt, reconcile, or decline step against an exact source event.",
+    description:
+      "Take one local adopt, reconcile, or decline step against an exact source event or coordinator-owned external delta.",
     args: z.tuple([vcsIntegrateInputSchema]),
     returns: vcsIntegrateResultSchema,
     access: WRITE_ACCESS,
@@ -1980,6 +2137,7 @@ export const vcsMethods = defineVcsMethods({
     references: [
       ...commonMutationRefs,
       ref("event", "source", "sourceEventId"),
+      ref("external-delta", "source", "sourceDeltaId"),
       ref("change", "source", "decision", "sourceChangeIds", "*"),
     ],
     errors: [...MUTATION_ERRORS, ...methodErrors("ConflictPresent", "DependencyBlocked")],
@@ -2033,6 +2191,40 @@ export const vcsMethods = defineVcsMethods({
     ],
     seeAlso: ["vcs.blame", "vcs.inspect"],
   },
+  registerExternalDelta: {
+    description: "Register one exact unapplied old-to-new external repository delta.",
+    args: z.tuple([vcsRegisterExternalDeltaInputSchema]),
+    returns: vcsExternalDeltaResultSchema,
+    access: WRITE_ACCESS,
+    operationClass: "context-write",
+    references: [
+      ...commonMutationRefs,
+      ref("repository", "resource", "repositoryId"),
+      ref("external-delta", "source", "supersedesDeltaId"),
+    ],
+    errors: [...MUTATION_ERRORS, ...methodErrors("ExternalEffectFailed")],
+    seeAlso: ["vcs.compare", "vcs.integrate"],
+  },
+  supersedeExternalDelta: {
+    description: "Retire one active external delta so it can no longer be integrated.",
+    args: z.tuple([vcsExternalDeltaLifecycleInputSchema]),
+    returns: vcsExternalDeltaResultSchema,
+    access: WRITE_ACCESS,
+    operationClass: "context-write",
+    references: [...commonMutationRefs, ref("external-delta", "source", "deltaId")],
+    errors: MUTATION_ERRORS,
+    seeAlso: ["vcs.compare"],
+  },
+  finalizeExternalDelta: {
+    description: "Finalize one fully decided external delta and release its dedicated GC roots.",
+    args: z.tuple([vcsExternalDeltaLifecycleInputSchema]),
+    returns: vcsExternalDeltaResultSchema,
+    access: WRITE_ACCESS,
+    operationClass: "context-write",
+    references: [...commonMutationRefs, ref("external-delta", "source", "deltaId")],
+    errors: [...MUTATION_ERRORS, ...methodErrors("IntegrationIncomplete")],
+    seeAlso: ["vcs.commit", "vcs.compare"],
+  },
   push: {
     description: "Publish one exact already-committed event to protected main.",
     args: z.tuple([vcsPushInputSchema]),
@@ -2069,12 +2261,17 @@ export const vcsMethods = defineVcsMethods({
     seeAlso: ["vcs.compare", "vcs.history"],
   },
   compare: {
-    description: "Compare an exact target state with a committed source event by semantic change.",
+    description:
+      "Compare an exact target state with a committed source event or coordinator-owned external delta by semantic change.",
     args: z.tuple([vcsCompareInputSchema]),
     returns: vcsCompareResultSchema,
     access: READ_ACCESS,
     operationClass: "read",
-    references: [ref("state-node", "target", "target"), ref("event", "source", "sourceEventId")],
+    references: [
+      ref("state-node", "target", "target"),
+      ref("event", "source", "sourceEventId"),
+      ref("external-delta", "source", "sourceDeltaId"),
+    ],
     errors: READ_ERRORS,
     seeAlso: ["vcs.integrate", "vcs.inspect"],
   },
@@ -2184,7 +2381,15 @@ export const vcsMethods = defineVcsMethods({
   },
 });
 
+/**
+ * Agent-facing VCS surface. External deltas are context-owned semantic review
+ * resources: callers may register, supersede, and finalize only deltas reachable
+ * from their authorized context graph, and finalization succeeds only after the
+ * semantic engine verifies that every effective change is accounted for.
+ */
+export const vcsMethods = vcsSemanticMethods;
 export type VcsMethodName = keyof typeof vcsMethods;
+export type VcsSemanticMethodName = keyof typeof vcsSemanticMethods;
 
 export type VcsOperationMetadata = Readonly<{
   accessClass: VcsOperationClass;
@@ -2201,6 +2406,15 @@ export const vcsOperationRegistry = Object.freeze(
       }),
     ])
   ) as unknown as Record<VcsMethodName, VcsOperationMetadata>
+);
+
+const vcsAllSemanticReferenceInventory = Object.freeze(
+  Object.fromEntries(
+    Object.entries(vcsSemanticMethods).map(([method, definition]) => [
+      method,
+      definition.references,
+    ])
+  ) as unknown as Record<VcsSemanticMethodName, readonly VcsReferenceDescriptor[]>
 );
 
 export const vcsSemanticReferenceInventory = Object.freeze(
@@ -2229,11 +2443,11 @@ function collectPathValues(
 
 /** Reference extraction is driven only by stable public descriptors. */
 export function extractVcsSemanticReferences(
-  method: VcsMethodName,
+  method: VcsSemanticMethodName,
   canonicalArgs: readonly unknown[]
 ): VcsSemanticReference[] {
   const input = canonicalArgs[0];
-  return vcsSemanticReferenceInventory[method].flatMap((descriptor) =>
+  return vcsAllSemanticReferenceInventory[method].flatMap((descriptor) =>
     collectPathValues(input, descriptor.path).map(({ value, concretePath }) => ({
       ...descriptor,
       value,
@@ -2243,10 +2457,10 @@ export function extractVcsSemanticReferences(
 }
 
 export function parseVcsSemanticRequest(
-  method: VcsMethodName,
+  method: VcsSemanticMethodName,
   input: unknown
 ): { input: unknown; references: VcsSemanticReference[] } {
-  const canonicalArgs = vcsMethods[method].args.parse([input]) as unknown[];
+  const canonicalArgs = vcsSemanticMethods[method].args.parse([input]) as unknown[];
   return {
     input: canonicalArgs[0],
     references: extractVcsSemanticReferences(method, canonicalArgs),
@@ -2255,8 +2469,8 @@ export function parseVcsSemanticRequest(
 
 /** Metadata is already explicit; this asserts registry completeness only. */
 export function assertVcsSemanticReferenceContract(): void {
-  for (const method of Object.keys(vcsMethods) as VcsMethodName[]) {
-    if (!Object.hasOwn(vcsSemanticReferenceInventory, method)) {
+  for (const method of Object.keys(vcsSemanticMethods) as VcsSemanticMethodName[]) {
+    if (!Object.hasOwn(vcsAllSemanticReferenceInventory, method)) {
       throw new Error(`VCS ${method} lacks explicit semantic reference metadata`);
     }
   }

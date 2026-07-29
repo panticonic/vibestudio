@@ -397,19 +397,21 @@ the same routed API.
 they do not advance protected `main`. Import results also contain required
 `semanticEvidence` from the same atomic semantic transaction: the application,
 import work unit, canonical snapshot revision/digest, and admitted repository
-IDs. Use `--json` with `vcs git import` or a real `vcs git pull` when a CLI
-agent needs that complete evidence; human output remains a compact candidate
-summary. While
+IDs. Use `--json` when a CLI agent needs the complete identity-joined evidence.
+Human import and pull output still names the repository/branch, exact observed
+commit, whether the semantic snapshot changed, candidate context/event, the
+fact that protected main is unchanged, and the complete next workflow. While
 `vcs git status` reports `integration-required`, use
 the ordinary semantic compare/integrate/check/commit workflow and publish
 explicitly. Outgoing export and Git push remain blocked until that candidate is
 accounted for.
 
-Credential selection is explicit: omit both flags for automatic URL-bound
-resolution, pass `--credential ID` to pin one stored credential, or pass
-`--anonymous` to forbid credential resolution. Durable remotes reject embedded
+Credential selection is explicit: omit both flags to use the declaration's
+logical credential binding, or anonymous transport when no logical credential
+is declared; pass `--credential ID` for a one-call concrete override, or pass
+`--anonymous` to require anonymous transport. Durable remotes reject embedded
 credentials, query parameters, and fragments. `vcs git pull --dry-run` uses a
-disposable checkout and mutates no managed Git or semantic state. A missing
+isolated temporary checkout and mutates no managed Git or semantic state. A missing
 configured remote branch is reported distinctly from fetch/auth failure; push
 to create it or update the declaration. Related force updates show an exact
 overwrite count, while unrelated histories deliberately have no comparable

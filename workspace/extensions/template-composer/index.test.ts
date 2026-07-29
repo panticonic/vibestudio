@@ -1,0 +1,314 @@
+import { describe, expect, it, vi } from "vitest";
+import { composeWorkspaceConfig } from "@vibestudio/workspace/configComposition";
+import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
+import { TemplateRegistryUnavailableError } from "@workspace/template-registry";
+import type {
+  TemplateOperationInspection,
+  TemplateSourcePorts,
+} from "@workspace/template-composer";
+import { ensureApprovedTemplateOperation } from "./operationRecord.js";
+import { createPinnedTemplateSourcePorts } from "./source.js";
+import { affectedRepositoryPaths, type TemplateOperationRecord } from "./staging.js";
+import {
+  bootstrapNeedsAdoption,
+  cancelTemplateOperation,
+  loadTemplateCatalog,
+  mergeAcceptedTemplateSuggestion,
+  operationReviewForTemplate,
+  resolveRepositoryConflictChoices,
+} from "./index.js";
+import { bootstrapWorkspaceSource, projectBootstrapRuntimeToSource } from "./workspace.js";
+
+const oldPin: WorkspaceTemplatePin = {
+  url: "git+https://example.test/template.git",
+  ref: "refs/tags/v1",
+  commit: "1".repeat(40),
+  snapshot: `v1-sha256:${"a".repeat(64)}`,
+};
+
+const refreshedPin: WorkspaceTemplatePin = {
+  ...oldPin,
+  ref: "refs/tags/v2",
+  commit: "2".repeat(40),
+  snapshot: `v1-sha256:${"b".repeat(64)}`,
+};
+
+function inspection(): TemplateOperationInspection {
+  return {
+    kind: "pull",
+    nextTemplates: null,
+    plan: {
+      version: 1,
+      fingerprint: `v1-sha256:${"c".repeat(64)}`,
+      rootNodeIds: [],
+      nodes: [
+        {
+          nodeId: "t-old",
+          alias: "template",
+          pin: oldPin,
+          parents: [],
+          fragment: { systemEpoch: 57 },
+          fragmentYaml: "{}\n",
+          fragmentDigest: `v1-sha256:${"d".repeat(64)}`,
+          excludedSuggestions: {},
+        },
+      ],
+      repositories: {},
+      localRepoPaths: [],
+      ownershipChanges: [],
+      lock: null,
+      artifacts: [],
+      removedArtifactPaths: [],
+    },
+  };
+}
+
+function approvedRecord(): TemplateOperationRecord {
+  return {
+    version: 1,
+    operationId: "pull-1",
+    kind: "pull",
+    fingerprint: inspection().plan.fingerprint,
+    intent: { kind: "pull", target: oldPin },
+    pins: [oldPin],
+    addedParts: [],
+    orphanedParts: [],
+  };
+}
+
+describe("template composer operation resumption", () => {
+  it("discards the exact approved in-flight context", async () => {
+    const requestApproval = vi.fn(async () => null);
+    const publishCancellation = vi.fn(async () => undefined);
+    const destroy = vi.fn(async () => undefined);
+    await expect(
+      cancelTemplateOperation({
+        operationId: "pull-1",
+        findContext: async () => ({
+          contextId: "template-composer-operation-exact",
+          applied: false,
+          mainEventId: "event-main",
+        }),
+        requestApproval,
+        publishCancellation,
+        destroy,
+      })
+    ).resolves.toEqual({ operationId: "pull-1", state: "cancelled" });
+    expect(requestApproval).toHaveBeenCalledOnce();
+    expect(publishCancellation).toHaveBeenCalledWith("event-main");
+    expect(destroy).toHaveBeenCalledWith("template-composer-operation-exact");
+  });
+
+  it("treats a repeated cancellation as idempotently complete", async () => {
+    const requestApproval = vi.fn();
+    const publishCancellation = vi.fn();
+    const destroy = vi.fn();
+    await expect(
+      cancelTemplateOperation({
+        operationId: "pull-1",
+        findContext: async () => null,
+        requestApproval,
+        publishCancellation,
+        destroy,
+      })
+    ).resolves.toEqual({ operationId: "pull-1", state: "cancelled" });
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(publishCancellation).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
+  it("does not report cancellation when publication wins the protected-main race", async () => {
+    let applied = false;
+    const destroy = vi.fn();
+    await expect(
+      cancelTemplateOperation({
+        operationId: "pull-1",
+        findContext: async () => ({
+          contextId: "template-composer-operation-exact",
+          applied,
+          mainEventId: applied ? "event-applied" : "event-main",
+        }),
+        requestApproval: async () => null,
+        publishCancellation: async () => {
+          applied = true;
+          throw new Error("Protected main changed");
+        },
+        destroy,
+      })
+    ).rejects.toThrow("already applied");
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
+  it("joins an exact pending review back onto its installed template", () => {
+    const record = {
+      ...approvedRecord(),
+      intent: { kind: "pull", alias: "template", target: refreshedPin },
+      reviews: [{ repoPath: "panels/news", deltaId: "delta:news" }],
+    };
+    expect(
+      operationReviewForTemplate([{ contextId: "template-composer-operation-pull", record }], {
+        alias: "template",
+        pin: oldPin,
+      })
+    ).toEqual({
+      contextId: "template-composer-operation-pull",
+      record,
+    });
+  });
+
+  it("keeps registry-independent operations usable without a cached catalog", async () => {
+    const client = {
+      catalog: vi.fn(async () => {
+        throw new TemplateRegistryUnavailableError();
+      }),
+      refresh: vi.fn(),
+    };
+
+    await expect(loadTemplateCatalog(client)).resolves.toBeUndefined();
+    await expect(loadTemplateCatalog(client, { requireCatalog: true })).rejects.toThrow(
+      TemplateRegistryUnavailableError
+    );
+    expect(client.refresh).not.toHaveBeenCalled();
+  });
+
+  it("re-requests host approval on resume while retaining exact context intent", async () => {
+    const requestApproval = vi.fn(async () => null);
+    const persist = vi.fn(async () => undefined);
+    await expect(
+      ensureApprovedTemplateOperation({
+        operationId: "pull-1",
+        inspection: inspection(),
+        intent: { kind: "pull", target: oldPin },
+        existing: approvedRecord(),
+        requestApproval,
+        persist,
+      })
+    ).resolves.toMatchObject({ status: "approved", resumed: true });
+    expect(requestApproval).toHaveBeenCalledOnce();
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it("keeps every exact in-flight pin when the registry refreshes", async () => {
+    const fallback = vi.fn(async () => refreshedPin);
+    const base: TemplateSourcePorts = {
+      resolvePromoted: fallback,
+      acquire: vi.fn(),
+    };
+    const pinned = createPinnedTemplateSourcePorts(base, approvedRecord().pins);
+    await expect(pinned.resolvePromoted({ url: oldPin.url })).resolves.toEqual(oldPin);
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it("includes reviewed same-owner updates in the affected build set", () => {
+    expect(affectedRepositoryPaths([], ["panels/news"], [])).toEqual(["panels/news"]);
+  });
+
+  it("turns keep/take/skip into explicit durable claimant decisions", () => {
+    const conflict = {
+      kind: "repository" as const,
+      repoPath: "panels/shared",
+      claimants: ["base", "news"],
+    };
+    const observation = {
+      lock: {
+        nodes: [{ nodeId: "t-base", alias: "base" }],
+        repositories: { "panels/shared": { nodeId: "t-base" } },
+      },
+    } as never;
+    expect(
+      resolveRepositoryConflictChoices([conflict], { "panels/shared": "keep" }, observation)
+    ).toEqual({ "panels/shared": "base" });
+    expect(
+      resolveRepositoryConflictChoices([conflict], { "panels/shared": "take" }, observation)
+    ).toEqual({ "panels/shared": "news" });
+    expect(
+      resolveRepositoryConflictChoices([conflict], { "panels/shared": "skip" }, observation)
+    ).toEqual({ "panels/shared": "ignore" });
+  });
+
+  it("merges accepted exact trust suggestions without replacing existing grants", () => {
+    expect(
+      mergeAcceptedTemplateSuggestion(
+        {
+          systemEpoch: 57,
+          trust: { chromeApps: ["apps/shell"] },
+        },
+        "trust",
+        { chromeApps: ["apps/integration"] }
+      ).trust
+    ).toEqual({ chromeApps: ["apps/shell", "apps/integration"] });
+  });
+
+  it("never resurrects a removed bootstrap root after durable adoption", () => {
+    expect(
+      bootstrapNeedsAdoption({
+        roots: [],
+        top: {
+          systemEpoch: 57,
+          templates: { use: [], bootstrapAdopted: oldPin },
+        },
+      })
+    ).toBe(false);
+  });
+
+  it("preserves workspace-owned authority while a bootstrap runtime becomes composed", () => {
+    const runtime = {
+      systemEpoch: 57,
+      defaultRepo: "projects/default",
+      extensions: [{ source: "extensions/template-composer" }],
+      providers: {
+        evalEngine: { source: "@workspace/eval" },
+      },
+      trust: { chromeApps: ["apps/shell"] },
+    };
+    const source = bootstrapWorkspaceSource(runtime);
+    const composed = composeWorkspaceConfig(
+      source,
+      [
+        {
+          nodeId: "t-base",
+          alias: "base",
+          ancestors: [],
+          config: {
+            systemEpoch: 57,
+            defaultRepo: runtime.defaultRepo,
+            extensions: runtime.extensions,
+          },
+        },
+      ],
+      "workspace-1"
+    );
+    const { id: _id, ...flattened } = composed;
+    expect(flattened).toEqual(runtime);
+  });
+
+  it("projects pre-adoption runtime edits over the exact bootstrap fragment", () => {
+    const runtime = {
+      systemEpoch: 57,
+      defaultRepo: "projects/locally-selected",
+      extensions: [{ source: "extensions/template-composer" }, { source: "extensions/local-tool" }],
+      providers: { evalEngine: { source: "@workspace/eval" } },
+      trust: { chromeApps: ["apps/shell"] },
+    };
+    const nodes = [
+      {
+        nodeId: "t-base",
+        alias: "base",
+        parents: [],
+        fragment: {
+          systemEpoch: 57,
+          defaultRepo: "projects/default",
+          extensions: [{ source: "extensions/template-composer" }],
+        },
+      },
+    ];
+    const source = projectBootstrapRuntimeToSource(runtime, nodes, "workspace-1");
+    const composed = composeWorkspaceConfig(
+      source,
+      [{ ...nodes[0]!, ancestors: [], config: nodes[0]!.fragment }],
+      "workspace-1"
+    );
+    const { id: _id, ...flattened } = composed;
+    expect(flattened).toEqual(runtime);
+  });
+});

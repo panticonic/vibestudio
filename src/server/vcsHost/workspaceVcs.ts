@@ -14,6 +14,7 @@
  */
 
 import { EventEmitter } from "node:events";
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as crypto from "node:crypto";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
@@ -78,6 +79,7 @@ import type { SemanticControlPlaneCaller } from "../internalDOs/controlPlane.js"
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
+import type { WorkspaceRootTemplateBootstrap } from "../workspaceRootTemplateBootstrap.js";
 
 const SYSTEM_ACTOR = { id: "system", kind: "system" } as const;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
@@ -125,6 +127,8 @@ export interface WorkspaceVcsDeps {
   workspaceId: string;
   buildSourcesRoot: string;
   refs: ProtectedRefStore;
+  /** The only pre-userland template path: acquire one exact root for first publication. */
+  rootTemplateBootstrap?: Pick<WorkspaceRootTemplateBootstrap, "prepareInitialization">;
 }
 
 export interface WorkspaceActivationTimings {
@@ -252,6 +256,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private readonly projector: DiskProjector;
   private readonly materializer: ContextMaterializer;
   private readonly locks = new Map<string, Promise<unknown>>();
+  private protectedMainMutationTail: Promise<void> = Promise.resolve();
+  private readonly protectedMainMutationScope = new AsyncLocalStorage<boolean>();
   private readonly semanticContextInitializations = new Map<string, Promise<VcsStateNodeRef>>();
   private readonly contextInitializations = new Map<string, Promise<VcsStateNodeRef>>();
   private readonly semanticStateByContent = new Map<string, VcsStateNodeRef>();
@@ -371,6 +377,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return this.gad().call<boolean>("vcsReferencesReachable", { contextIds, references });
   }
 
+  async listSemanticContexts(prefix?: string): Promise<string[]> {
+    return this.gad().call<string[]>("vcsListContexts", {
+      ...(prefix === undefined ? {} : { prefix }),
+    });
+  }
+
   async isStateDescendant(
     ancestor: VcsStateNodeRef,
     descendant: VcsStateNodeRef
@@ -441,13 +453,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private semanticWorkspaceInitializationPush<T>(input: unknown): Promise<T> {
-    return this.dispatchSemanticCall<T>(
-      "vcsPush",
-      {
-        input,
-        ingress: { causalParent: null, contextIntegrity: HOST_SEMANTIC_INTEGRITY },
-      } satisfies SemanticRequest,
-      { kind: "workspace-initialization" }
+    return this.withProtectedMainMutation(() =>
+      this.dispatchSemanticCall<T>(
+        "vcsPush",
+        {
+          input,
+          ingress: { causalParent: null, contextIntegrity: HOST_SEMANTIC_INTEGRITY },
+        } satisfies SemanticRequest,
+        { kind: "workspace-initialization" }
+      )
     );
   }
 
@@ -473,14 +487,39 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     contextIntegrity: SemanticRequest["ingress"]["contextIntegrity"],
     signal?: AbortSignal
   ): Promise<T> {
-    return this.semanticCall<T>(
-      "vcsPush",
-      {
-        input,
-        ingress: { causalParent, contextIntegrity },
-      } satisfies SemanticRequest,
-      { kind: "caller", caller, ...(signal ? { signal } : {}) }
+    return this.withProtectedMainMutation(() =>
+      this.semanticCall<T>(
+        "vcsPush",
+        {
+          input,
+          ingress: { causalParent, contextIntegrity },
+        } satisfies SemanticRequest,
+        { kind: "caller", caller, ...(signal ? { signal } : {}) }
+      )
     );
+  }
+
+  /**
+   * One workspace-wide protected-main authoring lease. Callers that must read
+   * main, author a candidate, journal its publication intent, and publish may
+   * hold this across the whole sequence. Ordinary pushes enter the same lease
+   * through `semanticPublishCall`, so no second serialization domain can move
+   * main between preparation and publication.
+   */
+  async withProtectedMainMutation<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.protectedMainMutationScope.getStore()) return operation();
+    const previous = this.protectedMainMutationTail;
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.protectedMainMutationTail = previous.catch(() => undefined).then(() => current);
+    await previous.catch(() => undefined);
+    try {
+      return await this.protectedMainMutationScope.run(true, operation);
+    } finally {
+      release();
+    }
   }
 
   private async drainSemanticResult<T>(
@@ -870,36 +909,22 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       edgeLimit: 1,
     });
     timings.inspectMs = performance.now() - spanStartedAt;
-    if (inspected.node.kind !== "event" || inspected.node.value.kind !== "genesis") {
-      const existingRefs = this.deps.refs.listMains();
-      if (existingRefs.length === 0) {
-        if (
-          state.kind !== "event" ||
-          inspected.node.kind !== "event" ||
-          inspected.node.value.parentEventIds.length !== 1
-        ) {
-          throw new Error(
-            "semantic main exists but protected host refs are absent and the initialization publication cannot be reconstructed"
-          );
-        }
-        // This code is the trusted workspace-initialization operation. Retrying
-        // its exact first publication supplies lifecycle authority at the gate;
-        // generic outbox recovery above intentionally cannot do so.
-        spanStartedAt = performance.now();
-        await this.semanticWorkspaceInitializationPush<VcsPushResult>({
-          contextId,
-          commandId: `initial-push:${state.eventId}`,
-          expectedCommittedEventId: state.eventId,
-          expectedMainEventId: inspected.node.value.parentEventIds[0],
-        });
-        timings.initializationPushMs = performance.now() - spanStartedAt;
-      }
+    const existingRefs = this.deps.refs.listMains();
+    if (
+      (inspected.node.kind !== "event" || inspected.node.value.kind !== "genesis") &&
+      existingRefs.length > 0
+    ) {
       spanStartedAt = performance.now();
       const fresh = await this.ensureFresh();
       timings.ensureFreshMs = performance.now() - spanStartedAt;
       timings.totalMs = performance.now() - activationStartedAt;
       return { ...fresh, initialized: false, timings };
     }
+
+    const preparedRoot = this.deps.rootTemplateBootstrap
+      ? await this.deps.rootTemplateBootstrap.prepareInitialization()
+      : null;
+    const initializationEvidence = await this.initializationEvidence(state);
 
     const scanned = await this.contentProjection.localState(this.deps.workspaceRoot);
     timings.sourceScanMs = scanned.timings.scanMs;
@@ -916,45 +941,109 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       throw new Error("workspace source is missing meta/vibestudio.yml");
     }
 
+    const sourceFiles = [...scanned.files];
+    sourceFiles.sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
     const repositories = [];
-    for (const repository of discoverRepos(scanned.files.map((file) => file.path))) {
-      const prefix = `${repository.repoPath}/`;
-      const sourceFiles = scanned.files.filter((file) => file.path.startsWith(prefix));
-      const files = sourceFiles.map((file) => ({
-        path: file.path.slice(prefix.length),
-        contentHash: file.contentHash,
-        mode: file.mode & 0o777,
-      }));
-      repositories.push({
-        repoPath: repository.repoPath,
-        files,
-      });
+    if (!preparedRoot) {
+      for (const repository of discoverRepos(sourceFiles.map((file) => file.path))) {
+        const prefix = `${repository.repoPath}/`;
+        const repositoryFiles = sourceFiles.filter((file) => file.path.startsWith(prefix));
+        const files = repositoryFiles.map((file) => ({
+          path: file.path.slice(prefix.length),
+          contentHash: file.contentHash,
+          mode: file.mode & 0o777,
+        }));
+        repositories.push({
+          repoPath: repository.repoPath,
+          files,
+        });
+      }
     }
 
+    let workingHead = state;
     spanStartedAt = performance.now();
-    const importResult = await this.semanticDirectCall<VcsImportSnapshotResult>(
-      "vcsImportSnapshot",
-      {
-        contextId,
-        commandId: `initial-import:${scanned.stateHash}`,
-        expectedWorkingHead: state,
-        intentSummary: "Import the initial workspace snapshot",
-        source: {
-          kind: "filesystem",
-          uri: "vibestudio://workspace/source",
-          snapshotRevision: scanned.stateHash,
-        },
-        repositories,
-        message: "Import initial workspace snapshot",
+    if (!preparedRoot) {
+      const localSnapshotRevision = scanned.stateHash;
+      const localAlreadyImported = initializationEvidence.some(
+        (evidence) =>
+          evidence.sourceKind === "filesystem" &&
+          evidence.sourceUri === "vibestudio://workspace/source" &&
+          evidence.snapshotRevision === localSnapshotRevision
+      );
+      if (!localAlreadyImported) {
+        const importResult = await this.semanticDirectCall<VcsImportSnapshotResult>(
+          "vcsImportSnapshot",
+          {
+            contextId,
+            commandId: `initial-import:${localSnapshotRevision}`,
+            expectedWorkingHead: workingHead,
+            intentSummary: "Import the initial local workspace snapshot",
+            source: {
+              kind: "filesystem",
+              uri: "vibestudio://workspace/source",
+              snapshotRevision: localSnapshotRevision,
+            },
+            repositories,
+            message: "Import initial local workspace snapshot",
+          }
+        );
+        workingHead = { kind: "event", eventId: importResult.eventId };
       }
-    );
+    }
+    for (const repository of [...(preparedRoot?.repositories ?? [])].sort((left, right) =>
+      compareUtf16CodeUnits(left.repoPath, right.repoPath)
+    )) {
+      if (!preparedRoot) {
+        throw new Error(`Root template repository ${repository.repoPath} has no prepared root`);
+      }
+      const evidence = initializationEvidence.find(
+        (candidate) =>
+          candidate.sourceKind === "git" &&
+          candidate.sourceUri === preparedRoot.pin.url &&
+          candidate.snapshotRevision === preparedRoot.pin.commit &&
+          candidate.sourceSubdir === repository.subdir &&
+          candidate.canonicalSnapshot === repository.snapshot
+      );
+      if (evidence) {
+        continue;
+      }
+      const imported = await this.semanticDirectCall<VcsImportSnapshotResult>("vcsImportSnapshot", {
+        contextId,
+        commandId: `initial-root:${preparedRoot.pin.commit}:${repository.repoPath}`,
+        expectedWorkingHead: workingHead,
+        intentSummary: `Import ${repository.repoPath} from root template ${preparedRoot.pin.url}`,
+        source: {
+          kind: "git",
+          url: preparedRoot.pin.url,
+          commit: preparedRoot.pin.commit,
+          subdir: repository.subdir,
+          snapshot: repository.snapshot,
+        },
+        repositories: [
+          {
+            repoPath: repository.repoPath,
+            files: repository.files.map(({ path: filePath, contentHash, mode }) => ({
+              path: filePath,
+              contentHash,
+              mode,
+            })),
+          },
+        ],
+        message: `Import ${repository.repoPath} from root template ${preparedRoot.pin.url}`,
+      });
+      workingHead = { kind: "event", eventId: imported.eventId };
+    }
     timings.importSnapshotMs = performance.now() - spanStartedAt;
+    const genesisEventId = await this.initializationGenesisEventId(workingHead);
+    if (workingHead.kind !== "event") {
+      throw new Error("Workspace initialization did not produce a committed event head");
+    }
     spanStartedAt = performance.now();
     await this.semanticWorkspaceInitializationPush<VcsPushResult>({
       contextId,
-      commandId: `initial-push:${importResult.eventId}`,
-      expectedCommittedEventId: importResult.eventId,
-      expectedMainEventId: inspected.node.value.eventId,
+      commandId: `initial-push:${workingHead.eventId}`,
+      expectedCommittedEventId: workingHead.eventId,
+      expectedMainEventId: genesisEventId,
     });
     timings.initializationPushMs = performance.now() - spanStartedAt;
     spanStartedAt = performance.now();
@@ -962,6 +1051,77 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     timings.ensureFreshMs = performance.now() - spanStartedAt;
     timings.totalMs = performance.now() - activationStartedAt;
     return { ...fresh, initialized: true, timings };
+  }
+
+  private async initializationGenesisEventId(state: VcsStateNodeRef): Promise<string> {
+    let cursor = state;
+    for (;;) {
+      if (cursor.kind !== "event") {
+        throw new Error("Workspace initialization history contains a non-event state");
+      }
+      const inspected = await this.semanticDirectCall<VcsInspectResult>("vcsInspect", {
+        node: cursor,
+        edgeLimit: 1,
+      });
+      if (inspected.node.kind !== "event") {
+        throw new Error(`Workspace initialization event ${cursor.eventId} cannot be inspected`);
+      }
+      if (inspected.node.value.kind === "genesis") return inspected.node.value.eventId;
+      if (inspected.node.value.parentEventIds.length !== 1) {
+        throw new Error("Workspace initialization history is not a single import chain");
+      }
+      cursor = { kind: "event", eventId: inspected.node.value.parentEventIds[0]! };
+    }
+  }
+
+  private async initializationEvidence(state: VcsStateNodeRef): Promise<
+    Array<{
+      sourceKind: string;
+      sourceUri: string;
+      snapshotRevision: string;
+      canonicalSnapshot?: string;
+      sourceSubdir?: string | null;
+      eventId: string;
+    }>
+  > {
+    const evidence: Array<{
+      sourceKind: string;
+      sourceUri: string;
+      snapshotRevision: string;
+      canonicalSnapshot?: string;
+      sourceSubdir?: string | null;
+      eventId: string;
+    }> = [];
+    let cursor = state;
+    for (;;) {
+      if (cursor.kind !== "event") break;
+      const event = await this.semanticDirectCall<VcsInspectResult>("vcsInspect", {
+        node: cursor,
+        edgeLimit: 1,
+      });
+      if (event.node.kind !== "event" || event.node.value.kind === "genesis") break;
+      for (const applicationId of event.node.value.applicationIds) {
+        const application = await this.semanticDirectCall<VcsInspectResult>("vcsInspect", {
+          node: { kind: "application", applicationId },
+          edgeLimit: 1,
+        });
+        if (application.node.kind !== "application") continue;
+        const workUnit = await this.semanticDirectCall<VcsInspectResult>("vcsInspect", {
+          node: { kind: "work-unit", workUnitId: application.node.value.workUnitId },
+          edgeLimit: 1,
+        });
+        if (workUnit.node.kind !== "work-unit" || !workUnit.node.value.externalSnapshot) continue;
+        evidence.push({
+          ...workUnit.node.value.externalSnapshot,
+          eventId: event.node.value.eventId,
+        });
+      }
+      if (event.node.value.parentEventIds.length !== 1) {
+        throw new Error("Workspace initialization history is not a single import chain");
+      }
+      cursor = { kind: "event", eventId: event.node.value.parentEventIds[0]! };
+    }
+    return evidence;
   }
 
   async forkContext(sourceContextId: string, targetContextId: string): Promise<VcsStateNodeRef> {
@@ -1232,6 +1392,16 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async discoverGraph(stateHash: string): Promise<PackageGraph> {
     const root = await this.materializeStateForGraphDiscovery(stateHash);
     return discoverPackageGraph(root);
+  }
+
+  /**
+   * Materialize one exact semantic state for source-tree inspection. This is
+   * the same content-addressed projection used for graph discovery; callers
+   * must not fall back to an operational checkout, which is never semantic
+   * workspace source.
+   */
+  async materializeSourceTree(stateHash: string): Promise<string> {
+    return this.materializeStateForGraphDiscovery(stateHash);
   }
 
   async materializeForBuild(

@@ -547,9 +547,10 @@ describe("reduced VCS agentic catalog", () => {
       ),
       invocation(
         "commit-original",
-        "commit",
-        { message: "Named change" },
+        "vcs",
+        { operation: "commit", message: "Named change" },
         {
+          operation: "commit",
           result: {
             event: { kind: "event", eventId: "event:original" },
             committedApplicationIds: ["application:original"],
@@ -589,9 +590,10 @@ describe("reduced VCS agentic catalog", () => {
       ),
       invocation(
         "commit-counteraction",
-        "commit",
-        { message: "Undo named change" },
+        "vcs",
+        { operation: "commit", message: "Undo named change" },
         {
+          operation: "commit",
           result: {
             event: { kind: "event", eventId: "event:restored" },
             committedApplicationIds: ["application:counteraction"],

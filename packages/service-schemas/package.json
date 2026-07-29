@@ -23,6 +23,7 @@
     "@vibestudio/shell-core": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "@vibestudio/workspace-contracts": "workspace:*",
+    "@vibestudio/vcs-path-policy": "workspace:*",
     "zod": "^3.24.1"
   }
 }

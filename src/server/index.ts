@@ -45,13 +45,14 @@ import {
   sealAndDrainDurableObjectRelays,
 } from "./workerdRpcRelay.js";
 import { resolveHttpRuntimeCaller } from "./httpRuntimeIdentity.js";
-import { classifyStartupDependency } from "./startupDependencyStatus.js";
 import { isSuccessfulDevTemplateMirrorExit } from "./devTemplateMirror.js";
 import { getProductBootManifest } from "./internalDOs/productBootManifest.js";
 import {
   AppliedWorkspaceUnitDeclarations,
   workspaceUnitDeclarationFingerprint,
 } from "./workspaceUnitDeclarationFingerprint.js";
+import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
+import { templateGitTransportUrl } from "@vibestudio/workspace/templateCoordinates";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
@@ -496,8 +497,6 @@ async function main() {
     ...(workspaceConfig.services ?? []),
     ...PRODUCT_WORKSPACE_SERVICES,
   ]);
-  const { DisposableGitRemoteManager } = await import("./services/disposableGitRemoteManager.js");
-  const disposableGitRemotes = new DisposableGitRemoteManager(statePath);
 
   // Parse workspace declarations (singletonObjects + services + routes).
   // Validation (every DO-backed service/route has a matching singleton row)
@@ -779,8 +778,12 @@ async function main() {
   const recordContextIngestionBatch = createContextIngestionBatchRecorder(contextIntegrityStore);
   const { ConduitBlessingStore } = await import("./services/conduitBlessingStore.js");
   const conduitBlessingStore = new ConduitBlessingStore({ statePath });
-  const { isAttestedSystemTestHarness, isBlessedSystemTestConduit } =
-    await import("./services/authorityRuntime.js");
+  const {
+    authorizeVerifiedCaller,
+    callerMatchesMissionHarness,
+    isAttestedSystemTestHarness,
+    isBlessedSystemTestConduit,
+  } = await import("./services/authorityRuntime.js");
   const { MissionRegistry } = await import("./services/missionRegistry.js");
   const missionRegistry = new MissionRegistry({
     statePath,
@@ -791,6 +794,64 @@ async function main() {
         effectiveVersion: identity.ev,
       }),
   });
+  // Exact root bootstrap may run while services are starting, before the
+  // dispatcher can be marked fully initialized. Install the one compositional
+  // resolver as soon as all of its
+  // durable policy inputs exist; ordinary RPC dispatch remains fenced by
+  // markInitialized() after every service has registered.
+  dispatcher.setAuthorityResolver(
+    ({ ctx, caller, service, method, capability, resourceKey, tier }) => {
+      const sessionId = caller.agentBinding?.channelId ?? caller.runtime.id;
+      const sessionOrigin = caller.executionSession !== undefined;
+      const mission = missionRegistry.factForSession(sessionId);
+      let missionChangeRequired = false;
+      try {
+        missionRegistry.assertServiceExposure(sessionId, `${service}.${method}`);
+      } catch (error) {
+        if (
+          mission &&
+          error instanceof Error &&
+          (error as NodeJS.ErrnoException).code === "EMISSIONSCOPE"
+        ) {
+          missionChangeRequired = true;
+        } else {
+          throw error;
+        }
+      }
+      const conduitBlessed = Boolean(
+        caller.code?.executionDigest &&
+        conduitBlessingStore.isBlessed(caller.code) &&
+        caller.executionSession &&
+        caller.executionSession.harness.principal ===
+          `code:${caller.code.repoPath}@${caller.code.executionDigest}` &&
+        (!mission || callerMatchesMissionHarness(caller, mission))
+      );
+      return {
+        ...authorizeVerifiedCaller(caller, {
+          workspaceId,
+          workspaceMember: caller.hostOriginated === true || membershipEntryGate(caller.subject),
+          workspaceRole: workspaceRoleResolver(caller.subject),
+          sessionId,
+          audience: `service:${service}`,
+          capability,
+          resourceKey,
+          tier,
+          mission,
+          contextIntegrity:
+            sessionOrigin && caller.agentBinding
+              ? contextIntegrityStore.effectiveFact({
+                  sessionId,
+                  attested: ctx.authorization?.contextIntegrity,
+                  conduitBlessed,
+                })
+              : { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
+          grantCode: caller.codeApproved === true,
+          grantStore: capabilityGrantStore,
+        }),
+        ...(missionChangeRequired ? { missionChangeRequired: true } : {}),
+      };
+    }
+  );
   const { DevelopmentSessionStore } = await import("./services/developmentSessionStore.js");
   const developmentSessionStore = new DevelopmentSessionStore({
     statePath,
@@ -1141,7 +1202,7 @@ async function main() {
   // through it); the approval gate is late-bound below once the main-advance
   // approval machinery exists — advances before that point fail closed.
   const { createProtectedRefStore } = await import("./services/protectedRefStore.js");
-  const { collectTreeReachableDigests } = await import("./services/blobstoreService.js");
+  const { collectTreeReachableDigests, putBytes } = await import("./services/blobstoreService.js");
   let mainRefGate: import("./services/protectedRefStore.js").RefGate | null = null;
   const protectedRefStore = createProtectedRefStore({
     statePath: layout.refsDir,
@@ -1163,6 +1224,44 @@ async function main() {
       }
     },
   });
+  const { gitCredentialRequirement } = await import("./gitCredentialRequirements.js");
+  const { createHostGitReadClient } = await import("./services/hostGitHttpClient.js");
+  const rootTemplateCaller = createHostCaller("server", "server", SYSTEM_SUBJECT);
+  const { acquireRootTemplateSnapshot } = await import("./acquireRootTemplateSnapshot.js");
+  const { WorkspaceRootTemplateBootstrap } = await import("./workspaceRootTemplateBootstrap.js");
+  const createRootTemplateGitClient = (pin: { url: string; credential?: string }) => {
+    const remoteUrl = templateGitTransportUrl(pin.url);
+    return createHostGitReadClient({
+      egress: egressProxy,
+      caller: rootTemplateCaller,
+      credential: { kind: "anonymous" },
+      fallbackCredential: pin.credential
+        ? { kind: "named", label: pin.credential }
+        : { kind: "automatic" },
+      credentialRequirement: gitCredentialRequirement(pin.credential, remoteUrl),
+      operation: () => ({
+        service: "workspace-initialization",
+        method: "acquireRootTemplate",
+        workspaceId,
+        resourceKey: `workspace-root-template:${pin.url}`,
+        preparedStateDigest: sha256Canonical({ workspaceId, pin }),
+      }),
+    });
+  };
+  const rootTemplateBootstrap = new WorkspaceRootTemplateBootstrap({
+    workspaceId,
+    statePath,
+    acquire: async (pin) => {
+      return acquireRootTemplateSnapshot({
+        statePath,
+        pin,
+        git: createRootTemplateGitClient(pin),
+        sink: {
+          put: (bytes) => putBytes(layout.blobsDir, Buffer.from(bytes)),
+        },
+      });
+    },
+  });
   // Workspace VCS is a host adapter for the product-sealed semantic control
   // plane. It has no pre-attachment history or mutable workspace binding.
   const { WorkspaceVcs } = await import("./vcsHost/workspaceVcs.js");
@@ -1172,6 +1271,7 @@ async function main() {
     contextProjectionsRoot: layout.contextProjections.current,
     buildSourcesRoot: layout.buildSourcesDir,
     refs: protectedRefStore,
+    rootTemplateBootstrap,
     // Public context bindings contain durable identities only. Reachability is
     // resolved from the caller's current hub/session credential.
     workspaceId,
@@ -1377,7 +1477,10 @@ async function main() {
   };
 
   const { WorkspaceTreeScanner } = await import("./vcsHost/workspaceTreeScanner.js");
-  const treeScanner = new WorkspaceTreeScanner(workspacePath);
+  const treeScanner = new WorkspaceTreeScanner(async () => {
+    const { stateHash } = await workspaceVcs.ensureFresh();
+    return workspaceVcs.materializeSourceTree(stateHash);
+  });
   const skippedDeclaredRemoteRepoWarnings = new Set<string>();
   const syncDeclaredRemotesForSource = async (repoPath?: string): Promise<void> => {
     const repos = repoPath
@@ -2116,14 +2219,26 @@ async function main() {
     replaceWorkspaceConfig(workspaceConfig, { ...next, id: workspaceId });
   const invokeGitInteropProvider = createGitInteropProviderInvoker(() => extensionHostForGateway);
   const gitInteropDefinition = createGitInteropService({
+    workspaceId,
     workspacePath,
     workspaceConfig,
+    resolveCredential: async (input) => {
+      const { resolveCredentialByLabel } = await import("./services/credentialSelection.js");
+      return (
+        (
+          await resolveCredentialByLabel(credentialStore, {
+            label: input.name,
+            url: input.url,
+            use: "git-http",
+          })
+        )?.id ?? null
+      );
+    },
     invokeGitProvider: invokeGitInteropProvider,
     requestGitReconciliation: (repoPaths) => {
       for (const repo of repoPaths) pendingGitUpstreamRepos.add(repo);
       void flushGitUpstreamRepos();
     },
-    disposableRemotes: disposableGitRemotes,
     persistWorkspaceConfigMutation: async (input) => {
       const result = await workspaceConfigWriter.applyMutation(input);
       replaceLiveWorkspaceConfig(result.nextConfig);
@@ -2136,22 +2251,14 @@ async function main() {
   const flushGitUpstreamRepos = async (): Promise<void> => {
     if (gitUpstreamFlushRunning) return;
     gitUpstreamFlushRunning = true;
-    let readinessAttempts = 0;
     try {
-      // Ref advances begin during VCS/bootstrap attachment, before declared
-      // extensions are reconciled. Keep those notifications queued until the
-      // background extension pass has installed git-bridge instead of polling
-      // and emitting a transient ENOEXT on the interactive launch path.
+      // Ref advances can precede declared-extension reconciliation. Extension
+      // lifecycle notifications below replay this queue when provider state
+      // changes; no timer guesses at readiness.
       await startupBackgroundWorkComplete;
       while (pendingGitUpstreamRepos.size > 0) {
         if (!extensionHostForGateway) {
-          if (readinessAttempts >= 120) {
-            console.warn("[GitUpstream] extension host did not become ready within 60s");
-            return;
-          }
-          readinessAttempts += 1;
-          await new Promise<void>((resolve) => setTimeout(resolve, 500));
-          continue;
+          return;
         }
         const repos = [...pendingGitUpstreamRepos];
         pendingGitUpstreamRepos.clear();
@@ -2159,19 +2266,16 @@ async function main() {
           await invokeGitInteropProvider(
             { caller: createHostCaller("server") },
             "reconcileUpstreams",
-            [repos]
+            [repos.map((repoPath) => ({ repoPath }))]
           );
-          readinessAttempts = 0;
         } catch (err) {
           const code =
             typeof err === "object" && err !== null && "code" in err
               ? (err as { code?: unknown }).code
               : undefined;
-          if ((code === "ENOEXT" || code === "ENOTREADY") && readinessAttempts < 120) {
+          if (code === "ENOEXT" || code === "ENOTREADY") {
             for (const repo of repos) pendingGitUpstreamRepos.add(repo);
-            readinessAttempts += 1;
-            await new Promise<void>((resolve) => setTimeout(resolve, 500));
-            continue;
+            return;
           }
           console.warn("[GitUpstream] forward failed:", err);
         }
@@ -2188,38 +2292,6 @@ async function main() {
     for (const repo of repos) pendingGitUpstreamRepos.add(repo);
     void flushGitUpstreamRepos();
   });
-  const completeConfiguredWorkspaceDependenciesAtStartup = async (): Promise<void> => {
-    try {
-      const result = (await gitInteropDefinition.handler(
-        { caller: createHostCaller("server") },
-        "completeWorkspaceDependencies",
-        []
-      )) as {
-        imported: Array<{ path: string }>;
-        failed: Array<{ path: string; error: string }>;
-      };
-      if (result.imported.length > 0) {
-        console.log(
-          `[GitRemotes] Imported configured workspace dependencies: ${result.imported
-            .map((entry) => entry.path)
-            .join(", ")}`
-        );
-      }
-      for (const failure of result.failed) {
-        const status = classifyStartupDependency(failure.error);
-        const log = status.state === "waiting-for-consent" ? console.info : console.warn;
-        log(
-          `[GitRemotes] state=${status.state} workspace dependency ${failure.path}: ${status.message}`
-        );
-      }
-    } catch (err) {
-      const status = classifyStartupDependency(err);
-      const log = status.state === "waiting-for-consent" ? console.info : console.warn;
-      log(
-        `[GitRemotes] state=${status.state} configured workspace dependencies: ${status.message}`
-      );
-    }
-  };
   const { createBuildUnitChangeApprovalProvider } =
     await import("./services/buildUnitChangeApprovalProvider.js");
   const buildUnitChangeApprovalProvider = createBuildUnitChangeApprovalProvider({
@@ -2508,7 +2580,7 @@ async function main() {
     auditLog,
     relayOAuthRegistrar,
     egressProxy,
-    disposableGitHttp: disposableGitRemotes,
+    workspaceId,
     approvalQueue,
     sessionGrantStore: credentialSessionGrantStore,
     credentialUseGrantStore,
@@ -2957,6 +3029,7 @@ async function main() {
                     (status as import("@vibestudio/service-schemas/vcs").VcsStatusResult)
                       .workingHead
                 ),
+            listContexts: (prefix) => workspaceVcs.listSemanticContexts(prefix),
           },
           hooks: {
             prepare: (async ({ spec, key, contextId, existingBuildKey, parent }) => {
@@ -4133,8 +4206,12 @@ async function main() {
         hostProviderContracts: {
           gitInterop: GIT_INTEROP_PROVIDER_METHOD_NAMES,
         },
-        onWorkspaceUnitsChanged: (reason) =>
-          hostTargetLaunchCoordinator.notifyAllTargetsChanged(reason),
+        onWorkspaceUnitsChanged: (reason) => {
+          hostTargetLaunchCoordinator.notifyAllTargetsChanged(reason);
+          if (reason === "extension-status" && pendingGitUpstreamRepos.size > 0) {
+            void flushGitUpstreamRepos();
+          }
+        },
         extensionTransport: {
           call(name, method, args, options) {
             const rpcServer = rpcServerForGateway;
@@ -4657,6 +4734,7 @@ async function main() {
     entityCache,
     connectionGrants,
     workspace,
+    workspaceId,
     activeWorkspaceName: advertisedWorkspaceName ?? workspaceName,
     workspacePath,
     workspaceConfig,
@@ -5617,61 +5695,6 @@ async function main() {
   rpcServerInstance.setWorkerInstanceResolver((targetId) =>
     workerdManager.resolveWorkerInstanceName(targetId)
   );
-  const { authorizeVerifiedCaller, callerMatchesMissionHarness } =
-    await import("./services/authorityRuntime.js");
-  dispatcher.setAuthorityResolver(
-    ({ ctx, caller, service, method, capability, resourceKey, tier }) => {
-      const sessionId = caller.agentBinding?.channelId ?? caller.runtime.id;
-      const sessionOrigin = caller.executionSession !== undefined;
-      const mission = missionRegistry.factForSession(sessionId);
-      let missionChangeRequired = false;
-      try {
-        missionRegistry.assertServiceExposure(sessionId, `${service}.${method}`);
-      } catch (error) {
-        if (
-          mission &&
-          error instanceof Error &&
-          (error as NodeJS.ErrnoException).code === "EMISSIONSCOPE"
-        ) {
-          missionChangeRequired = true;
-        } else {
-          throw error;
-        }
-      }
-      const conduitBlessed = Boolean(
-        caller.code?.executionDigest &&
-        conduitBlessingStore.isBlessed(caller.code) &&
-        caller.executionSession &&
-        caller.executionSession.harness.principal ===
-          `code:${caller.code.repoPath}@${caller.code.executionDigest}` &&
-        (!mission || callerMatchesMissionHarness(caller, mission))
-      );
-      return {
-        ...authorizeVerifiedCaller(caller, {
-          workspaceId,
-          workspaceMember: caller.hostOriginated === true || membershipEntryGate(caller.subject),
-          workspaceRole: workspaceRoleResolver(caller.subject),
-          sessionId,
-          audience: `service:${service}`,
-          capability,
-          resourceKey,
-          tier,
-          mission,
-          contextIntegrity:
-            sessionOrigin && caller.agentBinding
-              ? contextIntegrityStore.effectiveFact({
-                  sessionId,
-                  attested: ctx.authorization?.contextIntegrity,
-                  conduitBlessed,
-                })
-              : { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
-          grantCode: caller.codeApproved === true,
-          grantStore: capabilityGrantStore,
-        }),
-        ...(missionChangeRequired ? { missionChangeRequired: true } : {}),
-      };
-    }
-  );
   dispatcher.markInitialized();
 
   // ===========================================================================
@@ -5842,7 +5865,6 @@ async function main() {
           syncDeclaredRemotesAfterStartupReload = true;
           pendingStartupMetaConfigReload = false;
         }
-        await completeConfiguredWorkspaceDependenciesAtStartup();
         await reconcileDeclaredWorkspaceUnits(workspaceConfig, "startup");
       } while (pendingStartupMetaConfigReload);
       const runtimeApproval = await buildUnitChangeApprovalProvider.startupApproval();

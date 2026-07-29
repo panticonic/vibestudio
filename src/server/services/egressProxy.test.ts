@@ -17,7 +17,13 @@ import type {
   Credential,
   CredentialUseGrant,
 } from "@vibestudio/credential-client/types";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import {
+  createHostCaller,
+  createVerifiedCaller,
+  ServiceDispatcher,
+  type HostAuthorityEffect,
+  type ServiceContext,
+} from "@vibestudio/shared/serviceDispatcher";
 import {
   EgressProxy,
   shouldRetryWebSocketConnectWithIpv4,
@@ -2091,8 +2097,8 @@ describe("EgressProxy", () => {
     );
 
     const response = await proxy.forwardGitHttp({
-      caller: workerCaller("worker:test"),
-      credentialId: "cred-1",
+      authority: { kind: "runtime", caller: workerCaller("worker:test") },
+      credential: { kind: "credential", credentialId: "cred-1" },
       url: "https://github.com/acme/project.git/git-upload-pack",
       method: "POST",
       headers: { authorization: "Bearer attacker" },
@@ -2149,14 +2155,305 @@ describe("EgressProxy", () => {
     );
 
     await proxy.forwardGitHttp({
-      caller: workerCaller("worker:test"),
-      credentialId: null,
+      authority: { kind: "runtime", caller: workerCaller("worker:test") },
+      credential: { kind: "anonymous" },
       url: "https://github.com/octocat/Hello-World.git/info/refs?service=git-upload-pack",
       method: "GET",
     });
 
     expect(authorizeInternalRequest).toHaveBeenCalledTimes(1);
   });
+
+  it("rejects a bare host caller on the runtime Git authority path", async () => {
+    const proxy = createProxy(undefined, new MemoryAuditLog());
+    await expect(
+      proxy.forwardGitHttp({
+        authority: { kind: "runtime", caller: createHostCaller("server") },
+        credential: { kind: "anonymous" },
+        url: "https://example.test/project.git/info/refs?service=git-upload-pack",
+        method: "GET",
+      })
+    ).rejects.toThrow(/Unknown caller identity/);
+  });
+
+  it("authorizes and audits anonymous Git for an exact host operation", async () => {
+    const auditLog = new MemoryAuditLog();
+    const authorizeEffect = vi.fn(
+      async (_ctx: ServiceContext, _effect: HostAuthorityEffect) => undefined
+    );
+    const proxy = new EgressProxy({
+      credentialStore: new MemoryCredentialStore(),
+      auditLog: auditLog as never,
+      authorizeEffect,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(new Uint8Array([1]), { status: 200 }))
+    );
+
+    await proxy.forwardGitHttp({
+      authority: {
+        kind: "host-operation",
+        caller: createHostCaller("server"),
+        operation: {
+          service: "workspace-initialization",
+          method: "acquireRootTemplate",
+          workspaceId: "workspace-test",
+          resourceKey: "template:https://example.test/project.git",
+          preparedStateDigest: "snapshot-1",
+        },
+      },
+      credential: { kind: "anonymous" },
+      url: "https://example.test/project.git/info/refs?service=git-upload-pack",
+      method: "GET",
+    });
+
+    expect(authorizeEffect).toHaveBeenCalledOnce();
+    expect(authorizeEffect.mock.calls[0]?.[1]).toMatchObject({
+      service: "workspace-initialization",
+      method: "acquireRootTemplate",
+      capability: "network.response.read",
+    });
+    expect(auditLog.entries[0]).toMatchObject({
+      workerId: "host:workspace-initialization.acquireRootTemplate:snapshot-1",
+      callerId: "server",
+      status: 200,
+    });
+  });
+
+  it.each([301, 302, 307, 308])(
+    "rejects Git HTTP redirect status %s without following it",
+    async (status) => {
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(null, {
+            status,
+            headers: { location: "https://example.test/other.git/info/refs" },
+          })
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const proxy = createProxy(undefined, new MemoryAuditLog(), {
+        authorizeInternalRequest: vi.fn(async () => ({})),
+      });
+
+      await expect(
+        proxy.forwardGitHttp({
+          authority: { kind: "runtime", caller: workerCaller("worker:test") },
+          credential: { kind: "anonymous" },
+          url: "https://example.test/project.git/info/refs?service=git-upload-pack",
+          method: "GET",
+        })
+      ).rejects.toThrow(/redirects are not allowed/);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://example.test/project.git/info/refs?service=git-upload-pack",
+        expect.objectContaining({ redirect: "manual" })
+      );
+    }
+  );
+
+  it("still lets ordinary fetch follow redirects when no mission requires otherwise", async () => {
+    // Refusing redirects is a Git-HTTP-specific rule. `credentials.fetch` has
+    // no redirect-following loop of its own, so forcing `manual` here would
+    // hand callers a bare 301 instead of the resource.
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array([1]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const proxy = createProxy(undefined, new MemoryAuditLog(), {
+      authorizeInternalRequest: vi.fn(async () => ({})),
+    });
+
+    await proxy.forwardProxyFetch({
+      caller: workerCaller("worker:test"),
+      url: "https://example.test/resource",
+      method: "GET",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://example.test/resource",
+      expect.objectContaining({ redirect: "follow" })
+    );
+  });
+
+  it.each([
+    {
+      credentialId: "missing",
+      credential: undefined,
+      expected: /credential-unavailable/,
+    },
+    {
+      credentialId: "cred-1",
+      credential: createCredential({
+        bindings: [
+          {
+            id: "git",
+            use: "git-http",
+            audience: [{ url: "https://elsewhere.test/repo.git", match: "path-prefix" }],
+            injection: {
+              type: "basic-auth",
+              usernameTemplate: "git",
+              passwordTemplate: "{token}",
+            },
+          },
+        ],
+      }),
+      expected: /credential-audience-mismatch/,
+    },
+  ])(
+    "validates host credential $credentialId before acquiring authority",
+    async ({ credentialId, credential, expected }) => {
+      const authorizeEffect = vi.fn(
+        async (_ctx: ServiceContext, _effect: HostAuthorityEffect) => undefined
+      );
+      const proxy = new EgressProxy({
+        credentialStore: new MemoryCredentialStore(
+          credential ? new Map([[credentialId, { ...credential, id: credentialId }]]) : undefined
+        ),
+        auditLog: new MemoryAuditLog() as never,
+        authorizeEffect,
+      });
+      await expect(
+        proxy.forwardGitHttp({
+          authority: {
+            kind: "host-operation",
+            caller: createHostCaller("server"),
+            operation: {
+              service: "workspace-initialization",
+              method: "acquireRootTemplate",
+              resourceKey: "template:test",
+              preparedStateDigest: "snapshot-invalid",
+            },
+          },
+          credential: { kind: "credential", credentialId },
+          url: "https://example.test/project.git/info/refs?service=git-upload-pack",
+          method: "GET",
+        })
+      ).rejects.toThrow(expected);
+      expect(authorizeEffect).not.toHaveBeenCalled();
+    }
+  );
+
+  it("uses an explicit credential under host authority without a code grant", async () => {
+    const credential = createCredential({
+      bindings: [
+        {
+          id: "git",
+          use: "git-http",
+          audience: [{ url: "https://example.test/project.git", match: "path-prefix" }],
+          injection: {
+            type: "basic-auth",
+            usernameTemplate: "git",
+            passwordTemplate: "{token}",
+          },
+        },
+      ],
+    });
+    const authorizeEffect = vi.fn(
+      async (_ctx: ServiceContext, _effect: HostAuthorityEffect) => undefined
+    );
+    const approvalQueue = {
+      request: vi.fn(),
+      resolve: vi.fn(),
+      listPending: vi.fn(() => []),
+    };
+    const proxy = new EgressProxy({
+      credentialStore: new MemoryCredentialStore(new Map([[credential.id!, credential]])),
+      auditLog: new MemoryAuditLog() as never,
+      authorizeEffect,
+      approvalQueue: approvalQueue as never,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url, init) => {
+        expect(new Headers(init?.headers).get("authorization")).toMatch(/^Basic /);
+        return new Response(new Uint8Array(), { status: 200 });
+      })
+    );
+
+    await proxy.forwardGitHttp({
+      authority: {
+        kind: "host-operation",
+        caller: createHostCaller("server"),
+        operation: {
+          service: "workspace-initialization",
+          method: "acquireSeed",
+          workspaceId: "workspace-test",
+          resourceKey: "seed:projects/example",
+          preparedStateDigest: "prepared-state-1",
+        },
+      },
+      credential: { kind: "credential", credentialId: credential.id! },
+      url: "https://example.test/project.git/info/refs?service=git-upload-pack",
+      method: "GET",
+    });
+
+    expect(authorizeEffect).toHaveBeenCalledTimes(2);
+    expect(authorizeEffect.mock.calls.map((call) => call[1].capability)).toEqual([
+      "network.response.read",
+      "credential.use",
+    ]);
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { selection: { kind: "automatic" as const }, label: "Example" },
+    { selection: { kind: "named" as const, label: "work-git" }, label: "work-git" },
+  ])(
+    "resolves $selection.kind host Git selection through the profile credential store",
+    async ({ selection, label }) => {
+      const credential = createCredential({
+        label,
+        bindings: [
+          {
+            id: "git",
+            use: "git-http",
+            audience: [{ url: "https://example.test/project.git", match: "path-prefix" }],
+            injection: {
+              type: "basic-auth",
+              usernameTemplate: "git",
+              passwordTemplate: "{token}",
+            },
+          },
+        ],
+      });
+      const authorizeEffect = vi.fn(
+        async (_ctx: ServiceContext, _effect: HostAuthorityEffect) => undefined
+      );
+      const proxy = new EgressProxy({
+        credentialStore: new MemoryCredentialStore(new Map([[credential.id!, credential]])),
+        auditLog: new MemoryAuditLog() as never,
+        authorizeEffect,
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url, init) => {
+          expect(new Headers(init?.headers).get("authorization")).toMatch(/^Basic /);
+          return new Response(new Uint8Array(), { status: 200 });
+        })
+      );
+
+      await proxy.forwardGitHttp({
+        authority: {
+          kind: "host-operation",
+          caller: createHostCaller("server"),
+          operation: {
+            service: "workspace-initialization",
+            method: "acquireRootTemplate",
+            workspaceId: "workspace-test",
+            resourceKey: "template:test",
+            preparedStateDigest: `host-${selection.kind}`,
+          },
+        },
+        credential: selection,
+        url: "https://example.test/project.git/info/refs?service=git-upload-pack",
+        method: "GET",
+      });
+
+      expect(authorizeEffect.mock.calls.map((call) => call[1].capability)).toEqual([
+        "network.response.read",
+        "credential.use",
+      ]);
+    }
+  );
 
   it("requests git-specific approval copy metadata for git HTTP writes", async () => {
     const credential = createCredential({
@@ -2190,8 +2487,8 @@ describe("EgressProxy", () => {
     );
 
     await proxy.forwardGitHttp({
-      caller: workerCaller("worker:test"),
-      credentialId: "cred-1",
+      authority: { kind: "runtime", caller: workerCaller("worker:test") },
+      credential: { kind: "credential", credentialId: "cred-1" },
       url: "https://github.com/acme/project.git/git-receive-pack",
       method: "POST",
     });

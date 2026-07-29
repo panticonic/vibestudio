@@ -358,7 +358,7 @@ const approvalDetailSchema = z
   .object({
     label: z.string(),
     value: z.string(),
-    format: z.enum(["plain", "markdown", "code"]).optional(),
+    format: z.enum(["plain", "markdown", "code", "tree"]).optional(),
   })
   .strict();
 const authorityRequirementSchema: z.ZodType<AuthorityRequirement> = z.lazy(() =>
@@ -537,7 +537,13 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
         .optional(),
       details: z.array(approvalDetailSchema).optional(),
       snapshot: invocationSnapshotSchema.optional(),
-      cardType: z.enum(["permission.gated", "permission.outside", "confirm.critical"]).optional(),
+      cardType: z
+        .enum([
+          "permission.gated",
+          "permission.outside",
+          "confirm.critical",
+        ])
+        .optional(),
       allowedDecisions: z.array(z.enum(APPROVAL_DECISIONS)).optional(),
       authorityRow: authorityRowSchema.optional(),
       operationSubstance: z

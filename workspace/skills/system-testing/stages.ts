@@ -20,6 +20,7 @@ export { projectLifecycleTests } from "./tests/project-lifecycle.js";
 export { cdpGadDiagnosticTests } from "./tests/cdp-gad-diagnostics.js";
 export { harnessResilienceTests } from "./tests/harness-resilience.js";
 export { gitInteropTests } from "./tests/git-interop.js";
+export { templateTests } from "./tests/templates.js";
 export { vcsAdvancedTests } from "./tests/vcs-advanced.js";
 export { blobstoreTests } from "./tests/blobstore.js";
 export { serverLogTests } from "./tests/server-logs.js";
@@ -34,7 +35,6 @@ export { extensionSurfaceTests } from "./tests/extensions-surface.js";
 export { harnessToolTests } from "./tests/harness-tools.js";
 export { credentialTests } from "./tests/credentials.js";
 export { agentOrchestrationTests } from "./tests/agent-orchestration.js";
-export { mobileTests } from "./tests/mobile.js";
 
 import { smokeTests as _smoke } from "./tests/smoke.js";
 import { filesystemTests as _fs } from "./tests/filesystem.js";
@@ -56,6 +56,7 @@ import { projectLifecycleTests as _projectLifecycle } from "./tests/project-life
 import { cdpGadDiagnosticTests as _cdpGad } from "./tests/cdp-gad-diagnostics.js";
 import { harnessResilienceTests as _harnessResilience } from "./tests/harness-resilience.js";
 import { gitInteropTests as _gitInterop } from "./tests/git-interop.js";
+import { templateTests as _templates } from "./tests/templates.js";
 import { vcsAdvancedTests as _vcsAdvanced } from "./tests/vcs-advanced.js";
 import { blobstoreTests as _blobstore } from "./tests/blobstore.js";
 import { serverLogTests as _serverLogs } from "./tests/server-logs.js";
@@ -70,7 +71,6 @@ import { extensionSurfaceTests as _extensionSurface } from "./tests/extensions-s
 import { harnessToolTests as _harnessTools } from "./tests/harness-tools.js";
 import { credentialTests as _credentials } from "./tests/credentials.js";
 import { agentOrchestrationTests as _agentOrchestration } from "./tests/agent-orchestration.js";
-import { mobileTests as _mobile } from "./tests/mobile.js";
 import { deterministicTestCases as _deterministic } from "./deterministic.js";
 
 export type TestStage = {
@@ -104,6 +104,7 @@ export function allTests(): TestCase[] {
     ..._vcs,
     ..._vcsAdvanced,
     ..._gitInterop,
+    ..._templates,
     ..._panels,
     ..._workers,
     ..._build,
@@ -120,7 +121,6 @@ export function allTests(): TestCase[] {
     ..._edge,
     ..._agenticRuntime,
     ..._agentOrchestration,
-    ..._mobile,
     ..._evalLifecycle,
     ..._selfDevelopment,
     ..._blobstore,

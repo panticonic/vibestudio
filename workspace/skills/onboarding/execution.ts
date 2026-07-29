@@ -1,8 +1,10 @@
 import { callMain, openPanel } from "@workspace/runtime";
 import {
   resolveOnboardingSelection,
+  resolveTemplateSelection,
   type OnboardingInteraction,
   type ResolvedOnboardingSelection,
+  type TemplateInteraction,
 } from "./routing";
 
 export interface OnboardingExecutionDependencies {
@@ -14,6 +16,12 @@ export interface OnboardingExecutionResult {
   handled: boolean;
   target: ResolvedOnboardingSelection["target"];
   ownerSkillPath?: string;
+}
+
+export interface TemplateExecutionResult {
+  handled: false;
+  target: { via: "template-composer" };
+  interaction: TemplateInteraction;
 }
 
 const defaultDependencies: OnboardingExecutionDependencies = {
@@ -48,4 +56,15 @@ export async function executeOnboardingSelection(
     target: route.target,
     ...(route.ownerSkillPath ? { ownerSkillPath: route.ownerSkillPath } : {}),
   };
+}
+
+/**
+ * Template actions intentionally remain composer-owned. This gives the agent a
+ * validated structured request to pass to the userland extension's
+ * inspect/add/pull methods, rather than letting client UI resolve a URL or
+ * bypass the approval card.
+ */
+export function executeTemplateSelection(interaction: TemplateInteraction): TemplateExecutionResult {
+  const route = resolveTemplateSelection(interaction);
+  return { handled: false, target: route.target, interaction: route.interaction };
 }

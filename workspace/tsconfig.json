@@ -73,7 +73,6 @@
       "@workspace-about/new": ["workspace/about/new/index.tsx"],
       "@workspace-panels/chat": ["workspace/panels/chat/index.tsx"],
       "@workspace-panels/terminal": ["workspace/panels/terminal/index.tsx"],
-      "@workspace-panels/hello-vanilla": ["workspace/panels/hello-vanilla/index.ts"],
       "@workspace-panels/hello-svelte": ["workspace/panels/hello-svelte/index.ts"],
       "@workspace-extensions/shell": ["workspace/extensions/shell/index.ts"],
       "@workspace-extensions/claude-code": ["workspace/extensions/claude-code/index.ts"],
@@ -98,10 +97,15 @@
       "@workspace-skills/onboarding": ["workspace/skills/onboarding/index.ts"],
       "@workspace-skills/web-research": ["workspace/skills/web-research/index.ts"],
       "@workspace-skills/system-testing": ["workspace/skills/system-testing/index.ts"],
+      "@workspace-skills/system-testing/scenario-validation": [
+        "workspace/skills/system-testing/scenario-validation.ts"
+      ],
       "@workspace-workers/agent-worker": ["workspace/workers/agent-worker/index.ts"],
       "@workspace-workers/email-sync": ["workspace/workers/email-sync/index.ts"],
       "@workspace-workers/test-agent": ["workspace/workers/test-agent/index.ts"],
       "@workspace/about-shared/types": ["workspace/packages/about-shared/types.ts"],
+      "@workspace/about-shared/templates": ["workspace/packages/about-shared/templates.ts"],
+      "@workspace/about-shared/template-review": ["workspace/packages/about-shared/templateReview.tsx"],
       "@workspace/agentic-chat": ["workspace/packages/agentic-chat/index.ts"],
       "@workspace/agentic-chat/chat": [
         "workspace/packages/agentic-chat/components/AgenticChat.tsx"

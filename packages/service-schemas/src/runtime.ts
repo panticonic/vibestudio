@@ -509,6 +509,27 @@ export const runtimeMethods = defineServiceMethods({
     access: READ_ACCESS,
     authority: RUNTIME_AGENT_READ_POLICY,
   },
+  listContexts: {
+    description:
+      "List durable semantic workspace contexts, optionally restricted to an exact id prefix. This is domain-neutral workflow discovery; context contents remain subject to their ordinary VCS read authority.",
+    args: z.union([
+      z.tuple([]),
+      z.tuple([
+        z
+          .object({
+            prefix: z.string().min(1).optional(),
+          })
+          .strict(),
+      ]),
+    ]),
+    returns: z.object({ contexts: z.array(z.string()) }).strict(),
+    access: READ_ACCESS,
+    authority: RUNTIME_AGENT_READ_POLICY,
+    examples: [
+      { args: [] },
+      { args: [{ prefix: "template-composer-operation-" }] },
+    ],
+  },
   setTitle: {
     description:
       "Set a server-controlled display title for the calling entity. Surfaced by approval UIs in place of the opaque id. Pass null/empty to clear.",

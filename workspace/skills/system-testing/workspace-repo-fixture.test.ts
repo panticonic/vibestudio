@@ -160,9 +160,15 @@ function createPort() {
                 !escapedWork && !fileWork && importRequest
                   ? {
                       sourceKind: importRequest.source.kind,
-                      sourceUri: importRequest.source.uri,
+                      sourceUri:
+                        importRequest.source.kind === "git"
+                          ? importRequest.source.url
+                          : importRequest.source.uri,
                       snapshotRevision:
-                        reportedSnapshotRevision ?? importRequest.source.snapshotRevision,
+                        reportedSnapshotRevision ??
+                        (importRequest.source.kind === "git"
+                          ? importRequest.source.commit
+                          : importRequest.source.snapshotRevision),
                       snapshotDigest: `snapshot:${"a".repeat(64)}`,
                       targetRepositoryIds: ["repository:fixture"],
                     }

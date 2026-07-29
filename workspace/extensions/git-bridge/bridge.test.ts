@@ -107,6 +107,8 @@ function importWorkUnitInspection(revision: string, sourceUri: string, workUnitI
           sourceKind: "git" as const,
           sourceUri,
           snapshotRevision: revision,
+          sourceSubdir: null,
+          canonicalSnapshot: `v1-sha256:${"c".repeat(64)}`,
           snapshotDigest: "a".repeat(64),
           targetRepositoryIds: ["repository:projects/demo"],
         },
@@ -138,6 +140,8 @@ function importSnapshotResult(input: {
       sourceKind: "git" as const,
       sourceUri: input.sourceUri,
       snapshotRevision: input.revision,
+      sourceSubdir: null,
+      canonicalSnapshot: `v1-sha256:${"c".repeat(64)}`,
       snapshotDigest: "a".repeat(64),
       targetRepositoryIds: [input.repositoryId],
     },
@@ -301,8 +305,9 @@ describe("GitBridge semantic snapshot boundary", () => {
         expectedWorkingHead: { kind: "event", eventId: "event:main" },
         source: expect.objectContaining({
           kind: "git",
-          uri: "https://example.test/owner/demo.git",
-          snapshotRevision: "a".repeat(40),
+          url: "https://example.test/owner/demo.git",
+          commit: "a".repeat(40),
+          snapshot: expect.stringMatching(/^v1-sha256:/),
         }),
         repositories: [
           expect.objectContaining({
@@ -405,7 +410,7 @@ describe("GitBridge semantic snapshot boundary", () => {
 
     expect(host.vcs.importSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({
-        source: expect.objectContaining({ snapshotRevision: commitOid }),
+        source: expect.objectContaining({ commit: commitOid }),
         repositories: [
           expect.objectContaining({
             files: [
@@ -581,7 +586,7 @@ describe("GitBridge semantic snapshot boundary", () => {
     });
     expect(host.vcs.importSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({
-        source: expect.objectContaining({ snapshotRevision: "b".repeat(40) }),
+        source: expect.objectContaining({ commit: "b".repeat(40) }),
       })
     );
   });
@@ -689,7 +694,7 @@ describe("GitBridge semantic snapshot boundary", () => {
     await expect(bridge.importLockedInner(repoPath, {})).rejects.toThrow(
       /link \(blob, mode 120000\).*only regular files and executable files are importable/
     );
-    expect(statusMatrix).not.toHaveBeenCalled();
+    expect(statusMatrix).toHaveBeenCalledOnce();
     expect(host.vcs.importSnapshot).not.toHaveBeenCalled();
   });
 
@@ -836,6 +841,19 @@ describe("GitBridge semantic snapshot boundary", () => {
     });
     expect(readFileSync(path.join(dir, "index.ts"), "utf8")).toBe("checkout-only edit\n");
     expect(() => readFileSync(path.join(previewDir, ".git", "HEAD"), "utf8")).toThrow();
+  });
+
+  it("rejects a template source event that is not the current protected main", async () => {
+    const { host } = baseHost(root);
+    host.vcs.status = vi.fn(async ({ contextId }) => status(contextId, "event:main"));
+    const bridge = new GitBridge(host);
+
+    await expect(
+      bridge.readProtectedRepository("projects/demo", "event:unpublished")
+    ).rejects.toThrow(
+      "Protected main changed from event:unpublished to event:main before template export"
+    );
+    expect(host.vcs.resolveRepository).not.toHaveBeenCalled();
   });
 
   it("refuses to export over an unresolved external candidate", async () => {

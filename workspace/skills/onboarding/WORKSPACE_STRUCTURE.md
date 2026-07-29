@@ -59,14 +59,14 @@ semantic VCS. This means:
 - Agents can author local applications and commit their complete context chain
 - Publishing the committed workspace event triggers affected rebuilds and
   config reloads
-- External Git upstreams are operationally materialized below
-  `state/git-checkouts/`, never in workspace source. Startup asks the configured
-  provider's `upstreamStatus` and imports only `not-materialized` rows as
-  unpublished semantic candidates. Prefer `git.setSharedRemote(path, remote)`
-  for targeted approval instead of editing an operational checkout by hand. See
+- External Git checkouts live operationally below `state/git-checkouts/`, never
+  in workspace source. External repository imports use one explicit userland
+  `git.importProject()` call and return
+  unpublished candidates. Prefer `git.setSharedRemote(path, remote)` for
+  targeted approval instead of editing an operational checkout by hand. See
   [EXTERNAL_GIT_PROJECTS.md](EXTERNAL_GIT_PROJECTS.md) for config shape,
-  approvals, branch/default discovery, credential tri-state, atomic import
-  evidence, nonmutating previews, and private repo retry behavior.
+  approvals, branch/default discovery, logical credentials, atomic import
+  evidence, and nonmutating previews.
 
 ## Context Folders
 
@@ -136,11 +136,8 @@ Plain projects are still external Git-backed projects when imported that way:
   from that same atomic import transaction. Later pulls use the same exact
   snapshot import for that stable repository identity; each import authors
   ordinary changes and follows the same incremental integration path.
-- Startup imports only configured upstreams whose provider status is
-  `not-materialized`. Other states are skipped as `already-materialized`;
-  `git.completeWorkspaceDependencies()` uses the same provider-observed rule as
-  an explicit retry/backfill. Both produce candidates, never an import-only
-  publication.
+- An explicit userland `git.importProject()` creates one unpublished candidate
+  per external source and never advances protected main by importing alone.
 - Build V2 reads the published or candidate semantic state through the CAS. It
   never builds from the operational Git checkout.
 - They are not launchable runtime units and do not become `@workspace/*`

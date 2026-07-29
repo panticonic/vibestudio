@@ -89,4 +89,44 @@ describe("WorkspaceVcs protected publication notification", () => {
       expect.anything()
     );
   });
+
+  it("serializes every protected-main author while allowing one authoring lease to publish", async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), "vcs-publication-lease-"));
+    const blobsDir = path.join(root, "blobs");
+    ensureLayout(blobsDir);
+    const vcs = new WorkspaceVcs({
+      workspaceId: "workspace:test",
+      blobsDir,
+      workspaceRoot: path.join(root, "source"),
+      contextProjectionsRoot: path.join(root, ".context-projections", "v5"),
+      buildSourcesRoot: path.join(root, "build-sources"),
+      refs: createProtectedRefStore({
+        statePath: path.join(root, "refs"),
+        gate: async () => undefined,
+      }),
+    });
+    const order: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = vcs.withProtectedMainMutation(async () => {
+      order.push("first:start");
+      await gate;
+      await vcs.withProtectedMainMutation(async () => {
+        order.push("first:publish");
+      });
+      order.push("first:end");
+    });
+    await vi.waitFor(() => expect(order).toEqual(["first:start"]));
+    const second = vcs.withProtectedMainMutation(async () => {
+      order.push("second");
+    });
+    await Promise.resolve();
+    expect(order).toEqual(["first:start"]);
+
+    release();
+    await Promise.all([first, second]);
+    expect(order).toEqual(["first:start", "first:publish", "first:end", "second"]);
+  });
 });

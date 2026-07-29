@@ -16,7 +16,9 @@ describe("workspace config source", () => {
   });
 
   it("reads workspace config from an already-prefixed state ref", async () => {
-    const readFile = vi.fn(async () => textFile(MANIFEST));
+    const readFile = vi.fn(async (_ref: string, filePath: string) =>
+      filePath === "meta/vibestudio.yml" ? textFile(MANIFEST) : null
+    );
 
     const config = await readWorkspaceConfigFromState({ readFile }, WORKSPACE_ID, "state:main");
 

@@ -475,8 +475,10 @@ function createMockResponse() {
 
 describe("AppHost", () => {
   it("computes meta-change approvals from committed workspace config", async () => {
-    const readWorkspaceFileAtState = vi.fn(
-      async () => `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\napps:\n  - source: apps/shell\n`
+    const readWorkspaceFileAtState = vi.fn(async (_stateHash: string, filePath: string) =>
+      filePath === "meta/vibestudio.yml"
+        ? `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\napps:\n  - source: apps/shell\n`
+        : null
     );
     const { host } = makeHarness({ readWorkspaceFileAtState });
 
@@ -493,8 +495,10 @@ describe("AppHost", () => {
   });
 
   it("treats an omitted static app capability list as an empty declaration", async () => {
-    const readWorkspaceFileAtState = vi.fn(
-      async () => `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\napps:\n  - source: apps/shell\n`
+    const readWorkspaceFileAtState = vi.fn(async (_stateHash: string, filePath: string) =>
+      filePath === "meta/vibestudio.yml"
+        ? `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\napps:\n  - source: apps/shell\n`
+        : null
     );
     const { host, appPath } = makeHarness({ readWorkspaceFileAtState });
     fs.writeFileSync(
@@ -1946,8 +1950,10 @@ describe("AppHost", () => {
 
   it("previews and applies React Native provider changes from trusted main", async () => {
     const { host, buildSystem, eventService, approvalQueue, graphNode } = makeHarness({
-      readWorkspaceFileAtState: async () =>
-        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\napps:\n  - source: apps/shell\n`,
+      readWorkspaceFileAtState: async (_stateHash: string, filePath: string) =>
+        filePath === "meta/vibestudio.yml"
+          ? `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\napps:\n  - source: apps/shell\n`
+          : null,
       reactNativeAppArtifactBaseUrl: "https://mobile.gateway.test",
     });
     setAppManifestTarget(graphNode, "react-native", ["notifications"]);
@@ -2108,8 +2114,10 @@ describe("AppHost", () => {
 
   it("defers trusted React Native provider changes until mobile readiness is requested", async () => {
     const { host, buildSystem, approvalQueue, graphNode, providerChangeCallbacks } = makeHarness({
-      readWorkspaceFileAtState: async () =>
-        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\napps:\n  - source: apps/shell\n`,
+      readWorkspaceFileAtState: async (_stateHash: string, filePath: string) =>
+        filePath === "meta/vibestudio.yml"
+          ? `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\napps:\n  - source: apps/shell\n`
+          : null,
     });
     setAppManifestTarget(graphNode, "react-native", ["notifications"]);
     installApp(host, graphNode);

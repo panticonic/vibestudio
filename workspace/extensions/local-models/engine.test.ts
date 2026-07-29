@@ -11,7 +11,12 @@ import {
   resolveAssetNames,
   type EngineInstallerDeps,
 } from "./engine.js";
-import type { EngineBackend, EnginePin, GpuInfo, HardwareProfile } from "./types.js";
+import type {
+  EngineBackend,
+  EnginePin,
+  GpuInfo,
+  HardwareProfile,
+} from "@workspace/model-catalog/localModels";
 
 const tempRoots: string[] = [];
 
@@ -22,7 +27,9 @@ afterEach(async () => {
 
 describe("resolveAssetNames", () => {
   it("resolves Windows CUDA 12.4 assets", () => {
-    expect(resolveAssetNames(profile({ os: "win32", chosenBackend: "cuda-12.4" }), "b9999")).toEqual({
+    expect(
+      resolveAssetNames(profile({ os: "win32", chosenBackend: "cuda-12.4" }), "b9999")
+    ).toEqual({
       cpu: "llama-b9999-bin-win-cpu-x64.zip",
       gpu: "llama-b9999-bin-win-cuda-12.4-x64.zip",
       extra: ["cudart-llama-bin-win-cuda-12.4-x64.zip"],
@@ -30,7 +37,9 @@ describe("resolveAssetNames", () => {
   });
 
   it("resolves Windows CUDA 13.3 assets including cudart", () => {
-    expect(resolveAssetNames(profile({ os: "win32", chosenBackend: "cuda-13.3" }), "b9999")).toEqual({
+    expect(
+      resolveAssetNames(profile({ os: "win32", chosenBackend: "cuda-13.3" }), "b9999")
+    ).toEqual({
       cpu: "llama-b9999-bin-win-cpu-x64.zip",
       gpu: "llama-b9999-bin-win-cuda-13.3-x64.zip",
       extra: ["cudart-llama-bin-win-cuda-13.3-x64.zip"],
@@ -46,7 +55,9 @@ describe("resolveAssetNames", () => {
   });
 
   it("resolves Linux CPU arm64 assets", () => {
-    expect(resolveAssetNames(profile({ os: "linux", arch: "arm64", chosenBackend: "cpu" }), "b9999")).toEqual({
+    expect(
+      resolveAssetNames(profile({ os: "linux", arch: "arm64", chosenBackend: "cpu" }), "b9999")
+    ).toEqual({
       cpu: "llama-b9999-bin-ubuntu-arm64.tar.gz",
       gpu: null,
       extra: [],
@@ -54,7 +65,9 @@ describe("resolveAssetNames", () => {
   });
 
   it("resolves macOS arm64 assets", () => {
-    expect(resolveAssetNames(profile({ os: "darwin", arch: "arm64", chosenBackend: "metal" }), "b9999")).toEqual({
+    expect(
+      resolveAssetNames(profile({ os: "darwin", arch: "arm64", chosenBackend: "metal" }), "b9999")
+    ).toEqual({
       cpu: "llama-b9999-bin-macos-arm64.tar.gz",
       gpu: "llama-b9999-bin-macos-arm64.tar.gz",
       extra: [],
@@ -62,7 +75,9 @@ describe("resolveAssetNames", () => {
   });
 
   it("uses the Linux Vulkan asset for NVIDIA CUDA profiles", () => {
-    expect(resolveAssetNames(profile({ os: "linux", chosenBackend: "cuda-12.4" }), "b9999")).toEqual({
+    expect(
+      resolveAssetNames(profile({ os: "linux", chosenBackend: "cuda-12.4" }), "b9999")
+    ).toEqual({
       cpu: "llama-b9999-bin-ubuntu-x64.tar.gz",
       gpu: "llama-b9999-bin-ubuntu-vulkan-x64.tar.gz",
       extra: [],
@@ -107,8 +122,12 @@ describe("createEngineInstaller", () => {
       "llama-b1234-bin-ubuntu-x64.tar.gz",
       "llama-b1234-bin-ubuntu-vulkan-x64.tar.gz",
     ]);
-    await expect(stat(state.cpu?.serverBinPath ?? "")).resolves.toMatchObject({ mode: expect.any(Number) });
-    await expect(stat(state.gpu?.serverBinPath ?? "")).resolves.toMatchObject({ mode: expect.any(Number) });
+    await expect(stat(state.cpu?.serverBinPath ?? "")).resolves.toMatchObject({
+      mode: expect.any(Number),
+    });
+    await expect(stat(state.gpu?.serverBinPath ?? "")).resolves.toMatchObject({
+      mode: expect.any(Number),
+    });
 
     const downloadCount = seenUrls.length;
     const secondState = await installer.ensureInstalled(hardware, pin.pin);
@@ -130,7 +149,9 @@ describe("createEngineInstaller", () => {
     });
     const pin: EnginePin = { buildTag: "b1234", checksums: { [asset]: "0".repeat(64) } };
 
-    await expect(installer.ensureInstalled(profile({ chosenBackend: "cpu" }), pin)).rejects.toThrow(/Checksum mismatch/);
+    await expect(installer.ensureInstalled(profile({ chosenBackend: "cpu" }), pin)).rejects.toThrow(
+      /Checksum mismatch/
+    );
   });
 
   it("throws when a release asset has no pinned checksum", async () => {
@@ -145,7 +166,10 @@ describe("createEngineInstaller", () => {
     });
 
     await expect(
-      installer.ensureInstalled(profile({ chosenBackend: "cpu" }), { buildTag: "b1234", checksums: {} })
+      installer.ensureInstalled(profile({ chosenBackend: "cpu" }), {
+        buildTag: "b1234",
+        checksums: {},
+      })
     ).rejects.toThrow(/Missing pinned checksum/);
   });
 
@@ -179,23 +203,26 @@ describe("createEngineInstaller", () => {
       "llama-b1234-bin-win-vulkan-x64.zip",
     ]);
     await expect(stat(join(rootDir, "engines", "b1234", "cuda-12.4"))).rejects.toThrow();
-    await expect(stat(state.gpu?.serverBinPath ?? "")).resolves.toMatchObject({ mode: expect.any(Number) });
+    await expect(stat(state.gpu?.serverBinPath ?? "")).resolves.toMatchObject({
+      mode: expect.any(Number),
+    });
   });
 });
 
 function profile(overrides: Partial<HardwareProfile> = {}): HardwareProfile {
   const chosenBackend = overrides.chosenBackend ?? "cpu";
-  const vendor: GpuInfo["vendor"] = chosenBackend === "rocm" ? "amd" : chosenBackend === "metal" ? "apple" : "nvidia";
+  const vendor: GpuInfo["vendor"] =
+    chosenBackend === "rocm" ? "amd" : chosenBackend === "metal" ? "apple" : "nvidia";
   const chosenGpu =
     chosenBackend === "cpu"
       ? null
-      : {
+      : ({
           vendor,
           name: "Test GPU",
           vramMB: 12_288,
           backend: chosenBackend,
           discrete: chosenBackend !== "metal",
-        } satisfies GpuInfo;
+        } satisfies GpuInfo);
 
   return {
     os: "linux",
@@ -219,7 +246,10 @@ async function tempRoot(): Promise<string> {
   return root;
 }
 
-function pinFor(buildTag: string, assets: Record<string, Uint8Array>): { pin: EnginePin; assets: Map<string, Uint8Array> } {
+function pinFor(
+  buildTag: string,
+  assets: Record<string, Uint8Array>
+): { pin: EnginePin; assets: Map<string, Uint8Array> } {
   const checksums: Record<string, string> = {};
   const assetMap = new Map<string, Uint8Array>();
   for (const [asset, body] of Object.entries(assets)) {
@@ -231,7 +261,8 @@ function pinFor(buildTag: string, assets: Record<string, Uint8Array>): { pin: En
 
 function fakeFetch(assets: Map<string, Uint8Array>, seenUrls: string[]): typeof fetch {
   return (async (input: RequestInfo | URL) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url =
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     seenUrls.push(url);
     const asset = assetFromUrl(url);
     const body = assets.get(asset);
@@ -242,7 +273,9 @@ function fakeFetch(assets: Map<string, Uint8Array>, seenUrls: string[]): typeof 
   }) as typeof fetch;
 }
 
-function fakeExec(options: { failSmokeBackends?: Set<EngineBackend> } = {}): { exec: EngineInstallerDeps["exec"] } {
+function fakeExec(options: { failSmokeBackends?: Set<EngineBackend> } = {}): {
+  exec: EngineInstallerDeps["exec"];
+} {
   const failSmokeBackends = options.failSmokeBackends ?? new Set<EngineBackend>();
   const exec: EngineInstallerDeps["exec"] = async (bin, args) => {
     if (bin === "unzip" || bin === "tar") {
@@ -253,7 +286,9 @@ function fakeExec(options: { failSmokeBackends?: Set<EngineBackend> } = {}): { e
     }
 
     if (args[0] === "--version") {
-      const failedBackend = [...failSmokeBackends].find((backend) => bin.includes(`/${backend}.tmp/`) || bin.includes(`/${backend}/`));
+      const failedBackend = [...failSmokeBackends].find(
+        (backend) => bin.includes(`/${backend}.tmp/`) || bin.includes(`/${backend}/`)
+      );
       if (failedBackend) {
         return { ok: false, stdout: "", stderr: `${failedBackend} failed`, code: 1 };
       }

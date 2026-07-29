@@ -1,6 +1,6 @@
 /** Stable public identity binding for a materialized workspace context. */
 
-export const CONTEXT_BINDING_FILE = ".vibestudio-context.json";
+export { CONTEXT_BINDING_FILE } from "@vibestudio/vcs-path-policy";
 export const CONTEXT_BINDING_PROTOCOL = "vibestudio.context-binding.v1" as const;
 
 export interface ContextBinding {

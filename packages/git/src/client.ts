@@ -23,6 +23,8 @@ import type {
   FileHistoryEntry,
 } from "./types.js";
 
+const FULL_OBJECT_ID = /^[0-9a-f]{40}$/iu;
+
 export class GitAuthError extends Error {
   statusCode?: number;
 
@@ -1457,18 +1459,28 @@ export class GitClient {
   }
 
   /**
-   * Get the current commit hash
+   * Resolve a ref or object id to the commit it ultimately names.
+   *
+   * Unlike resolveRef, this peels annotated tags (including nested annotated
+   * tags). Exact snapshot coordinates must identify commits, never tag objects.
    */
-  async getCurrentCommit(dir: string): Promise<string | null> {
+  async resolveCommit(dir: string, ref: string): Promise<string | null> {
     try {
-      return await git.resolveRef({
-        fs: this.fs,
-        dir,
-        ref: "HEAD",
-      });
+      const oid = FULL_OBJECT_ID.test(ref)
+        ? ref
+        : await git.resolveRef({ fs: this.fs, dir, ref });
+      const resolved = await git.readCommit({ fs: this.fs, dir, oid });
+      return resolved.oid;
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Get the current commit hash
+   */
+  async getCurrentCommit(dir: string): Promise<string | null> {
+    return this.resolveCommit(dir, "HEAD");
   }
 
   /**
@@ -1673,6 +1685,11 @@ export class GitClient {
     }));
   }
 
+  /** List fetched tag names without the refs/tags/ prefix. */
+  async listTags(dir: string): Promise<string[]> {
+    return (await git.listTags({ fs: this.fs, dir })).sort();
+  }
+
   /**
    * Create a branch.
    */
@@ -1691,6 +1708,43 @@ export class GitClient {
       ref: checked.name,
       object: checked.startPoint ?? "HEAD",
       checkout: checked.checkout ?? false,
+    });
+  }
+
+  /**
+   * Put an operational checkout on one local synchronization branch and record
+   * its exact remote tracking coordinate. This is intentionally a Git-only
+   * projection operation; it does not infer or import semantic state.
+   */
+  async configureTrackingBranch(options: {
+    dir: string;
+    branch: string;
+    remote: string;
+    remoteBranch: string;
+    startPoint?: string;
+  }): Promise<void> {
+    const branches = await git.listBranches({ fs: this.fs, dir: options.dir });
+    if (branches.includes(options.branch)) {
+      await this.checkout(options.dir, options.branch, { force: true });
+    } else {
+      await this.createBranch({
+        dir: options.dir,
+        name: options.branch,
+        startPoint: options.startPoint ?? "HEAD",
+        checkout: true,
+      });
+    }
+    await git.setConfig({
+      fs: this.fs,
+      dir: options.dir,
+      path: `branch.${options.branch}.remote`,
+      value: options.remote,
+    });
+    await git.setConfig({
+      fs: this.fs,
+      dir: options.dir,
+      path: `branch.${options.branch}.merge`,
+      value: `refs/heads/${options.remoteBranch}`,
     });
   }
 

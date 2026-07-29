@@ -88,7 +88,7 @@ export const panelTests: TestCase[] = [
       userland: [],
     },
     prompt:
-      "Exercise opening a spectrolite panel as a child panel using the documented @workspace/runtime panel APIs only. Do not inspect guessed internal source paths. Get a screenshot, retrieve host-captured console logs from the running panel, and run JavaScript in the child panel through handle.cdp.page(). Finish with PANEL_OPEN_OK and handle=<panel-id>.",
+      "Exercise opening the base chat panel as a child panel using the documented @workspace/runtime panel APIs only. Do not inspect guessed internal source paths. Get a screenshot, retrieve host-captured console logs from the running panel, and run JavaScript in the child panel through handle.cdp.page(). Finish with PANEL_OPEN_OK and handle=<panel-id>.",
     validate: (result) => {
       const base = checkedWithField(result, ["PANEL_OPEN_OK"], "handle");
       return base.passed ? requireCreatePanelEvidence(result) : base;

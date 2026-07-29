@@ -1,4 +1,9 @@
-import type { EngineBackend, GpuInfo, HardwareProfile, HardwareTier } from "./types.js";
+import type {
+  EngineBackend,
+  GpuInfo,
+  HardwareProfile,
+  HardwareTier,
+} from "@workspace/model-catalog/localModels";
 
 export interface HardwareProfilerDeps {
   exec(
@@ -153,13 +158,7 @@ async function probeGpus(
     gpus.push(...parsed);
   }
 
-  const vulkan = await runCommand(
-    deps,
-    "vulkaninfo",
-    ["--summary"],
-    "Vulkan GPU probing",
-    notes
-  );
+  const vulkan = await runCommand(deps, "vulkaninfo", ["--summary"], "Vulkan GPU probing", notes);
   if (vulkan) {
     const parsed = parseVulkanInfo(vulkan.stdout, notes);
     if (parsed.length === 0) {
@@ -186,7 +185,10 @@ async function probeCpuFeatures(
       return parseCpuFeatures(await deps.readFile("/proc/cpuinfo"), arch);
     } catch (error) {
       notes.push(`Unable to read /proc/cpuinfo for CPU feature probing: ${errorMessage(error)}`);
-      safeLog(deps, "local-models CPU probe failed", { path: "/proc/cpuinfo", error: errorMessage(error) });
+      safeLog(deps, "local-models CPU probe failed", {
+        path: "/proc/cpuinfo",
+        error: errorMessage(error),
+      });
       return arch === "arm64" ? ["arm64"] : [];
     }
   }
@@ -258,17 +260,19 @@ function parseRocmSmi(stdout: string, notes: string[]): GpuInfo[] {
   const gpus: GpuInfo[] = [];
 
   for (const [fallbackIndex, [key, value]] of records.entries()) {
-    const vramBytes = findByKey(value, (field) => /vram.*total.*memory.*\((b|bytes)\)/i.test(field));
+    const vramBytes = findByKey(value, (field) =>
+      /vram.*total.*memory.*\((b|bytes)\)/i.test(field)
+    );
     const vramMBField = findByKey(value, (field) =>
       /vram.*total.*memory.*\((mib|mb)\)/i.test(field)
     );
     if (vramBytes === undefined && vramMBField === undefined) continue;
 
-    const vramMB =
-      parseBytesToMB(vramBytes) ?? parseMemoryToMB(valueToString(vramMBField) ?? "");
+    const vramMB = parseBytesToMB(vramBytes) ?? parseMemoryToMB(valueToString(vramMBField) ?? "");
     const name =
-      findStringByKey(value, (field) => /(card series|gpu.*name|product.*name|device.*name)/i.test(field)) ??
-      `AMD GPU ${key}`;
+      findStringByKey(value, (field) =>
+        /(card series|gpu.*name|product.*name|device.*name)/i.test(field)
+      ) ?? `AMD GPU ${key}`;
     const selector = firstNumber(key) ?? String(fallbackIndex);
 
     if (vramMB === null) {
@@ -575,7 +579,10 @@ function hasEquivalentGpu(existing: GpuInfo[], candidate: GpuInfo): boolean {
 }
 
 function normalizeGpuName(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 function firstNumber(value: string): string | null {
@@ -584,13 +591,17 @@ function firstNumber(value: string): string | null {
 
 function normalizeOs(platform: NodeJS.Platform, notes: string[]): SupportedOs {
   if (platform === "linux" || platform === "darwin" || platform === "win32") return platform;
-  notes.push(`Unsupported platform "${platform}" for local-models hardware profiling; using linux fallback.`);
+  notes.push(
+    `Unsupported platform "${platform}" for local-models hardware profiling; using linux fallback.`
+  );
   return "linux";
 }
 
 function normalizeArch(arch: string, notes: string[]): SupportedArch {
   if (arch === "x64" || arch === "arm64") return arch;
-  notes.push(`Unsupported architecture "${arch}" for local-models hardware profiling; using x64 fallback.`);
+  notes.push(
+    `Unsupported architecture "${arch}" for local-models hardware profiling; using x64 fallback.`
+  );
   return "x64";
 }
 

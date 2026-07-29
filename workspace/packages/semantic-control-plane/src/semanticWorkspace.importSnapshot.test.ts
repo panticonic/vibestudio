@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sha256Hex } from "@vibestudio/content-addressing";
+import { canonicalSnapshotDigest, sha256Hex } from "@vibestudio/content-addressing";
 import {
   VCS_IMPORT_MAX_DESCRIPTOR_BYTES,
   vcsInspectResultSchema,
@@ -276,6 +276,14 @@ describe("SemanticWorkspace snapshot import", () => {
   it("stops honestly at the exact import boundary without a parallel external graph", async () => {
     const { semantic, restart, store, initial } = await authorityFixture();
     const sourceFile = textFile("src/index.ts", "hello");
+    const sourceSnapshot = canonicalSnapshotDigest([
+      {
+        path: sourceFile.descriptor.path,
+        mode: 0o100644,
+        size: sourceFile.bytes.byteLength,
+        contentHash: sourceFile.descriptor.contentHash,
+      },
+    ]);
     const ingress: SemanticDispatchRequest["ingress"] = {
       causalParent: {
         kind: "trajectory-invocation",
@@ -294,8 +302,9 @@ describe("SemanticWorkspace snapshot import", () => {
         intentSummary: "Bring in the upstream project",
         source: {
           kind: "git",
-          uri: "https://example.test/project.git",
-          snapshotRevision: "commit:head",
+          url: "https://example.test/project.git",
+          commit: "a".repeat(40),
+          snapshot: sourceSnapshot,
         },
         repositories: [
           {
@@ -331,7 +340,9 @@ describe("SemanticWorkspace snapshot import", () => {
     expect(imported.externalSnapshot).toEqual({
       sourceKind: "git",
       sourceUri: "https://example.test/project.git",
-      snapshotRevision: "commit:head",
+      snapshotRevision: "a".repeat(40),
+      sourceSubdir: null,
+      canonicalSnapshot: sourceSnapshot,
       snapshotDigest: expect.any(String),
       targetRepositoryIds: [repositoryId],
     });
@@ -378,11 +389,13 @@ describe("SemanticWorkspace snapshot import", () => {
     expect(inspectedWork).toMatchObject({
       authoredChangeCount: 2,
       contentClass: "external",
-      externalKeys: ["repo:https://example.test/project.git@commit:head"],
+      externalKeys: [`repo:https://example.test/project.git@${"a".repeat(40)}`],
       externalSnapshot: {
         sourceKind: "git",
         sourceUri: "https://example.test/project.git",
-        snapshotRevision: "commit:head",
+        snapshotRevision: "a".repeat(40),
+        sourceSubdir: null,
+        canonicalSnapshot: sourceSnapshot,
         snapshotDigest: compactId("snapshot", [
           {
             repoPath: "projects/imported",
@@ -410,7 +423,7 @@ describe("SemanticWorkspace snapshot import", () => {
       request: {
         authoredByWorkUnitId: imported.workUnitId,
         contentClass: "external",
-        externalKeys: ["repo:https://example.test/project.git@commit:head"],
+        externalKeys: [`repo:https://example.test/project.git@${"a".repeat(40)}`],
       },
     });
     const listed = await restarted.dispatch("listFiles", {
@@ -429,7 +442,7 @@ describe("SemanticWorkspace snapshot import", () => {
             fileId: file.fileId,
             authoredByWorkUnitId: imported.workUnitId,
             contentClass: "external",
-            externalKeys: ["repo:https://example.test/project.git@commit:head"],
+            externalKeys: [`repo:https://example.test/project.git@${"a".repeat(40)}`],
           },
         ],
       },
@@ -499,6 +512,258 @@ describe("SemanticWorkspace snapshot import", () => {
         ],
       },
     });
+  });
+
+  it("rejects Git descriptors that do not match their declared canonical snapshot", async () => {
+    const { semantic, initial } = await authorityFixture();
+    const sourceFile = textFile("src/index.ts", "hello");
+    const ingress: SemanticDispatchRequest["ingress"] = {
+      causalParent: {
+        kind: "trajectory-invocation",
+        logId: "trajectory:test",
+        head: "main",
+        invocationId: "invocation:test",
+      },
+      contextIntegrity: { class: "internal", externalKeys: [] },
+    };
+    const observation = await semantic.dispatch("importSnapshot", {
+      ingress,
+      input: {
+        contextId: "context:test",
+        commandId: "command:git-import-wrong-snapshot",
+        expectedWorkingHead: initial.working.ref,
+        source: {
+          kind: "git",
+          url: "https://example.test/project.git",
+          commit: "c".repeat(40),
+          snapshot: `v1-sha256:${"0".repeat(64)}`,
+        },
+        repositories: [{ repoPath: "projects/imported", files: [sourceFile.descriptor] }],
+      },
+    });
+    expect(() =>
+      acknowledgeImportObservation(
+        semantic,
+        observation,
+        new Map([[sourceFile.descriptor.contentHash, sourceFile.bytes]])
+      )
+    ).toThrow("declared canonical snapshot");
+  });
+
+  it("registers, compares, integrates, commits, finalizes, and releases an external delta", async () => {
+    const { semantic, store, initial } = await authorityFixture();
+    const ingress: SemanticDispatchRequest["ingress"] = {
+      causalParent: {
+        kind: "trajectory-invocation",
+        logId: "trajectory:test",
+        head: "main",
+        invocationId: "invocation:test",
+      },
+      contextIntegrity: { class: "internal", externalKeys: [] },
+    };
+    const oldFile = textFile("index.ts", "old");
+    const newFile = textFile("index.ts", "new");
+    const imported = await completeImport(
+      semantic,
+      {
+        ingress,
+        input: {
+          contextId: "context:test",
+          commandId: "command:delta-basis",
+          expectedWorkingHead: initial.working.ref,
+          source: {
+            kind: "generated",
+            uri: "fixture://delta-basis",
+            snapshotRevision: "v1",
+          },
+          repositories: [{ repoPath: "projects/delta", files: [oldFile.descriptor] }],
+        },
+      },
+      new Map([[oldFile.descriptor.contentHash, oldFile.bytes]])
+    );
+    const repositoryId = imported.importedRepositoryIds[0]!;
+    const snapshot = (file: ReturnType<typeof textFile>) =>
+      canonicalSnapshotDigest([
+        {
+          path: file.descriptor.path,
+          mode: 0o100644,
+          size: file.bytes.byteLength,
+          contentHash: file.descriptor.contentHash,
+        },
+      ]);
+    const deltaInput = {
+      contextId: "context:test",
+      commandId: "command:register-delta",
+      expectedWorkingHead: { kind: "event" as const, eventId: imported.eventId },
+      repositoryId,
+      repoPath: "projects/delta",
+      oldSource: {
+        kind: "generated" as const,
+        uri: "fixture://template/v1",
+        snapshotRevision: "v1",
+        snapshot: snapshot(oldFile),
+      },
+      newSource: {
+        kind: "generated" as const,
+        uri: "fixture://template/v2",
+        snapshotRevision: "v2",
+        snapshot: snapshot(newFile),
+      },
+      oldFiles: [oldFile.descriptor],
+      newFiles: [newFile.descriptor],
+    };
+    const observedContent = new Map([
+      [oldFile.descriptor.contentHash, oldFile.bytes],
+      [newFile.descriptor.contentHash, newFile.bytes],
+    ]);
+    const registered = await semantic.dispatch("registerExternalDelta", {
+      ingress,
+      input: deltaInput,
+    });
+    const registration = acknowledgeImportObservation(semantic, registered, observedContent);
+    if (registration.kind !== "complete") throw new Error("delta registration did not complete");
+    const delta = registration.result as { deltaId: string; changeIds: string[] };
+    const retried = await semantic.dispatch("registerExternalDelta", {
+      ingress,
+      input: { ...deltaInput, commandId: "command:register-delta-retry" },
+    });
+    const retry = acknowledgeImportObservation(semantic, retried, observedContent);
+    expect(retry).toMatchObject({ kind: "complete", result: { deltaId: delta.deltaId } });
+    expect(store.application(delta.deltaId)).toBeNull();
+    expect(semantic.contentGcRoots().contentHashes).toContain(newFile.descriptor.contentHash);
+
+    const foreign = store.forkContext("context:test", "context:foreign");
+    await expect(
+      semantic.dispatch("integrate", {
+        ingress,
+        input: {
+          contextId: "context:foreign",
+          commandId: "command:integrate-foreign-delta",
+          expectedWorkingHead: foreign.working.ref,
+          sourceDeltaId: delta.deltaId,
+          decision: { kind: "adopted", sourceChangeIds: delta.changeIds },
+        },
+      })
+    ).rejects.toMatchObject({ code: "InvalidReference" });
+
+    const compared = await semantic.dispatch("compare", {
+      ingress,
+      input: {
+        target: { kind: "event", eventId: imported.eventId },
+        sourceDeltaId: delta.deltaId,
+        view: "changes",
+        limit: 100,
+      },
+    });
+    if (compared.kind !== "complete") throw new Error("delta compare did not complete");
+    expect(compared.result).toMatchObject({
+      sourceDeltaId: delta.deltaId,
+      resolution: { complete: false, remainingChangeCount: 1 },
+    });
+
+    const integrated = await semantic.dispatch("integrate", {
+      ingress,
+      input: {
+        contextId: "context:test",
+        commandId: "command:integrate-delta",
+        expectedWorkingHead: { kind: "event", eventId: imported.eventId },
+        sourceDeltaId: delta.deltaId,
+        decision: { kind: "adopted", sourceChangeIds: delta.changeIds },
+      },
+    });
+    acknowledgeMaterialization(semantic, integrated);
+    if (integrated.kind !== "effects-pending")
+      throw new Error("delta integration did not complete");
+    const integratedResult = integrated.result as {
+      workingHead: { kind: "application"; applicationId: string };
+    };
+    const committed = await semantic.dispatch("commit", {
+      ingress,
+      input: {
+        contextId: "context:test",
+        commandId: "command:commit-delta",
+        expectedWorkingHead: integratedResult.workingHead,
+      },
+    });
+    acknowledgeMaterialization(semantic, committed);
+    if (committed.kind !== "effects-pending") throw new Error("delta commit did not complete");
+    const committedResult = committed.result as { event: { kind: "event"; eventId: string } };
+    const finalized = await semantic.dispatch("finalizeExternalDelta", {
+      ingress,
+      input: {
+        contextId: "context:test",
+        commandId: "command:finalize-delta",
+        expectedWorkingHead: committedResult.event,
+        deltaId: delta.deltaId,
+      },
+    });
+    expect(finalized).toMatchObject({ kind: "complete", result: { status: "finalized" } });
+    const finalizedRetry = await semantic.dispatch("finalizeExternalDelta", {
+      ingress,
+      input: {
+        contextId: "context:test",
+        commandId: "command:finalize-delta-retry",
+        expectedWorkingHead: committedResult.event,
+        deltaId: delta.deltaId,
+      },
+    });
+    expect(finalizedRetry).toMatchObject({
+      kind: "complete",
+      result: { deltaId: delta.deltaId, status: "finalized" },
+    });
+    const publishIntegratedDelta = await semantic.dispatch("push", {
+      ingress,
+      input: {
+        contextId: "context:test",
+        commandId: "command:publish-integrated-delta",
+        expectedCommittedEventId: committedResult.event.eventId,
+        expectedMainEventId: initial.committed.ref.eventId,
+      },
+    });
+    expect(publishIntegratedDelta.kind).toBe("effects-pending");
+
+    const noopRegistration = await semantic.dispatch("registerExternalDelta", {
+      ingress,
+      input: {
+        contextId: "context:test",
+        commandId: "command:register-noop-delta",
+        expectedWorkingHead: committedResult.event,
+        repositoryId,
+        repoPath: "projects/delta",
+        oldSource: {
+          kind: "generated",
+          uri: "fixture://template/v2",
+          snapshotRevision: "v2",
+          snapshot: snapshot(newFile),
+        },
+        newSource: {
+          kind: "generated",
+          uri: "fixture://template/v2-copy",
+          snapshotRevision: "v2-copy",
+          snapshot: snapshot(newFile),
+        },
+        oldFiles: [newFile.descriptor],
+        newFiles: [newFile.descriptor],
+      },
+    });
+    const noop = acknowledgeImportObservation(
+      semantic,
+      noopRegistration,
+      new Map([[newFile.descriptor.contentHash, newFile.bytes]])
+    );
+    if (noop.kind !== "complete") throw new Error("noop delta registration did not complete");
+    const noopDelta = noop.result as { deltaId: string };
+    await expect(
+      semantic.dispatch("supersedeExternalDelta", {
+        ingress,
+        input: {
+          contextId: "context:test",
+          commandId: "command:supersede-noop-delta",
+          expectedWorkingHead: committedResult.event,
+          deltaId: noopDelta.deltaId,
+        },
+      })
+    ).resolves.toMatchObject({ kind: "complete", result: { status: "superseded" } });
   });
 
   it("rejects invalid host-observed intrinsic descriptors atomically", async () => {
@@ -1202,8 +1467,16 @@ describe("SemanticWorkspace snapshot import", () => {
           expectedWorkingHead: initial.working.ref,
           source: {
             kind: "git",
-            uri: "https://example.test/incremental.git",
-            snapshotRevision: "commit:incremental",
+            url: "https://example.test/incremental.git",
+            commit: "b".repeat(40),
+            snapshot: canonicalSnapshotDigest([
+              {
+                path: sourceFile.descriptor.path,
+                mode: 0o100644,
+                size: sourceFile.bytes.byteLength,
+                contentHash: sourceFile.descriptor.contentHash,
+              },
+            ]),
           },
           repositories: [{ repoPath: "projects/incremental", files: [sourceFile.descriptor] }],
         },

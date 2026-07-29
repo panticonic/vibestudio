@@ -24,7 +24,7 @@ const TREE_CACHE_TTL_MS = 2_000;
 export class WorkspaceTreeScanner {
   private cache: ScanCache | null = null;
 
-  constructor(private readonly workspaceRoot: string) {}
+  constructor(private readonly sourceRoot: string | (() => Promise<string>)) {}
 
   invalidate(): void {
     this.cache = null;
@@ -34,14 +34,16 @@ export class WorkspaceTreeScanner {
     if (this.cache && Date.now() - this.cache.at < TREE_CACHE_TTL_MS) {
       return this.cache.tree;
     }
+    const workspaceRoot =
+      typeof this.sourceRoot === "string" ? this.sourceRoot : await this.sourceRoot();
     const graphByPath = new Map(
-      discoverPackageGraph(this.workspaceRoot)
+      discoverPackageGraph(workspaceRoot)
         .allNodes()
         .map((node) => [node.relativePath, node])
     );
     const children: WorkspaceNode[] = [];
     for (const scope of WORKSPACE_SOURCE_DIRS) {
-      const scopeAbs = path.join(this.workspaceRoot, scope);
+      const scopeAbs = path.join(workspaceRoot, scope);
       let entries: import("fs").Dirent[];
       try {
         entries = await fs.readdir(scopeAbs, { withFileTypes: true });
@@ -56,7 +58,7 @@ export class WorkspaceTreeScanner {
           isUnit: true,
           children: [],
         };
-        const skill = await readWorkspaceSkillEntry(this.workspaceRoot, "meta");
+        const skill = await readWorkspaceSkillEntry(workspaceRoot, "meta");
         if (skill) node.skillInfo = { name: skill.name, description: skill.description };
         children.push(node);
         continue;
@@ -65,7 +67,12 @@ export class WorkspaceTreeScanner {
       for (const entry of entries) {
         if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
         const unitRel = `${scope}/${entry.name}`;
-        const node = await this.unitNode(unitRel, entry.name, graphByPath.get(unitRel));
+        const node = await this.unitNode(
+          workspaceRoot,
+          unitRel,
+          entry.name,
+          graphByPath.get(unitRel)
+        );
         if (node) scopeChildren.push(node);
       }
       if (scopeChildren.length > 0) {
@@ -83,11 +90,12 @@ export class WorkspaceTreeScanner {
   }
 
   private async unitNode(
+    workspaceRoot: string,
     unitRel: string,
     name: string,
     graphNode?: GraphNode
   ): Promise<WorkspaceNode | null> {
-    const abs = path.join(this.workspaceRoot, unitRel);
+    const abs = path.join(workspaceRoot, unitRel);
     const node: WorkspaceNode = { name, path: unitRel, isUnit: true, children: [] };
 
     if (graphNode) {
@@ -114,7 +122,7 @@ export class WorkspaceTreeScanner {
       }
     }
 
-    const skill = await readWorkspaceSkillEntry(this.workspaceRoot, unitRel);
+    const skill = await readWorkspaceSkillEntry(workspaceRoot, unitRel);
     if (skill) node.skillInfo = { name: skill.name, description: skill.description };
 
     if (!node.packageInfo && !node.skillInfo) {

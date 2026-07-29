@@ -47,6 +47,7 @@ import {
   type DefaultAgentConfig,
   type ModelSettingsSnapshot,
 } from "@workspace/model-catalog/catalog";
+import type { LocalModelsCapabilities, ServerKind } from "@workspace/model-catalog/localModels";
 import type { DurableObjectServiceClient } from "@workspace/runtime";
 import {
   appendInstalledAgent,
@@ -514,14 +515,35 @@ export default function ChatPanel() {
     window.location.reload();
   }, []);
 
-  // Deep-link from a local model's red error dot in the picker (item 6) to the
-  // Local Models panel, opened straight onto the failing server's log.
-  const handleOpenLocalModelsLog = useCallback((server: "utility" | "main") => {
-    void openPanel("panels/local-models", { focus: true, stateArgs: { openLog: server } });
+  const openLocalModelsCapability = useCallback(async (server?: ServerKind) => {
+    try {
+      const capabilities = (await extensions.invoke(
+        LOCAL_MODELS_EXTENSION_ID,
+        "capabilities",
+        []
+      )) as LocalModelsCapabilities;
+      const target = server ? capabilities.serverLogs[server] : capabilities.managementPanel;
+      await openPanel(target.source, {
+        focus: true,
+        ...(target.stateArgs ? { stateArgs: target.stateArgs } : {}),
+      });
+    } catch (err) {
+      void notifications.show({
+        type: "error",
+        title: "Local Models unavailable",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
   }, []);
+  const handleOpenLocalModelsLog = useCallback(
+    (server: ServerKind) => {
+      void openLocalModelsCapability(server);
+    },
+    [openLocalModelsCapability]
+  );
   const handleOpenLocalModels = useCallback(() => {
-    void openPanel("panels/local-models", { focus: true });
-  }, []);
+    void openLocalModelsCapability();
+  }, [openLocalModelsCapability]);
 
   // The panel declares intent; the shell's registered Claude adapter owns
   // semantic preparation, host-local materialization, and process cleanup.

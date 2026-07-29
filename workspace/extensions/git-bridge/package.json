@@ -19,7 +19,8 @@
             "pullUpstream",
             "publishRepo",
             "commitMapping",
-            "pushDisposableRemote",
+            "pushTemplateContribution",
+            "publishTemplate",
             "cloneRepo",
             "remoteDefaultBranch",
             "reconcileUpstreams"

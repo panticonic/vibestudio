@@ -2,12 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import * as fsp from "node:fs/promises";
 import path from "node:path";
-import {
-  detectToolsCapable,
-  GgufHeaderTruncatedError,
-  parseGgufHeader,
-  type GgufMeta,
-} from "./gguf.js";
 import type {
   DownloadJob,
   FitEstimate,
@@ -16,8 +10,14 @@ import type {
   ModelRecord,
   ModelRuntimeConfig,
   QuantName,
-} from "./types.js";
-import { FALLBACK_MODEL, ROOT_LAYOUT } from "./types.js";
+} from "@workspace/model-catalog/localModels";
+import {
+  detectToolsCapable,
+  GgufHeaderTruncatedError,
+  parseGgufHeader,
+  type GgufMeta,
+} from "./gguf.js";
+import { FALLBACK_MODEL, ROOT_LAYOUT } from "./constants.js";
 
 export interface ModelLibraryDeps {
   rootDir: string;
@@ -168,10 +168,7 @@ export function createModelLibrary(deps: ModelLibraryDeps): {
   importDir(dir: string): Promise<ModelRecord[]>;
   setModelConfig(slug: string, cfg: ModelRuntimeConfig): Promise<void>;
   setBenchmark(slug: string, result: ModelBenchmarkResult): Promise<void>;
-  setRuntimeValidation(
-    slug: string,
-    validation: ModelRecord["runtimeValidation"]
-  ): Promise<void>;
+  setRuntimeValidation(slug: string, validation: ModelRecord["runtimeValidation"]): Promise<void>;
 } {
   const modelsDir = path.join(deps.rootDir, ROOT_LAYOUT.modelsDir);
   const recordsFile = path.join(modelsDir, RECORDS_FILE);

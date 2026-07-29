@@ -6,10 +6,10 @@ import type { AddressInfo, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { HardwareProfile } from "@workspace/model-catalog/localModels";
 import { detectToolsCapable, parseGgufHeader } from "./gguf.js";
 import { createModelLibrary, estimateFit, type ModelLibraryDeps } from "./library.js";
-import type { HardwareProfile } from "./types.js";
-import { FALLBACK_MODEL } from "./types.js";
+import { FALLBACK_MODEL } from "./constants.js";
 
 const GGUF_TYPE = {
   uint8: 0,

@@ -274,6 +274,24 @@ describe("workspace service handler", () => {
     expect(await service.handler(panelCtx, "getConfig", [])).toEqual(makeConfig());
   });
 
+  it("validates the flattened runtime manifest without reading template metadata", async () => {
+    const service = createWorkspaceService({
+      workspace: makeWorkspace(),
+      contextFiles: unavailableContextFiles,
+      getConfig: () => makeConfig(),
+      setConfigField: vi.fn(),
+      approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
+    });
+    await expect(
+      service.handler(panelCtx, "validateConfig", [
+        "systemEpoch: 57\ntemplates:\n  use:\n    - name: News\n      url: https://example.test/news.git\n      ref: refs/tags/v1\n      commit: '1111111111111111111111111111111111111111'\n      snapshot: v1-sha256:1111111111111111111111111111111111111111111111111111111111111111\n",
+      ])
+    ).rejects.toThrow(/unknown.*templates/i);
+    await expect(
+      service.handler(panelCtx, "validateConfig", ["systemEpoch: 57\ndefaultRepo: panels/chat\n"])
+    ).resolves.toEqual({ valid: true });
+  });
+
   it("units.inspector returns the inspector URL for a matching unit", async () => {
     const service = createWorkspaceService({
       workspace: makeWorkspace(),

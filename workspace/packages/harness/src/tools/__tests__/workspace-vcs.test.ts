@@ -14,7 +14,9 @@ function fixture() {
   }));
   const compare = vi.fn(async (input: Parameters<ToolWorkflowVcs["compare"]>[0]) => ({
     target: input.target,
-    sourceEventId: input.sourceEventId,
+    ...("sourceEventId" in input
+      ? { sourceEventId: input.sourceEventId }
+      : { sourceDeltaId: input.sourceDeltaId }),
     resolution: { complete: false, remainingChangeCount: 1 },
     counts: {
       shared: 1,

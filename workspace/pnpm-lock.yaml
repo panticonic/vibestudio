@@ -189,9 +189,15 @@ importers:
 
   ../packages/git:
     dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../content-addressing
       '@vibestudio/types':
         specifier: workspace:*
         version: link:../types
+      '@vibestudio/vcs-path-policy':
+        specifier: workspace:*
+        version: link:../vcs-path-policy
       diff:
         specifier: ^7.0.0
         version: 7.0.0
@@ -288,6 +294,9 @@ importers:
       '@vibestudio/shell-core':
         specifier: workspace:*
         version: link:../shell-core
+      '@vibestudio/vcs-path-policy':
+        specifier: workspace:*
+        version: link:../vcs-path-policy
       '@vibestudio/workspace-contracts':
         specifier: workspace:*
         version: link:../workspace-contracts
@@ -327,6 +336,9 @@ importers:
       '@vibestudio/types':
         specifier: workspace:*
         version: link:../types
+      '@vibestudio/vcs-path-policy':
+        specifier: workspace:*
+        version: link:../vcs-path-policy
       '@vibestudio/workspace-contracts':
         specifier: workspace:*
         version: link:../workspace-contracts
@@ -403,8 +415,13 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  ../packages/vcs-path-policy: {}
+
   ../packages/workspace:
     dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../content-addressing
       '@vibestudio/dev-log':
         specifier: workspace:*
         version: link:../dev-log
@@ -656,6 +673,33 @@ importers:
         specifier: workspace:*
         version: link:../../packages/runtime
 
+  about/templates:
+    dependencies:
+      '@radix-ui/react-icons':
+        specifier: ^1.3.2
+        version: 1.3.2(react@19.0.0)
+      '@radix-ui/themes':
+        specifier: ^3.2.1
+        version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
+      '@workspace/about-shared':
+        specifier: workspace:*
+        version: link:../../packages/about-shared
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      '@workspace/template-registry':
+        specifier: workspace:*
+        version: link:../../packages/template-registry
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
+
   apps/mobile:
     dependencies:
       '@notifee/react-native':
@@ -817,6 +861,9 @@ importers:
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
+      '@workspace/template-registry':
+        specifier: workspace:*
+        version: link:../../packages/template-registry
       '@workspace/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -930,7 +977,11 @@ importers:
         specifier: ^0.3.4
         version: 0.3.4
 
-  extensions/local-models: {}
+  extensions/local-models:
+    dependencies:
+      '@workspace/model-catalog':
+        specifier: workspace:*
+        version: link:../../packages/model-catalog
 
   extensions/mobile-debug: {}
 
@@ -963,6 +1014,39 @@ importers:
       zod:
         specifier: ^3.22.0
         version: 3.25.76
+
+  extensions/template-composer:
+    dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../../../packages/content-addressing
+      '@vibestudio/credential-client':
+        specifier: workspace:*
+        version: link:../../../packages/credential-client
+      '@vibestudio/git':
+        specifier: workspace:*
+        version: link:../../../packages/git
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
+      '@vibestudio/workspace':
+        specifier: workspace:*
+        version: link:../../../packages/workspace
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:../../../packages/workspace-contracts
+      '@workspace/template-composer':
+        specifier: workspace:*
+        version: link:../../packages/template-composer
+      '@workspace/template-registry':
+        specifier: workspace:*
+        version: link:../../packages/template-registry
+      yaml:
+        specifier: ^2.8.1
+        version: 2.9.0
 
   extensions/test-runner:
     dependencies:
@@ -1247,12 +1331,27 @@ importers:
 
   packages/gmail:
     dependencies:
+      '@radix-ui/react-icons':
+        specifier: ^1.3.2
+        version: 1.3.2(react@19.0.0)
+      '@radix-ui/themes':
+        specifier: ^3.2.1
+        version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@workspace-skills/agents':
+        specifier: workspace:*
+        version: link:../../skills/agents
+      '@workspace-skills/google-workspace':
+        specifier: workspace:*
+        version: link:../../skills/google-workspace
       '@workspace/integrations':
         specifier: workspace:*
         version: link:../integrations
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../runtime
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
     devDependencies:
       vitest:
         specifier: ^3.2.2
@@ -1622,6 +1721,43 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  packages/template-composer:
+    dependencies:
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../../../packages/content-addressing
+      '@vibestudio/git':
+        specifier: workspace:*
+        version: link:../../../packages/git
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
+      '@vibestudio/workspace':
+        specifier: workspace:*
+        version: link:../../../packages/workspace
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:../../../packages/workspace-contracts
+      yaml:
+        specifier: ^2.8.1
+        version: 2.9.0
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(terser@5.48.0)(yaml@2.9.0)
+
+  packages/template-registry:
+    dependencies:
+      '@vibestudio/git':
+        specifier: workspace:*
+        version: link:../../../packages/git
+      yaml:
+        specifier: ^2.8.1
+        version: 2.9.0
+
   packages/terminal-host-protocol:
     devDependencies:
       typescript:
@@ -1844,12 +1980,6 @@ importers:
         specifier: ^5.55.0
         version: 5.56.4
 
-  panels/hello-vanilla:
-    dependencies:
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
-
   panels/local-models:
     dependencies:
       '@radix-ui/react-icons':
@@ -1988,6 +2118,9 @@ importers:
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@workspace/testkit':
+        specifier: workspace:*
+        version: link:../../packages/testkit
       '@workspace/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -2043,6 +2176,9 @@ importers:
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@workspace/testkit':
+        specifier: workspace:*
+        version: link:../../packages/testkit
       '@workspace/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -2154,33 +2290,6 @@ importers:
         specifier: 19.0.0
         version: 19.0.0
 
-  skills/gmail:
-    dependencies:
-      '@radix-ui/react-icons':
-        specifier: ^1.3.2
-        version: 1.3.2(react@19.0.0)
-      '@radix-ui/themes':
-        specifier: ^3.2.1
-        version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
-      '@workspace-skills/agents':
-        specifier: workspace:*
-        version: link:../agents
-      '@workspace-skills/google-workspace':
-        specifier: workspace:*
-        version: link:../google-workspace
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../../packages/agentic-protocol
-      '@workspace/gmail':
-        specifier: workspace:*
-        version: link:../../packages/gmail
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
-      react:
-        specifier: 19.0.0
-        version: 19.0.0
-
   skills/google-drive:
     dependencies:
       '@workspace-skills/google-workspace':
@@ -2213,26 +2322,11 @@ importers:
 
   skills/memory: {}
 
-  skills/news:
+  skills/mobile-system-testing:
     dependencies:
-      '@radix-ui/react-icons':
-        specifier: ^1.3.2
-        version: 1.3.2(react@19.0.0)
-      '@radix-ui/themes':
-        specifier: ^3.2.1
-        version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
-      '@workspace/feeds':
+      '@workspace-skills/system-testing':
         specifier: workspace:*
-        version: link:../../packages/feeds
-      react:
-        specifier: 19.0.0
-        version: 19.0.0
-      react-markdown:
-        specifier: ^9.0.1
-        version: 9.1.0(@types/react@19.2.17)(react@19.0.0)
-      remark-gfm:
-        specifier: ^4.0.0
-        version: 4.0.1
+        version: link:../system-testing
 
   skills/onboarding:
     dependencies:
@@ -2245,21 +2339,15 @@ importers:
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
-      '@workspace-skills/github':
-        specifier: workspace:*
-        version: link:../github
-      '@workspace-skills/google-workspace':
-        specifier: workspace:*
-        version: link:../google-workspace
-      '@workspace-skills/web-research':
-        specifier: workspace:*
-        version: link:../web-research
       '@workspace/model-catalog':
         specifier: workspace:*
         version: link:../../packages/model-catalog
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@workspace/template-registry':
+        specifier: workspace:*
+        version: link:../../packages/template-registry
       react:
         specifier: 19.0.0
         version: 19.0.0
@@ -2289,6 +2377,8 @@ importers:
       '@workspace/testkit':
         specifier: workspace:*
         version: link:../../packages/testkit
+
+  skills/templates: {}
 
   skills/vibestudio-vcs: {}
 

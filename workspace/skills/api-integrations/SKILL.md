@@ -254,7 +254,7 @@ const imported = await git.importProject({
     url: "https://github.com/owner/example.git",
     branch: "feature/workspace-integration",
   },
-  credentialId: "cred_github_...",
+  credentialIdOverride: "cred_github_...", // call-scoped only; never persisted
 });
 
 console.log(
@@ -275,18 +275,16 @@ semantic import and names the exact application, import work unit, source
 revision/digest, and target repositories. Do not substitute clone metadata or a
 post-commit reconstruction.
 
-For Git transport credentials, omission means URL-bound automatic resolution, a
-string pins one stored credential, and `null` requires anonymous HTTP. Persist
-only credential-free HTTP(S) remote URLs without query parameters or fragments.
+Persist only a logical upstream `credential` name, never a concrete credential
+ID. It is resolved by the host for that workspace and remote URL; a
+`credentialIdOverride` is call-scoped, and credential-free declarations are
+anonymous-first. Persist only credential-free HTTP(S) remote URLs without query
+parameters or fragments.
 
-At startup, the configured Git provider reports operational checkout state via
-`upstreamStatus`. Vibestudio clones/imports only `not-materialized`
-declarations; other reported states are skipped as `already-materialized`, even
-when a candidate is still `integration-required`. Use
-`git.completeWorkspaceDependencies()` for the same explicit retry/backfill flow.
-For private repos, pass a credential id on the retry call because startup import
-has no interactive `credentialId` argument. Pass `null` on an explicit retry
-when the operation must remain anonymous. Operational clones live below server
+Use one explicit userland `git.importProject()` per absent repository. It
+freezes exact source coordinates, produces an unpublished semantic candidate,
+and never changes protected main by itself. Upstream declarations do not cause
+host startup imports. Operational clones live below server
 `state/git-checkouts/` and never become Build V2 source directly.
 
 `git.importProject()` uses one workspace config approval covering the shared

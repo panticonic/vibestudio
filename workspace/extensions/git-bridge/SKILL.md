@@ -1,6 +1,6 @@
 ---
 name: git-bridge
-description: Use the Vibestudio Git Bridge for external Git import, export, upstream status, push, pull, clone, publication, disposable remotes, and remote-server workflows. Use when working on workspace/extensions/git-bridge, git.upstreams/git.remotes, protected-main synchronization, provider publication, or deciding between runtime Git APIs and checkout commands.
+description: Use the Vibestudio Git Bridge for external Git import, export, upstream status, push, pull, clone, publication, and remote-server workflows. Use when working on workspace/extensions/git-bridge, git.upstreams/git.remotes, protected-main synchronization, provider publication, or deciding between runtime Git APIs and checkout commands.
 ---
 
 # Git Bridge
@@ -80,12 +80,12 @@ await git.setSharedRemote("projects/bgkit", {
 await git.setUpstream("projects/bgkit", {
   remote: "origin",
   branch: "main",
-  // Omit for URL-based credential resolution; use null to require anonymity.
-  credentialId: "cred_github_...",
+  // A portable logical name; omission makes transport anonymous-first.
+  credential: "github-workspace",
   autoPush: false,
 });
 
-const status = await git.upstreamStatus(["projects/bgkit"], { fetch: true });
+const status = await git.upstreamStatus(["projects/bgkit"]);
 await git.pullUpstream("projects/bgkit", { dryRun: true });
 await git.pushUpstream("projects/bgkit");
 ```
@@ -93,13 +93,12 @@ await git.pushUpstream("projects/bgkit");
 An empty repository array means all configured upstreams:
 
 ```ts
-const statuses = await git.upstreamStatus([], { fetch: true });
+const statuses = await git.upstreamStatus([]);
 ```
 
-Use `fetch: true` at an operational decision boundary so ahead/behind and
-divergence reflect the remote now. Use `fetch: false` only for an intentionally
-local observation, such as checking the candidate returned by the import call
-that just ran.
+Every status call observes the remote. Relationship and counts are absent when
+that observation fails; historical push/observation telemetry never substitutes
+for current remote truth.
 
 Important runtime methods:
 
@@ -115,11 +114,6 @@ Important runtime methods:
 | `publishRepo`                            | Create a provider repository, configure it, export protected main, and push.                 |
 | `importProject`                          | Configure, clone, and return the first unpublished semantic candidate.                       |
 | `commitMapping`                          | Read Git commit to semantic-event mappings from export trailers.                             |
-| `createDisposableRemote`                 | Create a short-lived credential-free smart-HTTP remote.                                      |
-| `publishToDisposableRemote`              | Export, push, verify, and clean up a disposable remote.                                      |
-| `pushDisposableRemote`                   | Push to an existing host-managed disposable remote without changing tracking.                |
-| `inspectDisposableRemote`                | Read a disposable remote's exact branch head and commit count.                               |
-| `removeDisposableRemote`                 | Delete a disposable remote before automatic expiry.                                          |
 
 The CLI exposes the same host-mediated workflow:
 
@@ -132,7 +126,8 @@ vibestudio vcs git push --repo projects/bgkit
 
 `vibestudio vcs git status` fetches before reporting. Use `--credential ID` to
 select a stored credential or `--anonymous` to forbid credential resolution.
-Omit both for automatic URL-bound resolution; the flags are mutually exclusive.
+Omit both to use a configured logical binding or anonymous transport when none
+is declared; the flags are mutually exclusive.
 Remote declarations accept only credential-free HTTP(S) URLs without query
 parameters or fragments.
 Run `vibestudio vcs git --help` for enable, disable, publish, import, auto-push,
@@ -155,8 +150,10 @@ The result carries `candidate.contextId`, `candidate.eventId`, whether the
 snapshot changed, and `candidate.semanticEvidence`: the exact application,
 import work unit, and external snapshot returned atomically by the canonical
 semantic import.
-The import records the remote and upstream with
-`autoPush: false`, but that setting controls only later outgoing Git pushes; it
+For a new declaration, import records the remote and upstream with
+`autoPush: false`; an exact existing declaration is reused without rewriting
+its credential, author, auto-push, or unrelated remote settings, while a
+conflicting declaration is rejected. That setting controls only later outgoing Git pushes; it
 never publishes an import candidate. Compare the candidate event from the
 working context where it should land, integrate selected changes in small local
 steps, and test. Commit derives the candidate source from those recorded local
@@ -176,64 +173,21 @@ for the canonical verification contract. Then use `upstreamStatus` on the same
 repository path to distinguish an unpublished `integration-required` candidate
 from protected main and outgoing Git publication.
 
-## Startup dependency completion
+## External repository acquisition
 
-- Treat the configured provider's `upstreamStatus` as the operational checkout
-  observation. Do not infer materialization from workspace source, a repo path,
-  or a filesystem scan.
-- Clone/import only rows whose state is `not-materialized`.
-- Return every other provider-reported state as `skipped` with
-  `reason: "already-materialized"`, including `integration-required`: its
-  checkout exists even though its candidate has not been published.
-- Return unsupported repository sections as `unsupported-path`. Treat a missing
-  provider row as a failure; never guess.
-- Keep each successful startup import as its own committed candidate. Startup
-  completion does not publish candidates or feed checkout bytes into Build V2.
-- Use `git.completeWorkspaceDependencies({ credentialId })` for an explicit
-  retry/backfill, especially when a private remote needs a credential that was
-  unavailable during startup.
-- Credential selection has three exact states everywhere: omit `credentialId`
-  to resolve a matching URL-bound credential, provide an id to select it, or
-  pass `null` to require anonymous Git HTTP.
-- Successful config writes queue immediate, coalesced reconciliation but do
-  not wait for provider readiness. Provider activation also reconciles all
-  declarations, so a durable config change is never rolled back merely because
-  the extension is still starting.
+- Import an absent repository with one explicit userland
+  `git.importProject()` call. It creates an unpublished candidate; only
+  ordinary VCS compare/integrate/commit/push may advance protected main.
+- Upstream declarations describe synchronization only. They never cause a host
+  startup import or partial initialization lifecycle.
+- A declaration with no credential is anonymous-first. A logical credential is
+  resolved for the exact workspace and remote URL.
+- Successful config writes queue immediate, coalesced reconciliation without
+  waiting for provider readiness.
 
-For a credential-free end-to-end verification:
-
-```ts
-const verified = await git.publishToDisposableRemote("projects/example");
-```
-
-Use the lower-level disposable lifecycle only when the remote must survive
-between calls:
-
-```ts
-const disposable = await git.createDisposableRemote({ name: "publish-check" });
-await git.setSharedRemote("projects/example", {
-  name: "origin",
-  url: disposable.url,
-  branch: disposable.branch,
-});
-await git.setUpstream("projects/example", {
-  remote: "origin",
-  branch: disposable.branch,
-  credentialId: null,
-  autoPush: false,
-});
-await git.pushUpstream("projects/example");
-const received = await git.inspectDisposableRemote(disposable.url);
-await git.detachUpstream("projects/example", { forgetRemote: true });
-await git.removeDisposableRemote(disposable.url);
-```
-
-`publishToDisposableRemote` always creates and deletes its own separate remote.
-It cannot initialize a URL returned by `createDisposableRemote`; use
-`pushUpstream` after declaring that exact URL when later calls must observe the
-same Git history. Detach the temporary upstream and shared remote before
-deleting the disposable endpoint so workspace configuration never retains a
-dead URL.
+For end-to-end verification, test infrastructure owns any local Git server.
+Agents use the same ordinary remote declaration and `pushUpstream` flow used
+for external repositories; production does not provide test-only remote URLs.
 
 ## Import rules
 
@@ -336,14 +290,14 @@ await serverLog.query({ tag: "BuildV2" });
 
 ## Divergence and recovery
 
-1. Run `upstreamStatus([repo], { fetch: true })`.
+1. Run `upstreamStatus([repo])`.
 2. If it reports `integration-required`, use its exact candidate context and
    event IDs. Compare that event from the intended working context, integrate
    ordinary changes incrementally, run checks, commit the complete local chain,
    and call `vcs.push` explicitly. Do not pull, export, or Git-push over it.
 3. When the remote is ahead or diverged, preview with
    `pullUpstream(repo, { dryRun: true })`. The preview exports and fetches only
-   inside a disposable checkout; it does not change the managed checkout,
+   inside an isolated temporary checkout; it does not change the managed checkout,
    bridge state, semantic state, or remote.
 4. Pull once to import exact upstream HEAD as a committed candidate. Retain the
    returned context and event IDs; the pull does not advance protected `main`.

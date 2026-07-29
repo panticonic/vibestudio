@@ -217,7 +217,7 @@ starting. Run status afterward to observe operational convergence.
 For outgoing changes, edit, `vibestudio vcs commit`, and `vibestudio vcs push`
 first; then run `vibestudio vcs git push`. For incoming changes, run
 `vibestudio vcs git pull --dry-run` first when you need a strict preview; it
-uses disposable Git state and changes neither the managed checkout nor semantic
+uses isolated temporary Git state and changes neither the managed checkout nor semantic
 state. A real pull returns an unpublished candidate with required atomic
 semantic evidence: compare and
 integrate that exact event, commit, and publish through semantic VCS before

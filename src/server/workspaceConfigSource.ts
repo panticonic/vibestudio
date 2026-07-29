@@ -1,7 +1,5 @@
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
-import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
-
-const WORKSPACE_CONFIG_PATH = "meta/vibestudio.yml";
+import { readWorkspaceConfig } from "@vibestudio/workspace/configParser";
 
 type WorkspaceConfigFile = {
   content: { kind: "text"; text: string } | { kind: "bytes"; base64: string };
@@ -21,9 +19,19 @@ export async function readWorkspaceConfigFromState(
   stateHash: string
 ): Promise<WorkspaceConfig> {
   const ref = normalizeStateRef(stateHash);
-  const file = await vcs.readFile(ref, WORKSPACE_CONFIG_PATH);
-  if (!file || file.content.kind !== "text") {
-    throw new Error(`${WORKSPACE_CONFIG_PATH} is missing from workspace state ${ref}`);
-  }
-  return parseWorkspaceConfigContentWithId(file.content.text, workspaceId);
+  return readWorkspaceConfig(
+    {
+      readText: async (filePath) => {
+        const file = await vcs.readFile(ref, filePath);
+        return file?.content.kind === "text" ? file.content.text : null;
+      },
+    },
+    workspaceId
+  ).catch((error) => {
+    throw new Error(
+      `Cannot read workspace configuration from ${ref}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  });
 }

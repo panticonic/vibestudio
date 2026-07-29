@@ -1,6 +1,16 @@
 import { useMemo } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
-import { Button, Callout, Dialog, Flex, Select, Spinner, Text, TextField } from "@radix-ui/themes";
+import {
+  Button,
+  Callout,
+  Card,
+  Dialog,
+  Flex,
+  Select,
+  Spinner,
+  Text,
+  TextField,
+} from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import { AppDialog } from "@workspace/ui";
 
@@ -47,7 +57,6 @@ export function WorkspaceWizard() {
   const handleCreate = async () => {
     await createWorkspace();
   };
-
   return (
     <AppDialog
       open={isOpen}
@@ -71,6 +80,21 @@ export function WorkspaceWizard() {
             {nameError ?? "Letters, numbers, hyphens, and underscores only."}
           </Text>
         </Flex>
+        <Flex direction="column" gap="2">
+          <Text size="2" weight="medium">
+            Start with
+          </Text>
+          <Card
+            style={{ outline: "2px solid var(--accent-8)" }}
+          >
+            <Text as="div" weight="medium">
+              Standard workspace
+            </Text>
+            <Text as="div" size="1" color="gray">
+              Panels, chat, and the basics. Recommended.
+            </Text>
+          </Card>
+        </Flex>
 
         {/* Fork from existing workspace */}
         {workspaces.length > 0 && (
@@ -84,7 +108,10 @@ export function WorkspaceWizard() {
             <Select.Root
               value={formData.forkFrom || "__none__"}
               onValueChange={(value) =>
-                setFormData({ ...formData, forkFrom: value === "__none__" ? "" : value })
+                setFormData({
+                  ...formData,
+                  forkFrom: value === "__none__" ? "" : value,
+                })
               }
             >
               <Select.Trigger placeholder="Default template (onboarding chat)" />
@@ -135,7 +162,11 @@ export function WorkspaceWizard() {
 
         <Button
           onClick={handleCreate}
-          disabled={isCreating || !formData.workspaceName || !!nameError}
+          disabled={
+            isCreating ||
+            !formData.workspaceName ||
+            !!nameError
+          }
           color="green"
         >
           {isCreating ? "Creating..." : "Create Workspace"}

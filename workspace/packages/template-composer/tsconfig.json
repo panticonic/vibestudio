@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "baseUrl": "../../..",
+    "paths": {
+      "@vibestudio/content-addressing": ["packages/content-addressing/src/index.ts"],
+      "@vibestudio/git": ["packages/git/src/index.ts"],
+      "@vibestudio/shared/*": ["packages/shared/src/*"],
+      "@vibestudio/workspace/*": ["packages/workspace/src/*"],
+      "@vibestudio/workspace-contracts/*": ["packages/workspace-contracts/src/*"]
+    },
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src/**/*"]
+}

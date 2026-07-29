@@ -71,11 +71,8 @@ const GROUPS = {
   "code-runner.reset": ["eval.reset"],
   "extensions.reload": ["extensions.reload"],
   "workspace.gateway.access": ["gateway.fetch"],
-  "workspace.dependencies.install": ["gitInterop.completeWorkspaceDependencies"],
   "git.remotes.manage": [
-    "gitInterop.createDisposableRemote",
     "gitInterop.detachUpstream",
-    "gitInterop.removeDisposableRemote",
     "gitInterop.removeSharedRemote",
     "gitInterop.removeUpstream",
     "gitInterop.setAutoPush",
@@ -85,8 +82,8 @@ const GROUPS = {
   "git.project.import": ["gitInterop.importProject"],
   "git.publish": [
     "gitInterop.publishRepo",
-    "gitInterop.publishToDisposableRemote",
-    "gitInterop.pushDisposableRemote",
+    "gitInterop.publishTemplate",
+    "gitInterop.pushTemplateContribution",
     "gitInterop.pushUpstream",
   ],
   "git.pull": ["gitInterop.pullUpstream"],

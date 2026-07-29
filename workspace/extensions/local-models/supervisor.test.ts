@@ -35,13 +35,8 @@ import {
   type SupervisorAdminTransport,
   type SupervisorDeps,
 } from "./supervisor.js";
-import {
-  FALLBACK_MODEL,
-  ROOT_LAYOUT,
-  type EngineState,
-  type ModelRecord,
-  type ServerKind,
-} from "./types.js";
+import type { EngineState, ModelRecord, ServerKind } from "@workspace/model-catalog/localModels";
+import { FALLBACK_MODEL, ROOT_LAYOUT } from "./constants.js";
 
 interface SpawnCall {
   bin: string;

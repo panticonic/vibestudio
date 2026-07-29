@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createDevLogger } from "@vibestudio/dev-log";
-import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
+import { readWorkspaceConfig } from "@vibestudio/workspace/configParser";
 import type {
   WorkspaceHeartbeatDecl,
   WorkspaceRecurringDecl,
@@ -543,9 +543,14 @@ async function readRecurringAtState(
   stateHash: string
 ): Promise<WorkspaceRecurringDecl[]> {
   try {
-    const out = await deps.readWorkspaceFileAtState(stateHash, "meta/vibestudio.yml");
-    if (!out) return [];
-    return parseWorkspaceConfigContentWithId(out, deps.workspaceId).recurring ?? [];
+    return (
+      (
+        await readWorkspaceConfig(
+          { readText: (filePath) => deps.readWorkspaceFileAtState(stateHash, filePath) },
+          deps.workspaceId
+        )
+      ).recurring ?? []
+    );
   } catch {
     return [];
   }
@@ -556,9 +561,14 @@ async function readHeartbeatsAtState(
   stateHash: string
 ): Promise<WorkspaceHeartbeatDecl[]> {
   try {
-    const out = await deps.readWorkspaceFileAtState(stateHash, "meta/vibestudio.yml");
-    if (!out) return [];
-    return parseWorkspaceConfigContentWithId(out, deps.workspaceId).heartbeats ?? [];
+    return (
+      (
+        await readWorkspaceConfig(
+          { readText: (filePath) => deps.readWorkspaceFileAtState(stateHash, filePath) },
+          deps.workspaceId
+        )
+      ).heartbeats ?? []
+    );
   } catch {
     return [];
   }

@@ -9948,6 +9948,47 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:workspace/packages/semantic-control-plane/src/index.ts:vcsListContexts",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/semantic-control-plane/src/index.ts",
+      "source": "packages/semantic-control-plane",
+      "method": "vcsListContexts",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/semantic-control-plane/src/index.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "capability": "workspace-service:<live-declaration>",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:vcsListContexts)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:workspace/packages/semantic-control-plane/src/index.ts:vcsPendingSemanticEffects",
       "rpcPlane": "workspace-do",
       "owner": "workspace/packages/semantic-control-plane/src/index.ts",
@@ -23818,88 +23859,6 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:gitInterop.completeWorkspaceDependencies",
-      "rpcPlane": "host-service",
-      "owner": "gitInterop",
-      "method": "completeWorkspaceDependencies",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:gitInterop.completeWorkspaceDependencies"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:gitInterop.completeWorkspaceDependencies),allOf(capability(user,service:gitInterop.completeWorkspaceDependencies),workspace-member),allOf(capability(code,service:gitInterop.completeWorkspaceDependencies),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:gitInterop.completeWorkspaceDependencies",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:gitInterop.createDisposableRemote",
-      "rpcPlane": "host-service",
-      "owner": "gitInterop",
-      "method": "createDisposableRemote",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:gitInterop.createDisposableRemote"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:gitInterop.createDisposableRemote),allOf(capability(user,service:gitInterop.createDisposableRemote),workspace-member),allOf(capability(code,service:gitInterop.createDisposableRemote),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:gitInterop.createDisposableRemote",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
       "id": "host:gitInterop.detachUpstream",
       "rpcPlane": "host-service",
       "owner": "gitInterop",
@@ -23979,47 +23938,6 @@
         "change": null
       },
       "capability": "service:gitInterop.importProject",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:gitInterop.inspectDisposableRemote",
-      "rpcPlane": "host-service",
-      "owner": "gitInterop",
-      "method": "inspectDisposableRemote",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:gitInterop.inspectDisposableRemote"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:gitInterop.inspectDisposableRemote),allOf(capability(user,service:gitInterop.inspectDisposableRemote),workspace-member),allOf(capability(code,service:gitInterop.inspectDisposableRemote),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:gitInterop.inspectDisposableRemote",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -24103,18 +24021,19 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:gitInterop.publishToDisposableRemote",
+      "id": "host:gitInterop.publishTemplate",
       "rpcPlane": "host-service",
       "owner": "gitInterop",
-      "method": "publishToDisposableRemote",
+      "method": "publishTemplate",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:gitInterop.publishToDisposableRemote"
+        "key": "git.publish"
       },
       "authorityPrincipals": [
-        "user",
         "code",
-        "host"
+        "host",
+        "session",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -24135,12 +24054,50 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:gitInterop.publishToDisposableRemote),allOf(capability(user,service:gitInterop.publishToDisposableRemote),workspace-member),allOf(capability(code,service:gitInterop.publishToDisposableRemote),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"git.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"git.publish\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"git.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"git.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
+        "review": "exact-source-and-destination-gated-template-publication",
+        "change": "Uses one prepared git.publish leaf scoped to the normalized external repository and credential selection. The reviewed substance binds the generated portable manifest, selected repository-to-subtree mapping, immutable release tag, and exact protected-main event before the provider creates or pushes the repository."
+      },
+      "capability": "service:gitInterop.publishTemplate",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:gitInterop.publishTemplate#capability:git.publish",
+      "rpcPlane": "host-service",
+      "owner": "gitInterop",
+      "method": "publishTemplate",
+      "capability": "git.publish",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "gitInterop.publishTemplate.destination"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"git.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"git.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
         "change": null
       },
-      "capability": "service:gitInterop.publishToDisposableRemote",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -24185,18 +24142,19 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:gitInterop.pushDisposableRemote",
+      "id": "host:gitInterop.pushTemplateContribution",
       "rpcPlane": "host-service",
       "owner": "gitInterop",
-      "method": "pushDisposableRemote",
+      "method": "pushTemplateContribution",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:gitInterop.pushDisposableRemote"
+        "key": "git.publish"
       },
       "authorityPrincipals": [
-        "user",
         "code",
-        "host"
+        "host",
+        "session",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -24217,12 +24175,50 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:gitInterop.pushDisposableRemote),allOf(capability(user,service:gitInterop.pushDisposableRemote),workspace-member),allOf(capability(code,service:gitInterop.pushDisposableRemote),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"git.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"git.publish\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"git.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"git.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
+        "review": "exact-source-and-destination-gated-template-contribution",
+        "change": "Uses one prepared git.publish leaf scoped to the normalized external repository and credential selection. The reviewed substance binds the selected repository-to-subtree mapping, exact template base, and one immutable protected-main event before the provider reads or pushes any source."
+      },
+      "capability": "service:gitInterop.pushTemplateContribution",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:gitInterop.pushTemplateContribution#capability:git.publish",
+      "rpcPlane": "host-service",
+      "owner": "gitInterop",
+      "method": "pushTemplateContribution",
+      "capability": "git.publish",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "gitInterop.pushTemplateContribution.destination"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"git.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"git.publish\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
         "change": null
       },
-      "capability": "service:gitInterop.pushDisposableRemote",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -24264,47 +24260,6 @@
         "change": null
       },
       "capability": "service:gitInterop.pushUpstream",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:gitInterop.removeDisposableRemote",
-      "rpcPlane": "host-service",
-      "owner": "gitInterop",
-      "method": "removeDisposableRemote",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:gitInterop.removeDisposableRemote"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:gitInterop.removeDisposableRemote),allOf(capability(user,service:gitInterop.removeDisposableRemote),workspace-member),allOf(capability(code,service:gitInterop.removeDisposableRemote),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:gitInterop.removeDisposableRemote",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -25222,7 +25177,7 @@
         "host",
         "code"
       ],
-      "sensitivity": "write",
+      "sensitivity": "read",
       "authenticatedFacts": [
         "session",
         "acting-user",
@@ -25243,8 +25198,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:hubControl.routeWorkspace),allOf(capability(user,service:hubControl.routeWorkspace),workspace-member),allOf(capability(code,service:hubControl.routeWorkspace),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "read-only-exact-workspace-routing",
+        "change": "Narrows exact workspace route discovery from write sensitivity to read sensitivity. The method returns only the selected child's reach and performs no registration or lifecycle mutation."
       },
       "capability": "service:hubControl.routeWorkspace",
       "parityAssertion": "generated-census:host-authority"
@@ -31982,6 +31937,47 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:runtime.listContexts",
+      "rpcPlane": "host-service",
+      "owner": "runtime",
+      "method": "listContexts",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:runtime.listContexts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:runtime.listContexts),allOf(capability(user,service:runtime.listContexts),workspace-member),allOf(capability(code,service:runtime.listContexts),workspace-member))",
+      "r3b": {
+        "review": "bounded-context-id-discovery",
+        "change": "Adds an open read of context identifiers optionally narrowed by a caller-supplied prefix. It exposes no context contents or mutation authority and lets userland discover its own durable operation journals without host-owned lifecycle state."
+      },
+      "capability": "service:runtime.listContexts",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:runtime.listEntities",
       "rpcPlane": "host-service",
       "owner": "runtime",
@@ -33562,6 +33558,47 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:vcs.finalizeExternalDelta",
+      "rpcPlane": "host-service",
+      "owner": "vcs",
+      "method": "finalizeExternalDelta",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:vcs.finalizeExternalDelta"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:vcs.finalizeExternalDelta),allOf(capability(user,service:vcs.finalizeExternalDelta),workspace-member),allOf(capability(code,service:vcs.finalizeExternalDelta),workspace-member))",
+      "r3b": {
+        "review": "context-bound-complete-external-delta-finalization",
+        "change": "Exposes finalization of one caller-reachable external delta only after the semantic engine proves every effective change is accounted for. The operation releases that delta's dedicated review roots and cannot mutate source content or finalize a foreign or incomplete review."
+      },
+      "capability": "service:vcs.finalizeExternalDelta",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:vcs.history",
       "rpcPlane": "host-service",
       "owner": "vcs",
@@ -34013,6 +34050,47 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:vcs.registerExternalDelta",
+      "rpcPlane": "host-service",
+      "owner": "vcs",
+      "method": "registerExternalDelta",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:vcs.registerExternalDelta"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:vcs.registerExternalDelta),allOf(capability(user,service:vcs.registerExternalDelta),workspace-member),allOf(capability(code,service:vcs.registerExternalDelta),workspace-member))",
+      "r3b": {
+        "review": "context-bound-exact-external-delta-registration",
+        "change": "Adds the existing context-write semantic operation to the ordinary VCS surface so userland can register an exact old-to-new external repository delta for compare and integrate. Context ownership, causal references, immutable source coordinates, and repository identity remain receiver-validated; lifecycle retirement and finalization remain internal to integration."
+      },
+      "capability": "service:vcs.registerExternalDelta",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:vcs.resolveRepository",
       "rpcPlane": "host-service",
       "owner": "vcs",
@@ -34133,6 +34211,47 @@
         "change": null
       },
       "capability": "service:vcs.status",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:vcs.supersedeExternalDelta",
+      "rpcPlane": "host-service",
+      "owner": "vcs",
+      "method": "supersedeExternalDelta",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:vcs.supersedeExternalDelta"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:vcs.supersedeExternalDelta),allOf(capability(user,service:vcs.supersedeExternalDelta),workspace-member),allOf(capability(code,service:vcs.supersedeExternalDelta),workspace-member))",
+      "r3b": {
+        "review": "context-bound-external-delta-retirement",
+        "change": "Exposes retirement of one caller-reachable external delta so userland can abandon or replace a review it owns. Context and delta identity are receiver-validated; the operation grants no source mutation, integration, or foreign lifecycle authority."
+      },
+      "capability": "service:vcs.supersedeExternalDelta",
       "parityAssertion": "generated-census:host-authority"
     },
     {

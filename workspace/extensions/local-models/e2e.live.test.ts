@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from "vitest";
 import { activate } from "./index.js";
-import { FALLBACK_MODEL } from "./types.js";
+import { FALLBACK_MODEL } from "./constants.js";
 
 const RUN = process.env["RUN_LOCAL_MODELS_E2E"] === "1";
 // Sized for a slow (~500 KB/s) connection downloading the fallback
@@ -202,5 +202,4 @@ describe.runIf(RUN)("local-models live e2e", () => {
     },
     BOOTSTRAP_TIMEOUT_MS
   );
-
 });

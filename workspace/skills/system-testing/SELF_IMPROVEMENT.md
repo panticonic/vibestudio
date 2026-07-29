@@ -706,9 +706,9 @@ if (retest.result.passed) {
 - **Use `projects/` for plain external repos.** They are editable and can have
   shared remotes, but they are not live runtime units.
 - **Shared remotes are transport declarations.** `git.setSharedRemote()` records
-  and propagates remotes for a workspace repo that exists or will exist later;
-  startup completion asks the provider's `upstreamStatus` and imports only
-  `not-materialized` checkouts.
+  and propagates remotes for a workspace repo that exists or will exist later.
+  Exact startup seeds are acquired before the first publication; later external
+  imports are explicit candidate-producing operations.
 - **Use `git.importProject()` to create a workspace repo from a remote.** It
   clones into operational server state under `state/git-checkouts/`, records the
   shared remote and matching upstream with auto-push off, and returns a
@@ -722,17 +722,13 @@ if (retest.result.passed) {
   source URI, revision, digest, and target repository IDs before reporting the
   import as proven. Those fields are returned by the same semantic transaction,
   not reconstructed after commit.
-- **Use `git.completeWorkspaceDependencies()` as a retry/backfill.** It imports
-  each configured upstream whose provider status is `not-materialized` and
-  reports imported, skipped, and failed paths, including candidate coordinates
-  for each successful import. Other provider-reported states are skipped as
-  `already-materialized`, including `integration-required`. Pass
-  `{ credentialId }` for private repo retries; startup auto-import has no
-  interactive credential argument. Omit the field for URL-bound resolution,
-  pass a string to pin a credential, or pass `null` to require anonymous Git
-  HTTP.
+- **Treat Git imports as candidates.** Startup acquires only exact configured
+  seeds before the first protected-main publication and publishes the complete
+  initialization chain once. In an existing workspace, use one explicit
+  `git.importProject()` per repository. Its candidate must be compared,
+  integrated, committed, and explicitly pushed before protected main changes.
 - **Preview Git pulls without perturbing the test.** `git.pullUpstream(repo,
-{ dryRun: true })` exports and fetches in a disposable checkout and changes no
+{ dryRun: true })` exports and fetches in an isolated temporary checkout and changes no
   managed Git, bridge, semantic, or remote state. After a successful fetch,
   `remoteBranchExists: false` means the configured branch is absent, not
   in-sync or auth-failed.

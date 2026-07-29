@@ -54,7 +54,10 @@ git:
 An imported repo also has a matching entry under
 `git.upstreams.<parent>.<name>`. `git.importProject()` writes the remote and
 upstream together, with `autoPush: false`; a second `git.setUpstream()` call is
-not required.
+not required. If that exact declaration already exists, import reuses it
+without rewriting its credential, author, auto-push, or unrelated remote
+settings. A conflicting URL, selected remote, or branch is rejected until the
+declaration is edited explicitly.
 
 ## Import APIs
 
@@ -71,7 +74,7 @@ const imported = await git.importProject({
     url: "https://github.com/owner/upstream.git",
     branch: "feature/workspace-integration",
   },
-  credentialId: "cred_github_...",
+  credentialIdOverride: "cred_github_...", // call-scoped only; never persisted
 });
 
 console.log(
@@ -82,9 +85,9 @@ console.log(
 ```
 
 The remote's `branch` is recorded on both the shared remote and matching
-upstream. Credential selection is recorded exactly: omission means automatic
-URL-bound resolution, a string pins one stored credential, and `null` requires
-anonymous Git HTTP. The exact imported tree receives stable repository/file identities
+upstream. A concrete `credentialIdOverride` is call-scoped: omission uses the
+declaration's logical binding when present and otherwise uses anonymous
+transport, while `null` explicitly requires anonymous Git HTTP. The exact imported tree receives stable repository/file identities
 and ordinary repository/file changes under one import work unit. That work
 unit's required `externalSnapshot` retains the canonical credential-free remote
 URI, exact revision, and snapshot digest derived by the semantic workspace only
@@ -108,10 +111,8 @@ integrated source, and call `vcs.push` explicitly only when publication is
 intended. `autoPush: false` is an outgoing Git setting; changing it never
 publishes an incoming candidate.
 
-`git.importProject()` is intentionally the single-project workflow. Dependency
-completion also imports each configured external remote as its own exact
-snapshot/event: one import work unit has one source coordinate and never
-conflates several Git remotes.
+`git.importProject()` is intentionally the single-project workflow: one import
+work unit has one source coordinate and never conflates several Git remotes.
 
 The operational clone is not a Build V2 source tree. Builds resolve the exact
 semantic repository state through the CAS, so an unintegrated candidate cannot
@@ -138,14 +139,15 @@ await git.setSharedRemote("projects/upstream", {
 });
 ```
 
-Use `git.completeWorkspaceDependencies()` as an explicit retry or backfill when
-a configured upstream reports that its operational checkout is not materialized:
+When an existing workspace lacks a declared repository, import that one
+repository explicitly. The call creates or reuses the declaration and returns
+an unpublished candidate; it never advances protected main:
 
 ```ts
-const result = await git.completeWorkspaceDependencies({
-  credentialId: "cred_github_...",
+const candidate = await git.importProject({
+  path: "projects/upstream",
+  remote: { url: "https://github.com/owner/upstream.git", branch: "main" },
 });
-console.log(result.imported, result.skipped, result.failed);
 ```
 
 ## Ongoing synchronization
@@ -153,56 +155,42 @@ console.log(result.imported, result.skipped, result.failed);
 Keep semantic workspace publication and external Git push as separate,
 observable boundaries:
 
-1. Run `git.upstreamStatus([repo], { fetch: true })` before deciding what to do.
+1. Run `git.upstreamStatus([repo])` before deciding what to do. Status always
+   observes the remote; there is no cache-only status mode.
 2. For local managed work, edit, check, commit, and publish through semantic
    VCS first. Then call `git.pushUpstream(repo)` to export protected main and
    push the resulting Git commit.
 3. If the remote is ahead or diverged, preview with
    `git.pullUpstream(repo, { dryRun: true })`, then pull once. The pull returns a
    committed candidate and does not advance protected main. The preview uses a
-   disposable checkout and changes no managed checkout, bridge, semantic, or
+   isolated temporary checkout and changes no managed checkout, bridge, semantic, or
    remote state.
 4. Compare and integrate that exact candidate in small steps, check, commit the
    complete chain, and explicitly publish it through semantic VCS.
 5. Fetch status again. Only call `git.pushUpstream(repo)` after the
    `integration-required` candidate has cleared.
 
-Pass a credential ID to require that URL-bound credential, omit
-`credentialId` to allow host resolution, or pass `credentialId: null` to require
-anonymous HTTP. Never infer that a public URL means anonymous operation.
+Use an upstream's logical `credential` name for durable access. A
+`credentialIdOverride` is a one-call override; omit it to use the logical
+binding, or pass `null` to require anonymous HTTP. Credential-free declarations
+are anonymous-first, so a public repository never prompts merely because it is
+public.
 If a successful fetch reports `remoteBranchExists: false`, the declared branch
 was deleted or has not been created; push to create it or update the
 declaration. Do not infer in-sync from zero counts.
 
 Load [Git Bridge](../../extensions/git-bridge/SKILL.md) for remote declaration,
-CLI equivalents, disposable remotes, exact status states, and the full
+CLI equivalents, exact status states, and the full
 divergence playbook.
 
-## Startup Behavior
+## Acquisition behavior
 
-On server startup, Vibestudio asks the configured Git provider for
-`upstreamStatus` on every supported declared upstream. It clones/imports only a
-`not-materialized` row. Every other reported state is returned in `skipped` with
-`reason: "already-materialized"`, including `integration-required`: the
-operational checkout exists even though the candidate remains unpublished. An
-unsupported section is skipped as `unsupported-path`; a missing provider row is
-reported as a failure instead of being guessed from workspace source or disk.
-
-Candidate creation does not publish the project or make its host checkout a
-second source of truth. A declared external panel, worker, skill, or package
-becomes normal shared workspace source only after its candidate is incrementally
-integrated, checked, committed, and explicitly published. Materializing a
-remote-only declaration also records its matching upstream with
-`autoPush: false`.
-
-Each newly materialized external project receives its own exact import work
-unit. Startup does not batch unrelated remotes behind one misleading source
-tuple.
-
-Startup import trusts the existing workspace config declaration and does not
-prompt again. The approval boundary is the config edit that introduced the
-remote declaration; the resulting import work unit and external snapshot tuple
-are still durable and inspectable.
+External repositories are acquired after bootstrap through explicit userland
+`git.importProject()` calls. Each exact source produces a semantic candidate;
+ordinary compare, integrate, check, commit, and explicit publication are still
+required before that project becomes shared workspace source. Upstream
+declarations describe ongoing synchronization and never trigger host startup
+imports.
 
 ## Approvals
 
@@ -216,19 +204,21 @@ Retry the same import when nothing persisted. If rollback itself failed, status
 reports `not-materialized`; retry the import or explicitly detach the upstream
 and remote. Never treat a configured-but-uncloned path as imported content.
 Successful config changes queue immediate provider reconciliation without
-waiting for provider readiness; provider startup retries the same declarations.
+waiting for provider readiness.
 
 ## Private Repos
 
-Startup auto-import has no interactive `credentialId` argument. Public repos can
-usually import without extra input. Private repos may fail at startup unless the
-host can resolve a usable credential automatically.
+Git operations resolve a declaration's logical credential through the
+profile-local binding table. Declarations without one are attempted
+anonymously first; private repositories require an explicit userland account
+connection or a call-scoped credential override.
 
 For private repos, prefer one of these paths:
 
-- call `git.importProject({ ..., credentialId })` when first adding the repo
-- if the config declaration already exists and startup failed, run
-  `git.completeWorkspaceDependencies({ credentialId })` as the retry path
+- call `git.importProject({ ... })` when first adding the repo; any credential
+  override applies only to that call
+- connect the account through the ordinary credential surface, then use its
+  logical name in the declaration
 
 Do not expose PATs to userland code. For direct Git smart HTTP operations, use
 `@vibestudio/git` with `credentials.gitHttp()` so credentials remain

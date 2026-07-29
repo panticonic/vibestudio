@@ -37,6 +37,14 @@ Owner workflows remain authoritative:
 - Credential inspection/revocation and agent grants open their distinct About
   pages.
 
+Template catalog selections are a separate typed route. Render
+`TemplateCatalog.tsx`, then pass its complete interaction through
+`executeTemplateSelection`. Follow the [templates skill](../templates/SKILL.md):
+it inspects before add and uses the ordinary protected-publication approval card. The client does
+not look up versions or install anything itself. Pass the cached verified
+`TemplateCatalogSnapshot` from the userland template composer as the component's
+`catalog` prop; catalog selections carry that snapshot's `revision`.
+
 After any check or workflow outcome, call the composer through `client_eval`
 again and render a new observation. A Google/GitHub check passes the selected
 ID as `verifyCapabilityId`. Do not update an old card optimistically.

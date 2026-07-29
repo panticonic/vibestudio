@@ -1,16 +1,17 @@
-import { browserData, createDurableObjectServiceClient, extensions } from "@workspace/runtime";
+import {
+  browserData,
+  callMain,
+  createDurableObjectServiceClient,
+  credentials,
+  extensions,
+  type StoredCredentialSummary,
+} from "@workspace/runtime";
 import {
   MODEL_SETTINGS_SERVICE_PROTOCOL,
   type ModelSettingsSnapshot,
 } from "@workspace/model-catalog/catalog";
-import {
-  getGoogleOnboardingStatus,
-  type GoogleOnboardingStatus,
-} from "@workspace-skills/google-workspace";
-import { getGitHubOnboardingStatus, type GitHubOnboardingStatus } from "@workspace-skills/github";
-import { getActiveSearchProvider } from "@workspace-skills/web-research";
+import type { LocalModelEntry, LocalModelsStatus } from "@workspace/model-catalog/localModels";
 import type { ImportJobSnapshot } from "@vibestudio/browser-data";
-import type { LocalModelEntry, LocalModelsStatus } from "../../extensions/local-models/types";
 import type { SetupPresentationState } from "./catalog";
 
 export interface CapabilityOnboardingStatusResult {
@@ -25,6 +26,21 @@ export type CapabilityOnboardingStatusAdapter = (opts?: {
   verify?: boolean;
 }) => Promise<CapabilityOnboardingStatusResult>;
 
+export interface GoogleOnboardingStatus {
+  stage: "needs-setup" | "ready-to-connect" | "connected" | "verified" | "error";
+  connected: boolean;
+  email?: string;
+  verification?: { valid: boolean };
+}
+
+export interface GitHubOnboardingStatus {
+  stage: "needs-token" | "connected" | "verified" | "error";
+  connected: boolean;
+  verified: boolean;
+  login?: string;
+  verification?: { valid: boolean };
+}
+
 export interface OnboardingStatusDependencies {
   google(opts?: { verify?: boolean }): Promise<GoogleOnboardingStatus>;
   github(opts?: { verify?: boolean }): Promise<GitHubOnboardingStatus>;
@@ -33,13 +49,119 @@ export interface OnboardingStatusDependencies {
   localModelsList(): Promise<LocalModelEntry[]>;
   browserImportJobs(): Promise<ImportJobSnapshot[]>;
   activeSearchProvider(): Promise<"duckduckgo" | "tavily" | "brave" | "exa">;
+  hasSkill(skillPath: string): Promise<boolean>;
+}
+
+interface SkillCatalogEntry {
+  skillPath: string;
+}
+
+function activeCredentials(
+  all: readonly StoredCredentialSummary[],
+  providerIds: readonly string[]
+): StoredCredentialSummary[] {
+  return all.filter(
+    (credential) =>
+      !credential.revokedAt &&
+      typeof credential.metadata?.["providerId"] === "string" &&
+      providerIds.includes(credential.metadata["providerId"])
+  );
+}
+
+async function googleStatus(opts: { verify?: boolean } = {}): Promise<GoogleOnboardingStatus> {
+  const [config, all] = await Promise.all([
+    credentials.getClientConfigStatus({ configId: "google-workspace" }),
+    credentials.listStoredCredentials(),
+  ]);
+  const primary = activeCredentials(all, ["google-workspace"])[0];
+  if (!primary) {
+    return {
+      stage: config.configured ? "ready-to-connect" : "needs-setup",
+      connected: false,
+    };
+  }
+  if (!opts.verify) {
+    return {
+      stage: "connected",
+      connected: true,
+      ...(primary.accountIdentity?.email ? { email: primary.accountIdentity.email } : {}),
+    };
+  }
+  const response = await credentials.fetch(
+    "https://www.googleapis.com/oauth2/v3/userinfo",
+    { method: "GET" },
+    { credentialId: primary.id }
+  );
+  if (!response.ok) {
+    return { stage: "connected", connected: true, verification: { valid: false } };
+  }
+  const profile = (await response.json()) as { email?: unknown };
+  return {
+    stage: "verified",
+    connected: true,
+    verification: { valid: true },
+    ...(typeof profile.email === "string" ? { email: profile.email } : {}),
+  };
+}
+
+async function githubStatus(opts: { verify?: boolean } = {}): Promise<GitHubOnboardingStatus> {
+  const primary = activeCredentials(await credentials.listStoredCredentials(), ["github"])[0];
+  if (!primary) {
+    return { stage: "needs-token", connected: false, verified: false };
+  }
+  if (!opts.verify) {
+    return {
+      stage: "connected",
+      connected: true,
+      verified: false,
+      ...(primary.accountIdentity?.username ? { login: primary.accountIdentity.username } : {}),
+    };
+  }
+  const response = await credentials.fetch(
+    "https://api.github.com/user",
+    { method: "GET", headers: { accept: "application/vnd.github+json" } },
+    { credentialId: primary.id }
+  );
+  if (!response.ok) {
+    return {
+      stage: "connected",
+      connected: true,
+      verified: false,
+      verification: { valid: false },
+    };
+  }
+  const profile = (await response.json()) as { login?: unknown };
+  return {
+    stage: "verified",
+    connected: true,
+    verified: true,
+    verification: { valid: true },
+    ...(typeof profile.login === "string" ? { login: profile.login } : {}),
+  };
+}
+
+async function activeSearchProvider(): Promise<"duckduckgo" | "tavily" | "brave" | "exa"> {
+  const providers = new Set(
+    activeCredentials(await credentials.listStoredCredentials(), ["tavily", "brave", "exa"]).map(
+      (credential) => credential.metadata?.["providerId"]
+    )
+  );
+  if (providers.has("tavily")) return "tavily";
+  if (providers.has("brave")) return "brave";
+  if (providers.has("exa")) return "exa";
+  return "duckduckgo";
 }
 
 export function createDefaultStatusDependencies(): OnboardingStatusDependencies {
   const modelSettings = createDurableObjectServiceClient(MODEL_SETTINGS_SERVICE_PROTOCOL);
+  let installedSkills: Promise<ReadonlySet<string>> | undefined;
+  const skills = () =>
+    (installedSkills ??= callMain<SkillCatalogEntry[]>("workspace.listSkills").then(
+      (entries) => new Set(entries.map((entry) => entry.skillPath))
+    ));
   return {
-    google: getGoogleOnboardingStatus,
-    github: getGitHubOnboardingStatus,
+    google: googleStatus,
+    github: githubStatus,
     modelSettings: () => modelSettings.call<ModelSettingsSnapshot>("getSettings"),
     localModelsStatus: () =>
       extensions.invoke(
@@ -52,7 +174,8 @@ export function createDefaultStatusDependencies(): OnboardingStatusDependencies 
         LocalModelEntry[]
       >,
     browserImportJobs: () => browserData.listImportJobs(),
-    activeSearchProvider: getActiveSearchProvider,
+    activeSearchProvider,
+    hasSkill: async (skillPath) => (await skills()).has(skillPath),
   };
 }
 
@@ -306,15 +429,25 @@ export function createStatusAdapters(
 ): Readonly<Record<string, CapabilityOnboardingStatusAdapter>> {
   return {
     "google-workspace": async (opts) =>
-      googleResult(await deps.google({ verify: opts?.verify === true }), opts?.verify === true),
+      (await deps.hasSkill("skills/google-workspace/SKILL.md"))
+        ? googleResult(await deps.google({ verify: opts?.verify === true }), opts?.verify === true)
+        : unavailable("Google Workspace is not installed in this workspace.", "not-installed"),
     github: async (opts) =>
-      githubResult(await deps.github({ verify: opts?.verify === true }), opts?.verify === true),
+      (await deps.hasSkill("skills/github/SKILL.md"))
+        ? githubResult(await deps.github({ verify: opts?.verify === true }), opts?.verify === true)
+        : unavailable("GitHub setup is not installed in this workspace.", "not-installed"),
     "ai-provider": async () => aiProviderResult(await deps.modelSettings()),
     "agent-defaults": async () => agentDefaultsResult(await deps.modelSettings()),
     "local-models": async () =>
       localModelsResult(await deps.localModelsStatus(), await deps.localModelsList()),
     "browser-environment": async () => browserImportResult(await deps.browserImportJobs()),
     "web-search": async () => {
+      if (!(await deps.hasSkill("skills/web-research/SKILL.md"))) {
+        return unavailable(
+          "Enhanced web search is not installed in this workspace.",
+          "not-installed"
+        );
+      }
       const provider = await deps.activeSearchProvider();
       return provider === "duckduckgo"
         ? {

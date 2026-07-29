@@ -113,7 +113,7 @@ export interface ProvenanceToolDiagnostic {
     "session",
     "managed repository or file path",
     "event/application/applied-change/work-unit/change/decision/command identity",
-    "exact typed root"
+    "exact typed root",
   ];
 }
 
@@ -194,6 +194,8 @@ function rootLabel(root: VcsSemanticNodeRef): string {
   switch (root.kind) {
     case "event":
       return root.eventId;
+    case "external-delta":
+      return root.deltaId;
     case "application":
       return root.applicationId;
     case "applied-change":

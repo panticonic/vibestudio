@@ -1227,16 +1227,6 @@ export const METHOD_TIERS = {
     session: "family",
     rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
   },
-  "gitInterop.completeWorkspaceDependencies": {
-    tier: "gated",
-    session: "family",
-    rationale: "G1: external-system effect or listening surface; §2 default {code, session} family",
-  },
-  "gitInterop.createDisposableRemote": {
-    tier: "gated",
-    session: "family",
-    rationale: "G1: external-system effect or listening surface; §2 default {code, session} family",
-  },
   "gitInterop.detachUpstream": {
     tier: "gated",
     session: "family",
@@ -1247,38 +1237,30 @@ export const METHOD_TIERS = {
     session: "family",
     rationale: "G1: external-system effect or listening surface; §2 default {code, session} family",
   },
-  "gitInterop.inspectDisposableRemote": {
-    tier: "open",
-    session: "family",
-    rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-  },
   "gitInterop.publishRepo": {
     tier: "open",
     session: "family",
     rationale:
       "The transport is open; code callers receive one prepared gated git.publish leaf scoped to the exact external repository",
   },
-  "gitInterop.publishToDisposableRemote": {
+  "gitInterop.pushTemplateContribution": {
     tier: "gated",
     session: "family",
-    rationale: "G1: external-system effect or listening surface; §2 default {code, session} family",
+    rationale:
+      "Pushes one externally visible branch through a prepared git.publish leaf whose resource binds the exact destination, protected-main event, template base, and selected subtrees",
+  },
+  "gitInterop.publishTemplate": {
+    tier: "gated",
+    session: "family",
+    rationale:
+      "Creates an externally visible template repository and immutable release through a prepared git.publish leaf bound to the exact destination, protected-main event, manifest, and selected subtrees",
   },
   "gitInterop.pullUpstream": {
     tier: "gated",
     session: "family",
     rationale: "G1: external-system effect or listening surface; §2 default {code, session} family",
   },
-  "gitInterop.pushDisposableRemote": {
-    tier: "gated",
-    session: "family",
-    rationale: "G1: external-system effect or listening surface; §2 default {code, session} family",
-  },
   "gitInterop.pushUpstream": {
-    tier: "gated",
-    session: "family",
-    rationale: "G1: external-system effect or listening surface; §2 default {code, session} family",
-  },
-  "gitInterop.removeDisposableRemote": {
     tier: "gated",
     session: "family",
     rationale: "G1: external-system effect or listening surface; §2 default {code, session} family",
@@ -2146,6 +2128,12 @@ export const METHOD_TIERS = {
     session: "family",
     rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
   },
+  "runtime.listContexts": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "Read-only discovery of semantic context ids exposes no context content or mutation authority; §2 default {code, session} family",
+  },
   "runtime.listOwnedContexts": {
     tier: "open",
     session: "family",
@@ -2361,6 +2349,12 @@ export const METHOD_TIERS = {
     rationale:
       "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
   },
+  "vcs.finalizeExternalDelta": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+  },
   "vcs.history": {
     tier: "open",
     session: "family",
@@ -2368,6 +2362,12 @@ export const METHOD_TIERS = {
       "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
   },
   "vcs.importSnapshot": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+  },
+  "vcs.registerExternalDelta": {
     tier: "open",
     session: "family",
     rationale:
@@ -2440,6 +2440,12 @@ export const METHOD_TIERS = {
       "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
   },
   "vcs.status": {
+    tier: "open",
+    session: "family",
+    rationale:
+      "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+  },
+  "vcs.supersedeExternalDelta": {
     tier: "open",
     session: "family",
     rationale:

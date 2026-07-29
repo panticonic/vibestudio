@@ -484,6 +484,8 @@ export const workspaceMethods = defineServiceMethods({
       "Filesystem paths (source, state, contexts) and resolved config for the active workspace.",
     args: z.tuple([]),
     returns: z.object({
+      id: z.string().min(1).describe("Opaque host-owned identity of the active workspace."),
+      name: z.string().min(1).describe("User-facing catalog name of the active workspace."),
       path: z.string().describe("Absolute path to the workspace source tree."),
       statePath: z.string().describe("Absolute path to the workspace's persisted state directory."),
       contextProjectionsPath: z
@@ -509,7 +511,7 @@ export const workspaceMethods = defineServiceMethods({
   },
   validateConfig: {
     description:
-      "Validate complete meta/vibestudio.yml content against the current host schema without changing workspace state.",
+      "Validate a complete flattened workspace runtime manifest without changing workspace state.",
     args: z.tuple([z.string().describe("Complete YAML document to validate.")]),
     returns: z.object({ valid: z.literal(true) }).strict(),
     authority: { principals: ["user", "code", "host"] },

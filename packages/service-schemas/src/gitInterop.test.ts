@@ -12,6 +12,8 @@ const SEMANTIC_EVIDENCE = {
     sourceKind: "git" as const,
     sourceUri: "https://example.test/demo.git",
     snapshotRevision: "a".repeat(40),
+    sourceSubdir: null,
+    canonicalSnapshot: `v1-sha256:${"c".repeat(64)}`,
     snapshotDigest: `snapshot:${"b".repeat(64)}`,
     targetRepositoryIds: ["repository:demo"],
   },
@@ -30,22 +32,18 @@ describe("gitInterop canonical contract", () => {
       "pushUpstream",
       "pullUpstream",
       "publishRepo",
-      "createDisposableRemote",
-      "publishToDisposableRemote",
-      "pushDisposableRemote",
-      "inspectDisposableRemote",
-      "removeDisposableRemote",
       "commitMapping",
       "importProject",
-      "completeWorkspaceDependencies",
+      "pushTemplateContribution",
+      "publishTemplate",
     ]);
   });
 
-  it("models automatic, explicit, and anonymous Git credential selection distinctly", () => {
-    for (const credentialId of [undefined, "credential:github", null]) {
+  it("models portable logical and anonymous Git credential selection distinctly", () => {
+    for (const credential of [undefined, "github-main"]) {
       const upstream = {
         remote: "origin",
-        ...(credentialId !== undefined ? { credentialId } : {}),
+        ...(credential !== undefined ? { credential } : {}),
       };
       expect(
         gitInteropMethods.setUpstream.args.safeParse(["projects/demo", upstream]).success
@@ -57,8 +55,7 @@ describe("gitInterop canonical contract", () => {
     const base = {
       exported: 1,
       headCommit: "abc",
-      pushed: true,
-      status: "in-sync",
+      outcome: "pushed",
     };
     expect(
       gitInteropMethods.pushUpstream.returns.safeParse({
@@ -84,35 +81,14 @@ describe("gitInterop canonical contract", () => {
     ).toBe(false);
   });
 
-  it("exposes a strict stepwise disposable-remote push", () => {
-    expect(
-      gitInteropMethods.pushDisposableRemote.args.safeParse([
-        "projects/demo",
-        "http://vibestudio.local/_disposable-git/id/demo.git",
-        "main",
-      ]).success
-    ).toBe(true);
-    expect(
-      gitInteropMethods.pushDisposableRemote.args.safeParse([
-        {
-          repoPath: "projects/demo",
-          url: "http://vibestudio.local/_disposable-git/id/demo.git",
-          branch: "main",
-        },
-      ]).success
-    ).toBe(false);
-  });
-
   it("accepts only array-based status queries", () => {
     expect(gitInteropMethods.upstreamStatus.args.safeParse([[]]).success).toBe(true);
     expect(
-      gitInteropMethods.upstreamStatus.args.safeParse([
-        ["projects/demo"],
-        { fetch: true, ttlMs: 60_000 },
-      ]).success
+      gitInteropMethods.upstreamStatus.args.safeParse([["projects/demo"], { branch: "release" }])
+        .success
     ).toBe(true);
     expect(
-      gitInteropMethods.upstreamStatus.args.safeParse([["projects/demo"], { ttlMs: -1 }]).success
+      gitInteropMethods.upstreamStatus.args.safeParse([["projects/demo"], { fetch: true }]).success
     ).toBe(false);
     expect(gitInteropMethods.upstreamStatus.args.safeParse([]).success).toBe(false);
     expect(gitInteropMethods.upstreamStatus.args.safeParse(["projects/demo", {}]).success).toBe(
@@ -121,7 +97,7 @@ describe("gitInterop canonical contract", () => {
     expect(gitInteropMethods.upstreamStatus.args.safeParse([null, {}]).success).toBe(false);
     expect(gitInteropMethods.upstreamStatus.args.safeParse([undefined]).success).toBe(false);
     expect(gitInteropMethods.upstreamStatus.description).toContain(
-      "git.upstreamStatus([imported.path], { fetch: false })"
+      "git.upstreamStatus([imported.path])"
     );
   });
 
@@ -131,7 +107,6 @@ describe("gitInterop canonical contract", () => {
       [gitInteropMethods.pushUpstream.args, ["projects/demo"]],
       [gitInteropMethods.pullUpstream.args, ["projects/demo"]],
       [gitInteropMethods.upstreamStatus.args, [[]]],
-      [gitInteropMethods.completeWorkspaceDependencies.args, []],
     ] as const;
 
     for (const [schema, args] of calls) {
@@ -149,9 +124,6 @@ describe("gitInterop canonical contract", () => {
     ).toBe(false);
     expect(
       gitInteropMethods.pullUpstream.args.safeParse(["projects/demo", undefined]).success
-    ).toBe(false);
-    expect(
-      gitInteropMethods.completeWorkspaceDependencies.args.safeParse([undefined]).success
     ).toBe(false);
   });
 
@@ -250,6 +222,25 @@ describe("gitInterop canonical contract", () => {
         projects: { demo: null },
       }).success
     ).toBe(false);
+    expect(
+      gitInteropMethods.setUpstream.returns.safeParse({
+        projects: { demo: { remote: "origin" } },
+      }).success
+    ).toBe(true);
+    expect(
+      gitInteropMethods.setUpstream.returns.safeParse({
+        projects: {
+          demo: {
+            remote: "origin",
+            seed: {
+              ref: "refs/tags/v1",
+              commit: "a".repeat(40),
+              snapshot: `v1-sha256:${"b".repeat(64)}`,
+            },
+          },
+        },
+      }).success
+    ).toBe(false);
   });
 
   it("accepts one strict publish input and rejects legacy options", () => {
@@ -266,6 +257,26 @@ describe("gitInterop canonical contract", () => {
       gitInteropMethods.publishRepo.args.safeParse([{ repoPath: "projects/demo", dryRun: true }])
         .success
     ).toBe(false);
+  });
+
+  it("binds template contributions to one exact protected-main event", () => {
+    const request = {
+      operationId: "suggest-1",
+      nodeId: "t-abcdef",
+      alias: "news",
+      url: "https://github.com/acme/news.git",
+      baseCommit: "a".repeat(40),
+      expectedMainEventId: "event:main",
+      parts: [{ repoPath: "panels/news", subdir: "panels/news" }],
+    };
+    expect(gitInteropMethods.pushTemplateContribution.args.safeParse([request]).success).toBe(true);
+    const { expectedMainEventId: _expectedMainEventId, ...unbound } = request;
+    expect(gitInteropMethods.pushTemplateContribution.args.safeParse([unbound]).success).toBe(
+      false
+    );
+    expect(gitInteropMethods.pushTemplateContribution.authority?.prepared?.resolver).toBe(
+      "gitInterop.pushTemplateContribution.destination"
+    );
   });
 
   it("requires the provider's complete publish result", () => {
@@ -293,8 +304,11 @@ describe("gitInterop canonical contract", () => {
       branch: "main",
       autoPush: false,
       state: "ahead",
+      relationship: "ahead",
       aheadBy: 1,
       behindBy: 0,
+      remoteBranchExists: true,
+      observedAt: 1,
     };
     expect(gitInteropMethods.upstreamStatus.returns.safeParse([row]).success).toBe(true);
     expect(
@@ -314,8 +328,6 @@ describe("gitInterop canonical contract", () => {
           branch: "main",
           autoPush: true,
           state: "integration-required",
-          aheadBy: 0,
-          behindBy: 0,
           candidate: { contextId: "git-bridge-demo", eventId: "event:candidate" },
         },
       ]).success
@@ -329,7 +341,8 @@ describe("gitInterop canonical contract", () => {
       "pullUpstream",
       "publishRepo",
       "commitMapping",
-      "pushDisposableRemote",
+      "pushTemplateContribution",
+      "publishTemplate",
       "cloneRepo",
       "remoteDefaultBranch",
       "reconcileUpstreams",
@@ -384,7 +397,9 @@ describe("gitInterop canonical contract", () => {
       ]).success
     ).toBe(false);
     expect(
-      gitInteropProviderMethods.reconcileUpstreams.args.safeParse([["projects/demo"]]).success
+      gitInteropProviderMethods.reconcileUpstreams.args.safeParse([
+        [{ repoPath: "projects/demo", credentialIdOverride: "credential-1" }],
+      ]).success
     ).toBe(true);
     expect(
       gitInteropProviderMethods.reconcileUpstreams.returns.safeParse({ queued: 1, ignored: false })

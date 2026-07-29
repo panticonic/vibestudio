@@ -357,7 +357,10 @@ export interface AcquisitionInfo {
   capability: string;
   resourceKey: string;
   tier: "gated" | "critical";
-  cardType: "permission.gated" | "permission.outside" | "confirm.critical";
+  cardType:
+    | "permission.gated"
+    | "permission.outside"
+    | "confirm.critical";
   renderedAction: string;
   pending: boolean;
   /** The host has minted an exact invocation grant; the receiver may retry
@@ -426,7 +429,10 @@ export interface AuthorityPreflightResult {
   leaves: AuthorityPreflightLeaf[];
   severityPreview?: "routine" | "sensitive" | "critical";
   wouldPrompt?: {
-    cardType: "permission.gated" | "permission.outside" | "confirm.critical";
+    cardType:
+      | "permission.gated"
+      | "permission.outside"
+      | "confirm.critical";
     renderedAction: string;
   };
 }

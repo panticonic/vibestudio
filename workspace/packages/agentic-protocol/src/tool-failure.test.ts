@@ -107,4 +107,16 @@ describe("agent tool failure contract", () => {
     });
     expect(JSON.stringify(failure).length).toBeLessThan(20_000);
   });
+
+  it("classifies invalid read paths as correctable input, not missing authority", () => {
+    const failure = agentToolFailureFromUnknown(
+      new Error('[fs.access] Invalid workspace repo path: "packages/maybe?"'),
+      { operation: "tool.read", stage: "execute" }
+    );
+    expect(failure).toMatchObject({
+      kind: "invalid-input",
+      retry: { policy: "correct-input" },
+    });
+    expect(renderAgentToolFailure(failure)).toContain("Correct the request");
+  });
 });

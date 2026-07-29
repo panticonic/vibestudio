@@ -373,14 +373,14 @@ describe("github skill facade", () => {
       upstreamStatus("projects/demo", {
         remote: "origin",
         branch: "main",
-        credentialId: "cred-github",
+        credentialIdOverride: "cred-github",
       })
     ).resolves.toEqual(row);
 
     expect(runtimeMock.git.upstreamStatus).toHaveBeenCalledWith(["projects/demo"], {
       remote: "origin",
       branch: "main",
-      credentialId: "cred-github",
+      credentialIdOverride: "cred-github",
     });
   });
 

@@ -2825,22 +2825,6 @@
           "sensitivity": "read"
         }
       },
-      "completeWorkspaceDependencies": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "createDisposableRemote": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
       "detachUpstream": {
         "authority": {
           "inherits": true
@@ -2855,14 +2839,6 @@
         },
         "access": {
           "sensitivity": "write"
-        }
-      },
-      "inspectDisposableRemote": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
         }
       },
       "publishRepo": {
@@ -2970,9 +2946,106 @@
           "sensitivity": "write"
         }
       },
-      "publishToDisposableRemote": {
+      "publishTemplate": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "git.publish"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "git.publish"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "git.publish"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "git.publish"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "git.publish"
+          },
+          "prepared": {
+            "resolver": "gitInterop.publishTemplate.destination",
+            "leaves": [
+              {
+                "capability": "git.publish",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "git.publish"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "git.publish"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
@@ -2986,23 +3059,112 @@
           "sensitivity": "write"
         }
       },
-      "pushDisposableRemote": {
+      "pushTemplateContribution": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "git.publish"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "git.publish"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "git.publish"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "git.publish"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "git.publish"
+          },
+          "prepared": {
+            "resolver": "gitInterop.pushTemplateContribution.destination",
+            "leaves": [
+              {
+                "capability": "git.publish",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "git.publish"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "git.publish"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
         }
       },
       "pushUpstream": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "removeDisposableRemote": {
         "authority": {
           "inherits": true
         },
@@ -7856,6 +8018,18 @@
           "rationale": "Hidden system-test transport; the host additionally verifies the attested harness incarnation and exact target entity."
         }
       },
+      "listContexts": {
+        "authority": {
+          "principals": [
+            "code",
+            "host",
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        }
+      },
       "listEntities": {
         "authority": {
           "principals": [
@@ -8388,6 +8562,14 @@
           "sensitivity": "write"
         }
       },
+      "finalizeExternalDelta": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
       "history": {
         "authority": {
           "inherits": true
@@ -8476,6 +8658,14 @@
           "sensitivity": "read"
         }
       },
+      "registerExternalDelta": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        }
+      },
       "resolveRepository": {
         "authority": {
           "inherits": true
@@ -8498,6 +8688,14 @@
         },
         "access": {
           "sensitivity": "read"
+        }
+      },
+      "supersedeExternalDelta": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
         }
       }
     }

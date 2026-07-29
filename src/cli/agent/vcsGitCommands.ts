@@ -57,7 +57,7 @@ const GIT_DRY_RUN_FLAG: FlagSpec = {
   name: "dry-run",
   takesValue: false,
   description:
-    "Preview incoming commits in a disposable checkout without changing managed or semantic state",
+    "Preview incoming commits in an isolated temporary checkout without changing managed or semantic state",
 };
 
 const GIT_NAME_FLAG: FlagSpec = {
@@ -191,18 +191,28 @@ function optionalFlagString(inv: ParsedInvocation, name: string): string | undef
   return typeof value === "string" && value ? value : undefined;
 }
 
-function gitCredentialSelection(inv: ParsedInvocation): { credentialId?: string | null } {
-  const credentialId = optionalFlagString(inv, "credential");
+type GitCredentialSelection =
+  | { kind: "automatic" }
+  | { kind: "anonymous" }
+  | { kind: "credential"; value: string };
+
+function gitCredentialSelection(inv: ParsedInvocation): GitCredentialSelection {
+  const credential = optionalFlagString(inv, "credential");
   const anonymous = inv.flags["anonymous"] === true;
-  if (credentialId && anonymous) {
+  if (credential && anonymous) {
     throw new UsageError("--credential and --anonymous are mutually exclusive");
   }
-  if (anonymous) return { credentialId: null };
-  return credentialId ? { credentialId } : {};
+  if (anonymous) return { kind: "anonymous" };
+  return credential ? { kind: "credential", value: credential } : { kind: "automatic" };
 }
 
 function isActionableGitState(state: GitUpstreamState): boolean {
-  return state === "diverged" || state === "auth-failed" || state === "error";
+  return (
+    state === "diverged" ||
+    state === "integration-required" ||
+    state === "auth-failed" ||
+    state === "error"
+  );
 }
 
 function shortSha(value: string | null | undefined): string {
@@ -222,24 +232,34 @@ function renderGitStatusHuman(rows: GitUpstreamStatusRow[]): void {
       row.remote && row.branch ? `${row.remote} ${row.branch}` : "(no upstream remote)";
     const state =
       row.state === "ahead"
-        ? `ahead ${row.aheadBy}`
+        ? row.aheadBy === undefined
+          ? "ahead"
+          : `ahead ${row.aheadBy}`
         : row.state === "behind"
-          ? `behind ${row.behindBy}`
+          ? row.behindBy === undefined
+            ? "behind"
+            : `behind ${row.behindBy}`
           : row.state === "diverged"
             ? "DIVERGED"
-            : row.state;
+            : row.state === "integration-required"
+              ? "INTEGRATION REQUIRED"
+              : row.state;
     const pushInfo =
       row.state === "in-sync"
-        ? `pushed ${formatRelativeTime(row.lastPushedAt)} (${shortSha(row.lastPushedSha)})`
+        ? row.lastSuccessfulPushAt && row.lastSuccessfulPushCommit
+          ? `last pushed ${formatRelativeTime(row.lastSuccessfulPushAt)} (${shortSha(row.lastSuccessfulPushCommit)})`
+          : "observed in sync"
         : row.state === "ahead"
           ? `${row.autoPush ? "auto-push pending" : `auto-push off - \`vibestudio vcs git push --repo ${row.repoPath}\``}`
           : row.state === "behind"
             ? `upstream +${row.behindBy} - \`vibestudio vcs git pull --repo ${row.repoPath}\``
             : row.state === "diverged"
               ? `upstream +${row.behindBy} / local +${row.aheadBy} - \`vibestudio vcs git pull --repo ${row.repoPath}\` or \`vibestudio vcs git push --repo ${row.repoPath} --force\``
-              : row.state === "local-only"
-                ? "`vibestudio vcs git remote set` or `vibestudio vcs git publish`"
-                : (row.lastError ?? "");
+              : row.state === "integration-required" && row.candidate
+                ? `candidate ${row.candidate.eventId} in ${row.candidate.contextId}; protected main unchanged - compare, integrate, check, commit, then \`vibestudio vcs push\``
+                : row.state === "local-only"
+                  ? "`vibestudio vcs git remote set` or `vibestudio vcs git publish`"
+                  : (row.error ?? row.lastFailureReason ?? "");
     console.log(`${row.repoPath.padEnd(24)} ${state.padEnd(12)} ${remote.padEnd(18)} ${pushInfo}`);
   }
 }
@@ -248,11 +268,7 @@ async function gitStatus(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const repos = collectOptionalRepos(inv);
-    // One-shot CLI invocation: fetch so ahead/behind reflects the remote now.
-    const rows = await invokeGitInterop<GitUpstreamStatusRow[]>("upstreamStatus", [
-      repos,
-      { fetch: true },
-    ]);
+    const rows = await invokeGitInterop<GitUpstreamStatusRow[]>("upstreamStatus", [repos]);
     printResult(rows, { json, human: () => renderGitStatusHuman(rows) });
     return rows.some((row) => isActionableGitState(row.state)) ? EXIT_ERROR : 0;
   } catch (error) {
@@ -269,7 +285,7 @@ async function gitEnable(inv: ParsedInvocation): Promise<number> {
       remote: optionalFlagString(inv, "remote") ?? "origin",
       ...(optionalFlagString(inv, "branch") ? { branch: optionalFlagString(inv, "branch") } : {}),
       autoPush: inv.flags["auto-push"] === true,
-      ...credential,
+      ...(credential.kind === "credential" ? { credential: credential.value } : {}),
     };
     const result = await invokeGitInterop("setUpstream", [repo, upstream]);
     printResult(result, {
@@ -284,10 +300,10 @@ async function gitEnable(inv: ParsedInvocation): Promise<number> {
             : `auto-push: off - enable with \`vibestudio vcs git auto --repo ${repo}\``
         );
         console.log(
-          upstream.credentialId === null
+          credential.kind === "anonymous"
             ? "credentials: anonymous"
-            : upstream.credentialId
-              ? `credentials: ${upstream.credentialId}`
+            : credential.kind === "credential"
+              ? `credentials: ${credential.value}`
               : "credentials: resolve automatically from the remote URL"
         );
       },
@@ -382,18 +398,24 @@ async function gitPush(inv: ParsedInvocation): Promise<number> {
       human: () => {
         printOverwritePreview(result.overwrites);
         printClobberedLocalEdits(result.clobberedLocalEdits);
-        if (result.pushed) {
-          console.log(`pushed ${repo} (${shortSha(result.headCommit)})`);
+        if (result.outcome === "pushed" || result.outcome === "remote-missing-created") {
+          console.log(
+            `${result.outcome === "remote-missing-created" ? "created remote branch for" : "pushed"} ${repo} (${shortSha(result.headCommit)})`
+          );
           if (result.exported > 0)
             console.log(`exported ${result.exported} gad commit(s) as git history`);
-        } else if (result.status === "empty") {
+        } else if (result.outcome === "empty") {
           console.log(`${repo} has no published gad history to push`);
+        } else if (result.outcome === "remote-advanced") {
+          console.log(
+            `${repo} was not pushed: remote ${result.relationship} at ${shortSha(result.remoteHead)}`
+          );
         } else {
           console.log(`${repo} already in sync`);
         }
       },
     });
-    return isActionableGitState(result.status) ? EXIT_ERROR : 0;
+    return result.outcome === "remote-advanced" ? EXIT_ERROR : 0;
   } catch (error) {
     return printError(error, { json });
   }
@@ -412,6 +434,10 @@ async function gitPull(inv: ParsedInvocation): Promise<number> {
       json,
       human: () => {
         printClobberedLocalEdits(result.clobberedLocalEdits);
+        console.log(
+          `observed ${result.remote}/${result.branch} at ${result.observedCommit ?? "missing"}`
+        );
+        console.log(`semantic snapshot changed: ${result.changed ? "yes" : "no"}`);
         if (result.incoming.length === 0) {
           console.log(`${repo} has no incoming upstream commits`);
         } else {
@@ -426,7 +452,10 @@ async function gitPull(inv: ParsedInvocation): Promise<number> {
             `imported upstream changes as semantic candidate ${result.imported.eventId} ` +
               `in context ${result.imported.contextId}`
           );
-          console.log("compare and incrementally integrate that candidate before publishing main");
+          console.log("protected main is unchanged");
+          console.log(
+            "next: compare and incrementally integrate that candidate, run checks, commit the integration, then publish protected main with `vibestudio vcs push`"
+          );
         }
       },
     });
@@ -483,28 +512,40 @@ async function gitImport(inv: ParsedInvocation): Promise<number> {
       {
         path: repoPath,
         remote: { name: "origin", url, ...(branch ? { branch } : {}) },
-        ...credential,
+        ...(credential.kind === "anonymous"
+          ? { credentialIdOverride: null }
+          : credential.kind === "credential"
+            ? { credentialIdOverride: credential.value }
+            : {}),
       },
     ]);
     printResult(result, {
       json,
       human: () => {
-        console.log(`imported ${repoPath} from ${url}${branch ? ` (branch ${branch})` : ""}`);
+        console.log(
+          `imported ${repoPath} from ${result.remote.url} ` +
+            `(branch ${result.remote.branch ?? "remote default"})`
+        );
+        console.log(
+          `  observed commit: ${result.candidate.semanticEvidence.externalSnapshot.snapshotRevision}`
+        );
+        console.log(`  semantic snapshot changed: ${result.candidate.changed ? "yes" : "no"}`);
         console.log(`  tracking: on`);
         console.log(
-          credential.credentialId === null
+          credential.kind === "anonymous"
             ? "  credentials: anonymous"
-            : credential.credentialId
-              ? `  credentials: ${credential.credentialId}`
-              : "  credentials: resolve automatically from the remote URL"
+            : credential.kind === "credential"
+              ? `  credentials: ${credential.value}`
+              : "  credentials: anonymous (no logical credential declared)"
         );
         console.log(
           `  semantic candidate: ${result.candidate.eventId} in context ${result.candidate.contextId}`
         );
         console.log(
-          "  next: compare and incrementally integrate this candidate, commit the integration, " +
-            "then publish protected main with `vibestudio vcs push`"
+          "  next: compare and incrementally integrate this candidate, run checks, commit the " +
+            "integration, then publish protected main with `vibestudio vcs push`"
         );
+        console.log("  protected main is unchanged until that publication");
         console.log("  Git push is available only after that semantic publication");
       },
     });

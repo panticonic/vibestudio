@@ -514,6 +514,54 @@ describe("vibestudio CLI", () => {
     });
   });
 
+  it("creates a workspace only from a caller-supplied exact root-template pin", async () => {
+    writeCredentials();
+    const pin = {
+      url: "https://git.example/docs.git",
+      ref: "refs/tags/v2",
+      commit: "a".repeat(40),
+      snapshot: `v1-sha256:${"b".repeat(64)}`,
+    };
+    const normalizedPin = { ...pin, url: "git+https://git.example/docs.git" };
+    webrtcMock.handlers.set("hubControl.createWorkspace", ([input]) => ({
+      workspaceId: "ws_docs_new",
+      name: (input as { workspace: string }).workspace,
+      lastOpened: 0,
+      running: true,
+    }));
+    const { main } = await import("./client.js");
+
+    await expect(
+      main([
+        "remote",
+        "create-workspace",
+        "docs-new",
+        "--template",
+        pin.url,
+        "--template-ref",
+        pin.ref,
+        "--template-commit",
+        pin.commit,
+        "--template-snapshot",
+        pin.snapshot,
+        "--json",
+      ])
+    ).resolves.toBe(0);
+    expect(jsonOutput()).toMatchObject({
+      workspaceId: "ws_docs_new",
+      name: "docs-new",
+      running: true,
+    });
+    expect(
+      webrtcMock.calls.filter(({ method }) => method === "hubControl.createWorkspace")
+    ).toEqual([
+      expect.objectContaining({
+        method: "hubControl.createWorkspace",
+        args: [{ workspace: "docs-new", rootTemplate: normalizedPin }],
+      }),
+    ]);
+  });
+
   it("rejects workspace selection when the route changes server identity", async () => {
     writeCredentials();
     webrtcMock.handlers.set("hubControl.routeWorkspace", (_args, _room) => ({

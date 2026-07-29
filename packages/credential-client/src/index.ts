@@ -80,6 +80,11 @@ export interface CredentialClient {
      * that credential, or pass null to make an explicitly anonymous request.
      */
     credentialId?: string | null;
+    /**
+     * Portable workspace declaration. The host resolves this name and remote
+     * coordinate without exposing a concrete credential id to extension state.
+     */
+    logicalCredential?: { name: string; remoteUrl: string };
     gitIntent?: ProxyGitHttpRequest["gitIntent"];
   }): GitHttpClient;
   forAudience(descriptor: UrlAudienceDescriptor): Promise<UrlCredentialHandle>;
@@ -203,21 +208,40 @@ async function resolveByAudienceList(
 
 export function createGitHttpClient(
   rpc: RpcCaller,
-  opts?: { credentialId?: string | null; gitIntent?: ProxyGitHttpRequest["gitIntent"] }
+  opts?: {
+    credentialId?: string | null;
+    logicalCredential?: { name: string; remoteUrl: string };
+    gitIntent?: ProxyGitHttpRequest["gitIntent"];
+  }
 ): GitHttpClient {
+  if (opts?.logicalCredential && opts.credentialId !== undefined) {
+    throw new Error("gitHttp accepts either logicalCredential or credentialId, not both");
+  }
   return {
     async request(request) {
       const body = request.body ? await collectGitBody(request.body) : undefined;
-      const result = await rpc.call<ProxyGitHttpResponse>("main", "credentials.proxyGitHttp", [
-        {
-          url: request.url,
-          method: request.method ?? "GET",
-          headers: request.headers ?? {},
-          bodyBase64: body ? bytesToBase64(body) : undefined,
-          credentialId: opts?.credentialId,
-          gitIntent: opts?.gitIntent,
-        } satisfies ProxyGitHttpRequest,
-      ]);
+      const forward = (credentialId: string | null | undefined) =>
+        rpc.call<ProxyGitHttpResponse>("main", "credentials.proxyGitHttp", [
+          {
+            url: request.url,
+            method: request.method ?? "GET",
+            headers: request.headers ?? {},
+            bodyBase64: body ? bytesToBase64(body) : undefined,
+            credentialId,
+            logicalCredential: opts?.logicalCredential,
+            gitIntent: opts?.gitIntent,
+          } satisfies ProxyGitHttpRequest,
+        ]);
+      let result = await forward(
+        opts?.credentialId === undefined && !opts?.logicalCredential ? null : opts?.credentialId
+      );
+      if (
+        opts?.credentialId === undefined &&
+        !opts?.logicalCredential &&
+        (result.statusCode === 401 || result.statusCode === 403)
+      ) {
+        result = await forward(undefined);
+      }
       const responseBody = base64ToBytes(result.bodyBase64);
       return {
         url: result.url,

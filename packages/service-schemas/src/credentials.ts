@@ -773,6 +773,13 @@ export const ResolveCredentialParamsSchema = z
     credentialId: IdentifierSchema.optional().describe(
       "Resolve a specific credential by id instead of by url/provider."
     ),
+    credentialLabel: z
+      .string()
+      .trim()
+      .min(1)
+      .max(256)
+      .optional()
+      .describe("Resolve the unique active credential with this user-owned label."),
     use: z
       .enum(["fetch", "git-http", "git-ssh"])
       .optional()
@@ -819,6 +826,19 @@ export const ProxyGitHttpParamsSchema = z
       .describe(
         "Credential to inject; resolved from the URL when omitted, or explicitly anonymous when null."
       ),
+    logicalCredential: z
+      .object({
+        name: IdentifierSchema.describe("Portable credential name declared by workspace config."),
+        remoteUrl: z
+          .string()
+          .url()
+          .describe("Exact credential-free Git remote URL bound to that logical name."),
+      })
+      .strict()
+      .optional()
+      .describe(
+        "Workspace-portable credential requirement resolved to a concrete credential only at the host boundary."
+      ),
     gitIntent: z
       .object({
         force: z.boolean(),
@@ -846,7 +866,14 @@ export const ProxyGitHttpParamsSchema = z
       .optional()
       .describe("Caller-declared git operation intent for approval copy and grant rules."),
   })
-  .strict();
+  .strict()
+  .refine(
+    (request) => request.logicalCredential === undefined || request.credentialId === undefined,
+    {
+      message:
+        "credentials.proxyGitHttp accepts either a logical credential requirement or credentialId, not both",
+    }
+  );
 
 export const AuditParamsSchema = z
   .object({

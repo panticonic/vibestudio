@@ -98,6 +98,27 @@ function noEffectApplication(input: {
 }
 
 describe("SemanticVcsStore reduced spine", () => {
+  it("enumerates durable contexts by exact prefix in stable order", async () => {
+    const sql = await createInMemorySql();
+    createSemanticVcsSchema(sql);
+    const store = new SemanticVcsStore(sql, () => timestamp);
+    store.initializeWorkspace("main", "command:main");
+    store.initializeWorkspace("template-composer-operation-z", "command:z");
+    store.initializeWorkspace("template-composer-operation-a", "command:a");
+    store.initializeWorkspace("system:other", "command:other");
+
+    expect(store.listContexts("template-composer-operation-")).toEqual([
+      "template-composer-operation-a",
+      "template-composer-operation-z",
+    ]);
+    expect(store.listContexts()).toEqual([
+      "main",
+      "system:other",
+      "template-composer-operation-a",
+      "template-composer-operation-z",
+    ]);
+  });
+
   it("proves exact event and application ancestry with a hard traversal bound", async () => {
     const sql = await createInMemorySql();
     createSemanticVcsSchema(sql);

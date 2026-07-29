@@ -3320,6 +3320,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "direct:workspace/packages/semantic-control-plane/src/index.ts:vcsListContexts",
+    rpcPlane: "workspace-do",
+    capability: "workspace-service:<live-declaration>",
+    authorityPrincipals: ["host"],
+    owner: "workspace/packages/semantic-control-plane/src/index.ts",
+    source: "packages/semantic-control-plane",
+    method: "vcsListContexts",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/packages/semantic-control-plane/src/index.ts",
+    },
+  },
+  {
     id: "direct:workspace/packages/semantic-control-plane/src/index.ts:vcsPendingSemanticEffects",
     rpcPlane: "workspace-do",
     capability: "workspace-service:<live-declaration>",
@@ -7823,32 +7837,6 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:gitInterop.completeWorkspaceDependencies",
-    rpcPlane: "host-service",
-    capability: "service:gitInterop.completeWorkspaceDependencies",
-    authorityPrincipals: ["user", "code", "host"],
-    owner: "gitInterop",
-    method: "completeWorkspaceDependencies",
-    sensitivity: "write",
-    resourceDerivation: {
-      kind: "literal",
-      key: "service:gitInterop.completeWorkspaceDependencies",
-    },
-  },
-  {
-    id: "host:gitInterop.createDisposableRemote",
-    rpcPlane: "host-service",
-    capability: "service:gitInterop.createDisposableRemote",
-    authorityPrincipals: ["user", "code", "host"],
-    owner: "gitInterop",
-    method: "createDisposableRemote",
-    sensitivity: "write",
-    resourceDerivation: {
-      kind: "literal",
-      key: "service:gitInterop.createDisposableRemote",
-    },
-  },
-  {
     id: "host:gitInterop.detachUpstream",
     rpcPlane: "host-service",
     capability: "service:gitInterop.detachUpstream",
@@ -7872,19 +7860,6 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:gitInterop.importProject",
-    },
-  },
-  {
-    id: "host:gitInterop.inspectDisposableRemote",
-    rpcPlane: "host-service",
-    capability: "service:gitInterop.inspectDisposableRemote",
-    authorityPrincipals: ["user", "code", "host"],
-    owner: "gitInterop",
-    method: "inspectDisposableRemote",
-    sensitivity: "read",
-    resourceDerivation: {
-      kind: "literal",
-      key: "service:gitInterop.inspectDisposableRemote",
     },
   },
   {
@@ -7914,16 +7889,29 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:gitInterop.publishToDisposableRemote",
+    id: "host:gitInterop.publishTemplate",
     rpcPlane: "host-service",
-    capability: "service:gitInterop.publishToDisposableRemote",
-    authorityPrincipals: ["user", "code", "host"],
+    capability: "service:gitInterop.publishTemplate",
+    authorityPrincipals: ["code", "host", "session", "user"],
     owner: "gitInterop",
-    method: "publishToDisposableRemote",
+    method: "publishTemplate",
     sensitivity: "write",
     resourceDerivation: {
       kind: "literal",
-      key: "service:gitInterop.publishToDisposableRemote",
+      key: "git.publish",
+    },
+  },
+  {
+    id: "host:gitInterop.publishTemplate#capability:git.publish",
+    rpcPlane: "host-service",
+    capability: "git.publish",
+    authorityPrincipals: ["code", "session"],
+    owner: "gitInterop",
+    method: "publishTemplate",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "prepared",
+      resolver: "gitInterop.publishTemplate.destination",
     },
   },
   {
@@ -7940,16 +7928,29 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:gitInterop.pushDisposableRemote",
+    id: "host:gitInterop.pushTemplateContribution",
     rpcPlane: "host-service",
-    capability: "service:gitInterop.pushDisposableRemote",
-    authorityPrincipals: ["user", "code", "host"],
+    capability: "service:gitInterop.pushTemplateContribution",
+    authorityPrincipals: ["code", "host", "session", "user"],
     owner: "gitInterop",
-    method: "pushDisposableRemote",
+    method: "pushTemplateContribution",
     sensitivity: "write",
     resourceDerivation: {
       kind: "literal",
-      key: "service:gitInterop.pushDisposableRemote",
+      key: "git.publish",
+    },
+  },
+  {
+    id: "host:gitInterop.pushTemplateContribution#capability:git.publish",
+    rpcPlane: "host-service",
+    capability: "git.publish",
+    authorityPrincipals: ["code", "session"],
+    owner: "gitInterop",
+    method: "pushTemplateContribution",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "prepared",
+      resolver: "gitInterop.pushTemplateContribution.destination",
     },
   },
   {
@@ -7963,19 +7964,6 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:gitInterop.pushUpstream",
-    },
-  },
-  {
-    id: "host:gitInterop.removeDisposableRemote",
-    rpcPlane: "host-service",
-    capability: "service:gitInterop.removeDisposableRemote",
-    authorityPrincipals: ["user", "code", "host"],
-    owner: "gitInterop",
-    method: "removeDisposableRemote",
-    sensitivity: "write",
-    resourceDerivation: {
-      kind: "literal",
-      key: "service:gitInterop.removeDisposableRemote",
     },
   },
   {
@@ -8271,7 +8259,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     authorityPrincipals: ["user", "host", "code"],
     owner: "hubControl",
     method: "routeWorkspace",
-    sensitivity: "write",
+    sensitivity: "read",
     resourceDerivation: {
       kind: "literal",
       key: "service:hubControl.routeWorkspace",
@@ -10436,6 +10424,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:runtime.listContexts",
+    rpcPlane: "host-service",
+    capability: "service:runtime.listContexts",
+    authorityPrincipals: ["code", "host", "user"],
+    owner: "runtime",
+    method: "listContexts",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:runtime.listContexts",
+    },
+  },
+  {
     id: "host:runtime.listEntities",
     rpcPlane: "host-service",
     capability: "service:runtime.listEntities",
@@ -10943,6 +10944,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:vcs.finalizeExternalDelta",
+    rpcPlane: "host-service",
+    capability: "service:vcs.finalizeExternalDelta",
+    authorityPrincipals: ["user", "code", "host"],
+    owner: "vcs",
+    method: "finalizeExternalDelta",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:vcs.finalizeExternalDelta",
+    },
+  },
+  {
     id: "host:vcs.history",
     rpcPlane: "host-service",
     capability: "service:vcs.history",
@@ -11086,6 +11100,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:vcs.registerExternalDelta",
+    rpcPlane: "host-service",
+    capability: "service:vcs.registerExternalDelta",
+    authorityPrincipals: ["user", "code", "host"],
+    owner: "vcs",
+    method: "registerExternalDelta",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:vcs.registerExternalDelta",
+    },
+  },
+  {
     id: "host:vcs.resolveRepository",
     rpcPlane: "host-service",
     capability: "service:vcs.resolveRepository",
@@ -11122,6 +11149,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:vcs.status",
+    },
+  },
+  {
+    id: "host:vcs.supersedeExternalDelta",
+    rpcPlane: "host-service",
+    capability: "service:vcs.supersedeExternalDelta",
+    authorityPrincipals: ["user", "code", "host"],
+    owner: "vcs",
+    method: "supersedeExternalDelta",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:vcs.supersedeExternalDelta",
     },
   },
   {
@@ -13106,14 +13146,6 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "gitInterop",
-    method: "completeWorkspaceDependencies",
-  },
-  {
-    service: "gitInterop",
-    method: "createDisposableRemote",
-  },
-  {
-    service: "gitInterop",
     method: "detachUpstream",
   },
   {
@@ -13122,15 +13154,11 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "gitInterop",
-    method: "inspectDisposableRemote",
-  },
-  {
-    service: "gitInterop",
     method: "publishRepo",
   },
   {
     service: "gitInterop",
-    method: "publishToDisposableRemote",
+    method: "publishTemplate",
   },
   {
     service: "gitInterop",
@@ -13138,15 +13166,11 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "gitInterop",
-    method: "pushDisposableRemote",
+    method: "pushTemplateContribution",
   },
   {
     service: "gitInterop",
     method: "pushUpstream",
-  },
-  {
-    service: "gitInterop",
-    method: "removeDisposableRemote",
   },
   {
     service: "gitInterop",
@@ -13550,6 +13574,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "runtime",
+    method: "listContexts",
+  },
+  {
+    service: "runtime",
     method: "listEntities",
   },
   {
@@ -13702,6 +13730,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "vcs",
+    method: "finalizeExternalDelta",
+  },
+  {
+    service: "vcs",
     method: "history",
   },
   {
@@ -13746,6 +13778,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "vcs",
+    method: "registerExternalDelta",
+  },
+  {
+    service: "vcs",
     method: "resolveRepository",
   },
   {
@@ -13755,6 +13791,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   {
     service: "vcs",
     method: "status",
+  },
+  {
+    service: "vcs",
+    method: "supersedeExternalDelta",
   },
   {
     service: "webhookIngress",
@@ -14664,17 +14704,13 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:fs.writeFile",
   "service:gateway.fetch",
   "service:gitInterop.commitMapping",
-  "service:gitInterop.completeWorkspaceDependencies",
-  "service:gitInterop.createDisposableRemote",
   "service:gitInterop.detachUpstream",
   "service:gitInterop.importProject",
-  "service:gitInterop.inspectDisposableRemote",
   "service:gitInterop.publishRepo",
-  "service:gitInterop.publishToDisposableRemote",
+  "service:gitInterop.publishTemplate",
   "service:gitInterop.pullUpstream",
-  "service:gitInterop.pushDisposableRemote",
+  "service:gitInterop.pushTemplateContribution",
   "service:gitInterop.pushUpstream",
-  "service:gitInterop.removeDisposableRemote",
   "service:gitInterop.removeSharedRemote",
   "service:gitInterop.removeUpstream",
   "service:gitInterop.setAutoPush",
@@ -14810,6 +14846,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:runtime.createSubagentContext",
   "service:runtime.destroyContext",
   "service:runtime.faultAbortAgentVessel",
+  "service:runtime.listContexts",
   "service:runtime.listEntities",
   "service:runtime.listOwnedContexts",
   "service:runtime.resolveContext",
@@ -14846,6 +14883,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:vcs.copy",
   "service:vcs.discard",
   "service:vcs.edit",
+  "service:vcs.finalizeExternalDelta",
   "service:vcs.history",
   "service:vcs.importSnapshot",
   "service:vcs.inspect",
@@ -14857,9 +14895,11 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:vcs.push",
   "service:vcs.readFile",
   "service:vcs.readMemory",
+  "service:vcs.registerExternalDelta",
   "service:vcs.resolveRepository",
   "service:vcs.revert",
   "service:vcs.status",
+  "service:vcs.supersedeExternalDelta",
   "service:view.bindNativePanelSlot",
   "service:view.browserForceReload",
   "service:view.browserGoBack",

@@ -199,7 +199,21 @@ export function createUserlandApprovalService(deps: {
     method: string
   ): Promise<ApprovalPrincipal | null> {
     if (ctx.caller.runtime.kind === "extension") {
-      return ctx.chainCaller ?? null;
+      if (ctx.chainCaller) return ctx.chainCaller;
+      const identity = ctx.caller.code;
+      if (
+        ctx.authorizingCaller &&
+        verifiedInitiatingUserId(ctx) &&
+        identity?.callerKind === "extension"
+      ) {
+        return {
+          callerId: identity.callerId,
+          callerKind: identity.callerKind,
+          repoPath: identity.repoPath,
+          effectiveVersion: identity.effectiveVersion,
+        };
+      }
+      return null;
     }
     if (
       ctx.caller.runtime.kind !== "panel" &&

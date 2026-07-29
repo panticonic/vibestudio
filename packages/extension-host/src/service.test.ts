@@ -640,9 +640,10 @@ const declare = (name: string, opts: { ref?: string } = {}) => [
 
 describe("ExtensionHost reconcileDeclared", () => {
   it("computes meta-change approvals from committed workspace config", async () => {
-    const readWorkspaceFileAtState = vi.fn(
-      async () =>
-        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\nextensions:\n  - source: extensions/git-tools\n`
+    const readWorkspaceFileAtState = vi.fn(async (_stateHash: string, filePath: string) =>
+      filePath === "meta/vibestudio.yml"
+        ? `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\nextensions:\n  - source: extensions/git-tools\n`
+        : null
     );
     const { host, extensionNode } = makeHost({
       installed: false,

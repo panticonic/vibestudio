@@ -7,4 +7,4 @@
  * manifest mismatch requires a supported workspace-source upgrade; it never
  * authorizes resetting persisted state.
  */
-export const WORKSPACE_SYSTEM_EPOCH = 56 as const;
+export const WORKSPACE_SYSTEM_EPOCH = 57 as const;

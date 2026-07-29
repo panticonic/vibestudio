@@ -5,6 +5,7 @@ import { describe, it, expect } from "vitest";
 import {
   CREDENTIALS_MEMBERS,
   GAD_MEMBERS,
+  GIT_MEMBERS,
   portableExports,
   VCS_MEMBERS,
   WEBHOOKS_MEMBERS,
@@ -77,6 +78,18 @@ describe("runtime surface schemaRef parity", () => {
     expect(vcs.members).toContain("move");
     expect(vcs.members).toContain("neighbors");
     expect(vcs.members).not.toContain("moveFiles");
+  });
+
+  it("documents external Git as candidate-based and keeps protected main explicit", () => {
+    const git = portableExports["git"];
+    if (!git) throw new Error("missing git runtime surface");
+    expect(git.members).toEqual(GIT_MEMBERS);
+    expect(git.members).toContain("importProject");
+    expect(git.members).toContain("pullUpstream");
+    expect(git.members).not.toContain("completeWorkspaceDependencies");
+    expect(git.description).toContain("unpublished semantic candidates");
+    expect(git.description).toContain("explicit publication advance protected main");
+    expect(git.description).toContain("anonymous-first");
   });
 
   it("documents the ergonomic webhook lifecycle without exposing its raw transport", () => {

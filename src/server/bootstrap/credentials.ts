@@ -22,7 +22,7 @@ export interface CredentialBootstrapDeps {
   auditLog: NonNullable<CredentialServiceDeps["auditLog"]>;
   relayOAuthRegistrar?: CredentialServiceDeps["relayOAuthRegistrar"];
   egressProxy: NonNullable<CredentialServiceDeps["egressProxy"]>;
-  disposableGitHttp: NonNullable<CredentialServiceDeps["disposableGitHttp"]>;
+  workspaceId: NonNullable<CredentialServiceDeps["workspaceId"]>;
   approvalQueue: NonNullable<CredentialServiceDeps["approvalQueue"]>;
   sessionGrantStore: NonNullable<CredentialServiceDeps["sessionGrantStore"]>;
   credentialUseGrantStore: NonNullable<CredentialServiceDeps["credentialUseGrantStore"]>;
@@ -66,7 +66,7 @@ export function wireCredentialService(
     relayOAuthRegistrar: deps.relayOAuthRegistrar,
     connectionLookup: { getAuthorizingShell: deps.getAuthorizingShell },
     egressProxy: deps.egressProxy,
-    disposableGitHttp: deps.disposableGitHttp,
+    workspaceId: deps.workspaceId,
     approvalQueue: deps.approvalQueue,
     sessionGrantStore: deps.sessionGrantStore,
     credentialUseGrantStore: deps.credentialUseGrantStore,

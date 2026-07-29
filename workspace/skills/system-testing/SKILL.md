@@ -369,47 +369,6 @@ the exact call sequence, object shape, or recovery branch. Validators inspect
 the resulting effects and complete trajectory; a final prose marker alone is
 not sufficient evidence of protocol correctness.
 
-## Full remote/mobile smoke
-
-First verify that sandboxed workspace code can install and launch the Android
-client through the real mobile-debug extension and its scoped approval:
-
-```bash
-pnpm cli --instance INSTANCE system-test run mobile-extension-install-android \
-  --model openai-codex:gpt-5.3-codex-spark
-```
-
-The test requires exactly one ready Android device or emulator. It must not
-shell out from the agent or replace the extension approval with a harness
-bypass.
-
-Then exercise end-user onboarding through a connected Electron desktop:
-
-```bash
-pnpm cli --instance INSTANCE system-test run onboarding-desktop-mobile-install-android \
-  --model openai-codex:gpt-5.3-codex-spark
-```
-
-This test must prove the atomic `phoneProvisioning.provision` outcome and then
-use `mobile-debug.verifyWorkspaceReady` for the same device. Keep its documented
-three-minute cold-build deadline: a fresh mobile workspace can take longer than
-one minute to prepare. Installed-package or paired-credential evidence without
-`workspace-panels-initialized` and `workspace-connected` is incomplete.
-
-Then run the composition smoke for real desktop remote access and mobile
-pairing:
-
-```bash
-pnpm smoke:full
-```
-
-Forensics are written under `test-results/full-system-smoke/`. The harness
-builds the product, exercises Electron pairing through the deployed signaling
-service, runs desktop Playwright coverage, and verifies the Android pairing/OTA
-activation/panel-load ladder. Missing adb/emulator, display, or
-node-datachannel is an environment failure; do not claim product verification
-until the full harness runs green.
-
 ## Artifact security
 
 CLI artifacts are stored with restrictive permissions under

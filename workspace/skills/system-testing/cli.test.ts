@@ -200,7 +200,7 @@ describe("system-testing CLI-neutral API", () => {
     });
   });
 
-  it("fails doctor before a required extension can strand an agent turn", async () => {
+  it("fails doctor while any declared workspace extension awaits approval", async () => {
     configureHealthyDoctorModels([
       { ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } },
     ]);
@@ -214,6 +214,24 @@ describe("system-testing CLI-neutral API", () => {
       if (method === "extensions.list") {
         return [{ name: "@workspace-extensions/shell", status: "pending-approval" }];
       }
+      if (method === "workspace.getConfig") {
+        return { extensions: [{ source: "extensions/shell" }] };
+      }
+      if (method === "workspace.sourceTree") {
+        return {
+          children: [
+            {
+              path: "extensions",
+              children: [
+                {
+                  path: "extensions/shell",
+                  packageInfo: { name: "@workspace-extensions/shell" },
+                },
+              ],
+            },
+          ],
+        };
+      }
       return {};
     });
 
@@ -226,7 +244,7 @@ describe("system-testing CLI-neutral API", () => {
     });
   });
 
-  it("accepts approved lazy extensions without forcing eager startup", async () => {
+  it("reports lazy extension states without forcing eager startup", async () => {
     configureHealthyDoctorModels([
       { ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } },
     ]);
@@ -248,6 +266,44 @@ describe("system-testing CLI-neutral API", () => {
           status: name === "shell" ? "running" : "available",
         }));
       }
+      if (args[1] === "workspace.getConfig") {
+        return {
+          extensions: [
+            "browser-data",
+            "claude-code",
+            "file-tools",
+            "git-bridge",
+            "image-service",
+            "mobile-debug",
+            "shell",
+            "test-runner",
+            "typecheck-service",
+          ].map((name) => ({ source: `extensions/${name}` })),
+        };
+      }
+      if (args[1] === "workspace.sourceTree") {
+        return {
+          children: [
+            {
+              path: "extensions",
+              children: [
+                "browser-data",
+                "claude-code",
+                "file-tools",
+                "git-bridge",
+                "image-service",
+                "mobile-debug",
+                "shell",
+                "test-runner",
+                "typecheck-service",
+              ].map((name) => ({
+                path: `extensions/${name}`,
+                packageInfo: { name: `@workspace-extensions/${name}` },
+              })),
+            },
+          ],
+        };
+      }
       return priorImplementation?.(...args);
     });
 
@@ -256,7 +312,7 @@ describe("system-testing CLI-neutral API", () => {
     expect(result.ok).toBe(true);
     expect(result.checks.find((check) => check.name === "required-extensions")).toMatchObject({
       ok: true,
-      detail: "required system-test extensions are approved and build-ready",
+      detail: "declared workspace extensions are approved and build-ready",
     });
   });
 

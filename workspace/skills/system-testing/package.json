@@ -10,6 +10,7 @@
     "./diagnostics": "./diagnostics.ts",
     "./report": "./messages/report.ts",
     "./runner": "./runner.ts",
+    "./scenario-validation": "./scenario-validation.ts",
     "./stages": "./stages.ts",
     "./test-runner": "./test-runner.ts",
     "./tests/*": "./tests/*.ts"

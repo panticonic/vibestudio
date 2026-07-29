@@ -218,6 +218,8 @@ export interface RuntimeSemanticContexts {
   forkContext(sourceContextId: string, targetContextId: string): Promise<void>;
   /** Exact semantic state pointer without materializing a native projection. */
   resolveWorkingState(contextId: string): Promise<VcsStateNodeRef>;
+  /** Enumerate durable semantic contexts, optionally restricted by exact prefix. */
+  listContexts(prefix?: string): Promise<string[]>;
 }
 
 export interface RuntimeServiceDeps {
@@ -1421,6 +1423,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     return await store.resolveContext(id);
   }
 
+  async function listContexts(prefix?: string): Promise<{ contexts: string[] }> {
+    return { contexts: await deps.semanticContexts.listContexts(prefix) };
+  }
+
   const definition: ServiceDefinition = {
     name: "runtime",
     description: "Runtime entity creation and retirement",
@@ -1589,6 +1595,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       },
       listEntities: (_ctx, [input]) => listEntities(input?.kind),
       resolveContext: (_ctx, [id]) => resolveContext(id),
+      listContexts: (_ctx, [input]) => listContexts(input?.prefix),
       createContext: (ctx, [{ contextId, testPolicy }]) =>
         createContext(ctx, { contextId, testPolicy }),
       cloneContext: (ctx, [cloneArgs]) => cloneContext(ctx.caller, cloneArgs),

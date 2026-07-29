@@ -38,6 +38,24 @@
           "evidence": "intentional-broad"
         },
         {
+          "capability": "accounts.connect",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "accounts.disconnect",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "critical",
+          "evidence": "intentional-broad"
+        },
+        {
           "capability": "application.update",
           "resource": {
             "kind": "prefix",
@@ -451,6 +469,7 @@
     "@tanstack/react-virtual": "^3.13.0",
     "@workspace/ui": "workspace:*",
     "@workspace/react": "workspace:*",
+    "@workspace/template-registry": "workspace:*",
     "jotai": "^2.14.0",
     "qrcode-terminal": "^0.12.0",
     "react": "^19.1.1",

@@ -33,6 +33,7 @@ import {
   providerIsConnectable,
 } from "@workspace/model-catalog/providerConnect";
 import { pickRecommendedModelId } from "@workspace/model-catalog/modelRecommendations";
+import type { LocalModelEntry } from "@workspace/model-catalog/localModels";
 import { findMatchingUrlAudience } from "@vibestudio/credential-client/urlAudience";
 import {
   isStoredCredentialUsable,
@@ -62,25 +63,6 @@ async function loadPiAi(): Promise<PiAiModule> {
 
 /** llama-server quirks (design §6.4); mirrors agentic-do's model-spec.ts. */
 const LLAMA_SERVER_COMPAT: Record<string, unknown> = { supportsReasoningEffort: false };
-
-/** Shape of the local-models extension's listModels() entries we consume. */
-export interface LocalModelEntry {
-  slug: string;
-  displayName: string;
-  baseUrl: string;
-  contextWindow: number;
-  maxTokens: number;
-  measuredTokensPerSec: number | null;
-  toolsCapable: boolean;
-  state: "ready" | "startable" | "not-installed" | "starting" | "downloading" | "error";
-  download: {
-    progress: number;
-    phase: "active" | "queued" | "paused";
-    receivedBytes: number;
-    totalBytes: number | null;
-  } | null;
-  errorMessage: string | null;
-}
 
 let cachedCatalog: Promise<ModelCatalog> | null = null;
 

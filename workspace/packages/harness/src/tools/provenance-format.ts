@@ -50,6 +50,15 @@ function inspectedNodeSummary(inspection: CanonicalProvenanceInspection): string
         .filter(Boolean)
         .join(" · ");
     }
+    case "external-delta": {
+      const value = node.value;
+      return [
+        "external-delta",
+        value.status,
+        value.repoPath,
+        `${value.changeCount} change${value.changeCount === 1 ? "" : "s"}`,
+      ].join(" · ");
+    }
     case "application": {
       const value = node.value;
       return [
@@ -213,6 +222,8 @@ function nodeLabel(node: VcsSemanticNodeRef): string {
   switch (node.kind) {
     case "event":
       return node.eventId;
+    case "external-delta":
+      return node.deltaId;
     case "application":
       return node.applicationId;
     case "applied-change":

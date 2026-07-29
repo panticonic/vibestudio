@@ -9,6 +9,8 @@ const SEMANTIC_EVIDENCE = {
     sourceKind: "git" as const,
     sourceUri: "https://github.com/octo/demo.git",
     snapshotRevision: "a".repeat(40),
+    sourceSubdir: null,
+    canonicalSnapshot: `v1-sha256:${"c".repeat(64)}`,
     snapshotDigest: `snapshot:${"b".repeat(64)}`,
     targetRepositoryIds: ["repository:demo"],
   },
@@ -33,10 +35,13 @@ describe("runtime Git client", () => {
       pushUpstream: {
         exported: 0,
         headCommit: null,
-        pushed: false,
-        status: "in-sync",
+        outcome: "already-at-remote",
       },
       pullUpstream: {
+        remote: "origin",
+        branch: "main",
+        observedCommit: null,
+        changed: false,
         behindBy: 0,
         aheadBy: 0,
         remoteBranchExists: false,
@@ -54,14 +59,6 @@ describe("runtime Git client", () => {
         headCommit: null,
         pushed: true,
       },
-      pushDisposableRemote: {
-        repoPath: "projects/demo",
-        branch: "main",
-        exported: 0,
-        pushed: true,
-        commitCount: 0,
-        headCommit: null,
-      },
       importProject: {
         path: "projects/demo",
         remote: { name: "origin", url: "https://github.com/octo/demo.git" },
@@ -72,7 +69,6 @@ describe("runtime Git client", () => {
           semanticEvidence: SEMANTIC_EVIDENCE,
         },
       },
-      completeWorkspaceDependencies: { imported: [], skipped: [], failed: [] },
     };
     const rpc = {
       call: vi.fn(async (_target: string, method: string) => {
@@ -93,18 +89,10 @@ describe("runtime Git client", () => {
       ["setUpstream", ["projects/demo", { remote: "origin", autoPush: true }]],
       ["removeUpstream", ["projects/demo"]],
       ["setAutoPush", ["projects/demo", false]],
-      ["upstreamStatus", [["projects/demo"], { fetch: true }]],
+      ["upstreamStatus", [["projects/demo"]]],
       ["pushUpstream", ["projects/demo", { force: true }]],
       ["pullUpstream", ["projects/demo", { dryRun: true }]],
       ["publishRepo", [{ repoPath: "projects/demo", provider: "github", autoPush: true }]],
-      [
-        "pushDisposableRemote",
-        [
-          "projects/demo",
-          "http://vibestudio.local/_disposable-git/id/demo.git",
-          "main",
-        ],
-      ],
       [
         "importProject",
         [
@@ -114,7 +102,6 @@ describe("runtime Git client", () => {
           },
         ],
       ],
-      ["completeWorkspaceDependencies", []],
     ];
 
     for (const [method, args] of invocations) {
@@ -140,32 +127,26 @@ describe("runtime Git client", () => {
       autoPush: true,
     };
     const rpc = {
-      call: vi
-        .fn()
-        .mockResolvedValueOnce(statusRows)
-        .mockResolvedValueOnce({
-          repoPath: "projects/demo",
-          provider: "github",
-          remote: "origin",
-          branch: "main",
-          remoteUrl: "https://github.com/octo/demo.git",
-          webUrl: "https://github.com/octo/demo",
-          owner: "octo",
-          exported: 1,
-          headCommit: "abc123",
-          pushed: true,
-        }),
+      call: vi.fn().mockResolvedValueOnce(statusRows).mockResolvedValueOnce({
+        repoPath: "projects/demo",
+        provider: "github",
+        remote: "origin",
+        branch: "main",
+        remoteUrl: "https://github.com/octo/demo.git",
+        webUrl: "https://github.com/octo/demo",
+        owner: "octo",
+        exported: 1,
+        headCommit: "abc123",
+        pushed: true,
+      }),
     };
     const client = createGitClient(rpc as never);
 
-    await expect(client.upstreamStatus(["projects/demo"], { fetch: false })).resolves.toEqual(
-      statusRows
-    );
+    await expect(client.upstreamStatus(["projects/demo"])).resolves.toEqual(statusRows);
     await client.publishRepo(publishInput);
 
     expect(rpc.call).toHaveBeenNthCalledWith(1, "main", "gitInterop.upstreamStatus", [
       ["projects/demo"],
-      { fetch: false },
     ]);
     expect(rpc.call).toHaveBeenNthCalledWith(2, "main", "gitInterop.publishRepo", [publishInput]);
   });

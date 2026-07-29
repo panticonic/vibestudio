@@ -11,12 +11,39 @@
     "authority": {
       "requests": [
         {
+          "capability": "account.profile.update",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
           "capability": "agent.credentials.manage",
           "resource": {
             "kind": "prefix",
             "prefix": ""
           },
           "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "approvals.decide",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "channel.members.remove",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "critical",
           "evidence": "intentional-broad"
         },
         {

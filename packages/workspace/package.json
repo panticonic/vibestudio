@@ -8,19 +8,24 @@
   },
   "exports": {
     "./configParser": "./src/configParser.ts",
+    "./configComposition": "./src/configComposition.ts",
     "./contextProjections": "./src/contextProjections.ts",
     "./extensionRegistry": "./src/extensionRegistry.ts",
     "./gitCheckouts": "./src/gitCheckouts.ts",
     "./loader": "./src/loader.ts",
     "./pathPolicy": "./src/pathPolicy.ts",
+    "./remoteUrl": "./src/remoteUrl.ts",
     "./remotes": "./src/remotes.ts",
     "./singletonRegistry": "./src/singletonRegistry.ts",
-    "./startup": "./src/startup.ts"
+    "./startup": "./src/startup.ts",
+    "./templateCoordinates": "./src/templateCoordinates.ts",
+    "./templateLock": "./src/templateLock.ts"
   },
   "scripts": {
     "test": "cd ../.. && vitest run packages/workspace/src"
   },
   "dependencies": {
+    "@vibestudio/content-addressing": "workspace:*",
     "@vibestudio/dev-log": "workspace:*",
     "@vibestudio/env-paths": "workspace:*",
     "@vibestudio/shared": "workspace:*",

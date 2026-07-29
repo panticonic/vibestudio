@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "@workspace/model-catalog": "workspace:*"
+  },
   "vibestudio": {
     "displayName": "Local Models",
     "entry": "index.ts",

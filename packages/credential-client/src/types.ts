@@ -516,6 +516,7 @@ export interface ResolveUrlBoundCredentialRequest {
   url?: string;
   providerId?: string;
   credentialId?: string;
+  credentialLabel?: string;
   use?: CredentialBindingUse;
 }
 
@@ -529,6 +530,10 @@ export interface ProxyGitHttpRequest {
    * that credential, or pass null to make an explicitly anonymous request.
    */
   credentialId?: string | null;
+  logicalCredential?: {
+    name: string;
+    remoteUrl: string;
+  };
   gitIntent?: {
     force: boolean;
     overwrites?:

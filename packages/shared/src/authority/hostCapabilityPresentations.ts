@@ -347,18 +347,6 @@ export const HOST_CAPABILITY_PRESENTATIONS = {
     description: "Allows {requesterKind} to access a workspace gateway address.",
     group: "network",
   },
-  "gitInterop.completeWorkspaceDependencies": {
-    title: "Download missing project dependencies",
-    action: "download missing project dependencies",
-    description: "Allows {requesterKind} to download missing project dependencies.",
-    group: "files",
-  },
-  "gitInterop.createDisposableRemote": {
-    title: "Create a temporary Git remote",
-    action: "create a temporary Git remote",
-    description: "Allows {requesterKind} to create a temporary Git remote.",
-    group: "files",
-  },
   "gitInterop.detachUpstream": {
     title: "Disconnect the upstream Git repository",
     action: "disconnect the upstream Git repository",
@@ -371,34 +359,30 @@ export const HOST_CAPABILITY_PRESENTATIONS = {
     description: "Allows {requesterKind} to import a Git project.",
     group: "files",
   },
-  "gitInterop.publishToDisposableRemote": {
-    title: "Publish to a temporary Git remote",
-    action: "publish to a temporary Git remote",
-    description: "Allows {requesterKind} to publish to a temporary Git remote.",
-    group: "files",
-  },
   "gitInterop.pullUpstream": {
     title: "Pull changes from the upstream Git repository",
     action: "pull changes from the upstream Git repository",
     description: "Allows {requesterKind} to pull changes from the upstream Git repository.",
     group: "files",
   },
-  "gitInterop.pushDisposableRemote": {
-    title: "Push changes to a temporary Git remote",
-    action: "push changes to a temporary Git remote",
-    description: "Allows {requesterKind} to push changes to a temporary Git remote.",
+  "gitInterop.pushTemplateContribution": {
+    title: "Push a template contribution",
+    action: "push a template contribution branch",
+    description:
+      "Allows {requesterKind} to push a template contribution branch to its upstream Git repository.",
+    group: "files",
+  },
+  "gitInterop.publishTemplate": {
+    title: "Publish a workspace template",
+    action: "publish a workspace template repository",
+    description:
+      "Allows {requesterKind} to create and publish a workspace template repository and immutable release.",
     group: "files",
   },
   "gitInterop.pushUpstream": {
     title: "Push changes to the upstream Git repository",
     action: "push changes to the upstream Git repository",
     description: "Allows {requesterKind} to push changes to the upstream Git repository.",
-    group: "files",
-  },
-  "gitInterop.removeDisposableRemote": {
-    title: "Remove a temporary Git remote",
-    action: "remove a temporary Git remote",
-    description: "Allows {requesterKind} to remove a temporary Git remote.",
     group: "files",
   },
   "gitInterop.removeSharedRemote": {

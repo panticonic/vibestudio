@@ -53,6 +53,7 @@ import { settingsMethods } from "./settings.js";
 import { shellApprovalMethods } from "./shellApproval.js";
 import { shellPresenceMethods } from "./shellPresence.js";
 import { systemAgentMethods } from "./systemAgent.js";
+import { templatesMethods } from "./templates.js";
 import { vcsMethods } from "./vcs.js";
 import { viewMethods } from "./view.js";
 import { webhookIngressMethods } from "./webhookIngress.js";
@@ -145,6 +146,7 @@ const serviceTables: ServiceTable[] = [
   { service: "shellApproval", file: "shellApproval.ts", methods: shellApprovalMethods },
   { service: "shellPresence", file: "shellPresence.ts", methods: shellPresenceMethods },
   { service: "systemAgent", file: "systemAgent.ts", methods: systemAgentMethods },
+  { service: "templates", file: "templates.ts", methods: templatesMethods },
   { service: "vcs", file: "vcs.ts", methods: vcsMethods },
   { service: "view", file: "view.ts", methods: viewMethods },
   { service: "webhookIngress", file: "webhookIngress.ts", methods: webhookIngressMethods },

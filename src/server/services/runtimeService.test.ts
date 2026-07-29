@@ -192,6 +192,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     dropContext: vi.fn(async () => {}),
     forkContext: vi.fn(async () => {}),
     resolveWorkingState: vi.fn(async () => ({ kind: "event" as const, eventId: "event:test" })),
+    listContexts: vi.fn(async () => []),
     ...opts.semanticContexts,
   };
 
@@ -2772,6 +2773,23 @@ describe("runtimeService.destroyContext", () => {
 });
 
 describe("runtimeService context-relationship registry", () => {
+  it("lists durable semantic contexts by prefix independently of ownership edges", async () => {
+    const listContexts = vi.fn(async (prefix?: string) =>
+      prefix === "template-composer-operation-"
+        ? ["template-composer-operation-add-1", "template-composer-operation-pull-2"]
+        : ["main"]
+    );
+    const { service } = await buildDeps({ semanticContexts: { listContexts } });
+    await expect(
+      service.handler({ caller: serverCaller }, "listContexts", [
+        { prefix: "template-composer-operation-" },
+      ])
+    ).resolves.toEqual({
+      contexts: ["template-composer-operation-add-1", "template-composer-operation-pull-2"],
+    });
+    expect(listContexts).toHaveBeenCalledWith("template-composer-operation-");
+  });
+
   it("records and lists lifecycle/lineage edges, scoped by kind", async () => {
     const { service } = await buildDeps();
     await service.handler({ caller: serverCaller }, "recordContextEdge", [

@@ -22,7 +22,10 @@ import YAML from "yaml";
 import dotenv from "dotenv";
 import { z } from "zod";
 import { createDevLogger } from "@vibestudio/dev-log";
-import { parseWorkspaceConfigContentWithId, resolveWorkspaceTrustGrants } from "./configParser.js";
+import {
+  parseWorkspaceConfigContentWithId,
+  resolveWorkspaceTrustGrants,
+} from "./configParser.js";
 import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
 import { currentContextProjectionsPath } from "./contextProjections.js";
 export {
@@ -37,8 +40,13 @@ import type {
   WorkspaceConfig,
   CentralConfig,
   CentralConfigPaths,
+  WorkspaceTemplatePin,
+  WorkspaceCreationDescriptor,
 } from "@vibestudio/workspace-contracts/types";
+import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { WorkspaceEntry } from "@vibestudio/shared/types";
+import { createWorkspaceId } from "@vibestudio/shared/centralData";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import type {
   CentralDataManager,
   EphemeralWorkspaceCleanupRecord,
@@ -60,6 +68,15 @@ const WORKSPACE_DELETE_MAX_RETRIES = 10;
 const WORKSPACE_DELETE_RETRY_DELAY_MS = 100;
 const WORKSPACE_DELETION_MARKER = "deletion.json";
 const WORKSPACE_DELETION_MARKER_VERSION = 1;
+const WORKSPACE_CREATION_DESCRIPTOR = "workspace-creation/v1.json";
+
+export interface WorkspaceCreationOptions {
+  templateDir?: string;
+  forkFrom?: string;
+  rootTemplate?: WorkspaceTemplatePin;
+  /** Allocated by the catalog owner; required for external-root descriptors. */
+  workspaceId?: string;
+}
 
 const ModelConfigSchema = z
   .object({
@@ -338,14 +355,12 @@ export function resolveWorkspaceTemplateDir(appRoot: string): string | null {
  * Source options (mutually exclusive, exactly one):
  * - `templateDir`: Copy source dirs from a local directory (e.g., the shipped workspace template)
  * - `forkFrom`:   Copy source dirs from another managed workspace by name
+ * - `rootTemplate`: Persist one exact root pin for pre-userland bootstrap
  *
  * Workspaces are always created from a template or an existing workspace fork.
  * Fails if the directory already exists on disk.
  */
-export function initWorkspace(
-  name: string,
-  opts?: { templateDir?: string; forkFrom?: string }
-): void {
+export function initWorkspace(name: string, opts?: WorkspaceCreationOptions): void {
   validateWorkspaceName(name);
 
   const wsDir = getWorkspaceDir(name);
@@ -356,8 +371,15 @@ export function initWorkspace(
 
   // Resolve template source directory for template/fork
   let templateSrc: string | null = null;
-  if (opts?.templateDir && opts.forkFrom) {
-    throw new Error("Workspace creation accepts exactly one of templateDir or forkFrom");
+  const sourceChoices = [
+    opts?.templateDir ? "templateDir" : null,
+    opts?.forkFrom ? "forkFrom" : null,
+    opts?.rootTemplate ? "rootTemplate" : null,
+  ].filter(Boolean);
+  if (sourceChoices.length > 1) {
+    throw new Error(
+      "Workspace creation accepts exactly one of templateDir, forkFrom, or rootTemplate"
+    );
   } else if (opts?.templateDir) {
     templateSrc = opts.templateDir;
   } else if (opts?.forkFrom) {
@@ -367,8 +389,13 @@ export function initWorkspace(
       throw new Error(`Source workspace "${opts.forkFrom}" does not exist`);
     }
   }
-  if (!templateSrc) {
-    throw new Error("Workspace creation requires a templateDir or forkFrom workspace");
+  if (!templateSrc && !opts?.rootTemplate) {
+    throw new Error(
+      "Workspace creation requires a templateDir or forkFrom workspace, or an exact rootTemplate"
+    );
+  }
+  if (opts?.rootTemplate && !opts.workspaceId) {
+    throw new Error("External-root workspace creation requires an allocated workspaceId");
   }
 
   const workspacesDir = getWorkspacesDir();
@@ -380,10 +407,12 @@ export function initWorkspace(
 
   try {
     fs.mkdirSync(stagedSourceRoot, { recursive: true });
-    for (const dir of WORKSPACE_SOURCE_DIRS) {
-      const src = path.join(templateSrc, dir);
-      if (fs.existsSync(src)) {
-        copyDirRecursive(src, path.join(stagedSourceRoot, dir));
+    if (templateSrc) {
+      for (const dir of WORKSPACE_SOURCE_DIRS) {
+        const src = path.join(templateSrc, dir);
+        if (fs.existsSync(src)) {
+          copyDirRecursive(src, path.join(stagedSourceRoot, dir));
+        }
       }
     }
 
@@ -397,17 +426,53 @@ export function initWorkspace(
     }
 
     const stagedConfigPath = path.join(stagedSourceRoot, WORKSPACE_CONFIG_FILE);
+    if (opts?.rootTemplate) {
+      fs.mkdirSync(path.dirname(stagedConfigPath), { recursive: true });
+      const descriptor: WorkspaceCreationDescriptor = WorkspaceCreationDescriptorSchema.parse({
+        version: 1,
+        workspaceId: opts.workspaceId,
+        rootTemplate: opts.rootTemplate,
+      });
+      fs.writeFileSync(
+        stagedConfigPath,
+        YAML.stringify({
+          systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+        }),
+        { encoding: "utf-8", mode: 0o600, flag: "wx" }
+      );
+      const descriptorPath = path.join(stagedStateRoot, WORKSPACE_CREATION_DESCRIPTOR);
+      fs.mkdirSync(path.dirname(descriptorPath), { recursive: true });
+      fs.writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`, {
+        encoding: "utf-8",
+        mode: 0o600,
+        flag: "wx",
+      });
+    }
     if (!fs.existsSync(stagedConfigPath)) {
-      throw new Error(`Workspace template is missing ${WORKSPACE_CONFIG_FILE}: ${templateSrc}`);
+      throw new Error(
+        templateSrc
+          ? `Workspace template is missing ${WORKSPACE_CONFIG_FILE}: ${templateSrc}`
+          : `Workspace template is missing ${WORKSPACE_CONFIG_FILE}`
+      );
     }
 
     // Validate against the FINAL managed path before publishing. Parsing the
     // staged file directly would derive the temporary directory name as the
     // workspace id and would let malformed manifests become visible on disk.
-    parseWorkspaceConfigContent(
-      fs.readFileSync(stagedConfigPath, "utf-8"),
-      path.join(wsDir, "source")
-    );
+    if (opts?.rootTemplate) {
+      if (!opts.workspaceId) {
+        throw new Error("External root-template initialization requires a workspace id");
+      }
+      parseWorkspaceConfigContentWithId(
+        fs.readFileSync(stagedConfigPath, "utf-8"),
+        opts.workspaceId
+      );
+    } else {
+      parseWorkspaceConfigContent(
+        fs.readFileSync(stagedConfigPath, "utf-8"),
+        path.join(wsDir, "source")
+      );
+    }
 
     fs.renameSync(stagingDir, wsDir);
     published = true;
@@ -460,8 +525,10 @@ export function loadWorkspaceConfig(workspacePath: string): WorkspaceConfig {
     throw new Error(`${WORKSPACE_CONFIG_FILE} not found at ${workspacePath}`);
   }
 
-  const content = fs.readFileSync(configPath, "utf-8");
-  const config = parseWorkspaceConfigContent(content, workspacePath);
+  const config = parseWorkspaceConfigContentWithId(
+    fs.readFileSync(configPath, "utf-8"),
+    deriveWorkspaceId(workspacePath)
+  );
   setWorkspaceAppTrust(resolveWorkspaceTrustGrants(config));
   return config;
 }
@@ -615,15 +682,19 @@ export function resolveOrCreateWorkspace(opts: ResolveWorkspaceOpts): ResolvedWo
 export function createAndRegisterWorkspace(
   name: string,
   centralData: CentralDataManager,
-  opts?: { templateDir?: string; forkFrom?: string }
+  opts?: WorkspaceCreationOptions
 ): WorkspaceEntry {
   if (centralData.hasWorkspace(name)) {
     throw new Error(`Workspace "${name}" already exists`);
   }
-  const resolvedOpts = resolveWorkspaceCreationOpts(opts);
+  const workspaceId = createWorkspaceId();
+  const resolvedOpts = {
+    ...resolveWorkspaceCreationOpts(opts),
+    workspaceId,
+  };
   initWorkspace(name, resolvedOpts);
   try {
-    return centralData.addWorkspace(name);
+    return centralData.addWorkspace(name, workspaceId);
   } catch (error) {
     try {
       removeWorkspaceTree(getWorkspaceDir(name));
@@ -899,34 +970,12 @@ function readWorkspaceDeletionMarker(trashRoot: string): WorkspaceDeletionMarker
   };
 }
 
-function resolveWorkspaceCreationOpts(opts?: { templateDir?: string; forkFrom?: string }): {
-  templateDir?: string;
-  forkFrom?: string;
-} {
-  if (opts?.templateDir || opts?.forkFrom) return opts;
+function resolveWorkspaceCreationOpts(opts?: WorkspaceCreationOptions): WorkspaceCreationOptions {
+  if (opts?.templateDir || opts?.forkFrom || opts?.rootTemplate) return opts;
   const appRoot = process.env["VIBESTUDIO_APP_ROOT"] ?? process.cwd();
   const templateDir = resolveWorkspaceTemplateDir(appRoot);
   if (!templateDir) {
     throw new Error("Workspace creation requires a template, but no workspace template was found");
   }
   return { templateDir };
-}
-
-/**
- * Manages atomic reads/writes of workspace config fields.
- * Updates both the in-memory config and disk (vibestudio.yml).
- */
-export function createWorkspaceConfigManager(configPath: string, config: WorkspaceConfig) {
-  return {
-    get: () => config,
-    set(key: keyof WorkspaceConfig | string, value: unknown): void {
-      // Write disk first — if I/O fails, in-memory config stays consistent
-      const content = fs.readFileSync(configPath, "utf-8");
-      const onDisk = (YAML.parse(content) as Record<string, unknown>) ?? {};
-      onDisk[key] = value;
-      fs.writeFileSync(configPath, YAML.stringify(onDisk), "utf-8");
-      // Only mutate in-memory after successful disk write
-      (config as unknown as Record<string, unknown>)[key] = value;
-    },
-  };
 }

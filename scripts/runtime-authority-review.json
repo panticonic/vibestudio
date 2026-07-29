@@ -1,7 +1,27 @@
 {
   "version": 1,
-  "censusDigest": "sha256:b93a046bbd66eafec3ff943b33eeebb69e3c7e0b82fa19d54b40c3a57f8262f9",
+  "censusDigest": "sha256:e6d565cce3d34987ea607b86209f59f9b99800ffaa2774ab5b886f0fba343d7e",
   "decisions": {
+    "host:vcs.finalizeExternalDelta": {
+      "review": "context-bound-complete-external-delta-finalization",
+      "change": "Exposes finalization of one caller-reachable external delta only after the semantic engine proves every effective change is accounted for. The operation releases that delta's dedicated review roots and cannot mutate source content or finalize a foreign or incomplete review."
+    },
+    "host:vcs.supersedeExternalDelta": {
+      "review": "context-bound-external-delta-retirement",
+      "change": "Exposes retirement of one caller-reachable external delta so userland can abandon or replace a review it owns. Context and delta identity are receiver-validated; the operation grants no source mutation, integration, or foreign lifecycle authority."
+    },
+    "host:runtime.listContexts": {
+      "review": "bounded-context-id-discovery",
+      "change": "Adds an open read of context identifiers optionally narrowed by a caller-supplied prefix. It exposes no context contents or mutation authority and lets userland discover its own durable operation journals without host-owned lifecycle state."
+    },
+    "host:vcs.registerExternalDelta": {
+      "review": "context-bound-exact-external-delta-registration",
+      "change": "Adds the existing context-write semantic operation to the ordinary VCS surface so userland can register an exact old-to-new external repository delta for compare and integrate. Context ownership, causal references, immutable source coordinates, and repository identity remain receiver-validated; lifecycle retirement and finalization remain internal to integration."
+    },
+    "host:hubControl.routeWorkspace": {
+      "review": "read-only-exact-workspace-routing",
+      "change": "Narrows exact workspace route discovery from write sensitivity to read sensitivity. The method returns only the selected child's reach and performs no registration or lifecycle mutation."
+    },
     "direct:src/server/internalDOs/evalDO.ts:appendAuthorityEvent": {
       "review": "host-only-eval-authority-event-ingress",
       "change": "Adds the typed host-only write used to append one already receiver-bound authority lifecycle event to an exact eval run. It cannot choose another owner, execute code, or grant authority."
@@ -253,6 +273,14 @@
     "host:gitInterop.publishRepo#capability:git.publish": {
       "review": "exact-destination-gated-git-publish",
       "change": "Adds a gated code-only prepared authority leaf for one normalized provider, credential selection, and repository name. The registered preparer derives the exact external-repository resource and user-facing change substance before handler entry."
+    },
+    "host:gitInterop.pushTemplateContribution": {
+      "review": "exact-source-and-destination-gated-template-contribution",
+      "change": "Uses one prepared git.publish leaf scoped to the normalized external repository and credential selection. The reviewed substance binds the selected repository-to-subtree mapping, exact template base, and one immutable protected-main event before the provider reads or pushes any source."
+    },
+    "host:gitInterop.publishTemplate": {
+      "review": "exact-source-and-destination-gated-template-publication",
+      "change": "Uses one prepared git.publish leaf scoped to the normalized external repository and credential selection. The reviewed substance binds the generated portable manifest, selected repository-to-subtree mapping, immutable release tag, and exact protected-main event before the provider creates or pushes the repository."
     },
     "host:vcs.listDirectory": {
       "review": "bounded-semantic-immediate-child-read",

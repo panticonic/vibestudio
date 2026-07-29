@@ -42,10 +42,7 @@ import type {
 } from "@vibestudio/shared/approvals";
 import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
 import { filterBootstrapApprovalsForTarget } from "@vibestudio/shared/bootstrapApprovals";
-import {
-  parseWorkspaceConfigContentWithId,
-  resolveDeclaredApps,
-} from "@vibestudio/workspace/configParser";
+import { readWorkspaceConfig, resolveDeclaredApps } from "@vibestudio/workspace/configParser";
 import {
   UnitManifestError,
   APP_CAPABILITIES_BY_TARGET,
@@ -2292,10 +2289,19 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
 
   private async readDeclaredAppsFromState(stateHash: string): Promise<WorkspaceAppDeclaration[]> {
     try {
-      const content = await this.deps.readWorkspaceFileAtState(stateHash, "meta/vibestudio.yml");
-      if (!content) return [];
-      return resolveDeclaredApps(parseWorkspaceConfigContentWithId(content, this.deps.workspaceId));
-    } catch {
+      return resolveDeclaredApps(
+        await readWorkspaceConfig(
+          {
+            readText: (filePath) => this.deps.readWorkspaceFileAtState(stateHash, filePath),
+          },
+          this.deps.workspaceId
+        )
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[AppHost] Cannot read declared apps from workspace state ${stateHash}; treating declarations as empty: ${message}`
+      );
       return [];
     }
   }

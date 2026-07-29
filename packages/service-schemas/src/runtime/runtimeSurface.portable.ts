@@ -375,7 +375,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   ),
   git: namespaceEntry(
     GIT_MEMBERS,
-    "Typed external Git operations routed through the workspace's configured gitInterop provider. Managed content crosses the boundary only as semantic import candidates or protected-main exports. Credential selection is exact: omit credentialId for URL-bound resolution, pass a string to pin one credential, or pass null to require anonymous Git HTTP. Pull dry-runs use disposable state and do not mutate the managed checkout or semantic workspace.",
+    "Typed external Git operations routed through the workspace's configured gitInterop provider. Import and pull create unpublished semantic candidates; only ordinary VCS integration and explicit publication advance protected main. Declarations carry logical credential names resolved by the host, while credential-free remotes are anonymous-first. Pull dry-runs use isolated temporary state and do not mutate managed Git, semantic state, or the remote.",
     "gitInterop"
   ),
   vcs: namespaceEntry(VCS_MEMBERS, VCS_DESCRIPTION, "vcs"),
